@@ -301,6 +301,7 @@ class RequestCoordinator:
             reservation_id = await self._create_reservation(
                 context, account_name, db_request_id
             )
+
             # Track reservation in estimator for scoring
             if reservation_id and self._quota_estimator is not None:
                 account_repo = AccountRepository(self._db)
@@ -509,8 +510,8 @@ class RequestCoordinator:
                 status_code=response.status_code,
             )
 
-        # Build the response headers
-        resp_headers = filter_response_headers(response.headers)
+        # Build the response headers (strip content-length for streaming)
+        resp_headers = filter_response_headers(response.headers, streaming=True)
         resp_headers["x-proxy-request-id"] = context.request_id
 
         # Build streaming generator

@@ -51,16 +51,20 @@ def filter_request_headers(
 
 def filter_response_headers(
     headers: httpx.Headers,
+    streaming: bool = False,
 ) -> dict[str, str]:
     """Filter response headers for downstream.
 
     - Remove hop-by-hop headers
+    - Remove content-length for streaming (chunked transfer)
     - Preserve useful headers
     """
     filtered: dict[str, str] = {}
     for key, value in headers.items():
         lower_key = key.lower()
         if lower_key in HOP_BY_HOP_HEADERS:
+            continue
+        if streaming and lower_key == "content-length":
             continue
         filtered[key] = value
     return filtered

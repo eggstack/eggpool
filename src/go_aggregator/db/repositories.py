@@ -511,3 +511,23 @@ class PriceSnapshotRepository:
             input_price_per_1k=prices_dict.get("input_price_per_1k"),
             output_price_per_1k=prices_dict.get("output_price_per_1k"),
         )
+
+
+class AccountEventRepository:
+    """CRUD operations for account_events."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def record(
+        self,
+        account_id: int,
+        event_type: str,
+        details: str = "{}",
+    ) -> None:
+        """Record an account event."""
+        await self._db.execute(
+            "INSERT INTO account_events (account_id, event_type, details) "
+            "VALUES (?, ?, ?)",
+            (account_id, event_type, details),
+        )

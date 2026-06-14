@@ -34,6 +34,7 @@ from go_aggregator.dashboard.routes import register_dashboard_routes
 from go_aggregator.db.connection import Database
 from go_aggregator.db.migrations import MigrationRunner
 from go_aggregator.db.repositories import (
+    AccountEventRepository,
     AccountRepository,
     AttemptRepository,
     RequestRepository,
@@ -101,6 +102,18 @@ class _HeaderRedactionMiddleware(BaseHTTPMiddleware):
 
 async def _crash_recovery(db: Database) -> None:
     """Mark stale pending requests as interrupted, release their reservations."""
+    # Collect affected account_ids before recovery
+    affected = await db.fetch_all(
+        "SELECT DISTINCT account_id FROM requests "
+        "WHERE status = 'pending' "
+        "AND started_at < datetime('now', '-10 minutes') "
+        "UNION "
+        "SELECT DISTINCT account_id FROM reservations "
+        "WHERE status = 'active' "
+        "AND created_at < datetime('now', '-10 minutes')"
+    )
+    affected_account_ids = [int(row["account_id"]) for row in affected]
+
     await db.execute(
         "UPDATE requests SET status = 'interrupted', "
         "completed_at = CURRENT_TIMESTAMP "
@@ -120,7 +133,25 @@ async def _crash_recovery(db: Database) -> None:
         "AND started_at < datetime('now', '-10 minutes')"
     )
     await db.connection.commit()
-    logger.info("Crash recovery: marked stale requests and reservations")
+
+    # Record recovery events
+    if affected_account_ids:
+        event_repo = AccountEventRepository(db)
+        for account_id in affected_account_ids:
+            await event_repo.record(
+                account_id=account_id,
+                event_type="crash_recovery",
+                details='{"action": "marked_interrupted", '
+                '"reason": "startup_recovery"}',
+            )
+        await db.connection.commit()
+        logger.info(
+            "Crash recovery: marked %d stale requests, recorded events for %d accounts",
+            len(affected),
+            len(affected_account_ids),
+        )
+    else:
+        logger.info("Crash recovery: no stale requests found")
 
 
 @asynccontextmanager
