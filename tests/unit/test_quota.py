@@ -60,7 +60,7 @@ class TestAccountQuota:
         """Test quota limit checking."""
         quota = AccountQuota(
             account_name="test-account",
-            max_daily_cost_microdollars=10000,
+            capacity_7d_microdollars=10000,
         )
         quota.record_usage(100, 500)
         assert quota.is_within_limits()
@@ -72,7 +72,7 @@ class TestAccountQuota:
         """Test remaining capacity calculation."""
         quota = AccountQuota(
             account_name="test-account",
-            max_daily_cost_microdollars=10000,
+            capacity_7d_microdollars=10000,
         )
         quota.record_usage(100, 5000)
         capacity = quota.get_remaining_capacity()
@@ -116,17 +116,17 @@ class TestQuotaEstimator:
     def test_account_limits(self) -> None:
         """Test account limit management."""
         estimator = QuotaEstimator()
-        estimator.set_account_limits("account1", max_daily_cost_microdollars=10000)
+        estimator.set_account_limits("account1", capacity_7d_microdollars=10000)
 
         quota = estimator.get_account_quota("account1")
         assert quota is not None
-        assert quota.max_daily_cost_microdollars == 10000
+        assert quota.capacity_7d_microdollars == 10000
 
     def test_eligible_accounts(self) -> None:
         """Test getting eligible accounts."""
         estimator = QuotaEstimator()
-        estimator.set_account_limits("account1", max_daily_cost_microdollars=10000)
-        estimator.set_account_limits("account2", max_daily_cost_microdollars=10000)
+        estimator.set_account_limits("account1", capacity_7d_microdollars=10000)
+        estimator.set_account_limits("account2", capacity_7d_microdollars=10000)
 
         # Account1 is at 50% usage
         estimator.record_usage("account1", 100, 5000)
@@ -137,6 +137,50 @@ class TestQuotaEstimator:
         assert len(eligible) == 2
         assert eligible[0][0] == "account1"  # Higher capacity
         assert eligible[0][1] > eligible[1][1]  # Higher remaining capacity
+
+    def test_configure_account_policy(self) -> None:
+        """Test configuring full account policy."""
+        estimator = QuotaEstimator()
+        estimator.configure_account_policy(
+            "account1",
+            weight=2.0,
+            capacity_5h_microdollars=24_000_000,
+            capacity_7d_microdollars=60_000_000,
+            capacity_30d_microdollars=120_000_000,
+            offset_5h_microdollars=1_000_000,
+            offset_7d_microdollars=2_000_000,
+            offset_30d_microdollars=3_000_000,
+        )
+
+        quota = estimator.get_account_quota("account1")
+        assert quota is not None
+        assert quota.weight == 2.0
+        assert quota.capacity_5h_microdollars == 24_000_000
+        assert quota.capacity_7d_microdollars == 60_000_000
+        assert quota.capacity_30d_microdollars == 120_000_000
+        assert quota.five_hour_offset == 1_000_000
+        assert quota.weekly_offset == 2_000_000
+        assert quota.monthly_offset == 3_000_000
+
+    def test_configure_account_policy_creates_if_missing(self) -> None:
+        """Test that configure_account_policy creates account if missing."""
+        estimator = QuotaEstimator()
+        assert "new_account" not in estimator.accounts
+
+        estimator.configure_account_policy(
+            "new_account",
+            weight=1.5,
+            capacity_5h_microdollars=18_000_000,
+            capacity_7d_microdollars=45_000_000,
+            capacity_30d_microdollars=90_000_000,
+            offset_5h_microdollars=0,
+            offset_7d_microdollars=0,
+            offset_30d_microdollars=0,
+        )
+
+        quota = estimator.get_account_quota("new_account")
+        assert quota is not None
+        assert quota.weight == 1.5
 
 
 class TestReservation:
@@ -227,8 +271,8 @@ class TestQuotaFairScorer:
     def test_score_accounts(self) -> None:
         """Test scoring accounts. Lower score = less utilized = preferred."""
         estimator = QuotaEstimator()
-        estimator.set_account_limits("account1", max_daily_cost_microdollars=10000)
-        estimator.set_account_limits("account2", max_daily_cost_microdollars=10000)
+        estimator.set_account_limits("account1", capacity_7d_microdollars=10000)
+        estimator.set_account_limits("account2", capacity_7d_microdollars=10000)
         estimator.record_usage("account1", 100, 5000)
         estimator.record_usage("account2", 100, 9000)
 

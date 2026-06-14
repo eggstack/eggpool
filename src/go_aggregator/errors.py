@@ -77,3 +77,7 @@ class UpstreamExhaustedError(AggregatorError):
 
 class AccountSuspendedError(AggregatorError):
     """Raised when an account has been suspended (503)."""
+
+
+class RequestTooLargeError(AggregatorError):
+    """Raised when a request body exceeds the configured limit."""

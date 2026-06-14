@@ -6,6 +6,7 @@ bounded incomplete-frame memory, and usage extraction.
 
 from __future__ import annotations
 
+import codecs
 import json
 import logging
 from dataclasses import dataclass, field
@@ -48,6 +49,7 @@ class IncrementalSSEObserver:
     - Bounded incomplete-frame memory
     - Usage extraction from recognized events
     - Tracking of bytes_emitted and first_byte_ms
+    - Proper SSE event assembly: accumulates data lines across blank lines
     """
 
     def __init__(self, protocol: str) -> None:
@@ -57,6 +59,11 @@ class IncrementalSSEObserver:
         self._usage_result = StreamUsageResult()
         self._frame_count = 0
         self._error_count = 0
+        self._decoder = codecs.getincrementaldecoder("utf-8")()
+
+        # Current event state (for assembling multi-line data)
+        self._current_event = ""
+        self._current_data_lines: list[str] = []
 
         if protocol == "anthropic":
             self._extractor = AnthropicStreamUsageExtractor()
@@ -69,22 +76,21 @@ class IncrementalSSEObserver:
         Appends to the internal buffer, splits on line boundaries,
         and processes complete SSE frames.
         """
-        if self._bytes_emitted == 0 and chunk:
-            # Will be set externally by caller
-            pass
-
         self._bytes_emitted += len(chunk)
 
-        # Decode and normalize line endings
-        text = chunk.decode("utf-8", errors="replace").replace("\r\n", "\n")
+        # Decode and normalize line endings using incremental decoder
+        text = self._decoder.decode(chunk).replace("\r\n", "\n")
+        # Also normalize lone CR to LF
+        text = text.replace("\r", "\n")
         self._buffer += text
 
         # Process complete lines
         while "\n" in self._buffer:
             line, self._buffer = self._buffer.split("\n", 1)
-            line = line.rstrip("\r")
 
             if not line:
+                # Blank line: terminate the current SSE event
+                self._flush_event()
                 continue
 
             self._process_line(line)
@@ -95,27 +101,54 @@ class IncrementalSSEObserver:
                 "SSE buffer exceeded %d bytes, discarding oldest data",
                 MAX_INCOMPLETE_FRAME_BYTES,
             )
+            self._error_count += 1
+            # Discard the current event state for the oversized frame
+            self._current_event = ""
+            self._current_data_lines.clear()
             self._buffer = self._buffer[-MAX_INCOMPLETE_FRAME_BYTES:]
 
     def _process_line(self, line: str) -> None:
         """Process a single SSE line."""
         self._frame_count += 1
 
-        if line.startswith("data: "):
-            data_str = line[6:]
+        # Ignore comments beginning with ':'
+        if line.startswith(":"):
+            return
 
-            if data_str.strip() == "[DONE]":
-                return
+        # Parse field and optional value
+        if ":" in line:
+            field_name, _, value = line.partition(":")
+            # Accept both "data:value" and "data: value"
+            value = value.lstrip(" ") if field_name != "data" else value
+            if field_name == "data":
+                self._current_data_lines.append(value)
+            elif field_name == "event":
+                self._current_event = value
+            # Ignore unknown fields (id:, retry:, etc.)
+        else:
+            # Line with no colon - treat as field with empty value
+            pass
 
-            try:
-                data = json.loads(data_str)
-                usage = self._extractor.extract(data)
-                if usage:
-                    self._merge_usage(usage)
-            except (json.JSONDecodeError, ValueError):
-                self._error_count += 1
-                logger.debug("Malformed SSE data frame, ignoring")
-        # Ignore unknown event types (event:, id:, retry:, comments)
+    def _flush_event(self) -> None:
+        """Flush the current accumulated event for processing."""
+        if not self._current_data_lines:
+            return
+
+        data = "\n".join(self._current_data_lines)
+        self._current_data_lines.clear()
+        self._current_event = ""
+
+        if data.strip() == "[DONE]":
+            return
+
+        try:
+            parsed = json.loads(data)
+            usage = self._extractor.extract(parsed)
+            if usage:
+                self._merge_usage(usage)
+        except (json.JSONDecodeError, ValueError):
+            self._error_count += 1
+            logger.debug("Malformed SSE data frame, ignoring")
 
     def _merge_usage(self, incoming: StreamUsageResult) -> None:
         """Merge incoming usage into the accumulated result."""
@@ -145,7 +178,27 @@ class IncrementalSSEObserver:
         return self._error_count
 
     def flush(self) -> None:
-        """Process any remaining buffered data."""
-        if self._buffer.strip():
-            self._process_line(self._buffer.strip())
-            self._buffer = ""
+        """Process any remaining buffered data.
+
+        Flushes any pending event. Also flushes the incremental decoder
+        for any incomplete multi-byte sequences.
+        """
+        # Flush the decoder for incomplete multi-byte sequences
+        try:
+            remainder = self._decoder.decode(b"", True)
+        except UnicodeDecodeError:
+            remainder = ""
+        if remainder:
+            self._buffer += remainder.replace("\r\n", "\n").replace("\r", "\n")
+
+        # Process any remaining complete lines
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            if not line:
+                self._flush_event()
+                continue
+            self._process_line(line)
+
+        # Flush any remaining partial event (no trailing blank line)
+        self._flush_event()
+        self._buffer = ""

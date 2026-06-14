@@ -66,9 +66,11 @@ class QuotaFairScorer:
         account_names: list[str],
         model_name: str | None = None,
         active_requests: dict[str, int] | None = None,
+        request_estimates: dict[str, int] | None = None,
     ) -> list[RoutingScore]:
         """Score all accounts for routing using the full formula."""
         active = active_requests or {}
+        estimates = request_estimates or {}
         scores = []
 
         for name in account_names:
@@ -93,22 +95,25 @@ class QuotaFairScorer:
                     # Get reserved cost from estimator
                     reserved = self.quota_estimator.get_account_reserved_cost(name)
 
+                    # Get projected request estimate for this account
+                    request_estimate = estimates.get(name, 0)
+
                     # Calculate utilization ratios per window with
-                    # per-window offsets and reservations
+                    # per-window offsets, reservations, and request estimate
                     p5 = self._calc_window_utilization(
-                        cost_5h + reserved,
+                        cost_5h + reserved + request_estimate,
                         quota.five_hour_offset,
-                        quota.max_hourly_cost_microdollars,
+                        quota.capacity_5h_microdollars,
                     )
                     pw = self._calc_window_utilization(
-                        cost_7d + reserved,
+                        cost_7d + reserved + request_estimate,
                         quota.weekly_offset,
-                        quota.max_daily_cost_microdollars,
+                        quota.capacity_7d_microdollars,
                     )
                     pm = self._calc_window_utilization(
-                        cost_30d + reserved,
+                        cost_30d + reserved + request_estimate,
                         quota.monthly_offset,
-                        quota.max_monthly_cost_microdollars,
+                        quota.capacity_30d_microdollars,
                     )
 
             # Base quota score: max of window utilizations
@@ -149,7 +154,7 @@ class QuotaFairScorer:
         if max_cost is None or max_cost <= 0:
             return 0.0
         total = used_cost + offset_cost
-        return min(total / max_cost, 1.0)
+        return total / max_cost
 
     def select_account(self, scores: list[RoutingScore]) -> RoutingScore | None:
         """Select best account. Lower final_score is better.

@@ -8,7 +8,7 @@ import time
 import uuid
 from typing import TYPE_CHECKING
 
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from go_aggregator.api.errors import openai_error_response
 from go_aggregator.auth import require_auth
@@ -18,6 +18,7 @@ from go_aggregator.errors import (
     NoEligibleAccountError,
     UpstreamExhaustedError,
 )
+from go_aggregator.request.body import read_body_limited
 from go_aggregator.request.coordinator import (
     PreparedProxyResponse,
     ProxyRequestContext,
@@ -32,17 +33,18 @@ logger = logging.getLogger(__name__)
 
 async def handle_chat_completions(
     request: Request,
-) -> JSONResponse | StreamingResponse:
+) -> Response:
     """Handle POST /v1/chat/completions."""
     await require_auth(request)
 
     coordinator: RequestCoordinator = request.app.state.coordinator
 
-    # Enforce body size limit
-    body = await request.body()
+    # Enforce body size limit (Section 12.1: bounded chunked reading)
     from go_aggregator.constants import MAX_REQUEST_BODY_BYTES
 
-    if len(body) > MAX_REQUEST_BODY_BYTES:
+    try:
+        body = await read_body_limited(request, MAX_REQUEST_BODY_BYTES)
+    except Exception:
         return openai_error_response(
             status_code=413,
             message="Request body too large",
@@ -117,12 +119,17 @@ async def handle_chat_completions(
 
 def _render_response(
     result: PreparedProxyResponse,
-) -> JSONResponse | StreamingResponse:
-    """Render a PreparedProxyResponse as a FastAPI response."""
+) -> Response:
+    """Render a PreparedProxyResponse as a FastAPI response.
+
+    For non-streaming responses, returns raw bytes to preserve upstream
+    content-type and body exactly. For streaming, uses StreamingResponse.
+    """
     if result.stream_iterator is not None:
+        stream_iter = result.stream_iterator
 
         async def _stream_gen():  # type: ignore[no-untyped-def]
-            async for chunk in result.stream_iterator:
+            async for chunk in stream_iter:
                 yield chunk
 
         return StreamingResponse(
@@ -132,8 +139,10 @@ def _render_response(
             media_type="text/event-stream",
         )
 
-    return JSONResponse(
+    # Return raw bytes - do not decode and re-serialize
+    return Response(
+        content=result.body,
         status_code=result.status_code,
-        content=json.loads(result.body) if result.body else {},
         headers=result.headers,
+        media_type=None,
     )

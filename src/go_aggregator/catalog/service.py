@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 from go_aggregator.catalog.cache import ModelCatalogCache
 from go_aggregator.catalog.fetcher import fetch_models_for_account
 from go_aggregator.catalog.normalizer import normalize_models
+from go_aggregator.catalog.protocols import ModelProtocolResolver
 
 if TYPE_CHECKING:
     import httpx
@@ -37,6 +38,7 @@ class CatalogService:
         self._httpx_client = httpx_client
         self._cache = ModelCatalogCache()
         self._refresh_lock = asyncio.Lock()
+        self._protocol_resolver = ModelProtocolResolver(config)
 
     @property
     def cache(self) -> ModelCatalogCache:
@@ -88,11 +90,27 @@ class CatalogService:
 
             models = normalize_models(raw_response)
 
-            # Apply protocol overrides from config
+            # Apply per-model protocol resolution (Section 11)
             for model in models:
+                # Check config override first
                 override = self._config.model_overrides.get(model["model_id"])
                 if override and override.protocol:
                     model["protocol"] = override.protocol
+                else:
+                    # Resolve from per-model metadata
+                    source_meta = model.get("source_metadata", {})
+                    resolution = self._protocol_resolver.resolve_from_metadata(
+                        model["model_id"], source_meta
+                    )
+                    if resolution.protocol:
+                        model["protocol"] = resolution.protocol
+                    else:
+                        # Fall back to catalog resolution
+                        resolution = self._protocol_resolver.resolve_from_catalog(
+                            model["model_id"]
+                        )
+                        if resolution.protocol:
+                            model["protocol"] = resolution.protocol
 
             self._cache.update_from_account(account_name, models)
             logger.debug(
@@ -112,14 +130,14 @@ class CatalogService:
             rows = await self._db.fetch_all(
                 "SELECT model_id, display_name, protocol, "
                 "capabilities, source_metadata, "
-                "first_seen_at, last_seen_at FROM models"
+                "first_seen_at, last_seen_at, protocol_source FROM models"
             )
             for row in rows:
                 model_id = row["model_id"]
-                caps = json.loads(row["capabilities"]) if row["capabilities"] else {}
-                meta = (
-                    json.loads(row["source_metadata"]) if row["source_metadata"] else {}
-                )
+                caps_raw = row["capabilities"]
+                caps = json.loads(caps_raw) if caps_raw else {}
+                meta_raw = row["source_metadata"]
+                meta = json.loads(meta_raw) if meta_raw else {}
                 self._cache.load_model(
                     model_id=model_id,
                     display_name=row["display_name"],
@@ -155,20 +173,27 @@ class CatalogService:
         now_sql = "datetime('now')"
 
         for model_id, model_info in self._cache.get_all_models().items():
+            # Resolve protocol source for this model
+            resolution = self._protocol_resolver.resolve_from_catalog(model_id)
+            protocol_source = (
+                resolution.source if resolution.source != "unresolved" else None
+            )
+
             # Upsert model
             await self._db.execute(
                 f"""
                 INSERT INTO models (
                     model_id, display_name, protocol,
                     capabilities, source_metadata,
-                    first_seen_at, last_seen_at
-                ) VALUES (?, ?, ?, ?, ?, {now_sql}, {now_sql})
+                    first_seen_at, last_seen_at, protocol_source
+                ) VALUES (?, ?, ?, ?, ?, {now_sql}, {now_sql}, ?)
                 ON CONFLICT(model_id) DO UPDATE SET
                     display_name = excluded.display_name,
                     protocol = excluded.protocol,
                     capabilities = excluded.capabilities,
                     source_metadata = excluded.source_metadata,
-                    last_seen_at = {now_sql}
+                    last_seen_at = {now_sql},
+                    protocol_source = excluded.protocol_source
                 """,
                 (
                     model_id,
@@ -176,6 +201,7 @@ class CatalogService:
                     model_info["protocol"],
                     json.dumps(model_info.get("capabilities", {})),
                     json.dumps(model_info.get("source_metadata", {})),
+                    protocol_source,
                 ),
             )
 

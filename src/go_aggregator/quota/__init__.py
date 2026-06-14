@@ -1,4 +1,9 @@
-"""Quota management package for account-based rate limiting."""
+"""Quota management package for account-based rate limiting.
+
+.. deprecated::
+    ReservationManager is retained for backward compatibility only.
+    SQLite reservations and QuotaEstimator in-memory tracking are canonical.
+"""
 
 from __future__ import annotations
 

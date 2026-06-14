@@ -26,7 +26,6 @@ from go_aggregator.background.cleanup import (
     checkpoint_database,
     cleanup_old_requests,
 )
-from go_aggregator.catalog.estimator import EWMACostEstimator
 from go_aggregator.catalog.pricing import CostCalculator, PriceRepository
 from go_aggregator.catalog.service import CatalogService
 from go_aggregator.constants import API_V1_PREFIX, MAX_REQUEST_BODY_BYTES
@@ -237,11 +236,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         except Exception:
             logger.exception("Initial catalog refresh failed")
 
-    # 13. EWMA cost estimator (loaded from DB on startup)
-    ewma_estimator = EWMACostEstimator(db)
-    await ewma_estimator.load_from_database()
-    app.state.ewma_estimator = ewma_estimator
-
     # 14. Price repository and cost calculator
     price_repo = PriceRepository(db)
     cost_calculator = CostCalculator(price_repo)
@@ -266,6 +260,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # Set account weights from config
     for acct_cfg in config.accounts:
         router.set_account_weight(acct_cfg.name, acct_cfg.weight)
+
+    # Configure explicit quota policies from config
+    for acct_cfg in config.accounts:
+        router.configure_account_policy(
+            account_name=acct_cfg.name,
+            weight=acct_cfg.weight,
+            capacity_5h_microdollars=int(
+                config.limits.five_hour_microdollars * acct_cfg.weight
+            ),
+            capacity_7d_microdollars=int(
+                config.limits.weekly_microdollars * acct_cfg.weight
+            ),
+            capacity_30d_microdollars=int(
+                config.limits.monthly_microdollars * acct_cfg.weight
+            ),
+            offset_5h_microdollars=acct_cfg.five_hour_offset_microdollars,
+            offset_7d_microdollars=acct_cfg.weekly_offset_microdollars,
+            offset_30d_microdollars=acct_cfg.monthly_offset_microdollars,
+        )
 
     # 17. Statistics service
     app.state.stats = StatsService(db, health_manager=health_manager)
@@ -434,9 +447,12 @@ def create_app(
                 media_type="application/json",
             )
 
-        # Verify database is writable
+        # Real writeability probe (Section 12.3): insert one row, roll back
         try:
-            await db.execute("SELECT 1")
+            await db.execute(
+                "INSERT INTO health_probe (probe_at) VALUES (CURRENT_TIMESTAMP)"
+            )
+            await db.connection.rollback()
         except Exception:
             return Response(
                 content='{"status":"degraded","reason":"database not writable"}',
@@ -481,18 +497,16 @@ def create_app(
                 media_type="application/json",
             )
 
-        # Check at least one model/account pairing is eligible
+        # Real eligible-pairing readiness (Section 12.2)
         router: Router | None = getattr(request.app.state, "router", None)
-        if router is not None and registry is not None and catalog is not None:
-            eligible = registry.get_enabled_states()
-            if not eligible:
-                return Response(
-                    content=(
-                        '{"status":"degraded","reason":"no eligible account pairings"}'
-                    ),
-                    status_code=503,
-                    media_type="application/json",
-                )
+        if router is not None and not router.has_eligible_pairing():
+            return Response(
+                content=(
+                    '{"status":"degraded","reason":"no eligible account pairings"}'
+                ),
+                status_code=503,
+                media_type="application/json",
+            )
 
         supervisor: TaskSupervisor | None = getattr(
             request.app.state, "supervisor", None

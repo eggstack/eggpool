@@ -136,13 +136,22 @@ src/go_aggregator/
 │       ├── 0001_initial.sql
 │       ├── 0002_indexes.sql
 │       ├── 0003_request_attempts.sql
-│       └── 0004_integration_hardening.sql
+│       ├── 0004_integration_hardening.sql
+│       ├── 0005_price_microdollars.sql
+│       ├── 0006_correct_price_microdollars.sql
+│       ├── 0007_price_cache_rates.sql
+│       ├── 0008_proxy_request_identity.sql
+│       ├── 0009_model_protocol_source.sql
+│       └── 0010_health_probe.sql
 ├── request/
-│   └── coordinator.py   # Central request lifecycle orchestrator
+│   ├── coordinator.py   # Central request lifecycle orchestrator
+│   ├── finalizer.py     # Idempotent request finalization
+│   ├── body.py          # Bounded request body reading
+│   └── generation.py    # Runtime generation (deprecated)
 ├── accounts/            # Account registry and state
-├── catalog/             # Model catalog, pricing, and estimation
+├── catalog/             # Model catalog, pricing, estimation, and protocols
 ├── routing/             # Quota-aware routing and eligibility
-├── proxy/               # Transparent proxy and streaming
+├── proxy/               # Transparent proxy, streaming, and SSE observer
 ├── retry/               # Error classification and failover
 ├── health/              # Circuit breaker and health tracking
 ├── quota/               # Quota estimation, reservations, scoring
@@ -169,16 +178,18 @@ tests/
 - [x] Phase 8: Statistics API and dashboard
 - [x] Phase 9: Deployment hardening
 - [x] Phase 10: Integration hardening and correct request lifecycle
+- [x] Phase 12: Executable correctness pass
 
 ## Known Limitations
 
-- Usage is authoritative only for traffic that passes through the proxy.
-- OpenCode may not expose exact subscription reset windows.
+- Usage is proxy-observed; only traffic routed through the proxy is tracked.
+- Weekly and monthly quota windows are rolling approximations unless OpenCode exposes authoritative subscription resets.
 - Interrupted streams may not contain terminal usage.
 - Published prices may not perfectly match upstream subscription accounting.
 - Accounts used outside the proxy require manual offsets for accurate balancing.
 - Model metadata and protocol behavior can change without notice.
-- Aggregating multiple subscriptions may not be an explicitly supported OpenCode deployment pattern.
+- Both `/v1/chat/completions` (OpenAI) and `/v1/messages` (Anthropic) endpoints are required because mixed protocol catalogs resolve per-model.
+- The dashboard is unauthenticated by default and intended for trusted LAN use only.
 - LAN-only deployment reduces but does not eliminate security obligations.
 - Configuration changes require service restart (live reload disabled for correctness).
 

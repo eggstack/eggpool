@@ -185,6 +185,42 @@ def test_crlf_and_lf_streams() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Test 2b: Arbitrary byte splitting produces identical usage
+# ---------------------------------------------------------------------------
+
+
+def _build_usage_stream() -> bytes:
+    """Build an SSE stream with a usage payload."""
+    usage_payload = {
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+        }
+    }
+    return (_sse_data_line(usage_payload) + "\n\n" + "data: [DONE]\n").encode()
+
+
+def test_arbitrary_splitting_identical_usage() -> None:
+    """Splitting the stream at every byte boundary produces identical usage."""
+    full_stream = _build_usage_stream()
+
+    # Get expected usage from full stream
+    expected = IncrementalSSEObserver(protocol="openai")
+    expected.observe(full_stream)
+    expected.flush()
+
+    for split_point in range(1, len(full_stream)):
+        obs = IncrementalSSEObserver(protocol="openai")
+        obs.observe(full_stream[:split_point])
+        obs.observe(full_stream[split_point:])
+        obs.flush()
+
+        assert obs.usage.input_tokens == expected.usage.input_tokens
+        assert obs.usage.output_tokens == expected.usage.output_tokens
+        assert obs.bytes_emitted == expected.bytes_emitted
+
+
+# ---------------------------------------------------------------------------
 # Test 2: Upstream non-200 before streaming body
 # ---------------------------------------------------------------------------
 

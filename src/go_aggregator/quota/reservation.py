@@ -1,4 +1,11 @@
-"""Reservation management for atomic quota tracking."""
+"""Reservation management for atomic quota tracking.
+
+.. deprecated::
+    This in-memory ReservationManager is no longer used for routing or scoring.
+    SQLite reservations (via ReservationRepository) and QuotaEstimator's
+    in-memory reservation cost tracking are the canonical mechanisms.
+    This module is retained only for backward-compatible imports and unit tests.
+"""
 
 from __future__ import annotations
 

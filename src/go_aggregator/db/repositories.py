@@ -117,8 +117,8 @@ class RequestRepository:
             cursor = await self._db.execute(
                 "INSERT INTO requests "
                 "(account_id, model_id, started_at, status, protocol, "
-                "streamed, reserved_microdollars) "
-                "VALUES (?, ?, ?, 'pending', ?, ?, ?)",
+                "streamed, reserved_microdollars, proxy_request_id) "
+                "VALUES (?, ?, ?, 'pending', ?, ?, ?, ?)",
                 (
                     account_id,
                     model_id,
@@ -126,19 +126,22 @@ class RequestRepository:
                     protocol,
                     int(streamed),
                     reserved_microdollars,
+                    request_id,
                 ),
             )
         else:
             cursor = await self._db.execute(
                 "INSERT INTO requests "
                 "(account_id, model_id, status, protocol, streamed, "
-                "reserved_microdollars) VALUES (?, ?, 'pending', ?, ?, ?)",
+                "reserved_microdollars, proxy_request_id) "
+                "VALUES (?, ?, 'pending', ?, ?, ?, ?)",
                 (
                     account_id,
                     model_id,
                     protocol,
                     int(streamed),
                     reserved_microdollars,
+                    request_id,
                 ),
             )
         last_id = cursor.lastrowid
@@ -258,6 +261,63 @@ class RequestRepository:
                 request_id,
             ),
         )
+
+    async def finalize_if_pending(
+        self,
+        request_id: str,
+        status: str,
+        status_code: int | None = None,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cost_microdollars: int = 0,
+        exactness: str = "unknown",
+        first_byte_ms: int | None = None,
+        error_class: str | None = None,
+        error_detail: str | None = None,
+        upstream_request_id: str | None = None,
+        cache_read_tokens: int | None = None,
+        cache_write_tokens: int | None = None,
+        reasoning_tokens: int | None = None,
+        thinking_characters: int | None = None,
+        retry_count: int = 0,
+        upstream_latency_ms: float = 0,
+    ) -> bool:
+        """Finalize a request only if it is still pending.
+
+        Returns True if the row was updated (transition performed),
+        False if the request was already terminal (idempotent).
+        """
+        cursor = await self._db.execute(
+            "UPDATE requests SET "
+            "status = ?, completed_at = CURRENT_TIMESTAMP, "
+            "input_tokens = ?, output_tokens = ?, cost_microdollars = ?, "
+            "exactness = ?, first_byte_ms = ?, "
+            "error_class = ?, error_detail = ?, upstream_request_id = ?, "
+            "cache_read_tokens = ?, cache_write_tokens = ?, "
+            "reasoning_tokens = ?, thinking_characters = ?, "
+            "retry_count = ?, status_code = ?, upstream_latency_ms = ? "
+            "WHERE id = ? AND status = 'pending'",
+            (
+                status,
+                input_tokens,
+                output_tokens,
+                cost_microdollars,
+                exactness,
+                first_byte_ms,
+                error_class,
+                error_detail,
+                upstream_request_id,
+                cache_read_tokens,
+                cache_write_tokens,
+                reasoning_tokens,
+                thinking_characters,
+                retry_count,
+                status_code,
+                upstream_latency_ms,
+                request_id,
+            ),
+        )
+        return cursor.rowcount > 0
 
     async def get_by_id(self, request_id: str) -> dict[str, Any] | None:
         """Fetch a request by id."""
@@ -480,7 +540,12 @@ class PriceSnapshotRepository:
     async def get_latest(self, model_id: str) -> dict[str, Any] | None:
         """Get the most recent price snapshot for a model."""
         row = await self._db.fetch_one(
-            "SELECT * FROM model_price_snapshots "
+            "SELECT model_id, input_price_per_1k, output_price_per_1k, "
+            "captured_at, input_per_million_microdollars, "
+            "output_per_million_microdollars, "
+            "cache_read_per_million_microdollars, "
+            "cache_write_per_million_microdollars, source "
+            "FROM model_price_snapshots "
             "WHERE model_id = ? ORDER BY captured_at DESC LIMIT 1",
             (model_id,),
         )
@@ -491,13 +556,23 @@ class PriceSnapshotRepository:
         model_id: str,
         input_price_per_1k: float | None,
         output_price_per_1k: float | None,
+        cache_read_per_million_microdollars: int | None = None,
+        cache_write_per_million_microdollars: int | None = None,
     ) -> None:
         """Record a new price snapshot."""
         await self._db.execute(
             "INSERT INTO model_price_snapshots "
-            "(model_id, input_price_per_1k, output_price_per_1k) "
-            "VALUES (?, ?, ?)",
-            (model_id, input_price_per_1k, output_price_per_1k),
+            "(model_id, input_price_per_1k, output_price_per_1k, "
+            "cache_read_per_million_microdollars, "
+            "cache_write_per_million_microdollars) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                model_id,
+                input_price_per_1k,
+                output_price_per_1k,
+                cache_read_per_million_microdollars,
+                cache_write_per_million_microdollars,
+            ),
         )
 
     async def record_from_dict(
@@ -506,10 +581,18 @@ class PriceSnapshotRepository:
         prices_dict: dict[str, float | None],
     ) -> None:
         """Record prices from a dictionary with input/output keys."""
+        cache_read = prices_dict.get("cache_read_per_million_microdollars")
+        cache_write = prices_dict.get("cache_write_per_million_microdollars")
         await self.record(
             model_id,
             input_price_per_1k=prices_dict.get("input_price_per_1k"),
             output_price_per_1k=prices_dict.get("output_price_per_1k"),
+            cache_read_per_million_microdollars=int(cache_read)
+            if cache_read is not None
+            else None,
+            cache_write_per_million_microdollars=int(cache_write)
+            if cache_write is not None
+            else None,
         )
 
 

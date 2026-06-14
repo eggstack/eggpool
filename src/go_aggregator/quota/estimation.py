@@ -58,7 +58,14 @@ class QuotaWindow:
 
 @dataclass
 class ManualOffset:
-    """Manual adjustment to an account's quota usage."""
+    """Manual adjustment to an account's quota usage.
+
+    .. deprecated::
+        The scorer does not read this field. Per-window explicit offsets
+        (five_hour_offset, weekly_offset, monthly_offset) are the canonical
+        adjustment mechanism. This class is retained for backward compatibility
+        only.
+    """
 
     tokens: int = 0
     cost_microdollars: int = 0
@@ -112,9 +119,9 @@ class AccountQuota:
     )
     manual_offset: ManualOffset = field(default_factory=ManualOffset)
     weight: float = 1.0
-    max_daily_cost_microdollars: int | None = None
-    max_hourly_cost_microdollars: int | None = None
-    max_monthly_cost_microdollars: int | None = None
+    capacity_5h_microdollars: int | None = None
+    capacity_7d_microdollars: int | None = None
+    capacity_30d_microdollars: int | None = None
     persisted_snapshot: PersistedWindowSnapshot | None = None
     five_hour_offset: int = 0
     weekly_offset: int = 0
@@ -147,22 +154,22 @@ class AccountQuota:
         _, hourly_cost = self.hourly_window.get_usage()
 
         if (
-            self.max_daily_cost_microdollars is not None
-            and daily_cost >= self.max_daily_cost_microdollars
+            self.capacity_7d_microdollars is not None
+            and daily_cost >= self.capacity_7d_microdollars
         ):
             return False
         return not (
-            self.max_hourly_cost_microdollars is not None
-            and hourly_cost >= self.max_hourly_cost_microdollars
+            self.capacity_5h_microdollars is not None
+            and hourly_cost >= self.capacity_5h_microdollars
         )
 
     def get_remaining_capacity(self) -> float:
         """Get remaining capacity as a normalized score (0.0 to 1.0)."""
-        if self.max_daily_cost_microdollars is None:
+        if self.capacity_7d_microdollars is None:
             return 1.0
 
         _, daily_cost = self.daily_window.get_usage()
-        used_ratio = daily_cost / self.max_daily_cost_microdollars
+        used_ratio = daily_cost / self.capacity_7d_microdollars
         return max(0.0, 1.0 - used_ratio)
 
     def get_persisted_cost_5h(self) -> int:
@@ -344,17 +351,45 @@ class QuotaEstimator:
     def set_account_limits(
         self,
         account_name: str,
-        max_daily_cost_microdollars: int | None = None,
-        max_hourly_cost_microdollars: int | None = None,
-        max_monthly_cost_microdollars: int | None = None,
+        capacity_7d_microdollars: int | None = None,
+        capacity_5h_microdollars: int | None = None,
+        capacity_30d_microdollars: int | None = None,
     ) -> None:
         """Set quota limits for an account."""
         if account_name not in self.accounts:
             self.accounts[account_name] = AccountQuota(account_name=account_name)
         quota = self.accounts[account_name]
-        quota.max_daily_cost_microdollars = max_daily_cost_microdollars
-        quota.max_hourly_cost_microdollars = max_hourly_cost_microdollars
-        quota.max_monthly_cost_microdollars = max_monthly_cost_microdollars
+        quota.capacity_7d_microdollars = capacity_7d_microdollars
+        quota.capacity_5h_microdollars = capacity_5h_microdollars
+        quota.capacity_30d_microdollars = capacity_30d_microdollars
+
+    def configure_account_policy(
+        self,
+        account_name: str,
+        *,
+        weight: float,
+        capacity_5h_microdollars: int,
+        capacity_7d_microdollars: int,
+        capacity_30d_microdollars: int,
+        offset_5h_microdollars: int,
+        offset_7d_microdollars: int,
+        offset_30d_microdollars: int,
+    ) -> None:
+        """Configure the full quota policy for an account.
+
+        Creates the account quota if it does not already exist, then sets
+        all seven values: weight, three capacities, and three offsets.
+        """
+        if account_name not in self.accounts:
+            self.accounts[account_name] = AccountQuota(account_name=account_name)
+        quota = self.accounts[account_name]
+        quota.weight = weight
+        quota.capacity_5h_microdollars = capacity_5h_microdollars
+        quota.capacity_7d_microdollars = capacity_7d_microdollars
+        quota.capacity_30d_microdollars = capacity_30d_microdollars
+        quota.five_hour_offset = offset_5h_microdollars
+        quota.weekly_offset = offset_7d_microdollars
+        quota.monthly_offset = offset_30d_microdollars
 
     def apply_manual_offset(
         self,
@@ -363,7 +398,12 @@ class QuotaEstimator:
         cost_microdollars: int,
         reason: str = "",
     ) -> None:
-        """Apply manual offset to an account's quota."""
+        """Apply manual offset to an account's quota.
+
+        .. deprecated::
+            The scorer does not read manual_offset. Use per-window explicit
+            offsets (five_hour_offset, weekly_offset, monthly_offset) instead.
+        """
         if account_name not in self.accounts:
             self.accounts[account_name] = AccountQuota(account_name=account_name)
         quota = self.accounts[account_name]

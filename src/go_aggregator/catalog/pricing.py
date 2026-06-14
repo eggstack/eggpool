@@ -20,8 +20,10 @@ class PriceSnapshot:
     input_price_per_1k: float | None  # Legacy dollars/1K
     output_price_per_1k: float | None  # Legacy dollars/1K
     captured_at: str
-    input_per_million_microdollars: int | None = None  # New integer field
-    output_per_million_microdollars: int | None = None  # New integer field
+    input_per_million_microdollars: int | None = None
+    output_per_million_microdollars: int | None = None
+    cache_read_per_million_microdollars: int | None = None
+    cache_write_per_million_microdollars: int | None = None
     source: str = "config"
 
 
@@ -54,7 +56,9 @@ class PriceRepository:
             """
             SELECT model_id, input_price_per_1k, output_price_per_1k,
                    captured_at, input_per_million_microdollars,
-                   output_per_million_microdollars, source
+                   output_per_million_microdollars,
+                   cache_read_per_million_microdollars,
+                   cache_write_per_million_microdollars, source
             FROM model_price_snapshots
             WHERE model_id = ?
             ORDER BY captured_at DESC
@@ -71,6 +75,12 @@ class PriceRepository:
             captured_at=row["captured_at"],
             input_per_million_microdollars=row["input_per_million_microdollars"],
             output_per_million_microdollars=row["output_per_million_microdollars"],
+            cache_read_per_million_microdollars=row[
+                "cache_read_per_million_microdollars"
+            ],
+            cache_write_per_million_microdollars=row[
+                "cache_write_per_million_microdollars"
+            ],
             source=row["source"] if row["source"] is not None else "config",
         )
 
@@ -82,7 +92,9 @@ class PriceRepository:
             """
             SELECT model_id, input_price_per_1k, output_price_per_1k,
                    captured_at, input_per_million_microdollars,
-                   output_per_million_microdollars, source
+                   output_per_million_microdollars,
+                   cache_read_per_million_microdollars,
+                   cache_write_per_million_microdollars, source
             FROM model_price_snapshots
             WHERE model_id = ? AND captured_at > datetime('now', ? || ' hours')
             ORDER BY captured_at DESC
@@ -97,6 +109,12 @@ class PriceRepository:
                 captured_at=row["captured_at"],
                 input_per_million_microdollars=row["input_per_million_microdollars"],
                 output_per_million_microdollars=row["output_per_million_microdollars"],
+                cache_read_per_million_microdollars=row[
+                    "cache_read_per_million_microdollars"
+                ],
+                cache_write_per_million_microdollars=row[
+                    "cache_write_per_million_microdollars"
+                ],
                 source=row["source"] if row["source"] is not None else "config",
             )
             for row in rows
@@ -114,6 +132,8 @@ class CostCalculator:
         model_id: str,
         input_tokens: int,
         output_tokens: int,
+        cache_read_tokens: int = 0,
+        cache_write_tokens: int = 0,
     ) -> tuple[int, str]:
         """Calculate cost in microdollars from token usage.
 
@@ -123,31 +143,39 @@ class CostCalculator:
         snapshot = await self._price_repo.get_latest_snapshot(model_id)
 
         if snapshot is None:
-            return self._estimate_cost(input_tokens, output_tokens), "estimated"
-
-        # Prefer integer microdollar fields
-        if (
-            snapshot.input_per_million_microdollars is not None
-            and snapshot.output_per_million_microdollars is not None
-        ):
-            input_cost = (
-                input_tokens * snapshot.input_per_million_microdollars // 1_000_000
+            return (
+                self._estimate_cost(input_tokens, output_tokens),
+                "estimated",
             )
-            output_cost = (
-                output_tokens * snapshot.output_per_million_microdollars // 1_000_000
-            )
-            return input_cost + output_cost, "derived"
 
-        # Fall back to float dollars/1K
+        input_rate = snapshot.input_per_million_microdollars or 0
+        output_rate = snapshot.output_per_million_microdollars or 0
+        cache_read_rate = snapshot.cache_read_per_million_microdollars or 0
+        cache_write_rate = snapshot.cache_write_per_million_microdollars or 0
+
+        exactness = "derived"
         if (
-            snapshot.input_price_per_1k is not None
-            and snapshot.output_price_per_1k is not None
+            input_rate == 0
+            and output_rate == 0
+            or (
+                cache_read_tokens > 0
+                and snapshot.cache_read_per_million_microdollars is None
+            )
+            or (
+                cache_write_tokens > 0
+                and snapshot.cache_write_per_million_microdollars is None
+            )
         ):
-            input_cost = (input_tokens / 1000.0) * snapshot.input_price_per_1k
-            output_cost = (output_tokens / 1000.0) * snapshot.output_price_per_1k
-            return int((input_cost + output_cost) * 1_000_000), "derived"
+            exactness = "estimated"
 
-        return self._estimate_cost(input_tokens, output_tokens), "estimated"
+        total_numerator = (
+            input_tokens * input_rate
+            + output_tokens * output_rate
+            + cache_read_tokens * cache_read_rate
+            + cache_write_tokens * cache_write_rate
+        )
+        cost_microdollars = total_numerator // 1_000_000
+        return cost_microdollars, exactness
 
     def _estimate_cost(self, input_tokens: int, output_tokens: int) -> int:
         """Estimate cost when no price data is available.

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 import aiosqlite
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import AsyncGenerator, Sequence
 
 from go_aggregator.errors import DatabaseError
 
@@ -82,3 +83,29 @@ class Database:
             return row  # type: ignore[return-value]
         except Exception as exc:
             raise DatabaseError(f"Fetch one failed: {exc}") from exc
+
+    @asynccontextmanager
+    async def transaction(self) -> AsyncGenerator[None]:
+        """Execute a serialized write transaction.
+
+        Uses BEGIN IMMEDIATE to serialize writers predictably.
+        Repository methods must NOT call commit inside this context;
+        the caller owns commit boundaries.
+
+        Detects nesting: if already in a transaction, this is a no-op
+        (the outer transaction owns the commit boundary).
+        """
+        conn = self.connection
+        # Check if already in a transaction (nesting detection)
+        if conn.in_transaction:
+            yield
+            return
+
+        await conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+        except BaseException:
+            await conn.rollback()
+            raise
+        else:
+            await conn.commit()

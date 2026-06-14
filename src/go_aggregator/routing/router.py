@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from go_aggregator.quota.estimation import QuotaEstimator
-from go_aggregator.quota.reservation import ReservationManager
 from go_aggregator.quota.scorer import QuotaFairScorer, RoutingScore
 from go_aggregator.routing.eligibility import get_eligible_accounts
 
@@ -14,6 +14,8 @@ if TYPE_CHECKING:
     from go_aggregator.accounts.state import AccountRuntimeState
     from go_aggregator.catalog.service import CatalogService
     from go_aggregator.health.health_manager import HealthManager
+
+logger = logging.getLogger(__name__)
 
 
 class Router:
@@ -24,13 +26,11 @@ class Router:
         registry: AccountRegistry,
         catalog: CatalogService,
         quota_estimator: QuotaEstimator | None = None,
-        reservation_manager: ReservationManager | None = None,
         health_manager: HealthManager | None = None,
     ) -> None:
         self._registry = registry
         self._catalog = catalog
         self._quota_estimator = quota_estimator or QuotaEstimator()
-        self._reservation_manager = reservation_manager or ReservationManager()
         self._health_manager = health_manager
         self._scorer = QuotaFairScorer(
             quota_estimator=self._quota_estimator,
@@ -38,7 +38,11 @@ class Router:
         )
 
     def select_account(
-        self, model_id: str, request_id: str | None = None
+        self,
+        model_id: str,
+        request_id: str | None = None,
+        request_estimates: dict[str, int] | None = None,
+        exclude_accounts: set[str] | None = None,
     ) -> AccountRuntimeState | None:
         """Select an account for the given model."""
         all_states = self._registry.get_enabled_states()
@@ -50,11 +54,15 @@ class Router:
             all_states, model_id, self._catalog.cache, self._health_manager
         )
 
+        # Exclude already-attempted accounts
+        if exclude_accounts:
+            eligible = [s for s in eligible if s.name not in exclude_accounts]
+
         if not eligible:
             return None
 
         scores = self._scorer.score_accounts(
-            [s.name for s in eligible], model_id, active_requests
+            [s.name for s in eligible], model_id, active_requests, request_estimates
         )
 
         best = self._scorer.select_account(scores)
@@ -68,7 +76,11 @@ class Router:
         return None
 
     def select_accounts_for_failover(
-        self, model_id: str, max_accounts: int = 3
+        self,
+        model_id: str,
+        max_accounts: int = 3,
+        request_estimates: dict[str, int] | None = None,
+        exclude_accounts: set[str] | None = None,
     ) -> list[tuple[AccountRuntimeState, RoutingScore]]:
         """Select multiple accounts for failover, ranked by score."""
         all_states = self._registry.get_enabled_states()
@@ -78,11 +90,15 @@ class Router:
             all_states, model_id, self._catalog.cache, self._health_manager
         )
 
+        # Exclude already-attempted accounts
+        if exclude_accounts:
+            eligible = [s for s in eligible if s.name not in exclude_accounts]
+
         if not eligible:
             return []
 
         scores = self._scorer.score_accounts(
-            [s.name for s in eligible], model_id, active_requests
+            [s.name for s in eligible], model_id, active_requests, request_estimates
         )
 
         ranked = self._scorer.rank_accounts(scores)
@@ -103,19 +119,26 @@ class Router:
         estimated_cost_microdollars: int,
         request_id: str,
     ) -> None:
-        """Create a reservation for an account."""
-        self._reservation_manager.create_reservation(
-            account_name=account_name,
-            estimated_tokens=estimated_tokens,
-            estimated_cost_microdollars=estimated_cost_microdollars,
-            request_id=request_id,
-        )
+        """Create a reservation for an account.
+
+        .. deprecated::
+            The coordinator now uses QuotaEstimator.add_reservation directly.
+            This method is retained for backward compatibility only.
+        """
+        logger.debug("create_reservation called (deprecated path) for %s", account_name)
 
     def release_reservation(
         self, reservation_id: str, reason: str = "completed"
     ) -> None:
-        """Release a reservation."""
-        self._reservation_manager.release_reservation(reservation_id, reason)
+        """Release a reservation.
+
+        .. deprecated::
+            The coordinator now uses QuotaEstimator.remove_reservation directly.
+            This method is retained for backward compatibility only.
+        """
+        logger.debug(
+            "release_reservation called (deprecated path) for %s", reservation_id
+        )
 
     def record_usage(
         self,
@@ -127,8 +150,13 @@ class Router:
         self._quota_estimator.record_usage(account_name, tokens, cost_microdollars)
 
     def reconcile_reservations(self) -> int:
-        """Reconcile expired reservations."""
-        return self._reservation_manager.reconcile_reservations()
+        """Reconcile expired reservations.
+
+        .. deprecated::
+            The coordinator and background tasks now handle reservation
+            reconciliation via SQLite directly.
+        """
+        return 0
 
     def get_account_usage(self, account_name: str) -> tuple[int, int]:
         """Get account usage (tokens, cost)."""
@@ -144,14 +172,92 @@ class Router:
     def set_account_limits(
         self,
         account_name: str,
-        max_daily_cost_microdollars: int | None = None,
-        max_hourly_cost_microdollars: int | None = None,
-        max_monthly_cost_microdollars: int | None = None,
+        capacity_7d_microdollars: int | None = None,
+        capacity_5h_microdollars: int | None = None,
+        capacity_30d_microdollars: int | None = None,
     ) -> None:
         """Set quota limits for an account."""
         self._quota_estimator.set_account_limits(
             account_name,
-            max_daily_cost_microdollars,
-            max_hourly_cost_microdollars,
-            max_monthly_cost_microdollars,
+            capacity_7d_microdollars,
+            capacity_5h_microdollars,
+            capacity_30d_microdollars,
         )
+
+    def configure_account_policy(
+        self,
+        account_name: str,
+        *,
+        weight: float,
+        capacity_5h_microdollars: int,
+        capacity_7d_microdollars: int,
+        capacity_30d_microdollars: int,
+        offset_5h_microdollars: int,
+        offset_7d_microdollars: int,
+        offset_30d_microdollars: int,
+    ) -> None:
+        """Configure the full quota policy for an account."""
+        self._quota_estimator.configure_account_policy(
+            account_name,
+            weight=weight,
+            capacity_5h_microdollars=capacity_5h_microdollars,
+            capacity_7d_microdollars=capacity_7d_microdollars,
+            capacity_30d_microdollars=capacity_30d_microdollars,
+            offset_5h_microdollars=offset_5h_microdollars,
+            offset_7d_microdollars=offset_7d_microdollars,
+            offset_30d_microdollars=offset_30d_microdollars,
+        )
+
+    def increment_active_request_count(self, account_name: str) -> None:
+        """Increment the active request count for an account."""
+        state = self._registry.get_state(account_name)
+        if state is not None:
+            state.active_request_count += 1
+
+    def decrement_active_request_count(self, account_name: str) -> None:
+        """Decrement the active request count for an account.
+
+        Never allows the count to become negative.
+        """
+        state = self._registry.get_state(account_name)
+        if state is not None and state.active_request_count > 0:
+            state.active_request_count -= 1
+
+    def has_eligible_pairing(self) -> bool:
+        """Check if at least one eligible account-model pairing exists.
+
+        Verifies at least one combination where:
+        - Account enabled
+        - Credential loaded
+        - Account healthy
+        - Model available to account
+        - Model protocol resolved
+        - Account not excluded by quota policy
+        """
+        all_states = self._registry.get_enabled_states()
+        if not all_states:
+            return False
+
+        for state in all_states:
+            if not state.is_eligible():
+                continue
+            # Check credential loaded
+            if not self._registry.get_api_key(state.name):
+                continue
+            # Check health
+            if (
+                self._health_manager is not None
+                and not self._health_manager.is_account_healthy(state.name)
+            ):
+                continue
+            # Check quota within limits
+            quota = self._quota_estimator.get_account_quota(state.name)
+            if quota is not None and not quota.is_within_limits():
+                continue
+            # Check model availability
+            all_models = self._catalog.cache.get_all_models()
+            for model_id in all_models:
+                supporting = self._catalog.cache.get_supporting_accounts(model_id)
+                if state.name in supporting:
+                    return True
+        return False

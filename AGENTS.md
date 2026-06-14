@@ -17,7 +17,7 @@ Development guidelines for the opencode-go-aggregator project.
 - respx for HTTPX upstream mocking
 - Tests in `tests/unit/`, `tests/integration/`, `tests/contract/`
 - Run: `uv run pytest`
-- All 287+ tests must pass before committing
+- All 470+ tests must pass before committing
 
 ## Pre-commit Checks
 
@@ -58,6 +58,7 @@ For detailed architecture documentation, see `architecture/` directory:
 - `phase-8.md`: Statistics API and dashboard
 - `phase-9.md`: Deployment hardening
 - `phase-10-integration-hardening.md`: Integration hardening and correct request lifecycle
+- `phase-12-executable-correctness-pass.md`: Executable correctness pass
 
 ## Import Organization
 

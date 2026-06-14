@@ -120,8 +120,8 @@ def _make_mock_catalog(model_id: str = "gpt-4") -> ModelCatalogCache:
 def test_5h_usage_changes_selection() -> None:
     """Five-hour usage on one account should route to the other."""
     estimator = QuotaEstimator()
-    estimator.set_account_limits("acct1", max_hourly_cost_microdollars=10_000_000)
-    estimator.set_account_limits("acct2", max_hourly_cost_microdollars=10_000_000)
+    estimator.set_account_limits("acct1", capacity_5h_microdollars=10_000_000)
+    estimator.set_account_limits("acct2", capacity_5h_microdollars=10_000_000)
     # Record usage only on acct1
     estimator.record_usage("acct1", 1000, 5_000_000)
 
@@ -139,14 +139,14 @@ def test_7d_usage_changes_selection() -> None:
 
     estimator.accounts["acct1"] = AccountQuota(
         account_name="acct1",
-        max_daily_cost_microdollars=10_000_000,
+        capacity_7d_microdollars=10_000_000,
         persisted_snapshot=PersistedWindowSnapshot(
             account_id=1, cost_5h=0, cost_7d=5_000_000, cost_30d=0
         ),
     )
     estimator.accounts["acct2"] = AccountQuota(
         account_name="acct2",
-        max_daily_cost_microdollars=10_000_000,
+        capacity_7d_microdollars=10_000_000,
         persisted_snapshot=PersistedWindowSnapshot(
             account_id=2, cost_5h=0, cost_7d=0, cost_30d=0
         ),
@@ -165,14 +165,14 @@ def test_30d_usage_changes_selection() -> None:
 
     estimator.accounts["acct1"] = AccountQuota(
         account_name="acct1",
-        max_monthly_cost_microdollars=60_000_000,
+        capacity_30d_microdollars=60_000_000,
         persisted_snapshot=PersistedWindowSnapshot(
             account_id=1, cost_5h=0, cost_7d=0, cost_30d=30_000_000
         ),
     )
     estimator.accounts["acct2"] = AccountQuota(
         account_name="acct2",
-        max_monthly_cost_microdollars=60_000_000,
+        capacity_30d_microdollars=60_000_000,
         persisted_snapshot=PersistedWindowSnapshot(
             account_id=2, cost_5h=0, cost_7d=0, cost_30d=0
         ),
@@ -191,8 +191,8 @@ def test_offsets_apply_to_correct_windows() -> None:
 
     estimator.accounts["acct1"] = AccountQuota(
         account_name="acct1",
-        max_hourly_cost_microdollars=10_000_000,
-        max_daily_cost_microdollars=10_000_000,
+        capacity_5h_microdollars=10_000_000,
+        capacity_7d_microdollars=10_000_000,
         five_hour_offset=8_000_000,
         weekly_offset=0,
         monthly_offset=0,
@@ -202,8 +202,8 @@ def test_offsets_apply_to_correct_windows() -> None:
     )
     estimator.accounts["acct2"] = AccountQuota(
         account_name="acct2",
-        max_hourly_cost_microdollars=10_000_000,
-        max_daily_cost_microdollars=10_000_000,
+        capacity_5h_microdollars=10_000_000,
+        capacity_7d_microdollars=10_000_000,
         five_hour_offset=0,
         weekly_offset=0,
         monthly_offset=0,
@@ -225,8 +225,8 @@ def test_weights_scale_capacities() -> None:
     estimator = QuotaEstimator()
     estimator.set_account_weight("acct1", 2.0)
     estimator.set_account_weight("acct2", 1.0)
-    estimator.set_account_limits("acct1", max_daily_cost_microdollars=20_000_000)
-    estimator.set_account_limits("acct2", max_daily_cost_microdollars=10_000_000)
+    estimator.set_account_limits("acct1", capacity_7d_microdollars=20_000_000)
+    estimator.set_account_limits("acct2", capacity_7d_microdollars=10_000_000)
     # Equal usage on both accounts
     estimator.record_usage("acct1", 1000, 5_000_000)
     estimator.record_usage("acct2", 1000, 5_000_000)
@@ -243,8 +243,8 @@ def test_weights_scale_capacities() -> None:
 def test_reservations_affect_selection() -> None:
     """Active reservation should make an account less preferred."""
     estimator = QuotaEstimator()
-    estimator.set_account_limits("acct1", max_hourly_cost_microdollars=10_000_000)
-    estimator.set_account_limits("acct2", max_hourly_cost_microdollars=10_000_000)
+    estimator.set_account_limits("acct1", capacity_5h_microdollars=10_000_000)
+    estimator.set_account_limits("acct2", capacity_5h_microdollars=10_000_000)
     # Add reservation on acct1
     estimator.add_reservation("acct1", 4_000_000)
 
@@ -283,7 +283,7 @@ def test_restart_hydration_preserves_behavior() -> None:
     estimator = QuotaEstimator()
     estimator.accounts["acct1"] = AccountQuota(
         account_name="acct1",
-        max_daily_cost_microdollars=10_000_000,
+        capacity_7d_microdollars=10_000_000,
         five_hour_offset=2_000_000,
         persisted_snapshot=PersistedWindowSnapshot(
             account_id=1, cost_5h=1_000_000, cost_7d=2_000_000, cost_30d=3_000_000
@@ -291,7 +291,7 @@ def test_restart_hydration_preserves_behavior() -> None:
     )
     estimator.accounts["acct2"] = AccountQuota(
         account_name="acct2",
-        max_daily_cost_microdollars=10_000_000,
+        capacity_7d_microdollars=10_000_000,
         persisted_snapshot=PersistedWindowSnapshot(
             account_id=2, cost_5h=0, cost_7d=0, cost_30d=0
         ),
@@ -304,7 +304,7 @@ def test_restart_hydration_preserves_behavior() -> None:
     estimator2 = QuotaEstimator()
     estimator2.accounts["acct1"] = AccountQuota(
         account_name="acct1",
-        max_daily_cost_microdollars=10_000_000,
+        capacity_7d_microdollars=10_000_000,
         five_hour_offset=2_000_000,
         persisted_snapshot=PersistedWindowSnapshot(
             account_id=1, cost_5h=1_000_000, cost_7d=2_000_000, cost_30d=3_000_000
@@ -312,7 +312,7 @@ def test_restart_hydration_preserves_behavior() -> None:
     )
     estimator2.accounts["acct2"] = AccountQuota(
         account_name="acct2",
-        max_daily_cost_microdollars=10_000_000,
+        capacity_7d_microdollars=10_000_000,
         persisted_snapshot=PersistedWindowSnapshot(
             account_id=2, cost_5h=0, cost_7d=0, cost_30d=0
         ),
@@ -332,9 +332,9 @@ def test_offset_does_not_affect_wrong_window() -> None:
     estimator = QuotaEstimator()
     estimator.accounts["acct1"] = AccountQuota(
         account_name="acct1",
-        max_hourly_cost_microdollars=10_000_000,
-        max_daily_cost_microdollars=10_000_000,
-        max_monthly_cost_microdollars=60_000_000,
+        capacity_5h_microdollars=10_000_000,
+        capacity_7d_microdollars=10_000_000,
+        capacity_30d_microdollars=60_000_000,
         five_hour_offset=5_000_000,
         weekly_offset=0,
         monthly_offset=0,
@@ -344,9 +344,9 @@ def test_offset_does_not_affect_wrong_window() -> None:
     )
     estimator.accounts["acct2"] = AccountQuota(
         account_name="acct2",
-        max_hourly_cost_microdollars=10_000_000,
-        max_daily_cost_microdollars=10_000_000,
-        max_monthly_cost_microdollars=60_000_000,
+        capacity_5h_microdollars=10_000_000,
+        capacity_7d_microdollars=10_000_000,
+        capacity_30d_microdollars=60_000_000,
         five_hour_offset=0,
         weekly_offset=0,
         monthly_offset=0,
@@ -365,3 +365,105 @@ def test_offset_does_not_affect_wrong_window() -> None:
     estimator.accounts["acct1"].five_hour_offset = 0
     scores_equal = scorer.score_accounts(["acct1", "acct2"])
     assert scores_equal[0].quota_score == scores_equal[1].quota_score
+
+
+def test_request_estimate_affects_projected_score() -> None:
+    """Incoming request estimate should be included in scoring."""
+    estimator = QuotaEstimator()
+    estimator.set_account_limits("acct1", capacity_5h_microdollars=10_000_000)
+    estimator.set_account_limits("acct2", capacity_5h_microdollars=10_000_000)
+    # Both accounts start with zero usage
+    estimator.record_usage("acct1", 0, 0)
+    estimator.record_usage("acct2", 0, 0)
+
+    scorer = QuotaFairScorer(quota_estimator=estimator)
+    # Without estimate, both should score equally
+    scores_no_est = scorer.score_accounts(["acct1", "acct2"])
+    assert scores_no_est[0].quota_score == scores_no_est[1].quota_score
+
+    # With estimate on acct1, it should score higher (more utilized)
+    scores_with_est = scorer.score_accounts(
+        ["acct1", "acct2"], request_estimates={"acct1": 5_000_000}
+    )
+    assert scores_with_est[0].quota_score > scores_with_est[1].quota_score
+
+
+def test_utilization_above_one_is_visible() -> None:
+    """Utilization above 1.0 should not be clamped."""
+    estimator = QuotaEstimator()
+    estimator.set_account_limits("acct1", capacity_5h_microdollars=10_000_000)
+    # Record usage that exceeds capacity
+    estimator.record_usage("acct1", 1000, 15_000_000)
+
+    scorer = QuotaFairScorer(quota_estimator=estimator)
+    scores = scorer.score_accounts(["acct1"])
+
+    # 150% utilization should produce score > 1.0
+    assert scores[0].quota_score > 1.0
+
+
+def test_utilization_above_one_compare() -> None:
+    """150% utilization should score higher than 110% utilization."""
+    estimator = QuotaEstimator()
+    estimator.set_account_limits("acct1", capacity_5h_microdollars=10_000_000)
+    estimator.set_account_limits("acct2", capacity_5h_microdollars=10_000_000)
+    # acct1 at 150%, acct2 at 110%
+    estimator.record_usage("acct1", 1000, 15_000_000)
+    estimator.record_usage("acct2", 1000, 11_000_000)
+
+    scorer = QuotaFairScorer(quota_estimator=estimator)
+    scores = scorer.score_accounts(["acct1", "acct2"])
+
+    # 150% should score higher than 110%
+    assert scores[0].quota_score > scores[1].quota_score
+
+
+def test_active_request_count_increments_and_returns_to_zero() -> None:
+    """Active request count should increment and decrement correctly."""
+    os.environ["TEST_ROUTER_ACCT_KEY"] = "key"
+    config = AppConfig.from_dict(
+        {
+            "accounts": [
+                {"name": "acct1", "api_key_env": "TEST_ROUTER_ACCT_KEY"},
+            ]
+        }
+    )
+    registry = AccountRegistry(config)
+    cache = ModelCatalogCache()
+    cache.update_from_account("acct1", [{"model_id": "gpt-4", "protocol": "openai"}])
+
+    class MockCatalog:
+        def __init__(self, c: ModelCatalogCache) -> None:
+            self._cache = c
+
+        @property
+        def cache(self) -> ModelCatalogCache:
+            return self._cache
+
+    catalog = MockCatalog(cache)
+    router = Router(registry, catalog)  # type: ignore[arg-type]
+
+    # Initially zero
+    state = registry.get_state("acct1")
+    assert state is not None
+    assert state.active_request_count == 0
+
+    # Increment twice
+    router.increment_active_request_count("acct1")
+    assert state.active_request_count == 1
+    router.increment_active_request_count("acct1")
+    assert state.active_request_count == 2
+
+    # Decrement once
+    router.decrement_active_request_count("acct1")
+    assert state.active_request_count == 1
+
+    # Decrement back to zero
+    router.decrement_active_request_count("acct1")
+    assert state.active_request_count == 0
+
+    # Decrement below zero should not go negative
+    router.decrement_active_request_count("acct1")
+    assert state.active_request_count == 0
+
+    del os.environ["TEST_ROUTER_ACCT_KEY"]

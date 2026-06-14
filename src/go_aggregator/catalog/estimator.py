@@ -1,4 +1,12 @@
-"""EWMA (Exponentially Weighted Moving Average) model cost estimator."""
+"""EWMA (Exponentially Weighted Moving Average) model cost estimator.
+
+.. deprecated::
+    This standalone estimator is no longer wired into the application.
+    The QuotaEstimator (in quota/estimation.py) includes its own 5-tier
+    cost estimation hierarchy with EWMA at tiers 1 and 2, and the
+    RequestFinalizer updates it on every completed request.
+    This module is retained for backward-compatible imports and tests only.
+"""
 
 from __future__ import annotations
 
