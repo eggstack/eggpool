@@ -567,6 +567,41 @@ async def test_upstream_429_with_retry_after(
     assert response.status_code == 429
 
 
+# ── 9b. Upstream 402 quota failure passed through ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_upstream_402_quota_failure(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+) -> None:
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+            return_value=httpx.Response(
+                402,
+                json={
+                    "error": {
+                        "message": "Quota exceeded",
+                        "type": "billing_error",
+                    }
+                },
+            )
+        )
+
+        response = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-4",
+                "messages": [{"role": "user", "content": "Hi"}],
+            },
+            headers=auth_headers,
+        )
+
+    assert response.status_code == 402
+    body = response.json()
+    assert "error" in body
+
+
 # ── 10. Upstream 404 passed through ──────────────────────────────────────────
 
 

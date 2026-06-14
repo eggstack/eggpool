@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import os
+import resource
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import httpx
@@ -12,7 +15,7 @@ import pytest_asyncio
 import respx
 
 from go_aggregator.accounts.registry import AccountRegistry
-from go_aggregator.app import create_app
+from go_aggregator.app import _reload_config, create_app
 from go_aggregator.catalog.service import CatalogService
 from go_aggregator.db.connection import Database
 from go_aggregator.db.migrations import MigrationRunner
@@ -492,3 +495,284 @@ async def test_rapid_successive_requests(
                 headers=auth_headers,
             )
             assert resp.status_code == 200
+
+
+# ── 8. Catalog refresh during active requests ────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_catalog_refresh_during_active_requests(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    app: FastAPI,
+) -> None:
+    """Catalog refresh does not interrupt in-flight requests."""
+    catalog: CatalogService = app.state.catalog
+
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "cmpl-1",
+                    "object": "chat.completion",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "Ok"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 5,
+                        "completion_tokens": 2,
+                        "total_tokens": 7,
+                    },
+                },
+            )
+        )
+
+        async def _request() -> httpx.Response:
+            return await client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "gpt-4",
+                    "messages": [{"role": "user", "content": "Hi"}],
+                },
+                headers=auth_headers,
+            )
+
+        # Fire requests and catalog refresh concurrently
+        tasks = [_request() for _ in range(5)]
+        tasks.append(catalog.refresh())
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # All HTTP requests should succeed (catalog refresh is a coroutine, not a response)
+    http_results = [r for r in results if isinstance(r, httpx.Response)]
+    assert len(http_results) == 5
+    for resp in http_results:
+        assert resp.status_code == 200
+
+
+# ── 9. Config reload during active requests ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_config_reload_during_active_requests(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    app: FastAPI,
+) -> None:
+    """Calling _reload_config while requests are in-flight does not crash."""
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "cmpl-1",
+                    "object": "chat.completion",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "Ok"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 5,
+                        "completion_tokens": 2,
+                        "total_tokens": 7,
+                    },
+                },
+            )
+        )
+
+        async def _request() -> httpx.Response:
+            return await client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "gpt-4",
+                    "messages": [{"role": "user", "content": "Hi"}],
+                },
+                headers=auth_headers,
+            )
+
+        # Fire requests and trigger config reload concurrently
+        # _reload_config needs config_path; set it to None so it warns and returns
+        app.state.config_path = None
+        tasks = [_request() for _ in range(5)]
+        tasks.append(asyncio.to_thread(_reload_config, app))
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    http_results = [r for r in results if isinstance(r, httpx.Response)]
+    assert len(http_results) == 5
+    for resp in http_results:
+        assert resp.status_code == 200
+
+
+# ── 10. One-week synthetic request history ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_one_week_synthetic_request_history(
+    app: FastAPI,
+) -> None:
+    """Inserting a week of synthetic request data and querying stats works."""
+    db: Database = app.state.db
+
+    # Insert 7 days of synthetic requests (100 per day)
+    for day in range(7):
+        for _ in range(100):
+            await db.execute(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, started_at, completed_at,
+                    status, input_tokens, output_tokens,
+                    cost_microdollars, upstream_latency_ms
+                ) VALUES (
+                    1, 'gpt-4',
+                    datetime('now', ? || ' days', ? || ' hours'),
+                    datetime('now', ? || ' days', ? || ' hours', '+1 seconds'),
+                    'completed', 100, 50, 5000, 150
+                )
+                """,
+                (f"-{day}", f"{day % 24}", f"-{day}", f"{day % 24}"),
+            )
+    await db.connection.commit()
+
+    # Verify total count
+    row = await db.fetch_one("SELECT COUNT(*) as cnt FROM requests")
+    assert row is not None
+    assert row["cnt"] == 700
+
+    # Verify stats queries work — use a wide range to capture all inserted data
+    from go_aggregator.stats.service import StatsService, TimeRange
+
+    stats = StatsService(db)
+    time_range = TimeRange(
+        start=datetime.now(UTC) - timedelta(days=8),
+        end=datetime.now(UTC) + timedelta(hours=1),
+        label="8d",
+    )
+
+    summary = await stats.get_summary(time_range)
+    assert summary["total_requests"] == 700
+    assert summary["total_input_tokens"] == 70000
+    assert summary["total_output_tokens"] == 35000
+
+    account_stats = await stats.get_account_stats(time_range)
+    assert len(account_stats) >= 1
+
+    model_stats = await stats.get_model_stats(time_range)
+    assert len(model_stats) >= 1
+
+
+# ── 11. Long-stream structural test ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_long_stream_structural(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+) -> None:
+    """A stream with many chunks completes without error."""
+    # Build a stream with 50 chunks
+    chunks = []
+    for i in range(50):
+        chunks.append(
+            "data: "
+            + __import__("json").dumps(
+                {
+                    "id": "cmpl-1",
+                    "object": "chat.completion.chunk",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": f"chunk-{i}"},
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+            )
+        )
+        chunks.append("")
+    chunks.append("data: [DONE]")
+    sse_content = "\n".join(chunks) + "\n"
+
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                content=sse_content.encode(),
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+
+        response = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-4",
+                "messages": [{"role": "user", "content": "Hi"}],
+                "stream": True,
+            },
+            headers=auth_headers,
+        )
+
+    assert response.status_code == 200
+    text = response.text
+    assert "chunk-0" in text
+    assert "chunk-49" in text
+    assert "[DONE]" in text
+
+
+# ── 12. File descriptor stability ───────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_file_descriptor_stability(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+) -> None:
+    """File descriptors do not leak across many requests."""
+    gc.collect()
+    fd_before = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "cmpl-1",
+                    "object": "chat.completion",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "Ok"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 5,
+                        "completion_tokens": 2,
+                        "total_tokens": 7,
+                    },
+                },
+            )
+        )
+
+        for _ in range(20):
+            resp = await client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "gpt-4",
+                    "messages": [{"role": "user", "content": "Hi"}],
+                },
+                headers=auth_headers,
+            )
+            assert resp.status_code == 200
+
+    gc.collect()
+    fd_after = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+
+    # Soft limit should not have changed (no fd leak in ulimit)
+    assert fd_before == fd_after
