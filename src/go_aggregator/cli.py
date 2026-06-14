@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
 import sys
 from typing import NoReturn
 
 import click
+import httpx
 
 from go_aggregator.db.connection import Database
 from go_aggregator.db.migrations import MigrationRunner
@@ -87,8 +90,6 @@ def migrate(ctx: click.Context) -> None:
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)
 
-    import asyncio
-
     async def _run() -> None:
         db = Database(
             path=config.database.path,
@@ -101,6 +102,119 @@ def migrate(ctx: click.Context) -> None:
             runner = MigrationRunner(db)
             await runner.run()
             click.echo("Migrations completed successfully")
+        finally:
+            await db.disconnect()
+
+    asyncio.run(_run())
+
+
+@cli.group()
+def models() -> None:
+    """Model catalog commands."""
+
+
+@models.command("refresh")
+@click.pass_context
+def models_refresh(ctx: click.Context) -> None:
+    """Refresh the model catalog from upstream."""
+    from go_aggregator.accounts.registry import AccountRegistry
+    from go_aggregator.catalog.service import CatalogService
+
+    config_path: str = ctx.obj["config_path"]
+
+    try:
+        config = AppConfig.from_toml(config_path)
+    except AggregatorError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
+    async def _run() -> None:
+        db = Database(
+            path=config.database.path,
+            busy_timeout_ms=config.database.busy_timeout_ms,
+            wal=config.database.wal,
+            synchronous=config.database.synchronous,
+        )
+        await db.connect()
+        try:
+            runner = MigrationRunner(db)
+            await runner.run()
+
+            registry = AccountRegistry(config)
+            client = httpx.AsyncClient(base_url=config.upstream.base_url)
+            try:
+                catalog = CatalogService(config, registry, db, client)
+                await catalog.refresh()
+                count = catalog.cache.model_count
+                click.echo(f"Refreshed catalog: {count} models found")
+            finally:
+                await client.aclose()
+        finally:
+            await db.disconnect()
+
+    asyncio.run(_run())
+
+
+@cli.group()
+def accounts() -> None:
+    """Account management commands."""
+
+
+@accounts.command("status")
+@click.pass_context
+def accounts_status(ctx: click.Context) -> None:
+    """Show account status."""
+    config_path: str = ctx.obj["config_path"]
+
+    try:
+        config = AppConfig.from_toml(config_path)
+    except AggregatorError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
+    if not config.accounts:
+        click.echo("No accounts configured.")
+        return
+
+    for acct in config.accounts:
+        env_set = "yes" if os.environ.get(acct.api_key_env) else "no"
+        click.echo(
+            f"  {acct.name}: enabled={acct.enabled}, "
+            f"weight={acct.weight}, "
+            f"api_key_env={acct.api_key_env} (set={env_set})"
+        )
+
+    click.echo(f"\nTotal accounts: {len(config.accounts)}")
+
+
+@cli.group("db")
+def db_group() -> None:
+    """Database maintenance commands."""
+
+
+@db_group.command("vacuum")
+@click.pass_context
+def db_vacuum(ctx: click.Context) -> None:
+    """Vacuum the database to reclaim space."""
+    config_path: str = ctx.obj["config_path"]
+
+    try:
+        config = AppConfig.from_toml(config_path)
+    except AggregatorError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
+    async def _run() -> None:
+        db = Database(
+            path=config.database.path,
+            busy_timeout_ms=config.database.busy_timeout_ms,
+            wal=config.database.wal,
+            synchronous=config.database.synchronous,
+        )
+        await db.connect()
+        try:
+            await db.connection.execute("VACUUM")
+            click.echo("Database vacuum completed successfully")
         finally:
             await db.disconnect()
 

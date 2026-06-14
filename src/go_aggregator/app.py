@@ -277,6 +277,7 @@ def create_app(
 
     @app.exception_handler(AggregatorError)
     async def handle_aggregator_error(  # pyright: ignore[reportUnusedFunction]
+        request: Request,
         exc: AggregatorError,
     ) -> JSONResponse:
         return JSONResponse(
