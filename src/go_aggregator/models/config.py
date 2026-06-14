@@ -148,6 +148,14 @@ class AppConfig(BaseModel):
         return self
 
     @classmethod
+    def from_dict(cls, data: dict) -> AppConfig:
+        """Create config from a dictionary."""
+        try:
+            return cls.model_validate(data)
+        except Exception as exc:
+            raise ConfigError(f"Config validation failed: {exc}") from exc
+
+    @classmethod
     def from_toml(cls, path: str) -> AppConfig:
         """Read and validate a TOML configuration file."""
         try:

@@ -17,3 +17,16 @@ class ReadyResponse(BaseModel):
 class ErrorResponse(BaseModel):
     error: str
     code: str | None = None
+
+
+class ModelObject(BaseModel):
+    id: str
+    object: str = "model"
+    created: int = 0
+    owned_by: str = "opencode"
+    name: str | None = None
+
+
+class ModelListResponse(BaseModel):
+    object: str = "list"
+    data: list[ModelObject] = []
