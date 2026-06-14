@@ -6,6 +6,7 @@ Used by both the JSON API and the server-rendered dashboard.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -30,6 +31,11 @@ PERIOD_PRESETS: dict[str, int] = {
     "7d": 604800,
     "30d": 2592000,
 }
+
+# Utilization windows in seconds
+_UTILIZATION_5H = 5 * 3600
+_UTILIZATION_7D = 7 * 86400
+_UTILIZATION_30D = 30 * 86400
 
 
 def resolve_period(period: str | None) -> tuple[datetime, datetime, str]:
@@ -115,22 +121,62 @@ class StatsService:
         )
 
     async def get_account_stats(self, time_range: TimeRange) -> list[dict[str, Any]]:
-        """Get per-account aggregates including current reservations."""
+        """Get per-account aggregates including reservations and utilization."""
         rows = await queries.fetch_account_stats(
             self._db, time_range.start_str(), time_range.end_str()
         )
         reservations = await fetch_active_reservations(self._db)
         reserved_by_account: dict[str, int] = {}
+        reservation_count_by_account: dict[str, int] = {}
         for r in reservations:
             name = str(r.get("account_name", ""))
             reserved_by_account[name] = reserved_by_account.get(name, 0) + int(
                 r.get("reserved_microdollars", 0)
             )
-        for row in rows:
-            row["reserved_microdollars"] = reserved_by_account.get(
-                str(row.get("account_name", "")), 0
+            reservation_count_by_account[name] = (
+                reservation_count_by_account.get(name, 0) + 1
             )
+
+        now = datetime.now(UTC)
+        for row in rows:
+            name = str(row.get("account_name", ""))
+            row["reserved_microdollars"] = reserved_by_account.get(name, 0)
+            row["active_reservations"] = reservation_count_by_account.get(name, 0)
+
+            # Compute utilization across three windows
+            row["utilization_5h"] = await self._compute_utilization(
+                name, now - timedelta(seconds=_UTILIZATION_5H), now
+            )
+            row["utilization_7d"] = await self._compute_utilization(
+                name, now - timedelta(seconds=_UTILIZATION_7D), now
+            )
+            row["utilization_30d"] = await self._compute_utilization(
+                name, now - timedelta(seconds=_UTILIZATION_30D), now
+            )
+
+            # Health state placeholder (could be integrated with HealthManager)
+            row["health_state"] = "healthy"
+
         return rows
+
+    async def _compute_utilization(
+        self, account_name: str, start: datetime, end: datetime
+    ) -> float:
+        """Compute cost-based utilization for an account in a time window."""
+        start_s = format_dt(start)
+        end_s = format_dt(end)
+        row = await self._db.fetch_one(
+            "SELECT COALESCE(SUM(cost_microdollars), 0) as cost "
+            "FROM requests r JOIN accounts a ON a.id = r.account_id "
+            "WHERE a.name = ? AND r.started_at >= ? AND r.started_at < ?",
+            (account_name, start_s, end_s),
+        )
+        if row is None:
+            return 0.0
+        cost = int(row["cost"])
+        # Normalize: cost per hour
+        hours = max((end - start).total_seconds() / 3600.0, 1.0)
+        return cost / hours
 
     async def get_model_stats(
         self, time_range: TimeRange, account_name: str | None = None
@@ -188,8 +234,8 @@ class StatsService:
         """Compute a utilization imbalance metric across accounts.
 
         The metric is the coefficient of variation of normalized account
-        utilization (cost / capacity). Lower is better; 0 means perfect
-        balance.
+        utilization (cost / capacity_weight). Lower is better; 0 means
+        perfect balance.
         """
         account_stats = await self.get_account_stats(time_range)
         active = [a for a in account_stats if int(a.get("request_count", 0)) > 0]
@@ -200,18 +246,29 @@ class StatsService:
                 "most_used": None,
                 "least_used": None,
             }
-        costs = [float(a.get("cost_microdollars", 0)) for a in active]
-        mean_cost = sum(costs) / len(costs)
-        if mean_cost == 0:
+
+        # Normalize by account weight (default 1.0)
+        normalized: list[float] = []
+        for a in active:
+            cost = float(a.get("cost_microdollars", 0))
+            weight = float(a.get("account_weight", 1.0))
+            if weight <= 0:
+                weight = 1.0
+            normalized.append(cost / weight)
+
+        mean_val = sum(normalized) / len(normalized)
+        if mean_val == 0:
             return {
                 "imbalance_ratio": 0.0,
                 "active_accounts": len(active),
                 "most_used": None,
                 "least_used": None,
             }
-        variance = sum((c - mean_cost) ** 2 for c in costs) / len(costs)
-        std_dev = variance**0.5
-        cv = std_dev / mean_cost
+
+        variance = sum((v - mean_val) ** 2 for v in normalized) / len(normalized)
+        std_dev = math.sqrt(variance)
+        cv = std_dev / mean_val
+
         most = max(active, key=lambda a: float(a.get("cost_microdollars", 0)))
         least = min(active, key=lambda a: float(a.get("cost_microdollars", 0)))
         return {

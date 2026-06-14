@@ -16,11 +16,18 @@ import pytest_asyncio
 import respx
 
 from go_aggregator.accounts.registry import AccountRegistry
-from go_aggregator.app import _reload_config, create_app
+from go_aggregator.app import create_app
 from go_aggregator.catalog.service import CatalogService
 from go_aggregator.db.connection import Database
 from go_aggregator.db.migrations import MigrationRunner
+from go_aggregator.db.repositories import (
+    AttemptRepository,
+    RequestRepository,
+    ReservationRepository,
+)
+from go_aggregator.health.health_manager import HealthManager
 from go_aggregator.models.config import AppConfig
+from go_aggregator.request.coordinator import RequestCoordinator
 from go_aggregator.routing.router import Router
 from go_aggregator.stats import StatsService
 
@@ -109,6 +116,26 @@ async def app(config: AppConfig) -> AsyncGenerator[FastAPI]:
     application.state.router = router
 
     application.state.stats = StatsService(db)
+
+    health_manager = HealthManager()
+    application.state.health_manager = health_manager
+
+    request_repo = RequestRepository(db)
+    reservation_repo = ReservationRepository(db)
+    attempt_repo = AttemptRepository(db)
+
+    coordinator = RequestCoordinator(
+        registry=registry,
+        catalog=catalog,
+        router=router,
+        db=db,
+        httpx_client=httpx_client,
+        request_repo=request_repo,
+        reservation_repo=reservation_repo,
+        attempt_repo=attempt_repo,
+        health_manager=health_manager,
+    )
+    application.state.coordinator = coordinator
 
     catalog.cache.load_model(
         model_id="gpt-4",
@@ -549,62 +576,6 @@ async def test_catalog_refresh_during_active_requests(
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
     # All HTTP requests should succeed (catalog refresh is a coroutine, not a response)
-    http_results = [r for r in results if isinstance(r, httpx.Response)]
-    assert len(http_results) == 5
-    for resp in http_results:
-        assert resp.status_code == 200
-
-
-# ── 9. Config reload during active requests ──────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_config_reload_during_active_requests(
-    client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
-    app: FastAPI,
-) -> None:
-    """Calling _reload_config while requests are in-flight does not crash."""
-    with respx.mock:
-        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
-            return_value=httpx.Response(
-                200,
-                json={
-                    "id": "cmpl-1",
-                    "object": "chat.completion",
-                    "choices": [
-                        {
-                            "index": 0,
-                            "message": {"role": "assistant", "content": "Ok"},
-                            "finish_reason": "stop",
-                        }
-                    ],
-                    "usage": {
-                        "prompt_tokens": 5,
-                        "completion_tokens": 2,
-                        "total_tokens": 7,
-                    },
-                },
-            )
-        )
-
-        async def _request() -> httpx.Response:
-            return await client.post(
-                "/v1/chat/completions",
-                json={
-                    "model": "gpt-4",
-                    "messages": [{"role": "user", "content": "Hi"}],
-                },
-                headers=auth_headers,
-            )
-
-        # Fire requests and trigger config reload concurrently
-        # _reload_config needs config_path; set it to None so it warns and returns
-        app.state.config_path = None
-        tasks = [_request() for _ in range(5)]
-        tasks.append(asyncio.to_thread(_reload_config, app))
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
     http_results = [r for r in results if isinstance(r, httpx.Response)]
     assert len(http_results) == 5
     for resp in http_results:

@@ -35,7 +35,25 @@ async def fetch_summary(
         COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0)
             as successful_requests,
         COALESCE(SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END), 0)
-            as error_requests
+            as error_requests,
+        COALESCE(SUM(COALESCE(cache_read_tokens, 0)), 0)
+            as total_cache_read_tokens,
+        COALESCE(SUM(COALESCE(cache_write_tokens, 0)), 0)
+            as total_cache_write_tokens,
+        COALESCE(SUM(COALESCE(reasoning_tokens, 0)), 0)
+            as total_reasoning_tokens,
+        COALESCE(SUM(CASE WHEN streamed = 1 THEN 1 ELSE 0 END), 0)
+            as streamed_requests,
+        COALESCE(SUM(CASE WHEN streamed = 0 THEN 1 ELSE 0 END), 0)
+            as non_streamed_requests,
+        COALESCE(SUM(CASE WHEN exactness = 'exact' THEN 1 ELSE 0 END), 0)
+            as exact_count,
+        COALESCE(SUM(CASE WHEN exactness = 'derived' THEN 1 ELSE 0 END), 0)
+            as derived_count,
+        COALESCE(SUM(CASE WHEN exactness = 'estimated' THEN 1 ELSE 0 END), 0)
+            as estimated_count,
+        COALESCE(SUM(CASE WHEN exactness = 'unknown' THEN 1 ELSE 0 END), 0)
+            as unknown_count
     FROM requests
     WHERE started_at >= ? AND started_at < ?
     """
@@ -56,6 +74,7 @@ async def fetch_account_stats(
         a.id as account_id,
         a.name as account_name,
         a.enabled as account_enabled,
+        a.weight as account_weight,
         COUNT(r.id) as request_count,
         COALESCE(SUM(r.input_tokens), 0) as input_tokens,
         COALESCE(SUM(r.output_tokens), 0) as output_tokens,
@@ -67,7 +86,7 @@ async def fetch_account_stats(
     LEFT JOIN requests r
         ON r.account_id = a.id
         AND r.started_at >= ? AND r.started_at < ?
-    GROUP BY a.id, a.name, a.enabled
+    GROUP BY a.id, a.name, a.enabled, a.weight
     ORDER BY a.name
     """
     rows = await db.fetch_all(sql, (_format_dt(start), _format_dt(end)))
@@ -252,6 +271,15 @@ def _build_summary(row: dict[str, Any]) -> dict[str, Any]:
         "total_output_tokens": int(row.get("total_output_tokens", 0)),
         "total_cost_microdollars": int(row.get("total_cost_microdollars", 0)),
         "avg_latency_ms": float(row.get("avg_latency_ms", 0.0)),
+        "total_cache_read_tokens": int(row.get("total_cache_read_tokens", 0)),
+        "total_cache_write_tokens": int(row.get("total_cache_write_tokens", 0)),
+        "total_reasoning_tokens": int(row.get("total_reasoning_tokens", 0)),
+        "streamed_requests": int(row.get("streamed_requests", 0)),
+        "non_streamed_requests": int(row.get("non_streamed_requests", 0)),
+        "exact_count": int(row.get("exact_count", 0)),
+        "derived_count": int(row.get("derived_count", 0)),
+        "estimated_count": int(row.get("estimated_count", 0)),
+        "unknown_count": int(row.get("unknown_count", 0)),
     }
 
 
@@ -266,4 +294,13 @@ def _empty_summary() -> dict[str, Any]:
         "total_output_tokens": 0,
         "total_cost_microdollars": 0,
         "avg_latency_ms": 0.0,
+        "total_cache_read_tokens": 0,
+        "total_cache_write_tokens": 0,
+        "total_reasoning_tokens": 0,
+        "streamed_requests": 0,
+        "non_streamed_requests": 0,
+        "exact_count": 0,
+        "derived_count": 0,
+        "estimated_count": 0,
+        "unknown_count": 0,
     }

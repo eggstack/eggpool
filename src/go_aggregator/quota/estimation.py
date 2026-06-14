@@ -6,12 +6,19 @@ Includes a 5-tier cost estimation hierarchy:
 3. Model-family moving average
 4. Configured per-model fallback
 5. Global unknown-request fallback
+
+Optionally uses persisted UsageWindowRepository for actual 5h/7d/30d
+usage from SQLite instead of in-memory hourly/daily windows.
 """
 
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from go_aggregator.db.repositories import UsageWindowRepository
 
 
 @dataclass
@@ -79,6 +86,17 @@ class EWMAEstimate:
 
 
 @dataclass
+class PersistedWindowSnapshot:
+    """Snapshot of persisted window usage for an account."""
+
+    account_id: int
+    cost_5h: int = 0
+    cost_7d: int = 0
+    cost_30d: int = 0
+    loaded_at: float = field(default_factory=time.time)
+
+
+@dataclass
 class AccountQuota:
     """Quota state for a single account."""
 
@@ -93,9 +111,13 @@ class AccountQuota:
     weight: float = 1.0
     max_daily_cost_microdollars: int | None = None
     max_hourly_cost_microdollars: int | None = None
+    persisted_snapshot: PersistedWindowSnapshot | None = None
 
     def record_usage(
-        self, tokens: int, cost_microdollars: int, timestamp: float | None = None
+        self,
+        tokens: int,
+        cost_microdollars: int,
+        timestamp: float | None = None,
     ) -> None:
         """Record usage for this account."""
         if timestamp is None:
@@ -136,6 +158,27 @@ class AccountQuota:
         used_ratio = daily_cost / self.max_daily_cost_microdollars
         return max(0.0, 1.0 - used_ratio)
 
+    def get_persisted_cost_5h(self) -> int:
+        """Get 5h cost from persisted snapshot, or fall back to hourly window."""
+        if self.persisted_snapshot is not None:
+            return self.persisted_snapshot.cost_5h
+        _, cost = self.hourly_window.get_usage()
+        return cost
+
+    def get_persisted_cost_7d(self) -> int:
+        """Get 7d cost from persisted snapshot, or fall back to daily window."""
+        if self.persisted_snapshot is not None:
+            return self.persisted_snapshot.cost_7d
+        _, cost = self.daily_window.get_usage()
+        return cost
+
+    def get_persisted_cost_30d(self) -> int:
+        """Get 30d cost from persisted snapshot, or fall back to daily window."""
+        if self.persisted_snapshot is not None:
+            return self.persisted_snapshot.cost_30d
+        _, cost = self.daily_window.get_usage()
+        return cost
+
 
 # Model family fallback costs (dollars per 1M tokens)
 MODEL_FAMILY_FALLBACKS: dict[str, tuple[float, float]] = {
@@ -158,6 +201,7 @@ class QuotaEstimator:
     """Estimates quota usage across all accounts.
 
     Includes 5-tier cost estimation hierarchy for reservation sizing.
+    Optionally uses persisted UsageWindowRepository for actual usage windows.
     """
 
     accounts: dict[str, AccountQuota] = field(default_factory=dict)
@@ -170,6 +214,12 @@ class QuotaEstimator:
     # Config
     default_safety_factor: float = 1.15
     default_unknown_reservation_microdollars: int = 1_000_000
+    # Optional persisted window repo for loading actual usage
+    _usage_window_repo: UsageWindowRepository | None = field(default=None, repr=False)
+
+    def set_usage_window_repo(self, repo: UsageWindowRepository) -> None:
+        """Set the persisted usage window repository."""
+        self._usage_window_repo = repo
 
     def record_usage(
         self,
@@ -335,3 +385,18 @@ class QuotaEstimator:
                 eligible.append((name, capacity))
 
         return sorted(eligible, key=lambda x: x[1], reverse=True)
+
+    def get_window_costs(self, account_name: str) -> tuple[int, int, int]:
+        """Get the 5h, 7d, 30d costs for an account.
+
+        Uses persisted snapshot when available, falls back to
+        in-memory windows.
+        """
+        quota = self.accounts.get(account_name)
+        if quota is None:
+            return 0, 0, 0
+        return (
+            quota.get_persisted_cost_5h(),
+            quota.get_persisted_cost_7d(),
+            quota.get_persisted_cost_30d(),
+        )

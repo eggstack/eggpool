@@ -3,38 +3,43 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
-import signal
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from go_aggregator.accounts.registry import AccountRegistry
 from go_aggregator.api.chat_completions import handle_chat_completions
 from go_aggregator.api.messages import handle_messages
 from go_aggregator.api.stats import register_stats_routes
-from go_aggregator.auth import require_auth
+from go_aggregator.auth import require_auth, require_auth_at_startup
 from go_aggregator.background import TaskSupervisor
 from go_aggregator.background.cleanup import (
     checkpoint_database,
     cleanup_old_requests,
-    cleanup_stale_reservations,
 )
 from go_aggregator.catalog.service import CatalogService
 from go_aggregator.constants import API_V1_PREFIX
 from go_aggregator.dashboard.routes import register_dashboard_routes
 from go_aggregator.db.connection import Database
 from go_aggregator.db.migrations import MigrationRunner
+from go_aggregator.db.repositories import (
+    AccountRepository,
+    AttemptRepository,
+    RequestRepository,
+    ReservationRepository,
+    UsageWindowRepository,
+)
 from go_aggregator.errors import AggregatorError
 from go_aggregator.health.health_manager import HealthManager
 from go_aggregator.logging import configure_logging
-from go_aggregator.models.api import HealthResponse, ReadyResponse
+from go_aggregator.models.api import HealthResponse
 from go_aggregator.models.config import AppConfig
+from go_aggregator.request.coordinator import RequestCoordinator
 from go_aggregator.routing.router import Router
 from go_aggregator.stats import StatsService
 
@@ -44,38 +49,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _reload_config(app: FastAPI) -> None:
-    """Reload configuration from disk. Called on SIGHUP."""
-    config_path: str | None = getattr(app.state, "config_path", None)
-    if config_path is None:
-        logger.warning("No config path stored; cannot reload")
-        return
-
-    try:
-        new_config = AppConfig.from_toml(config_path)
-    except AggregatorError as exc:
-        logger.error("Config reload failed: %s", exc)
-        return
-
-    configure_logging(level=new_config.server.log_level)
-
-    app.state.registry = AccountRegistry(new_config)
-    app.state.config = new_config
-
-    catalog: CatalogService = app.state.catalog
-    asyncio.get_event_loop().create_task(_safe_refresh(catalog))
-
-    logger.info(
-        "Configuration reloaded from %s (%d accounts)",
-        config_path,
-        len(new_config.accounts),
+async def _crash_recovery(db: Database) -> None:
+    """Mark stale pending requests as interrupted, release their reservations."""
+    await db.execute(
+        "UPDATE requests SET status = 'interrupted', "
+        "completed_at = CURRENT_TIMESTAMP "
+        "WHERE status = 'pending' "
+        "AND started_at < datetime('now', '-10 minutes')"
     )
-
-
-async def _safe_refresh(catalog: CatalogService) -> None:
-    """Refresh catalog, suppressing errors."""
-    with contextlib.suppress(Exception):
-        await catalog.refresh()
+    await db.execute(
+        "UPDATE reservations SET status = 'released', "
+        "released_at = CURRENT_TIMESTAMP, release_reason = 'crash_recovery' "
+        "WHERE status = 'active' "
+        "AND created_at < datetime('now', '-10 minutes')"
+    )
+    await db.connection.commit()
+    logger.info("Crash recovery: marked stale requests and reservations")
 
 
 @asynccontextmanager
@@ -85,7 +74,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     configure_logging(level=config.server.log_level)
 
-    # Database
+    # 1. Validate auth at startup
+    require_auth_at_startup(config.server.api_key_env)
+
+    # 2. Database
     db = Database(
         path=config.database.path,
         busy_timeout_ms=config.database.busy_timeout_ms,
@@ -95,14 +87,33 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     await db.connect()
     app.state.db = db
 
-    # Migrations
+    # 3. Migrations
     runner = MigrationRunner(db)
     await runner.run()
 
-    # Stale reservation cleanup on startup
-    await cleanup_stale_reservations(db)
+    # 4. Sync accounts from config to SQLite
+    account_repo = AccountRepository(db)
+    config_accounts = [
+        {
+            "name": acct.name,
+            "api_key_env": acct.api_key_env,
+            "enabled": acct.enabled,
+            "weight": acct.weight,
+        }
+        for acct in config.accounts
+    ]
+    await account_repo.sync_from_config(config_accounts, db)
 
-    # HTTPX client
+    # 5. Crash recovery
+    await _crash_recovery(db)
+
+    # 6. Initialize repositories
+    request_repo = RequestRepository(db)
+    reservation_repo = ReservationRepository(db)
+    attempt_repo = AttemptRepository(db)
+    usage_window_repo = UsageWindowRepository(db)
+
+    # 7. HTTPX client
     app.state.httpx_client = httpx.AsyncClient(
         base_url=config.upstream.base_url,
         timeout=httpx.Timeout(
@@ -117,26 +128,51 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         ),
     )
 
-    # Account registry
+    # 8. Account registry (runtime state)
     registry = AccountRegistry(config)
     app.state.registry = registry
 
-    # Health manager
+    # 9. Health manager
     health_manager = HealthManager()
     app.state.health_manager = health_manager
 
-    # Catalog service
+    # 10. Catalog service
     catalog = CatalogService(config, registry, db, app.state.httpx_client)
     app.state.catalog = catalog
 
-    # Router (with health manager for circuit breaker integration)
+    # 11. Load cached catalog
+    await catalog._load_cached_models()
+
+    # 12. Refresh catalog from enabled accounts
+    if config.models.startup_refresh:
+        try:
+            await catalog.refresh()
+        except Exception:
+            logger.exception("Initial catalog refresh failed")
+
+    # 13. Router (with health manager for circuit breaker integration)
     router = Router(registry, catalog, health_manager=health_manager)
     app.state.router = router
 
-    # Statistics service
+    # 14. Statistics service
     app.state.stats = StatsService(db)
 
-    # Background task supervisor
+    # 15. Request coordinator
+    coordinator = RequestCoordinator(
+        registry=registry,
+        catalog=catalog,
+        router=router,
+        db=db,
+        httpx_client=app.state.httpx_client,
+        request_repo=request_repo,
+        reservation_repo=reservation_repo,
+        attempt_repo=attempt_repo,
+        usage_window_repo=usage_window_repo,
+        health_manager=health_manager,
+    )
+    app.state.coordinator = coordinator
+
+    # 16. Background task supervisor
     supervisor = TaskSupervisor()
     app.state.supervisor = supervisor
 
@@ -163,25 +199,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     supervisor.register("checkpoint", _periodic_checkpoint)
 
-    # Initial catalog refresh
-    if config.models.startup_refresh:
-        with contextlib.suppress(Exception):
-            logger.exception("Initial catalog refresh failed")
-
-    # Start background tasks
+    # 17. Start background tasks
     await supervisor.start_all()
 
-    # SIGHUP handler for config reload
-    loop = asyncio.get_running_loop()
-
-    def _handle_sighup() -> None:
-        logger.info("Received SIGHUP, reloading configuration")
-        _reload_config(app)
-
-    for sig in (signal.SIGHUP,):
-        loop.add_signal_handler(sig, _handle_sighup)
-
-    logger.info("Application started")
+    # 18. Startup complete
+    logger.info(
+        "Application started (%d accounts, %d models). "
+        "Note: configuration changes require service restart.",
+        len(config.accounts),
+        catalog.cache.model_count,
+    )
     yield
 
     # Shutdown
@@ -244,38 +271,67 @@ def create_app(
         return HealthResponse(status="ok")
 
     @app.get(f"{API_V1_PREFIX}/readyz")
-    async def readyz(request: Request) -> ReadyResponse:  # pyright: ignore[reportUnusedFunction]
+    async def readyz(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
         db: Database | None = getattr(request.app.state, "db", None)
         if db is None or db._conn is None:  # pyright: ignore[reportPrivateUsage]
-            return ReadyResponse(
-                status="degraded",
-                reason="database not connected",
+            return Response(
+                content='{"status":"degraded","reason":"database not connected"}',
+                status_code=503,
+                media_type="application/json",
             )
 
         config: AppConfig = request.app.state.config
         if not config.accounts:
-            return ReadyResponse(
-                status="degraded",
-                reason="no accounts configured",
+            return Response(
+                content='{"status":"degraded","reason":"no accounts configured"}',
+                status_code=503,
+                media_type="application/json",
             )
 
         has_enabled = any(acct.enabled for acct in config.accounts)
         if not has_enabled:
-            return ReadyResponse(
-                status="degraded",
-                reason="no enabled accounts",
+            return Response(
+                content='{"status":"degraded","reason":"no enabled accounts"}',
+                status_code=503,
+                media_type="application/json",
+            )
+
+        # Check loaded credentials
+        registry: AccountRegistry | None = getattr(request.app.state, "registry", None)
+        if registry is not None:
+            enabled_states = registry.get_enabled_states()
+            has_credentials = any(registry.get_api_key(s.name) for s in enabled_states)
+            if not has_credentials:
+                return Response(
+                    content='{"status":"degraded","reason":"no loaded credentials"}',
+                    status_code=503,
+                    media_type="application/json",
+                )
+
+        # Check usable model catalog
+        catalog: CatalogService | None = getattr(request.app.state, "catalog", None)
+        if catalog is not None and catalog.cache.model_count == 0:
+            return Response(
+                content='{"status":"degraded","reason":"no usable model catalog"}',
+                status_code=503,
+                media_type="application/json",
             )
 
         supervisor: TaskSupervisor | None = getattr(
             request.app.state, "supervisor", None
         )
         if supervisor is not None and not supervisor.all_healthy:
-            return ReadyResponse(
-                status="degraded",
-                reason="background tasks degraded",
+            return Response(
+                content='{"status":"degraded","reason":"background tasks degraded"}',
+                status_code=503,
+                media_type="application/json",
             )
 
-        return ReadyResponse(status="ok")
+        return Response(
+            content='{"status":"ok"}',
+            status_code=200,
+            media_type="application/json",
+        )
 
     @app.get(f"{API_V1_PREFIX}/models")
     async def list_models(

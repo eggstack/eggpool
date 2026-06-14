@@ -41,6 +41,10 @@ All must pass with zero errors.
 - Never store API keys in SQLite
 - Never log prompts, completions, or API keys
 - Use constant-time comparison for API key verification
+- All data-plane requests flow through `RequestCoordinator`
+- SQLite is the durable source of truth for quota windows (5h/7d/30d)
+- Requests must be persisted before upstream dispatch
+- Pre-body failures can retry; no retry after first downstream byte emitted
 
 For detailed architecture documentation, see `architecture/` directory:
 - `phase-0.md`: Repository and tooling foundation
@@ -53,6 +57,7 @@ For detailed architecture documentation, see `architecture/` directory:
 - `phase-7.md`: Retry, failover, and health management
 - `phase-8.md`: Statistics API and dashboard
 - `phase-9.md`: Deployment hardening
+- `phase-10-integration-hardening.md`: Integration hardening and correct request lifecycle
 
 ## Import Organization
 
@@ -66,6 +71,7 @@ Follow ruff TCH rules:
 - Config errors: `ConfigError`
 - Database errors: `DatabaseError`
 - Upstream errors: `UpstreamError` and subclasses
+- Protocol errors: `ModelNotFoundError`, `NoEligibleAccountError`, `CatalogUnavailableError`, `AuthenticationUnavailableError`, `UpstreamExhaustedError`, `AccountSuspendedError`
 - Chain exceptions with `raise ... from err` or `raise ... from None`
 
 ## Git Workflow

@@ -116,6 +116,16 @@ def render_overview(
     latency = format_latency(summary.get("avg_latency_ms", 0.0))
     imb_pct = format_percent(float(imbalance.get("imbalance_ratio", 0.0)))
 
+    cache_read = format_tokens(summary.get("total_cache_read_tokens", 0))
+    cache_write = format_tokens(summary.get("total_cache_write_tokens", 0))
+    reasoning = format_tokens(summary.get("total_reasoning_tokens", 0))
+    streamed = int(summary.get("streamed_requests", 0))
+    non_streamed = int(summary.get("non_streamed_requests", 0))
+    exact = int(summary.get("exact_count", 0))
+    derived = int(summary.get("derived_count", 0))
+    estimated = int(summary.get("estimated_count", 0))
+    unknown_exc = int(summary.get("unknown_count", 0))
+
     most: dict[str, Any] = imbalance.get("most_used") or {}
     least: dict[str, Any] = imbalance.get("least_used") or {}
 
@@ -143,6 +153,30 @@ def render_overview(
     <h3>Utilization imbalance</h3>
     <p class="metric">{imb_pct}</p>
     <p class="sub">CV across active accounts</p>
+  </div>
+</section>
+
+<section class="cards">
+  <div class="card">
+    <h3>Cache tokens</h3>
+    <p class="metric">{cache_read}</p>
+    <p class="sub">read · write {cache_write}</p>
+  </div>
+  <div class="card">
+    <h3>Reasoning tokens</h3>
+    <p class="metric">{reasoning}</p>
+    <p class="sub">extended thinking</p>
+  </div>
+  <div class="card">
+    <h3>Streaming</h3>
+    <p class="metric">{streamed:,}</p>
+    <p class="sub">streamed · {non_streamed:,} non-streamed</p>
+  </div>
+  <div class="card">
+    <h3>Exactness</h3>
+    <p class="metric">{exact:,}</p>
+    <p class="sub">exact · {derived:,} derived
+     · {estimated:,} est · {unknown_exc:,} unk</p>
   </div>
 </section>
 
@@ -179,6 +213,7 @@ def _render_account_table(accounts: list[dict[str, Any]]) -> str:
         "<thead><tr>",
         "<th>Account</th>",
         "<th>Enabled</th>",
+        "<th>Health</th>",
         "<th>Requests</th>",
         "<th>Errors</th>",
         "<th>Input tokens</th>",
@@ -186,6 +221,10 @@ def _render_account_table(accounts: list[dict[str, Any]]) -> str:
         "<th>Cost</th>",
         "<th>Avg latency</th>",
         "<th>Reserved</th>",
+        "<th>Resv.</th>",
+        "<th>5h util</th>",
+        "<th>7d util</th>",
+        "<th>30d util</th>",
         "</tr></thead><tbody>",
     ]
     for row in accounts:
@@ -196,11 +235,17 @@ def _render_account_table(accounts: list[dict[str, Any]]) -> str:
         reserved = format_microdollars(row.get("reserved_microdollars", 0))
         in_tok = format_tokens(row.get("input_tokens", 0))
         out_tok = format_tokens(row.get("output_tokens", 0))
+        health = str(row.get("health_state", "unknown"))
+        active_resv = int(row.get("active_reservations", 0))
+        util_5h = format_microdollars(row.get("utilization_5h", 0))
+        util_7d = format_microdollars(row.get("utilization_7d", 0))
+        util_30d = format_microdollars(row.get("utilization_30d", 0))
         parts.append(
             f"<tr>"
             f"<td>{name}</td>"
             f'<td class="{"yes" if enabled else "no"}">'
             f"{'yes' if enabled else 'no'}</td>"
+            f'<td class="{sanitize_class_name(health)}">{health}</td>'
             f"<td>{int(row.get('request_count', 0)):,}</td>"
             f"<td>{int(row.get('error_count', 0)):,}</td>"
             f"<td>{in_tok}</td>"
@@ -208,6 +253,10 @@ def _render_account_table(accounts: list[dict[str, Any]]) -> str:
             f"<td>{cost}</td>"
             f"<td>{latency}</td>"
             f"<td>{reserved}</td>"
+            f"<td>{active_resv}</td>"
+            f"<td>{util_5h}</td>"
+            f"<td>{util_7d}</td>"
+            f"<td>{util_30d}</td>"
             f"</tr>"
         )
     parts.append("</tbody></table>")

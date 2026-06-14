@@ -117,10 +117,9 @@ uv run coverage report
 src/go_aggregator/
 ├── __init__.py          # Package version
 ├── __main__.py          # python -m go_aggregator
-├── app.py               # FastAPI application factory with SIGHUP reload
+├── app.py               # FastAPI application factory
 ├── cli.py               # Click CLI commands
 ├── auth.py              # Local API key authentication
-├── config.py            # (alias for models.config)
 ├── constants.py         # Project-wide constants
 ├── errors.py            # Exception hierarchy
 ├── logging.py           # Structured logging setup
@@ -132,10 +131,14 @@ src/go_aggregator/
 ├── db/
 │   ├── connection.py    # SQLite connection manager
 │   ├── migrations.py    # Schema migration runner
+│   ├── repositories.py  # Data access layer (Account, Request, Reservation, Attempt, Usage, Price repos)
 │   └── schema/
 │       ├── 0001_initial.sql
 │       ├── 0002_indexes.sql
-│       └── 0003_request_attempts.sql
+│       ├── 0003_request_attempts.sql
+│       └── 0004_integration_hardening.sql
+├── request/
+│   └── coordinator.py   # Central request lifecycle orchestrator
 ├── accounts/            # Account registry and state
 ├── catalog/             # Model catalog, pricing, and estimation
 ├── routing/             # Quota-aware routing and eligibility
@@ -144,32 +147,8 @@ src/go_aggregator/
 ├── health/              # Circuit breaker and health tracking
 ├── quota/               # Quota estimation, reservations, scoring
 ├── stats/               # Statistics queries and service
-├── api/                 # API endpoint handlers
+├── api/                 # API endpoint handlers and error shaping
 └── dashboard/           # Server-rendered HTML dashboard
-
-deploy/
-├── gorouter.service     # systemd unit file
-├── logrotate.conf       # Log rotation configuration
-└── env.example          # Example environment file
-
-architecture/
-├── phase-0.md           # Repository and tooling foundation
-├── phase-1.md           # Configuration, database, and application lifecycle
-├── phase-2.md           # Account registry and model discovery
-├── phase-3.md           # Non-streaming transparent proxy
-├── phase-4.md           # Streaming proxy
-├── phase-5.md           # Usage extraction and price accounting
-├── phase-6.md           # Quota-aware routing and reservations
-├── phase-7.md           # Retry, failover, and health management
-├── phase-8.md           # Statistics API and dashboard
-└── phase-9.md           # Deployment hardening
-
-docs/
-├── deployment.md        # Production deployment guide
-├── filesystem-layout.md # Directory structure and permissions
-├── backup-restore.md    # Backup and restore procedures
-├── firewall.md          # Firewall configuration
-└── raspberry-pi.md      # Raspberry Pi installation guide
 
 tests/
 ├── unit/                # Unit tests
@@ -189,18 +168,19 @@ tests/
 - [x] Phase 7: Retry, failover, and health management
 - [x] Phase 8: Statistics API and dashboard
 - [x] Phase 9: Deployment hardening
+- [x] Phase 10: Integration hardening and correct request lifecycle
 
 ## Known Limitations
 
 - Usage is authoritative only for traffic that passes through the proxy.
 - OpenCode may not expose exact subscription reset windows.
-- Rolling seven-day and thirty-day windows are approximations.
 - Interrupted streams may not contain terminal usage.
 - Published prices may not perfectly match upstream subscription accounting.
 - Accounts used outside the proxy require manual offsets for accurate balancing.
 - Model metadata and protocol behavior can change without notice.
 - Aggregating multiple subscriptions may not be an explicitly supported OpenCode deployment pattern.
 - LAN-only deployment reduces but does not eliminate security obligations.
+- Configuration changes require service restart (live reload disabled for correctness).
 
 ## License
 
@@ -222,8 +202,8 @@ For production (systemd):
 sudo systemctl enable --now gorouter
 ```
 
-Configuration reload (no downtime):
+Configuration changes require a service restart:
 
 ```bash
-sudo systemctl reload gorouter
+sudo systemctl restart gorouter
 ```

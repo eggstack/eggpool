@@ -29,7 +29,7 @@ class ServerConfig(BaseModel):
 class UpstreamConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    base_url: str = "https://api.opencode.go"
+    base_url: str = "https://opencode.ai/zen/go/v1"
     connect_timeout_s: float = 5
     read_timeout_s: float = 300
     write_timeout_s: float = 30
@@ -72,9 +72,9 @@ class RoutingConfig(BaseModel):
 class LimitsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    five_hour_microdollars: int = 60_000_000
-    weekly_microdollars: int = 400_000_000
-    monthly_microdollars: int = 1_200_000_000
+    five_hour_microdollars: int = 12_000_000
+    weekly_microdollars: int = 30_000_000
+    monthly_microdollars: int = 60_000_000
 
 
 class DashboardConfig(BaseModel):

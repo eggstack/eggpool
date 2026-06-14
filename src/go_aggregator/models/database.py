@@ -48,6 +48,20 @@ class RequestRow(BaseModel):
     cost_microdollars: int = 0
     upstream_latency_ms: float = 0
     error_message: str | None = None
+    protocol: str = "openai"
+    streamed: bool = False
+    exactness: str = "unknown"
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    thinking_characters: int | None = None
+    reserved_microdollars: int = 0
+    first_byte_ms: int | None = None
+    retry_count: int = 0
+    upstream_request_id: str | None = None
+    error_class: str | None = None
+    error_detail: str | None = None
+    status_code: int | None = None
 
 
 class ReservationRow(BaseModel):
@@ -59,3 +73,21 @@ class ReservationRow(BaseModel):
     created_at: datetime
     released_at: datetime | None = None
     status: str
+    estimated_tokens: int = 0
+    estimated_microdollars: int = 0
+    expires_at: datetime | None = None
+    release_reason: str | None = None
+
+
+class RequestAttemptRow(BaseModel):
+    id: int
+    request_id: int
+    attempt_number: int
+    account_id: int
+    started_at: datetime
+    completed_at: datetime | None = None
+    status_code: int | None = None
+    error_class: str | None = None
+    upstream_request_id: str | None = None
+    bytes_emitted: int = 0
+    error_detail: str | None = None

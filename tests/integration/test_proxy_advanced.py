@@ -18,7 +18,14 @@ from go_aggregator.background.cleanup import cleanup_stale_reservations
 from go_aggregator.catalog.service import CatalogService
 from go_aggregator.db.connection import Database
 from go_aggregator.db.migrations import MigrationRunner
+from go_aggregator.db.repositories import (
+    AttemptRepository,
+    RequestRepository,
+    ReservationRepository,
+)
+from go_aggregator.health.health_manager import HealthManager
 from go_aggregator.models.config import AppConfig
+from go_aggregator.request.coordinator import RequestCoordinator
 from go_aggregator.routing.router import Router
 from go_aggregator.stats import StatsService
 
@@ -107,6 +114,26 @@ async def app(config: AppConfig) -> AsyncGenerator[FastAPI]:
     application.state.router = router
 
     application.state.stats = StatsService(db)
+
+    health_manager = HealthManager()
+    application.state.health_manager = health_manager
+
+    request_repo = RequestRepository(db)
+    reservation_repo = ReservationRepository(db)
+    attempt_repo = AttemptRepository(db)
+
+    coordinator = RequestCoordinator(
+        registry=registry,
+        catalog=catalog,
+        router=router,
+        db=db,
+        httpx_client=httpx_client,
+        request_repo=request_repo,
+        reservation_repo=reservation_repo,
+        attempt_repo=attempt_repo,
+        health_manager=health_manager,
+    )
+    application.state.coordinator = coordinator
 
     catalog.cache.load_model(
         model_id="gpt-4",
@@ -633,6 +660,26 @@ async def test_multiple_accounts_routing() -> None:
     application.state.router = router
 
     application.state.stats = StatsService(db)
+
+    health_manager = HealthManager()
+    application.state.health_manager = health_manager
+
+    request_repo = RequestRepository(db)
+    reservation_repo = ReservationRepository(db)
+    attempt_repo = AttemptRepository(db)
+
+    coordinator = RequestCoordinator(
+        registry=registry,
+        catalog=catalog,
+        router=router,
+        db=db,
+        httpx_client=httpx_client,
+        request_repo=request_repo,
+        reservation_repo=reservation_repo,
+        attempt_repo=attempt_repo,
+        health_manager=health_manager,
+    )
+    application.state.coordinator = coordinator
 
     catalog.cache.load_model(
         model_id="gpt-4",

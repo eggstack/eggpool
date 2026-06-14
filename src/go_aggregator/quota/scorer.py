@@ -85,22 +85,30 @@ class QuotaFairScorer:
                     if not quota.is_within_limits():
                         is_eligible = False
 
+                    # Use persisted window costs when available
+                    cost_5h = quota.get_persisted_cost_5h()
+                    cost_7d = quota.get_persisted_cost_7d()
+                    cost_30d = quota.get_persisted_cost_30d()
+
                     # Calculate utilization ratios per window
                     p5 = self._calc_window_utilization(
-                        quota.hourly_window.used_cost_microdollars,
+                        cost_5h,
                         quota.manual_offset.cost_microdollars,
                         quota.max_hourly_cost_microdollars,
                     )
-                    # Use daily for 5h proxy, daily for weekly, and daily for monthly
-                    # Since we have hourly and daily windows, approximate:
                     pw = self._calc_window_utilization(
-                        quota.daily_window.used_cost_microdollars,
+                        cost_7d,
                         quota.manual_offset.cost_microdollars,
                         quota.max_daily_cost_microdollars,
                     )
-                    pm = pw  # 30d approximation using same daily data
+                    pm = self._calc_window_utilization(
+                        cost_30d,
+                        quota.manual_offset.cost_microdollars,
+                        quota.max_daily_cost_microdollars,
+                    )
 
-            # Base quota score: max of window utilizations + mean-weighted average
+            # Base quota score: max of window utilizations
+            # + mean-weighted average
             max_util = max(p5, pw, pm)
             mean_util = (p5 + pw + pm) / 3.0
             base_score = max_util + self.mean_weight * mean_util

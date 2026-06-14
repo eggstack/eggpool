@@ -6,7 +6,7 @@ log_level = "INFO"
 access_log = true
 
 [upstream]
-base_url = "https://api.opencode.go"
+base_url = "https://opencode.ai/zen/go/v1"
 connect_timeout_s = 5
 read_timeout_s = 300
 write_timeout_s = 30
@@ -22,50 +22,60 @@ synchronous = "NORMAL"
 
 [models]
 refresh_interval_s = 3600
-expose_mode = "all"  # "all", "subscribed", or "explicit"
+expose_mode = "union"
+startup_refresh = true
+stale_after_s = 7200
+allow_stale_catalog = true
 
 [routing]
-strategy = "round-robin"  # "round-robin", "least-usage", or "random"
-epsilon = 0.1
-max_retries = 3
-retry_backoff_s = 1.0
-penalty_new_account = 1000000000  # microdollars
-penalty_auth_error = 5000000000  # microdollars
+strategy = "quota_fair"
+near_tie_epsilon = 0.1
+max_retries_before_stream = 3
+unknown_request_reservation_microdollars = 1000000
+inflight_penalty = 100000
+health_penalty = 500000
+randomize_near_ties = true
 
 [limits]
-five_hour_microdollars = 60000000   # $60
-weekly_microdollars = 400000000     # $400
-monthly_microdollars = 1200000000   # $1200
+five_hour_microdollars = 12000000
+weekly_microdollars = 30000000
+monthly_microdollars = 60000000
 
 [dashboard]
 enabled = true
 public = false
-retention_days = 30
+retain_request_stats_days = 30
+store_request_content = false
+refresh_interval_s = 60
 
 [security]
 allowed_hosts = ["localhost", "127.0.0.1"]
 cors_origins = []
-trust_proxy = false
+trust_proxy_headers = false
 redact_headers = ["authorization", "x-api-key"]
 
 [[accounts]]
 name = "personal"
 api_key_env = "OPENCODE_GO_KEY_1"
-priority = 1
-models = ["claude-sonnet-4", "claude-opus-4"]
+enabled = true
+weight = 1.0
+five_hour_offset_microdollars = 0
+weekly_offset_microdollars = 0
+monthly_offset_microdollars = 0
 
 [[accounts]]
 name = "team"
 api_key_env = "OPENCODE_GO_KEY_2"
-priority = 2
-models = ["claude-sonnet-4"]
+enabled = true
+weight = 1.0
+five_hour_offset_microdollars = 0
+weekly_offset_microdollars = 0
+monthly_offset_microdollars = 0
 
 [model_overrides."claude-opus-4"]
+protocol = "anthropic"
 max_tokens = 32768
-cost_per_1k_input = 15
-cost_per_1k_output = 75
 
 [model_overrides."claude-sonnet-4"]
+protocol = "anthropic"
 max_tokens = 16384
-cost_per_1k_input = 3
-cost_per_1k_output = 15

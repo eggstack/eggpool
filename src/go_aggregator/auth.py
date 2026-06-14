@@ -27,6 +27,24 @@ def verify_api_key(request: Request, api_key: str) -> bool:
     return hmac.compare_digest(provided, api_key)
 
 
+def require_auth_at_startup(api_key_env: str | None) -> str | None:
+    """Validate that the configured API key environment variable is set.
+
+    Returns the API key value if set, None if auth is disabled (no env var name).
+    Raises RuntimeError if auth is enabled but the env var is not set.
+    """
+    if not api_key_env:
+        return None
+    expected = os.environ.get(api_key_env)
+    if not expected:
+        raise RuntimeError(
+            f"Authentication enabled but API key env var {api_key_env!r} is not set. "
+            f"Set the environment variable or disable authentication by removing "
+            f"api_key_env from configuration."
+        )
+    return expected
+
+
 async def require_auth(request: Request) -> None:
     """FastAPI dependency that enforces API key authentication.
 
