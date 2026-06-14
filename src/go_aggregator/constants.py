@@ -1,0 +1,8 @@
+"""Project-wide constants."""
+
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 8080
+DEFAULT_DATABASE_PATH = "usage.sqlite3"
+API_V1_PREFIX = "/v1"
+MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024  # 10 MB
+MAX_SSE_FRAME_SIZE = 64 * 1024  # 64 KB

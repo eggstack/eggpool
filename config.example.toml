@@ -1,0 +1,71 @@
+[server]
+host = "127.0.0.1"
+port = 8080
+api_key_env = "GO_AGGREGATOR_API_KEY"
+log_level = "INFO"
+access_log = true
+
+[upstream]
+base_url = "https://api.opencode.go"
+connect_timeout_s = 5
+read_timeout_s = 300
+write_timeout_s = 30
+max_connections = 100
+max_keepalive = 20
+keepalive_timeout_s = 30
+
+[database]
+path = "usage.sqlite3"
+busy_timeout_ms = 5000
+wal = true
+synchronous = "NORMAL"
+
+[models]
+refresh_interval_s = 3600
+expose_mode = "all"  # "all", "subscribed", or "explicit"
+
+[routing]
+strategy = "round-robin"  # "round-robin", "least-usage", or "random"
+epsilon = 0.1
+max_retries = 3
+retry_backoff_s = 1.0
+penalty_new_account = 1000000000  # microdollars
+penalty_auth_error = 5000000000  # microdollars
+
+[limits]
+five_hour_microdollars = 60000000   # $60
+weekly_microdollars = 400000000     # $400
+monthly_microdollars = 1200000000   # $1200
+
+[dashboard]
+enabled = true
+public = false
+retention_days = 30
+
+[security]
+allowed_hosts = ["localhost", "127.0.0.1"]
+cors_origins = []
+trust_proxy = false
+redact_headers = ["authorization", "x-api-key"]
+
+[[accounts]]
+name = "personal"
+api_key_env = "OPENCODE_GO_KEY_1"
+priority = 1
+models = ["claude-sonnet-4", "claude-opus-4"]
+
+[[accounts]]
+name = "team"
+api_key_env = "OPENCODE_GO_KEY_2"
+priority = 2
+models = ["claude-sonnet-4"]
+
+[model_overrides."claude-opus-4"]
+max_tokens = 32768
+cost_per_1k_input = 15
+cost_per_1k_output = 75
+
+[model_overrides."claude-sonnet-4"]
+max_tokens = 16384
+cost_per_1k_input = 3
+cost_per_1k_output = 15

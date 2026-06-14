@@ -1,0 +1,53 @@
+[project]
+name = "opencode-go-aggregator"
+version = "0.1.0"
+description = "Python proxy that aggregates OpenCode Go subscriptions"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [{ name = "David Bowman" }]
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "httpx",
+    "aiosqlite",
+    "pydantic>=2.0",
+    "jinja2",
+    "click",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "pyright",
+    "pytest",
+    "pytest-asyncio",
+    "respx",
+    "coverage[toml]",
+    "pre-commit",
+]
+
+[project.scripts]
+go-aggregator = "go_aggregator.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/go_aggregator"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "SIM", "TCH"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+reportMissingTypeStubs = false
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"

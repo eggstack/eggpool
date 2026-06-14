@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+
+# uv
+.uv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Testing
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+
+# Type checking
+.pyright/
+.pytype/
+
+# Ruff
+.ruff_cache/
+
+# Database
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Environment files
+.env
+.env.local
+.env.production
+
+# Configuration with secrets
+config.toml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+/var/
+*.log
