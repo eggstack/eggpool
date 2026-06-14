@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import signal
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -34,6 +35,45 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
 logger = logging.getLogger(__name__)
+
+
+def _reload_config(app: FastAPI) -> None:
+    """Reload configuration from disk. Called on SIGHUP."""
+    config_path: str | None = getattr(app.state, "config_path", None)
+    if config_path is None:
+        logger.warning("No config path stored; cannot reload")
+        return
+
+    try:
+        new_config = AppConfig.from_toml(config_path)
+    except AggregatorError as exc:
+        logger.error("Config reload failed: %s", exc)
+        return
+
+    # Update server log level
+    configure_logging(level=new_config.server.log_level)
+
+    # Recreate account registry
+    app.state.registry = AccountRegistry(new_config)
+    app.state.config = new_config
+
+    # Refresh catalog with new accounts
+    catalog: CatalogService = app.state.catalog
+    asyncio.get_event_loop().create_task(
+        _safe_refresh(catalog),
+    )
+
+    logger.info(
+        "Configuration reloaded from %s (%d accounts)",
+        config_path,
+        len(new_config.accounts),
+    )
+
+
+async def _safe_refresh(catalog: CatalogService) -> None:
+    """Refresh catalog, suppressing errors."""
+    with contextlib.suppress(Exception):
+        await catalog.refresh()
 
 
 @asynccontextmanager
@@ -100,6 +140,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         )
         app.state.refresh_task = refresh_task
 
+    # SIGHUP handler for config reload
+    loop = asyncio.get_running_loop()
+
+    def _handle_sighup() -> None:
+        logger.info("Received SIGHUP, reloading configuration")
+        _reload_config(app)
+
+    for sig in (signal.SIGHUP,):
+        loop.add_signal_handler(sig, _handle_sighup)
+
     logger.info("Application started")
     yield
 
@@ -128,7 +178,10 @@ async def _catalog_refresh_loop(
             logger.exception("Catalog refresh failed")
 
 
-def create_app(config: AppConfig | None = None) -> FastAPI:
+def create_app(
+    config: AppConfig | None = None,
+    config_path: str | None = None,
+) -> FastAPI:
     """Create and configure the FastAPI application."""
     if config is None:
         config = AppConfig()
@@ -141,6 +194,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.config = config
+    app.state.config_path = config_path
 
     # Dashboard and statistics routes (read-only, no auth by default)
     if config.dashboard.enabled:

@@ -117,7 +117,7 @@ uv run coverage report
 src/go_aggregator/
 ├── __init__.py          # Package version
 ├── __main__.py          # python -m go_aggregator
-├── app.py               # FastAPI application factory
+├── app.py               # FastAPI application factory with SIGHUP reload
 ├── cli.py               # Click CLI commands
 ├── auth.py              # Local API key authentication
 ├── config.py            # (alias for models.config)
@@ -135,29 +135,70 @@ src/go_aggregator/
 │   └── schema/
 │       ├── 0001_initial.sql
 │       └── 0002_indexes.sql
-├── accounts/            # (Phase 2)
-├── catalog/             # (Phase 2)
-├── routing/             # (Phase 6)
-├── proxy/               # (Phase 3-4)
-├── stats/               # (Phase 8)
-├── api/                 # (Phase 3)
-├── dashboard/           # (Phase 8)
-└── background/          # (Phase 2)
+├── accounts/            # Account registry and state
+├── catalog/             # Model catalog, pricing, and estimation
+├── routing/             # Quota-aware routing and eligibility
+├── proxy/               # Transparent proxy and streaming
+├── retry/               # Error classification and failover
+├── health/              # Circuit breaker and health tracking
+├── quota/               # Quota estimation, reservations, scoring
+├── stats/               # Statistics queries and service
+├── api/                 # API endpoint handlers
+└── dashboard/           # Server-rendered HTML dashboard
+
+deploy/
+├── gorouter.service     # systemd unit file
+├── logrotate.conf       # Log rotation configuration
+└── env.example          # Example environment file
+
+docs/
+├── deployment.md        # Production deployment guide
+├── filesystem-layout.md # Directory structure and permissions
+├── backup-restore.md    # Backup and restore procedures
+├── firewall.md          # Firewall configuration
+└── raspberry-pi.md      # Raspberry Pi installation guide
+
+tests/
+├── unit/                # Unit tests
+├── integration/         # Integration tests (mocked upstreams)
+└── contract/            # Contract tests (response format)
 ```
 
 ## Implementation Status
 
 - [x] Phase 0: Repository and tooling foundation
 - [x] Phase 1: Configuration, database, and application lifecycle
-- [ ] Phase 2: Account registry and model discovery
-- [ ] Phase 3: Non-streaming transparent proxy
-- [ ] Phase 4: Streaming proxy
-- [ ] Phase 5: Usage extraction and price accounting
-- [ ] Phase 6: Quota-aware routing and reservations
-- [ ] Phase 7: Retry, failover, and health management
-- [ ] Phase 8: Statistics API and dashboard
-- [ ] Phase 9: Deployment hardening
+- [x] Phase 2: Account registry and model discovery
+- [x] Phase 3: Non-streaming transparent proxy
+- [x] Phase 4: Streaming proxy
+- [x] Phase 5: Usage extraction and price accounting
+- [x] Phase 6: Quota-aware routing and reservations
+- [x] Phase 7: Retry, failover, and health management
+- [x] Phase 8: Statistics API and dashboard
+- [x] Phase 9: Deployment hardening
 
 ## License
 
 MIT
+
+## Deployment
+
+See `docs/deployment.md` for production deployment instructions.
+
+Quick start for development:
+
+```bash
+uv run go-aggregator serve --config config.toml
+```
+
+For production (systemd):
+
+```bash
+sudo systemctl enable --now gorouter
+```
+
+Configuration reload (no downtime):
+
+```bash
+sudo systemctl reload gorouter
+```

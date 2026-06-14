@@ -47,12 +47,13 @@ def serve(ctx: click.Context) -> None:
 
     from go_aggregator.app import create_app
 
-    app = create_app(config)
+    app = create_app(config, config_path=config_path)
     uvicorn.run(
         app,
         host=config.server.host,
         port=config.server.port,
         access_log=config.server.access_log,
+        timeout_graceful_shutdown=30,
     )
 
 
