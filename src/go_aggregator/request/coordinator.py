@@ -38,9 +38,11 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from go_aggregator.accounts.registry import AccountRegistry
+    from go_aggregator.catalog.pricing import CostCalculator
     from go_aggregator.catalog.service import CatalogService
     from go_aggregator.db.connection import Database
     from go_aggregator.health.health_manager import HealthManager
+    from go_aggregator.quota.estimation import QuotaEstimator
     from go_aggregator.routing.router import Router
 
 logger = logging.getLogger(__name__)
@@ -106,6 +108,8 @@ class RequestCoordinator:
         attempt_repo: AttemptRepository | None = None,
         usage_window_repo: UsageWindowRepository | None = None,
         health_manager: HealthManager | None = None,
+        cost_calculator: CostCalculator | None = None,
+        quota_estimator: QuotaEstimator | None = None,
     ) -> None:
         self._registry = registry
         self._catalog = catalog
@@ -117,6 +121,8 @@ class RequestCoordinator:
         self._attempt_repo = attempt_repo
         self._usage_window_repo = usage_window_repo
         self._health_manager = health_manager
+        self._cost_calculator = cost_calculator
+        self._quota_estimator = quota_estimator
         self._classifier = RetryClassifier()
         self._select_lock = asyncio.Lock()
 
@@ -153,6 +159,11 @@ class RequestCoordinator:
                     context.request_id,
                     err,
                 )
+                account_name = context.client_metadata.get("account_name", "")
+                if self._health_manager and account_name:
+                    self._health_manager.record_rate_limit(
+                        account_name, err.retry_after or 60.0
+                    )
                 if attempt_num >= MAX_RETRY_ATTEMPTS:
                     break
             except (QuotaExhaustedError, ModelUnavailableError) as err:
@@ -362,12 +373,24 @@ class RequestCoordinator:
         headers = filter_request_headers(dict(context.incoming_headers), api_key)
         upstream_path = self._get_upstream_path(context.protocol)
 
+        # Inject stream_options.include_usage for OpenAI
+        body_to_send = context.original_body
+        if context.protocol == "openai":
+            try:
+                payload = json.loads(context.original_body)
+                stream_opts = payload.get("stream_options", {})
+                stream_opts["include_usage"] = True
+                payload["stream_options"] = stream_opts
+                body_to_send = json.dumps(payload).encode()
+            except (json.JSONDecodeError, ValueError):
+                pass
+
         # Use httpx low-level streaming API
         request = self._client.build_request(
             "POST",
             upstream_path,
             headers=headers,
-            content=context.original_body,
+            content=body_to_send,
         )
         response = await self._client.send(request, stream=True)
 
@@ -492,6 +515,7 @@ class RequestCoordinator:
                     status_code=200,
                     input_tokens=usage_result.input_tokens,
                     output_tokens=usage_result.output_tokens,
+                    thinking_characters=usage_result.thinking_characters,
                 )
 
                 # Record health success
@@ -573,7 +597,12 @@ class RequestCoordinator:
             return AuthenticationError(error.message, status_code=status_code)
         if error.category == RetryCategory.QUOTA_EXCEEDED:
             if status_code == 429:
-                return RateLimitError(error.message, status_code=status_code)
+                retry_after = error.retry_after
+                return RateLimitError(
+                    error.message,
+                    status_code=status_code,
+                    retry_after=retry_after if retry_after is not None else 60.0,
+                )
             return QuotaExhaustedError(error.message, status_code=status_code)
         if error.category == RetryCategory.BAD_REQUEST:
             # Client errors - return None so the response body is
@@ -625,12 +654,20 @@ class RequestCoordinator:
         if account_id is None:
             return None
 
+        # Estimate cost for the reservation
+        estimated_tokens = 1000
+        estimated_microdollars = 0
+        if self._quota_estimator is not None:
+            estimated_microdollars = self._quota_estimator.estimate_cost(
+                account_name, context.model_id, estimated_tokens
+            )
+
         return await self._reservation_repo.create(
             request_id=db_request_id,
             account_id=account_id,
             model_id=context.model_id,
-            estimated_tokens=0,
-            estimated_microdollars=0,
+            estimated_tokens=estimated_tokens,
+            estimated_microdollars=estimated_microdollars,
         )
 
     async def _create_attempt(
@@ -681,11 +718,22 @@ class RequestCoordinator:
         status_code: int | None = None,
         input_tokens: int = 0,
         output_tokens: int = 0,
+        thinking_characters: int = 0,
         error_class: str | None = None,
         error_detail: str | None = None,
     ) -> None:
         """Finalize the request record and release reservations."""
         elapsed_ms = int((time.time() - context.started_at) * 1000)
+
+        # Calculate cost if calculator available
+        cost_microdollars = 0
+        exactness = "unknown"
+        if self._cost_calculator is not None and (
+            input_tokens > 0 or output_tokens > 0
+        ):
+            cost_microdollars, exactness = await self._cost_calculator.calculate_cost(
+                context.model_id, input_tokens, output_tokens
+            )
 
         # Use the DB row ID for updates
         db_request_id = context.client_metadata.get("db_request_id", context.request_id)
@@ -697,10 +745,12 @@ class RequestCoordinator:
                 status_code=status_code,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
-                cost_microdollars=0,
+                cost_microdollars=cost_microdollars,
+                exactness=exactness,
                 upstream_latency_ms=elapsed_ms,
                 error_class=error_class,
                 error_detail=error_detail,
+                thinking_characters=thinking_characters,
             )
 
         if self._reservation_repo:
@@ -737,5 +787,6 @@ def _merge_usage(target: StreamUsageResult, incoming: StreamUsageResult) -> None
     target.cache_read_tokens += incoming.cache_read_tokens
     target.cache_creation_tokens += incoming.cache_creation_tokens
     target.reasoning_tokens += incoming.reasoning_tokens
+    target.thinking_characters += incoming.thinking_characters
     if incoming.is_complete:
         target.is_complete = True

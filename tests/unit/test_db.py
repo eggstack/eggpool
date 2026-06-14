@@ -114,3 +114,89 @@ async def test_synchronous_pragma(db: Database) -> None:
     cursor = await db.fetch_one("PRAGMA synchronous")
     assert cursor is not None
     assert cursor["synchronous"] == 1
+
+
+@pytest.mark.asyncio()
+async def test_crash_recovery_marks_stale_pending(db: Database) -> None:
+    """Stale pending requests are marked as interrupted."""
+    await db.execute(
+        "INSERT INTO accounts (name, api_key_env) VALUES (?, ?)",
+        ("acct1", "ENV1"),
+    )
+    await db.execute(
+        "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+        ("gpt-4", "openai"),
+    )
+    await db.execute(
+        "INSERT INTO requests (account_id, model_id, status, protocol, streamed) "
+        "VALUES (?, 'gpt-4', 'pending', 'openai', 0)",
+        (1,),
+    )
+    await db.connection.commit()
+
+    # Simulate stale request (started more than 10 minutes ago)
+    await db.execute(
+        "UPDATE requests SET started_at = datetime('now', '-15 minutes') "
+        "WHERE id = last_insert_rowid()"
+    )
+    await db.connection.commit()
+
+    # Run crash recovery
+    await db.execute(
+        "UPDATE requests SET status = 'interrupted', "
+        "completed_at = CURRENT_TIMESTAMP "
+        "WHERE status = 'pending' "
+        "AND started_at < datetime('now', '-10 minutes')"
+    )
+    await db.connection.commit()
+
+    row = await db.fetch_one("SELECT status FROM requests")
+    assert row is not None
+    assert row["status"] == "interrupted"
+
+
+@pytest.mark.asyncio()
+async def test_crash_recovery_releases_stale_reservations(db: Database) -> None:
+    """Active reservations for stale requests are released."""
+    await db.execute(
+        "INSERT INTO accounts (name, api_key_env) VALUES (?, ?)",
+        ("acct1", "ENV1"),
+    )
+    await db.execute(
+        "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+        ("gpt-4", "openai"),
+    )
+    await db.execute(
+        "INSERT INTO requests (account_id, model_id, status, protocol, streamed) "
+        "VALUES (?, 'gpt-4', 'pending', 'openai', 0)",
+        (1,),
+    )
+    req_id = 1
+    await db.execute(
+        "INSERT INTO reservations "
+        "(request_id, account_id, model_id, estimated_tokens, "
+        "estimated_microdollars, expires_at) "
+        "VALUES (?, 1, 'gpt-4', 1000, 0, datetime('now', '+5 minutes'))",
+        (req_id,),
+    )
+    await db.connection.commit()
+
+    # Simulate stale reservation
+    await db.execute(
+        "UPDATE reservations SET created_at = datetime('now', '-15 minutes') "
+        "WHERE id = last_insert_rowid()"
+    )
+    await db.connection.commit()
+
+    # Run crash recovery
+    await db.execute(
+        "UPDATE reservations SET status = 'released', "
+        "released_at = CURRENT_TIMESTAMP, release_reason = 'crash_recovery' "
+        "WHERE status = 'active' "
+        "AND created_at < datetime('now', '-10 minutes')"
+    )
+    await db.connection.commit()
+
+    row = await db.fetch_one("SELECT status FROM reservations")
+    assert row is not None
+    assert row["status"] == "released"

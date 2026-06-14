@@ -174,3 +174,17 @@ enabled = false
     config = AppConfig.from_toml(str(config_file))
     assert config.accounts[0].name == "disabled_account"
     assert config.accounts[0].enabled is False
+
+
+def test_config_example_validates() -> None:
+    """Verify config.example.toml validates against the schema."""
+    os.environ["OPENCODE_GO_KEY_1"] = "test_key_1"
+    os.environ["OPENCODE_GO_KEY_2"] = "test_key_2"
+    try:
+        config = AppConfig.from_toml("config.example.toml")
+        assert config.upstream.base_url == "https://opencode.ai/zen/go/v1"
+        assert config.limits.five_hour_microdollars == 12_000_000
+        assert len(config.accounts) == 2
+    finally:
+        del os.environ["OPENCODE_GO_KEY_1"]
+        del os.environ["OPENCODE_GO_KEY_2"]

@@ -100,7 +100,7 @@ class TestAnthropicStreamUsageExtractor:
         result = extractor.extract(data)
 
         assert result is not None
-        assert result.reasoning_tokens == len(thinking_text)
+        assert result.thinking_characters == len(thinking_text)
 
     def test_extract_unknown_event(self) -> None:
         extractor = AnthropicStreamUsageExtractor()

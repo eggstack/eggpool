@@ -81,7 +81,25 @@ async def fetch_account_stats(
         COALESCE(SUM(r.cost_microdollars), 0) as cost_microdollars,
         COALESCE(AVG(r.upstream_latency_ms), 0) as avg_latency_ms,
         COALESCE(SUM(CASE WHEN r.status = 'error' THEN 1 ELSE 0 END), 0)
-            as error_count
+            as error_count,
+        COALESCE((
+            SELECT SUM(r2.cost_microdollars) FROM requests r2
+            WHERE r2.account_id = a.id
+            AND r2.started_at >= datetime('now', '-5 hours')
+            AND r2.status != 'cancelled'
+        ), 0) as cost_5h,
+        COALESCE((
+            SELECT SUM(r2.cost_microdollars) FROM requests r2
+            WHERE r2.account_id = a.id
+            AND r2.started_at >= datetime('now', '-7 days')
+            AND r2.status != 'cancelled'
+        ), 0) as cost_7d,
+        COALESCE((
+            SELECT SUM(r2.cost_microdollars) FROM requests r2
+            WHERE r2.account_id = a.id
+            AND r2.started_at >= datetime('now', '-30 days')
+            AND r2.status != 'cancelled'
+        ), 0) as cost_30d
     FROM accounts a
     LEFT JOIN requests r
         ON r.account_id = a.id

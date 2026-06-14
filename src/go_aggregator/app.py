@@ -22,6 +22,8 @@ from go_aggregator.background.cleanup import (
     checkpoint_database,
     cleanup_old_requests,
 )
+from go_aggregator.catalog.estimator import EWMACostEstimator
+from go_aggregator.catalog.pricing import CostCalculator, PriceRepository
 from go_aggregator.catalog.service import CatalogService
 from go_aggregator.constants import API_V1_PREFIX
 from go_aggregator.dashboard.routes import register_dashboard_routes
@@ -150,14 +152,31 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         except Exception:
             logger.exception("Initial catalog refresh failed")
 
-    # 13. Router (with health manager for circuit breaker integration)
+    # 13. EWMA cost estimator (loaded from DB on startup)
+    ewma_estimator = EWMACostEstimator(db)
+    await ewma_estimator.load_from_database()
+    app.state.ewma_estimator = ewma_estimator
+
+    # 14. Price repository and cost calculator
+    price_repo = PriceRepository(db)
+    cost_calculator = CostCalculator(price_repo)
+    app.state.cost_calculator = cost_calculator
+
+    # 15. Router (with health manager for circuit breaker integration)
     router = Router(registry, catalog, health_manager=health_manager)
     app.state.router = router
 
-    # 14. Statistics service
+    # 16. Load persisted usage windows and set account weights
+    router._quota_estimator.set_usage_window_repo(usage_window_repo)  # noqa: SLF001
+    await router._quota_estimator.load_persisted_windows()  # noqa: SLF001
+    # Set account weights from config
+    for acct_cfg in config.accounts:
+        router.set_account_weight(acct_cfg.name, acct_cfg.weight)
+
+    # 17. Statistics service
     app.state.stats = StatsService(db)
 
-    # 15. Request coordinator
+    # 18. Request coordinator
     coordinator = RequestCoordinator(
         registry=registry,
         catalog=catalog,
@@ -169,10 +188,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         attempt_repo=attempt_repo,
         usage_window_repo=usage_window_repo,
         health_manager=health_manager,
+        cost_calculator=cost_calculator,
+        quota_estimator=router._quota_estimator,  # noqa: SLF001
     )
     app.state.coordinator = coordinator
 
-    # 16. Background task supervisor
+    # 19. Background task supervisor
     supervisor = TaskSupervisor()
     app.state.supervisor = supervisor
 
@@ -199,10 +220,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     supervisor.register("checkpoint", _periodic_checkpoint)
 
-    # 17. Start background tasks
+    # 20. Start background tasks
     await supervisor.start_all()
 
-    # 18. Startup complete
+    # 21. Startup complete
     logger.info(
         "Application started (%d accounts, %d models). "
         "Note: configuration changes require service restart.",

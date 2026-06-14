@@ -13,12 +13,15 @@ usage from SQLite instead of in-memory hourly/daily windows.
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from go_aggregator.db.repositories import UsageWindowRepository
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -367,6 +370,31 @@ class QuotaEstimator:
     ) -> None:
         """Set a configured per-model price override (Tier 4)."""
         self.model_overrides[model_id] = (input_price, output_price)
+
+    async def load_persisted_windows(self) -> None:
+        """Load persisted usage windows from the database."""
+        if self._usage_window_repo is None:
+            return
+        from go_aggregator.db.repositories import AccountRepository
+
+        acct_repo = AccountRepository(self._usage_window_repo._db)
+        enabled = await acct_repo.list_enabled()
+        now_iso = time.strftime("%Y-%m-%d %H:%M:%S")
+        for acct in enabled:
+            name = acct["name"]
+            if name not in self.accounts:
+                self.accounts[name] = AccountQuota(account_name=name)
+            self.accounts[name].weight = acct.get("weight", 1.0)
+            windows = await self._usage_window_repo.get_usage_windows(
+                acct["id"], now_iso
+            )
+            self.accounts[name].persisted_snapshot = PersistedWindowSnapshot(
+                account_id=acct["id"],
+                cost_5h=windows["5h"],
+                cost_7d=windows["7d"],
+                cost_30d=windows["30d"],
+            )
+        logger.info("Loaded persisted usage windows for %d accounts", len(enabled))
 
     def get_eligible_accounts(
         self, account_names: list[str]

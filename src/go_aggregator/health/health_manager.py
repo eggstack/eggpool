@@ -20,13 +20,19 @@ class AccountHealth:
     disabled_models: set[str] = field(default_factory=set)
     disabled_until: float | None = None
     disabled_reason: str = ""
+    cooldown_until: float = 0.0
+    health_state: str = "healthy"
 
     def is_disabled(self, current_time: float | None = None) -> bool:
         """Check if account is currently disabled."""
         if current_time is None:
             current_time = time.time()
 
-        return self.disabled_until is not None and current_time < self.disabled_until
+        disabled = (
+            self.disabled_until is not None and current_time < self.disabled_until
+        )
+        cooled = self.cooldown_until > 0 and current_time < self.cooldown_until
+        return disabled or cooled
 
     def is_model_disabled(
         self, model_id: str, current_time: float | None = None
@@ -66,6 +72,12 @@ class HealthManager:
         health.consecutive_failures += 1
         health.last_check = time.time()
         health.circuit_breaker.record_failure()
+
+    def record_rate_limit(self, account_name: str, retry_after_seconds: float) -> None:
+        """Record a rate limit with explicit cooldown."""
+        health = self.get_account_health(account_name)
+        health.cooldown_until = time.time() + retry_after_seconds
+        health.health_state = "rate_limited"
 
     def disable_account(
         self,

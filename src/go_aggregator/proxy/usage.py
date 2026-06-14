@@ -15,6 +15,7 @@ class StreamUsageResult:
     cache_read_tokens: int = 0
     cache_creation_tokens: int = 0
     reasoning_tokens: int = 0
+    thinking_characters: int = 0
     is_complete: bool = False
 
 
@@ -76,9 +77,8 @@ class AnthropicStreamUsageExtractor:
         if event_type == "content_block_delta":
             delta = data.get("delta", {})
             if delta.get("type") == "thinking":
-                # Reasoning tokens are in thinking blocks
                 return StreamUsageResult(
-                    reasoning_tokens=len(delta.get("thinking", "")),
+                    thinking_characters=len(delta.get("thinking", "")),
                 )
 
         return None

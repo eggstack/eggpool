@@ -32,6 +32,16 @@ class QuotaExhaustedError(UpstreamError):
 class RateLimitError(UpstreamError):
     """Raised when we are rate-limited by an upstream."""
 
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        status_code: int | None = None,
+        retry_after: float | None = None,
+    ) -> None:
+        super().__init__(message, status_code=status_code)
+        self.retry_after = retry_after
+
 
 class ModelUnavailableError(UpstreamError):
     """Raised when the requested model is not available upstream."""
