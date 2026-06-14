@@ -90,21 +90,25 @@ class QuotaFairScorer:
                     cost_7d = quota.get_persisted_cost_7d()
                     cost_30d = quota.get_persisted_cost_30d()
 
-                    # Calculate utilization ratios per window
+                    # Get reserved cost from estimator
+                    reserved = self.quota_estimator.get_account_reserved_cost(name)
+
+                    # Calculate utilization ratios per window with
+                    # per-window offsets and reservations
                     p5 = self._calc_window_utilization(
-                        cost_5h,
-                        quota.manual_offset.cost_microdollars,
+                        cost_5h + reserved,
+                        quota.five_hour_offset,
                         quota.max_hourly_cost_microdollars,
                     )
                     pw = self._calc_window_utilization(
-                        cost_7d,
-                        quota.manual_offset.cost_microdollars,
+                        cost_7d + reserved,
+                        quota.weekly_offset,
                         quota.max_daily_cost_microdollars,
                     )
                     pm = self._calc_window_utilization(
-                        cost_30d,
-                        quota.manual_offset.cost_microdollars,
-                        quota.max_daily_cost_microdollars,
+                        cost_30d + reserved,
+                        quota.monthly_offset,
+                        quota.max_monthly_cost_microdollars,
                     )
 
             # Base quota score: max of window utilizations

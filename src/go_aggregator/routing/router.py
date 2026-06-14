@@ -146,8 +146,12 @@ class Router:
         account_name: str,
         max_daily_cost_microdollars: int | None = None,
         max_hourly_cost_microdollars: int | None = None,
+        max_monthly_cost_microdollars: int | None = None,
     ) -> None:
         """Set quota limits for an account."""
         self._quota_estimator.set_account_limits(
-            account_name, max_daily_cost_microdollars, max_hourly_cost_microdollars
+            account_name,
+            max_daily_cost_microdollars,
+            max_hourly_cost_microdollars,
+            max_monthly_cost_microdollars,
         )

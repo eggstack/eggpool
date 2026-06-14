@@ -125,6 +125,7 @@ class HealthManager:
         health = self.get_account_health(account_name)
         return (
             health.is_healthy
+            and not health.is_disabled()
             and not health.is_model_disabled(model_id)
             and health.circuit_breaker.allow_request()
         )

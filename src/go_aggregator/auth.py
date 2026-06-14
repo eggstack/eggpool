@@ -57,8 +57,12 @@ async def require_auth(request: Request) -> None:
 
     expected = os.environ.get(api_key_env)
     if not expected:
-        logger.warning("API key env var %s not set; auth disabled", api_key_env)
-        return
+        # Startup check should have caught this, but if env var
+        # disappears at runtime, fail closed
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication unavailable: API key not configured",
+        )
 
     if not verify_api_key(request, expected):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")

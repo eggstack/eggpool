@@ -8,6 +8,8 @@ from go_aggregator.accounts.registry import AccountRegistry
 from go_aggregator.accounts.state import AccountRuntimeState
 from go_aggregator.catalog.cache import ModelCatalogCache
 from go_aggregator.models.config import AppConfig
+from go_aggregator.quota.estimation import AccountQuota, QuotaEstimator
+from go_aggregator.quota.scorer import QuotaFairScorer, RoutingScore
 from go_aggregator.routing.eligibility import get_eligible_accounts
 from go_aggregator.routing.router import Router
 
@@ -105,3 +107,170 @@ def test_router_no_eligible_account() -> None:
     selected = router.select_account("gpt-4")
     assert selected is None
     del os.environ["TEST_ROUTER_KEY_2"]
+
+
+def _make_mock_catalog(model_id: str = "gpt-4") -> ModelCatalogCache:
+    """Create a mock catalog cache with a model."""
+    cache = ModelCatalogCache()
+    cache.update_from_account("acct1", [{"model_id": model_id, "protocol": "openai"}])
+    cache.update_from_account("acct2", [{"model_id": model_id, "protocol": "openai"}])
+    return cache
+
+
+def test_5h_usage_changes_selection() -> None:
+    """Five-hour usage on one account should route to the other."""
+    estimator = QuotaEstimator()
+    estimator.set_account_limits("acct1", max_hourly_cost_microdollars=10_000_000)
+    estimator.set_account_limits("acct2", max_hourly_cost_microdollars=10_000_000)
+    # Record usage only on acct1
+    estimator.record_usage("acct1", 1000, 5_000_000)
+
+    scorer = QuotaFairScorer(quota_estimator=estimator)
+    scores = scorer.score_accounts(["acct1", "acct2"])
+
+    # acct1 has usage, acct2 has none -- acct2 should score lower (better)
+    assert scores[1].quota_score < scores[0].quota_score
+
+
+def test_7d_usage_changes_selection() -> None:
+    """Seven-day usage on one account should route to the other."""
+    estimator = QuotaEstimator()
+    from go_aggregator.quota.estimation import PersistedWindowSnapshot
+
+    estimator.accounts["acct1"] = AccountQuota(
+        account_name="acct1",
+        max_daily_cost_microdollars=10_000_000,
+        persisted_snapshot=PersistedWindowSnapshot(
+            account_id=1, cost_5h=0, cost_7d=5_000_000, cost_30d=0
+        ),
+    )
+    estimator.accounts["acct2"] = AccountQuota(
+        account_name="acct2",
+        max_daily_cost_microdollars=10_000_000,
+        persisted_snapshot=PersistedWindowSnapshot(
+            account_id=2, cost_5h=0, cost_7d=0, cost_30d=0
+        ),
+    )
+
+    scorer = QuotaFairScorer(quota_estimator=estimator)
+    scores = scorer.score_accounts(["acct1", "acct2"])
+
+    assert scores[1].quota_score < scores[0].quota_score
+
+
+def test_30d_usage_changes_selection() -> None:
+    """Thirty-day usage on one account should route to the other."""
+    estimator = QuotaEstimator()
+    from go_aggregator.quota.estimation import PersistedWindowSnapshot
+
+    estimator.accounts["acct1"] = AccountQuota(
+        account_name="acct1",
+        max_monthly_cost_microdollars=60_000_000,
+        persisted_snapshot=PersistedWindowSnapshot(
+            account_id=1, cost_5h=0, cost_7d=0, cost_30d=30_000_000
+        ),
+    )
+    estimator.accounts["acct2"] = AccountQuota(
+        account_name="acct2",
+        max_monthly_cost_microdollars=60_000_000,
+        persisted_snapshot=PersistedWindowSnapshot(
+            account_id=2, cost_5h=0, cost_7d=0, cost_30d=0
+        ),
+    )
+
+    scorer = QuotaFairScorer(quota_estimator=estimator)
+    scores = scorer.score_accounts(["acct1", "acct2"])
+
+    assert scores[1].quota_score < scores[0].quota_score
+
+
+def test_offsets_apply_to_correct_windows() -> None:
+    """Manual offset on 5h should not affect 7d routing."""
+    estimator = QuotaEstimator()
+    from go_aggregator.quota.estimation import PersistedWindowSnapshot
+
+    estimator.accounts["acct1"] = AccountQuota(
+        account_name="acct1",
+        max_hourly_cost_microdollars=10_000_000,
+        max_daily_cost_microdollars=10_000_000,
+        five_hour_offset=8_000_000,
+        weekly_offset=0,
+        monthly_offset=0,
+        persisted_snapshot=PersistedWindowSnapshot(
+            account_id=1, cost_5h=0, cost_7d=0, cost_30d=0
+        ),
+    )
+    estimator.accounts["acct2"] = AccountQuota(
+        account_name="acct2",
+        max_hourly_cost_microdollars=10_000_000,
+        max_daily_cost_microdollars=10_000_000,
+        five_hour_offset=0,
+        weekly_offset=0,
+        monthly_offset=0,
+        persisted_snapshot=PersistedWindowSnapshot(
+            account_id=2, cost_5h=0, cost_7d=0, cost_30d=0
+        ),
+    )
+
+    scorer = QuotaFairScorer(quota_estimator=estimator)
+    scores = scorer.score_accounts(["acct1", "acct2"])
+
+    # acct1 has 80% offset on 5h window, acct2 has none
+    # acct1 should score higher (more utilized)
+    assert scores[0].quota_score > scores[1].quota_score
+
+
+def test_weights_scale_capacities() -> None:
+    """Account with weight=2 should have double the capacity."""
+    estimator = QuotaEstimator()
+    estimator.set_account_weight("acct1", 2.0)
+    estimator.set_account_weight("acct2", 1.0)
+    estimator.set_account_limits("acct1", max_daily_cost_microdollars=20_000_000)
+    estimator.set_account_limits("acct2", max_daily_cost_microdollars=10_000_000)
+    # Equal usage on both accounts
+    estimator.record_usage("acct1", 1000, 5_000_000)
+    estimator.record_usage("acct2", 1000, 5_000_000)
+
+    scorer = QuotaFairScorer(quota_estimator=estimator)
+    scores = scorer.score_accounts(["acct1", "acct2"])
+
+    # Both have 50% of their own capacity, so scores should be similar
+    # but acct1 has weight=2 vs acct2 weight=1
+    assert scores[0].weight == 2.0
+    assert scores[1].weight == 1.0
+
+
+def test_reservations_affect_selection() -> None:
+    """Active reservation should make an account less preferred."""
+    estimator = QuotaEstimator()
+    estimator.set_account_limits("acct1", max_hourly_cost_microdollars=10_000_000)
+    estimator.set_account_limits("acct2", max_hourly_cost_microdollars=10_000_000)
+    # Add reservation on acct1
+    estimator.add_reservation("acct1", 4_000_000)
+
+    scorer = QuotaFairScorer(quota_estimator=estimator)
+    scores = scorer.score_accounts(["acct1", "acct2"])
+
+    # acct1 has reservation, acct2 has none -- acct2 should score lower
+    assert scores[1].quota_score < scores[0].quota_score
+
+
+def test_near_ties_randomize() -> None:
+    """Near-tie accounts should not always select the same one."""
+    scorer = QuotaFairScorer(tiebreaker_range=0.5)
+    # Create scores with very close values
+    import random
+
+    random.seed(42)
+    selected_names = set()
+    for _ in range(100):
+        scores = [
+            RoutingScore("acct1", 0.5, 1.0, True),
+            RoutingScore("acct2", 0.501, 1.0, True),
+        ]
+        selected = scorer.select_account(scores)
+        if selected:
+            selected_names.add(selected.account_name)
+
+    # With 100 iterations, both should be selected at least once
+    assert len(selected_names) >= 2

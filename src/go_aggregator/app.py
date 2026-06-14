@@ -209,6 +209,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         while True:
             await asyncio.sleep(3600)
             await cleanup_old_requests(db, config.dashboard.retain_request_stats_days)
+            # Reconcile expired reservations
+            if reservation_repo:
+                count = await reservation_repo.reconcile_expired()
+                if count > 0:
+                    logger.info("Reconciled %d expired reservations", count)
 
     supervisor.register("retention_cleanup", _retention_cleanup)
 
@@ -219,6 +224,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             await checkpoint_database(db)
 
     supervisor.register("checkpoint", _periodic_checkpoint)
+
+    # Register periodic usage window refresh (every 60 seconds)
+    async def _refresh_usage_windows() -> None:
+        while True:
+            await asyncio.sleep(60)
+            try:
+                await router._quota_estimator.load_persisted_windows()  # noqa: SLF001
+            except Exception:
+                logger.debug("Failed to refresh usage windows")
+
+    supervisor.register("usage_window_refresh", _refresh_usage_windows)
 
     # 20. Start background tasks
     await supervisor.start_all()

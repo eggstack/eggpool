@@ -182,6 +182,10 @@ class RequestCoordinator:
                     attempt_num,
                     context.request_id,
                 )
+                if self._health_manager and context.client_metadata.get("account_name"):
+                    self._health_manager.record_failure(
+                        context.client_metadata["account_name"]
+                    )
                 if attempt_num >= MAX_RETRY_ATTEMPTS:
                     break
             except httpx.TimeoutException as err:
@@ -191,6 +195,10 @@ class RequestCoordinator:
                     attempt_num,
                     context.request_id,
                 )
+                if self._health_manager and context.client_metadata.get("account_name"):
+                    self._health_manager.record_failure(
+                        context.client_metadata["account_name"]
+                    )
                 if attempt_num >= MAX_RETRY_ATTEMPTS:
                     break
             except UpstreamError as err:
@@ -201,6 +209,10 @@ class RequestCoordinator:
                     context.request_id,
                     err,
                 )
+                if self._health_manager and context.client_metadata.get("account_name"):
+                    self._health_manager.record_failure(
+                        context.client_metadata["account_name"]
+                    )
                 if attempt_num >= MAX_RETRY_ATTEMPTS:
                     break
 
@@ -238,16 +250,27 @@ class RequestCoordinator:
             # Store account_name for health tracking
             context.client_metadata["account_name"] = account_name
 
-        # Create pending request record (only on first attempt)
-        if "db_request_id" not in context.client_metadata:
-            db_request_id = await self._ensure_request_record(context)
-            context.client_metadata["db_request_id"] = db_request_id
-        db_request_id = context.client_metadata["db_request_id"]
+            # Create pending request record (only on first attempt)
+            if "db_request_id" not in context.client_metadata:
+                db_request_id = await self._ensure_request_record(context)
+                context.client_metadata["db_request_id"] = db_request_id
+            db_request_id = context.client_metadata["db_request_id"]
 
-        # Create reservation
-        reservation_id = await self._create_reservation(
-            context, account_name, db_request_id
-        )
+            # Create reservation (inside lock for atomicity)
+            reservation_id = await self._create_reservation(
+                context, account_name, db_request_id
+            )
+            # Track reservation in estimator for scoring
+            if reservation_id and self._quota_estimator is not None:
+                account_repo = AccountRepository(self._db)
+                account_id = await account_repo.get_id_by_name(account_name)
+                if account_id is not None:
+                    estimated_microdollars = self._quota_estimator.estimate_cost(
+                        account_name, context.model_id, 1000
+                    )
+                    self._quota_estimator.add_reservation(
+                        account_name, estimated_microdollars
+                    )
 
         # Create attempt record
         attempt_id = await self._create_attempt(
@@ -267,6 +290,12 @@ class RequestCoordinator:
             # Release reservation on error
             if reservation_id and self._reservation_repo:
                 await self._reservation_repo.release(reservation_id, "error")
+            # Remove from estimator tracking
+            if self._quota_estimator is not None:
+                estimated = self._quota_estimator.estimate_cost(
+                    account_name, context.model_id, 1000
+                )
+                self._quota_estimator.remove_reservation(account_name, estimated)
             raise
 
     async def _execute_non_streaming(
@@ -348,6 +377,17 @@ class RequestCoordinator:
             input_tokens=usage.input_tokens if usage else 0,
             output_tokens=usage.output_tokens if usage else 0,
         )
+
+        # Record health success for completed requests
+        if self._health_manager and status == "completed":
+            self._health_manager.record_success(account_name, context.model_id)
+
+        # Remove reservation from estimator tracking
+        if self._quota_estimator is not None:
+            estimated = self._quota_estimator.estimate_cost(
+                account_name, context.model_id, 1000
+            )
+            self._quota_estimator.remove_reservation(account_name, estimated)
 
         resp_headers["x-proxy-request-id"] = context.request_id
         return PreparedProxyResponse(
@@ -522,6 +562,13 @@ class RequestCoordinator:
                 if self._health_manager:
                     self._health_manager.record_success(account_name, context.model_id)
 
+                # Remove reservation from estimator tracking
+                if self._quota_estimator is not None:
+                    estimated = self._quota_estimator.estimate_cost(
+                        account_name, context.model_id, 1000
+                    )
+                    self._quota_estimator.remove_reservation(account_name, estimated)
+
             except Exception as exc:
                 # Finalize on error
                 await self._update_attempt(
@@ -538,6 +585,12 @@ class RequestCoordinator:
                 )
                 if self._health_manager:
                     self._health_manager.record_failure(account_name, context.model_id)
+                # Remove reservation from estimator tracking
+                if self._quota_estimator is not None:
+                    estimated = self._quota_estimator.estimate_cost(
+                        account_name, context.model_id, 1000
+                    )
+                    self._quota_estimator.remove_reservation(account_name, estimated)
                 raise
             finally:
                 # Always close upstream response
@@ -734,6 +787,23 @@ class RequestCoordinator:
             cost_microdollars, exactness = await self._cost_calculator.calculate_cost(
                 context.model_id, input_tokens, output_tokens
             )
+
+        # For interrupted/error requests with no usage, use reservation
+        # estimate as conservative cost
+        if (
+            cost_microdollars == 0
+            and exactness == "unknown"
+            and status != "completed"
+            and self._quota_estimator is not None
+        ):
+            account_name = context.client_metadata.get("account_name", "")
+            if account_name:
+                estimated = self._quota_estimator.estimate_cost(
+                    account_name, context.model_id, 1000
+                )
+                if estimated > 0:
+                    cost_microdollars = estimated
+                    exactness = "estimated"
 
         # Use the DB row ID for updates
         db_request_id = context.client_metadata.get("db_request_id", context.request_id)

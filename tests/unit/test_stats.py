@@ -440,3 +440,31 @@ class TestStatsService:
         assert "summary" in overview
         assert "imbalance" in overview
         assert overview["summary"]["total_requests"] == 5
+
+    @pytest.mark.asyncio()
+    async def test_dashboard_totals_match_db_aggregates(
+        self, seeded_db: Database
+    ) -> None:
+        """Dashboard summary should match direct SQL aggregates."""
+        service = StatsService(seeded_db)
+        time_range = TimeRange(
+            start=__import__("datetime").datetime.fromisoformat("2000-01-01"),
+            end=__import__("datetime").datetime.fromisoformat("2099-12-31"),
+            label="custom",
+        )
+        overview = await service.get_dashboard_overview(time_range)
+        summary = overview["summary"]
+
+        # Direct SQL query for comparison
+        row = await seeded_db.fetch_one(
+            "SELECT COUNT(*) as cnt, "
+            "COALESCE(SUM(input_tokens), 0) as in_tok, "
+            "COALESCE(SUM(output_tokens), 0) as out_tok, "
+            "COALESCE(SUM(cost_microdollars), 0) as cost "
+            "FROM requests"
+        )
+        assert row is not None
+        assert summary["total_requests"] == int(row["cnt"])
+        assert summary["total_input_tokens"] == int(row["in_tok"])
+        assert summary["total_output_tokens"] == int(row["out_tok"])
+        assert summary["total_cost_microdollars"] == int(row["cost"])

@@ -890,3 +890,276 @@ async def test_invariant_12_request_content_not_persisted(
     req_str = json.dumps(dict(req))
     assert "Secret prompt" not in req_str
     assert "Secret response" not in req_str
+
+
+def _build_two_account_config() -> AppConfig:
+    os.environ["OPENCODE_TEST_KEY"] = "test-key-123"
+    os.environ["OPENCODE_TEST_KEY_2"] = "test-key-456"
+    return AppConfig.from_dict(
+        {
+            "server": {
+                "api_key_env": "OPENCODE_TEST_KEY",
+                "host": "127.0.0.1",
+                "port": 0,
+            },
+            "database": {"path": ":memory:"},
+            "upstream": {"base_url": UPSTREAM_BASE},
+            "models": {"startup_refresh": False, "refresh_interval_s": 0},
+            "accounts": [
+                {"name": "test-acct", "api_key_env": "OPENCODE_TEST_KEY"},
+                {"name": "test-acct-2", "api_key_env": "OPENCODE_TEST_KEY_2"},
+            ],
+            "dashboard": {"enabled": False},
+        }
+    )
+
+
+@pytest_asyncio.fixture()
+async def two_account_db() -> AsyncGenerator[Database, None]:
+    database = Database(path=":memory:")
+    await database.connect()
+    runner = MigrationRunner(database)
+    await runner.run()
+    await database.execute(
+        "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+        "VALUES (?, ?, 1, 1.0)",
+        ("test-acct", "OPENCODE_TEST_KEY"),
+    )
+    await database.execute(
+        "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+        "VALUES (?, ?, 1, 1.0)",
+        ("test-acct-2", "OPENCODE_TEST_KEY_2"),
+    )
+    await database.execute(
+        "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+        ("gpt-4", "openai"),
+    )
+    await database.connection.commit()
+    yield database
+    await database.disconnect()
+
+
+@pytest_asyncio.fixture()
+async def two_account_coordinator(
+    two_account_db: Database,
+) -> AsyncGenerator[RequestCoordinator, None]:
+    config = _build_two_account_config()
+    httpx_client = httpx.AsyncClient(
+        base_url=config.upstream.base_url,
+        timeout=httpx.Timeout(300.0, connect=5.0, read=300.0, write=30.0, pool=30.0),
+    )
+    registry = AccountRegistry(config)
+    catalog = CatalogService(config, registry, two_account_db, httpx_client)
+    catalog.cache.load_model(
+        model_id="gpt-4",
+        display_name="GPT-4",
+        protocol="openai",
+        capabilities={},
+        source_metadata={},
+    )
+    catalog.cache.add_account_support("gpt-4", "test-acct")
+    catalog.cache.add_account_support("gpt-4", "test-acct-2")
+
+    health_manager = HealthManager()
+    router = Router(registry, catalog, health_manager=health_manager)
+    router.set_account_weight("test-acct", 1.0)
+    router.set_account_weight("test-acct-2", 1.0)
+
+    request_repo = RequestRepository(two_account_db)
+    reservation_repo = ReservationRepository(two_account_db)
+    attempt_repo = AttemptRepository(two_account_db)
+
+    coord = RequestCoordinator(
+        registry=registry,
+        catalog=catalog,
+        router=router,
+        db=two_account_db,
+        httpx_client=httpx_client,
+        request_repo=request_repo,
+        reservation_repo=reservation_repo,
+        attempt_repo=attempt_repo,
+        health_manager=health_manager,
+    )
+    yield coord
+    await httpx_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_two_account_failover_first_returns_429(
+    two_account_coordinator: RequestCoordinator,
+    two_account_db: Database,
+) -> None:
+    """When first account returns 429, should failover to second."""
+    request_body = json.dumps(
+        {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hi"}],
+        }
+    ).encode()
+
+    call_count = 0
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return httpx.Response(
+                429,
+                json={"error": {"message": "Rate limited"}},
+                headers={"retry-after": "30"},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "id": "cmpl-1",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hello"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15,
+                },
+            },
+        )
+
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(side_effect=_handler)
+
+        context = ProxyRequestContext(
+            request_id="test-failover-429",
+            protocol="openai",
+            model_id="gpt-4",
+            streaming=False,
+            original_body=request_body,
+            incoming_headers={"content-type": "application/json"},
+        )
+        response = await two_account_coordinator.execute(context)
+
+    assert response.status_code == 200
+    assert response.account_name == "test-acct-2"
+
+
+@pytest.mark.asyncio
+async def test_two_account_failover_first_returns_500(
+    two_account_coordinator: RequestCoordinator,
+    two_account_db: Database,
+) -> None:
+    """When first account returns 500, should failover to second."""
+    request_body = json.dumps(
+        {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hi"}],
+        }
+    ).encode()
+
+    call_count = 0
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return httpx.Response(
+                500,
+                json={"error": {"message": "Internal error"}},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "id": "cmpl-1",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hello"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15,
+                },
+            },
+        )
+
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(side_effect=_handler)
+
+        context = ProxyRequestContext(
+            request_id="test-failover-500",
+            protocol="openai",
+            model_id="gpt-4",
+            streaming=False,
+            original_body=request_body,
+            incoming_headers={"content-type": "application/json"},
+        )
+        response = await two_account_coordinator.execute(context)
+
+    assert response.status_code == 200
+    assert response.account_name == "test-acct-2"
+
+
+@pytest.mark.asyncio
+async def test_no_secrets_in_database(
+    coordinator: RequestCoordinator,
+    db: Database,
+) -> None:
+    """SQLite should contain no API keys, prompts, or completions."""
+    request_body = json.dumps(
+        {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "My secret API key is sk-abc123"}],
+        }
+    ).encode()
+
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "cmpl-1",
+                    "object": "chat.completion",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": "Here is the secret: xyz789",
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 5,
+                        "total_tokens": 15,
+                    },
+                },
+            )
+        )
+
+        context = ProxyRequestContext(
+            request_id="test-privacy-secrets",
+            protocol="openai",
+            model_id="gpt-4",
+            streaming=False,
+            original_body=request_body,
+            incoming_headers={"content-type": "application/json"},
+        )
+        await coordinator.execute(context)
+
+    tables = ["requests", "reservations", "request_attempts"]
+    for table in tables:
+        rows = await db.fetch_all(f"SELECT * FROM {table}")  # noqa: S608
+        for row in rows:
+            row_str = json.dumps(dict(row))
+            assert "sk-abc123" not in row_str, f"API key found in {table}: {row_str}"
+            assert "xyz789" not in row_str, (
+                f"Secret content found in {table}: {row_str}"
+            )

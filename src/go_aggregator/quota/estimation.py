@@ -114,7 +114,11 @@ class AccountQuota:
     weight: float = 1.0
     max_daily_cost_microdollars: int | None = None
     max_hourly_cost_microdollars: int | None = None
+    max_monthly_cost_microdollars: int | None = None
     persisted_snapshot: PersistedWindowSnapshot | None = None
+    five_hour_offset: int = 0
+    weekly_offset: int = 0
+    monthly_offset: int = 0
 
     def record_usage(
         self,
@@ -219,6 +223,8 @@ class QuotaEstimator:
     default_unknown_reservation_microdollars: int = 1_000_000
     # Optional persisted window repo for loading actual usage
     _usage_window_repo: UsageWindowRepository | None = field(default=None, repr=False)
+    # In-memory reservation tracking for scorer
+    _account_reserved_cost: dict[str, int] = field(default_factory=dict)
 
     def set_usage_window_repo(self, repo: UsageWindowRepository) -> None:
         """Set the persisted usage window repository."""
@@ -340,6 +346,7 @@ class QuotaEstimator:
         account_name: str,
         max_daily_cost_microdollars: int | None = None,
         max_hourly_cost_microdollars: int | None = None,
+        max_monthly_cost_microdollars: int | None = None,
     ) -> None:
         """Set quota limits for an account."""
         if account_name not in self.accounts:
@@ -347,6 +354,7 @@ class QuotaEstimator:
         quota = self.accounts[account_name]
         quota.max_daily_cost_microdollars = max_daily_cost_microdollars
         quota.max_hourly_cost_microdollars = max_hourly_cost_microdollars
+        quota.max_monthly_cost_microdollars = max_monthly_cost_microdollars
 
     def apply_manual_offset(
         self,
@@ -370,6 +378,23 @@ class QuotaEstimator:
     ) -> None:
         """Set a configured per-model price override (Tier 4)."""
         self.model_overrides[model_id] = (input_price, output_price)
+
+    def add_reservation(self, account_name: str, cost: int) -> None:
+        """Track an active reservation's estimated cost for scoring."""
+        if account_name not in self._account_reserved_cost:
+            self._account_reserved_cost[account_name] = 0
+        self._account_reserved_cost[account_name] += cost
+
+    def remove_reservation(self, account_name: str, cost: int) -> None:
+        """Remove a reservation's cost from tracking."""
+        if account_name in self._account_reserved_cost:
+            self._account_reserved_cost[account_name] = max(
+                0, self._account_reserved_cost[account_name] - cost
+            )
+
+    def get_account_reserved_cost(self, account_name: str) -> int:
+        """Get total reserved cost for an account from active reservations."""
+        return self._account_reserved_cost.get(account_name, 0)
 
     async def load_persisted_windows(self) -> None:
         """Load persisted usage windows from the database."""
