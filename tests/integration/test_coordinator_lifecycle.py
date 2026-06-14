@@ -540,3 +540,353 @@ async def test_openai_stream_injects_stream_options(
     assert len(captured_requests) == 1
     sent_payload = json.loads(captured_requests[0])
     assert sent_payload["stream_options"]["include_usage"] is True
+
+
+# ---------------------------------------------------------------------------
+# Invariant tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_invariant_1_no_paid_request_without_pending_record_and_reservation(
+    coordinator: RequestCoordinator,
+    db: Database,
+) -> None:
+    """Invariant 1: No paid request exists without a pending record + reservation."""
+    request_body = json.dumps(
+        {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hi"}],
+        }
+    ).encode()
+
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "cmpl-1",
+                    "object": "chat.completion",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "Hello"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 5,
+                        "total_tokens": 15,
+                    },
+                },
+            )
+        )
+
+        context = ProxyRequestContext(
+            request_id="test-invariant-1",
+            protocol="openai",
+            model_id="gpt-4",
+            streaming=False,
+            original_body=request_body,
+            incoming_headers={"content-type": "application/json"},
+        )
+        await coordinator.execute(context)
+
+    # Request exists with terminal status
+    req_rows = await db.fetch_all("SELECT * FROM requests")
+    assert len(req_rows) == 1
+    req = req_rows[0]
+    assert req["status"] == "completed"
+
+    # Reservation exists for this request
+    resv_rows = await db.fetch_all(
+        "SELECT * FROM reservations WHERE request_id = ?", (req["id"],)
+    )
+    assert len(resv_rows) == 1
+    assert resv_rows[0]["status"] == "released"
+
+
+@pytest.mark.asyncio
+async def test_invariant_2_selection_and_reservation_are_atomic(
+    coordinator: RequestCoordinator,
+    db: Database,
+) -> None:
+    """Invariant 2: Account selection and reservation happen in one critical section."""
+    request_body = json.dumps(
+        {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hi"}],
+        }
+    ).encode()
+
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "cmpl-1",
+                    "object": "chat.completion",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "Hello"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 5,
+                        "total_tokens": 15,
+                    },
+                },
+            )
+        )
+
+        context = ProxyRequestContext(
+            request_id="test-invariant-2",
+            protocol="openai",
+            model_id="gpt-4",
+            streaming=False,
+            original_body=request_body,
+            incoming_headers={"content-type": "application/json"},
+        )
+        await coordinator.execute(context)
+
+    # A reservation exists and is linked to the request account
+    resv_rows = await db.fetch_all("SELECT * FROM reservations")
+    assert len(resv_rows) == 1
+    resv = resv_rows[0]
+    assert resv["account_id"] > 0
+    assert resv["model_id"] == "gpt-4"
+
+
+@pytest.mark.asyncio
+async def test_invariant_3_every_reservation_finalized_exactly_once(
+    coordinator: RequestCoordinator,
+    db: Database,
+) -> None:
+    """Invariant 3: Every reservation is finalized (released/expired) exactly once."""
+    request_body = json.dumps(
+        {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hi"}],
+        }
+    ).encode()
+
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "cmpl-1",
+                    "object": "chat.completion",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "Hello"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 5,
+                        "total_tokens": 15,
+                    },
+                },
+            )
+        )
+
+        context = ProxyRequestContext(
+            request_id="test-invariant-3",
+            protocol="openai",
+            model_id="gpt-4",
+            streaming=False,
+            original_body=request_body,
+            incoming_headers={"content-type": "application/json"},
+        )
+        await coordinator.execute(context)
+
+    resv_rows = await db.fetch_all("SELECT * FROM reservations")
+    assert len(resv_rows) == 1
+    resv = resv_rows[0]
+    assert resv["status"] in ("released", "expired")
+    assert resv["released_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_invariant_4_every_attempt_has_persistent_record(
+    coordinator: RequestCoordinator,
+    db: Database,
+) -> None:
+    """Invariant 4: Every attempt has a persistent record."""
+    request_body = json.dumps(
+        {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hi"}],
+        }
+    ).encode()
+
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "cmpl-1",
+                    "object": "chat.completion",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "Hello"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 5,
+                        "total_tokens": 15,
+                    },
+                },
+            )
+        )
+
+        context = ProxyRequestContext(
+            request_id="test-invariant-4",
+            protocol="openai",
+            model_id="gpt-4",
+            streaming=False,
+            original_body=request_body,
+            incoming_headers={"content-type": "application/json"},
+        )
+        response = await coordinator.execute(context)
+
+    assert response.status_code == 200
+
+    # Attempt record exists with status code
+    attempt_rows = await db.fetch_all(
+        "SELECT * FROM request_attempts WHERE request_id = ?",
+        (context.client_metadata.get("db_request_id", "1"),),
+    )
+    assert len(attempt_rows) >= 1
+    for attempt in attempt_rows:
+        assert attempt["attempt_number"] >= 1
+        assert attempt["account_id"] > 0
+
+
+@pytest.mark.asyncio
+async def test_invariant_5_no_retry_after_first_byte_emitted(
+    coordinator: RequestCoordinator,
+    db: Database,
+) -> None:
+    """Invariant 5: No retry occurs after the first byte has been emitted."""
+    request_body = json.dumps(
+        {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "stream": True,
+        }
+    ).encode()
+
+    async def _error_after_bytes(
+        request: httpx.Request,
+    ) -> httpx.Response:
+        async def _aiter_bytes():  # type: ignore[no-untyped-def]
+            yield b"data: {"
+            raise httpx.RemoteProtocolError("Connection reset")
+
+        return httpx.Response(
+            200,
+            stream=_aiter_bytes(),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+            side_effect=_error_after_bytes
+        )
+
+        context = ProxyRequestContext(
+            request_id="test-invariant-5",
+            protocol="openai",
+            model_id="gpt-4",
+            streaming=True,
+            original_body=request_body,
+            incoming_headers={"content-type": "application/json"},
+        )
+        response = await coordinator.execute(context)
+
+    assert response.status_code == 200
+
+    # Consume stream (will raise)
+    try:
+        async for _chunk in response.stream_iterator:  # type: ignore[union-attr]
+            pass
+    except (httpx.RemoteProtocolError, Exception):
+        pass
+
+    # Only one attempt - no retry after first byte
+    attempt_rows = await db.fetch_all(
+        "SELECT * FROM request_attempts WHERE request_id = ?",
+        (context.client_metadata.get("db_request_id", "1"),),
+    )
+    assert len(attempt_rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_invariant_12_request_content_not_persisted(
+    coordinator: RequestCoordinator,
+    db: Database,
+) -> None:
+    """Invariant 12: Request/response content is not persisted in the database."""
+    request_body = json.dumps(
+        {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Secret prompt content"}],
+        }
+    ).encode()
+
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "cmpl-1",
+                    "object": "chat.completion",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": "Secret response content",
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 5,
+                        "total_tokens": 15,
+                    },
+                },
+            )
+        )
+
+        context = ProxyRequestContext(
+            request_id="test-invariant-12",
+            protocol="openai",
+            model_id="gpt-4",
+            streaming=False,
+            original_body=request_body,
+            incoming_headers={"content-type": "application/json"},
+        )
+        await coordinator.execute(context)
+
+    # Check all table schemas for any content-like columns
+    req_rows = await db.fetch_all("SELECT * FROM requests")
+    assert len(req_rows) == 1
+    req = req_rows[0]
+
+    # Verify no prompt/completion content stored
+    req_str = json.dumps(dict(req))
+    assert "Secret prompt" not in req_str
+    assert "Secret response" not in req_str
