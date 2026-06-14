@@ -297,6 +297,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         health_manager=health_manager,
         cost_calculator=cost_calculator,
         quota_estimator=router._quota_estimator,  # noqa: SLF001
+        max_retry_attempts=1 + config.routing.max_retries_before_stream,
     )
     app.state.coordinator = coordinator
 
