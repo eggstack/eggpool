@@ -38,17 +38,47 @@ class PriceRepository:
         model_id: str,
         input_price_per_1k: float | None,
         output_price_per_1k: float | None,
+        *,
+        input_per_million_microdollars: int | None = None,
+        output_per_million_microdollars: int | None = None,
+        cache_read_per_million_microdollars: int | None = None,
+        cache_write_per_million_microdollars: int | None = None,
+        source: str = "config",
     ) -> None:
-        """Record a price snapshot for a model."""
+        """Record a price snapshot for a model.
+
+        Must be called within a transaction context.
+        """
+        # Auto-convert legacy float to integer microdollars if not provided
+        if input_per_million_microdollars is None and input_price_per_1k is not None:
+            input_per_million_microdollars = int(
+                round(input_price_per_1k * 1_000_000_000)
+            )
+        if output_per_million_microdollars is None and output_price_per_1k is not None:
+            output_per_million_microdollars = int(
+                round(output_price_per_1k * 1_000_000_000)
+            )
+
         await self._db.execute(
             """
             INSERT INTO model_price_snapshots
-                (model_id, input_price_per_1k, output_price_per_1k)
-            VALUES (?, ?, ?)
+                (model_id, input_price_per_1k, output_price_per_1k,
+                 input_per_million_microdollars, output_per_million_microdollars,
+                 cache_read_per_million_microdollars,
+                 cache_write_per_million_microdollars, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (model_id, input_price_per_1k, output_price_per_1k),
+            (
+                model_id,
+                input_price_per_1k,
+                output_price_per_1k,
+                input_per_million_microdollars,
+                output_per_million_microdollars,
+                cache_read_per_million_microdollars,
+                cache_write_per_million_microdollars,
+                source,
+            ),
         )
-        await self._db.connection.commit()
 
     async def get_latest_snapshot(self, model_id: str) -> PriceSnapshot | None:
         """Get the most recent price snapshot for a model."""
@@ -148,33 +178,47 @@ class CostCalculator:
                 "estimated",
             )
 
-        input_rate = snapshot.input_per_million_microdollars or 0
-        output_rate = snapshot.output_per_million_microdollars or 0
-        cache_read_rate = snapshot.cache_read_per_million_microdollars or 0
-        cache_write_rate = snapshot.cache_write_per_million_microdollars or 0
+        input_rate = snapshot.input_per_million_microdollars
+        output_rate = snapshot.output_per_million_microdollars
+        cache_read_rate = snapshot.cache_read_per_million_microdollars
+        cache_write_rate = snapshot.cache_write_per_million_microdollars
 
-        exactness = "derived"
-        if (
-            input_rate == 0
-            and output_rate == 0
-            or (
-                cache_read_tokens > 0
-                and snapshot.cache_read_per_million_microdollars is None
-            )
-            or (
-                cache_write_tokens > 0
-                and snapshot.cache_write_per_million_microdollars is None
-            )
-        ):
-            exactness = "estimated"
-
-        total_numerator = (
-            input_tokens * input_rate
-            + output_tokens * output_rate
-            + cache_read_tokens * cache_read_rate
-            + cache_write_tokens * cache_write_rate
+        # Determine if required rates are missing for nonzero token categories
+        missing_required_rate = (
+            (input_tokens > 0 and input_rate is None)
+            or (output_tokens > 0 and output_rate is None)
+            or (cache_read_tokens > 0 and cache_read_rate is None)
+            or (cache_write_tokens > 0 and cache_write_rate is None)
         )
-        cost_microdollars = total_numerator // 1_000_000
+
+        if missing_required_rate:
+            # Use fallback estimation for missing categories
+            exactness = "estimated"
+            # Use available rates where possible, fallback to estimate for missing
+            input_cost = (input_tokens * (input_rate or 0)) // 1_000_000
+            output_cost = (output_tokens * (output_rate or 0)) // 1_000_000
+            cache_read_cost = (cache_read_tokens * (cache_read_rate or 0)) // 1_000_000
+            cache_write_cost = (
+                cache_write_tokens * (cache_write_rate or 0)
+            ) // 1_000_000
+            calculated_partial = (
+                input_cost + output_cost + cache_read_cost + cache_write_cost
+            )
+            # Fall back to at least the estimated cost
+            fallback = self._estimate_cost(input_tokens, output_tokens)
+            cost_microdollars = max(calculated_partial, fallback)
+        else:
+            exactness = "derived"
+            total_numerator = (
+                (input_tokens * (input_rate or 0))
+                + (output_tokens * (output_rate or 0))
+                + (cache_read_tokens * (cache_read_rate or 0))
+                + (cache_write_tokens * (cache_write_rate or 0))
+            )
+            cost_microdollars = total_numerator // 1_000_000
+            if cost_microdollars == 0 and (input_tokens > 0 or output_tokens > 0):
+                exactness = "estimated"
+
         return cost_microdollars, exactness
 
     def _estimate_cost(self, input_tokens: int, output_tokens: int) -> int:

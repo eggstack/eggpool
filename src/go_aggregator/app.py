@@ -25,6 +25,7 @@ from go_aggregator.background import TaskSupervisor
 from go_aggregator.background.cleanup import (
     checkpoint_database,
     cleanup_old_requests,
+    reconcile_expired_reservations,
 )
 from go_aggregator.catalog.pricing import CostCalculator, PriceRepository
 from go_aggregator.catalog.service import CatalogService
@@ -113,37 +114,37 @@ async def _crash_recovery(db: Database) -> None:
     )
     affected_account_ids = [int(row["account_id"]) for row in affected]
 
-    await db.execute(
-        "UPDATE requests SET status = 'interrupted', "
-        "completed_at = CURRENT_TIMESTAMP "
-        "WHERE status = 'pending' "
-        "AND started_at < datetime('now', '-10 minutes')"
-    )
-    await db.execute(
-        "UPDATE reservations SET status = 'released', "
-        "released_at = CURRENT_TIMESTAMP, release_reason = 'crash_recovery' "
-        "WHERE status = 'active' "
-        "AND created_at < datetime('now', '-10 minutes')"
-    )
-    await db.execute(
-        "UPDATE request_attempts SET "
-        "completed_at = CURRENT_TIMESTAMP, error_class = 'process_interrupted' "
-        "WHERE completed_at IS NULL "
-        "AND started_at < datetime('now', '-10 minutes')"
-    )
-    await db.connection.commit()
+    async with db.transaction():
+        await db.execute(
+            "UPDATE requests SET status = 'interrupted', "
+            "completed_at = CURRENT_TIMESTAMP "
+            "WHERE status = 'pending' "
+            "AND started_at < datetime('now', '-10 minutes')"
+        )
+        await db.execute(
+            "UPDATE reservations SET status = 'released', "
+            "released_at = CURRENT_TIMESTAMP, release_reason = 'crash_recovery' "
+            "WHERE status = 'active' "
+            "AND created_at < datetime('now', '-10 minutes')"
+        )
+        await db.execute(
+            "UPDATE request_attempts SET "
+            "completed_at = CURRENT_TIMESTAMP, error_class = 'process_interrupted' "
+            "WHERE completed_at IS NULL "
+            "AND started_at < datetime('now', '-10 minutes')"
+        )
 
-    # Record recovery events
+    # Record recovery events (separate transaction)
     if affected_account_ids:
-        event_repo = AccountEventRepository(db)
-        for account_id in affected_account_ids:
-            await event_repo.record(
-                account_id=account_id,
-                event_type="crash_recovery",
-                details='{"action": "marked_interrupted", '
-                '"reason": "startup_recovery"}',
-            )
-        await db.connection.commit()
+        async with db.transaction():
+            event_repo = AccountEventRepository(db)
+            for account_id in affected_account_ids:
+                await event_repo.record(
+                    account_id=account_id,
+                    event_type="crash_recovery",
+                    details='{"action": "marked_interrupted", '
+                    '"reason": "startup_recovery"}',
+                )
         logger.info(
             "Crash recovery: marked %d stale requests, recorded events for %d accounts",
             len(affected),
@@ -318,10 +319,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             await asyncio.sleep(3600)
             await cleanup_old_requests(db, config.dashboard.retain_request_stats_days)
             # Reconcile expired reservations
-            if reservation_repo:
-                count = await reservation_repo.reconcile_expired()
-                if count > 0:
-                    logger.info("Reconciled %d expired reservations", count)
+            await reconcile_expired_reservations(db)
 
     supervisor.register("retention_cleanup", _retention_cleanup)
 
@@ -448,12 +446,15 @@ def create_app(
                 media_type="application/json",
             )
 
-        # Real writeability probe (Section 12.3): insert one row, roll back
+        # Real writeability probe: insert one row inside a savepoint, then roll back
         try:
-            await db.execute(
-                "INSERT INTO health_probe (probe_at) VALUES (CURRENT_TIMESTAMP)"
-            )
-            await db.connection.rollback()
+            await db.execute("SAVEPOINT readiness_probe")
+            try:
+                await db.execute(
+                    "INSERT INTO health_probe (probe_at) VALUES (CURRENT_TIMESTAMP)"
+                )
+            finally:
+                await db.execute("ROLLBACK TO readiness_probe")
         except Exception:
             return Response(
                 content='{"status":"degraded","reason":"database not writable"}',

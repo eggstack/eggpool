@@ -369,14 +369,18 @@ class ReservationRepository:
         last_id = cursor.lastrowid
         return str(last_id) if last_id is not None else ""
 
-    async def release(self, reservation_id: str, reason: str) -> None:
-        """Mark a reservation as released."""
-        await self._db.execute(
+    async def release(self, reservation_id: str, reason: str) -> bool:
+        """Mark a reservation as released.
+
+        Returns True if a reservation was actually released.
+        """
+        cursor = await self._db.execute(
             "UPDATE reservations SET status = 'released', "
             "released_at = CURRENT_TIMESTAMP, release_reason = ? "
             "WHERE id = ? AND status = 'active'",
             (reason, reservation_id),
         )
+        return cursor.rowcount > 0
 
     async def release_for_request(
         self,
@@ -481,6 +485,36 @@ class AttemptRepository:
                     attempt_id,
                 ),
             )
+
+    async def finalize_if_incomplete(
+        self,
+        attempt_id: int,
+        status_code: int | None = None,
+        error_class: str | None = None,
+        error_detail: str | None = None,
+        upstream_request_id: str | None = None,
+        bytes_emitted: int = 0,
+    ) -> bool:
+        """Finalize an attempt only if it is still incomplete.
+
+        Returns True if the row was updated (transition performed).
+        """
+        cursor = await self._db.execute(
+            "UPDATE request_attempts SET "
+            "status_code = ?, error_class = ?, error_detail = ?, "
+            "upstream_request_id = ?, bytes_emitted = ?, "
+            "completed_at = CURRENT_TIMESTAMP "
+            "WHERE id = ? AND completed_at IS NULL",
+            (
+                status_code,
+                error_class,
+                error_detail,
+                upstream_request_id,
+                bytes_emitted,
+                attempt_id,
+            ),
+        )
+        return cursor.rowcount > 0
 
     async def get_for_request(self, request_id: str) -> list[dict[str, Any]]:
         """Get all attempts for a request, ordered by attempt number."""

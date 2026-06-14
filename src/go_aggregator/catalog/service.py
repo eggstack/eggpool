@@ -172,61 +172,60 @@ class CatalogService:
         """Persist the in-memory catalog to the database."""
         now_sql = "datetime('now')"
 
-        for model_id, model_info in self._cache.get_all_models().items():
-            # Resolve protocol source for this model
-            resolution = self._protocol_resolver.resolve_from_catalog(model_id)
-            protocol_source = (
-                resolution.source if resolution.source != "unresolved" else None
-            )
-
-            # Upsert model
-            await self._db.execute(
-                f"""
-                INSERT INTO models (
-                    model_id, display_name, protocol,
-                    capabilities, source_metadata,
-                    first_seen_at, last_seen_at, protocol_source
-                ) VALUES (?, ?, ?, ?, ?, {now_sql}, {now_sql}, ?)
-                ON CONFLICT(model_id) DO UPDATE SET
-                    display_name = excluded.display_name,
-                    protocol = excluded.protocol,
-                    capabilities = excluded.capabilities,
-                    source_metadata = excluded.source_metadata,
-                    last_seen_at = {now_sql},
-                    protocol_source = excluded.protocol_source
-                """,
-                (
-                    model_id,
-                    model_info.get("display_name"),
-                    model_info["protocol"],
-                    json.dumps(model_info.get("capabilities", {})),
-                    json.dumps(model_info.get("source_metadata", {})),
-                    protocol_source,
-                ),
-            )
-
-            # Upsert account-model relationships
-            supporting_accounts = self._cache.get_supporting_accounts_for_model(
-                model_id
-            )
-            acct_rows = await self._db.fetch_all("SELECT id, name FROM accounts")
-            for acct_row in acct_rows:
-                account_id = acct_row["id"]
-                account_name = acct_row["name"]
-                is_available = 1 if account_name in supporting_accounts else 0
-
-                await self._db.execute(
-                    f"""
-                    INSERT INTO account_models (
-                        account_id, model_id, enabled, created_at
-                    ) VALUES (?, ?, ?, {now_sql})
-                    ON CONFLICT(account_id, model_id) DO UPDATE SET
-                        enabled = excluded.enabled
-                    """,
-                    (account_id, model_id, is_available),
+        async with self._db.transaction():
+            for model_id, model_info in self._cache.get_all_models().items():
+                # Resolve protocol source for this model
+                resolution = self._protocol_resolver.resolve_from_catalog(model_id)
+                protocol_source = (
+                    resolution.source if resolution.source != "unresolved" else None
                 )
 
-        await self._db.connection.commit()
+                # Upsert model
+                await self._db.execute(
+                    f"""
+                    INSERT INTO models (
+                        model_id, display_name, protocol,
+                        capabilities, source_metadata,
+                        first_seen_at, last_seen_at, protocol_source
+                    ) VALUES (?, ?, ?, ?, ?, {now_sql}, {now_sql}, ?)
+                    ON CONFLICT(model_id) DO UPDATE SET
+                        display_name = excluded.display_name,
+                        protocol = excluded.protocol,
+                        capabilities = excluded.capabilities,
+                        source_metadata = excluded.source_metadata,
+                        last_seen_at = {now_sql},
+                        protocol_source = excluded.protocol_source
+                    """,
+                    (
+                        model_id,
+                        model_info.get("display_name"),
+                        model_info["protocol"],
+                        json.dumps(model_info.get("capabilities", {})),
+                        json.dumps(model_info.get("source_metadata", {})),
+                        protocol_source,
+                    ),
+                )
+
+                # Upsert account-model relationships
+                supporting_accounts = self._cache.get_supporting_accounts_for_model(
+                    model_id
+                )
+                acct_rows = await self._db.fetch_all("SELECT id, name FROM accounts")
+                for acct_row in acct_rows:
+                    account_id = acct_row["id"]
+                    account_name = acct_row["name"]
+                    is_available = 1 if account_name in supporting_accounts else 0
+
+                    await self._db.execute(
+                        f"""
+                        INSERT INTO account_models (
+                            account_id, model_id, enabled, created_at
+                        ) VALUES (?, ?, ?, {now_sql})
+                        ON CONFLICT(account_id, model_id) DO UPDATE SET
+                            enabled = excluded.enabled
+                        """,
+                        (account_id, model_id, is_available),
+                    )
 
     def get_models_for_exposure(
         self,

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
@@ -53,6 +52,7 @@ class FinalizationData:
     cache_write_tokens: int = 0
     reasoning_tokens: int = 0
     thinking_characters: int = 0
+    upstream_latency_ms: int | None = None
     first_byte_ms: int | None = None
     bytes_emitted: int = 0
     upstream_request_id: str | None = None
@@ -129,12 +129,8 @@ class RequestFinalizer:
                     data.cache_write_tokens,
                 )
 
-            # 2. If no usable usage, use estimated_microdollars
-            if (
-                cost_microdollars == 0
-                and exactness == "unknown"
-                and data.outcome != FinalizationOutcome.COMPLETED
-            ):
+            # 2. Always use reservation estimate when cost is unknown
+            if cost_microdollars == 0 and exactness == "unknown":
                 cost_microdollars = selected.estimated_microdollars
                 exactness = "estimated"
 
@@ -160,21 +156,26 @@ class RequestFinalizer:
                 reasoning_tokens=data.reasoning_tokens,
                 thinking_characters=data.thinking_characters,
                 retry_count=retry_count,
-                upstream_latency_ms=int((time.time() - time.time()) * 1000),
+                upstream_latency_ms=data.upstream_latency_ms
+                if data.upstream_latency_ms is not None
+                else 0,
             )
 
-            # 4. Finalize attempt
-            await self._attempt_repo.update(
-                attempt_id=selected.attempt_id,
-                status_code=data.status_code,
-                error_class=data.error_class,
-                error_detail=error_detail,
-                upstream_request_id=data.upstream_request_id,
-                bytes_emitted=data.bytes_emitted,
-            )
+            # 4. Finalize attempt only if request transitioned (idempotent)
+            if transitioned:
+                await self._attempt_repo.update(
+                    attempt_id=selected.attempt_id,
+                    status_code=data.status_code,
+                    error_class=data.error_class,
+                    error_detail=error_detail,
+                    upstream_request_id=data.upstream_request_id,
+                    bytes_emitted=data.bytes_emitted,
+                )
 
-            # 5. Release reservation
-            await self._reservation_repo.release(selected.reservation_id, reason=status)
+                # 5. Release reservation
+                await self._reservation_repo.release(
+                    selected.reservation_id, reason=status
+                )
 
             # 6. Insert account event for significant failures
             if (
@@ -231,16 +232,15 @@ class RequestFinalizer:
                     model_id=_get_model_id(selected),
                 )
 
-                # 4. Refresh persisted snapshot locally (Section 8.2)
+                # 4. Refresh persisted snapshot locally
                 #    Increment cached 5h/7d/30d values by final cost
-                if exactness in ("exact", "derived"):
-                    snapshot = self._quota_estimator.get_account_quota(
-                        selected.account_name
-                    )
-                    if snapshot is not None and snapshot.persisted_snapshot is not None:
-                        snapshot.persisted_snapshot.cost_5h += cost_microdollars
-                        snapshot.persisted_snapshot.cost_7d += cost_microdollars
-                        snapshot.persisted_snapshot.cost_30d += cost_microdollars
+                snapshot = self._quota_estimator.get_account_quota(
+                    selected.account_name
+                )
+                if snapshot is not None and snapshot.persisted_snapshot is not None:
+                    snapshot.persisted_snapshot.cost_5h += cost_microdollars
+                    snapshot.persisted_snapshot.cost_7d += cost_microdollars
+                    snapshot.persisted_snapshot.cost_30d += cost_microdollars
 
             # 5. Update health state
             if self._health_manager is not None:

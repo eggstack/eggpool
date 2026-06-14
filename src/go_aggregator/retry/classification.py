@@ -16,6 +16,9 @@ class RetryCategory(Enum):
     TEMPORARY = "temporary"  # Temporary error, retry with backoff
     TRANSIENT = "transient"  # Transient error, retry immediately
     FATAL = "fatal"  # Fatal error, don't retry
+    MODEL_UNAVAILABLE = (
+        "model_unavailable"  # Model-specific 404, retryable on another account
+    )
 
 
 @dataclass
@@ -36,6 +39,7 @@ class RetryableError:
             RetryCategory.TEMPORARY,
             RetryCategory.TRANSIENT,
             RetryCategory.QUOTA_EXCEEDED,
+            RetryCategory.MODEL_UNAVAILABLE,
         )
 
     @property
@@ -44,16 +48,26 @@ class RetryableError:
         return self.category == RetryCategory.AUTH_FAILURE
 
     @property
+    def should_disable_model(self) -> bool:
+        """Check if this error should disable the model from this account."""
+        return self.category == RetryCategory.MODEL_UNAVAILABLE
+
+    @property
     def should_remove_model(self) -> bool:
         """Check if this error should remove the model from the account."""
-        return self.status_code == 404
+        return (
+            self.status_code == 404 and self.category == RetryCategory.MODEL_UNAVAILABLE
+        )
 
 
 class RetryClassifier:
     """Classifies errors for retry decisions."""
 
     def classify(
-        self, status_code: int, headers: dict[str, str] | None = None
+        self,
+        status_code: int,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
     ) -> RetryableError:
         """Classify a status code into a retry category."""
         headers = headers or {}
@@ -77,10 +91,17 @@ class RetryClassifier:
                 message="Forbidden",
             )
         elif status_code == 404:
+            # Check if this is a model-specific 404 (retryable on another account)
+            if body is not None and self._is_model_specific_404(body):
+                return RetryableError(
+                    status_code=status_code,
+                    category=RetryCategory.MODEL_UNAVAILABLE,
+                    message="Model unavailable on this account",
+                )
             return RetryableError(
                 status_code=status_code,
                 category=RetryCategory.BAD_REQUEST,
-                message="Model not found",
+                message="Not found",
             )
         elif status_code == 402:
             return RetryableError(
@@ -128,6 +149,23 @@ class RetryClassifier:
                 category=RetryCategory.TEMPORARY,
                 message=f"Unknown error: {status_code}",
             )
+
+    def _is_model_specific_404(self, body: bytes) -> bool:
+        """Check if a 404 response body indicates a model-specific error."""
+        try:
+            text = body.decode("utf-8", errors="replace").lower()
+        except Exception:
+            return False
+        model_signals = [
+            "model not found",
+            "unknown model",
+            "unsupported model",
+            "model is not available",
+            "model does not exist",
+            "no such model",
+            "model_id not found",
+        ]
+        return any(signal in text for signal in model_signals)
 
     def _parse_retry_after(self, value: str | None) -> float | None:
         """Parse Retry-After header value."""

@@ -144,10 +144,10 @@ src/go_aggregator/
 │       ├── 0009_model_protocol_source.sql
 │       └── 0010_health_probe.sql
 ├── request/
-│   ├── coordinator.py   # Central request lifecycle orchestrator
-│   ├── finalizer.py     # Idempotent request finalization
-│   ├── body.py          # Bounded request body reading
-│   └── generation.py    # Runtime generation (deprecated)
+│   ├── coordinator.py       # Central request lifecycle orchestrator
+│   ├── attempt_finalizer.py # Per-attempt terminal lifecycle
+│   ├── finalizer.py         # Idempotent request finalization
+│   └── body.py              # Bounded request body reading
 ├── accounts/            # Account registry and state
 ├── catalog/             # Model catalog, pricing, estimation, and protocols
 ├── routing/             # Quota-aware routing and eligibility
@@ -179,6 +179,7 @@ tests/
 - [x] Phase 9: Deployment hardening
 - [x] Phase 10: Integration hardening and correct request lifecycle
 - [x] Phase 12: Executable correctness pass
+- [x] Phase 13: Attempt lifecycle and transaction hardening
 
 ## Known Limitations
 

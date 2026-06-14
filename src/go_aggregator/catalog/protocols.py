@@ -40,6 +40,12 @@ FAMILY_PROTOCOLS: dict[str, str] = {
     "o1-": "openai",
     "o3-": "openai",
     "claude-": "anthropic",
+    "glm-": "openai",
+    "kimi-": "openai",
+    "mimo-": "openai",
+    "deepseek-": "openai",
+    "minimax-": "openai",
+    "qwen-": "openai",
 }
 
 

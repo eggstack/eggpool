@@ -29,6 +29,10 @@ from go_aggregator.errors import (
 from go_aggregator.proxy.client import filter_request_headers, filter_response_headers
 from go_aggregator.proxy.sse_observer import IncrementalSSEObserver
 from go_aggregator.proxy.usage import StreamUsageResult
+from go_aggregator.request.attempt_finalizer import (
+    AttemptFinalizationData,
+    AttemptFinalizer,
+)
 from go_aggregator.request.finalizer import (
     FinalizationData,
     FinalizationOutcome,
@@ -149,6 +153,13 @@ class RequestCoordinator:
         self._select_lock = asyncio.Lock()
         self._max_retry_attempts = max_retry_attempts
 
+        # Build the attempt finalizer with all dependencies
+        self._attempt_finalizer = AttemptFinalizer(
+            db=db,
+            attempt_repo=attempt_repo or AttemptRepository(db),
+            reservation_repo=reservation_repo or ReservationRepository(db),
+        )
+
         # Build the finalizer with all dependencies
         self._finalizer = RequestFinalizer(
             db=db,
@@ -172,6 +183,7 @@ class RequestCoordinator:
         last_error: Exception | None = None
         last_upstream_response: tuple[int, dict[str, str], bytes] | None = None
         attempt_num = 0
+        last_selected: SelectedAttempt | None = None
 
         for attempt_num in range(1, self._max_retry_attempts + 1):
             try:
@@ -205,6 +217,7 @@ class RequestCoordinator:
                 )
                 break
 
+            last_selected = selected
             try:
                 return await self._execute_upstream(context, selected, attempt_num)
             except _RetryableUpstreamError as err:
@@ -217,6 +230,16 @@ class RequestCoordinator:
                     attempt_num,
                     context.request_id,
                     err,
+                )
+                # Finalize the failed attempt before retrying
+                await self._attempt_finalizer.finalize_failed_attempt(
+                    attempt_id=selected.attempt_id,
+                    reservation_id=selected.reservation_id,
+                    data=AttemptFinalizationData(
+                        status_code=err.status_code,
+                        error_class=err.error_class,
+                        release_reason="attempt_retryable",
+                    ),
                 )
                 # Apply health transitions for the failed account
                 self._apply_health_transition(
@@ -240,7 +263,7 @@ class RequestCoordinator:
 
         # All retries exhausted or non-retryable error
         return await self._handle_exhausted(
-            context, last_error, last_upstream_response, attempt_num
+            context, last_error, last_upstream_response, attempt_num, last_selected
         )
 
     async def _select_and_persist_attempt(
@@ -261,10 +284,45 @@ class RequestCoordinator:
             raise DatabaseError("Cannot persist: database repositories unavailable")
 
         async with self._select_lock, self._db.transaction():
-            # 1. Load candidate accounts excluding attempted ones
+            # 1. Get eligible account names excluding attempted ones
+            all_states = self._registry.get_enabled_states()
+            from go_aggregator.routing.eligibility import get_eligible_accounts
+
+            eligible_states = get_eligible_accounts(
+                all_states,
+                context.model_id,
+                self._catalog.cache,
+                self._health_manager,
+            )
+            if context.attempted_accounts:
+                eligible_states = [
+                    s
+                    for s in eligible_states
+                    if s.name not in context.attempted_accounts
+                ]
+            eligible_account_names = [s.name for s in eligible_states]
+
+            if not eligible_account_names:
+                raise ModelUnavailableError(
+                    f"No accounts available for model {context.model_id!r}"
+                )
+
+            # 2. Calculate projected request tokens once
+            estimated_tokens = self._estimate_request_tokens(context)
+
+            # 3. Build per-account estimate map for scoring
+            request_estimates: dict[str, int] = {}
+            if self._quota_estimator is not None:
+                for acct_name in eligible_account_names:
+                    request_estimates[acct_name] = self._quota_estimator.estimate_cost(
+                        acct_name, context.model_id, estimated_tokens
+                    )
+
+            # 4. Select account using projected estimates
             selected_state = self._router.select_account(
                 context.model_id,
                 context.request_id,
+                request_estimates=request_estimates,
                 exclude_accounts=context.attempted_accounts,
             )
             if selected_state is None:
@@ -279,13 +337,13 @@ class RequestCoordinator:
                     f"API key not available for account {account_name!r}"
                 )
 
-            # 2. Resolve account ID
+            # 5. Resolve account ID
             account_repo = AccountRepository(self._db)
             account_id = await account_repo.get_id_by_name(account_name)
             if account_id is None:
                 raise DatabaseError(f"Account {account_name!r} not found in database")
 
-            # 3. Create pending request if first attempt (needs account_id)
+            # 6. Create pending request if first attempt
             if "db_request_id" not in context.client_metadata:
                 db_request_id = await self._request_repo.create_pending(
                     request_id=context.request_id,
@@ -298,15 +356,14 @@ class RequestCoordinator:
                 context.client_metadata["db_request_id"] = db_request_id
             db_request_id = context.client_metadata["db_request_id"]
 
-            # 4. Calculate per-account request estimate
-            estimated_tokens = 1000
-            estimated_microdollars = 0
-            if self._quota_estimator is not None:
+            # 7. Use the exact estimate for the selected account
+            estimated_microdollars = request_estimates.get(account_name, 0)
+            if estimated_microdollars == 0 and self._quota_estimator is not None:
                 estimated_microdollars = self._quota_estimator.estimate_cost(
                     account_name, context.model_id, estimated_tokens
                 )
 
-            # 5. Create reservation
+            # 8. Create reservation
             reservation_id = await self._reservation_repo.create(
                 request_id=db_request_id,
                 account_id=account_id,
@@ -315,24 +372,24 @@ class RequestCoordinator:
                 estimated_microdollars=estimated_microdollars,
             )
 
-            # 6. Create attempt row
+            # 9. Create attempt row
             attempt_id = await self._attempt_repo.create(
                 request_id=db_request_id,
                 attempt_number=attempt_number,
                 account_id=account_id,
             )
 
-            # 7. Update request with account and reserved amount
+            # 10. Update request with account and reserved amount
             await self._request_repo.update_after_selection(
                 request_id=db_request_id,
                 account_id=account_id,
                 reserved_microdollars=estimated_microdollars,
             )
 
-            # 8. Increment runtime active count
+            # 11. Increment runtime active count
             self._router.increment_active_request_count(account_name)
 
-            # 9. Add exact reserved amount to in-memory cache
+            # 12. Add exact reserved amount to in-memory cache
             if self._quota_estimator is not None:
                 self._quota_estimator.add_reservation(
                     account_name, estimated_microdollars
@@ -370,22 +427,16 @@ class RequestCoordinator:
                 return await self._execute_streaming(context, selected, attempt_num)
             else:
                 return await self._execute_non_streaming(context, selected, attempt_num)
-        except Exception:
-            # On any exception from upstream execution, clean up
-            # in-memory state (DB was already committed by selection)
-            self._cleanup_in_memory(selected)
-            raise
-
-    def _cleanup_in_memory(self, selected: SelectedAttempt) -> None:
-        """Remove in-memory reservation and decrement active count.
-
-        Used when upstream call fails before finalization can happen.
-        """
-        if self._quota_estimator is not None:
-            self._quota_estimator.remove_reservation(
-                selected.account_name, selected.estimated_microdollars
+        except asyncio.CancelledError:
+            # Client cancellation after selection - finalize the attempt
+            await self._finalizer.finalize(
+                selected,
+                FinalizationData(
+                    outcome=FinalizationOutcome.CLIENT_CANCELLED,
+                    error_class="CancelledError",
+                ),
             )
-        self._router.decrement_active_request_count(selected.account_name)
+            raise
 
     async def _execute_non_streaming(
         self,
@@ -432,7 +483,9 @@ class RequestCoordinator:
             resp_body = response.content
 
             # Check if this is retryable
-            error = self._classify_upstream_error(response.status_code, resp_headers)
+            error = self._classify_upstream_error(
+                response.status_code, resp_headers, body=resp_body
+            )
             if error is not None:
                 # Retryable error - raise for retry
                 raise _RetryableUpstreamError(
@@ -558,7 +611,9 @@ class RequestCoordinator:
             resp_headers = dict(response.headers)
             resp_body = response.content
 
-            error = self._classify_upstream_error(response.status_code, resp_headers)
+            error = self._classify_upstream_error(
+                response.status_code, resp_headers, body=resp_body
+            )
             if error is not None:
                 raise _RetryableUpstreamError(
                     str(error),
@@ -738,14 +793,17 @@ class RequestCoordinator:
             )
 
     def _classify_upstream_error(
-        self, status_code: int, headers: dict[str, str]
+        self,
+        status_code: int,
+        headers: dict[str, str],
+        body: bytes | None = None,
     ) -> UpstreamError | None:
         """Classify an upstream error status code into an exception.
 
-        Returns None for non-retryable client errors (400, 404) where the
-        response body should be passed through as-is.
+        Returns None for non-retryable client errors (400, non-model-specific 404)
+        where the response body should be passed through as-is.
         """
-        error = self._classifier.classify(status_code, headers)
+        error = self._classifier.classify(status_code, headers, body=body)
 
         if error.category == RetryCategory.AUTH_FAILURE:
             return AuthenticationError(error.message, status_code=status_code)
@@ -758,6 +816,8 @@ class RequestCoordinator:
                     retry_after=retry_after if retry_after is not None else 60.0,
                 )
             return QuotaExhaustedError(error.message, status_code=status_code)
+        if error.category == RetryCategory.MODEL_UNAVAILABLE:
+            return ModelUnavailableError(error.message, status_code=status_code)
         if error.category == RetryCategory.BAD_REQUEST:
             return None
         if error.category in (RetryCategory.TEMPORARY, RetryCategory.TRANSIENT):
@@ -830,17 +890,17 @@ class RequestCoordinator:
         last_error: Exception | None,
         last_upstream_response: tuple[int, dict[str, str], bytes] | None,
         attempt_num: int,
+        last_selected: SelectedAttempt | None = None,
     ) -> PreparedProxyResponse:
         """Handle exhausted retries or non-retryable errors.
 
+        Uses last_selected for finalization instead of reconstructing from DB.
         Preserves the last upstream response when available.
-        Ensures finalization happens to release reservations.
         """
         elapsed_ms = int((time.time() - context.started_at) * 1000)
 
-        # Finalize the request to release reservation if we have a selected attempt
-        db_request_id = context.client_metadata.get("db_request_id")
-        if db_request_id is not None and self._attempt_repo is not None:
+        # Finalize the request if we have a selected attempt
+        if last_selected is not None:
             # Determine outcome based on error type
             outcome = FinalizationOutcome.UPSTREAM_ERROR
             status_code = None
@@ -857,50 +917,29 @@ class RequestCoordinator:
                 elif isinstance(last_error, _RetryableUpstreamError):
                     outcome = FinalizationOutcome.UPSTREAM_ERROR
 
-            # Find the last selected attempt for finalization
-            # We need to find the most recent attempt for this request
-            attempts = await self._attempt_repo.get_for_request(db_request_id)
-            if attempts:
-                last_attempt = attempts[-1]
-                # Create a minimal SelectedAttempt for finalization
-                account_name = context.client_metadata.get("account_name", "")
-                # Find reservation for this request
-                from go_aggregator.db.repositories import AccountRepository
-
-                account_repo = AccountRepository(self._db)
-                account_id = await account_repo.get_id_by_name(account_name)
-                reservation_id = ""
-                if self._reservation_repo is not None and db_request_id:
-                    resv_rows = await self._db.fetch_all(
-                        "SELECT id FROM reservations WHERE request_id = ? "
-                        "AND status = 'active' LIMIT 1",
-                        (db_request_id,),
-                    )
-                    if resv_rows:
-                        reservation_id = str(resv_rows[0]["id"])
-
-                selected_for_finalization = SelectedAttempt(
-                    proxy_request_id=context.request_id,
-                    db_request_id=db_request_id,
-                    attempt_id=last_attempt["id"],
-                    reservation_id=reservation_id,
-                    account_id=account_id or 0,
-                    account_name=account_name,
-                    api_key="",
-                    model_id=context.model_id,
-                    estimated_tokens=0,
-                    estimated_microdollars=0,
-                    attempt_number=last_attempt.get("attempt_number", attempt_num),
-                )
-                await self._finalizer.finalize(
-                    selected_for_finalization,
-                    FinalizationData(
-                        outcome=outcome,
-                        status_code=status_code,
-                        error_class=error_class,
-                        error_detail=error_detail,
-                    ),
-                )
+            await self._finalizer.finalize(
+                last_selected,
+                FinalizationData(
+                    outcome=outcome,
+                    status_code=status_code,
+                    error_class=error_class,
+                    error_detail=error_detail,
+                ),
+            )
+        elif context.client_metadata.get("db_request_id") is not None:
+            # No selected attempt but request exists - just mark as interrupted
+            db_request_id = context.client_metadata["db_request_id"]
+            await self._db.execute(
+                "UPDATE requests SET status = 'error', "
+                "completed_at = CURRENT_TIMESTAMP, "
+                "error_class = ?, error_detail = ? "
+                "WHERE id = ? AND status = 'pending'",
+                (
+                    type(last_error).__name__ if last_error else "exhausted",
+                    str(last_error)[:2048] if last_error else "No attempts dispatched",
+                    db_request_id,
+                ),
+            )
 
         # Use last upstream response if available
         if last_upstream_response is not None:
@@ -917,8 +956,29 @@ class RequestCoordinator:
                 attempt_count=attempt_num,
             )
 
-        # Generate a proxy error envelope when no upstream response exists
+        # Generate a protocol-compatible proxy error envelope
         status_code = self._error_status_code(last_error)
+        error_msg = str(last_error or "Request failed")
+        if context.protocol == "anthropic":
+            error_body = json.dumps(
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "api_error",
+                        "message": error_msg,
+                    },
+                }
+            ).encode()
+        else:
+            error_body = json.dumps(
+                {
+                    "error": {
+                        "message": error_msg,
+                        "type": "server_error",
+                        "code": status_code,
+                    }
+                }
+            ).encode()
         return PreparedProxyResponse(
             status_code=status_code,
             headers={
@@ -926,12 +986,25 @@ class RequestCoordinator:
                 "x-proxy-request-id": context.request_id,
                 "x-proxy-attempt-count": str(attempt_num),
             },
-            body=json.dumps({"error": str(last_error or "Request failed")}).encode(),
+            body=error_body,
             request_id=context.request_id,
             account_name=context.client_metadata.get("account_name", ""),
             latency_ms=elapsed_ms,
             attempt_count=attempt_num,
         )
+
+    @staticmethod
+    def _estimate_request_tokens(context: ProxyRequestContext) -> int:
+        """Estimate token count from the incoming request body.
+
+        Uses a conservative heuristic: max(1_000, len(body) // 3),
+        capped at 128_000 to avoid pathological reservations.
+        """
+        body = context.original_body
+        if not body:
+            return 1_000
+        estimated = max(1_000, len(body) // 3)
+        return min(estimated, 128_000)
 
     @staticmethod
     def _error_status_code(err: Exception | None) -> int:

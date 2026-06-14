@@ -75,6 +75,24 @@ class Router:
 
         return None
 
+    def get_eligible_account_names(
+        self,
+        model_id: str,
+        exclude_accounts: set[str] | None = None,
+    ) -> list[str]:
+        """Get eligible account names for a model.
+
+        Uses the same eligibility logic as select_account() so estimate
+        generation and selection cannot disagree.
+        """
+        all_states = self._registry.get_enabled_states()
+        eligible = get_eligible_accounts(
+            all_states, model_id, self._catalog.cache, self._health_manager
+        )
+        if exclude_accounts:
+            eligible = [s for s in eligible if s.name not in exclude_accounts]
+        return [s.name for s in eligible]
+
     def select_accounts_for_failover(
         self,
         model_id: str,

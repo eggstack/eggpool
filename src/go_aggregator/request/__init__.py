@@ -5,11 +5,9 @@ from go_aggregator.request.coordinator import (
     ProxyRequestContext,
     RequestCoordinator,
 )
-from go_aggregator.request.generation import RuntimeGeneration
 
 __all__ = [
     "PreparedProxyResponse",
     "ProxyRequestContext",
     "RequestCoordinator",
-    "RuntimeGeneration",
 ]

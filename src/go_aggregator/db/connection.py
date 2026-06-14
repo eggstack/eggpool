@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 import aiosqlite
@@ -28,6 +30,11 @@ class Database:
         self._wal = wal
         self._synchronous = synchronous
         self._conn: aiosqlite.Connection | None = None
+        self._transaction_lock = asyncio.Lock()
+        self._transaction_depth: ContextVar[int] = ContextVar(
+            "database_transaction_depth",
+            default=0,
+        )
 
     async def connect(self) -> None:
         """Open the connection and set pragmas."""
@@ -92,20 +99,28 @@ class Database:
         Repository methods must NOT call commit inside this context;
         the caller owns commit boundaries.
 
-        Detects nesting: if already in a transaction, this is a no-op
-        (the outer transaction owns the commit boundary).
+        Supports nesting within the same task context: inner transactions
+        inherit the outer commit boundary.
         """
-        conn = self.connection
-        # Check if already in a transaction (nesting detection)
-        if conn.in_transaction:
-            yield
+        depth = self._transaction_depth.get()
+        if depth > 0:
+            token = self._transaction_depth.set(depth + 1)
+            try:
+                yield
+            finally:
+                self._transaction_depth.reset(token)
             return
 
-        await conn.execute("BEGIN IMMEDIATE")
-        try:
-            yield
-        except BaseException:
-            await conn.rollback()
-            raise
-        else:
-            await conn.commit()
+        async with self._transaction_lock:
+            token = self._transaction_depth.set(1)
+            try:
+                await self.connection.execute("BEGIN IMMEDIATE")
+                try:
+                    yield
+                except BaseException:
+                    await self.connection.rollback()
+                    raise
+                else:
+                    await self.connection.commit()
+            finally:
+                self._transaction_depth.reset(token)

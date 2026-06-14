@@ -237,9 +237,10 @@ class TestCostCalculator:
         cost, exactness = await calculator.calculate_cost(
             "unknown", input_tokens=1000, output_tokens=1000
         )
-        # No integer rates available; cost computed from zero rates
+        # No integer rates available; fallback to estimate
         assert exactness == "estimated"
-        assert cost == 0
+        # Fallback estimate: 1K input at $3/M + 1K output at $15/M = 18000
+        assert cost == 18000
 
 
 class TestMigrationConversionValues:

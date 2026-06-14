@@ -380,7 +380,8 @@ async def test_b_quota_balancing(
         assert resp.status_code == 200
 
     # Step 1: Seed account A with high 5h cost to push it above B
-    await _seed_usage(two_account_db, "acct-a", 10_000_000)
+    # Capacity: 5h=12M, 7d=30M, 30d=60M
+    await _seed_usage(two_account_db, "acct-a", 8_000_000)
 
     # Reload persisted windows so the estimator sees the seeded usage
     usage_window_repo = UsageWindowRepository(two_account_db)
@@ -407,7 +408,7 @@ async def test_b_quota_balancing(
         )
 
     # Step 2: Seed B with high 7d cost
-    await _seed_usage(two_account_db, "acct-b", 25_000_000)
+    await _seed_usage(two_account_db, "acct-b", 20_000_000)
     await coordinator._quota_estimator.load_persisted_windows()
 
     with respx.mock:
@@ -428,8 +429,8 @@ async def test_b_quota_balancing(
         # The response should succeed from either account
         assert resp.account_name in ("acct-a", "acct-b")
 
-    # Step 3: Seed A with high 30d cost too
-    await _seed_usage(two_account_db, "acct-a", 50_000_000)
+    # Step 3: Seed B with high 30d cost (cumulative for B: 20M+15M=35M)
+    await _seed_usage(two_account_db, "acct-b", 15_000_000)
     await coordinator._quota_estimator.load_persisted_windows()
 
     with respx.mock:

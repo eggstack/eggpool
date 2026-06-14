@@ -33,7 +33,18 @@ class TestRetryClassifier:
         classifier = RetryClassifier()
         error = classifier.classify(404)
         assert error.status_code == 404
+        assert not error.should_remove_model
+
+    def test_classify_404_model_specific(self) -> None:
+        """Test classification of 404 with model-specific body."""
+        classifier = RetryClassifier()
+        body = b'{"error": {"message": "model not found"}}'
+        error = classifier.classify(404, body=body)
+        assert error.status_code == 404
+        assert error.category == RetryCategory.MODEL_UNAVAILABLE
         assert error.should_remove_model
+        assert error.should_disable_model
+        assert error.is_retryable
 
     def test_classify_429_with_retry_after(self) -> None:
         """Test classification of 429 with Retry-After."""
@@ -85,10 +96,18 @@ class TestFailoverManager:
         assert manager.is_account_disabled("account1")
 
     def test_record_404_disables_model(self) -> None:
-        """Test recording 404 disables model."""
+        """Test recording 404 with model-specific body disables model."""
+        manager = FailoverManager()
+        body = b'{"error": {"message": "model not found"}}'
+        error = manager._classifier.classify(404, body=body)
+        assert error.category == RetryCategory.MODEL_UNAVAILABLE
+        assert error.should_remove_model
+
+    def test_record_404_generic_does_not_disable_model(self) -> None:
+        """Test recording generic 404 does not disable model."""
         manager = FailoverManager()
         manager.record_attempt("account1", "model1", 404, 1, False)
-        assert manager.is_model_disabled("account1", "model1")
+        assert not manager.is_model_disabled("account1", "model1")
 
     def test_circuit_breaker_opens(self) -> None:
         """Test circuit breaker opens after threshold."""

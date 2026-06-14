@@ -17,7 +17,7 @@ Development guidelines for the opencode-go-aggregator project.
 - respx for HTTPX upstream mocking
 - Tests in `tests/unit/`, `tests/integration/`, `tests/contract/`
 - Run: `uv run pytest`
-- All 470+ tests must pass before committing
+- All 490+ tests must pass before committing
 
 ## Pre-commit Checks
 
@@ -45,6 +45,12 @@ All must pass with zero errors.
 - SQLite is the durable source of truth for quota windows (5h/7d/30d)
 - Requests must be persisted before upstream dispatch
 - Pre-body failures can retry; no retry after first downstream byte emitted
+- Every retryable failed attempt must reach terminal state before the next attempt
+- Each attempt reservation is released exactly once via AttemptFinalizer
+- SQLite transactions are serialized across concurrent tasks via asyncio.Lock + ContextVar
+- Readiness probes use savepoints, never roll back request lifecycle work
+- Successful responses without terminal usage consume the reservation estimate
+- Unknown model protocols are rejected before durable selection
 
 For detailed architecture documentation, see `architecture/` directory:
 - `phase-0.md`: Repository and tooling foundation
@@ -59,6 +65,7 @@ For detailed architecture documentation, see `architecture/` directory:
 - `phase-9.md`: Deployment hardening
 - `phase-10-integration-hardening.md`: Integration hardening and correct request lifecycle
 - `phase-12-executable-correctness-pass.md`: Executable correctness pass
+- `phase-13-attempt-transaction-hardening.md`: Attempt lifecycle and transaction hardening
 
 ## Import Organization
 
