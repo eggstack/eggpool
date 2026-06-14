@@ -134,7 +134,8 @@ src/go_aggregator/
 │   ├── migrations.py    # Schema migration runner
 │   └── schema/
 │       ├── 0001_initial.sql
-│       └── 0002_indexes.sql
+│       ├── 0002_indexes.sql
+│       └── 0003_request_attempts.sql
 ├── accounts/            # Account registry and state
 ├── catalog/             # Model catalog, pricing, and estimation
 ├── routing/             # Quota-aware routing and eligibility
@@ -150,6 +151,18 @@ deploy/
 ├── gorouter.service     # systemd unit file
 ├── logrotate.conf       # Log rotation configuration
 └── env.example          # Example environment file
+
+architecture/
+├── phase-0.md           # Repository and tooling foundation
+├── phase-1.md           # Configuration, database, and application lifecycle
+├── phase-2.md           # Account registry and model discovery
+├── phase-3.md           # Non-streaming transparent proxy
+├── phase-4.md           # Streaming proxy
+├── phase-5.md           # Usage extraction and price accounting
+├── phase-6.md           # Quota-aware routing and reservations
+├── phase-7.md           # Retry, failover, and health management
+├── phase-8.md           # Statistics API and dashboard
+└── phase-9.md           # Deployment hardening
 
 docs/
 ├── deployment.md        # Production deployment guide

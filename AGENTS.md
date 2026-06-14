@@ -17,7 +17,7 @@ Development guidelines for the opencode-go-aggregator project.
 - respx for HTTPX upstream mocking
 - Tests in `tests/unit/`, `tests/integration/`, `tests/contract/`
 - Run: `uv run pytest`
-- All 27+ tests must pass before committing
+- All 287+ tests must pass before committing
 
 ## Pre-commit Checks
 
@@ -41,6 +41,18 @@ All must pass with zero errors.
 - Never store API keys in SQLite
 - Never log prompts, completions, or API keys
 - Use constant-time comparison for API key verification
+
+For detailed architecture documentation, see `architecture/` directory:
+- `phase-0.md`: Repository and tooling foundation
+- `phase-1.md`: Configuration, database, and application lifecycle
+- `phase-2.md`: Account registry and model discovery
+- `phase-3.md`: Non-streaming transparent proxy
+- `phase-4.md`: Streaming proxy
+- `phase-5.md`: Usage extraction and price accounting
+- `phase-6.md`: Quota-aware routing and reservations
+- `phase-7.md`: Retry, failover, and health management
+- `phase-8.md`: Statistics API and dashboard
+- `phase-9.md`: Deployment hardening
 
 ## Import Organization
 

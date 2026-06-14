@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import json
 import os
 import resource
 from datetime import UTC, datetime, timedelta
@@ -667,28 +668,32 @@ async def test_one_week_synthetic_request_history(
     assert len(model_stats) >= 1
 
 
-# ── 11. Long-stream structural test ──────────────────────────────────────────
+# ── 11. Long-stream structural test (30-60 min equivalent) ───────────────────
 
 
 @pytest.mark.asyncio
 async def test_long_stream_structural(
     client: httpx.AsyncClient,
     auth_headers: dict[str, str],
+    app: FastAPI,
 ) -> None:
-    """A stream with many chunks completes without error."""
-    # Build a stream with 50 chunks
+    """A stream with 500 chunks simulates a long-running stream.
+
+    Real 30-60 min streams are impractical in CI. This verifies the relay
+    handles high-volume SSE without error, memory blow-up, or DB write failure.
+    """
     chunks = []
-    for i in range(50):
+    for i in range(500):
         chunks.append(
             "data: "
-            + __import__("json").dumps(
+            + json.dumps(
                 {
                     "id": "cmpl-1",
                     "object": "chat.completion.chunk",
                     "choices": [
                         {
                             "index": 0,
-                            "delta": {"content": f"chunk-{i}"},
+                            "delta": {"content": f"token-{i:04d}"},
                             "finish_reason": None,
                         }
                     ],
@@ -720,9 +725,72 @@ async def test_long_stream_structural(
 
     assert response.status_code == 200
     text = response.text
-    assert "chunk-0" in text
-    assert "chunk-49" in text
+    assert "token-0000" in text
+    assert "token-0499" in text
     assert "[DONE]" in text
+
+    # Verify the request was recorded in the database
+    db: Database = app.state.db
+    row = await db.fetch_one("SELECT COUNT(*) as cnt FROM requests")
+    assert row is not None
+    assert row["cnt"] == 1
+
+
+# ── 12. SQLite writes under streaming load ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_sqlite_writes_under_streaming_load(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    app: FastAPI,
+) -> None:
+    """20 concurrent streaming requests all record to SQLite on completion.
+
+    Tests that SQLite WAL mode handles concurrent writes from streaming
+    request completion without errors or lost data.
+    """
+    sse_content = (
+        'data: {"id":"cmpl-1","object":"chat.completion.chunk",'
+        '"choices":[{"index":0,"delta":{"content":"ok"},'
+        '"finish_reason":"stop"}]}\n\n'
+        "data: [DONE]\n\n"
+    )
+
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                content=sse_content.encode(),
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+
+        async def _stream_request(idx: int) -> httpx.Response:
+            return await client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "gpt-4",
+                    "messages": [{"role": "user", "content": f"Msg {idx}"}],
+                    "stream": True,
+                },
+                headers=auth_headers,
+            )
+
+        responses = await asyncio.gather(*[_stream_request(i) for i in range(20)])
+
+    for resp in responses:
+        assert resp.status_code == 200
+
+    db: Database = app.state.db
+    row = await db.fetch_one("SELECT COUNT(*) as cnt FROM requests")
+    assert row is not None
+    assert row["cnt"] == 20
+
+    # Verify all requests have valid model_id (no corrupt writes)
+    rows = await db.fetch_all("SELECT model_id FROM requests")
+    for r in rows:
+        assert r["model_id"] == "gpt-4"
 
 
 # ── 12. File descriptor stability ───────────────────────────────────────────
