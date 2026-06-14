@@ -193,10 +193,11 @@ async def fetch_error_breakdown(
     end: str,
     limit: int = 20,
 ) -> list[dict[str, Any]]:
-    """Get error message breakdown for a time window."""
+    """Get error class/detail breakdown for a time window."""
     sql = """
     SELECT
-        r.error_message,
+        r.error_class,
+        r.error_detail,
         r.model_id,
         a.name as account_name,
         COUNT(*) as error_count,
@@ -205,8 +206,8 @@ async def fetch_error_breakdown(
     JOIN accounts a ON a.id = r.account_id
     WHERE r.started_at >= ? AND r.started_at < ?
         AND r.status = 'error'
-        AND r.error_message IS NOT NULL
-    GROUP BY r.error_message, r.model_id, a.name
+        AND r.error_class IS NOT NULL
+    GROUP BY r.error_class, r.error_detail, r.model_id, a.name
     ORDER BY error_count DESC
     LIMIT ?
     """

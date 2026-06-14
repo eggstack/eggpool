@@ -76,16 +76,16 @@ async def seeded_db(db: Database) -> Database:
             INSERT INTO requests (
                 account_id, model_id, started_at, completed_at,
                 status, input_tokens, output_tokens, cost_microdollars,
-                upstream_latency_ms, error_message
+                upstream_latency_ms, error_class, error_detail
             ) VALUES (
                 (SELECT id FROM accounts WHERE name = ?),
                 ?,
                 datetime('now', '-2 hours'),
                 datetime('now', '-2 hours'),
-                'error', ?, ?, 0, ?, ?
+                'error', ?, ?, 0, ?, ?, ?
             )
             """,
-            ("acct_b", "model_y", 50, 75, 300.0, "rate_limited"),
+            ("acct_b", "model_y", 50, 75, 300.0, "RateLimitError", "rate_limited"),
         )
     await db.connection.commit()
     return db
@@ -420,6 +420,39 @@ class TestStatsService:
             )
         )
         assert isinstance(errors, list)
+
+    @pytest.mark.asyncio()
+    async def test_error_breakdown_uses_error_class(self, seeded_db: Database) -> None:
+        """Error breakdown should query error_class, not error_message."""
+        # Insert a request with error_class and error_detail
+        await seeded_db.execute(
+            """
+            INSERT INTO requests (
+                account_id, model_id, started_at, completed_at,
+                status, error_class, error_detail
+            ) VALUES (
+                (SELECT id FROM accounts WHERE name = 'acct_a'),
+                'model_x', datetime('now', '-1 hour'),
+                datetime('now', '-1 hour'),
+                'error', 'AuthenticationError', 'Invalid API key'
+            )
+            """
+        )
+        await seeded_db.connection.commit()
+
+        service = StatsService(seeded_db)
+        errors = await service.get_error_breakdown(
+            TimeRange(
+                start=__import__("datetime").datetime.fromisoformat("2000-01-01"),
+                end=__import__("datetime").datetime.fromisoformat("2099-12-31"),
+                label="custom",
+            )
+        )
+        assert len(errors) >= 1
+        # Find the AuthenticationError row
+        auth_errors = [e for e in errors if e["error_class"] == "AuthenticationError"]
+        assert len(auth_errors) == 1
+        assert auth_errors[0]["error_detail"] == "Invalid API key"
 
     @pytest.mark.asyncio()
     async def test_get_recent_events(self, seeded_db: Database) -> None:

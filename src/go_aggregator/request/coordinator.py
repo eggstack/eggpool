@@ -20,6 +20,7 @@ from go_aggregator.db.repositories import (
 )
 from go_aggregator.errors import (
     AuthenticationError,
+    DatabaseError,
     ModelUnavailableError,
     ProxyError,
     QuotaExhaustedError,
@@ -146,10 +147,12 @@ class RequestCoordinator:
                     context.request_id,
                     err,
                 )
-                if self._health_manager and context.client_metadata.get("account_name"):
+                acct_name = context.client_metadata.get("account_name", "")
+                if self._health_manager and acct_name:
                     self._health_manager.record_failure(
-                        context.client_metadata["account_name"]
+                        acct_name, reason="authentication_failed"
                     )
+                self._update_account_state(acct_name, "authentication")
                 break  # Don't retry auth failures
             except RateLimitError as err:
                 last_error = err
@@ -159,11 +162,16 @@ class RequestCoordinator:
                     context.request_id,
                     err,
                 )
-                account_name = context.client_metadata.get("account_name", "")
-                if self._health_manager and account_name:
+                acct_name = context.client_metadata.get("account_name", "")
+                if self._health_manager and acct_name:
                     self._health_manager.record_rate_limit(
-                        account_name, err.retry_after or 60.0
+                        acct_name, err.retry_after or 60.0
                     )
+                # Track failure without cooldown - retry is allowed
+                state = self._registry.get_state(acct_name)
+                if state:
+                    state.consecutive_failures += 1
+                    state.last_failure_at = time.time()
                 if attempt_num >= MAX_RETRY_ATTEMPTS:
                     break
             except (QuotaExhaustedError, ModelUnavailableError) as err:
@@ -174,6 +182,15 @@ class RequestCoordinator:
                     context.request_id,
                     err,
                 )
+                if isinstance(err, ModelUnavailableError) and self._health_manager:
+                    self._health_manager.disable_model(
+                        context.client_metadata.get("account_name", ""),
+                        context.model_id,
+                    )
+                self._update_account_state(
+                    context.client_metadata.get("account_name", ""),
+                    "quota_exhausted",
+                )
                 break
             except httpx.ConnectError as err:
                 last_error = ProxyError(f"Connection failed: {err}")
@@ -182,10 +199,14 @@ class RequestCoordinator:
                     attempt_num,
                     context.request_id,
                 )
-                if self._health_manager and context.client_metadata.get("account_name"):
-                    self._health_manager.record_failure(
-                        context.client_metadata["account_name"]
-                    )
+                acct_name = context.client_metadata.get("account_name", "")
+                if self._health_manager and acct_name:
+                    self._health_manager.record_failure(acct_name)
+                # Track failure without cooldown - retry is allowed
+                state = self._registry.get_state(acct_name)
+                if state:
+                    state.consecutive_failures += 1
+                    state.last_failure_at = time.time()
                 if attempt_num >= MAX_RETRY_ATTEMPTS:
                     break
             except httpx.TimeoutException as err:
@@ -195,10 +216,14 @@ class RequestCoordinator:
                     attempt_num,
                     context.request_id,
                 )
-                if self._health_manager and context.client_metadata.get("account_name"):
-                    self._health_manager.record_failure(
-                        context.client_metadata["account_name"]
-                    )
+                acct_name = context.client_metadata.get("account_name", "")
+                if self._health_manager and acct_name:
+                    self._health_manager.record_failure(acct_name)
+                # Track failure without cooldown - retry is allowed
+                state = self._registry.get_state(acct_name)
+                if state:
+                    state.consecutive_failures += 1
+                    state.last_failure_at = time.time()
                 if attempt_num >= MAX_RETRY_ATTEMPTS:
                     break
             except UpstreamError as err:
@@ -209,10 +234,14 @@ class RequestCoordinator:
                     context.request_id,
                     err,
                 )
-                if self._health_manager and context.client_metadata.get("account_name"):
-                    self._health_manager.record_failure(
-                        context.client_metadata["account_name"]
-                    )
+                acct_name = context.client_metadata.get("account_name", "")
+                if self._health_manager and acct_name:
+                    self._health_manager.record_failure(acct_name)
+                # Track failure without cooldown - 5xx errors are transient
+                state = self._registry.get_state(acct_name)
+                if state:
+                    state.consecutive_failures += 1
+                    state.last_failure_at = time.time()
                 if attempt_num >= MAX_RETRY_ATTEMPTS:
                     break
 
@@ -226,6 +255,18 @@ class RequestCoordinator:
             latency_ms=elapsed_ms,
             attempt_count=attempt_num if "attempt_num" in dir() else 1,
         )
+
+    def _update_account_state(
+        self, account_name: str, error_class: str | None = None
+    ) -> None:
+        """Update AccountRuntimeState for health transitions."""
+        state = self._registry.get_state(account_name)
+        if state is None:
+            return
+        if error_class is None:
+            state.record_success()
+        else:
+            state.record_failure(error_class)
 
     async def _attempt_request(
         self, context: ProxyRequestContext, attempt_num: int
@@ -309,13 +350,21 @@ class RequestCoordinator:
         headers = filter_request_headers(dict(context.incoming_headers), api_key)
         upstream_path = self._get_upstream_path(context.protocol)
 
-        response = await self._client.request(
-            "POST",
-            upstream_path,
-            headers=headers,
-            content=context.original_body,
-            timeout=300.0,
-        )
+        try:
+            response = await self._client.request(
+                "POST",
+                upstream_path,
+                headers=headers,
+                content=context.original_body,
+                timeout=300.0,
+            )
+        except Exception as err:
+            await self._update_attempt(
+                attempt_id,
+                error_class=type(err).__name__,
+                error_detail=str(err),
+            )
+            raise
 
         # Check for upstream errors before consuming body
         if response.status_code >= 400:
@@ -381,6 +430,8 @@ class RequestCoordinator:
         # Record health success for completed requests
         if self._health_manager and status == "completed":
             self._health_manager.record_success(account_name, context.model_id)
+        if status == "completed":
+            self._update_account_state(account_name)
 
         # Remove reservation from estimator tracking
         if self._quota_estimator is not None:
@@ -678,7 +729,7 @@ class RequestCoordinator:
         Returns the database row ID.
         """
         if self._request_repo is None:
-            return context.request_id
+            raise DatabaseError("Cannot persist request: database unavailable")
         account_name = context.client_metadata.get("account_name")
         account_id = None
         if account_name:
@@ -691,6 +742,7 @@ class RequestCoordinator:
             protocol=context.protocol,
             streamed=context.streaming,
             account_id=account_id,
+            started_at=context.started_at,
         )
 
     async def _create_reservation(
@@ -701,7 +753,7 @@ class RequestCoordinator:
     ) -> str | None:
         """Create a reservation for the selected account."""
         if self._reservation_repo is None:
-            return None
+            raise DatabaseError("Cannot create reservation: database unavailable")
         account_repo = AccountRepository(self._db)
         account_id = await account_repo.get_id_by_name(account_name)
         if account_id is None:
@@ -732,7 +784,7 @@ class RequestCoordinator:
     ) -> int:
         """Create an attempt record."""
         if self._attempt_repo is None:
-            return 0
+            raise DatabaseError("Cannot create attempt: database unavailable")
         account_repo = AccountRepository(self._db)
         account_id = await account_repo.get_id_by_name(account_name)
         if account_id is None:

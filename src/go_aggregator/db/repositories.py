@@ -105,20 +105,42 @@ class RequestRepository:
         streamed: bool,
         account_id: int | None = None,
         reserved_microdollars: int = 0,
+        started_at: float | None = None,
     ) -> str:
         """Insert a new pending request, return the id as string."""
-        cursor = await self._db.execute(
-            "INSERT INTO requests "
-            "(account_id, model_id, status, protocol, streamed, "
-            "reserved_microdollars) VALUES (?, ?, 'pending', ?, ?, ?)",
-            (
-                account_id,
-                model_id,
-                protocol,
-                int(streamed),
-                reserved_microdollars,
-            ),
-        )
+        if started_at is not None:
+            import datetime as _dt
+
+            started_at_str = _dt.datetime.fromtimestamp(
+                started_at, tz=_dt.UTC
+            ).strftime("%Y-%m-%d %H:%M:%S")
+            cursor = await self._db.execute(
+                "INSERT INTO requests "
+                "(account_id, model_id, started_at, status, protocol, "
+                "streamed, reserved_microdollars) "
+                "VALUES (?, ?, ?, 'pending', ?, ?, ?)",
+                (
+                    account_id,
+                    model_id,
+                    started_at_str,
+                    protocol,
+                    int(streamed),
+                    reserved_microdollars,
+                ),
+            )
+        else:
+            cursor = await self._db.execute(
+                "INSERT INTO requests "
+                "(account_id, model_id, status, protocol, streamed, "
+                "reserved_microdollars) VALUES (?, ?, 'pending', ?, ?, ?)",
+                (
+                    account_id,
+                    model_id,
+                    protocol,
+                    int(streamed),
+                    reserved_microdollars,
+                ),
+            )
         last_id = cursor.lastrowid
         return str(last_id) if last_id is not None else request_id
 

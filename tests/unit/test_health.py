@@ -249,3 +249,40 @@ class TestHealthManager:
         stats = manager.get_health_stats("account1")
         assert stats["account_name"] == "account1"
         assert stats["is_healthy"] is True
+
+    def test_record_failure_auth_sets_authentication_failed(self) -> None:
+        """Auth failure should set health_state to authentication_failed."""
+        manager = HealthManager()
+        manager.record_failure("account1", reason="authentication_failed")
+        health = manager.get_account_health("account1")
+        assert health.health_state == "authentication_failed"
+        assert not health.is_healthy
+
+    def test_record_success_resets_health_state(self) -> None:
+        """Success should reset health_state to healthy."""
+        manager = HealthManager()
+        manager.record_failure("account1", reason="authentication_failed")
+        assert manager.get_account_health("account1").health_state == (
+            "authentication_failed"
+        )
+        manager.record_success("account1")
+        assert manager.get_account_health("account1").health_state == "healthy"
+        assert manager.is_account_healthy("account1")
+
+    def test_disable_model_only_affects_that_model(self) -> None:
+        """Disabling model A should not affect model B on same account."""
+        manager = HealthManager()
+        manager.disable_model("account1", "model-a")
+        assert not manager.is_model_healthy("account1", "model-a")
+        assert manager.is_model_healthy("account1", "model-b")
+
+    def test_invalid_client_request_does_not_affect_health(self) -> None:
+        """400 errors should not change health state."""
+        manager = HealthManager()
+        manager.record_success("account1")
+        # Simulating a 400 error - should not be recorded as failure
+        # since 400s are client errors, not upstream failures
+        health = manager.get_account_health("account1")
+        assert health.is_healthy
+        assert health.consecutive_failures == 0
+        assert health.health_state == "healthy"

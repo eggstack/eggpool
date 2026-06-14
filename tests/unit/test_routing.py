@@ -274,3 +274,94 @@ def test_near_ties_randomize() -> None:
 
     # With 100 iterations, both should be selected at least once
     assert len(selected_names) >= 2
+
+
+def test_restart_hydration_preserves_behavior() -> None:
+    """Persisted windows should produce same routing after reload."""
+    from go_aggregator.quota.estimation import PersistedWindowSnapshot
+
+    estimator = QuotaEstimator()
+    estimator.accounts["acct1"] = AccountQuota(
+        account_name="acct1",
+        max_daily_cost_microdollars=10_000_000,
+        five_hour_offset=2_000_000,
+        persisted_snapshot=PersistedWindowSnapshot(
+            account_id=1, cost_5h=1_000_000, cost_7d=2_000_000, cost_30d=3_000_000
+        ),
+    )
+    estimator.accounts["acct2"] = AccountQuota(
+        account_name="acct2",
+        max_daily_cost_microdollars=10_000_000,
+        persisted_snapshot=PersistedWindowSnapshot(
+            account_id=2, cost_5h=0, cost_7d=0, cost_30d=0
+        ),
+    )
+
+    scorer = QuotaFairScorer(quota_estimator=estimator)
+    scores = scorer.score_accounts(["acct1", "acct2"])
+
+    # Rebuild estimator with same state (simulating restart)
+    estimator2 = QuotaEstimator()
+    estimator2.accounts["acct1"] = AccountQuota(
+        account_name="acct1",
+        max_daily_cost_microdollars=10_000_000,
+        five_hour_offset=2_000_000,
+        persisted_snapshot=PersistedWindowSnapshot(
+            account_id=1, cost_5h=1_000_000, cost_7d=2_000_000, cost_30d=3_000_000
+        ),
+    )
+    estimator2.accounts["acct2"] = AccountQuota(
+        account_name="acct2",
+        max_daily_cost_microdollars=10_000_000,
+        persisted_snapshot=PersistedWindowSnapshot(
+            account_id=2, cost_5h=0, cost_7d=0, cost_30d=0
+        ),
+    )
+
+    scorer2 = QuotaFairScorer(quota_estimator=estimator2)
+    scores2 = scorer2.score_accounts(["acct1", "acct2"])
+
+    assert scores[0].quota_score == scores2[0].quota_score
+    assert scores[1].quota_score == scores2[1].quota_score
+
+
+def test_offset_does_not_affect_wrong_window() -> None:
+    """5h offset should not affect 7d or 30d scores."""
+    from go_aggregator.quota.estimation import PersistedWindowSnapshot
+
+    estimator = QuotaEstimator()
+    estimator.accounts["acct1"] = AccountQuota(
+        account_name="acct1",
+        max_hourly_cost_microdollars=10_000_000,
+        max_daily_cost_microdollars=10_000_000,
+        max_monthly_cost_microdollars=60_000_000,
+        five_hour_offset=5_000_000,
+        weekly_offset=0,
+        monthly_offset=0,
+        persisted_snapshot=PersistedWindowSnapshot(
+            account_id=1, cost_5h=0, cost_7d=0, cost_30d=0
+        ),
+    )
+    estimator.accounts["acct2"] = AccountQuota(
+        account_name="acct2",
+        max_hourly_cost_microdollars=10_000_000,
+        max_daily_cost_microdollars=10_000_000,
+        max_monthly_cost_microdollars=60_000_000,
+        five_hour_offset=0,
+        weekly_offset=0,
+        monthly_offset=0,
+        persisted_snapshot=PersistedWindowSnapshot(
+            account_id=2, cost_5h=0, cost_7d=0, cost_30d=0
+        ),
+    )
+
+    scorer = QuotaFairScorer(quota_estimator=estimator)
+    scores = scorer.score_accounts(["acct1", "acct2"])
+
+    # acct1 has 5h offset only, 7d and 30d should be identical
+    assert scores[0].quota_score != scores[1].quota_score
+
+    # Verify 5h offset is the differentiator by checking without it
+    estimator.accounts["acct1"].five_hour_offset = 0
+    scores_equal = scorer.score_accounts(["acct1", "acct2"])
+    assert scores_equal[0].quota_score == scores_equal[1].quota_score

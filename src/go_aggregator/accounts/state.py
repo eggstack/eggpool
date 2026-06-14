@@ -63,6 +63,7 @@ class AccountRuntimeState:
             # Exponential backoff: 30s, 60s, 120s, ... max 10 min
             backoff = min(30 * (2 ** (self.consecutive_failures - 1)), 600)
             self.cooldown_until = time.time() + backoff
+        # upstream_server_error, internal_error, etc. - no cooldown
 
     def reset_health(self) -> None:
         """Reset health state to healthy."""

@@ -63,15 +63,24 @@ class HealthManager:
         health = self.get_account_health(account_name)
         health.consecutive_failures = 0
         health.is_healthy = True
+        health.health_state = "healthy"
         health.last_check = time.time()
         health.circuit_breaker.record_success()
 
-    def record_failure(self, account_name: str, model_id: str | None = None) -> None:
+    def record_failure(
+        self,
+        account_name: str,
+        model_id: str | None = None,
+        reason: str | None = None,
+    ) -> None:
         """Record a failed request."""
         health = self.get_account_health(account_name)
         health.consecutive_failures += 1
         health.last_check = time.time()
         health.circuit_breaker.record_failure()
+        if reason == "authentication_failed":
+            health.health_state = "authentication_failed"
+            health.is_healthy = False
 
     def record_rate_limit(self, account_name: str, retry_after_seconds: float) -> None:
         """Record a rate limit with explicit cooldown."""

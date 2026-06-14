@@ -326,3 +326,55 @@ async def test_memory_stability(
     # No pending requests
     pending_rows = await db.fetch_all("SELECT * FROM requests WHERE status = 'pending'")
     assert len(pending_rows) == 0
+
+
+@pytest.mark.asyncio
+async def test_catalog_refresh_during_requests(
+    coordinator: RequestCoordinator,
+    db: Database,
+) -> None:
+    """Catalog refresh should not break in-flight requests."""
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+            side_effect=_non_stream_handler
+        )
+
+        async def _refresh_catalog() -> None:
+            """Simulate a catalog refresh cycle."""
+            await asyncio.sleep(0.01)
+            # Just touch the cache to simulate a refresh
+            coordinator._catalog.cache.update_from_account(
+                "test-acct", [{"model_id": "gpt-4", "protocol": "openai"}]
+            )
+
+        # Run requests and catalog refresh concurrently
+        tasks: list[asyncio.Task[object]] = []
+        for i in range(5):
+            context = ProxyRequestContext(
+                request_id=f"soak-refresh-{i}",
+                protocol="openai",
+                model_id="gpt-4",
+                streaming=False,
+                original_body=json.dumps(
+                    {
+                        "model": "gpt-4",
+                        "messages": [{"role": "user", "content": f"Msg {i}"}],
+                    }
+                ).encode(),
+                incoming_headers={"content-type": "application/json"},
+            )
+            tasks.append(asyncio.create_task(coordinator.execute(context)))
+
+        # Start catalog refresh in parallel
+        tasks.append(asyncio.create_task(_refresh_catalog()))  # type: ignore[arg-type]
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    errors = [r for r in results if isinstance(r, Exception)]
+    assert len(errors) == 0, f"Got errors: {errors}"
+
+    # Verify all requests completed successfully
+    req_rows = await db.fetch_all(
+        "SELECT status FROM requests WHERE status = 'completed'"
+    )
+    assert len(req_rows) == 5

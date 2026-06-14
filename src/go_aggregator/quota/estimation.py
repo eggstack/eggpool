@@ -396,8 +396,15 @@ class QuotaEstimator:
         """Get total reserved cost for an account from active reservations."""
         return self._account_reserved_cost.get(account_name, 0)
 
-    async def load_persisted_windows(self) -> None:
-        """Load persisted usage windows from the database."""
+    async def load_persisted_windows(
+        self, offsets: dict[str, dict[str, int]] | None = None
+    ) -> None:
+        """Load persisted usage windows from the database.
+
+        Args:
+            offsets: Optional mapping of account_name -> per-window offsets.
+                     Keys: "five_hour", "weekly", "monthly".
+        """
         if self._usage_window_repo is None:
             return
         from go_aggregator.db.repositories import AccountRepository
@@ -419,6 +426,11 @@ class QuotaEstimator:
                 cost_7d=windows["7d"],
                 cost_30d=windows["30d"],
             )
+            if offsets and name in offsets:
+                acct_offsets = offsets[name]
+                self.accounts[name].five_hour_offset = acct_offsets.get("five_hour", 0)
+                self.accounts[name].weekly_offset = acct_offsets.get("weekly", 0)
+                self.accounts[name].monthly_offset = acct_offsets.get("monthly", 0)
         logger.info("Loaded persisted usage windows for %d accounts", len(enabled))
 
     def get_eligible_accounts(

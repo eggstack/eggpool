@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
+from starlette.middleware.cors import CORSMiddleware
 
 from go_aggregator.accounts.registry import AccountRegistry
 from go_aggregator.api.chat_completions import handle_chat_completions
@@ -64,6 +65,12 @@ async def _crash_recovery(db: Database) -> None:
         "released_at = CURRENT_TIMESTAMP, release_reason = 'crash_recovery' "
         "WHERE status = 'active' "
         "AND created_at < datetime('now', '-10 minutes')"
+    )
+    await db.execute(
+        "UPDATE request_attempts SET "
+        "completed_at = CURRENT_TIMESTAMP, error_class = 'process_interrupted' "
+        "WHERE completed_at IS NULL "
+        "AND started_at < datetime('now', '-10 minutes')"
     )
     await db.connection.commit()
     logger.info("Crash recovery: marked stale requests and reservations")
@@ -166,15 +173,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     router = Router(registry, catalog, health_manager=health_manager)
     app.state.router = router
 
-    # 16. Load persisted usage windows and set account weights
+    # 16. Load persisted usage windows and set account weights/offsets
     router._quota_estimator.set_usage_window_repo(usage_window_repo)  # noqa: SLF001
-    await router._quota_estimator.load_persisted_windows()  # noqa: SLF001
+    config_offsets: dict[str, dict[str, int]] = {}
+    for acct_cfg in config.accounts:
+        config_offsets[acct_cfg.name] = {
+            "five_hour": acct_cfg.five_hour_offset_microdollars,
+            "weekly": acct_cfg.weekly_offset_microdollars,
+            "monthly": acct_cfg.monthly_offset_microdollars,
+        }
+    await router._quota_estimator.load_persisted_windows(  # noqa: SLF001
+        offsets=config_offsets,
+    )
     # Set account weights from config
     for acct_cfg in config.accounts:
         router.set_account_weight(acct_cfg.name, acct_cfg.weight)
 
     # 17. Statistics service
-    app.state.stats = StatsService(db)
+    app.state.stats = StatsService(db, health_manager=health_manager)
 
     # 18. Request coordinator
     coordinator = RequestCoordinator(
@@ -287,6 +303,15 @@ def create_app(
     )
     app.state.config = config
     app.state.config_path = config_path
+
+    # Security middleware
+    if config.security.cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=config.security.cors_origins,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     # Dashboard and statistics routes (read-only, no auth by default)
     if config.dashboard.enabled:

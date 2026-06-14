@@ -23,6 +23,7 @@ from go_aggregator.stats.queries import (
 
 if TYPE_CHECKING:
     from go_aggregator.db.connection import Database
+    from go_aggregator.health.health_manager import HealthManager
 
 
 PERIOD_PRESETS: dict[str, int] = {
@@ -111,8 +112,11 @@ class StatsService:
     or API consumers expect (e.g., utilization imbalance, exactness ratios).
     """
 
-    def __init__(self, db: Database) -> None:
+    def __init__(
+        self, db: Database, health_manager: HealthManager | None = None
+    ) -> None:
         self._db = db
+        self._health_manager = health_manager
 
     async def get_summary(self, time_range: TimeRange) -> dict[str, Any]:
         """Get a top-line summary for the given time range."""
@@ -154,8 +158,15 @@ class StatsService:
                 name, now - timedelta(seconds=_UTILIZATION_30D), now
             )
 
-            # Health state placeholder (could be integrated with HealthManager)
-            row["health_state"] = "healthy"
+            # Health state from HealthManager
+            if self._health_manager:
+                row["health_state"] = (
+                    "healthy"
+                    if self._health_manager.is_account_healthy(name)
+                    else "unhealthy"
+                )
+            else:
+                row["health_state"] = "healthy"
 
         return rows
 
