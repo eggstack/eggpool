@@ -1,0 +1,384 @@
+"""Tests for the dashboard HTML rendering and escape utilities."""
+
+from __future__ import annotations
+
+from html.parser import HTMLParser
+
+from go_aggregator.dashboard.escape import (
+    escape,
+    escape_attr,
+    format_latency,
+    format_microdollars,
+    format_percent,
+    format_tokens,
+    sanitize_class_name,
+    truncate,
+)
+from go_aggregator.dashboard.render import (
+    render_accounts,
+    render_events,
+    render_models,
+    render_overview,
+    render_timeseries,
+)
+
+
+class _HTMLTextExtractor(HTMLParser):
+    """Extract text and check for unescaped content."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.text_parts: list[str] = []
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list) -> None:  # type: ignore[override]
+        if tag in ("script", "style"):
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:  # type: ignore[override]
+        if tag in ("script", "style") and self._skip_depth > 0:
+            self._skip_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth == 0:
+            self.text_parts.append(data)
+
+
+class TestEscape:
+    """Tests for escape utilities."""
+
+    def test_escape_none(self) -> None:
+        assert escape(None) == ""
+
+    def test_escape_plain_text(self) -> None:
+        assert escape("hello") == "hello"
+
+    def test_escape_html_chars(self) -> None:
+        assert escape("<script>") == "&lt;script&gt;"
+        assert escape("a & b") == "a &amp; b"
+        assert escape('"quoted"') == "&quot;quoted&quot;"
+
+    def test_escape_attr(self) -> None:
+        result = escape_attr("a&b")
+        assert "&amp;" in result
+
+    def test_format_microdollars(self) -> None:
+        assert format_microdollars(1_000_000) == "$1.000000"
+        assert format_microdollars(0) == "$0.000000"
+        assert format_microdollars(None) == "$0.000000"
+
+    def test_format_tokens(self) -> None:
+        assert format_tokens(1_000_000) == "1,000,000"
+        assert format_tokens(0) == "0"
+
+    def test_format_percent(self) -> None:
+        assert format_percent(0.5) == "50.00%"
+        assert format_percent(0.123) == "12.30%"
+
+    def test_format_latency(self) -> None:
+        assert format_latency(100.5) == "100.5 ms"
+        assert format_latency(0) == "0.0 ms"
+
+    def test_truncate_short(self) -> None:
+        assert truncate("hello") == "hello"
+
+    def test_truncate_long(self) -> None:
+        result = truncate("a" * 100, max_length=10)
+        assert result.endswith("...")
+        assert len(result) == 10
+
+    def test_truncate_escapes(self) -> None:
+        result = truncate("<script>alert(1)</script>")
+        assert "<script>" not in result
+        assert "&lt;script&gt;" in result
+
+    def test_sanitize_class_name(self) -> None:
+        assert sanitize_class_name("hello-world") == "hello-world"
+        assert sanitize_class_name("hello world!") == "hello world_"
+        assert sanitize_class_name("") == ""
+
+
+class TestRenderOverview:
+    """Tests for the overview page renderer."""
+
+    def test_renders_basic_structure(self) -> None:
+        html = render_overview(
+            overview={
+                "summary": {
+                    "total_requests": 10,
+                    "successful_requests": 8,
+                    "error_requests": 2,
+                    "error_rate": 0.2,
+                    "total_input_tokens": 1000,
+                    "total_output_tokens": 2000,
+                    "total_cost_microdollars": 1_500_000,
+                    "avg_latency_ms": 250.0,
+                },
+                "imbalance": {
+                    "imbalance_ratio": 0.1,
+                    "active_accounts": 2,
+                    "most_used": {"name": "acct_a", "cost_microdollars": 1000},
+                    "least_used": {"name": "acct_b", "cost_microdollars": 500},
+                },
+                "period_label": "24h",
+                "start": "2024-01-01 00:00:00",
+                "end": "2024-01-02 00:00:00",
+            },
+            accounts=[],
+        )
+        assert "<html" in html
+        assert "</html>" in html
+        assert "10" in html
+        assert "$1.500000" in html
+        assert "20.00%" in html
+
+    def test_escapes_account_name_in_overview(self) -> None:
+        html = render_overview(
+            overview={
+                "summary": {
+                    "total_requests": 0,
+                    "successful_requests": 0,
+                    "error_requests": 0,
+                    "error_rate": 0.0,
+                    "total_input_tokens": 0,
+                    "total_output_tokens": 0,
+                    "total_cost_microdollars": 0,
+                    "avg_latency_ms": 0.0,
+                },
+                "imbalance": {
+                    "imbalance_ratio": 0.0,
+                    "active_accounts": 0,
+                    "most_used": {"name": "<bad>", "cost_microdollars": 0},
+                    "least_used": {"name": "<worse>", "cost_microdollars": 0},
+                },
+                "period_label": "24h",
+                "start": "2024-01-01 00:00:00",
+                "end": "2024-01-02 00:00:00",
+            },
+            accounts=[],
+        )
+        assert "<bad>" not in html
+        assert "&lt;bad&gt;" in html
+
+    def test_renders_account_table(self) -> None:
+        accounts = [
+            {
+                "account_name": "acct_a",
+                "account_enabled": 1,
+                "request_count": 5,
+                "error_count": 1,
+                "input_tokens": 100,
+                "output_tokens": 200,
+                "cost_microdollars": 1_000_000,
+                "avg_latency_ms": 100.0,
+                "reserved_microdollars": 500_000,
+            }
+        ]
+        html = render_overview(
+            overview={
+                "summary": {
+                    "total_requests": 5,
+                    "successful_requests": 4,
+                    "error_requests": 1,
+                    "error_rate": 0.2,
+                    "total_input_tokens": 100,
+                    "total_output_tokens": 200,
+                    "total_cost_microdollars": 1_000_000,
+                    "avg_latency_ms": 100.0,
+                },
+                "imbalance": {
+                    "imbalance_ratio": 0.0,
+                    "active_accounts": 1,
+                    "most_used": None,
+                    "least_used": None,
+                },
+                "period_label": "24h",
+                "start": "2024-01-01 00:00:00",
+                "end": "2024-01-02 00:00:00",
+            },
+            accounts=accounts,
+        )
+        assert "acct_a" in html
+        assert "$1.000000" in html
+
+    def test_renders_no_accounts_message(self) -> None:
+        html = render_overview(
+            overview={
+                "summary": {
+                    "total_requests": 0,
+                    "successful_requests": 0,
+                    "error_requests": 0,
+                    "error_rate": 0.0,
+                    "total_input_tokens": 0,
+                    "total_output_tokens": 0,
+                    "total_cost_microdollars": 0,
+                    "avg_latency_ms": 0.0,
+                },
+                "imbalance": {
+                    "imbalance_ratio": 0.0,
+                    "active_accounts": 0,
+                    "most_used": None,
+                    "least_used": None,
+                },
+                "period_label": "24h",
+                "start": "2024-01-01 00:00:00",
+                "end": "2024-01-02 00:00:00",
+            },
+            accounts=[],
+        )
+        assert "No accounts configured" in html
+
+
+class TestRenderAccounts:
+    """Tests for the accounts page renderer."""
+
+    def test_renders_empty(self) -> None:
+        html = render_accounts(accounts=[], period="24h")
+        assert "Accounts" in html
+        assert "No accounts" in html
+
+    def test_renders_table(self) -> None:
+        accounts = [
+            {
+                "account_name": "alpha",
+                "account_enabled": 1,
+                "request_count": 3,
+                "error_count": 0,
+                "input_tokens": 100,
+                "output_tokens": 200,
+                "cost_microdollars": 500_000,
+                "avg_latency_ms": 75.5,
+                "reserved_microdollars": 0,
+            }
+        ]
+        html = render_accounts(accounts=accounts, period="24h")
+        assert "alpha" in html
+
+    def test_html_injection_blocked(self) -> None:
+        accounts = [
+            {
+                "account_name": "<script>alert(1)</script>",
+                "account_enabled": 1,
+                "request_count": 0,
+                "error_count": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cost_microdollars": 0,
+                "avg_latency_ms": 0.0,
+                "reserved_microdollars": 0,
+            }
+        ]
+        html = render_accounts(accounts=accounts, period="24h")
+        assert "<script>alert(1)</script>" not in html
+        assert "&lt;script&gt;" in html
+
+
+class TestRenderModels:
+    """Tests for the models page renderer."""
+
+    def test_renders_empty(self) -> None:
+        html = render_models(models=[], period="24h")
+        assert "No model data" in html
+
+    def test_renders_rows(self) -> None:
+        models = [
+            {
+                "model_id": "gpt-x",
+                "request_count": 5,
+                "error_count": 1,
+                "input_tokens": 100,
+                "output_tokens": 200,
+                "cost_microdollars": 1_000_000,
+                "avg_latency_ms": 200.0,
+            }
+        ]
+        html = render_models(models=models, period="24h")
+        assert "gpt-x" in html
+        assert "$1.000000" in html
+
+    def test_account_filter_shown(self) -> None:
+        html = render_models(models=[], account_filter="acct_a", period="24h")
+        assert 'value="acct_a"' in html
+
+
+class TestRenderEvents:
+    """Tests for the events page renderer."""
+
+    def test_renders_empty(self) -> None:
+        html = render_events(events=[], period="24h")
+        assert "No events" in html
+
+    def test_renders_event(self) -> None:
+        events = [
+            {
+                "created_at": "2024-01-01 12:00:00",
+                "account_name": "acct_a",
+                "event_type": "cooldown_active",
+                "details": '{"seconds": 60}',
+            }
+        ]
+        html = render_events(events=events, period="24h")
+        assert "cooldown_active" in html
+        assert "acct_a" in html
+        assert "cooldown_active" in html
+
+    def test_event_type_filter_in_form(self) -> None:
+        html = render_events(events=[], event_type="cooldown_active", period="24h")
+        assert 'value="cooldown_active"' in html
+
+
+class TestRenderTimeseries:
+    """Tests for the timeseries page renderer."""
+
+    def test_renders_empty(self) -> None:
+        html = render_timeseries(series=[], bucket="hour", period="24h")
+        assert "No requests" in html
+
+    def test_renders_buckets(self) -> None:
+        series = [
+            {
+                "bucket": "2024-01-01 12:00:00",
+                "request_count": 5,
+                "error_count": 1,
+                "input_tokens": 100,
+                "output_tokens": 200,
+                "cost_microdollars": 500_000,
+            }
+        ]
+        html = render_timeseries(series=series, bucket="hour", period="24h")
+        assert "2024-01-01 12:00:00" in html
+
+
+class TestHtmlParseability:
+    """Verify rendered HTML parses as valid HTML."""
+
+    def test_overview_parses(self) -> None:
+        html = render_overview(
+            overview={
+                "summary": {
+                    "total_requests": 10,
+                    "successful_requests": 8,
+                    "error_requests": 2,
+                    "error_rate": 0.2,
+                    "total_input_tokens": 1000,
+                    "total_output_tokens": 2000,
+                    "total_cost_microdollars": 1_500_000,
+                    "avg_latency_ms": 250.0,
+                },
+                "imbalance": {
+                    "imbalance_ratio": 0.1,
+                    "active_accounts": 2,
+                    "most_used": {"name": "acct_a", "cost_microdollars": 1000},
+                    "least_used": {"name": "acct_b", "cost_microdollars": 500},
+                },
+                "period_label": "24h",
+                "start": "2024-01-01 00:00:00",
+                "end": "2024-01-02 00:00:00",
+            },
+            accounts=[],
+        )
+        parser = _HTMLTextExtractor()
+        parser.feed(html)
+        text = "".join(parser.text_parts)
+        assert "10" in text
+        assert "$1.500000" in text

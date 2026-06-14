@@ -1,0 +1,81 @@
+"""HTML escape utilities for the dashboard.
+
+All free-text fields rendered into HTML templates must be escaped
+to prevent HTML injection (model_id, account_name, error_message, etc.).
+"""
+
+from __future__ import annotations
+
+import html
+import re
+from typing import Any
+
+_PATTERN: re.Pattern[str] = re.compile(r"[^\w\s\-\.:@/\?&=%]")
+
+
+def escape(value: Any) -> str:
+    """Escape a value for safe inclusion in HTML.
+
+    None becomes the empty string. Other values are coerced to str
+    then HTML-escaped.
+    """
+    if value is None:
+        return ""
+    return html.escape(str(value), quote=True)
+
+
+def escape_attr(value: Any) -> str:
+    """Escape a value for use in an HTML attribute (quotes always escaped)."""
+    if value is None:
+        return ""
+    return html.escape(str(value), quote=True)
+
+
+def format_microdollars(value: int | float | None) -> str:
+    """Format a microdollar value as $X.XXXXXX."""
+    if value is None:
+        value = 0
+    return f"${value / 1_000_000:.6f}"
+
+
+def format_tokens(value: int | None) -> str:
+    """Format a token count with thousands separators."""
+    if value is None:
+        value = 0
+    return f"{int(value):,}"
+
+
+def format_percent(value: float | None, digits: int = 2) -> str:
+    """Format a fraction as a percentage."""
+    if value is None:
+        value = 0.0
+    return f"{value * 100:.{digits}f}%"
+
+
+def format_latency(value: float | None) -> str:
+    """Format a latency value in milliseconds."""
+    if value is None:
+        value = 0.0
+    return f"{float(value):.1f} ms"
+
+
+def format_timestamp(value: Any) -> str:
+    """Format a timestamp for display."""
+    if value is None:
+        return ""
+    return str(value)
+
+
+def truncate(value: Any, max_length: int = 80) -> str:
+    """Truncate a string to a maximum length, escaping the result."""
+    escaped = escape(value)
+    if len(escaped) > max_length:
+        return escaped[: max_length - 3] + "..."
+    return escaped
+
+
+def sanitize_class_name(value: str) -> str:
+    """Sanitize a string for use as an HTML class name."""
+    if not value:
+        return ""
+    return _PATTERN.sub("_", str(value))

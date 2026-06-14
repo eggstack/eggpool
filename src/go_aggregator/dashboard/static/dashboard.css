@@ -1,0 +1,194 @@
+/* Go Aggregator dashboard styles */
+
+* { box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  margin: 0;
+  background: #f6f7f9;
+  color: #1f2328;
+}
+
+header.topbar {
+  display: flex;
+  align-items: center;
+  padding: 0.75rem 1.5rem;
+  background: #1f2328;
+  color: #f6f7f9;
+  border-bottom: 1px solid #2d333b;
+}
+
+header.topbar h1 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+header.topbar h1 a {
+  color: inherit;
+  text-decoration: none;
+}
+
+nav.topnav {
+  margin-left: auto;
+  display: flex;
+  gap: 0.5rem;
+}
+
+nav.topnav a {
+  color: #c9d1d9;
+  text-decoration: none;
+  padding: 0.35rem 0.7rem;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+
+nav.topnav a:hover {
+  background: #2d333b;
+}
+
+nav.topnav a.active {
+  background: #444c56;
+  color: #fff;
+}
+
+main {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+footer {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1rem 1.5rem 2rem;
+  color: #57606a;
+  font-size: 0.85rem;
+}
+
+footer .period-label {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  color: #1f2328;
+}
+
+h2 {
+  margin: 0 0 1rem;
+  font-size: 1.4rem;
+}
+
+h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+  color: #57606a;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.card {
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  padding: 1rem;
+}
+
+.card .metric {
+  margin: 0.25rem 0 0.5rem;
+  font-size: 1.6rem;
+  font-weight: 600;
+}
+
+.card .sub {
+  margin: 0;
+  color: #57606a;
+  font-size: 0.85rem;
+}
+
+.panel {
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.5rem;
+}
+
+table.data {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+table.data th, table.data td {
+  padding: 0.5rem 0.6rem;
+  text-align: left;
+  border-bottom: 1px solid #eaeef2;
+  font-size: 0.9rem;
+}
+
+table.data th {
+  font-weight: 600;
+  color: #57606a;
+  background: #f6f8fa;
+}
+
+table.data tr:last-child td {
+  border-bottom: none;
+}
+
+td.yes { color: #1a7f37; font-weight: 600; }
+td.no { color: #cf222e; font-weight: 600; }
+
+.period-selector,
+.filter-form {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0 0 1rem;
+}
+
+.period-selector select,
+.filter-form input,
+.filter-form button {
+  font: inherit;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.filter-form button {
+  background: #1f2328;
+  color: #fff;
+  border-color: #1f2328;
+  cursor: pointer;
+}
+
+.empty {
+  color: #57606a;
+  font-style: italic;
+}
+
+.event-tag {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: #ddf4ff;
+  color: #0969da;
+  font-size: 0.8rem;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+}
+
+.event-tag.cooldown_active { background: #fff8c5; color: #9a6700; }
+.event-tag.auth_failed { background: #ffebe9; color: #cf222e; }
+.event-tag.model_appeared,
+.event-tag.model_discovered { background: #dafbe1; color: #1a7f37; }
+.event-tag.circuit_open { background: #ffebe9; color: #cf222e; }
+.event-tag.circuit_close,
+.event-tag.circuit_closed { background: #dafbe1; color: #1a7f37; }
+.event-tag.reservation_recovered { background: #fff8c5; color: #9a6700; }
+.event-tag.catalog_refresh_failed { background: #ffebe9; color: #cf222e; }

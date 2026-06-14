@@ -1,0 +1,159 @@
+"""Read-only JSON statistics API endpoints.
+
+Endpoints:
+- GET /api/stats/summary
+- GET /api/stats/accounts
+- GET /api/stats/models
+- GET /api/stats/timeseries
+- GET /api/stats/errors
+- GET /api/events
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from fastapi.responses import JSONResponse
+
+from go_aggregator.stats import TimeRange, resolve_period
+
+if TYPE_CHECKING:
+    from fastapi import Request
+    from fastapi.responses import Response
+
+
+def _resolve(request: Request, period: str | None) -> TimeRange:
+    """Resolve a period string into a TimeRange."""
+    start, end, label = resolve_period(period)
+    return TimeRange(start=start, end=end, label=label)
+
+
+async def handle_summary(request: Request, period: str | None = "24h") -> Response:
+    """GET /api/stats/summary."""
+    time_range = _resolve(request, period)
+    stats = request.app.state.stats
+    summary = await stats.get_summary(time_range)
+    return JSONResponse(content={"period": time_range.label, **summary})
+
+
+async def handle_account_stats(
+    request: Request, period: str | None = "24h"
+) -> Response:
+    """GET /api/stats/accounts."""
+    time_range = _resolve(request, period)
+    stats = request.app.state.stats
+    accounts = await stats.get_account_stats(time_range)
+    return JSONResponse(content={"period": time_range.label, "accounts": accounts})
+
+
+async def handle_model_stats(
+    request: Request,
+    period: str | None = "24h",
+    account: str | None = None,
+) -> Response:
+    """GET /api/stats/models."""
+    time_range = _resolve(request, period)
+    stats = request.app.state.stats
+    models = await stats.get_model_stats(time_range, account_name=account or None)
+    return JSONResponse(
+        content={
+            "period": time_range.label,
+            "account_filter": account or None,
+            "models": models,
+        }
+    )
+
+
+async def handle_timeseries(
+    request: Request,
+    period: str | None = "24h",
+    bucket: str = "hour",
+    account: str | None = None,
+    model: str | None = None,
+) -> Response:
+    """GET /api/stats/timeseries."""
+    time_range = _resolve(request, period)
+    if bucket not in ("hour", "day"):
+        bucket = "hour"
+    stats = request.app.state.stats
+    series = await stats.get_timeseries(
+        time_range,
+        bucket=bucket,
+        account_name=account or None,
+        model_id=model or None,
+    )
+    return JSONResponse(
+        content={
+            "period": time_range.label,
+            "bucket": bucket,
+            "account_filter": account or None,
+            "model_filter": model or None,
+            "series": series,
+        }
+    )
+
+
+async def handle_errors(
+    request: Request, period: str | None = "24h", limit: int = 20
+) -> Response:
+    """GET /api/stats/errors."""
+    time_range = _resolve(request, period)
+    stats = request.app.state.stats
+    errors = await stats.get_error_breakdown(time_range, limit=limit)
+    return JSONResponse(content={"period": time_range.label, "errors": errors})
+
+
+async def handle_events(
+    request: Request,
+    limit: int = 50,
+    type_filter: str | None = None,
+) -> Response:
+    """GET /api/events."""
+    stats = request.app.state.stats
+    events = await stats.get_recent_events(limit=limit, event_type=type_filter or None)
+    return JSONResponse(content={"limit": limit, "type": type_filter, "events": events})
+
+
+def register_stats_routes(app: Any) -> None:
+    """Attach the JSON statistics routes to a FastAPI app."""
+    app.add_api_route(
+        path="/api/stats/summary",
+        endpoint=handle_summary,
+        methods=["GET"],
+    )
+    app.add_api_route(
+        path="/api/stats/accounts",
+        endpoint=handle_account_stats,
+        methods=["GET"],
+    )
+    app.add_api_route(
+        path="/api/stats/models",
+        endpoint=handle_model_stats,
+        methods=["GET"],
+    )
+    app.add_api_route(
+        path="/api/stats/timeseries",
+        endpoint=handle_timeseries,
+        methods=["GET"],
+    )
+    app.add_api_route(
+        path="/api/stats/errors",
+        endpoint=handle_errors,
+        methods=["GET"],
+    )
+    app.add_api_route(
+        path="/api/events",
+        endpoint=handle_events,
+        methods=["GET"],
+    )
+
+
+__all__ = [
+    "handle_account_stats",
+    "handle_errors",
+    "handle_events",
+    "handle_model_stats",
+    "handle_summary",
+    "handle_timeseries",
+    "register_stats_routes",
+]

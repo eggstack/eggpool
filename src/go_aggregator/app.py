@@ -6,18 +6,21 @@ import asyncio
 import contextlib
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from go_aggregator.accounts.registry import AccountRegistry
 from go_aggregator.api.chat_completions import handle_chat_completions
 from go_aggregator.api.messages import handle_messages
+from go_aggregator.api.stats import register_stats_routes
 from go_aggregator.auth import require_auth
 from go_aggregator.catalog.service import CatalogService
 from go_aggregator.constants import API_V1_PREFIX
+from go_aggregator.dashboard.routes import register_dashboard_routes
 from go_aggregator.db.connection import Database
 from go_aggregator.db.migrations import MigrationRunner
 from go_aggregator.errors import AggregatorError
@@ -25,6 +28,7 @@ from go_aggregator.logging import configure_logging
 from go_aggregator.models.api import HealthResponse, ReadyResponse
 from go_aggregator.models.config import AppConfig
 from go_aggregator.routing.router import Router
+from go_aggregator.stats import StatsService
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -80,6 +84,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     router = Router(registry, catalog)
     app.state.router = router
 
+    # Statistics service
+    app.state.stats = StatsService(db)
+
     # Initial catalog refresh
     if config.models.startup_refresh:
         with contextlib.suppress(Exception):
@@ -134,6 +141,21 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.config = config
+
+    # Dashboard and statistics routes (read-only, no auth by default)
+    if config.dashboard.enabled:
+        register_dashboard_routes(app)
+        register_stats_routes(app)
+
+        @app.get("/static/dashboard.css")
+        async def dashboard_css() -> FileResponse:  # pyright: ignore[reportUnusedFunction]
+            css_path: Path = (
+                Path(__file__).parent / "dashboard" / "static" / "dashboard.css"
+            )
+            return FileResponse(
+                path=str(css_path),
+                media_type="text/css",
+            )
 
     @app.get(f"{API_V1_PREFIX}/healthz")
     async def healthz() -> HealthResponse:  # pyright: ignore[reportUnusedFunction]
