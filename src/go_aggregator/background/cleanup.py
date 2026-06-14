@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from go_aggregator.db.connection import Database
+    from go_aggregator.quota.estimation import QuotaEstimator
 
 logger = logging.getLogger(__name__)
 
@@ -95,11 +96,28 @@ async def cleanup_old_events(
 
 async def reconcile_expired_reservations(
     db: Database,
+    quota_estimator: QuotaEstimator | None = None,
 ) -> int:
     """Release reservations past their expiry inside a transaction.
 
+    Optionally reconciles in-memory reservation totals so that expired
+    reservations are removed from the quota estimator's tracking.
+
     Returns the number of reservations reconciled.
     """
+    # Collect expired reservations for in-memory sync before releasing
+    expired_rows: list[dict[str, Any]] = []
+    if quota_estimator is not None:
+        expired_rows = [
+            dict(r)
+            for r in await db.fetch_all(
+                "SELECT id, account_id, estimated_microdollars FROM reservations "
+                "WHERE status = 'active' "
+                "AND expires_at IS NOT NULL "
+                "AND expires_at < CURRENT_TIMESTAMP"
+            )
+        ]
+
     async with db.transaction():
         cursor = await db.execute(
             """
@@ -113,6 +131,22 @@ async def reconcile_expired_reservations(
             """,
         )
     count = cursor.rowcount or 0
+
+    # Sync in-memory reservation tracking for expired reservations
+    if quota_estimator is not None and expired_rows:
+        for row in expired_rows:
+            account_id = row["account_id"]
+            estimated_microdollars = row["estimated_microdollars"] or 0
+            if estimated_microdollars <= 0:
+                continue
+            # Resolve account name from account_id
+            acct_row = await db.fetch_one(
+                "SELECT name FROM accounts WHERE id = ?", (account_id,)
+            )
+            if acct_row is not None:
+                account_name = acct_row["name"]
+                quota_estimator.remove_reservation(account_name, estimated_microdollars)
+
     if count > 0:
         logger.info("Reconciled %d expired reservations", count)
     return count

@@ -12,6 +12,7 @@ from fastapi.responses import Response, StreamingResponse
 
 from go_aggregator.api.errors import openai_error_response
 from go_aggregator.auth import require_auth
+from go_aggregator.catalog.protocols import ProtocolMismatchError
 from go_aggregator.errors import (
     CatalogUnavailableError,
     ModelNotFoundError,
@@ -112,6 +113,12 @@ async def handle_chat_completions(
             status_code=502,
             message=str(exc),
             error_type="server_error",
+        )
+    except ProtocolMismatchError as exc:
+        return openai_error_response(
+            status_code=400,
+            message=str(exc),
+            error_type="invalid_request_error",
         )
 
     return _render_response(result)

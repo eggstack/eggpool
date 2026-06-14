@@ -180,6 +180,11 @@ class RequestCoordinator:
         or stream_iterator (streaming). On retryable pre-body failures,
         retries on different accounts (excluding previously attempted ones).
         """
+        # Section 10.5: Validate endpoint before durable selection.
+        # Reject mismatched protocol endpoints before creating any
+        # request, reservation, or attempt row.
+        self._validate_endpoint(context)
+
         last_error: Exception | None = None
         last_upstream_response: tuple[int, dict[str, str], bytes] | None = None
         attempt_num = 0
@@ -992,6 +997,29 @@ class RequestCoordinator:
             latency_ms=elapsed_ms,
             attempt_count=attempt_num,
         )
+
+    def _validate_endpoint(self, context: ProxyRequestContext) -> None:
+        """Validate that the endpoint matches the model's protocol.
+
+        Raises ProtocolMismatchError (which callers render as 400) when
+        the wrong endpoint is used for a known model.
+        """
+        model_info = self._catalog.cache.get_model(context.model_id)
+        if model_info is None:
+            # Unknown model - handled later by _select_and_persist_attempt
+            return
+
+        model_protocol = model_info.get("protocol")
+        if not model_protocol:
+            # Unresolved protocol - fail closed
+            raise ModelUnavailableError(
+                f"Model {context.model_id!r} has unresolved protocol"
+            )
+
+        from go_aggregator.catalog.protocols import ModelProtocolResolver
+
+        resolver = ModelProtocolResolver()
+        resolver.validate_endpoint(model_protocol, context.protocol, context.model_id)
 
     @staticmethod
     def _estimate_request_tokens(context: ProxyRequestContext) -> int:

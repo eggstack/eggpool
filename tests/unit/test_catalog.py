@@ -20,7 +20,8 @@ def test_normalize_openai_models() -> None:
     models = normalize_openai_models(raw)
     assert len(models) == 2
     assert models[0]["model_id"] == "gpt-4"
-    assert models[0]["protocol"] == "openai"
+    # Fail-closed: normalizer no longer assigns protocol; resolved by catalog
+    assert models[0]["protocol"] is None
     assert models[0]["capabilities"]["context_window"] == 8192
 
 
@@ -43,10 +44,10 @@ def test_normalize_models_auto_detect() -> None:
     models = normalize_models(anthropic)
     assert models[0]["protocol"] == "anthropic"
 
-    # OpenAI format
+    # OpenAI format - normalizer no longer assigns protocol; fail-closed
     openai = {"data": [{"id": "gpt-4"}]}
     models = normalize_models(openai)
-    assert models[0]["protocol"] == "openai"
+    assert models[0]["protocol"] is None
 
 
 def test_cache_update_from_account() -> None:

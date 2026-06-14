@@ -32,7 +32,7 @@ class ModelCatalogCache:
                 self._models[model_id] = {
                     "model_id": model_id,
                     "display_name": model.get("display_name"),
-                    "protocol": model.get("protocol", "openai"),
+                    "protocol": model.get("protocol"),
                     "capabilities": model.get("capabilities", {}),
                     "source_metadata": model.get("source_metadata", {}),
                     "first_seen_at": now,

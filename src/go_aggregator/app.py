@@ -318,8 +318,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         while True:
             await asyncio.sleep(3600)
             await cleanup_old_requests(db, config.dashboard.retain_request_stats_days)
-            # Reconcile expired reservations
-            await reconcile_expired_reservations(db)
+            # Reconcile expired reservations and sync in-memory state
+            await reconcile_expired_reservations(
+                db, quota_estimator=router._quota_estimator
+            )
 
     supervisor.register("retention_cleanup", _retention_cleanup)
 

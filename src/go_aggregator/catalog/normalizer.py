@@ -29,7 +29,7 @@ def normalize_openai_models(
             {
                 "model_id": model_id,
                 "display_name": item.get("name") or item.get("title"),
-                "protocol": "openai",
+                "protocol": None,
                 "capabilities": capabilities,
                 "source_metadata": {
                     k: v for k, v in item.items() if k not in source_exclude

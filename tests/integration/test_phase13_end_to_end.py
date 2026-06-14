@@ -22,6 +22,7 @@ import respx
 
 from go_aggregator.accounts.registry import AccountRegistry
 from go_aggregator.catalog.pricing import CostCalculator, PriceRepository
+from go_aggregator.catalog.protocols import ProtocolMismatchError
 from go_aggregator.catalog.service import CatalogService
 from go_aggregator.db.connection import Database
 from go_aggregator.db.migrations import MigrationRunner
@@ -455,6 +456,45 @@ class TestAttemptLifecycle:
         await _assert_failover_invariants(
             two_account_db,
             "test-a-500",
+            {"acct-a", "acct-b"},
+            2,
+            coordinator._health_manager,
+        )
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_failover_402_then_success(
+        self, coordinator: RequestCoordinator, two_account_db: Database
+    ) -> None:
+        """402 (payment required) then 200."""
+        call_count = 0
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _error_response(402, '{"error": "payment required"}')
+            return _success_response()
+
+        with respx.mock:
+            respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(side_effect=_handler)
+
+            context = ProxyRequestContext(
+                request_id="test-a-402",
+                protocol="openai",
+                model_id="gpt-4",
+                streaming=False,
+                original_body=_make_openai_body(),
+                incoming_headers={"content-type": "application/json"},
+            )
+            response = await coordinator.execute(context)
+
+        assert response.status_code == 200
+        assert call_count == 2
+
+        await _assert_failover_invariants(
+            two_account_db,
+            "test-a-402",
             {"acct-a", "acct-b"},
             2,
             coordinator._health_manager,
@@ -985,6 +1025,53 @@ class TestProtocolFailClosed:
             ("test-h-unknown",),
         )
         assert len(req_rows) == 0, "Unknown model should not create lifecycle rows"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_wrong_endpoint_returns_400(
+        self, coordinator: RequestCoordinator, two_account_db: Database
+    ) -> None:
+        """Anthropic model through /chat/completions raises ProtocolMismatchError.
+
+        The API endpoint layer catches this and returns 400. Here we verify
+        the coordinator raises it before any lifecycle rows are created.
+        """
+        # Load an anthropic model into the catalog cache for this test
+        coordinator._catalog.cache.load_model(
+            model_id="claude-3-opus-20240229",
+            display_name="Claude 3 Opus",
+            protocol="anthropic",
+            capabilities={},
+            source_metadata={},
+        )
+        coordinator._catalog.cache.add_account_support(
+            "claude-3-opus-20240229", "acct-a"
+        )
+
+        with respx.mock:
+            # No route mocked - should not reach upstream
+            ctx = ProxyRequestContext(
+                request_id="test-h-wrong-endpoint",
+                protocol="openai",
+                model_id="claude-3-opus-20240229",
+                streaming=False,
+                original_body=json.dumps(
+                    {
+                        "model": "claude-3-opus-20240229",
+                        "messages": [{"role": "user", "content": "Hi"}],
+                    }
+                ).encode(),
+                incoming_headers={"content-type": "application/json"},
+            )
+            with pytest.raises(ProtocolMismatchError):
+                await coordinator.execute(ctx)
+
+        # Verify no request rows were created
+        req_rows = await two_account_db.fetch_all(
+            "SELECT * FROM requests WHERE proxy_request_id = ?",
+            ("test-h-wrong-endpoint",),
+        )
+        assert len(req_rows) == 0, "Wrong endpoint should not create lifecycle rows"
 
 
 # ===========================================================================

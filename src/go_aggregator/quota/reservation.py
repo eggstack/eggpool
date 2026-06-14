@@ -164,34 +164,34 @@ class ReservationManager:
 
     async def persist_reservations(self, db: Database) -> None:
         """Persist reservations to database."""
-        for reservation in self._reservations.values():
-            await db.execute(
-                """
-                INSERT OR REPLACE INTO reservations (
-                    id, request_id, account_id, reserved_tokens,
-                    reserved_cost_microdollars, created_at, expires_at,
-                    released, released_at, release_reason
-                ) VALUES (
-                    ?, ?,
-                    (SELECT id FROM accounts WHERE name = ?),
-                    ?, ?, datetime(?, 'unixepoch'), datetime(?, 'unixepoch'),
-                    ?, ?, ?
+        async with db.transaction():
+            for reservation in self._reservations.values():
+                await db.execute(
+                    """
+                    INSERT OR REPLACE INTO reservations (
+                        id, request_id, account_id, reserved_tokens,
+                        reserved_cost_microdollars, created_at, expires_at,
+                        released, released_at, release_reason
+                    ) VALUES (
+                        ?, ?,
+                        (SELECT id FROM accounts WHERE name = ?),
+                        ?, ?, datetime(?, 'unixepoch'), datetime(?, 'unixepoch'),
+                        ?, ?, ?
+                    )
+                    """,
+                    (
+                        reservation.reservation_id,
+                        reservation.request_id,
+                        reservation.account_name,
+                        reservation.estimated_tokens,
+                        reservation.estimated_cost_microdollars,
+                        reservation.created_at,
+                        reservation.expires_at,
+                        reservation.released,
+                        reservation.released_at,
+                        reservation.release_reason,
+                    ),
                 )
-                """,
-                (
-                    reservation.reservation_id,
-                    reservation.request_id,
-                    reservation.account_name,
-                    reservation.estimated_tokens,
-                    reservation.estimated_cost_microdollars,
-                    reservation.created_at,
-                    reservation.expires_at,
-                    reservation.released,
-                    reservation.released_at,
-                    reservation.release_reason,
-                ),
-            )
-        await db.connection.commit()
 
     async def load_reservations(self, db: Database) -> None:
         """Load active reservations from database."""
