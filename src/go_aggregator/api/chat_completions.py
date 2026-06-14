@@ -17,6 +17,7 @@ from go_aggregator.errors import (
     CatalogUnavailableError,
     ModelNotFoundError,
     NoEligibleAccountError,
+    RequestTooLargeError,
     UpstreamExhaustedError,
 )
 from go_aggregator.request.body import read_body_limited
@@ -45,7 +46,7 @@ async def handle_chat_completions(
 
     try:
         body = await read_body_limited(request, MAX_REQUEST_BODY_BYTES)
-    except Exception:
+    except RequestTooLargeError:
         return openai_error_response(
             status_code=413,
             message="Request body too large",

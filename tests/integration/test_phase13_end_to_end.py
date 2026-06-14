@@ -1342,11 +1342,16 @@ class TestModelSpecific404:
         )
 
         # Verify catalog cache reflects the unavailability
+        # The 404'd account should be removed from supporting;
+        # the successful account should still be present
         supporting = coordinator._catalog.cache.get_supporting_accounts("gpt-4")
-        assert "acct-b" in supporting, "acct-b should still support gpt-4"
-        # acct-a may or may not be in supporting accounts depending on
-        # whether the cache was updated, but the health manager should
-        # block routing to acct-a for this model
+        assert other_account in supporting, (
+            f"{other_account} should still support gpt-4 after successful response"
+        )
+        assert first_attempt_account_name not in supporting, (
+            f"{first_attempt_account_name} should be removed from supporting "
+            "after model-specific 404"
+        )
 
 
 # ===========================================================================

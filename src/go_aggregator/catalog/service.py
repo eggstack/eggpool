@@ -108,9 +108,16 @@ class CatalogService:
                         model["protocol"] = resolution.protocol
                         model["protocol_source"] = resolution.source
                     else:
-                        # Fall back to catalog resolution
+                        # Fall back to catalog resolution, using persisted
+                        # protocol as a fallback so previously-resolved
+                        # models do not become unresolved on refresh.
+                        persisted = self._cache.get_model(model["model_id"])
+                        persisted_protocol = (
+                            persisted.get("protocol") if persisted else None
+                        )
                         resolution = self._protocol_resolver.resolve_from_catalog(
-                            model["model_id"]
+                            model["model_id"],
+                            persisted_protocol=persisted_protocol,
                         )
                         if resolution.protocol:
                             model["protocol"] = resolution.protocol

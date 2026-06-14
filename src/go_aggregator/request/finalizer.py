@@ -168,9 +168,10 @@ class RequestFinalizer:
                 else 0,
             )
 
-            # 4. Finalize attempt only if request transitioned (idempotent)
+            # 4. Finalize attempt only if request transitioned and attempt
+            #    is still incomplete (idempotent; preserves first terminal data)
             if transitioned:
-                await self._attempt_repo.update(
+                await self._attempt_repo.finalize_if_incomplete(
                     attempt_id=selected.attempt_id,
                     status_code=data.status_code,
                     error_class=data.error_class,

@@ -126,6 +126,7 @@ class AccountQuota:
     five_hour_offset: int = 0
     weekly_offset: int = 0
     monthly_offset: int = 0
+    reserved_cost: int = 0
 
     def record_usage(
         self,
@@ -152,13 +153,17 @@ class AccountQuota:
         """Check if account is within quota limits.
 
         Uses the three persisted windows (5h, 7d, 30d) when available,
-        falling back to in-memory hourly/daily windows. Returns False
+        with per-window offsets and active reserved cost. Returns False
         (ineligible) when any configured capacity threshold is exceeded,
         preventing further routing to this account.
         """
-        cost_5h = self.get_persisted_cost_5h() + self.five_hour_offset
-        cost_7d = self.get_persisted_cost_7d() + self.weekly_offset
-        cost_30d = self.get_persisted_cost_30d() + self.monthly_offset
+        cost_5h = (
+            self.get_persisted_cost_5h() + self.five_hour_offset + self.reserved_cost
+        )
+        cost_7d = self.get_persisted_cost_7d() + self.weekly_offset + self.reserved_cost
+        cost_30d = (
+            self.get_persisted_cost_30d() + self.monthly_offset + self.reserved_cost
+        )
 
         # Consider exhausted if any configured capacity is exceeded
         if (
@@ -437,6 +442,10 @@ class QuotaEstimator:
         if account_name not in self._account_reserved_cost:
             self._account_reserved_cost[account_name] = 0
         self._account_reserved_cost[account_name] += cost
+        # Keep AccountQuota in sync for eligibility checks
+        quota = self.get_account_quota(account_name)
+        if quota is not None:
+            quota.reserved_cost = self._account_reserved_cost[account_name]
 
     def remove_reservation(self, account_name: str, cost: int) -> None:
         """Remove a reservation's cost from tracking."""
@@ -444,6 +453,10 @@ class QuotaEstimator:
             self._account_reserved_cost[account_name] = max(
                 0, self._account_reserved_cost[account_name] - cost
             )
+            # Keep AccountQuota in sync for eligibility checks
+            quota = self.get_account_quota(account_name)
+            if quota is not None:
+                quota.reserved_cost = self._account_reserved_cost[account_name]
 
     def get_account_reserved_cost(self, account_name: str) -> int:
         """Get total reserved cost for an account from active reservations."""
