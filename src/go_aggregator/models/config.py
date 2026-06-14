@@ -113,6 +113,8 @@ class ModelOverrideConfig(BaseModel):
 
     protocol: Literal["openai", "anthropic"] | None = None
     max_tokens: int | None = None
+    input_price_per_1k: float | None = None
+    output_price_per_1k: float | None = None
 
 
 class AppConfig(BaseModel):

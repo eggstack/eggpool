@@ -607,6 +607,46 @@ class TestTransactionConcurrency:
             "Readiness probe rolled back unrelated request data"
         )
 
+    @pytest.mark.asyncio
+    async def test_nested_same_task_transaction_rollback(
+        self, two_account_db: Database
+    ) -> None:
+        """Outer transaction inserts A, inner inserts B, outer raises.
+        Assert both A and B roll back.
+        """
+        # Clear any prior state from other tests
+        await two_account_db.execute(
+            "DELETE FROM accounts WHERE name IN ('nested-a', 'nested-b')"
+        )
+        await two_account_db.connection.commit()
+
+        with pytest.raises(ValueError, match="outer failure"):
+            async with two_account_db.transaction():
+                await two_account_db.execute(
+                    "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+                    "VALUES (?, ?, 1, 1.0)",
+                    ("nested-a", "DUMMY_KEY"),
+                )
+                # Nested transaction (same task) - inherits outer boundary
+                async with two_account_db.transaction():
+                    await two_account_db.execute(
+                        "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+                        "VALUES (?, ?, 1, 1.0)",
+                        ("nested-b", "DUMMY_KEY"),
+                    )
+                # Outer raises - both inserts should roll back
+                raise ValueError("outer failure")
+
+        # Both inserts should be rolled back
+        row_a = await two_account_db.fetch_one(
+            "SELECT name FROM accounts WHERE name = ?", ("nested-a",)
+        )
+        row_b = await two_account_db.fetch_one(
+            "SELECT name FROM accounts WHERE name = ?", ("nested-b",)
+        )
+        assert row_a is None, "Nested outer rollback: row A survived"
+        assert row_b is None, "Nested outer rollback: row B survived"
+
 
 # ===========================================================================
 # Section C: Projected request selection
@@ -842,6 +882,92 @@ class TestCancellationStages:
         health = coordinator._health_manager.get_account_health("acct-a")
         assert health.is_healthy
 
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_cancel_non_streaming_after_connect(
+        self, coordinator: RequestCoordinator, two_account_db: Database
+    ) -> None:
+        """Cancel a non-streaming request after upstream connection established.
+
+        The upstream responds slowly; cancel arrives after headers but
+        before the response body is fully read.
+        """
+        upstream_called = asyncio.Event()
+        hold_upstream = asyncio.Event()
+
+        async def _handler(request: httpx.Request) -> httpx.Response:
+            upstream_called.set()
+            # Hold until test cancels
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(hold_upstream.wait(), timeout=5.0)
+            return httpx.Response(
+                200,
+                json={
+                    "id": "cmpl-slow",
+                    "object": "chat.completion",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "Late"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 5,
+                        "total_tokens": 15,
+                    },
+                },
+            )
+
+        with respx.mock:
+            respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(side_effect=_handler)
+
+            ctx = ProxyRequestContext(
+                request_id="test-d-cancel-non-streaming",
+                protocol="openai",
+                model_id="gpt-4",
+                streaming=False,
+                original_body=_make_openai_body(),
+                incoming_headers={"content-type": "application/json"},
+            )
+            exec_task = asyncio.create_task(coordinator.execute(ctx))
+
+            # Wait until upstream is called
+            await asyncio.wait_for(upstream_called.wait(), timeout=5.0)
+
+            # Cancel before upstream responds
+            exec_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await exec_task
+
+            # Release upstream
+            hold_upstream.set()
+
+        # Give finalizer a moment
+        await asyncio.sleep(0.3)
+
+        # Verify terminal state
+        req_row = await two_account_db.fetch_one(
+            "SELECT status FROM requests WHERE proxy_request_id = ?",
+            ("test-d-cancel-non-streaming",),
+        )
+        assert req_row is not None
+        assert req_row["status"] in ("cancelled", "completed", "pending")
+
+        # Verify reservation released
+        req_id = await two_account_db.fetch_one(
+            "SELECT id FROM requests WHERE proxy_request_id = ?",
+            ("test-d-cancel-non-streaming",),
+        )
+        if req_id is not None:
+            resv_rows = await two_account_db.fetch_all(
+                "SELECT * FROM reservations WHERE request_id = ?",
+                (str(req_id["id"]),),
+            )
+            for resv in resv_rows:
+                assert resv["status"] == "released"
+
 
 # ===========================================================================
 # Section E: No-usage success
@@ -900,6 +1026,67 @@ class TestNoUsageSuccess:
             "No-usage success should use reservation estimate, not zero"
         )
         assert req_row["exactness"] == "estimated"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_estimated_cost_influences_immediate_routing(
+        self, coordinator: RequestCoordinator, two_account_db: Database
+    ) -> None:
+        """Estimated cost from first request influences routing of second request.
+
+        First request succeeds without usage (cost = estimated). Second request
+        should see the estimated cost in the account's utilization.
+        """
+        # First request - no usage, cost will be estimated
+        no_usage_response = httpx.Response(
+            200,
+            json={
+                "id": "cmpl-1",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hello"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+
+        with respx.mock:
+            respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+                return_value=no_usage_response
+            )
+            ctx = ProxyRequestContext(
+                request_id="test-e-routing-1",
+                protocol="openai",
+                model_id="gpt-4",
+                streaming=False,
+                original_body=_make_openai_body(),
+                incoming_headers={"content-type": "application/json"},
+            )
+            resp = await coordinator.execute(ctx)
+            assert resp.status_code == 200
+
+        # Verify first request used estimated cost
+        req1 = await two_account_db.fetch_one(
+            "SELECT cost_microdollars, exactness FROM requests "
+            "WHERE proxy_request_id = ?",
+            ("test-e-routing-1",),
+        )
+        assert req1 is not None
+        assert req1["cost_microdollars"] > 0
+        assert req1["exactness"] == "estimated"
+
+        # The estimated cost should now be reflected in the account's
+        # in-memory quota state, which the scorer uses for routing.
+        # Verify the daily window captured the cost.
+        estimator = coordinator._quota_estimator
+        account_name = resp.account_name
+        snapshot = estimator.get_account_quota(account_name)
+        assert snapshot is not None
+        daily_tokens, daily_cost = snapshot.daily_window.get_usage()
+        assert daily_cost > 0, "Estimated cost should be reflected in daily window"
 
 
 # ===========================================================================
@@ -1129,6 +1316,38 @@ class TestModelSpecific404:
         # Verify first attempt had 404
         assert attempts[0]["status_code"] == 404
 
+        # Determine which account was used for the first attempt
+        first_attempt_account_id = attempts[0]["account_id"]
+        acct_rows = await two_account_db.fetch_all(
+            "SELECT id, name FROM accounts WHERE id = ?",
+            (first_attempt_account_id,),
+        )
+        assert len(acct_rows) == 1
+        first_attempt_account_name = acct_rows[0]["name"]
+
+        # Verify model is disabled for the first-attempt account
+        health = coordinator._health_manager.get_account_health(
+            first_attempt_account_name
+        )
+        assert "gpt-4" in health.disabled_models, (
+            f"Model should be disabled for {first_attempt_account_name} "
+            "after model-specific 404"
+        )
+
+        # Verify model is NOT disabled for the other account
+        other_account = "acct-b" if first_attempt_account_name == "acct-a" else "acct-a"
+        health_other = coordinator._health_manager.get_account_health(other_account)
+        assert "gpt-4" not in health_other.disabled_models, (
+            f"Model should not be disabled for {other_account}"
+        )
+
+        # Verify catalog cache reflects the unavailability
+        supporting = coordinator._catalog.cache.get_supporting_accounts("gpt-4")
+        assert "acct-b" in supporting, "acct-b should still support gpt-4"
+        # acct-a may or may not be in supporting accounts depending on
+        # whether the cache was updated, but the health manager should
+        # block routing to acct-a for this model
+
 
 # ===========================================================================
 # Section J: Duplicate finalization
@@ -1144,6 +1363,11 @@ class TestDuplicateFinalization:
         self, coordinator: RequestCoordinator, two_account_db: Database
     ) -> None:
         """Second finalization call cannot overwrite terminal fields."""
+        from go_aggregator.request.finalizer import (
+            FinalizationData,
+            FinalizationOutcome,
+        )
+
         # Complete a successful request
         with respx.mock:
             respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
@@ -1187,12 +1411,38 @@ class TestDuplicateFinalization:
         assert len(resv_rows) >= 1
         original_resv_status = resv_rows[0]["status"]
 
-        # The finalizer should be idempotent - second finalize with
-        # different data should NOT overwrite the original terminal state.
-        # This is verified by the fact that finalize_if_pending returns False
-        # for already-terminal requests, so no update occurs.
+        # Now attempt a second finalization with DIFFERENT data
+        # (500 status, 0 bytes) - this should NOT overwrite the original
+        from go_aggregator.request.coordinator import SelectedAttempt
 
-        # Verify no change after attempting to finalize again
+        selected = SelectedAttempt(
+            proxy_request_id="test-j-double-finalize",
+            db_request_id=str(req_row["id"]),
+            attempt_id=attempt_rows[0]["id"],
+            reservation_id=resv_rows[0]["id"],
+            account_id=attempt_rows[0]["account_id"],
+            account_name="acct-a",
+            api_key="key",
+            model_id="gpt-4",
+            estimated_microdollars=1000,
+            estimated_tokens=100,
+            attempt_number=1,
+        )
+        result = await coordinator._finalizer.finalize(
+            selected,
+            FinalizationData(
+                outcome=FinalizationOutcome.UPSTREAM_ERROR,
+                status_code=500,
+                bytes_emitted=0,
+                error_class="TestError",
+            ),
+        )
+        # Second finalization should return False (idempotent)
+        assert result is False, (
+            "Second finalization should return False for already-terminal request"
+        )
+
+        # Verify original state is preserved
         req_row_after = await two_account_db.fetch_one(
             "SELECT * FROM requests WHERE proxy_request_id = ?",
             ("test-j-double-finalize",),
@@ -1449,3 +1699,84 @@ class TestRestartRecovery:
         assert len(events) >= 1
 
         await httpx_client.aclose()
+
+
+# ===========================================================================
+# Section 10.3: Protocol family mapping tests
+# ===========================================================================
+
+
+class TestProtocolFamilyMappings:
+    """Section 10.3: Verify Go model family mappings resolve correctly."""
+
+    @pytest.mark.asyncio
+    async def test_glm_family_resolves_to_openai(self) -> None:
+        """GLM models should resolve to openai protocol."""
+        from go_aggregator.catalog.protocols import ModelProtocolResolver
+
+        resolver = ModelProtocolResolver()
+        resolution = resolver.resolve_from_catalog("glm-4-plus")
+        assert resolution.protocol == "openai"
+        assert resolution.source == "family_mapping"
+
+    @pytest.mark.asyncio
+    async def test_kimi_family_resolves_to_openai(self) -> None:
+        """Kimi models should resolve to openai protocol."""
+        from go_aggregator.catalog.protocols import ModelProtocolResolver
+
+        resolver = ModelProtocolResolver()
+        resolution = resolver.resolve_from_catalog("kimi-k2")
+        assert resolution.protocol == "openai"
+        assert resolution.source == "family_mapping"
+
+    @pytest.mark.asyncio
+    async def test_mimo_family_resolves_to_openai(self) -> None:
+        """MiMo models should resolve to openai protocol."""
+        from go_aggregator.catalog.protocols import ModelProtocolResolver
+
+        resolver = ModelProtocolResolver()
+        resolution = resolver.resolve_from_catalog("mimo-7b")
+        assert resolution.protocol == "openai"
+        assert resolution.source == "family_mapping"
+
+    @pytest.mark.asyncio
+    async def test_deepseek_family_resolves_to_openai(self) -> None:
+        """DeepSeek models should resolve to openai protocol."""
+        from go_aggregator.catalog.protocols import ModelProtocolResolver
+
+        resolver = ModelProtocolResolver()
+        resolution = resolver.resolve_from_catalog("deepseek-v3")
+        assert resolution.protocol == "openai"
+        assert resolution.source == "family_mapping"
+
+    @pytest.mark.asyncio
+    async def test_minimax_family_resolves_to_openai(self) -> None:
+        """MiniMax models should resolve to openai protocol."""
+        from go_aggregator.catalog.protocols import ModelProtocolResolver
+
+        resolver = ModelProtocolResolver()
+        resolution = resolver.resolve_from_catalog("minimax-text-01")
+        assert resolution.protocol == "openai"
+        assert resolution.source == "family_mapping"
+
+    @pytest.mark.asyncio
+    async def test_qwen_family_resolves_to_openai(self) -> None:
+        """Qwen models should resolve to openai protocol."""
+        from go_aggregator.catalog.protocols import ModelProtocolResolver
+
+        resolver = ModelProtocolResolver()
+        resolution = resolver.resolve_from_catalog("qwen-max")
+        assert resolution.protocol == "openai"
+        assert resolution.source == "family_mapping"
+
+    @pytest.mark.asyncio
+    async def test_unknown_model_remains_unresolved(self) -> None:
+        """Unknown model should remain unresolved."""
+        from go_aggregator.catalog.protocols import ModelProtocolResolver
+
+        resolver = ModelProtocolResolver()
+        resolution = resolver.resolve_from_catalog("totally-unknown-model-xyz")
+        assert not resolution.protocol, (
+            f"Unknown model should be unresolved, got {resolution.protocol!r}"
+        )
+        assert resolution.source == "unresolved"

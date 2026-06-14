@@ -11,6 +11,7 @@ from go_aggregator.catalog.cache import ModelCatalogCache
 from go_aggregator.catalog.fetcher import fetch_models_for_account
 from go_aggregator.catalog.normalizer import normalize_models
 from go_aggregator.catalog.protocols import ModelProtocolResolver
+from go_aggregator.db.repositories import PriceSnapshotRepository
 
 if TYPE_CHECKING:
     import httpx
@@ -96,6 +97,7 @@ class CatalogService:
                 override = self._config.model_overrides.get(model["model_id"])
                 if override and override.protocol:
                     model["protocol"] = override.protocol
+                    model["protocol_source"] = "config"
                 else:
                     # Resolve from per-model metadata
                     source_meta = model.get("source_metadata", {})
@@ -104,6 +106,7 @@ class CatalogService:
                     )
                     if resolution.protocol:
                         model["protocol"] = resolution.protocol
+                        model["protocol_source"] = resolution.source
                     else:
                         # Fall back to catalog resolution
                         resolution = self._protocol_resolver.resolve_from_catalog(
@@ -111,6 +114,7 @@ class CatalogService:
                         )
                         if resolution.protocol:
                             model["protocol"] = resolution.protocol
+                            model["protocol_source"] = resolution.source
 
             self._cache.update_from_account(account_name, models)
             logger.debug(
@@ -174,11 +178,10 @@ class CatalogService:
 
         async with self._db.transaction():
             for model_id, model_info in self._cache.get_all_models().items():
-                # Resolve protocol source for this model
-                resolution = self._protocol_resolver.resolve_from_catalog(model_id)
-                protocol_source = (
-                    resolution.source if resolution.source != "unresolved" else None
-                )
+                # Use preserved protocol source from resolution
+                protocol_source = model_info.get("protocol_source")
+                if protocol_source == "unresolved":
+                    protocol_source = None
 
                 # Upsert model
                 await self._db.execute(
@@ -226,6 +229,77 @@ class CatalogService:
                         """,
                         (account_id, model_id, is_available),
                     )
+
+                # 7.5: Insert price snapshot if pricing data is available
+                await self._maybe_insert_price_snapshot(model_id, model_info)
+
+    async def _maybe_insert_price_snapshot(
+        self, model_id: str, model_info: dict[str, Any]
+    ) -> None:
+        """Insert a price snapshot if pricing data is available.
+
+        Extracts pricing from TOML overrides (authoritative) or upstream
+        metadata. Only inserts when values differ from the latest snapshot.
+        """
+        input_price: float | None = None
+        output_price: float | None = None
+        source = "upstream"
+
+        # 1. Check TOML override (authoritative)
+        override = self._config.model_overrides.get(model_id)
+        has_override_pricing = override and (
+            override.input_price_per_1k is not None
+            or override.output_price_per_1k is not None
+        )
+        if has_override_pricing:
+            input_price = override.input_price_per_1k
+            output_price = override.output_price_per_1k
+            source = "config"
+
+        # 2. Check upstream source_metadata for pricing
+        if input_price is None and output_price is None:
+            meta = model_info.get("source_metadata", {})
+            # OpenAI-style: pricing.prompt / pricing.completion (dollars per token)
+            pricing = meta.get("pricing")
+            if isinstance(pricing, dict):
+                prompt = pricing.get("prompt")
+                completion = pricing.get("completion")
+                if prompt is not None:
+                    input_price = float(prompt) * 1_000  # per token -> per 1k
+                if completion is not None:
+                    output_price = float(completion) * 1_000
+            # Some providers: input_price_per_1k / output_price_per_1k
+            if input_price is None:
+                input_price = meta.get("input_price_per_1k")
+            if output_price is None:
+                output_price = meta.get("output_price_per_1k")
+
+        if input_price is None and output_price is None:
+            return
+
+        # 3. Check if values differ from latest snapshot
+        snapshot_repo = PriceSnapshotRepository(self._db)
+        latest = await snapshot_repo.get_latest(model_id)
+        if latest is not None:
+            old_input = latest.get("input_price_per_1k")
+            old_output = latest.get("output_price_per_1k")
+            if old_input == input_price and old_output == output_price:
+                return  # No change, skip insert
+
+        # 4. Insert new snapshot
+        await snapshot_repo.record(
+            model_id,
+            input_price_per_1k=input_price,
+            output_price_per_1k=output_price,
+            source=source,
+        )
+        logger.debug(
+            "Inserted price snapshot for %s: input=%s output=%s source=%s",
+            model_id,
+            input_price,
+            output_price,
+            source,
+        )
 
     def get_models_for_exposure(
         self,

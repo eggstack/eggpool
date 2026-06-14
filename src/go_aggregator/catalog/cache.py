@@ -33,6 +33,7 @@ class ModelCatalogCache:
                     "model_id": model_id,
                     "display_name": model.get("display_name"),
                     "protocol": model.get("protocol"),
+                    "protocol_source": model.get("protocol_source"),
                     "capabilities": model.get("capabilities", {}),
                     "source_metadata": model.get("source_metadata", {}),
                     "first_seen_at": now,
@@ -43,6 +44,9 @@ class ModelCatalogCache:
                 # Update protocol if more specific
                 if model.get("protocol"):
                     self._models[model_id]["protocol"] = model["protocol"]
+                # Update source if provided
+                if model.get("protocol_source"):
+                    self._models[model_id]["protocol_source"] = model["protocol_source"]
 
             if model_id not in self._account_support:
                 self._account_support[model_id] = set()
@@ -65,10 +69,18 @@ class ModelCatalogCache:
         expose_mode: str,
         eligible_account_names: set[str],
     ) -> list[dict[str, Any]]:
-        """Get models to expose based on the configured mode."""
+        """Get models to expose based on the configured mode.
+
+        Excludes models with unresolved protocol (None) since they
+        cannot be routed to any endpoint.
+        """
         result = []
 
         for model_id, model_info in self._models.items():
+            # Fail-closed: do not expose unresolved models
+            if not model_info.get("protocol"):
+                continue
+
             accounts_supporting = self._account_support.get(model_id, set())
             visible_accounts = accounts_supporting & eligible_account_names
 

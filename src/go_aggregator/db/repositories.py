@@ -590,22 +590,44 @@ class PriceSnapshotRepository:
         model_id: str,
         input_price_per_1k: float | None,
         output_price_per_1k: float | None,
+        *,
+        input_per_million_microdollars: int | None = None,
+        output_per_million_microdollars: int | None = None,
         cache_read_per_million_microdollars: int | None = None,
         cache_write_per_million_microdollars: int | None = None,
+        source: str = "catalog",
     ) -> None:
-        """Record a new price snapshot."""
+        """Record a new price snapshot.
+
+        Auto-converts legacy float prices to integer microdollars when
+        integer fields are not provided.
+        """
+        # Auto-convert legacy floats to integer microdollars
+        if input_per_million_microdollars is None and input_price_per_1k is not None:
+            input_per_million_microdollars = int(
+                round(input_price_per_1k * 1_000_000_000)
+            )
+        if output_per_million_microdollars is None and output_price_per_1k is not None:
+            output_per_million_microdollars = int(
+                round(output_price_per_1k * 1_000_000_000)
+            )
+
         await self._db.execute(
             "INSERT INTO model_price_snapshots "
             "(model_id, input_price_per_1k, output_price_per_1k, "
+            "input_per_million_microdollars, output_per_million_microdollars, "
             "cache_read_per_million_microdollars, "
-            "cache_write_per_million_microdollars) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "cache_write_per_million_microdollars, source) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 model_id,
                 input_price_per_1k,
                 output_price_per_1k,
+                input_per_million_microdollars,
+                output_per_million_microdollars,
                 cache_read_per_million_microdollars,
                 cache_write_per_million_microdollars,
+                source,
             ),
         )
 
@@ -615,18 +637,27 @@ class PriceSnapshotRepository:
         prices_dict: dict[str, float | None],
     ) -> None:
         """Record prices from a dictionary with input/output keys."""
+        input_micro = prices_dict.get("input_per_million_microdollars")
+        output_micro = prices_dict.get("output_per_million_microdollars")
         cache_read = prices_dict.get("cache_read_per_million_microdollars")
         cache_write = prices_dict.get("cache_write_per_million_microdollars")
         await self.record(
             model_id,
             input_price_per_1k=prices_dict.get("input_price_per_1k"),
             output_price_per_1k=prices_dict.get("output_price_per_1k"),
+            input_per_million_microdollars=int(input_micro)
+            if input_micro is not None
+            else None,
+            output_per_million_microdollars=int(output_micro)
+            if output_micro is not None
+            else None,
             cache_read_per_million_microdollars=int(cache_read)
             if cache_read is not None
             else None,
             cache_write_per_million_microdollars=int(cache_write)
             if cache_write is not None
             else None,
+            source=prices_dict.get("source", "catalog"),
         )
 
 

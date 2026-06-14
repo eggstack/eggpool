@@ -134,6 +134,13 @@ class RequestFinalizer:
                 cost_microdollars = selected.estimated_microdollars
                 exactness = "estimated"
 
+            # 2b. Ensure estimated cost never falls below reservation estimate
+            if (
+                exactness == "estimated"
+                and cost_microdollars < selected.estimated_microdollars
+            ):
+                cost_microdollars = selected.estimated_microdollars
+
             # 3. Finalize request only if pending (idempotent)
             db_request_id = selected.db_request_id
             status = self._outcome_to_status(data.outcome)

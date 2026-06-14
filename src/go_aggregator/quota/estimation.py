@@ -152,16 +152,15 @@ class AccountQuota:
         """Check if account is within quota limits.
 
         Uses the three persisted windows (5h, 7d, 30d) when available,
-        falling back to in-memory hourly/daily windows. Accounts above
-        capacity remain scoreable but receive high utilization scores.
-        This method returns True unless the account is definitively
-        exhausted by all three configured capacity thresholds.
+        falling back to in-memory hourly/daily windows. Returns False
+        (ineligible) when any configured capacity threshold is exceeded,
+        preventing further routing to this account.
         """
         cost_5h = self.get_persisted_cost_5h() + self.five_hour_offset
         cost_7d = self.get_persisted_cost_7d() + self.weekly_offset
         cost_30d = self.get_persisted_cost_30d() + self.monthly_offset
 
-        # Only consider exhausted if a capacity is configured and exceeded
+        # Consider exhausted if any configured capacity is exceeded
         if (
             self.capacity_5h_microdollars is not None
             and cost_5h >= self.capacity_5h_microdollars

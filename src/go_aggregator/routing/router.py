@@ -247,7 +247,7 @@ class Router:
         Verifies at least one combination where:
         - Account enabled
         - Credential loaded
-        - Account healthy
+        - Account and model healthy (circuit breaker, model disable)
         - Model available to account
         - Model protocol resolved
         - Account not excluded by quota policy
@@ -262,20 +262,22 @@ class Router:
             # Check credential loaded
             if not self._registry.get_api_key(state.name):
                 continue
-            # Check health
-            if (
-                self._health_manager is not None
-                and not self._health_manager.is_account_healthy(state.name)
-            ):
-                continue
             # Check quota within limits
             quota = self._quota_estimator.get_account_quota(state.name)
             if quota is not None and not quota.is_within_limits():
                 continue
-            # Check model availability
+            # Check model availability with model-level health
             all_models = self._catalog.cache.get_all_models()
             for model_id in all_models:
                 supporting = self._catalog.cache.get_supporting_accounts(model_id)
-                if state.name in supporting:
-                    return True
+                if state.name not in supporting:
+                    continue
+                # Use model-level health check (includes circuit breaker
+                # and model-specific disable, matching routing behavior)
+                if (
+                    self._health_manager is not None
+                    and not self._health_manager.is_model_healthy(state.name, model_id)
+                ):
+                    continue
+                return True
         return False

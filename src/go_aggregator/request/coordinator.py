@@ -237,7 +237,7 @@ class RequestCoordinator:
                     err,
                 )
                 # Finalize the failed attempt before retrying
-                await self._attempt_finalizer.finalize_failed_attempt(
+                finalized = await self._attempt_finalizer.finalize_failed_attempt(
                     attempt_id=selected.attempt_id,
                     reservation_id=selected.reservation_id,
                     data=AttemptFinalizationData(
@@ -246,6 +246,17 @@ class RequestCoordinator:
                         release_reason="attempt_retryable",
                     ),
                 )
+                # Clean up in-memory state when the attempt transitioned
+                if finalized:
+                    if self._quota_estimator is not None:
+                        self._quota_estimator.remove_reservation(
+                            selected.account_name,
+                            selected.estimated_microdollars,
+                        )
+                    if self._router is not None:
+                        self._router.decrement_active_request_count(
+                            selected.account_name
+                        )
                 # Apply health transitions for the failed account
                 self._apply_health_transition(
                     selected.account_name, err, context.model_id
@@ -290,22 +301,12 @@ class RequestCoordinator:
 
         async with self._select_lock, self._db.transaction():
             # 1. Get eligible account names excluding attempted ones
-            all_states = self._registry.get_enabled_states()
-            from go_aggregator.routing.eligibility import get_eligible_accounts
-
-            eligible_states = get_eligible_accounts(
-                all_states,
+            eligible_account_names = self._router.get_eligible_account_names(
                 context.model_id,
-                self._catalog.cache,
-                self._health_manager,
+                exclude_accounts=context.attempted_accounts
+                if context.attempted_accounts
+                else None,
             )
-            if context.attempted_accounts:
-                eligible_states = [
-                    s
-                    for s in eligible_states
-                    if s.name not in context.attempted_accounts
-                ]
-            eligible_account_names = [s.name for s in eligible_states]
 
             if not eligible_account_names:
                 raise ModelUnavailableError(
@@ -434,11 +435,13 @@ class RequestCoordinator:
                 return await self._execute_non_streaming(context, selected, attempt_num)
         except asyncio.CancelledError:
             # Client cancellation after selection - finalize the attempt
+            elapsed_ms = int((time.time() - context.started_at) * 1000)
             await self._finalizer.finalize(
                 selected,
                 FinalizationData(
                     outcome=FinalizationOutcome.CLIENT_CANCELLED,
                     error_class="CancelledError",
+                    upstream_latency_ms=elapsed_ms,
                 ),
             )
             raise
@@ -540,6 +543,7 @@ class RequestCoordinator:
                 reasoning_tokens=usage.reasoning_tokens if usage else 0,
                 thinking_characters=usage.thinking_characters if usage else 0,
                 first_byte_ms=0,
+                upstream_latency_ms=elapsed_ms,
                 bytes_emitted=len(body),
                 upstream_request_id=upstream_req_id,
             ),
@@ -713,6 +717,7 @@ class RequestCoordinator:
                         reasoning_tokens=usage_result.reasoning_tokens,
                         thinking_characters=usage_result.thinking_characters,
                         first_byte_ms=int(first_byte_ms) if first_byte_ms > 0 else None,
+                        upstream_latency_ms=int((time.time() - started) * 1000),
                         bytes_emitted=bytes_emitted,
                         upstream_request_id=resp_headers.get("x-request-id"),
                     ),
@@ -727,6 +732,7 @@ class RequestCoordinator:
                     FinalizationData(
                         outcome=FinalizationOutcome.CLIENT_CANCELLED,
                         first_byte_ms=int(first_byte_ms) if first_byte_ms > 0 else None,
+                        upstream_latency_ms=int((time.time() - started) * 1000),
                         bytes_emitted=bytes_emitted,
                         input_tokens=usage_result.input_tokens,
                         output_tokens=usage_result.output_tokens,
@@ -745,6 +751,7 @@ class RequestCoordinator:
                     FinalizationData(
                         outcome=FinalizationOutcome.MIDSTREAM_ERROR,
                         first_byte_ms=int(first_byte_ms) if first_byte_ms > 0 else None,
+                        upstream_latency_ms=int((time.time() - started) * 1000),
                         bytes_emitted=bytes_emitted,
                         input_tokens=usage_result.input_tokens,
                         output_tokens=usage_result.output_tokens,
@@ -860,6 +867,9 @@ class RequestCoordinator:
             )
         elif "ModelUnavailable" in error_class:
             self._health_manager.disable_model(account_name, model_id)
+            # Also mark unavailable in catalog cache so eligibility
+            # checks reflect the disabled state immediately
+            self._catalog.cache.mark_model_unavailable(account_name, model_id)
         else:
             self._health_manager.record_failure(
                 account_name, model_id=model_id, reason=error_class
@@ -879,11 +889,13 @@ class RequestCoordinator:
         resp_body: bytes,
     ) -> None:
         """Finalize a non-retryable client error (4xx)."""
+        elapsed_ms = int((time.time() - context.started_at) * 1000)
         await self._finalizer.finalize(
             selected,
             FinalizationData(
                 outcome=FinalizationOutcome.CLIENT_ERROR,
                 status_code=status_code,
+                upstream_latency_ms=elapsed_ms,
                 bytes_emitted=len(resp_body),
                 upstream_request_id=resp_headers.get("x-request-id"),
             ),
@@ -929,6 +941,7 @@ class RequestCoordinator:
                     status_code=status_code,
                     error_class=error_class,
                     error_detail=error_detail,
+                    upstream_latency_ms=elapsed_ms,
                 ),
             )
         elif context.client_metadata.get("db_request_id") is not None:
