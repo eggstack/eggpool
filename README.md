@@ -190,6 +190,18 @@ tests/
 - [x] Phase 8: Statistics API and dashboard
 - [x] Phase 9: Deployment hardening
 
+## Known Limitations
+
+- Usage is authoritative only for traffic that passes through the proxy.
+- OpenCode may not expose exact subscription reset windows.
+- Rolling seven-day and thirty-day windows are approximations.
+- Interrupted streams may not contain terminal usage.
+- Published prices may not perfectly match upstream subscription accounting.
+- Accounts used outside the proxy require manual offsets for accurate balancing.
+- Model metadata and protocol behavior can change without notice.
+- Aggregating multiple subscriptions may not be an explicitly supported OpenCode deployment pattern.
+- LAN-only deployment reduces but does not eliminate security obligations.
+
 ## License
 
 MIT
