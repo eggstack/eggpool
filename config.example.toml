@@ -49,7 +49,7 @@ store_request_content = false
 refresh_interval_s = 60
 
 [security]
-allowed_hosts = ["localhost", "127.0.0.1"]
+allowed_hosts = []
 cors_origins = []
 trust_proxy_headers = false
 redact_headers = ["authorization", "x-api-key"]

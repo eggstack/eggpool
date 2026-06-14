@@ -1,4 +1,10 @@
-"""Immutable runtime generation for atomic config reload."""
+"""Immutable runtime generation for atomic config reload.
+
+NOTE: Hot-reload via SIGHUP is not currently supported. Configuration
+changes (accounts, weights, offsets, upstream URL, etc.) require a
+service restart. The RuntimeGeneration dataclass is ready for future
+atomic swap support but no signal handler is wired.
+"""
 
 from __future__ import annotations
 

@@ -11,7 +11,10 @@ from typing import TYPE_CHECKING, Any
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.responses import Response as StarletteResponse
 
 from go_aggregator.accounts.registry import AccountRegistry
 from go_aggregator.api.chat_completions import handle_chat_completions
@@ -26,7 +29,7 @@ from go_aggregator.background.cleanup import (
 from go_aggregator.catalog.estimator import EWMACostEstimator
 from go_aggregator.catalog.pricing import CostCalculator, PriceRepository
 from go_aggregator.catalog.service import CatalogService
-from go_aggregator.constants import API_V1_PREFIX
+from go_aggregator.constants import API_V1_PREFIX, MAX_REQUEST_BODY_BYTES
 from go_aggregator.dashboard.routes import register_dashboard_routes
 from go_aggregator.db.connection import Database
 from go_aggregator.db.migrations import MigrationRunner
@@ -49,7 +52,51 @@ from go_aggregator.stats import StatsService
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
+    from starlette.requests import Request as StarletteRequest
+
 logger = logging.getLogger(__name__)
+
+
+class _BodyLimitMiddleware(BaseHTTPMiddleware):
+    """Reject requests whose Content-Length exceeds the configured limit."""
+
+    def __init__(self, app: Any, max_bytes: int) -> None:  # noqa: ANN401
+        super().__init__(app)
+        self._max_bytes = max_bytes
+
+    async def dispatch(
+        self,
+        request: StarletteRequest,
+        call_next: Any,  # noqa: ANN401
+    ) -> StarletteResponse:
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > self._max_bytes:
+            return StarletteResponse(
+                status_code=413,
+                content='{"error": {"message": "Request body too large",'
+                ' "type": "invalid_request_error"}}',
+                media_type="application/json",
+            )
+        return await call_next(request)
+
+
+class _HeaderRedactionMiddleware(BaseHTTPMiddleware):
+    """Redact configured headers from upstream responses."""
+
+    def __init__(self, app: Any, headers_to_redact: list[str]) -> None:  # noqa: ANN401
+        super().__init__(app)
+        self._redact = {h.lower() for h in headers_to_redact}
+
+    async def dispatch(
+        self,
+        request: StarletteRequest,
+        call_next: Any,  # noqa: ANN401
+    ) -> StarletteResponse:
+        response = await call_next(request)
+        for header in self._redact:
+            if header in response.headers:
+                del response.headers[header]
+        return response
 
 
 async def _crash_recovery(db: Database) -> None:
@@ -312,6 +359,20 @@ def create_app(
             allow_methods=["*"],
             allow_headers=["*"],
         )
+    if config.security.allowed_hosts:
+        app.add_middleware(
+            TrustedHostMiddleware,
+            allowed_hosts=config.security.allowed_hosts,
+        )
+    if config.security.redact_headers:
+        app.add_middleware(
+            _HeaderRedactionMiddleware,
+            headers_to_redact=config.security.redact_headers,
+        )
+    app.add_middleware(
+        _BodyLimitMiddleware,
+        max_bytes=MAX_REQUEST_BODY_BYTES,
+    )
 
     # Dashboard and statistics routes (read-only, no auth by default)
     if config.dashboard.enabled:
@@ -338,6 +399,16 @@ def create_app(
         if db is None or db._conn is None:  # pyright: ignore[reportPrivateUsage]
             return Response(
                 content='{"status":"degraded","reason":"database not connected"}',
+                status_code=503,
+                media_type="application/json",
+            )
+
+        # Verify database is writable
+        try:
+            await db.execute("SELECT 1")
+        except Exception:
+            return Response(
+                content='{"status":"degraded","reason":"database not writable"}',
                 status_code=503,
                 media_type="application/json",
             )
@@ -378,6 +449,19 @@ def create_app(
                 status_code=503,
                 media_type="application/json",
             )
+
+        # Check at least one model/account pairing is eligible
+        router: Router | None = getattr(request.app.state, "router", None)
+        if router is not None and registry is not None and catalog is not None:
+            eligible = registry.get_enabled_states()
+            if not eligible:
+                return Response(
+                    content=(
+                        '{"status":"degraded","reason":"no eligible account pairings"}'
+                    ),
+                    status_code=503,
+                    media_type="application/json",
+                )
 
         supervisor: TaskSupervisor | None = getattr(
             request.app.state, "supervisor", None

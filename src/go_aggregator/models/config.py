@@ -90,7 +90,7 @@ class DashboardConfig(BaseModel):
 class SecurityConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    allowed_hosts: list[str] = ["localhost", "127.0.0.1"]
+    allowed_hosts: list[str] = []
     cors_origins: list[str] = []
     trust_proxy_headers: bool = False
     redact_headers: list[str] = ["authorization", "x-api-key"]

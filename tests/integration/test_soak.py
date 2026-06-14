@@ -378,3 +378,49 @@ async def test_catalog_refresh_during_requests(
         "SELECT status FROM requests WHERE status = 'completed'"
     )
     assert len(req_rows) == 5
+
+
+@pytest.mark.asyncio
+async def test_repeated_restart_recovery(
+    coordinator: RequestCoordinator,
+    db: Database,
+) -> None:
+    """Simulate repeated crash/recovery cycles without data corruption."""
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+            side_effect=_non_stream_handler
+        )
+
+        # Run some requests
+        for i in range(5):
+            context = ProxyRequestContext(
+                request_id=f"soak-restart-{i}",
+                protocol="openai",
+                model_id="gpt-4",
+                streaming=False,
+                original_body=json.dumps(
+                    {
+                        "model": "gpt-4",
+                        "messages": [{"role": "user", "content": f"Msg {i}"}],
+                    }
+                ).encode(),
+                incoming_headers={"content-type": "application/json"},
+            )
+            response = await coordinator.execute(context)
+            assert response.status_code == 200
+
+    # Simulate crash recovery (idempotent)
+    from go_aggregator.app import _crash_recovery
+
+    for _ in range(3):
+        await _crash_recovery(db)
+
+    # All requests should still be completed (not corrupted by recovery)
+    req_rows = await db.fetch_all("SELECT status FROM requests")
+    assert all(row["status"] == "completed" for row in req_rows)
+
+    # No active reservations remain
+    active_resv = await db.fetch_all(
+        "SELECT * FROM reservations WHERE status = 'active'"
+    )
+    assert len(active_resv) == 0
