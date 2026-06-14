@@ -8,13 +8,15 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
+import httpx
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from go_aggregator.auth import require_auth
 from go_aggregator.proxy.client import (
+    filter_request_headers,
     filter_response_headers,
-    forward_to_upstream,
 )
+from go_aggregator.proxy.streaming import relay_streaming_response
 
 if TYPE_CHECKING:
     from fastapi import Request
@@ -87,18 +89,117 @@ async def handle_chat_completions(
 
     # Forward to upstream
     request_headers = dict(request.headers)
-    response = await forward_to_upstream(
-        client,
-        "POST",
-        "/chat/completions",
-        api_key,
-        request_headers,
-        body,
-    )
+    filtered_headers = filter_request_headers(request_headers, api_key)
 
-    # Record request in database
+    is_stream = payload.get("stream", False)
+
+    try:
+        # For streaming, we need to stream the response
+        if is_stream:
+            upstream_response = client.stream(
+                "POST",
+                "/chat/completions",
+                headers=filtered_headers,
+                content=body,
+                timeout=300.0,
+            )
+        else:
+            upstream_response = await client.request(
+                "POST",
+                "/chat/completions",
+                headers=filtered_headers,
+                content=body,
+                timeout=300.0,
+            )
+    except httpx.ConnectError:
+        logger.exception("Connection error to upstream")
+        return JSONResponse(
+            status_code=502,
+            content={"error": "Upstream connection failed"},
+        )
+    except httpx.TimeoutException:
+        logger.exception("Timeout connecting to upstream")
+        return JSONResponse(
+            status_code=504,
+            content={"error": "Upstream timeout"},
+        )
+
+    # Handle streaming response
+    if is_stream:
+
+        async def stream_generator():
+            """Generate streaming response with usage tracking."""
+            async with upstream_response as response:
+                # Filter response headers
+                response_headers = filter_response_headers(response.headers)
+                response_headers["x-proxy-request-id"] = proxy_request_id
+
+                # Stream the response
+                first_chunk = True
+                final_metrics = None
+                async for chunk, metrics in relay_streaming_response(
+                    response, "openai", proxy_request_id
+                ):
+                    if first_chunk:
+                        first_chunk = False
+                    final_metrics = metrics
+                    yield f"{chunk}\n"
+
+                # Record request in database after streaming completes
+                elapsed_ms = int((time.time() - start_time) * 1000)
+                has_usage = (
+                    final_metrics is not None and final_metrics.usage is not None
+                )
+                input_tokens = final_metrics.usage.input_tokens if has_usage else 0
+                output_tokens = final_metrics.usage.output_tokens if has_usage else 0
+
+                await db.execute(
+                    """
+                    INSERT INTO requests (
+                        account_id, model_id, started_at, completed_at,
+                        status, input_tokens, output_tokens,
+                        cost_microdollars, upstream_latency_ms
+                    ) VALUES (
+                        (SELECT id FROM accounts WHERE name = ?),
+                        ?,
+                        datetime('now'),
+                        datetime('now'),
+                        'completed',
+                        ?, ?, 0, ?
+                    )
+                    """,
+                    (selected.name, model_id, input_tokens, output_tokens, elapsed_ms),
+                )
+                await db.connection.commit()
+
+        return StreamingResponse(
+            stream_generator(),
+            status_code=200,
+            headers={"x-proxy-request-id": proxy_request_id},
+            media_type="text/event-stream",
+        )
+
+    # Handle non-streaming response
+    response = upstream_response
     elapsed_ms = int((time.time() - start_time) * 1000)
     status = "completed" if response.status_code < 400 else "error"
+
+    # Filter response headers
+    response_headers = filter_response_headers(response.headers)
+    response_headers["x-proxy-request-id"] = proxy_request_id
+
+    # Extract usage from response
+    input_tokens = 0
+    output_tokens = 0
+    try:
+        resp_json = response.json()
+        usage = resp_json.get("usage", {})
+        input_tokens = usage.get("prompt_tokens", 0)
+        output_tokens = usage.get("completion_tokens", 0)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Record request in database
     await db.execute(
         """
         INSERT INTO requests (
@@ -111,26 +212,12 @@ async def handle_chat_completions(
             datetime('now'),
             datetime('now'),
             ?,
-            0, 0, 0, ?
+            ?, ?, 0, ?
         )
         """,
-        (selected.name, model_id, status, elapsed_ms),
+        (selected.name, model_id, status, input_tokens, output_tokens, elapsed_ms),
     )
     await db.connection.commit()
-
-    # Filter response headers
-    response_headers = filter_response_headers(response.headers)
-    response_headers["x-proxy-request-id"] = proxy_request_id
-
-    # Return response
-    if payload.get("stream", False):
-        # Streaming response - for Phase 4
-        return StreamingResponse(
-            iter([response.content]),
-            status_code=response.status_code,
-            headers=response_headers,
-            media_type=response.headers.get("content-type", "application/json"),
-        )
 
     content_type = response.headers.get("content-type", "")
     if content_type.startswith("application/json"):
