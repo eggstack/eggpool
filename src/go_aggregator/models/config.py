@@ -67,6 +67,7 @@ class RoutingConfig(BaseModel):
     inflight_penalty: int = 100_000
     health_penalty: int = 500_000
     randomize_near_ties: bool = True
+    quota_exhausted_cooldown_seconds: float = 300.0
 
 
 class LimitsConfig(BaseModel):
@@ -115,6 +116,8 @@ class ModelOverrideConfig(BaseModel):
     max_tokens: int | None = None
     input_price_per_1k: float | None = None
     output_price_per_1k: float | None = None
+    cache_read_per_million_microdollars: int | None = None
+    cache_write_per_million_microdollars: int | None = None
 
 
 class AppConfig(BaseModel):

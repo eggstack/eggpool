@@ -155,6 +155,7 @@ class CatalogService:
                     protocol=row["protocol"],
                     capabilities=caps,
                     source_metadata=meta,
+                    protocol_source=row["protocol_source"],
                 )
 
             # Load account-model relationships
@@ -185,6 +186,14 @@ class CatalogService:
 
         async with self._db.transaction():
             for model_id, model_info in self._cache.get_all_models().items():
+                protocol = model_info.get("protocol")
+                if protocol not in ("openai", "anthropic"):
+                    logger.warning(
+                        "Skipping unresolved model during catalog persistence: %s",
+                        model_id,
+                    )
+                    continue
+
                 # Use preserved protocol source from resolution
                 protocol_source = model_info.get("protocol_source")
                 if protocol_source == "unresolved":
@@ -250,6 +259,8 @@ class CatalogService:
         """
         input_price: float | None = None
         output_price: float | None = None
+        cache_read_price: float | None = None
+        cache_write_price: float | None = None
         source = "upstream"
 
         # 1. Check TOML override (authoritative)
@@ -262,6 +273,12 @@ class CatalogService:
             input_price = override.input_price_per_1k
             output_price = override.output_price_per_1k
             source = "config"
+
+        # 1b. Check TOML overrides for cache rates
+        if override and override.cache_read_per_million_microdollars is not None:
+            cache_read_price = override.cache_read_per_million_microdollars
+        if override and override.cache_write_per_million_microdollars is not None:
+            cache_write_price = override.cache_write_per_million_microdollars
 
         # 2. Check upstream source_metadata for pricing
         if input_price is None and output_price is None:
@@ -281,6 +298,14 @@ class CatalogService:
             if output_price is None:
                 output_price = meta.get("output_price_per_1k")
 
+        # 2b. Check upstream metadata for cache pricing
+        if cache_read_price is None and cache_write_price is None:
+            meta = model_info.get("source_metadata", {})
+            if cache_read_price is None:
+                cache_read_price = meta.get("cache_read_per_million_microdollars")
+            if cache_write_price is None:
+                cache_write_price = meta.get("cache_write_per_million_microdollars")
+
         if input_price is None and output_price is None:
             return
 
@@ -290,14 +315,27 @@ class CatalogService:
         if latest is not None:
             old_input = latest.get("input_price_per_1k")
             old_output = latest.get("output_price_per_1k")
-            if old_input == input_price and old_output == output_price:
+            old_cache_read = latest.get("cache_read_per_million_microdollars")
+            old_cache_write = latest.get("cache_write_per_million_microdollars")
+            if (
+                old_input == input_price
+                and old_output == output_price
+                and old_cache_read == cache_read_price
+                and old_cache_write == cache_write_price
+            ):
                 return  # No change, skip insert
 
         # 4. Insert new snapshot
+        cache_read_int = int(cache_read_price) if cache_read_price is not None else None
+        cache_write_int = (
+            int(cache_write_price) if cache_write_price is not None else None
+        )
         await snapshot_repo.record(
             model_id,
             input_price_per_1k=input_price,
             output_price_per_1k=output_price,
+            cache_read_per_million_microdollars=cache_read_int,
+            cache_write_per_million_microdollars=cache_write_int,
             source=source,
         )
         logger.debug(

@@ -82,6 +82,17 @@ class HealthManager:
             health.health_state = "authentication_failed"
             health.is_healthy = False
 
+    def record_quota_exhausted(
+        self,
+        account_name: str,
+        cooldown_seconds: float,
+    ) -> None:
+        """Place account into a bounded quota-exhausted cooldown."""
+        health = self.get_account_health(account_name)
+        health.health_state = "quota_exhausted"
+        health.cooldown_until = time.time() + cooldown_seconds
+        health.is_healthy = False
+
     def record_rate_limit(self, account_name: str, retry_after_seconds: float) -> None:
         """Record a rate limit with explicit cooldown."""
         health = self.get_account_health(account_name)
@@ -127,6 +138,12 @@ class HealthManager:
     def is_account_healthy(self, account_name: str) -> bool:
         """Check if an account is healthy."""
         health = self.get_account_health(account_name)
+        if (
+            not health.is_healthy
+            and health.cooldown_until > 0
+            and not health.is_disabled()
+        ):
+            health.is_healthy = True
         return health.is_healthy and not health.is_disabled()
 
     def is_model_healthy(self, account_name: str, model_id: str) -> bool:

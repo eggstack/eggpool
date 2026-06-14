@@ -35,6 +35,7 @@ unknown_request_reservation_microdollars = 1000000
 inflight_penalty = 100000
 health_penalty = 500000
 randomize_near_ties = true
+quota_exhausted_cooldown_seconds = 300
 
 [limits]
 five_hour_microdollars = 12000000

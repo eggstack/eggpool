@@ -48,7 +48,7 @@ All must pass with zero errors.
 - Every retryable failed attempt must reach terminal state before the next attempt
 - Each attempt reservation is released exactly once via AttemptFinalizer
 - SQLite transactions are serialized across concurrent tasks via asyncio.Lock + ContextVar
-- Readiness probes use savepoints, never roll back request lifecycle work
+- Readiness probes use `probe_writable()` with owned transactions, never interfere with request lifecycle work
 - Successful responses without terminal usage consume the reservation estimate
 - Unknown model protocols are rejected before durable selection
 
@@ -66,6 +66,7 @@ For detailed architecture documentation, see `architecture/` directory:
 - `phase-10-integration-hardening.md`: Integration hardening and correct request lifecycle
 - `phase-12-executable-correctness-pass.md`: Executable correctness pass
 - `phase-13-attempt-transaction-hardening.md`: Attempt lifecycle and transaction hardening
+- `phase-14-deployment-blockers-and-operational-hardening.md`: Deployment blockers and operational hardening
 
 ## Import Organization
 

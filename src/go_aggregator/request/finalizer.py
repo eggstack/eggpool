@@ -58,6 +58,7 @@ class FinalizationData:
     upstream_request_id: str | None = None
     error_class: str | None = None
     error_detail: str | None = None
+    health_already_applied: bool = False
 
 
 class RequestFinalizer:
@@ -185,36 +186,36 @@ class RequestFinalizer:
                     selected.reservation_id, reason=status
                 )
 
-            # 6. Insert account event for significant failures
-            if (
-                data.outcome
-                in (
-                    FinalizationOutcome.UPSTREAM_ERROR,
-                    FinalizationOutcome.INTERRUPTED,
-                )
-                and data.error_class
-            ):
-                try:
-                    from go_aggregator.db.repositories import AccountRepository
-
-                    account_repo = AccountRepository(self._db)
-                    account_id = await account_repo.get_id_by_name(
-                        selected.account_name
+                # 6. Insert account event for significant failures
+                if (
+                    data.outcome
+                    in (
+                        FinalizationOutcome.UPSTREAM_ERROR,
+                        FinalizationOutcome.INTERRUPTED,
                     )
-                    if account_id is not None:
-                        event_repo = AccountEventRepository(self._db)
-                        await event_repo.record(
-                            account_id=account_id,
-                            event_type=data.outcome.value,
-                            details=json.dumps(
-                                {
-                                    "error_class": data.error_class,
-                                    "status_code": data.status_code,
-                                }
-                            ),
+                    and data.error_class
+                ):
+                    try:
+                        from go_aggregator.db.repositories import AccountRepository
+
+                        account_repo = AccountRepository(self._db)
+                        account_id = await account_repo.get_id_by_name(
+                            selected.account_name
                         )
-                except Exception:
-                    logger.debug("Failed to record account event", exc_info=True)
+                        if account_id is not None:
+                            event_repo = AccountEventRepository(self._db)
+                            await event_repo.record(
+                                account_id=account_id,
+                                event_type=data.outcome.value,
+                                details=json.dumps(
+                                    {
+                                        "error_class": data.error_class,
+                                        "status_code": data.status_code,
+                                    }
+                                ),
+                            )
+                    except Exception:
+                        logger.debug("Failed to record account event", exc_info=True)
 
             # Commit happens via context manager
 
@@ -251,7 +252,7 @@ class RequestFinalizer:
                     snapshot.persisted_snapshot.cost_30d += cost_microdollars
 
             # 5. Update health state
-            if self._health_manager is not None:
+            if self._health_manager is not None and not data.health_already_applied:
                 mid = _get_model_id(selected)
                 if data.outcome == FinalizationOutcome.COMPLETED:
                     self._health_manager.record_success(selected.account_name, mid)

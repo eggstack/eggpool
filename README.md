@@ -142,7 +142,8 @@ src/go_aggregator/
 │       ├── 0007_price_cache_rates.sql
 │       ├── 0008_proxy_request_identity.sql
 │       ├── 0009_model_protocol_source.sql
-│       └── 0010_health_probe.sql
+│       ├── 0010_health_probe.sql
+│       └── 0011_model_resolution_status.sql
 ├── request/
 │   ├── coordinator.py       # Central request lifecycle orchestrator
 │   ├── attempt_finalizer.py # Per-attempt terminal lifecycle
@@ -180,6 +181,7 @@ tests/
 - [x] Phase 10: Integration hardening and correct request lifecycle
 - [x] Phase 12: Executable correctness pass
 - [x] Phase 13: Attempt lifecycle and transaction hardening
+- [x] Phase 14: Deployment blockers and operational hardening
 
 ## Known Limitations
 
@@ -187,6 +189,7 @@ tests/
 - Weekly and monthly quota windows are rolling approximations unless OpenCode exposes authoritative subscription resets.
 - Interrupted streams may not contain terminal usage.
 - Published prices may not perfectly match upstream subscription accounting.
+- Context-tiered prices are conservatively estimated until pricing-rule support is added.
 - Accounts used outside the proxy require manual offsets for accurate balancing.
 - Model metadata and protocol behavior can change without notice.
 - Both `/v1/chat/completions` (OpenAI) and `/v1/messages` (Anthropic) endpoints are required because mixed protocol catalogs resolve per-model.

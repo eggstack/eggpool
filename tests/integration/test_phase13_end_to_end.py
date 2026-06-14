@@ -1755,23 +1755,23 @@ class TestProtocolFamilyMappings:
         assert resolution.source == "family_mapping"
 
     @pytest.mark.asyncio
-    async def test_minimax_family_resolves_to_openai(self) -> None:
-        """MiniMax models should resolve to openai protocol."""
+    async def test_minimax_family_resolves_to_anthropic(self) -> None:
+        """MiniMax models should resolve to anthropic protocol."""
         from go_aggregator.catalog.protocols import ModelProtocolResolver
 
         resolver = ModelProtocolResolver()
-        resolution = resolver.resolve_from_catalog("minimax-text-01")
-        assert resolution.protocol == "openai"
+        resolution = resolver.resolve_from_catalog("minimax-m3")
+        assert resolution.protocol == "anthropic"
         assert resolution.source == "family_mapping"
 
     @pytest.mark.asyncio
-    async def test_qwen_family_resolves_to_openai(self) -> None:
-        """Qwen models should resolve to openai protocol."""
+    async def test_qwen3_family_resolves_to_anthropic(self) -> None:
+        """Qwen3 models should resolve to anthropic protocol."""
         from go_aggregator.catalog.protocols import ModelProtocolResolver
 
         resolver = ModelProtocolResolver()
-        resolution = resolver.resolve_from_catalog("qwen-max")
-        assert resolution.protocol == "openai"
+        resolution = resolver.resolve_from_catalog("qwen3.7-max")
+        assert resolution.protocol == "anthropic"
         assert resolution.source == "family_mapping"
 
     @pytest.mark.asyncio

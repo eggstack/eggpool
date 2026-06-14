@@ -136,6 +136,7 @@ class RequestCoordinator:
         cost_calculator: CostCalculator | None = None,
         quota_estimator: QuotaEstimator | None = None,
         max_retry_attempts: int = DEFAULT_MAX_RETRY_ATTEMPTS,
+        quota_exhausted_cooldown_seconds: float = 300.0,
     ) -> None:
         self._registry = registry
         self._catalog = catalog
@@ -152,6 +153,7 @@ class RequestCoordinator:
         self._classifier = RetryClassifier()
         self._select_lock = asyncio.Lock()
         self._max_retry_attempts = max_retry_attempts
+        self._quota_exhausted_cooldown_seconds = quota_exhausted_cooldown_seconds
 
         # Build the attempt finalizer with all dependencies
         self._attempt_finalizer = AttemptFinalizer(
@@ -257,10 +259,11 @@ class RequestCoordinator:
                         self._router.decrement_active_request_count(
                             selected.account_name
                         )
-                # Apply health transitions for the failed account
-                self._apply_health_transition(
-                    selected.account_name, err, context.model_id
-                )
+                # Apply health transitions only when the attempt transitioned
+                if finalized:
+                    self._apply_health_transition(
+                        selected.account_name, err, context.model_id
+                    )
                 if attempt_num >= self._max_retry_attempts:
                     break
                 continue
@@ -539,7 +542,7 @@ class RequestCoordinator:
                 input_tokens=usage.input_tokens if usage else 0,
                 output_tokens=usage.output_tokens if usage else 0,
                 cache_read_tokens=usage.cache_read_tokens if usage else 0,
-                cache_write_tokens=0,
+                cache_write_tokens=usage.cache_creation_tokens if usage else 0,
                 reasoning_tokens=usage.reasoning_tokens if usage else 0,
                 thinking_characters=usage.thinking_characters if usage else 0,
                 first_byte_ms=0,
@@ -615,39 +618,43 @@ class RequestCoordinator:
             ) from err
 
         # Check upstream status before creating downstream response
-        if response.status_code >= 400:
-            await response.aread()
-            resp_headers = dict(response.headers)
-            resp_body = response.content
+        try:
+            if response.status_code >= 400:
+                await response.aread()
+                resp_headers = dict(response.headers)
+                resp_body = response.content
 
-            error = self._classify_upstream_error(
-                response.status_code, resp_headers, body=resp_body
-            )
-            if error is not None:
-                raise _RetryableUpstreamError(
-                    str(error),
+                error = self._classify_upstream_error(
+                    response.status_code, resp_headers, body=resp_body
+                )
+                if error is not None:
+                    raise _RetryableUpstreamError(
+                        str(error),
+                        status_code=response.status_code,
+                        error_class=type(error).__name__,
+                        upstream_response=(
+                            response.status_code,
+                            resp_headers,
+                            resp_body,
+                        ),
+                    ) from error
+
+                # Non-retryable client error - finalize and raise for pass-through
+                await self._finalize_non_retryable(
+                    context, selected, response.status_code, resp_headers, resp_body
+                )
+                raise _NonRetryableUpstreamError(
+                    f"Upstream returned {response.status_code}",
                     status_code=response.status_code,
-                    error_class=type(error).__name__,
                     upstream_response=(
                         response.status_code,
                         resp_headers,
                         resp_body,
                     ),
-                ) from error
-
-            # Non-retryable client error - finalize and raise for pass-through
-            await self._finalize_non_retryable(
-                context, selected, response.status_code, resp_headers, resp_body
-            )
-            raise _NonRetryableUpstreamError(
-                f"Upstream returned {response.status_code}",
-                status_code=response.status_code,
-                upstream_response=(
-                    response.status_code,
-                    resp_headers,
-                    resp_body,
-                ),
-            )
+                )
+        finally:
+            if response.status_code >= 400:
+                await response.aclose()
 
         # Build the response headers
         resp_headers = filter_response_headers(response.headers, streaming=True)
@@ -713,7 +720,7 @@ class RequestCoordinator:
                         input_tokens=usage_result.input_tokens,
                         output_tokens=usage_result.output_tokens,
                         cache_read_tokens=usage_result.cache_read_tokens,
-                        cache_write_tokens=0,
+                        cache_write_tokens=usage_result.cache_creation_tokens,
                         reasoning_tokens=usage_result.reasoning_tokens,
                         thinking_characters=usage_result.thinking_characters,
                         first_byte_ms=int(first_byte_ms) if first_byte_ms > 0 else None,
@@ -737,6 +744,7 @@ class RequestCoordinator:
                         input_tokens=usage_result.input_tokens,
                         output_tokens=usage_result.output_tokens,
                         cache_read_tokens=usage_result.cache_read_tokens,
+                        cache_write_tokens=usage_result.cache_creation_tokens,
                         reasoning_tokens=usage_result.reasoning_tokens,
                         thinking_characters=usage_result.thinking_characters,
                     ),
@@ -756,6 +764,7 @@ class RequestCoordinator:
                         input_tokens=usage_result.input_tokens,
                         output_tokens=usage_result.output_tokens,
                         cache_read_tokens=usage_result.cache_read_tokens,
+                        cache_write_tokens=usage_result.cache_creation_tokens,
                         reasoning_tokens=usage_result.reasoning_tokens,
                         thinking_characters=usage_result.thinking_characters,
                         error_class=type(exc).__name__,
@@ -862,8 +871,9 @@ class RequestCoordinator:
             retry_after = err.retry_after or 60.0
             self._health_manager.record_rate_limit(account_name, retry_after)
         elif "QuotaExhausted" in error_class:
-            self._health_manager.record_failure(
-                account_name, model_id=model_id, reason="quota_exhausted"
+            self._health_manager.record_quota_exhausted(
+                account_name,
+                self._quota_exhausted_cooldown_seconds,
             )
         elif "ModelUnavailable" in error_class:
             self._health_manager.disable_model(account_name, model_id)
@@ -942,6 +952,7 @@ class RequestCoordinator:
                     error_class=error_class,
                     error_detail=error_detail,
                     upstream_latency_ms=elapsed_ms,
+                    health_already_applied=True,
                 ),
             )
         elif context.client_metadata.get("db_request_id") is not None:

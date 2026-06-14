@@ -97,26 +97,17 @@ async def cleanup_old_events(
 async def reconcile_expired_reservations(
     db: Database,
     quota_estimator: QuotaEstimator | None = None,
+    router: Any | None = None,
 ) -> int:
-    """Release reservations past their expiry inside a transaction.
+    """Release reservations past their expiry atomically.
 
-    Optionally reconciles in-memory reservation totals so that expired
-    reservations are removed from the quota estimator's tracking.
+    Uses UPDATE ... RETURNING inside a single transaction so that only
+    rows actually transitioned by this call are reconciled.  No other
+    task can race the same rows.
 
     Returns the number of reservations reconciled.
     """
-    # Collect expired reservations for in-memory sync before releasing
-    expired_rows: list[dict[str, Any]] = []
-    if quota_estimator is not None:
-        expired_rows = [
-            dict(r)
-            for r in await db.fetch_all(
-                "SELECT id, account_id, estimated_microdollars FROM reservations "
-                "WHERE status = 'active' "
-                "AND expires_at IS NOT NULL "
-                "AND expires_at < CURRENT_TIMESTAMP"
-            )
-        ]
+    transitioned_rows: list[dict[str, Any]] = []
 
     async with db.transaction():
         cursor = await db.execute(
@@ -128,13 +119,16 @@ async def reconcile_expired_reservations(
             WHERE status = 'active'
               AND expires_at IS NOT NULL
               AND expires_at < CURRENT_TIMESTAMP
+            RETURNING id, account_id, estimated_microdollars
             """,
         )
-    count = cursor.rowcount or 0
+        transitioned_rows = [dict(row) for row in await cursor.fetchall()]
 
-    # Sync in-memory reservation tracking for expired reservations
-    if quota_estimator is not None and expired_rows:
-        for row in expired_rows:
+    count = len(transitioned_rows)
+
+    # Sync in-memory reservation tracking for the rows we actually transitioned
+    if quota_estimator is not None and transitioned_rows:
+        for row in transitioned_rows:
             account_id = row["account_id"]
             estimated_microdollars = row["estimated_microdollars"] or 0
             if estimated_microdollars <= 0:
@@ -146,6 +140,9 @@ async def reconcile_expired_reservations(
             if acct_row is not None:
                 account_name = acct_row["name"]
                 quota_estimator.remove_reservation(account_name, estimated_microdollars)
+            # Also decrement active request count if router is available
+            if router is not None and acct_row is not None:
+                router.decrement_active_request_count(acct_row["name"])
 
     if count > 0:
         logger.info("Reconciled %d expired reservations", count)

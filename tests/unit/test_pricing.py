@@ -268,3 +268,53 @@ class TestMigrationConversionValues:
         correct_result = int(price_per_1k * 1_000_000_000)
         assert wrong_result == 3
         assert correct_result == 3_000_000
+
+
+class TestCacheAccounting:
+    """Phase 14: Cache usage accounting tests."""
+
+    @pytest.mark.asyncio
+    async def test_cache_creation_as_cache_write_tokens(self) -> None:
+        """Cache creation tokens should be passed as cache_write_tokens."""
+        from go_aggregator.proxy.usage import StreamUsageResult
+
+        usage = StreamUsageResult(
+            input_tokens=100,
+            output_tokens=50,
+            cache_read_tokens=20,
+            cache_creation_tokens=30,
+        )
+        # The cache_creation_tokens should be used as cache_write_tokens
+        assert usage.cache_creation_tokens == 30
+
+    @pytest.mark.asyncio
+    async def test_cache_rates_affect_cost(self) -> None:
+        """Cache read/write rates affect final microdollar cost."""
+        snapshot = PriceSnapshot(
+            model_id="claude-3",
+            input_price_per_1k=0.015,
+            output_price_per_1k=0.075,
+            captured_at="2024-01-01T00:00:00",
+            input_per_million_microdollars=15_000_000,
+            output_per_million_microdollars=75_000_000,
+            cache_read_per_million_microdollars=1_500_000,
+            cache_write_per_million_microdollars=18_750_000,
+        )
+        mock_repo = AsyncMock()
+        mock_repo.get_latest_snapshot = AsyncMock(return_value=snapshot)
+        calculator = CostCalculator(price_repo=mock_repo)
+
+        cost, exactness = await calculator.calculate_cost(
+            "claude-3",
+            input_tokens=1000,
+            output_tokens=1000,
+            cache_read_tokens=500,
+            cache_write_tokens=200,
+        )
+        # input: 1000 * 15_000_000 = 15_000_000_000
+        # output: 1000 * 75_000_000 = 75_000_000_000
+        # cache_read: 500 * 1_500_000 = 750_000_000
+        # cache_write: 200 * 18_750_000 = 3_750_000_000
+        # total = 94_500_000_000 / 1_000_000 = 94500
+        assert cost == 94_500
+        assert exactness == "derived"

@@ -299,6 +299,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         cost_calculator=cost_calculator,
         quota_estimator=router._quota_estimator,  # noqa: SLF001
         max_retry_attempts=1 + config.routing.max_retries_before_stream,
+        quota_exhausted_cooldown_seconds=config.routing.quota_exhausted_cooldown_seconds,
     )
     app.state.coordinator = coordinator
 
@@ -320,7 +321,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             await cleanup_old_requests(db, config.dashboard.retain_request_stats_days)
             # Reconcile expired reservations and sync in-memory state
             await reconcile_expired_reservations(
-                db, quota_estimator=router._quota_estimator
+                db, quota_estimator=router._quota_estimator, router=router
             )
 
     supervisor.register("retention_cleanup", _retention_cleanup)
@@ -448,16 +449,8 @@ def create_app(
                 media_type="application/json",
             )
 
-        # Real writeability probe: insert one row inside a savepoint, then roll back
-        try:
-            await db.execute("SAVEPOINT readiness_probe")
-            try:
-                await db.execute(
-                    "INSERT INTO health_probe (probe_at) VALUES (CURRENT_TIMESTAMP)"
-                )
-            finally:
-                await db.execute("ROLLBACK TO readiness_probe")
-        except Exception:
+        # Real writeability probe using probe_writable()
+        if not await db.probe_writable():
             return Response(
                 content='{"status":"degraded","reason":"database not writable"}',
                 status_code=503,

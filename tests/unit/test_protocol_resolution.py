@@ -202,3 +202,106 @@ class TestMixedCatalog:
         )
         assert openai_result.protocol == "openai"
         assert anthropic_result.protocol == "anthropic"
+
+
+class TestOpenCodeGoFamilyMappings:
+    """Phase 14: Correct protocol families for OpenCode Go model families."""
+
+    def test_minimax_m3_to_anthropic(
+        self, resolver_no_config: ModelProtocolResolver
+    ) -> None:
+        result = resolver_no_config.resolve_from_catalog("minimax-m3")
+        assert result.protocol == "anthropic"
+        assert result.source == "family_mapping"
+
+    def test_minimax_m27_to_anthropic(
+        self, resolver_no_config: ModelProtocolResolver
+    ) -> None:
+        result = resolver_no_config.resolve_from_catalog("minimax-m2.7")
+        assert result.protocol == "anthropic"
+        assert result.source == "family_mapping"
+
+    def test_minimax_m25_to_anthropic(
+        self, resolver_no_config: ModelProtocolResolver
+    ) -> None:
+        result = resolver_no_config.resolve_from_catalog("minimax-m2.5")
+        assert result.protocol == "anthropic"
+        assert result.source == "family_mapping"
+
+    def test_qwen37_max_to_anthropic(
+        self, resolver_no_config: ModelProtocolResolver
+    ) -> None:
+        result = resolver_no_config.resolve_from_catalog("qwen3.7-max")
+        assert result.protocol == "anthropic"
+        assert result.source == "family_mapping"
+
+    def test_qwen37_plus_to_anthropic(
+        self, resolver_no_config: ModelProtocolResolver
+    ) -> None:
+        result = resolver_no_config.resolve_from_catalog("qwen3.7-plus")
+        assert result.protocol == "anthropic"
+        assert result.source == "family_mapping"
+
+    def test_qwen36_plus_to_anthropic(
+        self, resolver_no_config: ModelProtocolResolver
+    ) -> None:
+        result = resolver_no_config.resolve_from_catalog("qwen3.6-plus")
+        assert result.protocol == "anthropic"
+        assert result.source == "family_mapping"
+
+    def test_glm51_to_openai(self, resolver_no_config: ModelProtocolResolver) -> None:
+        result = resolver_no_config.resolve_from_catalog("glm-5.1")
+        assert result.protocol == "openai"
+        assert result.source == "family_mapping"
+
+    def test_kimi_k27_to_openai(
+        self, resolver_no_config: ModelProtocolResolver
+    ) -> None:
+        result = resolver_no_config.resolve_from_catalog("kimi-k2.7")
+        assert result.protocol == "openai"
+        assert result.source == "family_mapping"
+
+    def test_mimo_v25_to_openai(
+        self, resolver_no_config: ModelProtocolResolver
+    ) -> None:
+        result = resolver_no_config.resolve_from_catalog("mimo-v2.5")
+        assert result.protocol == "openai"
+        assert result.source == "family_mapping"
+
+    def test_deepseek_v4_pro_to_openai(
+        self, resolver_no_config: ModelProtocolResolver
+    ) -> None:
+        result = resolver_no_config.resolve_from_catalog("deepseek-v4-pro")
+        assert result.protocol == "openai"
+        assert result.source == "family_mapping"
+
+
+class TestEndpointValidationMiniMaxQwen:
+    """Phase 14: MiniMax and Qwen models use /messages (Anthropic)."""
+
+    def test_minimax_messages_succeeds(
+        self, resolver_no_config: ModelProtocolResolver
+    ) -> None:
+        # Should not raise - minimax uses anthropic protocol
+        resolver_no_config.validate_endpoint("anthropic", "anthropic", "minimax-m3")
+
+    def test_minimax_chat_completions_raises(
+        self, resolver_no_config: ModelProtocolResolver
+    ) -> None:
+        with pytest.raises(ProtocolMismatchError) as exc_info:
+            resolver_no_config.validate_endpoint("anthropic", "openai", "minimax-m3")
+        assert "Anthropic" in str(exc_info.value)
+        assert "/v1/messages" in str(exc_info.value)
+
+    def test_qwen_messages_succeeds(
+        self, resolver_no_config: ModelProtocolResolver
+    ) -> None:
+        resolver_no_config.validate_endpoint("anthropic", "anthropic", "qwen3.7-max")
+
+    def test_qwen_chat_completions_raises(
+        self, resolver_no_config: ModelProtocolResolver
+    ) -> None:
+        with pytest.raises(ProtocolMismatchError) as exc_info:
+            resolver_no_config.validate_endpoint("anthropic", "openai", "qwen3.7-max")
+        assert "Anthropic" in str(exc_info.value)
+        assert "/v1/messages" in str(exc_info.value)

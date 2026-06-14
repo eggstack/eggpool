@@ -15,6 +15,10 @@ if TYPE_CHECKING:
 from go_aggregator.errors import DatabaseError
 
 
+class _RollbackProbeError(Exception):
+    """Sentinel exception for probe_writable to roll back without logging."""
+
+
 class Database:
     """Async wrapper around aiosqlite with pragma configuration."""
 
@@ -35,6 +39,7 @@ class Database:
             "database_transaction_depth",
             default=0,
         )
+        self._transaction_owner: asyncio.Task[object] | None = None
 
     async def connect(self) -> None:
         """Open the connection and set pragmas."""
@@ -62,8 +67,37 @@ class Database:
             raise DatabaseError("Database not connected")
         return self._conn
 
+    async def probe_writable(self) -> bool:
+        """Probe the database for write access using a transaction.
+
+        The transaction is always rolled back; returns True if the
+        insert succeeded, False otherwise.
+        """
+        try:
+            async with self.transaction():
+                await self.execute(
+                    "INSERT INTO health_probe (probe_at) VALUES (CURRENT_TIMESTAMP)"
+                )
+                raise _RollbackProbeError
+        except _RollbackProbeError:
+            return True
+        except Exception:
+            return False
+
+    async def _wait_for_connection_access(self) -> None:
+        """Wait for connection access if another task owns the transaction."""
+        owner = getattr(self, "_transaction_owner", None)
+        if owner is None:
+            return
+        if owner is asyncio.current_task():
+            return
+        # Another task owns it — wait for the lock, then release immediately
+        async with self._transaction_lock:
+            pass
+
     async def execute(self, sql: str, params: Sequence[Any] = ()) -> aiosqlite.Cursor:
         """Execute a SQL statement and return the cursor."""
+        await self._wait_for_connection_access()
         try:
             return await self.connection.execute(sql, params)  # type: ignore[return-value]
         except Exception as exc:
@@ -73,6 +107,7 @@ class Database:
         self, sql: str, params: Sequence[Any] = ()
     ) -> list[aiosqlite.Row]:
         """Fetch all matching rows."""
+        await self._wait_for_connection_access()
         try:
             cursor = await self.connection.execute(sql, params)  # type: ignore[union-attr]
             rows = await cursor.fetchall()
@@ -84,6 +119,7 @@ class Database:
         self, sql: str, params: Sequence[Any] = ()
     ) -> aiosqlite.Row | None:
         """Fetch a single row or None."""
+        await self._wait_for_connection_access()
         try:
             cursor = await self.connection.execute(sql, params)  # type: ignore[union-attr]
             row = await cursor.fetchone()
@@ -100,10 +136,14 @@ class Database:
         the caller owns commit boundaries.
 
         Supports nesting within the same task context: inner transactions
-        inherit the outer commit boundary.
+        inherit the outer commit boundary. Different tasks always get their
+        own outer transaction.
         """
         depth = self._transaction_depth.get()
-        if depth > 0:
+        owner = asyncio.current_task()
+
+        # Nested detection: depth > 0 AND same task owns it
+        if depth > 0 and self._transaction_owner is owner:
             token = self._transaction_depth.set(depth + 1)
             try:
                 yield
@@ -111,8 +151,14 @@ class Database:
                 self._transaction_depth.reset(token)
             return
 
-        async with self._transaction_lock:
+        # If depth > 0 but different task, wait for lock then start new outer tx
+        if depth > 0:
+            # Wait for the lock, then release it and fall through to acquire it properly
+            async with self._transaction_lock:
+                pass
+            # Now start a fresh outer transaction
             token = self._transaction_depth.set(1)
+            self._transaction_owner = owner
             try:
                 await self.connection.execute("BEGIN IMMEDIATE")
                 try:
@@ -124,3 +170,21 @@ class Database:
                     await self.connection.commit()
             finally:
                 self._transaction_depth.reset(token)
+                self._transaction_owner = None
+            return
+
+        async with self._transaction_lock:
+            token = self._transaction_depth.set(1)
+            self._transaction_owner = owner
+            try:
+                await self.connection.execute("BEGIN IMMEDIATE")
+                try:
+                    yield
+                except BaseException:
+                    await self.connection.rollback()
+                    raise
+                else:
+                    await self.connection.commit()
+            finally:
+                self._transaction_depth.reset(token)
+                self._transaction_owner = None

@@ -135,12 +135,14 @@ class ModelCatalogCache:
         protocol: str,
         capabilities: dict[str, Any],
         source_metadata: dict[str, Any],
+        protocol_source: str | None = None,
     ) -> None:
         """Load a model from database into cache."""
         self._models[model_id] = {
             "model_id": model_id,
             "display_name": display_name,
             "protocol": protocol,
+            "protocol_source": protocol_source,
             "capabilities": capabilities,
             "source_metadata": source_metadata,
             "first_seen_at": 0,

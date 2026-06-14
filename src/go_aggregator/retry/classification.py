@@ -143,11 +143,23 @@ class RetryClassifier:
                 category=RetryCategory.TRANSIENT,
                 message="Gateway timeout",
             )
-        else:
+        elif 400 <= status_code < 500:
+            return RetryableError(
+                status_code=status_code,
+                category=RetryCategory.BAD_REQUEST,
+                message=f"Non-retryable client error: {status_code}",
+            )
+        elif 500 <= status_code < 600:
             return RetryableError(
                 status_code=status_code,
                 category=RetryCategory.TEMPORARY,
-                message=f"Unknown error: {status_code}",
+                message=f"Temporary upstream error: {status_code}",
+            )
+        else:
+            return RetryableError(
+                status_code=status_code,
+                category=RetryCategory.NEVER,
+                message=f"Unclassified upstream status: {status_code}",
             )
 
     def _is_model_specific_404(self, body: bytes) -> bool:
