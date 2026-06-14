@@ -1,4 +1,4 @@
-"""Quota-aware account router for Phase 6."""
+"""Quota-aware account router."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from go_aggregator.accounts.registry import AccountRegistry
     from go_aggregator.accounts.state import AccountRuntimeState
     from go_aggregator.catalog.service import CatalogService
+    from go_aggregator.health.health_manager import HealthManager
 
 
 class Router:
@@ -24,35 +25,42 @@ class Router:
         catalog: CatalogService,
         quota_estimator: QuotaEstimator | None = None,
         reservation_manager: ReservationManager | None = None,
+        health_manager: HealthManager | None = None,
     ) -> None:
         self._registry = registry
         self._catalog = catalog
         self._quota_estimator = quota_estimator or QuotaEstimator()
         self._reservation_manager = reservation_manager or ReservationManager()
-        self._scorer = QuotaFairScorer(quota_estimator=self._quota_estimator)
+        self._health_manager = health_manager
+        self._scorer = QuotaFairScorer(
+            quota_estimator=self._quota_estimator,
+            health_manager=self._health_manager,
+        )
 
     def select_account(
         self, model_id: str, request_id: str | None = None
     ) -> AccountRuntimeState | None:
-        """Select an account for the given model.
-
-        Phase 6: Quota-fair scoring with near-tie randomization.
-        """
+        """Select an account for the given model."""
         all_states = self._registry.get_enabled_states()
-        eligible = get_eligible_accounts(all_states, model_id, self._catalog.cache)
+
+        # Build active request counts per account
+        active_requests = {s.name: s.active_request_count for s in all_states}
+
+        eligible = get_eligible_accounts(
+            all_states, model_id, self._catalog.cache, self._health_manager
+        )
 
         if not eligible:
             return None
 
-        # Score eligible accounts
-        scores = self._scorer.score_accounts([s.name for s in eligible], model_id)
+        scores = self._scorer.score_accounts(
+            [s.name for s in eligible], model_id, active_requests
+        )
 
-        # Select best account
         best = self._scorer.select_account(scores)
         if best is None:
             return None
 
-        # Find the account state
         for state in eligible:
             if state.name == best.account_name:
                 return state
@@ -64,18 +72,21 @@ class Router:
     ) -> list[tuple[AccountRuntimeState, RoutingScore]]:
         """Select multiple accounts for failover, ranked by score."""
         all_states = self._registry.get_enabled_states()
-        eligible = get_eligible_accounts(all_states, model_id, self._catalog.cache)
+        active_requests = {s.name: s.active_request_count for s in all_states}
+
+        eligible = get_eligible_accounts(
+            all_states, model_id, self._catalog.cache, self._health_manager
+        )
 
         if not eligible:
             return []
 
-        # Score eligible accounts
-        scores = self._scorer.score_accounts([s.name for s in eligible], model_id)
+        scores = self._scorer.score_accounts(
+            [s.name for s in eligible], model_id, active_requests
+        )
 
-        # Rank accounts
         ranked = self._scorer.rank_accounts(scores)
 
-        # Return top N accounts with their states
         result = []
         for score in ranked[:max_accounts]:
             for state in eligible:

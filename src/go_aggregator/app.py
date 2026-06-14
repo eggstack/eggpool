@@ -19,12 +19,19 @@ from go_aggregator.api.chat_completions import handle_chat_completions
 from go_aggregator.api.messages import handle_messages
 from go_aggregator.api.stats import register_stats_routes
 from go_aggregator.auth import require_auth
+from go_aggregator.background import TaskSupervisor
+from go_aggregator.background.cleanup import (
+    checkpoint_database,
+    cleanup_old_requests,
+    cleanup_stale_reservations,
+)
 from go_aggregator.catalog.service import CatalogService
 from go_aggregator.constants import API_V1_PREFIX
 from go_aggregator.dashboard.routes import register_dashboard_routes
 from go_aggregator.db.connection import Database
 from go_aggregator.db.migrations import MigrationRunner
 from go_aggregator.errors import AggregatorError
+from go_aggregator.health.health_manager import HealthManager
 from go_aggregator.logging import configure_logging
 from go_aggregator.models.api import HealthResponse, ReadyResponse
 from go_aggregator.models.config import AppConfig
@@ -50,18 +57,13 @@ def _reload_config(app: FastAPI) -> None:
         logger.error("Config reload failed: %s", exc)
         return
 
-    # Update server log level
     configure_logging(level=new_config.server.log_level)
 
-    # Recreate account registry
     app.state.registry = AccountRegistry(new_config)
     app.state.config = new_config
 
-    # Refresh catalog with new accounts
     catalog: CatalogService = app.state.catalog
-    asyncio.get_event_loop().create_task(
-        _safe_refresh(catalog),
-    )
+    asyncio.get_event_loop().create_task(_safe_refresh(catalog))
 
     logger.info(
         "Configuration reloaded from %s (%d accounts)",
@@ -97,6 +99,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     runner = MigrationRunner(db)
     await runner.run()
 
+    # Stale reservation cleanup on startup
+    await cleanup_stale_reservations(db)
+
     # HTTPX client
     app.state.httpx_client = httpx.AsyncClient(
         base_url=config.upstream.base_url,
@@ -116,29 +121,55 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     registry = AccountRegistry(config)
     app.state.registry = registry
 
+    # Health manager
+    health_manager = HealthManager()
+    app.state.health_manager = health_manager
+
     # Catalog service
     catalog = CatalogService(config, registry, db, app.state.httpx_client)
     app.state.catalog = catalog
 
-    # Router
-    router = Router(registry, catalog)
+    # Router (with health manager for circuit breaker integration)
+    router = Router(registry, catalog, health_manager=health_manager)
     app.state.router = router
 
     # Statistics service
     app.state.stats = StatsService(db)
+
+    # Background task supervisor
+    supervisor = TaskSupervisor()
+    app.state.supervisor = supervisor
+
+    # Register catalog refresh task
+    if config.models.refresh_interval_s > 0:
+        supervisor.register(
+            "catalog_refresh",
+            lambda: _catalog_refresh_loop(catalog, config.models.refresh_interval_s),
+        )
+
+    # Register retention cleanup task (runs every hour)
+    async def _retention_cleanup() -> None:
+        while True:
+            await asyncio.sleep(3600)
+            await cleanup_old_requests(db, config.dashboard.retain_request_stats_days)
+
+    supervisor.register("retention_cleanup", _retention_cleanup)
+
+    # Register periodic checkpoint task (runs every 4 hours)
+    async def _periodic_checkpoint() -> None:
+        while True:
+            await asyncio.sleep(14400)
+            await checkpoint_database(db)
+
+    supervisor.register("checkpoint", _periodic_checkpoint)
 
     # Initial catalog refresh
     if config.models.startup_refresh:
         with contextlib.suppress(Exception):
             logger.exception("Initial catalog refresh failed")
 
-    # Background refresh task
-    refresh_task: asyncio.Task[None] | None = None
-    if config.models.refresh_interval_s > 0:
-        refresh_task = asyncio.create_task(
-            _catalog_refresh_loop(catalog, config.models.refresh_interval_s)
-        )
-        app.state.refresh_task = refresh_task
+    # Start background tasks
+    await supervisor.start_all()
 
     # SIGHUP handler for config reload
     loop = asyncio.get_running_loop()
@@ -155,10 +186,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     # Shutdown
     logger.info("Application shutting down")
-    if refresh_task is not None:
-        refresh_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await refresh_task
+    await supervisor.stop_all()
     await app.state.httpx_client.aclose()
     await db.disconnect()
 
@@ -236,6 +264,15 @@ def create_app(
             return ReadyResponse(
                 status="degraded",
                 reason="no enabled accounts",
+            )
+
+        supervisor: TaskSupervisor | None = getattr(
+            request.app.state, "supervisor", None
+        )
+        if supervisor is not None and not supervisor.all_healthy:
+            return ReadyResponse(
+                status="degraded",
+                reason="background tasks degraded",
             )
 
         return ReadyResponse(status="ok")

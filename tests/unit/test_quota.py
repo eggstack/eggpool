@@ -225,7 +225,7 @@ class TestQuotaFairScorer:
     """Tests for QuotaFairScorer."""
 
     def test_score_accounts(self) -> None:
-        """Test scoring accounts."""
+        """Test scoring accounts. Lower score = less utilized = preferred."""
         estimator = QuotaEstimator()
         estimator.set_account_limits("account1", max_daily_cost_microdollars=10000)
         estimator.set_account_limits("account2", max_daily_cost_microdollars=10000)
@@ -236,10 +236,11 @@ class TestQuotaFairScorer:
         scores = scorer.score_accounts(["account1", "account2"])
 
         assert len(scores) == 2
-        assert scores[0].quota_score > scores[1].quota_score
+        # account1 used 50%, account2 used 90% — account1 should score lower
+        assert scores[0].quota_score < scores[1].quota_score
 
     def test_select_account(self) -> None:
-        """Test account selection."""
+        """Test account selection. Lower score = less utilized = preferred."""
         scorer = QuotaFairScorer()
         scores = [
             RoutingScore("account1", 1.0, 1.0, True),
@@ -248,7 +249,7 @@ class TestQuotaFairScorer:
 
         selected = scorer.select_account(scores)
         assert selected is not None
-        assert selected.account_name == "account1"
+        assert selected.account_name == "account2"
 
     def test_select_no_eligible(self) -> None:
         """Test selection when no accounts eligible."""
@@ -262,7 +263,7 @@ class TestQuotaFairScorer:
         assert selected is None
 
     def test_rank_accounts(self) -> None:
-        """Test account ranking."""
+        """Test account ranking. Lower score = less utilized = ranked first."""
         scorer = QuotaFairScorer()
         scores = [
             RoutingScore("account1", 0.5, 1.0, True),
@@ -271,6 +272,6 @@ class TestQuotaFairScorer:
         ]
 
         ranked = scorer.rank_accounts(scores)
-        assert ranked[0].account_name == "account2"
+        assert ranked[0].account_name == "account1"
         assert ranked[1].account_name == "account3"
-        assert ranked[2].account_name == "account1"
+        assert ranked[2].account_name == "account2"
