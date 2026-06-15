@@ -9,6 +9,7 @@ and health consistency.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 
 import pytest
@@ -924,6 +925,99 @@ class TestPrivacyRegression:
                             f"Privacy violation: '{marker}' found in "
                             f"{tbl}.{col_name} = {val!r}"
                         )
+
+        await db.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_no_secrets_in_logs(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Known markers for prompts, completions, API keys, and auth
+        headers must not appear in application log output during request
+        finalization.  (aiosqlite DEBUG logs are excluded since they
+        echo SQL parameters by design; the database itself is checked
+        by test_no_secrets_in_database.)"""
+        db = Database(path=":memory:")
+        await db.connect()
+        runner = MigrationRunner(db)
+        await runner.run()
+        await _seed_db(db)
+
+        request_repo = RequestRepository(db)
+        attempt_repo = AttemptRepository(db)
+        reservation_repo = ReservationRepository(db)
+
+        async with db.transaction():
+            db_id = await request_repo.create_pending(
+                request_id="log-privacy-test",
+                model_id="gpt-4",
+                protocol="openai",
+                streamed=False,
+                account_id=1,
+            )
+            attempt_id = await attempt_repo.create(
+                request_id=db_id, attempt_number=1, account_id=1
+            )
+            reservation_id = await reservation_repo.create(
+                request_id=db_id,
+                account_id=1,
+                model_id="gpt-4",
+                estimated_tokens=1000,
+                estimated_microdollars=100000,
+                ttl_seconds=300,
+            )
+
+        finalizer = RequestFinalizer(
+            db=db,
+            request_repo=request_repo,
+            attempt_repo=attempt_repo,
+            reservation_repo=reservation_repo,
+        )
+
+        _attempt_id = attempt_id
+        _reservation_id = reservation_id
+        _db_id = db_id
+
+        class MockSelected:
+            db_request_id = _db_id
+            account_name = "test-acct"
+            model_id = "gpt-4"
+            attempt_id = _attempt_id
+            reservation_id = _reservation_id
+            estimated_microdollars = 100000
+            attempt_number = 1
+
+        forbidden = [
+            "sk-",
+            "Bearer ",
+            "Authorization",
+            '"prompt":',
+            '"completion":',
+            "password",
+            "secret",
+        ]
+
+        # INFO level avoids aiosqlite DEBUG logs which echo SQL parameters
+        with caplog.at_level(logging.INFO):
+            await finalizer.finalize(
+                MockSelected(),
+                FinalizationData(
+                    outcome=FinalizationOutcome.UPSTREAM_ERROR,
+                    error_class="AuthenticationError",
+                    status_code=401,
+                    error_detail=(
+                        "sk-FAKE_API_KEY Authorization Bearer "
+                        '"prompt": "secret prompt content" '
+                        '"completion": "secret completion" '
+                        "password=secret123 secret_value"
+                    ),
+                ),
+            )
+
+        for record in caplog.records:
+            msg = record.getMessage()
+            for marker in forbidden:
+                assert marker not in msg, (
+                    f"Privacy violation: '{marker}' found in log: {msg[:200]}"
+                )
 
         await db.disconnect()
 
