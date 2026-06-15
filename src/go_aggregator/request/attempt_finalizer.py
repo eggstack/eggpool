@@ -28,6 +28,14 @@ class AttemptFinalizationData:
     release_reason: str = "attempt_failed"
 
 
+@dataclass(frozen=True)
+class AttemptFinalizeResult:
+    """Result of finalizing a failed attempt."""
+
+    attempt_transitioned: bool
+    reservation_released: bool
+
+
 class AttemptFinalizer:
     """Finalizes individual failed attempts before retry.
 
@@ -52,10 +60,11 @@ class AttemptFinalizer:
         attempt_id: int,
         reservation_id: str,
         data: AttemptFinalizationData,
-    ) -> bool:
+    ) -> AttemptFinalizeResult:
         """Mark a failed attempt as terminal and release its reservation.
 
-        Returns True only when this call performed the attempt transition.
+        Returns AttemptFinalizeResult indicating whether the attempt
+        transitioned and whether the reservation was actually released.
         """
         # Truncate error_detail
         error_detail = data.error_detail
@@ -63,6 +72,7 @@ class AttemptFinalizer:
             error_detail = error_detail[:2048]
 
         transitioned = False
+        reservation_released = False
         async with self._db.transaction():
             # 1. Mark attempt completed only if not already terminal
             cursor = await self._db.execute(
@@ -84,11 +94,15 @@ class AttemptFinalizer:
 
             # 2. Release reservation if still active
             if reservation_id:
-                await self._db.execute(
+                res_cursor = await self._db.execute(
                     "UPDATE reservations SET status = 'released', "
                     "released_at = CURRENT_TIMESTAMP, release_reason = ? "
                     "WHERE id = ? AND status = 'active'",
                     (data.release_reason, reservation_id),
                 )
+                reservation_released = res_cursor.rowcount > 0
 
-        return transitioned
+        return AttemptFinalizeResult(
+            attempt_transitioned=transitioned,
+            reservation_released=reservation_released,
+        )

@@ -349,7 +349,7 @@ class ReservationRepository:
         model_id: str,
         estimated_tokens: int,
         estimated_microdollars: int,
-        ttl_seconds: int = 300,
+        ttl_seconds: int = 900,
     ) -> str:
         """Create a new reservation with expiry, return the id."""
         cursor = await self._db.execute(
@@ -401,7 +401,12 @@ class ReservationRepository:
             "UPDATE reservations SET status = 'expired', "
             "released_at = CURRENT_TIMESTAMP, release_reason = 'expired' "
             "WHERE status = 'active' AND expires_at IS NOT NULL "
-            "AND expires_at < CURRENT_TIMESTAMP",
+            "AND expires_at < CURRENT_TIMESTAMP "
+            "AND NOT EXISTS ("
+            "  SELECT 1 FROM requests"
+            "  WHERE requests.id = reservations.request_id"
+            "    AND requests.status = 'pending'"
+            ")"
         )
         return cursor.rowcount
 
@@ -543,19 +548,22 @@ class UsageWindowRepository:
                 "SELECT COALESCE(SUM(cost_microdollars), 0) FROM requests "
                 "WHERE account_id = ? "
                 "AND started_at >= datetime(?, '-5 hours') "
-                "AND status != 'cancelled'"
+                "AND status != 'pending' "
+                "AND cost_microdollars > 0"
             ),
             "7d": (
                 "SELECT COALESCE(SUM(cost_microdollars), 0) FROM requests "
                 "WHERE account_id = ? "
                 "AND started_at >= datetime(?, '-7 days') "
-                "AND status != 'cancelled'"
+                "AND status != 'pending' "
+                "AND cost_microdollars > 0"
             ),
             "30d": (
                 "SELECT COALESCE(SUM(cost_microdollars), 0) FROM requests "
                 "WHERE account_id = ? "
                 "AND started_at >= datetime(?, '-30 days') "
-                "AND status != 'cancelled'"
+                "AND status != 'pending' "
+                "AND cost_microdollars > 0"
             ),
         }
         result: dict[str, int] = {}

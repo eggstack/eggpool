@@ -26,6 +26,10 @@ from go_aggregator.errors import (
     RateLimitError,
     UpstreamError,
 )
+from go_aggregator.health.health_manager import (
+    FailureCategory,
+    classify_failure_category,
+)
 from go_aggregator.proxy.client import filter_request_headers, filter_response_headers
 from go_aggregator.proxy.sse_observer import IncrementalSSEObserver
 from go_aggregator.proxy.usage import StreamUsageResult
@@ -239,7 +243,7 @@ class RequestCoordinator:
                     err,
                 )
                 # Finalize the failed attempt before retrying
-                finalized = await self._attempt_finalizer.finalize_failed_attempt(
+                result = await self._attempt_finalizer.finalize_failed_attempt(
                     attempt_id=selected.attempt_id,
                     reservation_id=selected.reservation_id,
                     data=AttemptFinalizationData(
@@ -249,18 +253,21 @@ class RequestCoordinator:
                     ),
                 )
                 # Clean up in-memory state when the attempt transitioned
-                if finalized:
-                    if self._quota_estimator is not None:
+                if result.attempt_transitioned:
+                    if (
+                        self._quota_estimator is not None
+                        and result.reservation_released
+                    ):
                         self._quota_estimator.remove_reservation(
                             selected.account_name,
                             selected.estimated_microdollars,
                         )
-                    if self._router is not None:
+                    if self._router is not None and result.reservation_released:
                         self._router.decrement_active_request_count(
                             selected.account_name
                         )
                 # Apply health transitions only when the attempt transitioned
-                if finalized:
+                if result.attempt_transitioned:
                     self._apply_health_transition(
                         selected.account_name, err, context.model_id
                     )
@@ -862,33 +869,31 @@ class RequestCoordinator:
         if self._health_manager is None:
             return
 
-        error_class = err.error_class or ""
-        if "Authentication" in error_class or "Auth" in error_class:
+        category = classify_failure_category(err.error_class, err.status_code)
+        if category == FailureCategory.AUTHENTICATION_FAILED:
             self._health_manager.record_failure(
                 account_name, model_id=model_id, reason="authentication_failed"
             )
-        elif "RateLimit" in error_class or "429" in str(err.status_code):
+        elif category == FailureCategory.RATE_LIMITED:
             retry_after = err.retry_after or 60.0
             self._health_manager.record_rate_limit(account_name, retry_after)
-        elif "QuotaExhausted" in error_class:
+        elif category == FailureCategory.QUOTA_EXHAUSTED:
             self._health_manager.record_quota_exhausted(
                 account_name,
                 self._quota_exhausted_cooldown_seconds,
             )
-        elif "ModelUnavailable" in error_class:
+        elif category == FailureCategory.MODEL_UNAVAILABLE:
             self._health_manager.disable_model(account_name, model_id)
-            # Also mark unavailable in catalog cache so eligibility
-            # checks reflect the disabled state immediately
             self._catalog.cache.mark_model_unavailable(account_name, model_id)
         else:
             self._health_manager.record_failure(
-                account_name, model_id=model_id, reason=error_class
+                account_name, model_id=model_id, reason=category.value
             )
 
-        # Also update runtime state
+        # Also update runtime state with normalized category
         state = self._registry.get_state(account_name)
         if state is not None:
-            state.record_failure(error_class)
+            state.record_failure(category.value)
 
     async def _finalize_non_retryable(
         self,

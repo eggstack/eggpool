@@ -205,15 +205,17 @@ class CatalogService:
                     INSERT INTO models (
                         model_id, display_name, protocol,
                         capabilities, source_metadata,
-                        first_seen_at, last_seen_at, protocol_source
-                    ) VALUES (?, ?, ?, ?, ?, {now_sql}, {now_sql}, ?)
+                        first_seen_at, last_seen_at, protocol_source,
+                        resolution_status
+                    ) VALUES (?, ?, ?, ?, ?, {now_sql}, {now_sql}, ?, 'resolved')
                     ON CONFLICT(model_id) DO UPDATE SET
                         display_name = excluded.display_name,
                         protocol = excluded.protocol,
                         capabilities = excluded.capabilities,
                         source_metadata = excluded.source_metadata,
                         last_seen_at = {now_sql},
-                        protocol_source = excluded.protocol_source
+                        protocol_source = excluded.protocol_source,
+                        resolution_status = 'resolved'
                     """,
                     (
                         model_id,
@@ -306,7 +308,15 @@ class CatalogService:
             if cache_write_price is None:
                 cache_write_price = meta.get("cache_write_per_million_microdollars")
 
-        if input_price is None and output_price is None:
+        if all(
+            value is None
+            for value in (
+                input_price,
+                output_price,
+                cache_read_price,
+                cache_write_price,
+            )
+        ):
             return
 
         # 3. Check if values differ from latest snapshot
@@ -317,11 +327,13 @@ class CatalogService:
             old_output = latest.get("output_price_per_1k")
             old_cache_read = latest.get("cache_read_per_million_microdollars")
             old_cache_write = latest.get("cache_write_per_million_microdollars")
+            old_source = latest.get("source")
             if (
                 old_input == input_price
                 and old_output == output_price
                 and old_cache_read == cache_read_price
                 and old_cache_write == cache_write_price
+                and old_source == source
             ):
                 return  # No change, skip insert
 

@@ -119,6 +119,12 @@ async def reconcile_expired_reservations(
             WHERE status = 'active'
               AND expires_at IS NOT NULL
               AND expires_at < CURRENT_TIMESTAMP
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM requests
+                  WHERE requests.id = reservations.request_id
+                    AND requests.status = 'pending'
+              )
             RETURNING id, account_id, estimated_microdollars
             """,
         )

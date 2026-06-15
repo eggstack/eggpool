@@ -4,8 +4,51 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 from go_aggregator.health.circuit_breaker import CircuitBreaker
+
+
+class FailureCategory(StrEnum):
+    """Normalized failure categories used across health and runtime state."""
+
+    AUTHENTICATION_FAILED = "authentication_failed"
+    QUOTA_EXHAUSTED = "quota_exhausted"
+    RATE_LIMITED = "rate_limited"
+    MODEL_UNAVAILABLE = "model_unavailable"
+    CONNECT_TIMEOUT = "connect_timeout"
+    CONNECTION_FAILURE = "connection_failure"
+    UPSTREAM_SERVER_ERROR = "upstream_server_error"
+    PROTOCOL_ERROR = "protocol_error"
+    UNKNOWN = "unknown"
+
+
+def classify_failure_category(
+    error_class: str | None,
+    status_code: int | None = None,
+) -> FailureCategory:
+    """Map an error class string or status code to a normalized failure category."""
+    if error_class is None:
+        return FailureCategory.UNKNOWN
+    ec = error_class.lower()
+    if "auth" in ec:
+        return FailureCategory.AUTHENTICATION_FAILED
+    if ec == "quota_exhausted":
+        return FailureCategory.QUOTA_EXHAUSTED
+    if "ratelimit" in ec or "rate_limit" in ec or status_code == 429:
+        return FailureCategory.RATE_LIMITED
+    if "modelunavailable" in ec or "model_not_found" in ec:
+        return FailureCategory.MODEL_UNAVAILABLE
+    if "connecttimeout" in ec or "connect_timeout" in ec:
+        return FailureCategory.CONNECT_TIMEOUT
+    conn_terms = ("connectionfailure", "connection_failure", "connectionerror")
+    if any(s in ec for s in conn_terms):
+        return FailureCategory.CONNECTION_FAILURE
+    if "timeout" in ec:
+        return FailureCategory.CONNECT_TIMEOUT
+    if status_code is not None and 500 <= status_code < 600:
+        return FailureCategory.UPSTREAM_SERVER_ERROR
+    return FailureCategory.UNKNOWN
 
 
 @dataclass
@@ -135,9 +178,22 @@ class HealthManager:
         health = self.get_account_health(account_name)
         health.disabled_models.discard(model_id)
 
+    def _refresh_transient_state(self, health: AccountHealth) -> None:
+        """Restore transient health states after cooldown expiration."""
+        now = time.time()
+        if (
+            health.cooldown_until > 0
+            and now >= health.cooldown_until
+            and health.health_state in ("quota_exhausted", "rate_limited")
+        ):
+            health.health_state = "healthy"
+            health.is_healthy = True
+            health.cooldown_until = 0
+
     def is_account_healthy(self, account_name: str) -> bool:
         """Check if an account is healthy."""
         health = self.get_account_health(account_name)
+        self._refresh_transient_state(health)
         if (
             not health.is_healthy
             and health.cooldown_until > 0
@@ -148,10 +204,11 @@ class HealthManager:
 
     def is_model_healthy(self, account_name: str, model_id: str) -> bool:
         """Check if a model is healthy for an account."""
+        if not self.is_account_healthy(account_name):
+            return False
         health = self.get_account_health(account_name)
         return (
-            health.is_healthy
-            and not health.is_disabled()
+            not health.is_disabled()
             and not health.is_model_disabled(model_id)
             and health.circuit_breaker.allow_request()
         )

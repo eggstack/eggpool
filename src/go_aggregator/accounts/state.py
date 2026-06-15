@@ -28,10 +28,23 @@ class AccountRuntimeState:
         default_factory=dict
     )
 
+    def refresh_transient_state(self, now: float | None = None) -> None:
+        """Clear transient cooldown status when it expires."""
+        if now is None:
+            now = time.time()
+        if (
+            self.cooldown_until > 0
+            and now >= self.cooldown_until
+            and self.health_state in ("quota_exhausted", "rate_limited", "cooldown")
+        ):
+            self.health_state = "healthy"
+            self.cooldown_until = 0.0
+
     def is_eligible(self) -> bool:
         """Check if account is eligible for routing."""
         if not self.enabled:
             return False
+        self.refresh_transient_state()
         if self.health_state in ("authentication_failed", "quota_exhausted"):
             return False
         return self.cooldown_until <= time.time()
@@ -48,7 +61,7 @@ class AccountRuntimeState:
         self.consecutive_failures += 1
         self.last_failure_at = time.time()
 
-        if error_class == "authentication":
+        if error_class in ("authentication_failed", "authentication"):
             self.health_state = "authentication_failed"
         elif error_class == "quota_exhausted":
             self.health_state = "quota_exhausted"
@@ -58,12 +71,13 @@ class AccountRuntimeState:
             "connect_timeout",
             "read_timeout",
             "connection_failure",
+            "connection_error",
         ):
             self.health_state = "cooldown"
             # Exponential backoff: 30s, 60s, 120s, ... max 10 min
             backoff = min(30 * (2 ** (self.consecutive_failures - 1)), 600)
             self.cooldown_until = time.time() + backoff
-        # upstream_server_error, internal_error, etc. - no cooldown
+        # upstream_server_error, protocol_error, unknown, etc. - no cooldown
 
     def reset_health(self) -> None:
         """Reset health state to healthy."""

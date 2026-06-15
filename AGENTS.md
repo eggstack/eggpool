@@ -17,7 +17,7 @@ Development guidelines for the opencode-go-aggregator project.
 - respx for HTTPX upstream mocking
 - Tests in `tests/unit/`, `tests/integration/`, `tests/contract/`
 - Run: `uv run pytest`
-- All 490+ tests must pass before committing
+- All 596+ tests must pass before committing
 
 ## Pre-commit Checks
 
@@ -47,10 +47,20 @@ All must pass with zero errors.
 - Pre-body failures can retry; no retry after first downstream byte emitted
 - Every retryable failed attempt must reach terminal state before the next attempt
 - Each attempt reservation is released exactly once via AttemptFinalizer
-- SQLite transactions are serialized across concurrent tasks via asyncio.Lock + ContextVar
+- SQLite transactions are serialized across concurrent tasks via a single connection lock + ContextVar
 - Readiness probes use `probe_writable()` with owned transactions, never interfere with request lifecycle work
 - Successful responses without terminal usage consume the reservation estimate
 - Unknown model protocols are rejected before durable selection
+- All SQL operations on the shared connection are serialized; no task can execute SQL inside another task's transaction
+- Child tasks cannot inherit transaction ownership (both task identity and ContextVar depth must match)
+- Reservation and active-count in-memory cleanup occur only when the database reservation actually transitions
+- Exhausted retries cannot corrupt another request's in-memory state
+- Quota-exhausted accounts recover after cooldown expiration via `_refresh_transient_state()`
+- Pending active requests are excluded from expiry cleanup
+- Cancelled nonzero-cost requests remain in usage windows
+- Cache-only rate changes create snapshots; cache-only token usage invokes cost calculation
+- Health systems use a normalized `FailureCategory` vocabulary shared by `HealthManager` and `AccountRuntimeState`
+- `models.resolution_status` is set to `'resolved'` for all persisted models with resolved protocols
 
 For detailed architecture documentation, see `architecture/` directory:
 - `phase-0.md`: Repository and tooling foundation
@@ -67,6 +77,7 @@ For detailed architecture documentation, see `architecture/` directory:
 - `phase-12-executable-correctness-pass.md`: Executable correctness pass
 - `phase-13-attempt-transaction-hardening.md`: Attempt lifecycle and transaction hardening
 - `phase-14-deployment-blockers-and-operational-hardening.md`: Deployment blockers and operational hardening
+- `phase-15-concurrency-accounting-correctness.md`: Concurrency and accounting correctness
 
 ## Import Organization
 

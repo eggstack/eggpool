@@ -182,6 +182,7 @@ tests/
 - [x] Phase 12: Executable correctness pass
 - [x] Phase 13: Attempt lifecycle and transaction hardening
 - [x] Phase 14: Deployment blockers and operational hardening
+- [x] Phase 15: Concurrency and accounting correctness
 
 ## Known Limitations
 

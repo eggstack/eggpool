@@ -14,6 +14,7 @@ from go_aggregator.db.repositories import (
     RequestRepository,
     ReservationRepository,
 )
+from go_aggregator.health.health_manager import classify_failure_category
 
 if TYPE_CHECKING:
     from go_aggregator.accounts.registry import AccountRegistry
@@ -106,6 +107,7 @@ class RequestFinalizer:
         False if the request was already finalized (idempotent).
         """
         transitioned = False
+        reservation_released = False
         cost_microdollars = 0
         exactness = "unknown"
 
@@ -116,8 +118,13 @@ class RequestFinalizer:
 
         async with self._db.transaction():
             # 1. Calculate cost if we have usable usage
-            if self._cost_calculator is not None and (
-                data.input_tokens > 0 or data.output_tokens > 0
+            if self._cost_calculator is not None and any(
+                (
+                    data.input_tokens,
+                    data.output_tokens,
+                    data.cache_read_tokens,
+                    data.cache_write_tokens,
+                )
             ):
                 (
                     cost_microdollars,
@@ -182,7 +189,7 @@ class RequestFinalizer:
                 )
 
                 # 5. Release reservation
-                await self._reservation_repo.release(
+                reservation_released = await self._reservation_repo.release(
                     selected.reservation_id, reason=status
                 )
 
@@ -220,7 +227,7 @@ class RequestFinalizer:
             # Commit happens via context manager
 
         # Post-commit: update in-memory state only if we performed the transition
-        if transitioned:
+        if transitioned and reservation_released:
             # 1. Remove exactly the reserved amount from in-memory tracking
             if self._quota_estimator is not None:
                 self._quota_estimator.remove_reservation(
@@ -279,7 +286,10 @@ class RequestFinalizer:
                         FinalizationOutcome.TIMEOUT,
                         FinalizationOutcome.INTERRUPTED,
                     ):
-                        state.record_failure(data.error_class or "unknown")
+                        category = classify_failure_category(
+                            data.error_class, data.status_code
+                        )
+                        state.record_failure(category.value)
 
         return transitioned
 

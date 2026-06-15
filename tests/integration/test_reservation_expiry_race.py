@@ -53,6 +53,11 @@ async def test_normal_release_racing_expiry_cleanup() -> None:
             estimated_microdollars=100000,
             ttl_seconds=1,
         )
+        # Transition the request out of 'pending' so the reservation can be
+        # expired by the background cleanup.
+        await request_repo.update_after_completion(
+            db_id, status="succeeded", status_code=200
+        )
 
     # Wait for the reservation to expire.
     # SQLite CURRENT_TIMESTAMP has second precision, so sleep 2s to be safe.
@@ -101,6 +106,11 @@ async def test_concurrent_expiry_cleanup_no_double_count() -> None:
             estimated_tokens=1000,
             estimated_microdollars=100000,
             ttl_seconds=1,
+        )
+        # Transition the request out of 'pending' so the reservation can be
+        # expired by the background cleanup.
+        await request_repo.update_after_completion(
+            db_id, status="succeeded", status_code=200
         )
 
     # Wait long enough for CURRENT_TIMESTAMP to advance past expires_at.
