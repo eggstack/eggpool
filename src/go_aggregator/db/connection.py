@@ -116,15 +116,88 @@ class Database:
     async def execute(self, sql: str, params: Sequence[Any] = ()) -> aiosqlite.Cursor:
         """Execute a SQL statement and return the cursor.
 
-        Callers must consume the cursor before yielding control if they
-        are not inside a transaction (the lock is released after this
-        method returns).  Within a transaction the lock is already held.
+        Prefer the explicit helpers :meth:`execute_write`,
+        :meth:`execute_insert`, or :meth:`execute_returning`.  This
+        method exists for transaction-internal use where the caller
+        needs the full cursor object.  Callers MUST consume the cursor
+        before yielding control if they are not inside a transaction
+        (the connection lock is released after this method returns).
+        Within a transaction the lock is already held for the entire
+        outer transaction lifetime, so the cursor may be safely
+        consumed anywhere inside the ``async with db.transaction():``
+        block.
         """
         async with self._connection_access():
             try:
                 return await self.connection.execute(sql, params)  # type: ignore[return-value]
             except Exception as exc:
                 raise DatabaseError(f"Execute failed: {exc}") from exc
+
+    async def execute_write(
+        self,
+        sql: str,
+        params: Sequence[Any] = (),
+    ) -> int:
+        """Execute a write statement and return the rowcount.
+
+        Acquires the connection lock for the duration of the statement
+        if no transaction is owned by the current task; otherwise the
+        call is a no-op with respect to lock acquisition.  The cursor
+        is fully consumed before this method returns, so the returned
+        rowcount is always valid.
+        """
+        async with self._connection_access():
+            try:
+                cursor = await self.connection.execute(sql, params)  # type: ignore[union-attr]
+                return int(cursor.rowcount or 0)
+            except Exception as exc:
+                raise DatabaseError(f"Execute write failed: {exc}") from exc
+
+    async def execute_insert(
+        self,
+        sql: str,
+        params: Sequence[Any] = (),
+    ) -> int:
+        """Execute an INSERT and return lastrowid.
+
+        Raises ``DatabaseError`` if the INSERT did not produce a
+        ``lastrowid`` (for example, against a table that lacks an
+        INTEGER PRIMARY KEY).  Acquires the connection lock for the
+        duration of the statement when no transaction is owned.
+        """
+        async with self._connection_access():
+            try:
+                cursor = await self.connection.execute(sql, params)  # type: ignore[union-attr]
+                last_id = cursor.lastrowid
+                if last_id is None:
+                    raise DatabaseError("INSERT did not return lastrowid")
+                return int(last_id)
+            except DatabaseError:
+                raise
+            except Exception as exc:
+                raise DatabaseError(f"Execute insert failed: {exc}") from exc
+
+    async def execute_returning(
+        self,
+        sql: str,
+        params: Sequence[Any] = (),
+    ) -> list[aiosqlite.Row]:
+        """Execute a statement (typically ``UPDATE ... RETURNING``) and
+        return all rows.
+
+        Acquires the connection lock for the duration of the fetch, so
+        the returned rows are guaranteed to be observed under the same
+        lock acquisition as the underlying statement.  When called
+        inside a transaction the call is a no-op with respect to lock
+        acquisition.
+        """
+        async with self._connection_access():
+            try:
+                cursor = await self.connection.execute(sql, params)  # type: ignore[union-attr]
+                rows = await cursor.fetchall()
+                return list(rows)  # type: ignore[arg-type]
+            except Exception as exc:
+                raise DatabaseError(f"Execute returning failed: {exc}") from exc
 
     async def fetch_all(
         self, sql: str, params: Sequence[Any] = ()

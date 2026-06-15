@@ -6,6 +6,8 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from go_aggregator.security.redaction import redact_error_detail
+
 if TYPE_CHECKING:
     from go_aggregator.db.connection import Database
     from go_aggregator.db.repositories import (
@@ -14,6 +16,8 @@ if TYPE_CHECKING:
     )
 
 logger = logging.getLogger(__name__)
+
+ATTEMPT_MAX_ERROR_DETAIL_CHARS = 2048
 
 
 @dataclass(frozen=True)
@@ -66,41 +70,47 @@ class AttemptFinalizer:
         Returns AttemptFinalizeResult indicating whether the attempt
         transitioned and whether the reservation was actually released.
         """
-        # Truncate error_detail
-        error_detail = data.error_detail
-        if error_detail is not None and len(error_detail) > 2048:
-            error_detail = error_detail[:2048]
+        # Redact, then truncate error_detail. Redaction first ensures the
+        # 2048-char cap applies to the safe value, not the raw input.
+        error_detail = redact_error_detail(data.error_detail)
+        if (
+            error_detail is not None
+            and len(error_detail) > ATTEMPT_MAX_ERROR_DETAIL_CHARS
+        ):
+            error_detail = error_detail[:ATTEMPT_MAX_ERROR_DETAIL_CHARS]
 
         transitioned = False
         reservation_released = False
         async with self._db.transaction():
             # 1. Mark attempt completed only if not already terminal
-            cursor = await self._db.execute(
-                "UPDATE request_attempts SET "
-                "status_code = ?, error_class = ?, error_detail = ?, "
-                "upstream_request_id = ?, bytes_emitted = ?, "
-                "completed_at = CURRENT_TIMESTAMP "
-                "WHERE id = ? AND completed_at IS NULL",
-                (
-                    data.status_code,
-                    data.error_class,
-                    error_detail,
-                    data.upstream_request_id,
-                    data.bytes_emitted,
-                    attempt_id,
-                ),
+            transitioned = bool(
+                await self._db.execute_write(
+                    "UPDATE request_attempts SET "
+                    "status_code = ?, error_class = ?, error_detail = ?, "
+                    "upstream_request_id = ?, bytes_emitted = ?, "
+                    "completed_at = CURRENT_TIMESTAMP "
+                    "WHERE id = ? AND completed_at IS NULL",
+                    (
+                        data.status_code,
+                        data.error_class,
+                        error_detail,
+                        data.upstream_request_id,
+                        data.bytes_emitted,
+                        attempt_id,
+                    ),
+                )
             )
-            transitioned = cursor.rowcount > 0
 
             # 2. Release reservation if still active
             if reservation_id:
-                res_cursor = await self._db.execute(
-                    "UPDATE reservations SET status = 'released', "
-                    "released_at = CURRENT_TIMESTAMP, release_reason = ? "
-                    "WHERE id = ? AND status = 'active'",
-                    (data.release_reason, reservation_id),
+                reservation_released = bool(
+                    await self._db.execute_write(
+                        "UPDATE reservations SET status = 'released', "
+                        "released_at = CURRENT_TIMESTAMP, release_reason = ? "
+                        "WHERE id = ? AND status = 'active'",
+                        (data.release_reason, reservation_id),
+                    )
                 )
-                reservation_released = res_cursor.rowcount > 0
 
         return AttemptFinalizeResult(
             attempt_transitioned=transitioned,

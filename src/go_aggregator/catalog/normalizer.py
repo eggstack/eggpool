@@ -12,7 +12,7 @@ def normalize_openai_models(
 
     Returns a list of normalized model dicts ready for persistence.
     """
-    models = []
+    models: list[dict[str, Any]] = []
     for item in raw_response.get("data", []):
         model_id = item.get("id", "")
         if not model_id:
@@ -47,7 +47,7 @@ def normalize_anthropic_models(
 
     Returns a list of normalized model dicts ready for persistence.
     """
-    models = []
+    models: list[dict[str, Any]] = []
     for item in raw_response.get("data", []):
         model_id = item.get("id", "")
         if not model_id:

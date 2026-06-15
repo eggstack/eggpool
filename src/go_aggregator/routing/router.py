@@ -121,7 +121,7 @@ class Router:
 
         ranked = self._scorer.rank_accounts(scores)
 
-        result = []
+        result: list[tuple[AccountRuntimeState, RoutingScore]] = []
         for score in ranked[:max_accounts]:
             for state in eligible:
                 if state.name == score.account_name:

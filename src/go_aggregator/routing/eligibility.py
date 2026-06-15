@@ -37,7 +37,7 @@ def get_eligible_accounts(
     - circuit breaker allows requests (if health_manager provided)
     - supports the requested model
     """
-    eligible = []
+    eligible: list[AccountRuntimeState] = []
     for state in all_states:
         if not state.is_eligible():
             continue

@@ -2,7 +2,7 @@
 
 ALTER TABLE model_price_snapshots ADD COLUMN input_per_million_microdollars INTEGER;
 ALTER TABLE model_price_snapshots ADD COLUMN output_per_million_microdollars INTEGER;
-ALTER TABLE model_price_snapshots ADD COLUMN source TEXT NOT NULL DEFAULT 'config';
+ALTER TABLE model_price_snapshots ADD COLUMN source TEXT NOT NULL DEFAULT 'upstream';
 ALTER TABLE model_price_snapshots ADD COLUMN metadata_json TEXT;
 
 -- Backfill from existing float prices (dollars/1K -> microdollars/million)

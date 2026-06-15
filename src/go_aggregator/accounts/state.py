@@ -5,6 +5,17 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+# Default cooldown durations used when the caller does not supply an
+# explicit value. These mirror the configured defaults in
+# ``RoutingConfig`` and exist only as a safety net for tests or
+# command-line tools that instantiate ``AccountRuntimeState``
+# directly. Production code paths should pass the configured cooldown
+# explicitly so the runtime state stays in lock-step with the
+# authoritative ``HealthManager``.
+DEFAULT_QUOTA_EXHAUSTED_COOLDOWN_SECONDS = 300.0
+DEFAULT_BACKOFF_BASE_SECONDS = 30.0
+DEFAULT_BACKOFF_MAX_SECONDS = 600.0
+
 
 @dataclass
 class AccountRuntimeState:
@@ -56,8 +67,24 @@ class AccountRuntimeState:
         if self.health_state == "cooldown":
             self.health_state = "healthy"
 
-    def record_failure(self, error_class: str) -> None:
-        """Record a failed request and update health state."""
+    def record_failure(
+        self,
+        error_class: str,
+        *,
+        cooldown_seconds: float | None = None,
+        rate_limit_retry_after: float | None = None,
+    ) -> None:
+        """Record a failed request and update health state.
+
+        ``cooldown_seconds`` is the configured quota-exhausted cooldown
+        duration; the same value used by the authoritative
+        ``HealthManager`` must be passed here so the two cooldown
+        representations cannot diverge. ``rate_limit_retry_after`` is
+        the parsed ``Retry-After`` value for 429 responses; when
+        supplied, it takes precedence over the exponential backoff
+        schedule. Authentication failures remain terminal until
+        explicitly reset.
+        """
         self.consecutive_failures += 1
         self.last_failure_at = time.time()
 
@@ -65,7 +92,12 @@ class AccountRuntimeState:
             self.health_state = "authentication_failed"
         elif error_class == "quota_exhausted":
             self.health_state = "quota_exhausted"
-            self.cooldown_until = time.time() + 300  # 5 min cooldown
+            duration = (
+                cooldown_seconds
+                if cooldown_seconds is not None
+                else DEFAULT_QUOTA_EXHAUSTED_COOLDOWN_SECONDS
+            )
+            self.cooldown_until = time.time() + duration
         elif error_class in (
             "rate_limited",
             "connect_timeout",
@@ -74,9 +106,17 @@ class AccountRuntimeState:
             "connection_error",
         ):
             self.health_state = "cooldown"
-            # Exponential backoff: 30s, 60s, 120s, ... max 10 min
-            backoff = min(30 * (2 ** (self.consecutive_failures - 1)), 600)
-            self.cooldown_until = time.time() + backoff
+            if rate_limit_retry_after is not None and rate_limit_retry_after > 0:
+                # Honor the upstream-suggested retry interval.
+                self.cooldown_until = time.time() + rate_limit_retry_after
+            else:
+                # Exponential backoff: 30s, 60s, 120s, ... max 10 min
+                backoff = min(
+                    DEFAULT_BACKOFF_BASE_SECONDS
+                    * (2 ** (self.consecutive_failures - 1)),
+                    DEFAULT_BACKOFF_MAX_SECONDS,
+                )
+                self.cooldown_until = time.time() + backoff
         # upstream_server_error, protocol_error, unknown, etc. - no cooldown
 
     def reset_health(self) -> None:

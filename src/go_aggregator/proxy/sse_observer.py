@@ -28,7 +28,7 @@ class SSEFrame:
     """A parsed SSE frame."""
 
     event: str = ""
-    data_lines: list[str] = field(default_factory=list)
+    data_lines: list[str] = field(default_factory=list[str])
 
     @property
     def data(self) -> str:

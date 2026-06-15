@@ -38,7 +38,13 @@ class MigrationRunner:
         self._db = db
 
     async def run(self) -> None:
-        """Apply all pending migrations in order."""
+        """Apply all pending migrations in order.
+
+        Each migration file is applied in a single ``db.transaction()``
+        boundary so that schema and bookkeeping are atomic; on any
+        statement failure the entire migration is rolled back and the
+        database is left untouched.
+        """
         await self._ensure_migrations_table()
         applied = await self._applied_versions()
         pending = self._pending_migrations(applied)
@@ -52,31 +58,30 @@ class MigrationRunner:
             statements = _split_statements(sql)
             logger.info("Applying migration %04d: %s", version, path.name)
             try:
-                for stmt in statements:
-                    await self._db.execute(stmt)
-                await self._db.execute(
-                    "INSERT INTO _migrations (version, name) VALUES (?, ?)",
-                    (version, path.name),
-                )
-                await self._db.connection.commit()
+                async with self._db.transaction():
+                    for stmt in statements:
+                        await self._db.execute(stmt)
+                    await self._db.execute(
+                        "INSERT INTO _migrations (version, name) VALUES (?, ?)",
+                        (version, path.name),
+                    )
             except DatabaseError:
-                await self._db.connection.rollback()
                 raise
 
         logger.info("Applied %d migration(s)", len(pending))
 
     async def _ensure_migrations_table(self) -> None:
         """Create the _migrations tracking table if it doesn't exist."""
-        await self._db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS _migrations (
-                version INTEGER PRIMARY KEY,
-                name TEXT NOT NULL,
-                applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        async with self._db.transaction():
+            await self._db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS _migrations (
+                    version INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
             )
-            """
-        )
-        await self._db.connection.commit()
 
     async def _applied_versions(self) -> set[int]:
         """Return set of already-applied migration versions."""

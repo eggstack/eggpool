@@ -74,7 +74,7 @@ class ModelCatalogCache:
         Excludes models with unresolved protocol (None) since they
         cannot be routed to any endpoint.
         """
-        result = []
+        result: list[dict[str, Any]] = []
 
         for model_id, model_info in self._models.items():
             # Fail-closed: do not expose unresolved models

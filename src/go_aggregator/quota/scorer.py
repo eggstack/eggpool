@@ -71,7 +71,7 @@ class QuotaFairScorer:
         """Score all accounts for routing using the full formula."""
         active = active_requests or {}
         estimates = request_estimates or {}
-        scores = []
+        scores: list[RoutingScore] = []
 
         for name in account_names:
             weight = 1.0

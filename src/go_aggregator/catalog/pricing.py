@@ -24,7 +24,7 @@ class PriceSnapshot:
     output_per_million_microdollars: int | None = None
     cache_read_per_million_microdollars: int | None = None
     cache_write_per_million_microdollars: int | None = None
-    source: str = "config"
+    source: str = "upstream"
 
 
 class PriceRepository:
@@ -111,7 +111,7 @@ class PriceRepository:
             cache_write_per_million_microdollars=row[
                 "cache_write_per_million_microdollars"
             ],
-            source=row["source"] if row["source"] is not None else "config",
+            source=row["source"] if row["source"] is not None else "upstream",
         )
 
     async def get_snapshots_since(
@@ -145,7 +145,7 @@ class PriceRepository:
                 cache_write_per_million_microdollars=row[
                     "cache_write_per_million_microdollars"
                 ],
-                source=row["source"] if row["source"] is not None else "config",
+                source=row["source"] if row["source"] is not None else "upstream",
             )
             for row in rows
         ]
@@ -216,7 +216,19 @@ class CostCalculator:
                 + (cache_write_tokens * (cache_write_rate or 0))
             )
             cost_microdollars = total_numerator // 1_000_000
-            if cost_microdollars == 0 and (input_tokens > 0 or output_tokens > 0):
+            # If the integer microdollar arithmetic rounded a nonzero
+            # billable event down to zero, the result is not actually
+            # "derived" (i.e., exact) — it is a lower bound on the
+            # true cost. Downgrade exactness so the request finalizer
+            # floors the cost at the reservation estimate.
+            if cost_microdollars == 0 and any(
+                (
+                    input_tokens,
+                    output_tokens,
+                    cache_read_tokens,
+                    cache_write_tokens,
+                )
+            ):
                 exactness = "estimated"
 
         return cost_microdollars, exactness

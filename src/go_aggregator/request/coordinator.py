@@ -43,6 +43,7 @@ from go_aggregator.request.finalizer import (
     RequestFinalizer,
 )
 from go_aggregator.retry.classification import RetryCategory, RetryClassifier
+from go_aggregator.security.redaction import redact_error_detail
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -72,8 +73,8 @@ class ProxyRequestContext:
     original_body: bytes
     incoming_headers: dict[str, str]
     started_at: float = field(default_factory=time.time)
-    client_metadata: dict[str, Any] = field(default_factory=dict)
-    attempted_accounts: set[str] = field(default_factory=set)
+    client_metadata: dict[str, Any] = field(default_factory=dict[str, Any])
+    attempted_accounts: set[str] = field(default_factory=set[str])
 
 
 @dataclass(frozen=True)
@@ -262,7 +263,7 @@ class RequestCoordinator:
                             selected.account_name,
                             selected.estimated_microdollars,
                         )
-                    if self._router is not None and result.reservation_released:
+                    if result.reservation_released:
                         self._router.decrement_active_request_count(
                             selected.account_name
                         )
@@ -761,6 +762,10 @@ class RequestCoordinator:
                 # Midstream error - finalize, no retry
                 observer.flush()
                 usage_result = observer.usage
+                redacted = redact_error_detail(str(exc))
+                error_detail_value: str | None = (
+                    redacted[:2048] if redacted is not None else None
+                )
                 await finalizer.finalize(
                     selected,
                     FinalizationData(
@@ -775,7 +780,7 @@ class RequestCoordinator:
                         reasoning_tokens=usage_result.reasoning_tokens,
                         thinking_characters=usage_result.thinking_characters,
                         error_class=type(exc).__name__,
-                        error_detail=str(exc)[:2048],
+                        error_detail=error_detail_value,
                     ),
                 )
                 raise
@@ -893,7 +898,11 @@ class RequestCoordinator:
         # Also update runtime state with normalized category
         state = self._registry.get_state(account_name)
         if state is not None:
-            state.record_failure(category.value)
+            state.record_failure(
+                category.value,
+                cooldown_seconds=self._quota_exhausted_cooldown_seconds,
+                rate_limit_retry_after=err.retry_after,
+            )
 
     async def _finalize_non_retryable(
         self,
@@ -943,7 +952,10 @@ class RequestCoordinator:
                 status_code = last_upstream_response[0]
             if last_error is not None:
                 error_class = type(last_error).__name__
-                error_detail = str(last_error)[:2048]
+                redacted_detail = redact_error_detail(str(last_error))
+                error_detail = (
+                    redacted_detail[:2048] if redacted_detail is not None else None
+                )
                 if isinstance(last_error, _NonRetryableUpstreamError):
                     outcome = FinalizationOutcome.CLIENT_ERROR
                 elif isinstance(last_error, _RetryableUpstreamError):
@@ -963,6 +975,15 @@ class RequestCoordinator:
         elif context.client_metadata.get("db_request_id") is not None:
             # No selected attempt but request exists - just mark as interrupted
             db_request_id = context.client_metadata["db_request_id"]
+            if last_error is not None:
+                redacted_detail = redact_error_detail(str(last_error))
+                detail_value: str = (
+                    redacted_detail[:2048]
+                    if redacted_detail is not None
+                    else "No attempts dispatched"
+                )
+            else:
+                detail_value = "No attempts dispatched"
             await self._db.execute(
                 "UPDATE requests SET status = 'error', "
                 "completed_at = CURRENT_TIMESTAMP, "
@@ -970,7 +991,7 @@ class RequestCoordinator:
                 "WHERE id = ? AND status = 'pending'",
                 (
                     type(last_error).__name__ if last_error else "exhausted",
-                    str(last_error)[:2048] if last_error else "No attempts dispatched",
+                    detail_value,
                     db_request_id,
                 ),
             )

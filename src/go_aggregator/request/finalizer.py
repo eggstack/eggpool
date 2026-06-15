@@ -15,6 +15,7 @@ from go_aggregator.db.repositories import (
     ReservationRepository,
 )
 from go_aggregator.health.health_manager import classify_failure_category
+from go_aggregator.security.redaction import redact_error_detail
 
 if TYPE_CHECKING:
     from go_aggregator.accounts.registry import AccountRegistry
@@ -111,8 +112,10 @@ class RequestFinalizer:
         cost_microdollars = 0
         exactness = "unknown"
 
-        # Truncate error_detail before any processing
-        error_detail = data.error_detail
+        # Redact, then truncate error_detail before any processing.
+        # Redaction must happen first so the truncation cap applies to
+        # the safe value, not the original secret-bearing input.
+        error_detail = redact_error_detail(data.error_detail)
         if error_detail is not None and len(error_detail) > MAX_ERROR_DETAIL_CHARS:
             error_detail = error_detail[:MAX_ERROR_DETAIL_CHARS]
 
@@ -211,6 +214,9 @@ class RequestFinalizer:
                         )
                         if account_id is not None:
                             event_repo = AccountEventRepository(self._db)
+                            # error_class and status_code are safe to
+                            # persist; the event details deliberately do
+                            # not include error_detail.
                             await event_repo.record(
                                 account_id=account_id,
                                 event_type=data.outcome.value,
@@ -227,18 +233,26 @@ class RequestFinalizer:
             # Commit happens via context manager
 
         # Post-commit: update in-memory state only if we performed the transition
-        if transitioned and reservation_released:
-            # 1. Remove exactly the reserved amount from in-memory tracking
-            if self._quota_estimator is not None:
-                self._quota_estimator.remove_reservation(
-                    selected.account_name, selected.estimated_microdollars
-                )
+        if transitioned:
+            # 1. Reservation cleanup depends on whether the reservation was
+            #    actually released. If the attempt finalizer already released
+            #    the reservation we must not decrement again.
+            if reservation_released:
+                # 1a. Remove exactly the reserved amount from in-memory tracking
+                if self._quota_estimator is not None:
+                    self._quota_estimator.remove_reservation(
+                        selected.account_name, selected.estimated_microdollars
+                    )
 
-            # 2. Decrement active request count
-            if self._router is not None:
-                self._router.decrement_active_request_count(selected.account_name)
+                # 1b. Decrement active request count
+                if self._router is not None:
+                    self._router.decrement_active_request_count(selected.account_name)
 
-            # 3. Add final cost to live quota state
+            # 2. Add final cost to live quota state whenever the request
+            #    transitioned. This is independent of the reservation path:
+            #    even when the attempt finalizer already released the
+            #    reservation, the request-level cost must still be recorded
+            #    so that routing decisions observe it immediately.
             if self._quota_estimator is not None and cost_microdollars > 0:
                 total_tokens = data.input_tokens + data.output_tokens
                 self._quota_estimator.record_usage(
@@ -248,7 +262,7 @@ class RequestFinalizer:
                     model_id=_get_model_id(selected),
                 )
 
-                # 4. Refresh persisted snapshot locally
+                # 3. Refresh persisted snapshot locally
                 #    Increment cached 5h/7d/30d values by final cost
                 snapshot = self._quota_estimator.get_account_quota(
                     selected.account_name
@@ -258,7 +272,8 @@ class RequestFinalizer:
                     snapshot.persisted_snapshot.cost_7d += cost_microdollars
                     snapshot.persisted_snapshot.cost_30d += cost_microdollars
 
-            # 5. Update health state
+            # 4. Update health state. health_already_applied is honored to
+            #    keep health transitions idempotent across retried attempts.
             if self._health_manager is not None and not data.health_already_applied:
                 mid = _get_model_id(selected)
                 if data.outcome == FinalizationOutcome.COMPLETED:
@@ -275,7 +290,9 @@ class RequestFinalizer:
                     )
                 # CLIENT_CANCELLED and CLIENT_ERROR don't penalize health
 
-            # Update runtime state
+            # 5. Update runtime state. Request-level success and terminal
+            #    state must always update the runtime view, independent of
+            #    the reservation path.
             if self._registry is not None:
                 state = self._registry.get_state(selected.account_name)
                 if state is not None:

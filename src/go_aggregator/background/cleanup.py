@@ -21,7 +21,7 @@ async def cleanup_stale_reservations(
     Returns the number of reservations cleaned up.
     """
     async with db.transaction():
-        result = await db.execute(
+        count = await db.execute_write(
             """
             UPDATE reservations
             SET status = 'released', released_at = datetime('now')
@@ -30,7 +30,6 @@ async def cleanup_stale_reservations(
             """,
             (f"-{int(max_age_seconds)}",),
         )
-    count = result.rowcount or 0
     if count > 0:
         logger.info("Cleaned up %d stale reservations", count)
     return count
@@ -47,7 +46,7 @@ async def cleanup_old_requests(
     """
     async with db.transaction():
         # First delete reservations for old requests
-        await db.execute(
+        await db.execute_write(
             """
             DELETE FROM reservations
             WHERE request_id IN (
@@ -58,14 +57,13 @@ async def cleanup_old_requests(
             (f"-{retain_days}",),
         )
 
-        result = await db.execute(
+        count = await db.execute_write(
             """
             DELETE FROM requests
             WHERE started_at < datetime('now', ? || ' days')
             """,
             (f"-{retain_days}",),
         )
-    count = result.rowcount or 0
     if count > 0:
         logger.info(
             "Deleted %d old request records (retention=%d days)",
@@ -81,14 +79,13 @@ async def cleanup_old_events(
 ) -> int:
     """Delete account events older than the retention period."""
     async with db.transaction():
-        result = await db.execute(
+        count = await db.execute_write(
             """
             DELETE FROM account_events
             WHERE created_at < datetime('now', ? || ' days')
             """,
             (f"-{retain_days}",),
         )
-    count = result.rowcount or 0
     if count > 0:
         logger.info("Deleted %d old account events", count)
     return count
@@ -107,10 +104,8 @@ async def reconcile_expired_reservations(
 
     Returns the number of reservations reconciled.
     """
-    transitioned_rows: list[dict[str, Any]] = []
-
     async with db.transaction():
-        cursor = await db.execute(
+        rows = await db.execute_returning(
             """
             UPDATE reservations
             SET status = 'expired',
@@ -128,7 +123,7 @@ async def reconcile_expired_reservations(
             RETURNING id, account_id, estimated_microdollars
             """,
         )
-        transitioned_rows = [dict(row) for row in await cursor.fetchall()]
+        transitioned_rows = [dict(row) for row in rows]
 
     count = len(transitioned_rows)
 

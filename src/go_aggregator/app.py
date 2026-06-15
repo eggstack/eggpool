@@ -228,7 +228,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     app.state.catalog = catalog
 
     # 11. Load cached catalog
-    await catalog._load_cached_models()
+    await catalog._load_cached_models()  # pyright: ignore[reportPrivateUsage]
 
     # 12. Refresh catalog from enabled accounts
     if config.models.startup_refresh:
@@ -247,7 +247,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     app.state.router = router
 
     # 16. Load persisted usage windows and set account weights/offsets
-    router._quota_estimator.set_usage_window_repo(usage_window_repo)  # noqa: SLF001
+    router._quota_estimator.set_usage_window_repo(  # pyright: ignore[reportPrivateUsage]
+        usage_window_repo
+    )
     config_offsets: dict[str, dict[str, int]] = {}
     for acct_cfg in config.accounts:
         config_offsets[acct_cfg.name] = {
@@ -255,7 +257,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             "weekly": acct_cfg.weekly_offset_microdollars,
             "monthly": acct_cfg.monthly_offset_microdollars,
         }
-    await router._quota_estimator.load_persisted_windows(  # noqa: SLF001
+    await router._quota_estimator.load_persisted_windows(  # pyright: ignore[reportPrivateUsage]
         offsets=config_offsets,
     )
     # Set account weights from config
@@ -297,7 +299,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         usage_window_repo=usage_window_repo,
         health_manager=health_manager,
         cost_calculator=cost_calculator,
-        quota_estimator=router._quota_estimator,  # noqa: SLF001
+        quota_estimator=router._quota_estimator,  # pyright: ignore[reportPrivateUsage]
         max_retry_attempts=1 + config.routing.max_retries_before_stream,
         quota_exhausted_cooldown_seconds=config.routing.quota_exhausted_cooldown_seconds,
     )
@@ -321,7 +323,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             await cleanup_old_requests(db, config.dashboard.retain_request_stats_days)
             # Reconcile expired reservations and sync in-memory state
             await reconcile_expired_reservations(
-                db, quota_estimator=router._quota_estimator, router=router
+                db,
+                quota_estimator=router._quota_estimator,  # pyright: ignore[reportPrivateUsage]
+                router=router,
             )
 
     supervisor.register("retention_cleanup", _retention_cleanup)
@@ -339,7 +343,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         while True:
             await asyncio.sleep(60)
             try:
-                await router._quota_estimator.load_persisted_windows()  # noqa: SLF001
+                await router._quota_estimator.load_persisted_windows()  # pyright: ignore[reportPrivateUsage]
             except Exception:
                 logger.debug("Failed to refresh usage windows")
 
@@ -522,9 +526,9 @@ def create_app(
         )
 
     @app.get(f"{API_V1_PREFIX}/models")
-    async def list_models(
+    async def list_models(  # pyright: ignore[reportUnusedFunction]
         request: Request,
-    ) -> dict[str, Any]:  # pyright: ignore[reportUnusedFunction]
+    ) -> dict[str, Any]:
         await require_auth(request)
 
         catalog: CatalogService = request.app.state.catalog
@@ -545,15 +549,15 @@ def create_app(
         }
 
     @app.post(f"{API_V1_PREFIX}/chat/completions")
-    async def chat_completions(
+    async def chat_completions(  # pyright: ignore[reportUnusedFunction]
         request: Request,
-    ) -> Any:  # pyright: ignore[reportUnusedFunction]
+    ) -> Any:
         return await handle_chat_completions(request)
 
     @app.post(f"{API_V1_PREFIX}/messages")
-    async def messages(
+    async def messages(  # pyright: ignore[reportUnusedFunction]
         request: Request,
-    ) -> Any:  # pyright: ignore[reportUnusedFunction]
+    ) -> Any:
         return await handle_messages(request)
 
     @app.exception_handler(AggregatorError)

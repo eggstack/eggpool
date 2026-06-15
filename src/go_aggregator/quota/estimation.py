@@ -31,7 +31,9 @@ class QuotaWindow:
     window_seconds: float
     used_tokens: int = 0
     used_cost_microdollars: int = 0
-    observations: list[tuple[float, int, int]] = field(default_factory=list)
+    observations: list[tuple[float, int, int]] = field(
+        default_factory=list[tuple[float, int, int]]
+    )
 
     def add_observation(self, timestamp: float, tokens: int, cost: int) -> None:
         """Add an observation to the window."""
@@ -143,7 +145,7 @@ class AccountQuota:
     def get_effective_usage(self) -> tuple[int, int]:
         """Get effective usage including manual offsets."""
         daily_tokens, daily_cost = self.daily_window.get_usage()
-        hourly_tokens, hourly_cost = self.hourly_window.get_usage()
+        _hourly_tokens, _hourly_cost = self.hourly_window.get_usage()
         return (
             daily_tokens + self.manual_offset.tokens,
             daily_cost + self.manual_offset.cost_microdollars,
@@ -236,20 +238,26 @@ class QuotaEstimator:
     Optionally uses persisted UsageWindowRepository for actual usage windows.
     """
 
-    accounts: dict[str, AccountQuota] = field(default_factory=dict)
+    accounts: dict[str, AccountQuota] = field(default_factory=dict[str, AccountQuota])
     # Tier 1: account/model EWMA
-    account_model_ewma: dict[str, dict[str, EWMAEstimate]] = field(default_factory=dict)
+    account_model_ewma: dict[str, dict[str, EWMAEstimate]] = field(
+        default_factory=dict[str, dict[str, EWMAEstimate]]
+    )
     # Tier 2: global model EWMA
-    global_model_ewma: dict[str, EWMAEstimate] = field(default_factory=dict)
+    global_model_ewma: dict[str, EWMAEstimate] = field(
+        default_factory=dict[str, EWMAEstimate]
+    )
     # Tier 4: configured per-model overrides
-    model_overrides: dict[str, tuple[float, float]] = field(default_factory=dict)
+    model_overrides: dict[str, tuple[float, float]] = field(
+        default_factory=dict[str, tuple[float, float]]
+    )
     # Config
     default_safety_factor: float = 1.15
     default_unknown_reservation_microdollars: int = 1_000_000
     # Optional persisted window repo for loading actual usage
     _usage_window_repo: UsageWindowRepository | None = field(default=None, repr=False)
     # In-memory reservation tracking for scorer
-    _account_reserved_cost: dict[str, int] = field(default_factory=dict)
+    _account_reserved_cost: dict[str, int] = field(default_factory=dict[str, int])
 
     def set_usage_window_repo(self, repo: UsageWindowRepository) -> None:
         """Set the persisted usage window repository."""
@@ -475,7 +483,9 @@ class QuotaEstimator:
             return
         from go_aggregator.db.repositories import AccountRepository
 
-        acct_repo = AccountRepository(self._usage_window_repo._db)
+        acct_repo = AccountRepository(
+            self._usage_window_repo._db  # pyright: ignore[reportPrivateUsage]
+        )
         enabled = await acct_repo.list_enabled()
         now_iso = time.strftime("%Y-%m-%d %H:%M:%S")
         for acct in enabled:
@@ -503,7 +513,7 @@ class QuotaEstimator:
         self, account_names: list[str]
     ) -> list[tuple[str, float]]:
         """Get eligible accounts with their remaining capacity scores."""
-        eligible = []
+        eligible: list[tuple[str, float]] = []
         for name in account_names:
             quota = self.accounts.get(name)
             if quota is None:

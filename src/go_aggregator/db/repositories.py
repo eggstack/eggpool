@@ -31,7 +31,7 @@ class AccountRepository:
                 (name,),
             )
             if row is not None:
-                await db.execute(
+                await db.execute_write(
                     "UPDATE accounts SET api_key_env = ?, enabled = ?, "
                     "weight = ? WHERE name = ?",
                     (
@@ -43,7 +43,7 @@ class AccountRepository:
                 )
                 name_to_id[name] = int(row["id"])
             else:
-                cursor = await db.execute(
+                last_id = await db.execute_insert(
                     "INSERT INTO accounts (name, api_key_env, enabled, weight) "
                     "VALUES (?, ?, ?, ?)",
                     (
@@ -53,16 +53,12 @@ class AccountRepository:
                         float(acct.get("weight", 1.0)),
                     ),
                 )
-                last_id = cursor.lastrowid
-                if last_id is None:
-                    msg = "INSERT into accounts returned no lastrowid"
-                    raise RuntimeError(msg)
                 name_to_id[name] = last_id
 
         existing = await db.fetch_all("SELECT id, name FROM accounts WHERE enabled = 1")
         for row in existing:
             if row["name"] not in configured_names:
-                await db.execute(
+                await db.execute_write(
                     "UPDATE accounts SET enabled = 0 WHERE id = ?",
                     (row["id"],),
                 )
@@ -114,7 +110,7 @@ class RequestRepository:
             started_at_str = _dt.datetime.fromtimestamp(
                 started_at, tz=_dt.UTC
             ).strftime("%Y-%m-%d %H:%M:%S")
-            cursor = await self._db.execute(
+            last_id = await self._db.execute_insert(
                 "INSERT INTO requests "
                 "(account_id, model_id, started_at, status, protocol, "
                 "streamed, reserved_microdollars, proxy_request_id) "
@@ -130,7 +126,7 @@ class RequestRepository:
                 ),
             )
         else:
-            cursor = await self._db.execute(
+            last_id = await self._db.execute_insert(
                 "INSERT INTO requests "
                 "(account_id, model_id, status, protocol, streamed, "
                 "reserved_microdollars, proxy_request_id) "
@@ -144,8 +140,7 @@ class RequestRepository:
                     request_id,
                 ),
             )
-        last_id = cursor.lastrowid
-        return str(last_id) if last_id is not None else request_id
+        return str(last_id)
 
     async def update_after_selection(
         self,
@@ -154,7 +149,7 @@ class RequestRepository:
         reserved_microdollars: int,
     ) -> None:
         """Set the selected account after routing decision."""
-        await self._db.execute(
+        await self._db.execute_write(
             "UPDATE requests SET account_id = ?, reserved_microdollars = ? "
             "WHERE id = ?",
             (account_id, reserved_microdollars, request_id),
@@ -181,7 +176,7 @@ class RequestRepository:
         retry_count: int = 0,
     ) -> None:
         """Update request after completion (non-streaming)."""
-        await self._db.execute(
+        await self._db.execute_write(
             "UPDATE requests SET "
             "status = ?, completed_at = CURRENT_TIMESTAMP, "
             "input_tokens = ?, output_tokens = ?, cost_microdollars = ?, "
@@ -232,7 +227,7 @@ class RequestRepository:
         retry_count: int = 0,
     ) -> None:
         """Update request after streaming completes."""
-        await self._db.execute(
+        await self._db.execute_write(
             "UPDATE requests SET "
             "status = ?, completed_at = CURRENT_TIMESTAMP, "
             "input_tokens = ?, output_tokens = ?, cost_microdollars = ?, "
@@ -287,7 +282,7 @@ class RequestRepository:
         Returns True if the row was updated (transition performed),
         False if the request was already terminal (idempotent).
         """
-        cursor = await self._db.execute(
+        rowcount = await self._db.execute_write(
             "UPDATE requests SET "
             "status = ?, completed_at = CURRENT_TIMESTAMP, "
             "input_tokens = ?, output_tokens = ?, cost_microdollars = ?, "
@@ -317,7 +312,7 @@ class RequestRepository:
                 request_id,
             ),
         )
-        return cursor.rowcount > 0
+        return rowcount > 0
 
     async def get_by_id(self, request_id: str) -> dict[str, Any] | None:
         """Fetch a request by id."""
@@ -352,7 +347,7 @@ class ReservationRepository:
         ttl_seconds: int = 900,
     ) -> str:
         """Create a new reservation with expiry, return the id."""
-        cursor = await self._db.execute(
+        last_id = await self._db.execute_insert(
             "INSERT INTO reservations "
             "(request_id, account_id, model_id, estimated_tokens, "
             "estimated_microdollars, expires_at) "
@@ -366,21 +361,20 @@ class ReservationRepository:
                 f"+{ttl_seconds} seconds",
             ),
         )
-        last_id = cursor.lastrowid
-        return str(last_id) if last_id is not None else ""
+        return str(last_id)
 
     async def release(self, reservation_id: str, reason: str) -> bool:
         """Mark a reservation as released.
 
         Returns True if a reservation was actually released.
         """
-        cursor = await self._db.execute(
+        rowcount = await self._db.execute_write(
             "UPDATE reservations SET status = 'released', "
             "released_at = CURRENT_TIMESTAMP, release_reason = ? "
             "WHERE id = ? AND status = 'active'",
             (reason, reservation_id),
         )
-        return cursor.rowcount > 0
+        return rowcount > 0
 
     async def release_for_request(
         self,
@@ -388,7 +382,7 @@ class ReservationRepository:
         reason: str,
     ) -> None:
         """Release all active reservations for a request."""
-        await self._db.execute(
+        await self._db.execute_write(
             "UPDATE reservations SET status = 'released', "
             "released_at = CURRENT_TIMESTAMP, release_reason = ? "
             "WHERE request_id = ? AND status = 'active'",
@@ -397,7 +391,7 @@ class ReservationRepository:
 
     async def reconcile_expired(self) -> int:
         """Release all reservations past their expiry, return count."""
-        cursor = await self._db.execute(
+        return await self._db.execute_write(
             "UPDATE reservations SET status = 'expired', "
             "released_at = CURRENT_TIMESTAMP, release_reason = 'expired' "
             "WHERE status = 'active' AND expires_at IS NOT NULL "
@@ -408,7 +402,6 @@ class ReservationRepository:
             "    AND requests.status = 'pending'"
             ")"
         )
-        return cursor.rowcount
 
     async def get_active_for_account(
         self,
@@ -435,17 +428,12 @@ class AttemptRepository:
         account_id: int,
     ) -> int:
         """Create a new attempt row, return its id."""
-        cursor = await self._db.execute(
+        return await self._db.execute_insert(
             "INSERT INTO request_attempts "
             "(request_id, attempt_number, account_id) "
             "VALUES (?, ?, ?)",
             (request_id, attempt_number, account_id),
         )
-        last_id = cursor.lastrowid
-        if last_id is None:
-            msg = "INSERT into request_attempts returned no lastrowid"
-            raise RuntimeError(msg)
-        return last_id
 
     async def update(
         self,
@@ -459,7 +447,7 @@ class AttemptRepository:
     ) -> None:
         """Update an attempt with outcome fields."""
         if completed:
-            await self._db.execute(
+            await self._db.execute_write(
                 "UPDATE request_attempts SET "
                 "status_code = ?, error_class = ?, error_detail = ?, "
                 "upstream_request_id = ?, bytes_emitted = ?, "
@@ -475,7 +463,7 @@ class AttemptRepository:
                 ),
             )
         else:
-            await self._db.execute(
+            await self._db.execute_write(
                 "UPDATE request_attempts SET "
                 "status_code = ?, error_class = ?, error_detail = ?, "
                 "upstream_request_id = ?, bytes_emitted = ?, "
@@ -504,7 +492,7 @@ class AttemptRepository:
 
         Returns True if the row was updated (transition performed).
         """
-        cursor = await self._db.execute(
+        rowcount = await self._db.execute_write(
             "UPDATE request_attempts SET "
             "status_code = ?, error_class = ?, error_detail = ?, "
             "upstream_request_id = ?, bytes_emitted = ?, "
@@ -519,7 +507,7 @@ class AttemptRepository:
                 attempt_id,
             ),
         )
-        return cursor.rowcount > 0
+        return rowcount > 0
 
     async def get_for_request(self, request_id: str) -> list[dict[str, Any]]:
         """Get all attempts for a request, ordered by attempt number."""
@@ -603,7 +591,7 @@ class PriceSnapshotRepository:
         output_per_million_microdollars: int | None = None,
         cache_read_per_million_microdollars: int | None = None,
         cache_write_per_million_microdollars: int | None = None,
-        source: str = "catalog",
+        source: str = "upstream",
     ) -> None:
         """Record a new price snapshot.
 
@@ -620,7 +608,7 @@ class PriceSnapshotRepository:
                 round(output_price_per_1k * 1_000_000_000)
             )
 
-        await self._db.execute(
+        await self._db.execute_write(
             "INSERT INTO model_price_snapshots "
             "(model_id, input_price_per_1k, output_price_per_1k, "
             "input_per_million_microdollars, output_per_million_microdollars, "
@@ -642,17 +630,24 @@ class PriceSnapshotRepository:
     async def record_from_dict(
         self,
         model_id: str,
-        prices_dict: dict[str, float | None],
+        prices_dict: dict[str, float | int | str | None],
     ) -> None:
         """Record prices from a dictionary with input/output keys."""
         input_micro = prices_dict.get("input_per_million_microdollars")
         output_micro = prices_dict.get("output_per_million_microdollars")
         cache_read = prices_dict.get("cache_read_per_million_microdollars")
         cache_write = prices_dict.get("cache_write_per_million_microdollars")
+        input_price_per_1k = prices_dict.get("input_price_per_1k")
+        output_price_per_1k = prices_dict.get("output_price_per_1k")
+        source_value = prices_dict.get("source", "upstream")
         await self.record(
             model_id,
-            input_price_per_1k=prices_dict.get("input_price_per_1k"),
-            output_price_per_1k=prices_dict.get("output_price_per_1k"),
+            input_price_per_1k=float(input_price_per_1k)
+            if input_price_per_1k is not None
+            else None,
+            output_price_per_1k=float(output_price_per_1k)
+            if output_price_per_1k is not None
+            else None,
             input_per_million_microdollars=int(input_micro)
             if input_micro is not None
             else None,
@@ -665,7 +660,7 @@ class PriceSnapshotRepository:
             cache_write_per_million_microdollars=int(cache_write)
             if cache_write is not None
             else None,
-            source=prices_dict.get("source", "catalog"),
+            source=source_value if isinstance(source_value, str) else "upstream",
         )
 
 
@@ -682,7 +677,7 @@ class AccountEventRepository:
         details: str = "{}",
     ) -> None:
         """Record an account event."""
-        await self._db.execute(
+        await self._db.execute_write(
             "INSERT INTO account_events (account_id, event_type, details) "
             "VALUES (?, ?, ?)",
             (account_id, event_type, details),

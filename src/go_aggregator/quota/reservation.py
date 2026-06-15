@@ -53,8 +53,12 @@ class ReservationManager:
     """Manages atomic reservations for quota-aware routing."""
 
     reservation_ttl_seconds: float = 300.0  # 5 minutes default TTL
-    _reservations: dict[str, Reservation] = field(default_factory=dict)
-    _account_reservations: dict[str, list[str]] = field(default_factory=dict)
+    _reservations: dict[str, Reservation] = field(
+        default_factory=dict[str, Reservation]
+    )
+    _account_reservations: dict[str, list[str]] = field(
+        default_factory=dict[str, list[str]]
+    )
 
     def create_reservation(
         self,
@@ -145,7 +149,7 @@ class ReservationManager:
         """Remove old reservations from memory."""
         now = time.time()
         cutoff = now - max_age_seconds
-        to_remove = []
+        to_remove: list[str] = []
 
         for rid, reservation in self._reservations.items():
             if reservation.created_at < cutoff:
@@ -195,7 +199,7 @@ class ReservationManager:
 
     async def load_reservations(self, db: Database) -> None:
         """Load active reservations from database."""
-        async with db.execute(
+        async with await db.execute(
             """
             SELECT r.id, r.request_id, a.name, r.reserved_tokens,
                    r.reserved_cost_microdollars,

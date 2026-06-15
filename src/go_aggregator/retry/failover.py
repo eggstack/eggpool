@@ -63,8 +63,10 @@ class FailoverManager:
     circuit_breaker_duration_seconds: float = 300.0  # 5 minutes
 
     _classifier: RetryClassifier = field(default_factory=RetryClassifier)
-    _failover_states: dict[str, FailoverState] = field(default_factory=dict)
-    _attempt_history: list[AttemptRecord] = field(default_factory=list)
+    _failover_states: dict[str, FailoverState] = field(
+        default_factory=dict[str, FailoverState]
+    )
+    _attempt_history: list[AttemptRecord] = field(default_factory=list[AttemptRecord])
 
     def should_retry(
         self, account_name: str, model_id: str, attempt_number: int

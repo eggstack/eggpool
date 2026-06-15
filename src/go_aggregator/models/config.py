@@ -153,7 +153,7 @@ class AppConfig(BaseModel):
         return self
 
     @classmethod
-    def from_dict(cls, data: dict) -> AppConfig:
+    def from_dict(cls, data: dict[str, object]) -> AppConfig:
         """Create config from a dictionary."""
         try:
             return cls.model_validate(data)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
 from go_aggregator.health.circuit_breaker import CircuitBreaker
 
@@ -27,13 +28,29 @@ def classify_failure_category(
     error_class: str | None,
     status_code: int | None = None,
 ) -> FailureCategory:
-    """Map an error class string or status code to a normalized failure category."""
+    """Map an error class string or status code to a normalized failure category.
+
+    Real upstream HTTP 402 (Payment Required) responses map to
+    QUOTA_EXHAUSTED regardless of error class, because providers often
+    return generic 402 bodies without a structured error class. The
+    quota-exhausted substring check is intentionally permissive to
+    accept vendor-specific spellings (``quotaexhausted`` or
+    ``quota_exhausted``).
+    """
+    if error_class is None and status_code is None:
+        return FailureCategory.UNKNOWN
+    if status_code == 402:
+        return FailureCategory.QUOTA_EXHAUSTED
     if error_class is None:
+        # status_code already handled above; any other code without
+        # an error class falls through to the generic catch-all below.
+        if status_code is not None and 500 <= status_code < 600:
+            return FailureCategory.UPSTREAM_SERVER_ERROR
         return FailureCategory.UNKNOWN
     ec = error_class.lower()
     if "auth" in ec:
         return FailureCategory.AUTHENTICATION_FAILED
-    if ec == "quota_exhausted":
+    if "quotaexhausted" in ec or "quota_exhausted" in ec:
         return FailureCategory.QUOTA_EXHAUSTED
     if "ratelimit" in ec or "rate_limit" in ec or status_code == 429:
         return FailureCategory.RATE_LIMITED
@@ -60,7 +77,7 @@ class AccountHealth:
     last_check: float = field(default_factory=time.time)
     consecutive_failures: int = 0
     circuit_breaker: CircuitBreaker = field(default_factory=CircuitBreaker)
-    disabled_models: set[str] = field(default_factory=set)
+    disabled_models: set[str] = field(default_factory=set[str])
     disabled_until: float | None = None
     disabled_reason: str = ""
     cooldown_until: float = 0.0
@@ -90,9 +107,11 @@ class AccountHealth:
 class HealthManager:
     """Manages health state for all accounts."""
 
-    _accounts: dict[str, AccountHealth] = field(default_factory=dict)
+    _accounts: dict[str, AccountHealth] = field(
+        default_factory=dict[str, AccountHealth]
+    )
     _model_health: dict[str, dict[str, AccountHealth]] = field(
-        default_factory=dict
+        default_factory=dict[str, dict[str, AccountHealth]]
     )  # model_id -> account_name -> health
 
     def get_account_health(self, account_name: str) -> AccountHealth:
@@ -217,9 +236,7 @@ class HealthManager:
         """Get list of healthy accounts."""
         return [name for name in account_names if self.is_account_healthy(name)]
 
-    def get_health_stats(
-        self, account_name: str
-    ) -> dict[str, float | int | str | bool]:
+    def get_health_stats(self, account_name: str) -> dict[str, Any]:
         """Get health statistics for an account."""
         health = self.get_account_health(account_name)
         return {

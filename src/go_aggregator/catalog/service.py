@@ -59,12 +59,16 @@ class CatalogService:
                 return
 
             # Fetch concurrently for each account
-            tasks = []
+            tasks: list[asyncio.Task[None]] = []
             for state in enabled_accounts:
                 api_key = self._registry.get_api_key(state.name)
                 if not api_key:
                     continue
-                tasks.append(self._fetch_and_process_account(state.name, api_key))
+                tasks.append(
+                    asyncio.create_task(
+                        self._fetch_and_process_account(state.name, api_key)
+                    )
+                )
 
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
@@ -146,9 +150,9 @@ class CatalogService:
             for row in rows:
                 model_id = row["model_id"]
                 caps_raw = row["capabilities"]
-                caps = json.loads(caps_raw) if caps_raw else {}
+                caps: dict[str, Any] = json.loads(caps_raw) if caps_raw else {}
                 meta_raw = row["source_metadata"]
-                meta = json.loads(meta_raw) if meta_raw else {}
+                meta: dict[str, Any] = json.loads(meta_raw) if meta_raw else {}
                 self._cache.load_model(
                     model_id=model_id,
                     display_name=row["display_name"],
@@ -256,57 +260,75 @@ class CatalogService:
     ) -> None:
         """Insert a price snapshot if pricing data is available.
 
-        Extracts pricing from TOML overrides (authoritative) or upstream
-        metadata. Only inserts when values differ from the latest snapshot.
+        Each pricing category (input, output, cache-read, cache-write)
+        is resolved independently: a TOML override is authoritative
+        for any category it sets, and any category not set by TOML
+        falls back to upstream metadata. The resulting ``source`` is
+
+        - ``"config"`` if every present value came from TOML,
+        - ``"upstream"`` if every present value came from upstream
+          metadata,
+        - ``"mixed"`` if the present values came from a mix of both.
+
+        The snapshot is only inserted when its values differ from the
+        latest snapshot for the same model.
         """
-        input_price: float | None = None
-        output_price: float | None = None
-        cache_read_price: float | None = None
-        cache_write_price: float | None = None
-        source = "upstream"
-
-        # 1. Check TOML override (authoritative)
+        # Per-category override values (None means: no override for this
+        # category, fall back to upstream).
         override = self._config.model_overrides.get(model_id)
-        has_override_pricing = override and (
-            override.input_price_per_1k is not None
-            or override.output_price_per_1k is not None
-        )
-        if has_override_pricing:
-            input_price = override.input_price_per_1k
-            output_price = override.output_price_per_1k
-            source = "config"
+        override_values: dict[str, Any] = {}
+        if override is not None:
+            if override.input_price_per_1k is not None:
+                override_values["input"] = override.input_price_per_1k
+            if override.output_price_per_1k is not None:
+                override_values["output"] = override.output_price_per_1k
+            if override.cache_read_per_million_microdollars is not None:
+                override_values["cache_read"] = (
+                    override.cache_read_per_million_microdollars
+                )
+            if override.cache_write_per_million_microdollars is not None:
+                override_values["cache_write"] = (
+                    override.cache_write_per_million_microdollars
+                )
 
-        # 1b. Check TOML overrides for cache rates
-        if override and override.cache_read_per_million_microdollars is not None:
-            cache_read_price = override.cache_read_per_million_microdollars
-        if override and override.cache_write_per_million_microdollars is not None:
-            cache_write_price = override.cache_write_per_million_microdollars
+        meta: dict[str, Any] = model_info.get("source_metadata", {})
 
-        # 2. Check upstream source_metadata for pricing
-        if input_price is None and output_price is None:
-            meta = model_info.get("source_metadata", {})
-            # OpenAI-style: pricing.prompt / pricing.completion (dollars per token)
-            pricing = meta.get("pricing")
-            if isinstance(pricing, dict):
-                prompt = pricing.get("prompt")
-                completion = pricing.get("completion")
-                if prompt is not None:
-                    input_price = float(prompt) * 1_000  # per token -> per 1k
-                if completion is not None:
-                    output_price = float(completion) * 1_000
-            # Some providers: input_price_per_1k / output_price_per_1k
-            if input_price is None:
-                input_price = meta.get("input_price_per_1k")
-            if output_price is None:
-                output_price = meta.get("output_price_per_1k")
+        def _resolve_input() -> float | None:
+            if "input" in override_values:
+                return override_values["input"]
+            pricing: dict[str, Any] | None = meta.get("pricing")
+            if isinstance(pricing, dict) and "prompt" in pricing:
+                prompt_val: Any = pricing["prompt"]
+                return float(prompt_val) * 1_000  # per token -> per 1k
+            upstream = meta.get("input_price_per_1k")
+            return float(upstream) if upstream is not None else None
 
-        # 2b. Check upstream metadata for cache pricing
-        if cache_read_price is None and cache_write_price is None:
-            meta = model_info.get("source_metadata", {})
-            if cache_read_price is None:
-                cache_read_price = meta.get("cache_read_per_million_microdollars")
-            if cache_write_price is None:
-                cache_write_price = meta.get("cache_write_per_million_microdollars")
+        def _resolve_output() -> float | None:
+            if "output" in override_values:
+                return override_values["output"]
+            pricing: dict[str, Any] | None = meta.get("pricing")
+            if isinstance(pricing, dict) and "completion" in pricing:
+                completion_val: Any = pricing["completion"]
+                return float(completion_val) * 1_000
+            upstream = meta.get("output_price_per_1k")
+            return float(upstream) if upstream is not None else None
+
+        def _resolve_cache_read() -> int | None:
+            if "cache_read" in override_values:
+                return int(override_values["cache_read"])
+            upstream = meta.get("cache_read_per_million_microdollars")
+            return int(upstream) if upstream is not None else None
+
+        def _resolve_cache_write() -> int | None:
+            if "cache_write" in override_values:
+                return int(override_values["cache_write"])
+            upstream = meta.get("cache_write_per_million_microdollars")
+            return int(upstream) if upstream is not None else None
+
+        input_price = _resolve_input()
+        output_price = _resolve_output()
+        cache_read_price = _resolve_cache_read()
+        cache_write_price = _resolve_cache_write()
 
         if all(
             value is None
@@ -319,7 +341,31 @@ class CatalogService:
         ):
             return
 
-        # 3. Check if values differ from latest snapshot
+        # Determine the per-category provenance to compute the snapshot
+        # source. A category is considered "present" if it has a value;
+        # its provenance is "config" if the override provided it,
+        # otherwise "upstream".
+        present_provenance: set[str] = set()
+        for _key, override_key, present in (
+            ("input", "input", input_price is not None),
+            ("output", "output", output_price is not None),
+            ("cache_read", "cache_read", cache_read_price is not None),
+            ("cache_write", "cache_write", cache_write_price is not None),
+        ):
+            if not present:
+                continue
+            present_provenance.add(
+                "config" if override_key in override_values else "upstream"
+            )
+
+        if present_provenance == {"config"}:
+            source = "config"
+        elif present_provenance == {"upstream"}:
+            source = "upstream"
+        else:
+            source = "mixed"
+
+        # Skip insert when every field already matches the latest snapshot.
         snapshot_repo = PriceSnapshotRepository(self._db)
         latest = await snapshot_repo.get_latest(model_id)
         if latest is not None:
@@ -337,24 +383,25 @@ class CatalogService:
             ):
                 return  # No change, skip insert
 
-        # 4. Insert new snapshot
-        cache_read_int = int(cache_read_price) if cache_read_price is not None else None
-        cache_write_int = (
-            int(cache_write_price) if cache_write_price is not None else None
-        )
+        # Insert new snapshot. Cache rates are always int microdollars
+        # here; legacy float input/output are forwarded to the repo's
+        # auto-conversion path.
         await snapshot_repo.record(
             model_id,
             input_price_per_1k=input_price,
             output_price_per_1k=output_price,
-            cache_read_per_million_microdollars=cache_read_int,
-            cache_write_per_million_microdollars=cache_write_int,
+            cache_read_per_million_microdollars=cache_read_price,
+            cache_write_per_million_microdollars=cache_write_price,
             source=source,
         )
         logger.debug(
-            "Inserted price snapshot for %s: input=%s output=%s source=%s",
+            "Inserted price snapshot for %s: input=%s output=%s "
+            "cache_read=%s cache_write=%s source=%s",
             model_id,
             input_price,
             output_price,
+            cache_read_price,
+            cache_write_price,
             source,
         )
 
