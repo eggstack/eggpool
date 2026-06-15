@@ -146,6 +146,96 @@ class TestSharedConnectionSerialization:
 
         await db.disconnect()
 
+    @pytest.mark.asyncio
+    async def test_write_waits_for_transaction_commit(self) -> None:
+        """Task B's write outside a transaction waits for Task A's commit."""
+        db = Database(path=":memory:")
+        await db.connect()
+        runner = MigrationRunner(db)
+        await runner.run()
+
+        commit_event = asyncio.Event()
+        write_result: list[int] = []
+
+        async def task_a() -> None:
+            async with db.transaction():
+                await db.execute(
+                    "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+                    "VALUES (?, ?, 1, 1.0)",
+                    ("tx-acct", "DUMMY"),
+                )
+                commit_event.set()
+                await asyncio.sleep(0.1)
+
+        async def task_b() -> None:
+            await commit_event.wait()
+            # This write should wait until Task A's transaction commits.
+            await db.execute(
+                "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+                "VALUES (?, ?, 1, 1.0)",
+                ("b-acct", "DUMMY"),
+            )
+            row = await db.fetch_one(
+                "SELECT name FROM accounts WHERE name = ?", ("tx-acct",)
+            )
+            # Task B can only see tx-acct after Task A's commit
+            write_result.append(1 if row is not None else 0)
+
+        task_a_coro = asyncio.create_task(task_a())
+        task_b_coro = asyncio.create_task(task_b())
+        await asyncio.gather(task_a_coro, task_b_coro)
+
+        assert write_result == [1]
+        await db.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_child_task_cannot_inherit_transaction(self) -> None:
+        """A child task spawned inside a transaction must wait for the lock."""
+        db = Database(path=":memory:")
+        await db.connect()
+        runner = MigrationRunner(db)
+        await runner.run()
+
+        parent_in_transaction = asyncio.Event()
+        child_entered = asyncio.Event()
+        child_saw_data: list[bool] = []
+
+        async def parent_task() -> None:
+            async with db.transaction():
+                await db.execute(
+                    "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+                    "VALUES (?, ?, 1, 1.0)",
+                    ("parent-acct", "DUMMY"),
+                )
+                parent_in_transaction.set()
+                # Spawn child while holding the transaction lock but do NOT
+                # await it here – that would deadlock.
+                child_task = asyncio.create_task(child_task_fn())
+                await asyncio.sleep(0.1)
+            # Transaction committed, lock released. Now await the child.
+            await child_task
+
+        async def child_task_fn() -> None:
+            # Child should NOT enter until parent completes
+            await parent_in_transaction.wait()
+            # Small delay to ensure we're scheduled while parent holds the lock
+            await asyncio.sleep(0.05)
+            # Child entering transaction must wait on the lock
+            async with db.transaction():
+                child_entered.set()
+                row = await db.fetch_one(
+                    "SELECT name FROM accounts WHERE name = ?",
+                    ("parent-acct",),
+                )
+                child_saw_data.append(row is not None)
+
+        await parent_task()
+
+        # Child entered and could see committed data
+        assert child_entered.is_set()
+        assert child_saw_data == [True]
+        await db.disconnect()
+
 
 # ===========================================================================
 # B. Exhausted retry cleanup
@@ -787,3 +877,129 @@ class TestHealthConsistency:
         health = hm.get_account_health("acct-a")
         assert health.health_state == "authentication_failed"
         assert state.health_state == "authentication_failed"
+
+
+# ===========================================================================
+# I. Privacy regression
+# ===========================================================================
+
+
+class TestPrivacyRegression:
+    """I. No request content or secrets appear in persisted data."""
+
+    @pytest.mark.asyncio
+    async def test_no_secrets_in_database(self) -> None:
+        """Known markers for prompts, completions, API keys, and auth
+        headers must not appear anywhere in the persisted database."""
+        db = Database(path=":memory:")
+        await db.connect()
+        runner = MigrationRunner(db)
+        await runner.run()
+        await _seed_db(db)
+
+        forbidden = [
+            "sk-",
+            "Bearer ",
+            "Authorization",
+            '"prompt":',
+            '"completion":',
+            "password",
+            "secret",
+        ]
+
+        rows = await db.fetch_all(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name NOT LIKE '\\_%' ESCAPE '\\'"
+        )
+        for table in rows:
+            tbl = table["name"]
+            cols = await db.fetch_all(f"PRAGMA table_info({tbl})")
+            for col in cols:
+                col_name = col["name"]
+                cell_rows = await db.fetch_all(f"SELECT {col_name} FROM {tbl}")
+                for cell in cell_rows:
+                    val = str(cell[0]) if cell[0] is not None else ""
+                    for marker in forbidden:
+                        assert marker not in val, (
+                            f"Privacy violation: '{marker}' found in "
+                            f"{tbl}.{col_name} = {val!r}"
+                        )
+
+        await db.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_error_detail_is_truncated(self) -> None:
+        """Error details longer than 2048 chars are truncated."""
+        db = Database(path=":memory:")
+        await db.connect()
+        runner = MigrationRunner(db)
+        await runner.run()
+        await _seed_db(db)
+
+        request_repo = RequestRepository(db)
+        attempt_repo = AttemptRepository(db)
+        reservation_repo = ReservationRepository(db)
+
+        async with db.transaction():
+            db_id = await request_repo.create_pending(
+                request_id="truncate-test",
+                model_id="gpt-4",
+                protocol="openai",
+                streamed=False,
+                account_id=1,
+            )
+            attempt_id = await attempt_repo.create(
+                request_id=db_id, attempt_number=1, account_id=1
+            )
+            reservation_id = await reservation_repo.create(
+                request_id=db_id,
+                account_id=1,
+                model_id="gpt-4",
+                estimated_tokens=1000,
+                estimated_microdollars=100000,
+                ttl_seconds=300,
+            )
+
+        from go_aggregator.request.finalizer import (
+            FinalizationData,
+            FinalizationOutcome,
+            RequestFinalizer,
+        )
+
+        finalizer = RequestFinalizer(
+            db=db,
+            request_repo=request_repo,
+            attempt_repo=attempt_repo,
+            reservation_repo=reservation_repo,
+        )
+
+        _attempt_id = attempt_id
+        _reservation_id = reservation_id
+        _db_id = db_id
+
+        class MockSelected:
+            db_request_id = _db_id
+            account_name = "test-acct"
+            model_id = "gpt-4"
+            attempt_id = _attempt_id
+            reservation_id = _reservation_id
+            estimated_microdollars = 100000
+            attempt_number = 1
+
+        long_error = "x" * 5000
+        await finalizer.finalize(
+            MockSelected(),
+            FinalizationData(
+                outcome=FinalizationOutcome.UPSTREAM_ERROR,
+                error_detail=long_error,
+            ),
+        )
+
+        row = await db.fetch_one(
+            "SELECT error_detail FROM requests WHERE id = ?", (db_id,)
+        )
+        assert row is not None
+        assert row["error_detail"] is not None
+        assert len(row["error_detail"]) <= 2048
+
+        await db.disconnect()
