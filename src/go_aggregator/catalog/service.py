@@ -204,7 +204,7 @@ class CatalogService:
                     protocol_source = None
 
                 # Upsert model
-                await self._db.execute(
+                await self._db.execute_write(
                     f"""
                     INSERT INTO models (
                         model_id, display_name, protocol,
@@ -241,7 +241,7 @@ class CatalogService:
                     account_name = acct_row["name"]
                     is_available = 1 if account_name in supporting_accounts else 0
 
-                    await self._db.execute(
+                    await self._db.execute_write(
                         f"""
                         INSERT INTO account_models (
                             account_id, model_id, enabled, created_at

@@ -170,7 +170,7 @@ class ReservationManager:
         """Persist reservations to database."""
         async with db.transaction():
             for reservation in self._reservations.values():
-                await db.execute(
+                await db.execute_write(
                     """
                     INSERT OR REPLACE INTO reservations (
                         id, request_id, account_id, reserved_tokens,
@@ -199,7 +199,7 @@ class ReservationManager:
 
     async def load_reservations(self, db: Database) -> None:
         """Load active reservations from database."""
-        async with await db.execute(
+        rows = await db.fetch_all(
             """
             SELECT r.id, r.request_id, a.name, r.reserved_tokens,
                    r.reserved_cost_microdollars,
@@ -210,24 +210,23 @@ class ReservationManager:
             JOIN accounts a ON r.account_id = a.id
             WHERE r.released = 0 AND r.expires_at > datetime('now')
             """
-        ) as cursor:
-            rows = await cursor.fetchall()
-            for row in rows:
-                reservation = Reservation(
-                    reservation_id=row[0],
-                    request_id=row[1],
-                    account_name=row[2],
-                    estimated_tokens=row[3],
-                    estimated_cost_microdollars=row[4],
-                    created_at=float(row[5]) if row[5] else 0.0,
-                    expires_at=float(row[6]) if row[6] else 0.0,
-                    released=bool(row[7]),
-                    released_at=float(row[8]) if row[8] else None,
-                    release_reason=row[9] or "",
-                )
-                self._reservations[reservation.reservation_id] = reservation
-                if reservation.account_name not in self._account_reservations:
-                    self._account_reservations[reservation.account_name] = []
-                self._account_reservations[reservation.account_name].append(
-                    reservation.reservation_id
-                )
+        )
+        for row in rows:
+            reservation = Reservation(
+                reservation_id=row[0],
+                request_id=row[1],
+                account_name=row[2],
+                estimated_tokens=row[3],
+                estimated_cost_microdollars=row[4],
+                created_at=float(row[5]) if row[5] else 0.0,
+                expires_at=float(row[6]) if row[6] else 0.0,
+                released=bool(row[7]),
+                released_at=float(row[8]) if row[8] else None,
+                release_reason=row[9] or "",
+            )
+            self._reservations[reservation.reservation_id] = reservation
+            if reservation.account_name not in self._account_reservations:
+                self._account_reservations[reservation.account_name] = []
+            self._account_reservations[reservation.account_name].append(
+                reservation.reservation_id
+            )

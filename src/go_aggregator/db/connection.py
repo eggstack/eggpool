@@ -104,7 +104,7 @@ class Database:
         """
         try:
             async with self.transaction():
-                await self.execute(
+                await self._execute_cursor(
                     "INSERT INTO health_probe (probe_at) VALUES (CURRENT_TIMESTAMP)"
                 )
                 raise _RollbackProbeError
@@ -113,25 +113,44 @@ class Database:
         except Exception:
             return False
 
-    async def execute(self, sql: str, params: Sequence[Any] = ()) -> aiosqlite.Cursor:
-        """Execute a SQL statement and return the cursor.
+    async def _execute_cursor(
+        self, sql: str, params: Sequence[Any] = ()
+    ) -> aiosqlite.Cursor:
+        """Execute a SQL statement and return the raw cursor.
 
-        Prefer the explicit helpers :meth:`execute_write`,
-        :meth:`execute_insert`, or :meth:`execute_returning`.  This
-        method exists for transaction-internal use where the caller
-        needs the full cursor object.  Callers MUST consume the cursor
-        before yielding control if they are not inside a transaction
-        (the connection lock is released after this method returns).
-        Within a transaction the lock is already held for the entire
-        outer transaction lifetime, so the cursor may be safely
-        consumed anywhere inside the ``async with db.transaction():``
-        block.
+        This method is **transaction-owner-only**.  The caller MUST hold
+        the connection lock (either by being inside ``async with
+        db.transaction():`` or by consuming the cursor before yielding
+        control).  Outside a transaction the lock is released when this
+        method returns, so any subsequent use of the cursor would race
+        with other concurrent tasks.
+
+        Prefer :meth:`execute_write`, :meth:`execute_insert`, or
+        :meth:`execute_returning` for all new code.
         """
         async with self._connection_access():
             try:
                 return await self.connection.execute(sql, params)  # type: ignore[return-value]
             except Exception as exc:
                 raise DatabaseError(f"Execute failed: {exc}") from exc
+
+    async def execute(self, sql: str, params: Sequence[Any] = ()) -> aiosqlite.Cursor:
+        """Legacy wrapper around :meth:`_execute_cursor`.
+
+        .. deprecated::
+            Use :meth:`execute_write`, :meth:`execute_insert`, or
+            :meth:`execute_returning` instead.  This method remains for
+            backward-compatible test seeding and DDL execution.
+        """
+        import warnings
+
+        warnings.warn(
+            "db.execute() is deprecated; use execute_write/execute_insert/"
+            "execute_returning instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return await self._execute_cursor(sql, params)
 
     async def execute_write(
         self,

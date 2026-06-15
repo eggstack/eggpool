@@ -59,7 +59,7 @@ class PriceRepository:
                 round(output_price_per_1k * 1_000_000_000)
             )
 
-        await self._db.execute(
+        await self._db.execute_write(
             """
             INSERT INTO model_price_snapshots
                 (model_id, input_price_per_1k, output_price_per_1k,

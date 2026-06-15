@@ -60,8 +60,8 @@ class MigrationRunner:
             try:
                 async with self._db.transaction():
                     for stmt in statements:
-                        await self._db.execute(stmt)
-                    await self._db.execute(
+                        await self._db._execute_cursor(stmt)  # pyright: ignore[reportPrivateUsage] -- DDL requires raw cursor, safe inside transaction
+                    await self._db._execute_cursor(  # pyright: ignore[reportPrivateUsage] -- DDL requires raw cursor, safe inside transaction
                         "INSERT INTO _migrations (version, name) VALUES (?, ?)",
                         (version, path.name),
                     )
@@ -73,7 +73,7 @@ class MigrationRunner:
     async def _ensure_migrations_table(self) -> None:
         """Create the _migrations tracking table if it doesn't exist."""
         async with self._db.transaction():
-            await self._db.execute(
+            await self._db._execute_cursor(  # pyright: ignore[reportPrivateUsage] -- DDL requires raw cursor, safe inside transaction
                 """
                 CREATE TABLE IF NOT EXISTS _migrations (
                     version INTEGER PRIMARY KEY,

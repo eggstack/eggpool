@@ -115,19 +115,19 @@ async def _crash_recovery(db: Database) -> None:
     affected_account_ids = [int(row["account_id"]) for row in affected]
 
     async with db.transaction():
-        await db.execute(
+        await db.execute_write(
             "UPDATE requests SET status = 'interrupted', "
             "completed_at = CURRENT_TIMESTAMP "
             "WHERE status = 'pending' "
             "AND started_at < datetime('now', '-10 minutes')"
         )
-        await db.execute(
+        await db.execute_write(
             "UPDATE reservations SET status = 'released', "
             "released_at = CURRENT_TIMESTAMP, release_reason = 'crash_recovery' "
             "WHERE status = 'active' "
             "AND created_at < datetime('now', '-10 minutes')"
         )
-        await db.execute(
+        await db.execute_write(
             "UPDATE request_attempts SET "
             "completed_at = CURRENT_TIMESTAMP, error_class = 'process_interrupted' "
             "WHERE completed_at IS NULL "

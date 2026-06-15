@@ -984,7 +984,7 @@ class RequestCoordinator:
                 )
             else:
                 detail_value = "No attempts dispatched"
-            await self._db.execute(
+            await self._db.execute_write(
                 "UPDATE requests SET status = 'error', "
                 "completed_at = CURRENT_TIMESTAMP, "
                 "error_class = ?, error_detail = ? "
