@@ -72,12 +72,12 @@ async def app(config: AppConfig) -> AsyncGenerator[FastAPI]:
     runner = MigrationRunner(db)
     await runner.run()
 
-    await db.execute(
-        "INSERT INTO accounts (name, api_key_env, enabled, weight) "
-        "VALUES (?, ?, 1, 1.0)",
-        ("test-acct", "OPENCODE_TEST_KEY"),
-    )
-    await db.connection.commit()
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+            "VALUES (?, ?, 1, 1.0)",
+            ("test-acct", "OPENCODE_TEST_KEY"),
+        )
 
     application.state.httpx_client = httpx.AsyncClient(
         base_url=config.upstream.base_url,
@@ -135,10 +135,11 @@ async def app(config: AppConfig) -> AsyncGenerator[FastAPI]:
     )
     catalog.cache.add_account_support("gpt-4", "test-acct")
 
-    await db.execute(
-        "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
-        ("gpt-4", "openai"),
-    )
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+            ("gpt-4", "openai"),
+        )
 
     catalog.cache.load_model(
         model_id="claude-3",
@@ -149,11 +150,11 @@ async def app(config: AppConfig) -> AsyncGenerator[FastAPI]:
     )
     catalog.cache.add_account_support("claude-3", "test-acct")
 
-    await db.execute(
-        "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
-        ("claude-3", "anthropic"),
-    )
-    await db.connection.commit()
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+            ("claude-3", "anthropic"),
+        )
 
     yield application
 
