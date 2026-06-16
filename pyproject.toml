@@ -22,6 +22,7 @@ dev = [
     "pyright",
     "pytest",
     "pytest-asyncio",
+    "pytest-cov",
     "respx",
     "coverage[toml]",
     "pre-commit",
@@ -48,6 +49,8 @@ select = ["E", "F", "W", "I", "N", "UP", "B", "A", "SIM", "TCH"]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
 reportMissingTypeStubs = false
+include = ["src"]
+exclude = ["scripts", "tests"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
