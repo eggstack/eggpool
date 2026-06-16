@@ -1,18 +1,20 @@
-"""Phase 17 migration compatibility and checksum verification.
+"""Phase 17/18 migration compatibility and checksum verification.
 
 Verifies that:
 - All migrations apply cleanly to a fresh database.
-- A simulated existing database (migrations 1..11 already applied)
-  behaves equivalently to a fresh database.
+- A real historical v11 fixture upgrades correctly under the current
+  migration runner (no migration is re-executed, all rows survive).
 - Migration files are immutable: any edit fails the checksum test.
+- The historical fixture's own checksum is recorded and protected.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+import aiosqlite
 import pytest
 
 from go_aggregator.db.connection import Database
@@ -20,6 +22,14 @@ from go_aggregator.db.migrations import SCHEMA_DIR, MigrationRunner
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+# SCHEMA_DIR = src/go_aggregator/db/schema. Walk up to the project
+# root and into tests/fixtures/schema.
+_PROJECT_ROOT = SCHEMA_DIR.parent.parent.parent.parent
+FIXTURE_DIR = _PROJECT_ROOT / "tests" / "fixtures" / "schema"
+HISTORICAL_FIXTURE = FIXTURE_DIR / "pre_phase17_v11.sql"
+HISTORICAL_CHECKSUMS = FIXTURE_DIR / "checksums.json"
 
 
 def _expected_migration_files() -> list[Path]:
@@ -37,6 +47,29 @@ def _load_checksums_manifest() -> dict[str, str]:
     return json.loads(manifest_path.read_text(encoding="utf-8")).get("files", {})
 
 
+def _load_historical_checksums_manifest() -> dict[str, str]:
+    if not HISTORICAL_CHECKSUMS.exists():
+        return {}
+    return json.loads(HISTORICAL_CHECKSUMS.read_text(encoding="utf-8")).get("files", {})
+
+
+def _split_sql_statements(sql: str) -> list[str]:
+    """Split a SQL file into individual statements.
+
+    Strips comment lines and drops empty statements. Used to apply the
+    historical fixture without depending on the migration runner.
+    """
+    statements: list[str] = []
+    for block in sql.split(";"):
+        lines = [
+            line for line in block.splitlines() if not line.strip().startswith("--")
+        ]
+        stmt = "\n".join(lines).strip()
+        if stmt:
+            statements.append(stmt)
+    return statements
+
+
 async def _fresh_db() -> Database:
     db = Database(path=":memory:")
     await db.connect()
@@ -45,22 +78,41 @@ async def _fresh_db() -> Database:
     return db
 
 
-async def _simulated_existing_db() -> Database:
-    """Build a database with the 0001..0011 migrations already applied.
+async def _historical_v11_db(tmp_path: Path) -> Database:
+    """Build a database from the historical v11 fixture and run
+    the current migrations on top.
 
-    We compose a temporary directory with the historical 0005 (using
-    the legacy ``source`` default) and apply the migrations in order.
+    Steps:
+      1. Create a file-backed SQLite database.
+      2. Apply the fixture exactly (no migration runner).
+      3. Open it through ``Database``.
+      4. Run the current ``MigrationRunner``.
+      5. Verify no already-applied migration is re-executed.
     """
-    db = Database(path=":memory:")
+    db_path = tmp_path / "historical_v11.sqlite3"
+    fixture_sql = HISTORICAL_FIXTURE.read_text(encoding="utf-8")
+    raw = await aiosqlite.connect(str(db_path))
+    try:
+        await raw.executescript(fixture_sql)
+        await raw.commit()
+    finally:
+        await raw.close()
+
+    db = Database(path=str(db_path))
     await db.connect()
+    applied_before = await MigrationRunner(db)._applied_versions()  # noqa: SLF001
     runner = MigrationRunner(db)
     await runner.run()
+    applied_after = await MigrationRunner(db)._applied_versions()  # noqa: SLF001
+    assert applied_before == applied_after, (
+        "MigrationRunner re-executed migrations that were already "
+        f"applied by the historical fixture: before={sorted(applied_before)} "
+        f"after={sorted(applied_after)}"
+    )
     return db
 
 
 def _table_names(db: Database) -> set[str]:
-    import asyncio
-
     async def _fetch() -> set[str]:
         rows = await db.fetch_all(
             "SELECT name FROM sqlite_master "
@@ -68,7 +120,67 @@ def _table_names(db: Database) -> set[str]:
         )
         return {row["name"] for row in rows}
 
-    return asyncio.get_event_loop().run_until_complete(_fetch())
+    return _run_sync(_fetch())
+
+
+async def _behavioral_schema_metadata(db: Database) -> dict[str, Any]:
+    """Return a structural metadata snapshot of the database.
+
+    The snapshot is suitable for equality comparison between two
+    databases that are semantically equivalent but whose raw
+    ``sqlite_master.sql`` strings differ in formatting.
+
+    Fields:
+      - tables: sorted list of user-visible table names
+      - columns: per-table list of (cid, name, type, notnull,
+        default, pk) tuples from PRAGMA table_info
+      - indexes: per-table mapping of index name to sorted list of
+        (column_name, ) tuples
+    """
+    table_rows = await db.fetch_all(
+        "SELECT name FROM sqlite_master "
+        "WHERE type='table' AND name NOT LIKE 'sqlite_%' "
+        "AND name NOT LIKE '\\_%' ESCAPE '\\' ORDER BY name"
+    )
+    table_names = [row["name"] for row in table_rows]
+
+    columns: dict[str, list[tuple[Any, ...]]] = {}
+    for name in table_names:
+        info_rows = await db.fetch_all(f"PRAGMA table_info({name})")
+        columns[name] = [
+            (
+                row["cid"],
+                row["name"],
+                row["type"],
+                int(row["notnull"]),
+                row["dflt_value"],
+                int(row["pk"]),
+            )
+            for row in info_rows
+        ]
+
+    indexes: dict[str, dict[str, list[str]]] = {}
+    for name in table_names:
+        idx_rows = await db.fetch_all(f"PRAGMA index_list({name})")
+        indexes[name] = {}
+        for idx in idx_rows:
+            if idx["origin"] != "c":  # 'c' = CREATE INDEX, 'u' = UNIQUE
+                continue
+            idx_name = idx["name"]
+            col_rows = await db.fetch_all(f"PRAGMA index_info({idx_name})")
+            indexes[name][idx_name] = sorted(row["name"] for row in col_rows)
+
+    return {
+        "tables": table_names,
+        "columns": columns,
+        "indexes": indexes,
+    }
+
+
+def _run_sync(coro: Any) -> Any:
+    import asyncio
+
+    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 class TestMigrationCompatibility:
@@ -100,32 +212,34 @@ class TestMigrationCompatibility:
 
     @pytest.mark.asyncio
     async def test_fresh_and_existing_schema_equivalent(self) -> None:
-        """Apply migrations on a fresh in-memory DB; schema must match.
+        """The fresh schema and a database freshly built from the
+        historical v11 fixture must be behaviorally schema-equivalent.
 
-        The simulated-existing branch uses the same migrations, so the
-        resulting schema must be identical. This is the regression
-        guard against accidentally changing an applied migration.
+        We compare structural metadata (table names, column names/
+        types/nullability/defaults/PK, index names and indexed
+        columns) rather than raw ``sqlite_master.sql`` text, because
+        semantically equivalent schemas can differ in whitespace,
+        column ordering, and SQL formatting.
         """
+        import tempfile
+
         fresh = await _fresh_db()
-        existing = await _simulated_existing_db()
         try:
-            fresh_rows = await fresh.fetch_all(
-                "SELECT name, sql FROM sqlite_master "
-                "WHERE type IN ('table', 'index') AND name NOT LIKE '\\_%' "
-                "ESCAPE '\\' ORDER BY name"
-            )
-            existing_rows = await existing.fetch_all(
-                "SELECT name, sql FROM sqlite_master "
-                "WHERE type IN ('table', 'index') AND name NOT LIKE '\\_%' "
-                "ESCAPE '\\' ORDER BY name"
-            )
-            assert fresh_rows == existing_rows, (
-                "Fresh and existing databases diverge. An applied migration "
-                "may have been modified."
-            )
+            with tempfile.TemporaryDirectory() as td:
+                from pathlib import Path
+
+                existing = await _historical_v11_db(Path(td))
+                try:
+                    fresh_meta = await _behavioral_schema_metadata(fresh)
+                    existing_meta = await _behavioral_schema_metadata(existing)
+                    assert fresh_meta == existing_meta, (
+                        "Fresh and historical databases diverge. An "
+                        "applied migration may have been modified."
+                    )
+                finally:
+                    await existing.disconnect()
         finally:
             await fresh.disconnect()
-            await existing.disconnect()
 
     @pytest.mark.asyncio
     async def test_migration_runner_is_idempotent(self) -> None:
@@ -167,16 +281,261 @@ class TestMigrationCompatibility:
             await db.disconnect()
 
     @pytest.mark.asyncio
-    async def test_migration_applied_count(self) -> None:
-        """Exactly N migrations must be recorded."""
+    async def test_migration_versions_match_files_on_disk(self) -> None:
+        """The number and identity of applied migrations must exactly
+        match the .sql files in src/go_aggregator/db/schema.
+
+        Replaces the prior `assert len(versions) == len(versions)` tautology.
+        """
         db = await _fresh_db()
         try:
             rows = await db.fetch_all("SELECT version FROM _migrations")
             versions = sorted(row["version"] for row in rows)
-            assert len(versions) == len(versions)
-            assert versions == list(range(1, len(versions) + 1))
+            expected = [
+                int(path.stem.split("_")[0])
+                for path in sorted(SCHEMA_DIR.glob("*.sql"))
+            ]
+            assert versions == expected, (
+                f"Applied versions {versions} differ from files-on-disk "
+                f"versions {expected}"
+            )
+            # Sanity checks: no gaps, no duplicates.
+            assert len(versions) == len(set(versions)), (
+                f"Duplicate migration versions: {versions}"
+            )
+            assert versions == list(range(min(versions), max(versions) + 1)), (
+                f"Gap in migration version sequence: {versions}"
+            )
         finally:
             await db.disconnect()
+
+
+class TestHistoricalFixture:
+    """The historical v11 fixture must open, upgrade, and behave
+    equivalently to a fresh production database."""
+
+    @pytest.mark.asyncio
+    async def test_fixture_opens_successfully(self, tmp_path: Path) -> None:
+        db = await _historical_v11_db(tmp_path)
+        try:
+            row = await db.fetch_one("SELECT COUNT(*) AS c FROM _migrations")
+            assert row is not None
+            assert int(row["c"]) == 11
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_running_migrations_on_fixture_is_idempotent(
+        self, tmp_path: Path
+    ) -> None:
+        """Running MigrationRunner.run twice on the upgraded fixture
+        must not re-execute any migration.
+        """
+        db = await _historical_v11_db(tmp_path)
+        try:
+            runner = MigrationRunner(db)
+            applied_before = await runner._applied_versions()  # noqa: SLF001
+            await runner.run()
+            applied_after = await runner._applied_versions()  # noqa: SLF001
+            assert applied_before == applied_after
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_representative_rows_survive_upgrade(self, tmp_path: Path) -> None:
+        """Every representative row inserted by the fixture must
+        still be readable after the current migration runner is
+        applied on top.
+        """
+        db = await _historical_v11_db(tmp_path)
+        try:
+            # accounts
+            account = await db.fetch_one(
+                "SELECT name, api_key_env, enabled, weight FROM accounts "
+                "WHERE name = ?",
+                ("historical-account",),
+            )
+            assert account is not None
+            assert account["name"] == "historical-account"
+            assert account["api_key_env"] == "GOROUTER_TEST_KEY_1"
+            assert int(account["enabled"]) == 1
+
+            # models: protocol + resolution_status are the v11
+            # columns most at risk of regression.
+            model = await db.fetch_one(
+                "SELECT model_id, protocol, resolution_status, "
+                "protocol_source, endpoint_path FROM models "
+                "WHERE model_id = ?",
+                ("historical-model",),
+            )
+            assert model is not None
+            assert model["protocol"] == "openai"
+            assert model["resolution_status"] == "resolved"
+            assert model["protocol_source"] == "config"
+            assert model["endpoint_path"] == "/v1/chat/completions"
+
+            # account_models
+            link = await db.fetch_one(
+                "SELECT enabled FROM account_models "
+                "WHERE account_id = 1 AND model_id = ?",
+                ("historical-model",),
+            )
+            assert link is not None
+            assert int(link["enabled"]) == 1
+
+            # model_price_snapshots
+            snap = await db.fetch_one(
+                "SELECT model_id, source, "
+                "input_per_million_microdollars, "
+                "output_per_million_microdollars "
+                "FROM model_price_snapshots WHERE model_id = ?",
+                ("historical-model",),
+            )
+            assert snap is not None
+            assert snap["source"] == "config"
+            assert int(snap["input_per_million_microdollars"]) == 10000
+            assert int(snap["output_per_million_microdollars"]) == 20000
+
+            # requests
+            req = await db.fetch_one(
+                "SELECT account_id, model_id, status, input_tokens, "
+                "output_tokens, cost_microdollars, proxy_request_id "
+                "FROM requests WHERE id = 1"
+            )
+            assert req is not None
+            assert req["status"] == "success"
+            assert int(req["input_tokens"]) == 100
+            assert int(req["output_tokens"]) == 50
+            assert int(req["cost_microdollars"]) == 1500
+            assert req["proxy_request_id"] == "legacy-historical-1"
+
+            # request_attempts
+            attempt = await db.fetch_one(
+                "SELECT request_id, attempt_number, status_code "
+                "FROM request_attempts WHERE id = 1"
+            )
+            assert attempt is not None
+            assert int(attempt["request_id"]) == 1
+            assert int(attempt["attempt_number"]) == 1
+            assert int(attempt["status_code"]) == 200
+
+            # reservations
+            resv = await db.fetch_one(
+                "SELECT request_id, account_id, model_id, status, "
+                "release_reason FROM reservations WHERE id = 1"
+            )
+            assert resv is not None
+            assert resv["status"] == "released"
+            assert resv["release_reason"] == "completed"
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_fresh_and_upgraded_schemas_equivalent(self, tmp_path: Path) -> None:
+        """Behavioral equivalence: a representative set of repository
+        operations must succeed on both the fresh and the upgraded
+        databases with identical observable outcomes.
+        """
+        from go_aggregator.db.repositories import (
+            AccountRepository,
+            PriceSnapshotRepository,
+            RequestRepository,
+            ReservationRepository,
+        )
+
+        async def _exercise(db: Database) -> dict[str, Any]:
+            account_repo = AccountRepository(db)
+            request_repo = RequestRepository(db)
+            reservation_repo = ReservationRepository(db)
+            price_repo = PriceSnapshotRepository(db)
+
+            account_id = await account_repo.sync_from_config(
+                [
+                    {
+                        "name": "compat-account",
+                        "api_key_env": "GOROUTER_COMPAT_KEY",
+                        "enabled": True,
+                        "weight": 2.5,
+                    }
+                ],
+                db,
+            )
+            account_id_value = int(account_id["compat-account"])
+
+            async with db.transaction():
+                await db.execute_write(
+                    "INSERT OR IGNORE INTO models (model_id, protocol, "
+                    "resolution_status) VALUES (?, 'openai', 'resolved')",
+                    ("compat-model",),
+                )
+                request_id = await request_repo.create_pending(
+                    request_id="compat-request-1",
+                    model_id="compat-model",
+                    protocol="openai",
+                    streamed=False,
+                    account_id=account_id_value,
+                    reserved_microdollars=100,
+                )
+                await request_repo.update_after_completion(
+                    request_id,
+                    status="success",
+                    input_tokens=10,
+                    output_tokens=20,
+                    cost_microdollars=300,
+                )
+                reservation_id = await reservation_repo.create(
+                    request_id=request_id,
+                    account_id=account_id_value,
+                    model_id="compat-model",
+                    estimated_tokens=10,
+                    estimated_microdollars=300,
+                )
+                await price_repo.record(
+                    model_id="compat-model",
+                    input_price_per_1k=0.00001,
+                    output_price_per_1k=0.00002,
+                    source="config",
+                )
+
+            async with db.transaction():
+                released = await reservation_repo.release(reservation_id, "test-compat")
+
+            model_row = await db.fetch_one(
+                "SELECT protocol, resolution_status FROM models WHERE model_id = ?",
+                ("compat-model",),
+            )
+            assert model_row is not None
+
+            request_row = await request_repo.get_by_id(request_id)
+            assert request_row is not None
+            assert request_row["status"] == "success"
+
+            price_row = await price_repo.get_latest("compat-model")
+            assert price_row is not None
+            assert price_row["source"] == "config"
+
+            return {
+                "reservation_released": released,
+                "model_protocol": model_row["protocol"],
+                "model_resolution_status": model_row["resolution_status"],
+                "request_status": request_row["status"],
+                "request_input_tokens": int(request_row["input_tokens"]),
+                "request_output_tokens": int(request_row["output_tokens"]),
+                "request_cost_microdollars": int(request_row["cost_microdollars"]),
+                "price_source": price_row["source"],
+                "account_name_resolved": account_id_value > 0,
+                "request_id_resolved": int(request_id) > 0,
+            }
+
+        fresh = await _fresh_db()
+        upgraded = await _historical_v11_db(tmp_path)
+        try:
+            fresh_outcome = await _exercise(fresh)
+            upgraded_outcome = await _exercise(upgraded)
+            assert fresh_outcome == upgraded_outcome
+        finally:
+            await fresh.disconnect()
+            await upgraded.disconnect()
 
 
 class TestMigrationChecksums:
@@ -218,3 +577,38 @@ class TestMigrationChecksums:
         assert len(versions) == len(set(versions)), (
             f"Duplicate migration version numbers: {versions}"
         )
+
+
+class TestHistoricalFixtureChecksums:
+    """The historical fixture's own SHA-256 is recorded and protected."""
+
+    def test_historical_fixture_exists(self) -> None:
+        assert HISTORICAL_FIXTURE.exists(), (
+            f"Missing historical fixture at {HISTORICAL_FIXTURE}"
+        )
+
+    def test_historical_checksums_manifest_exists(self) -> None:
+        assert HISTORICAL_CHECKSUMS.exists(), (
+            f"Missing historical checksums manifest at {HISTORICAL_CHECKSUMS}"
+        )
+
+    def test_historical_checksums_manifest_covers_fixture(self) -> None:
+        manifest = _load_historical_checksums_manifest()
+        on_disk = {p.name for p in FIXTURE_DIR.glob("*.sql")}
+        in_manifest = set(manifest.keys())
+        missing = on_disk - in_manifest
+        extra = in_manifest - on_disk
+        assert not missing, f"Historical fixtures missing from manifest: {missing}"
+        assert not extra, f"Manifest entries not on disk: {extra}"
+
+    def test_historical_fixture_checksum_matches(self) -> None:
+        manifest = _load_historical_checksums_manifest()
+        for path in FIXTURE_DIR.glob("*.sql"):
+            expected = manifest[path.name]
+            actual = _compute_checksum(path)
+            assert actual == expected, (
+                f"Checksum mismatch for historical fixture {path.name}: "
+                f"expected={expected}, actual={actual}. "
+                "Editing the historical upgrade fixture is forbidden; "
+                "create a new fixture file instead."
+            )
