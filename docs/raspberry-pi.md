@@ -113,7 +113,7 @@ sudo cp /opt/gorouter/deploy/logrotate.conf /etc/logrotate.d/gorouter
 ### 6. Run migrations and start
 
 ```bash
-sudo -u gorouter /opt/gorouter/.venv/bin/go-aggregator migrate --config /etc/gorouter/config.toml
+sudo -u gorouter /opt/gorouter/.venv/bin/go-aggregator --config /etc/gorouter/config.toml migrate
 sudo systemctl enable gorouter
 sudo systemctl start gorouter
 ```
@@ -155,7 +155,7 @@ The systemd unit already includes `ProtectSystem=strict` and `ReadWritePaths=/va
 
 ```bash
 sudo journalctl -u gorouter --since "5 minutes ago"
-sudo -u gorouter /opt/gorouter/.venv/bin/go-aggregator check-config --config /etc/gorouter/config.toml
+sudo -u gorouter /opt/gorouter/.venv/bin/go-aggregator --config /etc/gorouter/config.toml check-config
 ```
 
 ### Slow performance

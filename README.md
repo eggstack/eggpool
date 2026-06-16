@@ -19,6 +19,22 @@ A lightweight, LAN-hosted proxy that aggregates multiple OpenCode Go subscriptio
 
 ## Quick Start
 
+### Option 1: Automated install (recommended)
+
+```bash
+./scripts/install.sh
+```
+
+This script will:
+- Verify Python 3.12+ and uv are installed
+- Install dependencies
+- Copy example configuration files
+- Validate the configuration
+
+Then edit `config.toml` and `.env` with your settings.
+
+### Option 2: Manual install
+
 ```bash
 # Install dependencies
 uv sync --extra dev
@@ -31,13 +47,13 @@ cp .env.example .env
 # Edit .env with your API keys
 
 # Validate configuration
-uv run go-aggregator check-config --config config.toml
+uv run go-aggregator --config config.toml check-config
 
 # Run database migrations
-uv run go-aggregator migrate --config config.toml
+uv run go-aggregator --config config.toml migrate
 
 # Start the server
-uv run go-aggregator serve --config config.toml
+uv run go-aggregator --config config.toml serve
 ```
 
 ## CLI Commands
@@ -55,8 +71,9 @@ All commands accept `--config /path/to/config.toml` (defaults to `config.toml`).
 
 ## Operational Scripts
 
-Three scripts under `scripts/` are used as deployment release gates:
+Scripts under `scripts/`:
 
+- `scripts/install.sh` — quick install script for local development setup
 - `scripts/check_database.py` — read-only database invariant checker. See
   `docs/deployment.md` for the documented exit-code contract.
 - `scripts/smoke_test.py` — deployment smoke test for the running
@@ -178,7 +195,8 @@ src/go_aggregator/
 ├── dashboard/           # Server-rendered HTML dashboard
 └── security/            # Header redaction and security utilities
 
-scripts/                 # Operational release-gate scripts
+scripts/                 # Operational scripts
+├── install.sh           # Quick install script for local development
 ├── check_database.py    # Read-only database invariant checker
 ├── smoke_test.py        # Deployment smoke test for a running proxy
 └── verify_upstream_auth.py  # Direct-upstream auth verifier (operator-only)

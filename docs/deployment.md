@@ -82,10 +82,10 @@ sudo cp deploy/logrotate.conf /etc/logrotate.d/gorouter
 
 ```bash
 # Validate configuration
-sudo -u gorouter /opt/gorouter/.venv/bin/go-aggregator check-config --config /etc/gorouter/config.toml
+sudo -u gorouter /opt/gorouter/.venv/bin/go-aggregator --config /etc/gorouter/config.toml check-config
 
 # Run initial migrations
-sudo -u gorouter /opt/gorouter/.venv/bin/go-aggregator migrate --config /etc/gorouter/config.toml
+sudo -u gorouter /opt/gorouter/.venv/bin/go-aggregator --config /etc/gorouter/config.toml migrate
 
 # Enable and start
 sudo systemctl enable gorouter
@@ -158,7 +158,7 @@ sudo journalctl -u gorouter --since "1 hour ago"
 sudo journalctl -u gorouter --since "5 minutes ago"
 
 # Validate config
-sudo -u gorouter /opt/gorouter/.venv/bin/go-aggregator check-config --config /etc/gorouter/config.toml
+sudo -u gorouter /opt/gorouter/.venv/bin/go-aggregator --config /etc/gorouter/config.toml check-config
 
 # Check file permissions
 ls -la /etc/gorouter/

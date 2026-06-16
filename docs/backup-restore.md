@@ -130,7 +130,7 @@ After restoring a backup from an older version, run migrations:
 
 ```bash
 sudo systemctl stop gorouter
-sudo -u gorouter /opt/gorouter/.venv/bin/go-aggregator migrate --config /etc/gorouter/config.toml
+sudo -u gorouter /opt/gorouter/.venv/bin/go-aggregator --config /etc/gorouter/config.toml migrate
 sudo systemctl start gorouter
 ```
 
