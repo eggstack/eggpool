@@ -47,8 +47,24 @@ uv run go-aggregator serve --config config.toml
 | `go-aggregator serve` | Start the aggregation proxy server (default command) |
 | `go-aggregator check-config` | Validate the configuration file |
 | `go-aggregator migrate` | Run database migrations |
+| `go-aggregator models refresh` | Refresh the model catalog from upstream (also syncs configured accounts) |
+| `go-aggregator accounts status` | Show configured account status and key environment variables |
+| `go-aggregator db vacuum` | Reclaim SQLite space via the lock-owned `Database.vacuum()` helper |
 
 All commands accept `--config /path/to/config.toml` (defaults to `config.toml`).
+
+## Operational Scripts
+
+Two scripts under `scripts/` are used as deployment release gates:
+
+- `scripts/check_database.py` — read-only database invariant checker. See
+  `docs/deployment.md` for the documented exit-code contract.
+- `scripts/smoke_test.py` — deployment smoke test for the running
+  proxy. Exercises health, models, stats, non-streaming, and
+  streaming endpoints for both protocol families.
+- `scripts/verify_upstream_auth.py` — direct-upstream authentication
+  verifier. Bypasses GoRouter to confirm the configured key works
+  against each upstream endpoint family. Operator-only; not run in CI.
 
 ## API Endpoints
 
@@ -91,17 +107,17 @@ See `config.example.toml` for all available options.
 # Install with dev dependencies
 uv sync --extra dev
 
-# Run linter
-uv run ruff check src/ tests/
+# Run linter (covers src/, tests/, and operational scripts/)
+uv run ruff check src/ tests/ scripts/
 
 # Auto-fix lint issues
-uv run ruff check --fix src/ tests/
+uv run ruff check --fix src/ tests/ scripts/
 
 # Run formatter
-uv run ruff format src/ tests/
+uv run ruff format src/ tests/ scripts/
 
-# Run type checker
-uv run pyright src/
+# Run type checker (covers src/ and scripts/)
+uv run pyright src/ scripts/
 
 # Run tests
 uv run pytest
@@ -160,10 +176,17 @@ src/go_aggregator/
 ├── api/                 # API endpoint handlers and error shaping
 └── dashboard/           # Server-rendered HTML dashboard
 
+scripts/                 # Operational release-gate scripts
+├── check_database.py    # Read-only database invariant checker
+├── smoke_test.py        # Deployment smoke test for a running proxy
+└── verify_upstream_auth.py  # Direct-upstream auth verifier (operator-only)
+
 tests/
 ├── unit/                # Unit tests
 ├── integration/         # Integration tests (mocked upstreams)
-└── contract/            # Contract tests (response format)
+├── contract/            # Contract tests (response format)
+└── fixtures/            # Test data, including the historical schema fixture
+    └── schema/          # pre_phase17_v11.sql + checksums.json
 ```
 
 ## Implementation Status
@@ -185,6 +208,7 @@ tests/
 - [x] Phase 15: Concurrency and accounting correctness
 - [x] Phase 16: Final polish and release validation
 - [x] Phase 17: Deployment readiness corrections
+- [x] Phase 18: Final cleanup before live testing
 
 ## Known Limitations
 

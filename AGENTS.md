@@ -17,16 +17,16 @@ Development guidelines for the opencode-go-aggregator project.
 - respx for HTTPX upstream mocking
 - Tests in `tests/unit/`, `tests/integration/`, `tests/contract/`
 - Run: `uv run pytest`
-- All 596+ tests must pass before committing
+- All 870+ tests must pass before committing
 
 ## Pre-commit Checks
 
 Run before every commit:
 
 ```bash
-uv run ruff check src/ tests/
-uv run ruff format --check src/ tests/
-uv run pyright src/
+uv run ruff format --check src/ tests/ scripts/
+uv run ruff check src/ tests/ scripts/
+uv run pyright src/ scripts/
 uv run pytest
 ```
 
@@ -67,6 +67,16 @@ All must pass with zero errors.
 - The systemd unit intentionally omits `ExecReload`; all configuration changes require `sudo systemctl restart gorouter`
 - The `scripts/check_database.py` checker opens the database read-only via `file:...?mode=ro` and refuses to mutate anything
 - `tests/integration/test_phase17_deployment_readiness_matrix.py` is the cross-cutting release-gate for the matrix in the Phase 17 plan
+- `tests/integration/test_phase18_cleanup.py` is the cross-cutting release-gate for the Phase 18 final-cleanup matrix
+- The `scripts/check_database.py` checker is fail-closed: it treats missing `_migrations`, empty `_migrations`, missing required tables/columns, and query errors as exit code 2 (configuration/schema error), not zero violations
+- `Database.vacuum()` is the only sanctioned path for `VACUUM` in production code; the CLI `db vacuum` command uses it and is serialized with transactions through the connection lock
+- `models refresh` synchronizes configured accounts via `AccountRepository.sync_from_config` before refreshing the catalog, so cached account/model relationships match normal application startup
+- The historical schema fixture at `tests/fixtures/schema/pre_phase17_v11.sql` is the authoritative upgrade-compatibility baseline; its SHA-256 is recorded in `tests/fixtures/schema/checksums.json` and any edit fails the checksum test
+- Optional persisted `error_detail` uses a strict diagnostic allowlist (`SAFE_JSON_KEYS`); arbitrary provider payload keys such as `payload`, `body`, `context`, `data`, `details`, or `debug` are dropped, top-level JSON arrays are fail-closed to `[REDACTED]`, and the helper always returns a value bounded by `MAX_REDACTED_ERROR_DETAIL_CHARS`
+- The `scripts/smoke_test.py` stream diagnostics use a rolling tail buffer to recognize SSE markers split across arbitrary transport chunks, and they require both `x-proxy-request-id` and `x-proxy-attempt-count` (positive integer) plus a known terminal frame
+- `scripts/verify_upstream_auth.py` is operator-only: it bypasses GoRouter to confirm the configured key works directly upstream, so a failed direct call proves the issue is upstream and not in the proxy
+- Pyright in CI covers `src/` AND `scripts/`; narrow type annotations with `cast` or `Any` rather than excluding a file
+- The CI workflow runs ruff format, ruff check, pyright, and pytest with coverage on every push to `main` and on every pull request
 
 For detailed architecture documentation, see `architecture/` directory:
 - `phase-0.md`: Repository and tooling foundation
@@ -85,6 +95,7 @@ For detailed architecture documentation, see `architecture/` directory:
 - `phase-14-deployment-blockers-and-operational-hardening.md`: Deployment blockers and operational hardening
 - `phase-15-concurrency-accounting-correctness.md`: Concurrency and accounting correctness
 - `phase-17-deployment-readiness-corrections.md`: Deployment readiness corrections
+- `phase-18-final-cleanup-before-live-testing.md`: Final cleanup before live testing
 
 ## Import Organization
 
