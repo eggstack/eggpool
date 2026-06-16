@@ -55,7 +55,7 @@ All commands accept `--config /path/to/config.toml` (defaults to `config.toml`).
 
 ## Operational Scripts
 
-Two scripts under `scripts/` are used as deployment release gates:
+Three scripts under `scripts/` are used as deployment release gates:
 
 - `scripts/check_database.py` — read-only database invariant checker. See
   `docs/deployment.md` for the documented exit-code contract.
@@ -174,7 +174,9 @@ src/go_aggregator/
 ├── quota/               # Quota estimation, reservations, scoring
 ├── stats/               # Statistics queries and service
 ├── api/                 # API endpoint handlers and error shaping
-└── dashboard/           # Server-rendered HTML dashboard
+├── background/          # Background task supervisor and cleanup
+├── dashboard/           # Server-rendered HTML dashboard
+└── security/            # Header redaction and security utilities
 
 scripts/                 # Operational release-gate scripts
 ├── check_database.py    # Read-only database invariant checker
@@ -206,7 +208,6 @@ tests/
 - [x] Phase 13: Attempt lifecycle and transaction hardening
 - [x] Phase 14: Deployment blockers and operational hardening
 - [x] Phase 15: Concurrency and accounting correctness
-- [x] Phase 16: Final polish and release validation
 - [x] Phase 17: Deployment readiness corrections
 - [x] Phase 18: Final cleanup before live testing
 
