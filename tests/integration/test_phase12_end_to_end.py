@@ -153,14 +153,14 @@ async def _seed_usage(
         return
     started_at = _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%d %H:%M:%S")
     seed_id = f"seed-{account_name}-{cost_microdollars}"
-    await db.execute(
-        "INSERT INTO requests "
-        "(account_id, model_id, status, protocol, streamed, "
-        "reserved_microdollars, proxy_request_id, cost_microdollars, started_at) "
-        "VALUES (?, ?, 'completed', 'openai', 0, 0, ?, ?, ?)",
-        (acct_id, model_id, seed_id, cost_microdollars, started_at),
-    )
-    await db.connection.commit()
+    async with db.transaction():
+        await db.execute_insert(
+            "INSERT INTO requests "
+            "(account_id, model_id, status, protocol, streamed, "
+            "reserved_microdollars, proxy_request_id, cost_microdollars, started_at) "
+            "VALUES (?, ?, 'completed', 'openai', 0, 0, ?, ?, ?)",
+            (acct_id, model_id, seed_id, cost_microdollars, started_at),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -174,25 +174,25 @@ async def two_account_db() -> AsyncGenerator[Database, None]:
     await database.connect()
     runner = MigrationRunner(database)
     await runner.run()
-    await database.execute(
-        "INSERT INTO accounts (name, api_key_env, enabled, weight) "
-        "VALUES (?, ?, 1, 1.0)",
-        ("acct-a", "OPENCODE_TEST_KEY_A"),
-    )
-    await database.execute(
-        "INSERT INTO accounts (name, api_key_env, enabled, weight) "
-        "VALUES (?, ?, 1, 1.0)",
-        ("acct-b", "OPENCODE_TEST_KEY_B"),
-    )
-    await database.execute(
-        "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
-        ("gpt-4", "openai"),
-    )
-    await database.execute(
-        "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
-        ("claude-3", "anthropic"),
-    )
-    await database.connection.commit()
+    async with database.transaction():
+        await database.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+            "VALUES (?, ?, 1, 1.0)",
+            ("acct-a", "OPENCODE_TEST_KEY_A"),
+        )
+        await database.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+            "VALUES (?, ?, 1, 1.0)",
+            ("acct-b", "OPENCODE_TEST_KEY_B"),
+        )
+        await database.execute_write(
+            "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+            ("gpt-4", "openai"),
+        )
+        await database.execute_write(
+            "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+            ("claude-3", "anthropic"),
+        )
     yield database
     await database.disconnect()
 
@@ -1041,31 +1041,31 @@ async def test_j_restart_recovery(
     acct_repo = AccountRepository(two_account_db)
     acct_a_id = await acct_repo.get_id_by_name("acct-a")
 
-    db_request_id = await request_repo.create_pending(
-        request_id="test-j-recovery",
-        model_id="gpt-4",
-        protocol="openai",
-        streamed=False,
-        account_id=acct_a_id,
-    )
-    await request_repo.update_after_selection(
-        request_id=db_request_id,
-        account_id=acct_a_id,
-        reserved_microdollars=500000,
-    )
-    reservation_id = await reservation_repo.create(
-        request_id=db_request_id,
-        account_id=acct_a_id,
-        model_id="gpt-4",
-        estimated_tokens=1000,
-        estimated_microdollars=500000,
-    )
-    await attempt_repo.create(
-        request_id=db_request_id,
-        attempt_number=1,
-        account_id=acct_a_id,
-    )
-    await two_account_db.connection.commit()
+    async with two_account_db.transaction():
+        db_request_id = await request_repo.create_pending(
+            request_id="test-j-recovery",
+            model_id="gpt-4",
+            protocol="openai",
+            streamed=False,
+            account_id=acct_a_id,
+        )
+        await request_repo.update_after_selection(
+            request_id=db_request_id,
+            account_id=acct_a_id,
+            reserved_microdollars=500000,
+        )
+        reservation_id = await reservation_repo.create(
+            request_id=db_request_id,
+            account_id=acct_a_id,
+            model_id="gpt-4",
+            estimated_tokens=1000,
+            estimated_microdollars=500000,
+        )
+        await attempt_repo.create(
+            request_id=db_request_id,
+            attempt_number=1,
+            account_id=acct_a_id,
+        )
 
     # Verify pending state exists
     req_row = await two_account_db.fetch_one(
@@ -1081,17 +1081,17 @@ async def test_j_restart_recovery(
     # We need to make the request look old enough for recovery to pick it up
     # The recovery checks started_at < datetime('now', '-10 minutes')
     # For in-memory DB, we'll set the started_at to an old timestamp
-    await two_account_db.execute(
-        "UPDATE requests SET started_at = datetime('now', '-15 minutes') "
-        "WHERE proxy_request_id = ?",
-        ("test-j-recovery",),
-    )
-    await two_account_db.execute(
-        "UPDATE reservations SET created_at = datetime('now', '-15 minutes') "
-        "WHERE id = ?",
-        (reservation_id,),
-    )
-    await two_account_db.connection.commit()
+    async with two_account_db.transaction():
+        await two_account_db.execute_write(
+            "UPDATE requests SET started_at = datetime('now', '-15 minutes') "
+            "WHERE proxy_request_id = ?",
+            ("test-j-recovery",),
+        )
+        await two_account_db.execute_write(
+            "UPDATE reservations SET created_at = datetime('now', '-15 minutes') "
+            "WHERE id = ?",
+            (reservation_id,),
+        )
 
     await _crash_recovery(two_account_db)
 

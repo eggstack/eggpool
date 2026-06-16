@@ -74,20 +74,20 @@ async def app(config: AppConfig) -> AsyncGenerator[FastAPI]:
     runner = MigrationRunner(db)
     await runner.run()
 
-    await db.execute(
-        "INSERT INTO accounts (name, api_key_env, enabled, weight) "
-        "VALUES (?, ?, 1, 1.0)",
-        ("test-acct", "OPENCODE_TEST_KEY"),
-    )
-    await db.execute(
-        "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
-        ("gpt-4", "openai"),
-    )
-    await db.execute(
-        "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
-        ("claude-3", "anthropic"),
-    )
-    await db.connection.commit()
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+            "VALUES (?, ?, 1, 1.0)",
+            ("test-acct", "OPENCODE_TEST_KEY"),
+        )
+        await db.execute_write(
+            "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+            ("gpt-4", "openai"),
+        )
+        await db.execute_write(
+            "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+            ("claude-3", "anthropic"),
+        )
 
     httpx_client = httpx.AsyncClient(
         base_url=config.upstream.base_url,
@@ -593,24 +593,24 @@ async def test_one_week_synthetic_request_history(
     db: Database = app.state.db
 
     # Insert 7 days of synthetic requests (100 per day)
-    for day in range(7):
-        for _ in range(100):
-            await db.execute(
-                """
-                INSERT INTO requests (
-                    account_id, model_id, started_at, completed_at,
-                    status, input_tokens, output_tokens,
-                    cost_microdollars, upstream_latency_ms
-                ) VALUES (
-                    1, 'gpt-4',
-                    datetime('now', ? || ' days', ? || ' hours'),
-                    datetime('now', ? || ' days', ? || ' hours', '+1 seconds'),
-                    'completed', 100, 50, 5000, 150
+    async with db.transaction():
+        for day in range(7):
+            for _ in range(100):
+                await db.execute_write(
+                    """
+                    INSERT INTO requests (
+                        account_id, model_id, started_at, completed_at,
+                        status, input_tokens, output_tokens,
+                        cost_microdollars, upstream_latency_ms
+                    ) VALUES (
+                        1, 'gpt-4',
+                        datetime('now', ? || ' days', ? || ' hours'),
+                        datetime('now', ? || ' days', ? || ' hours', '+1 seconds'),
+                        'completed', 100, 50, 5000, 150
+                    )
+                    """,
+                    (f"-{day}", f"{day % 24}", f"-{day}", f"{day % 24}"),
                 )
-                """,
-                (f"-{day}", f"{day % 24}", f"-{day}", f"{day % 24}"),
-            )
-    await db.connection.commit()
 
     # Verify total count
     row = await db.fetch_one("SELECT COUNT(*) as cnt FROM requests")

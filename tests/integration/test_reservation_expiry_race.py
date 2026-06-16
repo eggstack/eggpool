@@ -13,16 +13,16 @@ from go_aggregator.db.repositories import RequestRepository, ReservationReposito
 
 
 async def _seed_db(db: Database) -> None:
-    await db.execute(
-        "INSERT INTO accounts (name, api_key_env, enabled, weight) "
-        "VALUES (?, ?, 1, 1.0)",
-        ("test-acct", "TEST_KEY"),
-    )
-    await db.execute(
-        "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
-        ("gpt-4", "openai"),
-    )
-    await db.connection.commit()
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+            "VALUES (?, ?, 1, 1.0)",
+            ("test-acct", "TEST_KEY"),
+        )
+        await db.execute_write(
+            "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+            ("gpt-4", "openai"),
+        )
 
 
 @pytest.mark.asyncio
@@ -63,8 +63,8 @@ async def test_normal_release_racing_expiry_cleanup() -> None:
     # SQLite CURRENT_TIMESTAMP has second precision, so sleep 2s to be safe.
     await asyncio.sleep(2.0)
 
-    await reservation_repo.release(reservation_id, reason="completed")
-    await db.connection.commit()
+    async with db.transaction():
+        await reservation_repo.release(reservation_id, reason="completed")
 
     count = await reconcile_expired_reservations(db)
 

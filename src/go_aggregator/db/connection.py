@@ -81,6 +81,21 @@ class Database:
             and self._transaction_depth.get() > 0
         )
 
+    def _require_transaction_owner(self) -> None:
+        """Raise if the current task is not the owner of an active transaction.
+
+        Every write through :meth:`execute_write`, :meth:`execute_insert`,
+        :meth:`execute_returning`, or :meth:`_execute_cursor` MUST be
+        performed inside a ``db.transaction()`` boundary owned by the
+        current task.  This prevents implicit transactions and ensures
+        the connection lock is held for the duration of the operation.
+        """
+        if not self._current_task_owns_transaction():
+            raise DatabaseError(
+                "Database writes require an owned transaction; "
+                "use 'async with db.transaction():'"
+            )
+
     @asynccontextmanager
     async def _connection_access(self) -> AsyncGenerator[None]:
         """Acquire the connection lock for a SQL operation.
@@ -128,29 +143,11 @@ class Database:
         Prefer :meth:`execute_write`, :meth:`execute_insert`, or
         :meth:`execute_returning` for all new code.
         """
-        async with self._connection_access():
-            try:
-                return await self.connection.execute(sql, params)  # type: ignore[return-value]
-            except Exception as exc:
-                raise DatabaseError(f"Execute failed: {exc}") from exc
-
-    async def execute(self, sql: str, params: Sequence[Any] = ()) -> aiosqlite.Cursor:
-        """Legacy wrapper around :meth:`_execute_cursor`.
-
-        .. deprecated::
-            Use :meth:`execute_write`, :meth:`execute_insert`, or
-            :meth:`execute_returning` instead.  This method remains for
-            backward-compatible test seeding and DDL execution.
-        """
-        import warnings
-
-        warnings.warn(
-            "db.execute() is deprecated; use execute_write/execute_insert/"
-            "execute_returning instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return await self._execute_cursor(sql, params)
+        self._require_transaction_owner()
+        try:
+            return await self.connection.execute(sql, params)  # type: ignore[return-value]
+        except Exception as exc:
+            raise DatabaseError(f"Execute failed: {exc}") from exc
 
     async def execute_write(
         self,
@@ -159,18 +156,16 @@ class Database:
     ) -> int:
         """Execute a write statement and return the rowcount.
 
-        Acquires the connection lock for the duration of the statement
-        if no transaction is owned by the current task; otherwise the
-        call is a no-op with respect to lock acquisition.  The cursor
-        is fully consumed before this method returns, so the returned
-        rowcount is always valid.
+        Must be called inside ``async with db.transaction():`` owned
+        by the current task.  The cursor is fully consumed before this
+        method returns, so the returned rowcount is always valid.
         """
-        async with self._connection_access():
-            try:
-                cursor = await self.connection.execute(sql, params)  # type: ignore[union-attr]
-                return int(cursor.rowcount or 0)
-            except Exception as exc:
-                raise DatabaseError(f"Execute write failed: {exc}") from exc
+        self._require_transaction_owner()
+        try:
+            cursor = await self.connection.execute(sql, params)  # type: ignore[union-attr]
+            return int(cursor.rowcount or 0)
+        except Exception as exc:
+            raise DatabaseError(f"Execute write failed: {exc}") from exc
 
     async def execute_insert(
         self,
@@ -179,22 +174,22 @@ class Database:
     ) -> int:
         """Execute an INSERT and return lastrowid.
 
-        Raises ``DatabaseError`` if the INSERT did not produce a
-        ``lastrowid`` (for example, against a table that lacks an
-        INTEGER PRIMARY KEY).  Acquires the connection lock for the
-        duration of the statement when no transaction is owned.
+        Must be called inside ``async with db.transaction():`` owned
+        by the current task.  Raises ``DatabaseError`` if the INSERT
+        did not produce a ``lastrowid`` (for example, against a table
+        that lacks an INTEGER PRIMARY KEY).
         """
-        async with self._connection_access():
-            try:
-                cursor = await self.connection.execute(sql, params)  # type: ignore[union-attr]
-                last_id = cursor.lastrowid
-                if last_id is None:
-                    raise DatabaseError("INSERT did not return lastrowid")
-                return int(last_id)
-            except DatabaseError:
-                raise
-            except Exception as exc:
-                raise DatabaseError(f"Execute insert failed: {exc}") from exc
+        self._require_transaction_owner()
+        try:
+            cursor = await self.connection.execute(sql, params)  # type: ignore[union-attr]
+            last_id = cursor.lastrowid
+            if last_id is None:
+                raise DatabaseError("INSERT did not return lastrowid")
+            return int(last_id)
+        except DatabaseError:
+            raise
+        except Exception as exc:
+            raise DatabaseError(f"Execute insert failed: {exc}") from exc
 
     async def execute_returning(
         self,
@@ -204,19 +199,39 @@ class Database:
         """Execute a statement (typically ``UPDATE ... RETURNING``) and
         return all rows.
 
-        Acquires the connection lock for the duration of the fetch, so
-        the returned rows are guaranteed to be observed under the same
-        lock acquisition as the underlying statement.  When called
-        inside a transaction the call is a no-op with respect to lock
-        acquisition.
+        Must be called inside ``async with db.transaction():`` owned
+        by the current task.  The returned rows are guaranteed to be
+        observed under the same lock acquisition as the underlying
+        statement.
         """
-        async with self._connection_access():
+        self._require_transaction_owner()
+        try:
+            cursor = await self.connection.execute(sql, params)  # type: ignore[union-attr]
+            rows = await cursor.fetchall()
+            return list(rows)  # type: ignore[arg-type]
+        except Exception as exc:
+            raise DatabaseError(f"Execute returning failed: {exc}") from exc
+
+    async def execute_pragma(self, sql: str) -> list[aiosqlite.Row]:
+        """Execute a PRAGMA statement safely.
+
+        Only accepts SQL beginning with "PRAGMA " (case-insensitive,
+        after whitespace normalization).  Holds the connection lock
+        for execution and fetch, and consumes the cursor before
+        releasing the lock.  Returns rows when the PRAGMA produces
+        rows; empty list otherwise.
+        """
+        if not sql or not sql.lstrip().upper().startswith("PRAGMA "):
+            raise DatabaseError(
+                "execute_pragma() only accepts SQL beginning with 'PRAGMA '"
+            )
+        async with self._connection_lock:
             try:
-                cursor = await self.connection.execute(sql, params)  # type: ignore[union-attr]
+                cursor = await self.connection.execute(sql)  # type: ignore[union-attr]
                 rows = await cursor.fetchall()
                 return list(rows)  # type: ignore[arg-type]
             except Exception as exc:
-                raise DatabaseError(f"Execute returning failed: {exc}") from exc
+                raise DatabaseError(f"Execute pragma failed: {exc}") from exc
 
     async def fetch_all(
         self, sql: str, params: Sequence[Any] = ()

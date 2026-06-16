@@ -72,20 +72,20 @@ async def app(config: AppConfig) -> AsyncGenerator[FastAPI]:
     runner = MigrationRunner(db)
     await runner.run()
 
-    await db.execute(
-        "INSERT INTO accounts (name, api_key_env, enabled, weight) "
-        "VALUES (?, ?, 1, 1.0)",
-        ("test-acct", "OPENCODE_TEST_KEY"),
-    )
-    await db.execute(
-        "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
-        ("gpt-4", "openai"),
-    )
-    await db.execute(
-        "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
-        ("claude-3", "anthropic"),
-    )
-    await db.connection.commit()
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+            "VALUES (?, ?, 1, 1.0)",
+            ("test-acct", "OPENCODE_TEST_KEY"),
+        )
+        await db.execute_write(
+            "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+            ("gpt-4", "openai"),
+        )
+        await db.execute_write(
+            "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+            ("claude-3", "anthropic"),
+        )
 
     httpx_client = httpx.AsyncClient(
         base_url=config.upstream.base_url,
@@ -473,11 +473,11 @@ async def test_catalog_refresh_with_divergent_models(
     catalog.cache.add_account_support("gpt-4-turbo", "test-acct")
 
     db: Database = app.state.db
-    await db.execute(
-        "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
-        ("gpt-4-turbo", "openai"),
-    )
-    await db.connection.commit()
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+            ("gpt-4-turbo", "openai"),
+        )
 
     with respx.mock:
         respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
@@ -538,27 +538,29 @@ async def test_stale_reservation_cleanup_on_startup() -> None:
     runner = MigrationRunner(db)
     await runner.run()
 
-    await db.execute(
-        "INSERT INTO accounts (name, api_key_env, enabled, weight) "
-        "VALUES (?, ?, 1, 1.0)",
-        ("test-acct", "OPENCODE_TEST_KEY"),
-    )
-    await db.execute(
-        "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
-        ("gpt-4", "openai"),
-    )
-    await db.execute(
-        "INSERT INTO requests (account_id, model_id, status) "
-        "VALUES (1, 'gpt-4', 'completed')"
-    )
-    await db.connection.commit()
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+            "VALUES (?, ?, 1, 1.0)",
+            ("test-acct", "OPENCODE_TEST_KEY"),
+        )
+        await db.execute_write(
+            "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+            ("gpt-4", "openai"),
+        )
+        await db.execute_write(
+            "INSERT INTO requests (account_id, model_id, status) "
+            "VALUES (1, 'gpt-4', 'completed')"
+        )
 
-    await db.execute(
-        "INSERT INTO reservations "
-        "(request_id, account_id, model_id, reserved_microdollars, status, created_at) "
-        "VALUES (1, 1, 'gpt-4', 1000000, 'active', datetime('now', '-1200 seconds'))"
-    )
-    await db.connection.commit()
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT INTO reservations "
+            "(request_id, account_id, model_id, reserved_microdollars, status, "
+            " created_at) "
+            "VALUES (1, 1, 'gpt-4', 1000000, 'active', "
+            "datetime('now', '-1200 seconds'))"
+        )
 
     row = await db.fetch_one("SELECT status FROM reservations")
     assert row is not None
@@ -619,19 +621,21 @@ async def test_multiple_accounts_routing() -> None:
     runner = MigrationRunner(db)
     await runner.run()
 
-    await db.execute(
-        "INSERT INTO accounts (name, api_key_env, enabled, weight) VALUES (?, ?, 1, ?)",
-        ("acct1", "GO_AGG_ACCT1_KEY", 0.7),
-    )
-    await db.execute(
-        "INSERT INTO accounts (name, api_key_env, enabled, weight) VALUES (?, ?, 1, ?)",
-        ("acct2", "GO_AGG_ACCT2_KEY", 0.3),
-    )
-    await db.execute(
-        "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
-        ("gpt-4", "openai"),
-    )
-    await db.connection.commit()
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT INTO accounts "
+            "(name, api_key_env, enabled, weight) VALUES (?, ?, 1, ?)",
+            ("acct1", "GO_AGG_ACCT1_KEY", 0.7),
+        )
+        await db.execute_write(
+            "INSERT INTO accounts "
+            "(name, api_key_env, enabled, weight) VALUES (?, ?, 1, ?)",
+            ("acct2", "GO_AGG_ACCT2_KEY", 0.3),
+        )
+        await db.execute_write(
+            "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+            ("gpt-4", "openai"),
+        )
 
     httpx_client = httpx.AsyncClient(
         base_url=config.upstream.base_url,

@@ -20,6 +20,15 @@ class AccountRepository:
         db: Database,
     ) -> dict[str, int]:
         """Upsert configured accounts, disable removed ones, return name->id map."""
+        async with db.transaction():
+            return await self._sync_from_config_locked(config_accounts, db)
+
+    async def _sync_from_config_locked(
+        self,
+        config_accounts: list[dict[str, Any]],
+        db: Database,
+    ) -> dict[str, int]:
+        """Upsert configured accounts inside the caller's transaction."""
         name_to_id: dict[str, int] = {}
         configured_names: set[str] = set()
 

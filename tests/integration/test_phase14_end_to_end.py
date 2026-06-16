@@ -118,21 +118,21 @@ async def two_account_db() -> AsyncGenerator[Database, None]:
     await database.connect()
     runner = MigrationRunner(database)
     await runner.run()
-    await database.execute(
-        "INSERT INTO accounts (name, api_key_env, enabled, weight) "
-        "VALUES (?, ?, 1, 1.0)",
-        ("acct-a", "OPENCODE_P14_KEY_A"),
-    )
-    await database.execute(
-        "INSERT INTO accounts (name, api_key_env, enabled, weight) "
-        "VALUES (?, ?, 1, 1.0)",
-        ("acct-b", "OPENCODE_P14_KEY_B"),
-    )
-    await database.execute(
-        "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
-        ("gpt-4", "openai"),
-    )
-    await database.connection.commit()
+    async with database.transaction():
+        await database.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+            "VALUES (?, ?, 1, 1.0)",
+            ("acct-a", "OPENCODE_P14_KEY_A"),
+        )
+        await database.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+            "VALUES (?, ?, 1, 1.0)",
+            ("acct-b", "OPENCODE_P14_KEY_B"),
+        )
+        await database.execute_write(
+            "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+            ("gpt-4", "openai"),
+        )
     yield database
     await database.disconnect()
 
@@ -255,7 +255,7 @@ class TestReadinessSafety:
 
         async def request_task() -> None:
             async with two_account_db.transaction():
-                await two_account_db.execute(
+                await two_account_db.execute_write(
                     "INSERT INTO accounts (name, api_key_env, enabled, weight) "
                     "VALUES (?, ?, 1, 1.0)",
                     ("concurrent-acct", "DUMMY"),
@@ -544,9 +544,11 @@ class TestExpiryRace:
         await asyncio.sleep(1.5)
 
         # Release manually first
-        released = await reservation_repo.release(reservation_id, reason="completed")
+        async with two_account_db.transaction():
+            released = await reservation_repo.release(
+                reservation_id, reason="completed"
+            )
         assert released is True
-        await two_account_db.connection.commit()
 
         # Cleanup should find nothing to transition
         cleanup_count = await reconcile_expired_reservations(two_account_db)

@@ -35,59 +35,67 @@ async def db(tmp_path: pytest.TempPathFactory) -> AsyncGenerator[Database, None]
 @pytest_asyncio.fixture()
 async def seeded_db(db: Database) -> Database:
     """Seed the database with two accounts, two models, and several requests."""
-    await db.execute(
-        "INSERT INTO accounts (name, api_key_env, enabled) VALUES (?, ?, ?)",
-        ("acct_a", "ENV_A", 1),
-    )
-    await db.execute(
-        "INSERT INTO accounts (name, api_key_env, enabled) VALUES (?, ?, ?)",
-        ("acct_b", "ENV_B", 1),
-    )
-    await db.execute(
-        "INSERT INTO models (model_id, protocol) VALUES (?, ?)",
-        ("model_x", "openai"),
-    )
-    await db.execute(
-        "INSERT INTO models (model_id, protocol) VALUES (?, ?)",
-        ("model_y", "anthropic"),
-    )
-    await db.connection.commit()
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled) VALUES (?, ?, ?)",
+            ("acct_a", "ENV_A", 1),
+        )
+        await db.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled) VALUES (?, ?, ?)",
+            ("acct_b", "ENV_B", 1),
+        )
+        await db.execute_write(
+            "INSERT INTO models (model_id, protocol) VALUES (?, ?)",
+            ("model_x", "openai"),
+        )
+        await db.execute_write(
+            "INSERT INTO models (model_id, protocol) VALUES (?, ?)",
+            ("model_y", "anthropic"),
+        )
     # Insert some completed requests
-    for _i in range(3):
-        await db.execute(
-            """
-            INSERT INTO requests (
-                account_id, model_id, started_at, completed_at,
-                status, input_tokens, output_tokens, cost_microdollars,
-                upstream_latency_ms
-            ) VALUES (
-                (SELECT id FROM accounts WHERE name = ?),
-                ?,
-                datetime('now', '-1 hour'),
-                datetime('now', '-1 hour'),
-                'completed', ?, ?, ?, ?
+    async with db.transaction():
+        for _i in range(3):
+            await db.execute_write(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, started_at, completed_at,
+                    status, input_tokens, output_tokens, cost_microdollars,
+                    upstream_latency_ms
+                ) VALUES (
+                    (SELECT id FROM accounts WHERE name = ?),
+                    ?,
+                    datetime('now', '-1 hour'),
+                    datetime('now', '-1 hour'),
+                    'completed', ?, ?, ?, ?
+                )
+                """,
+                ("acct_a", "model_x", 100, 200, 1_000_000, 150.0),
             )
-            """,
-            ("acct_a", "model_x", 100, 200, 1_000_000, 150.0),
-        )
-    for _i in range(2):
-        await db.execute(
-            """
-            INSERT INTO requests (
-                account_id, model_id, started_at, completed_at,
-                status, input_tokens, output_tokens, cost_microdollars,
-                upstream_latency_ms, error_class, error_detail
-            ) VALUES (
-                (SELECT id FROM accounts WHERE name = ?),
-                ?,
-                datetime('now', '-2 hours'),
-                datetime('now', '-2 hours'),
-                'error', ?, ?, 0, ?, ?, ?
+        for _i in range(2):
+            await db.execute_write(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, started_at, completed_at,
+                    status, input_tokens, output_tokens, cost_microdollars,
+                    upstream_latency_ms, error_class, error_detail
+                ) VALUES (
+                    (SELECT id FROM accounts WHERE name = ?),
+                    ?,
+                    datetime('now', '-2 hours'),
+                    datetime('now', '-2 hours'),
+                    'error', ?, ?, 0, ?, ?, ?
+                )
+                """,
+                (
+                    "acct_b",
+                    "model_y",
+                    50,
+                    75,
+                    300.0,
+                    "RateLimitError",
+                    "rate_limited",
+                ),
             )
-            """,
-            ("acct_b", "model_y", 50, 75, 300.0, "RateLimitError", "rate_limited"),
-        )
-    await db.connection.commit()
     return db
 
 
@@ -215,17 +223,17 @@ class TestFetchRecentEvents:
 
     @pytest.mark.asyncio()
     async def test_filters_by_type(self, seeded_db: Database) -> None:
-        await seeded_db.execute(
-            """
-            INSERT INTO account_events (account_id, event_type, details)
-            VALUES (
-                (SELECT id FROM accounts WHERE name = ?),
-                ?, ?
+        async with seeded_db.transaction():
+            await seeded_db.execute_write(
+                """
+                INSERT INTO account_events (account_id, event_type, details)
+                VALUES (
+                    (SELECT id FROM accounts WHERE name = ?),
+                    ?, ?
+                )
+                """,
+                ("acct_a", "cooldown_active", '{"seconds": 60}'),
             )
-            """,
-            ("acct_a", "cooldown_active", '{"seconds": 60}'),
-        )
-        await seeded_db.connection.commit()
         rows = await queries.fetch_recent_events(
             seeded_db, 10, event_type="cooldown_active"
         )
@@ -313,31 +321,31 @@ class TestStatsService:
         self, seeded_db: Database
     ) -> None:
         # Insert a pending request and a reservation
-        await seeded_db.execute(
-            """
-            INSERT INTO requests (
-                account_id, model_id, started_at, status
-            ) VALUES (
-                (SELECT id FROM accounts WHERE name = ?), ?, datetime('now'),
-                'pending'
+        async with seeded_db.transaction():
+            await seeded_db.execute_write(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, started_at, status
+                ) VALUES (
+                    (SELECT id FROM accounts WHERE name = ?), ?, datetime('now'),
+                    'pending'
+                )
+                """,
+                ("acct_a", "model_x"),
             )
-            """,
-            ("acct_a", "model_x"),
-        )
-        req_id_row = await seeded_db.fetch_one("SELECT last_insert_rowid() as id")
-        assert req_id_row is not None
-        req_id = int(req_id_row["id"])
-        await seeded_db.execute(
-            """
-            INSERT INTO reservations (
-                request_id, account_id, model_id, reserved_microdollars, status
-            ) VALUES (
-                ?, (SELECT id FROM accounts WHERE name = ?), ?, ?, 'active'
+            req_id_row = await seeded_db.fetch_one("SELECT last_insert_rowid() as id")
+            assert req_id_row is not None
+            req_id = int(req_id_row["id"])
+            await seeded_db.execute_write(
+                """
+                INSERT INTO reservations (
+                    request_id, account_id, model_id, reserved_microdollars, status
+                ) VALUES (
+                    ?, (SELECT id FROM accounts WHERE name = ?), ?, ?, 'active'
+                )
+                """,
+                (req_id, "acct_a", "model_x", 500_000),
             )
-            """,
-            (req_id, "acct_a", "model_x", 500_000),
-        )
-        await seeded_db.connection.commit()
 
         service = StatsService(seeded_db)
         rows = await service.get_account_stats(
@@ -393,11 +401,11 @@ class TestStatsService:
 
     @pytest.mark.asyncio()
     async def test_get_utilization_imbalance_single_active(self, db: Database) -> None:
-        await db.execute(
-            "INSERT INTO accounts (name, api_key_env) VALUES (?, ?)",
-            ("only_one", "ENV_ONLY"),
-        )
-        await db.connection.commit()
+        async with db.transaction():
+            await db.execute_write(
+                "INSERT INTO accounts (name, api_key_env) VALUES (?, ?)",
+                ("only_one", "ENV_ONLY"),
+            )
         service = StatsService(db)
         imb = await service.get_utilization_imbalance(
             TimeRange(
@@ -425,20 +433,20 @@ class TestStatsService:
     async def test_error_breakdown_uses_error_class(self, seeded_db: Database) -> None:
         """Error breakdown should query error_class, not error_message."""
         # Insert a request with error_class and error_detail
-        await seeded_db.execute(
-            """
-            INSERT INTO requests (
-                account_id, model_id, started_at, completed_at,
-                status, error_class, error_detail
-            ) VALUES (
-                (SELECT id FROM accounts WHERE name = 'acct_a'),
-                'model_x', datetime('now', '-1 hour'),
-                datetime('now', '-1 hour'),
-                'error', 'AuthenticationError', 'Invalid API key'
+        async with seeded_db.transaction():
+            await seeded_db.execute_write(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, started_at, completed_at,
+                    status, error_class, error_detail
+                ) VALUES (
+                    (SELECT id FROM accounts WHERE name = 'acct_a'),
+                    'model_x', datetime('now', '-1 hour'),
+                    datetime('now', '-1 hour'),
+                    'error', 'AuthenticationError', 'Invalid API key'
+                )
+                """
             )
-            """
-        )
-        await seeded_db.connection.commit()
 
         service = StatsService(seeded_db)
         errors = await service.get_error_breakdown(

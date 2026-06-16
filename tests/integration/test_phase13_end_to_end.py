@@ -130,14 +130,14 @@ async def _seed_usage(
         return
     started_at = _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%d %H:%M:%S")
     seed_id = f"seed-{account_name}-{cost_microdollars}"
-    await db.execute(
-        "INSERT INTO requests "
-        "(account_id, model_id, status, protocol, streamed, "
-        "reserved_microdollars, proxy_request_id, cost_microdollars, started_at) "
-        "VALUES (?, ?, 'completed', 'openai', 0, 0, ?, ?, ?)",
-        (acct_id, model_id, seed_id, cost_microdollars, started_at),
-    )
-    await db.connection.commit()
+    async with db.transaction():
+        await db.execute_insert(
+            "INSERT INTO requests "
+            "(account_id, model_id, status, protocol, streamed, "
+            "reserved_microdollars, proxy_request_id, cost_microdollars, started_at) "
+            "VALUES (?, ?, 'completed', 'openai', 0, 0, ?, ?, ?)",
+            (acct_id, model_id, seed_id, cost_microdollars, started_at),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -151,21 +151,21 @@ async def two_account_db() -> AsyncGenerator[Database, None]:
     await database.connect()
     runner = MigrationRunner(database)
     await runner.run()
-    await database.execute(
-        "INSERT INTO accounts (name, api_key_env, enabled, weight) "
-        "VALUES (?, ?, 1, 1.0)",
-        ("acct-a", "OPENCODE_TEST_KEY_A"),
-    )
-    await database.execute(
-        "INSERT INTO accounts (name, api_key_env, enabled, weight) "
-        "VALUES (?, ?, 1, 1.0)",
-        ("acct-b", "OPENCODE_TEST_KEY_B"),
-    )
-    await database.execute(
-        "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
-        ("gpt-4", "openai"),
-    )
-    await database.connection.commit()
+    async with database.transaction():
+        await database.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+            "VALUES (?, ?, 1, 1.0)",
+            ("acct-a", "OPENCODE_TEST_KEY_A"),
+        )
+        await database.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+            "VALUES (?, ?, 1, 1.0)",
+            ("acct-b", "OPENCODE_TEST_KEY_B"),
+        )
+        await database.execute_write(
+            "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+            ("gpt-4", "openai"),
+        )
     yield database
     await database.disconnect()
 
@@ -524,7 +524,7 @@ class TestTransactionConcurrency:
 
         async def _task_a() -> None:
             async with two_account_db.transaction():
-                await two_account_db.execute(
+                await two_account_db.execute_write(
                     "INSERT INTO accounts (name, api_key_env, enabled, weight) "
                     "VALUES (?, ?, 1, 1.0)",
                     ("task-a-account", "DUMMY_KEY"),
@@ -538,7 +538,7 @@ class TestTransactionConcurrency:
             await asyncio.sleep(0.1)
             async with two_account_db.transaction():
                 task_b_entered.set()
-                await two_account_db.execute(
+                await two_account_db.execute_write(
                     "INSERT INTO accounts (name, api_key_env, enabled, weight) "
                     "VALUES (?, ?, 1, 1.0)",
                     ("task-b-account", "DUMMY_KEY"),
@@ -577,17 +577,17 @@ class TestTransactionConcurrency:
     ) -> None:
         """Readiness probe cannot roll back another request's work."""
         # Simulate a request inserting a row
-        await two_account_db.execute(
-            "INSERT INTO accounts (name, api_key_env, enabled, weight) "
-            "VALUES (?, ?, 1, 1.0)",
-            ("request-account", "DUMMY_KEY"),
-        )
-        await two_account_db.connection.commit()
+        async with two_account_db.transaction():
+            await two_account_db.execute_write(
+                "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+                "VALUES (?, ?, 1, 1.0)",
+                ("request-account", "DUMMY_KEY"),
+            )
 
         # Now simulate a readiness probe using a savepoint approach
         # The readiness probe should NOT roll back the request's row
         async with two_account_db.transaction():
-            await two_account_db.execute(
+            await two_account_db.execute_write(
                 "INSERT INTO accounts (name, api_key_env, enabled, weight) "
                 "VALUES (?, ?, 1, 1.0)",
                 ("probe-account", "DUMMY_KEY"),
@@ -615,21 +615,21 @@ class TestTransactionConcurrency:
         Assert both A and B roll back.
         """
         # Clear any prior state from other tests
-        await two_account_db.execute(
-            "DELETE FROM accounts WHERE name IN ('nested-a', 'nested-b')"
-        )
-        await two_account_db.connection.commit()
+        async with two_account_db.transaction():
+            await two_account_db.execute_write(
+                "DELETE FROM accounts WHERE name IN ('nested-a', 'nested-b')"
+            )
 
         with pytest.raises(ValueError, match="outer failure"):
             async with two_account_db.transaction():
-                await two_account_db.execute(
+                await two_account_db.execute_write(
                     "INSERT INTO accounts (name, api_key_env, enabled, weight) "
                     "VALUES (?, ?, 1, 1.0)",
                     ("nested-a", "DUMMY_KEY"),
                 )
                 # Nested transaction (same task) - inherits outer boundary
                 async with two_account_db.transaction():
-                    await two_account_db.execute(
+                    await two_account_db.execute_write(
                         "INSERT INTO accounts (name, api_key_env, enabled, weight) "
                         "VALUES (?, ?, 1, 1.0)",
                         ("nested-b", "DUMMY_KEY"),
@@ -1613,31 +1613,31 @@ class TestRestartRecovery:
         acct_repo = AccountRepository(two_account_db)
         acct_a_id = await acct_repo.get_id_by_name("acct-a")
 
-        db_request_id = await request_repo.create_pending(
-            request_id="test-k-recovery",
-            model_id="gpt-4",
-            protocol="openai",
-            streamed=False,
-            account_id=acct_a_id,
-        )
-        await request_repo.update_after_selection(
-            request_id=db_request_id,
-            account_id=acct_a_id,
-            reserved_microdollars=500000,
-        )
-        reservation_id = await reservation_repo.create(
-            request_id=db_request_id,
-            account_id=acct_a_id,
-            model_id="gpt-4",
-            estimated_tokens=1000,
-            estimated_microdollars=500000,
-        )
-        await attempt_repo.create(
-            request_id=db_request_id,
-            attempt_number=1,
-            account_id=acct_a_id,
-        )
-        await two_account_db.connection.commit()
+        async with two_account_db.transaction():
+            db_request_id = await request_repo.create_pending(
+                request_id="test-k-recovery",
+                model_id="gpt-4",
+                protocol="openai",
+                streamed=False,
+                account_id=acct_a_id,
+            )
+            await request_repo.update_after_selection(
+                request_id=db_request_id,
+                account_id=acct_a_id,
+                reserved_microdollars=500000,
+            )
+            reservation_id = await reservation_repo.create(
+                request_id=db_request_id,
+                account_id=acct_a_id,
+                model_id="gpt-4",
+                estimated_tokens=1000,
+                estimated_microdollars=500000,
+            )
+            await attempt_repo.create(
+                request_id=db_request_id,
+                attempt_number=1,
+                account_id=acct_a_id,
+            )
 
         # Verify pending state exists
         req_row = await two_account_db.fetch_one(
@@ -1648,22 +1648,23 @@ class TestRestartRecovery:
         assert req_row["status"] == "pending"
 
         # Step 2: Make the request look old enough for recovery to pick it up
-        await two_account_db.execute(
-            "UPDATE requests SET started_at = datetime('now', '-15 minutes') "
-            "WHERE proxy_request_id = ?",
-            ("test-k-recovery",),
-        )
-        await two_account_db.execute(
-            "UPDATE reservations SET created_at = datetime('now', '-15 minutes') "
-            "WHERE id = ?",
-            (reservation_id,),
-        )
-        await two_account_db.execute(
-            "UPDATE request_attempts SET started_at = datetime('now', '-15 minutes') "
-            "WHERE request_id = ?",
-            (db_request_id,),
-        )
-        await two_account_db.connection.commit()
+        async with two_account_db.transaction():
+            await two_account_db.execute_write(
+                "UPDATE requests SET started_at = datetime('now', '-15 minutes') "
+                "WHERE proxy_request_id = ?",
+                ("test-k-recovery",),
+            )
+            await two_account_db.execute_write(
+                "UPDATE reservations SET created_at = datetime('now', '-15 minutes') "
+                "WHERE id = ?",
+                (reservation_id,),
+            )
+            await two_account_db.execute_write(
+                "UPDATE request_attempts "
+                "SET started_at = datetime('now', '-15 minutes') "
+                "WHERE request_id = ?",
+                (db_request_id,),
+            )
 
         # Step 3: Run crash recovery
         from go_aggregator.app import _crash_recovery

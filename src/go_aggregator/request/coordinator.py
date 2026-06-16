@@ -984,17 +984,18 @@ class RequestCoordinator:
                 )
             else:
                 detail_value = "No attempts dispatched"
-            await self._db.execute_write(
-                "UPDATE requests SET status = 'error', "
-                "completed_at = CURRENT_TIMESTAMP, "
-                "error_class = ?, error_detail = ? "
-                "WHERE id = ? AND status = 'pending'",
-                (
-                    type(last_error).__name__ if last_error else "exhausted",
-                    detail_value,
-                    db_request_id,
-                ),
-            )
+            async with self._db.transaction():
+                await self._db.execute_write(
+                    "UPDATE requests SET status = 'error', "
+                    "completed_at = CURRENT_TIMESTAMP, "
+                    "error_class = ?, error_detail = ? "
+                    "WHERE id = ? AND status = 'pending'",
+                    (
+                        type(last_error).__name__ if last_error else "exhausted",
+                        detail_value,
+                        db_request_id,
+                    ),
+                )
 
         # Use last upstream response if available
         if last_upstream_response is not None:

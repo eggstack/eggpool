@@ -26,45 +26,46 @@ async def _seed_db(
 
     Returns (account_id, request_db_id, attempt_id, reservation_id).
     """
-    cursor = await db.execute(
-        "INSERT INTO accounts (name, api_key_env, enabled, weight) "
-        "VALUES (?, ?, 1, 1.0)",
-        ("test-acct", "TEST_KEY"),
-    )
-    account_id = cursor.lastrowid
-    assert account_id is not None
+    async with db.transaction():
+        account_id = await db.execute_insert(
+            "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+            "VALUES (?, ?, 1, 1.0)",
+            ("test-acct", "TEST_KEY"),
+        )
 
-    await db.execute(
-        "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
-        ("gpt-4", "openai"),
-    )
+        await db.execute_write(
+            "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+            ("gpt-4", "openai"),
+        )
 
     request_repo = RequestRepository(db)
-    request_db_id = await request_repo.create_pending(
-        request_id="idem-req-1",
-        model_id="gpt-4",
-        protocol="openai",
-        streamed=False,
-        account_id=account_id,
-    )
+    async with db.transaction():
+        request_db_id = await request_repo.create_pending(
+            request_id="idem-req-1",
+            model_id="gpt-4",
+            protocol="openai",
+            streamed=False,
+            account_id=account_id,
+        )
 
     attempt_repo = AttemptRepository(db)
-    attempt_id = await attempt_repo.create(
-        request_id=request_db_id,
-        attempt_number=1,
-        account_id=account_id,
-    )
+    async with db.transaction():
+        attempt_id = await attempt_repo.create(
+            request_id=request_db_id,
+            attempt_number=1,
+            account_id=account_id,
+        )
 
     reservation_repo = ReservationRepository(db)
-    reservation_id = await reservation_repo.create(
-        request_id=request_db_id,
-        account_id=account_id,
-        model_id="gpt-4",
-        estimated_tokens=1000,
-        estimated_microdollars=100000,
-    )
+    async with db.transaction():
+        reservation_id = await reservation_repo.create(
+            request_id=request_db_id,
+            account_id=account_id,
+            model_id="gpt-4",
+            estimated_tokens=1000,
+            estimated_microdollars=100000,
+        )
 
-    await db.connection.commit()
     return account_id, request_db_id, attempt_id, reservation_id
 
 

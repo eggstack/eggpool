@@ -11,12 +11,12 @@ from go_aggregator.db.migrations import MigrationRunner
 
 
 async def _seed_db(db: Database) -> None:
-    await db.execute(
-        "INSERT INTO accounts (name, api_key_env, enabled, weight) "
-        "VALUES (?, ?, 1, 1.0)",
-        ("test-acct", "TEST_KEY"),
-    )
-    await db.connection.commit()
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+            "VALUES (?, ?, 1, 1.0)",
+            ("test-acct", "TEST_KEY"),
+        )
 
 
 @pytest.mark.asyncio
@@ -156,10 +156,12 @@ async def test_persist_skips_unresolved_models() -> None:
     await _seed_db(db)
 
     # Directly insert a resolved model
-    await db.execute(
-        "INSERT INTO models (model_id, protocol, resolution_status) VALUES (?, ?, ?)",
-        ("gpt-4o", "openai", "resolved"),
-    )
+    async with db.transaction():
+        await db.execute_insert(
+            "INSERT INTO models "
+            "(model_id, protocol, resolution_status) VALUES (?, ?, ?)",
+            ("gpt-4o", "openai", "resolved"),
+        )
 
     # Try to insert an unresolved model (simulating what _persist_catalog would do)
     # After our fix, _persist_catalog should skip this

@@ -29,16 +29,16 @@ EXPECTED_TABLES = frozenset(
 
 async def _seed_db(db: Database) -> None:
     """Insert required account and model rows for FK constraints."""
-    await db.execute(
-        "INSERT INTO accounts (name, api_key_env, enabled, weight) "
-        "VALUES (?, ?, 1, 1.0)",
-        ("test-acct", "TEST_KEY"),
-    )
-    await db.execute(
-        "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
-        ("gpt-4", "openai"),
-    )
-    await db.connection.commit()
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+            "VALUES (?, ?, 1, 1.0)",
+            ("test-acct", "TEST_KEY"),
+        )
+        await db.execute_write(
+            "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+            ("gpt-4", "openai"),
+        )
 
 
 @pytest.mark.asyncio
@@ -49,14 +49,12 @@ async def test_migration_from_existing_schema() -> None:
     runner = MigrationRunner(db)
 
     await runner.run()
-    await db.connection.commit()
 
     rows = await db.fetch_all("SELECT name FROM sqlite_master WHERE type = 'table'")
     tables_first = {row["name"] for row in rows}
     assert tables_first >= EXPECTED_TABLES
 
     await runner.run()
-    await db.connection.commit()
 
     rows = await db.fetch_all("SELECT name FROM sqlite_master WHERE type = 'table'")
     tables_second = {row["name"] for row in rows}
@@ -82,28 +80,28 @@ async def test_uuid_request_and_reservation_compatibility() -> None:
     reservation_repo = ReservationRepository(db)
 
     uuid_request_id = str(uuid.uuid4())
-    created_id = await request_repo.create_pending(
-        request_id=uuid_request_id,
-        model_id="gpt-4",
-        protocol="openai",
-        streamed=False,
-        account_id=1,
-    )
+    async with db.transaction():
+        created_id = await request_repo.create_pending(
+            request_id=uuid_request_id,
+            model_id="gpt-4",
+            protocol="openai",
+            streamed=False,
+            account_id=1,
+        )
 
-    reservation_id = await reservation_repo.create(
-        request_id=created_id,
-        account_id=1,
-        model_id="gpt-4",
-        estimated_tokens=1000,
-        estimated_microdollars=100000,
-    )
+        reservation_id = await reservation_repo.create(
+            request_id=created_id,
+            account_id=1,
+            model_id="gpt-4",
+            estimated_tokens=1000,
+            estimated_microdollars=100000,
+        )
 
-    await db.execute(
-        "INSERT INTO request_attempts "
-        "(request_id, attempt_number, account_id) VALUES (?, 1, ?)",
-        (created_id, 1),
-    )
-    await db.connection.commit()
+        await db.execute_write(
+            "INSERT INTO request_attempts "
+            "(request_id, attempt_number, account_id) VALUES (?, 1, ?)",
+            (created_id, 1),
+        )
 
     req_row = await db.fetch_one("SELECT * FROM requests WHERE id = ?", (created_id,))
     assert req_row is not None
@@ -137,19 +135,19 @@ async def test_finalization_idempotency() -> None:
     await _seed_db(db)
 
     request_repo = RequestRepository(db)
-    created_id = await request_repo.create_pending(
-        request_id=str(uuid.uuid4()),
-        model_id="gpt-4",
-        protocol="openai",
-        streamed=False,
-        account_id=1,
-    )
-    await db.connection.commit()
+    async with db.transaction():
+        created_id = await request_repo.create_pending(
+            request_id=str(uuid.uuid4()),
+            model_id="gpt-4",
+            protocol="openai",
+            streamed=False,
+            account_id=1,
+        )
 
-    await request_repo.update_after_completion(
-        created_id, status="completed", input_tokens=10, output_tokens=5
-    )
-    await db.connection.commit()
+    async with db.transaction():
+        await request_repo.update_after_completion(
+            created_id, status="completed", input_tokens=10, output_tokens=5
+        )
 
     row_after_first = await db.fetch_one(
         "SELECT * FROM requests WHERE id = ?", (created_id,)
@@ -158,10 +156,10 @@ async def test_finalization_idempotency() -> None:
     assert row_after_first["status"] == "completed"
     assert row_after_first["completed_at"] is not None
 
-    await request_repo.update_after_completion(
-        created_id, status="completed", input_tokens=10, output_tokens=5
-    )
-    await db.connection.commit()
+    async with db.transaction():
+        await request_repo.update_after_completion(
+            created_id, status="completed", input_tokens=10, output_tokens=5
+        )
 
     row_after_second = await db.fetch_one(
         "SELECT * FROM requests WHERE id = ?", (created_id,)
@@ -199,49 +197,48 @@ async def test_repeated_restart_recovery() -> None:
     request_repo = RequestRepository(db)
     reservation_repo = ReservationRepository(db)
 
-    request_id_1 = await request_repo.create_pending(
-        request_id=str(uuid.uuid4()),
-        model_id="gpt-4",
-        protocol="openai",
-        streamed=False,
-        account_id=1,
-    )
-    request_id_2 = await request_repo.create_pending(
-        request_id=str(uuid.uuid4()),
-        model_id="gpt-4",
-        protocol="openai",
-        streamed=False,
-        account_id=1,
-    )
+    async with db.transaction():
+        request_id_1 = await request_repo.create_pending(
+            request_id=str(uuid.uuid4()),
+            model_id="gpt-4",
+            protocol="openai",
+            streamed=False,
+            account_id=1,
+        )
+        request_id_2 = await request_repo.create_pending(
+            request_id=str(uuid.uuid4()),
+            model_id="gpt-4",
+            protocol="openai",
+            streamed=False,
+            account_id=1,
+        )
 
-    reservation_id_1 = await reservation_repo.create(
-        request_id=request_id_1,
-        account_id=1,
-        model_id="gpt-4",
-        estimated_tokens=1000,
-        estimated_microdollars=100000,
-    )
-    reservation_id_2 = await reservation_repo.create(
-        request_id=request_id_2,
-        account_id=1,
-        model_id="gpt-4",
-        estimated_tokens=1000,
-        estimated_microdollars=100000,
-    )
+        reservation_id_1 = await reservation_repo.create(
+            request_id=request_id_1,
+            account_id=1,
+            model_id="gpt-4",
+            estimated_tokens=1000,
+            estimated_microdollars=100000,
+        )
+        reservation_id_2 = await reservation_repo.create(
+            request_id=request_id_2,
+            account_id=1,
+            model_id="gpt-4",
+            estimated_tokens=1000,
+            estimated_microdollars=100000,
+        )
 
-    await db.connection.commit()
-
-    await db.execute(
-        "UPDATE requests SET started_at = datetime('now', '-1 hour') "
-        "WHERE id IN (?, ?)",
-        (request_id_1, request_id_2),
-    )
-    await db.execute(
-        "UPDATE reservations SET created_at = datetime('now', '-1 hour') "
-        "WHERE id IN (?, ?)",
-        (reservation_id_1, reservation_id_2),
-    )
-    await db.connection.commit()
+    async with db.transaction():
+        await db.execute_write(
+            "UPDATE requests SET started_at = datetime('now', '-1 hour') "
+            "WHERE id IN (?, ?)",
+            (request_id_1, request_id_2),
+        )
+        await db.execute_write(
+            "UPDATE reservations SET created_at = datetime('now', '-1 hour') "
+            "WHERE id IN (?, ?)",
+            (reservation_id_1, reservation_id_2),
+        )
 
     for _ in range(3):
         await _crash_recovery(db)

@@ -60,16 +60,16 @@ async def db() -> AsyncGenerator[Database, None]:
     await database.connect()
     runner = MigrationRunner(database)
     await runner.run()
-    await database.execute(
-        "INSERT INTO accounts (name, api_key_env, enabled, weight) "
-        "VALUES (?, ?, 1, 1.0)",
-        ("test-acct", "OPENCODE_TEST_KEY"),
-    )
-    await database.execute(
-        "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
-        ("gpt-4", "openai"),
-    )
-    await database.connection.commit()
+    async with database.transaction():
+        await database.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+            "VALUES (?, ?, 1, 1.0)",
+            ("test-acct", "OPENCODE_TEST_KEY"),
+        )
+        await database.execute_write(
+            "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+            ("gpt-4", "openai"),
+        )
     yield database
     await database.disconnect()
 

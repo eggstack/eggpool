@@ -19,20 +19,21 @@ async def _run_migrations(db: Database) -> None:
 
 
 async def _seed_account(db: Database, name: str = "test_account") -> int:
-    cursor = await db.execute(
-        "INSERT INTO accounts (name, api_key_env, enabled, weight) VALUES (?, ?, ?, ?)",
-        (name, "TEST_KEY", 1, 1.0),
-    )
-    await db.connection.commit()
-    return cursor.lastrowid  # type: ignore[return-value]
+    async with db.transaction():
+        last_id = await db.execute_insert(
+            "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+            "VALUES (?, ?, ?, ?)",
+            (name, "TEST_KEY", 1, 1.0),
+        )
+    return int(last_id)
 
 
 async def _seed_model(db: Database, model_id: str = "gpt-4o") -> None:
-    await db.execute(
-        "INSERT INTO models (model_id, display_name) VALUES (?, ?)",
-        (model_id, "GPT-4o"),
-    )
-    await db.connection.commit()
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT INTO models (model_id, display_name) VALUES (?, ?)",
+            (model_id, "GPT-4o"),
+        )
 
 
 @pytest.mark.asyncio()
@@ -115,13 +116,13 @@ async def test_insert_and_query_account() -> None:
     try:
         await _run_migrations(database)
 
-        await database.execute(
-            "INSERT INTO accounts "
-            "(name, api_key_env, enabled, weight) "
-            "VALUES (?, ?, ?, ?)",
-            ("acct1", "ENV1", 1, 2.5),
-        )
-        await database.connection.commit()
+        async with database.transaction():
+            await database.execute_write(
+                "INSERT INTO accounts "
+                "(name, api_key_env, enabled, weight) "
+                "VALUES (?, ?, ?, ?)",
+                ("acct1", "ENV1", 1, 2.5),
+            )
 
         row = await database.fetch_one(
             "SELECT * FROM accounts WHERE name = ?",
@@ -146,13 +147,13 @@ async def test_insert_request_with_foreign_key() -> None:
         account_id = await _seed_account(database)
         await _seed_model(database)
 
-        await database.execute(
-            "INSERT INTO requests "
-            "(account_id, model_id, input_tokens, output_tokens) "
-            "VALUES (?, ?, ?, ?)",
-            (account_id, "gpt-4o", 100, 50),
-        )
-        await database.connection.commit()
+        async with database.transaction():
+            await database.execute_write(
+                "INSERT INTO requests "
+                "(account_id, model_id, input_tokens, output_tokens) "
+                "VALUES (?, ?, ?, ?)",
+                (account_id, "gpt-4o", 100, 50),
+            )
 
         row = await database.fetch_one(
             "SELECT * FROM requests WHERE account_id = ?",
@@ -174,10 +175,11 @@ async def test_insert_request_invalid_account_fails() -> None:
         await _seed_model(database)
 
         with pytest.raises(DatabaseError):
-            await database.execute(
-                "INSERT INTO requests (account_id, model_id) VALUES (?, ?)",
-                (9999, "gpt-4o"),
-            )
+            async with database.transaction():
+                await database.execute_write(
+                    "INSERT INTO requests (account_id, model_id) VALUES (?, ?)",
+                    (9999, "gpt-4o"),
+                )
     finally:
         await database.disconnect()
 
@@ -210,11 +212,11 @@ async def test_concurrent_readers_during_write() -> None:
 
         await _run_migrations(db1)
 
-        await db1.execute(
-            "INSERT INTO accounts (name, api_key_env) VALUES (?, ?)",
-            ("concurrent_test", "ENV"),
-        )
-        await db1.connection.commit()
+        async with db1.transaction():
+            await db1.execute_write(
+                "INSERT INTO accounts (name, api_key_env) VALUES (?, ?)",
+                ("concurrent_test", "ENV"),
+            )
 
         rows = await db2.fetch_all(
             "SELECT * FROM accounts WHERE name = ?",
@@ -237,18 +239,18 @@ async def test_price_snapshot_insert_and_retrieve() -> None:
         account_id = await _seed_account(database)
         await _seed_model(database, "claude-3")
 
-        await database.execute(
-            "INSERT INTO account_models (account_id, model_id) VALUES (?, ?)",
-            (account_id, "claude-3"),
-        )
+        async with database.transaction():
+            await database.execute_write(
+                "INSERT INTO account_models (account_id, model_id) VALUES (?, ?)",
+                (account_id, "claude-3"),
+            )
 
-        await database.execute(
-            "INSERT INTO model_price_snapshots "
-            "(model_id, input_price_per_1k, output_price_per_1k) "
-            "VALUES (?, ?, ?)",
-            ("claude-3", 15.0, 75.0),
-        )
-        await database.connection.commit()
+            await database.execute_write(
+                "INSERT INTO model_price_snapshots "
+                "(model_id, input_price_per_1k, output_price_per_1k) "
+                "VALUES (?, ?, ?)",
+                ("claude-3", 15.0, 75.0),
+            )
 
         row = await database.fetch_one(
             "SELECT * FROM model_price_snapshots WHERE model_id = ?",
@@ -271,28 +273,27 @@ async def test_price_snapshot_immutability() -> None:
         account_id = await _seed_account(database)
         await _seed_model(database, "gpt-4")
 
-        await database.execute(
-            "INSERT INTO account_models (account_id, model_id) VALUES (?, ?)",
-            (account_id, "gpt-4"),
-        )
+        async with database.transaction():
+            await database.execute_write(
+                "INSERT INTO account_models (account_id, model_id) VALUES (?, ?)",
+                (account_id, "gpt-4"),
+            )
 
-        await database.execute(
-            "INSERT INTO model_price_snapshots "
-            "(model_id, input_price_per_1k,"
-            " output_price_per_1k, captured_at) "
-            "VALUES (?, ?, ?, ?)",
-            ("gpt-4", 10.0, 30.0, "2025-01-01T00:00:00"),
-        )
-        await database.connection.commit()
+            await database.execute_write(
+                "INSERT INTO model_price_snapshots "
+                "(model_id, input_price_per_1k,"
+                " output_price_per_1k, captured_at) "
+                "VALUES (?, ?, ?, ?)",
+                ("gpt-4", 10.0, 30.0, "2025-01-01T00:00:00"),
+            )
 
-        await database.execute(
-            "INSERT INTO model_price_snapshots "
-            "(model_id, input_price_per_1k,"
-            " output_price_per_1k, captured_at) "
-            "VALUES (?, ?, ?, ?)",
-            ("gpt-4", 12.0, 36.0, "2025-06-01T00:00:00"),
-        )
-        await database.connection.commit()
+            await database.execute_write(
+                "INSERT INTO model_price_snapshots "
+                "(model_id, input_price_per_1k,"
+                " output_price_per_1k, captured_at) "
+                "VALUES (?, ?, ?, ?)",
+                ("gpt-4", 12.0, 36.0, "2025-06-01T00:00:00"),
+            )
 
         latest = await database.fetch_one(
             "SELECT * FROM model_price_snapshots "
@@ -322,28 +323,27 @@ async def test_price_snapshots_since_filtering() -> None:
         account_id = await _seed_account(database)
         await _seed_model(database, "gpt-4")
 
-        await database.execute(
-            "INSERT INTO account_models (account_id, model_id) VALUES (?, ?)",
-            (account_id, "gpt-4"),
-        )
+        async with database.transaction():
+            await database.execute_write(
+                "INSERT INTO account_models (account_id, model_id) VALUES (?, ?)",
+                (account_id, "gpt-4"),
+            )
 
-        await database.execute(
-            "INSERT INTO model_price_snapshots "
-            "(model_id, input_price_per_1k,"
-            " output_price_per_1k, captured_at) "
-            "VALUES (?, ?, ?, ?)",
-            ("gpt-4", 10.0, 30.0, "2025-01-01T00:00:00"),
-        )
-        await database.connection.commit()
+            await database.execute_write(
+                "INSERT INTO model_price_snapshots "
+                "(model_id, input_price_per_1k,"
+                " output_price_per_1k, captured_at) "
+                "VALUES (?, ?, ?, ?)",
+                ("gpt-4", 10.0, 30.0, "2025-01-01T00:00:00"),
+            )
 
-        await database.execute(
-            "INSERT INTO model_price_snapshots "
-            "(model_id, input_price_per_1k,"
-            " output_price_per_1k, captured_at) "
-            "VALUES (?, ?, ?, ?)",
-            ("gpt-4", 12.0, 36.0, "2025-06-01T00:00:00"),
-        )
-        await database.connection.commit()
+            await database.execute_write(
+                "INSERT INTO model_price_snapshots "
+                "(model_id, input_price_per_1k,"
+                " output_price_per_1k, captured_at) "
+                "VALUES (?, ?, ?, ?)",
+                ("gpt-4", 12.0, 36.0, "2025-06-01T00:00:00"),
+            )
 
         rows = await database.fetch_all(
             "SELECT * FROM model_price_snapshots "
@@ -366,15 +366,15 @@ async def test_requests_aggregate_query() -> None:
         account_id = await _seed_account(database)
         await _seed_model(database)
 
-        for inp, out in [(100, 50), (200, 80), (150, 70)]:
-            await database.execute(
-                "INSERT INTO requests "
-                "(account_id, model_id,"
-                " input_tokens, output_tokens) "
-                "VALUES (?, ?, ?, ?)",
-                (account_id, "gpt-4o", inp, out),
-            )
-        await database.connection.commit()
+        async with database.transaction():
+            for inp, out in [(100, 50), (200, 80), (150, 70)]:
+                await database.execute_write(
+                    "INSERT INTO requests "
+                    "(account_id, model_id,"
+                    " input_tokens, output_tokens) "
+                    "VALUES (?, ?, ?, ?)",
+                    (account_id, "gpt-4o", inp, out),
+                )
 
         row = await database.fetch_one(
             "SELECT COUNT(*) as cnt,"
@@ -396,20 +396,19 @@ async def test_model_upsert() -> None:
     try:
         await _run_migrations(database)
 
-        await database.execute(
-            "INSERT INTO models (model_id, display_name) VALUES (?, ?)",
-            ("gpt-4o", "GPT-4o"),
-        )
-        await database.connection.commit()
+        async with database.transaction():
+            await database.execute_write(
+                "INSERT INTO models (model_id, display_name) VALUES (?, ?)",
+                ("gpt-4o", "GPT-4o"),
+            )
 
-        await database.execute(
-            "INSERT INTO models (model_id, display_name)"
-            " VALUES (?, ?) "
-            "ON CONFLICT(model_id) DO UPDATE "
-            "SET display_name = excluded.display_name",
-            ("gpt-4o", "GPT-4o Turbo"),
-        )
-        await database.connection.commit()
+            await database.execute_write(
+                "INSERT INTO models (model_id, display_name)"
+                " VALUES (?, ?) "
+                "ON CONFLICT(model_id) DO UPDATE "
+                "SET display_name = excluded.display_name",
+                ("gpt-4o", "GPT-4o Turbo"),
+            )
 
         row = await database.fetch_one(
             "SELECT * FROM models WHERE model_id = ?",
@@ -438,11 +437,11 @@ async def test_account_model_relationship() -> None:
         account_id = await _seed_account(database)
         await _seed_model(database)
 
-        await database.execute(
-            "INSERT INTO account_models (account_id, model_id) VALUES (?, ?)",
-            (account_id, "gpt-4o"),
-        )
-        await database.connection.commit()
+        async with database.transaction():
+            await database.execute_write(
+                "INSERT INTO account_models (account_id, model_id) VALUES (?, ?)",
+                (account_id, "gpt-4o"),
+            )
 
         row = await database.fetch_one(
             "SELECT * FROM account_models WHERE account_id = ? AND model_id = ?",
@@ -466,11 +465,11 @@ async def test_cascade_delete_account_removes_account_models() -> None:
         account_id = await _seed_account(database)
         await _seed_model(database)
 
-        await database.execute(
-            "INSERT INTO account_models (account_id, model_id) VALUES (?, ?)",
-            (account_id, "gpt-4o"),
-        )
-        await database.connection.commit()
+        async with database.transaction():
+            await database.execute_write(
+                "INSERT INTO account_models (account_id, model_id) VALUES (?, ?)",
+                (account_id, "gpt-4o"),
+            )
 
         before = await database.fetch_one(
             "SELECT COUNT(*) as cnt FROM account_models WHERE account_id = ?",
@@ -479,11 +478,11 @@ async def test_cascade_delete_account_removes_account_models() -> None:
         assert before is not None
         assert before["cnt"] == 1
 
-        await database.execute(
-            "DELETE FROM accounts WHERE id = ?",
-            (account_id,),
-        )
-        await database.connection.commit()
+        async with database.transaction():
+            await database.execute_write(
+                "DELETE FROM accounts WHERE id = ?",
+                (account_id,),
+            )
 
         after = await database.fetch_one(
             "SELECT COUNT(*) as cnt FROM account_models WHERE account_id = ?",

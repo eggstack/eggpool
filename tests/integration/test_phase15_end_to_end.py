@@ -39,35 +39,35 @@ from go_aggregator.request.finalizer import (
 
 async def _seed_db(db: Database) -> None:
     """Insert required account and model rows for FK constraints."""
-    await db.execute(
-        "INSERT INTO accounts (name, api_key_env, enabled, weight) "
-        "VALUES (?, ?, 1, 1.0)",
-        ("test-acct", "TEST_KEY"),
-    )
-    await db.execute(
-        "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
-        ("gpt-4", "openai"),
-    )
-    await db.connection.commit()
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+            "VALUES (?, ?, 1, 1.0)",
+            ("test-acct", "TEST_KEY"),
+        )
+        await db.execute_write(
+            "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+            ("gpt-4", "openai"),
+        )
 
 
 async def _seed_db_two_accounts(db: Database) -> None:
     """Insert two accounts for multi-account tests."""
-    await db.execute(
-        "INSERT INTO accounts (name, api_key_env, enabled, weight) "
-        "VALUES (?, ?, 1, 1.0)",
-        ("acct-a", "KEY_A"),
-    )
-    await db.execute(
-        "INSERT INTO accounts (name, api_key_env, enabled, weight) "
-        "VALUES (?, ?, 1, 1.0)",
-        ("acct-b", "KEY_B"),
-    )
-    await db.execute(
-        "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
-        ("gpt-4", "openai"),
-    )
-    await db.connection.commit()
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+            "VALUES (?, ?, 1, 1.0)",
+            ("acct-a", "KEY_A"),
+        )
+        await db.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+            "VALUES (?, ?, 1, 1.0)",
+            ("acct-b", "KEY_B"),
+        )
+        await db.execute_write(
+            "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+            ("gpt-4", "openai"),
+        )
 
 
 # ===========================================================================
@@ -91,7 +91,7 @@ class TestSharedConnectionSerialization:
 
         async def task_a() -> None:
             async with db.transaction():
-                await db.execute(
+                await db.execute_write(
                     "INSERT INTO accounts (name, api_key_env, enabled, weight) "
                     "VALUES (?, ?, 1, 1.0)",
                     ("delayed-acct", "DUMMY"),
@@ -131,7 +131,7 @@ class TestSharedConnectionSerialization:
         await runner.run()
 
         async with db.transaction():
-            await db.execute(
+            await db.execute_write(
                 "INSERT INTO accounts (name, api_key_env, enabled, weight) "
                 "VALUES (?, ?, 1, 1.0)",
                 ("committed-acct", "DUMMY"),
@@ -160,7 +160,7 @@ class TestSharedConnectionSerialization:
 
         async def task_a() -> None:
             async with db.transaction():
-                await db.execute(
+                await db.execute_write(
                     "INSERT INTO accounts (name, api_key_env, enabled, weight) "
                     "VALUES (?, ?, 1, 1.0)",
                     ("tx-acct", "DUMMY"),
@@ -171,11 +171,12 @@ class TestSharedConnectionSerialization:
         async def task_b() -> None:
             await commit_event.wait()
             # This write should wait until Task A's transaction commits.
-            await db.execute(
-                "INSERT INTO accounts (name, api_key_env, enabled, weight) "
-                "VALUES (?, ?, 1, 1.0)",
-                ("b-acct", "DUMMY"),
-            )
+            async with db.transaction():
+                await db.execute_write(
+                    "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+                    "VALUES (?, ?, 1, 1.0)",
+                    ("b-acct", "DUMMY"),
+                )
             row = await db.fetch_one(
                 "SELECT name FROM accounts WHERE name = ?", ("tx-acct",)
             )
@@ -203,7 +204,7 @@ class TestSharedConnectionSerialization:
 
         async def parent_task() -> None:
             async with db.transaction():
-                await db.execute(
+                await db.execute_write(
                     "INSERT INTO accounts (name, api_key_env, enabled, weight) "
                     "VALUES (?, ?, 1, 1.0)",
                     ("parent-acct", "DUMMY"),
@@ -576,12 +577,13 @@ class TestCancelledAccounting:
             )
 
         # Finalize as cancelled with cost
-        await request_repo.update_after_completion(
-            db_id,
-            status="cancelled",
-            status_code=499,
-            cost_microdollars=50000,
-        )
+        async with db.transaction():
+            await request_repo.update_after_completion(
+                db_id,
+                status="cancelled",
+                status_code=499,
+                cost_microdollars=50000,
+            )
 
         # Query usage windows
         windows = await usage_window_repo.get_usage_windows(
@@ -619,12 +621,13 @@ class TestCancelledAccounting:
             )
 
         # Finalize as cancelled with zero cost
-        await request_repo.update_after_completion(
-            db_id,
-            status="cancelled",
-            status_code=499,
-            cost_microdollars=0,
-        )
+        async with db.transaction():
+            await request_repo.update_after_completion(
+                db_id,
+                status="cancelled",
+                status_code=499,
+                cost_microdollars=0,
+            )
 
         # Query usage windows
         windows = await usage_window_repo.get_usage_windows(

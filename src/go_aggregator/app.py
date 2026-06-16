@@ -207,6 +207,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             connect=config.upstream.connect_timeout_s,
             read=config.upstream.read_timeout_s,
             write=config.upstream.write_timeout_s,
+            pool=config.upstream.connect_timeout_s,
         ),
         limits=httpx.Limits(
             max_connections=config.upstream.max_connections,

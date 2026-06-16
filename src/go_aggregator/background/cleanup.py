@@ -152,5 +152,5 @@ async def reconcile_expired_reservations(
 
 async def checkpoint_database(db: Database) -> None:
     """Force a WAL checkpoint to reclaim disk space."""
-    await db._execute_cursor("PRAGMA wal_checkpoint(PASSIVE)")  # pyright: ignore[reportPrivateUsage] -- transaction-owner DDL helper, safe inside checkpoint
+    await db.execute_pragma("PRAGMA wal_checkpoint(PASSIVE)")
     logger.debug("Database WAL checkpoint completed")

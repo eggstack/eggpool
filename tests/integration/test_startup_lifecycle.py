@@ -135,12 +135,12 @@ async def test_immediate_startup_catalog_refresh() -> None:
     await db.connect()
     runner = MigrationRunner(db)
     await runner.run()
-    await db.execute(
-        "INSERT INTO accounts (name, api_key_env, enabled, weight) "
-        "VALUES (?, ?, 1, 1.0)",
-        ("test-acct", "OPENCODE_TEST_KEY"),
-    )
-    await db.connection.commit()
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+            "VALUES (?, ?, 1, 1.0)",
+            ("test-acct", "OPENCODE_TEST_KEY"),
+        )
 
     httpx_client = httpx.AsyncClient(
         base_url=config.upstream.base_url,
@@ -201,12 +201,12 @@ async def test_remote_refresh_failure_with_valid_cached_catalog() -> None:
     await db.connect()
     runner = MigrationRunner(db)
     await runner.run()
-    await db.execute(
-        "INSERT INTO accounts (name, api_key_env, enabled, weight) "
-        "VALUES (?, ?, 1, 1.0)",
-        ("test-acct", "OPENCODE_TEST_KEY"),
-    )
-    await db.connection.commit()
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+            "VALUES (?, ?, 1, 1.0)",
+            ("test-acct", "OPENCODE_TEST_KEY"),
+        )
 
     httpx_client = httpx.AsyncClient(
         base_url=config.upstream.base_url,
@@ -282,12 +282,12 @@ async def readyz_app_empty_catalog() -> AsyncGenerator[FastAPI]:
     runner = MigrationRunner(db)
     await runner.run()
 
-    await db.execute(
-        "INSERT INTO accounts (name, api_key_env, enabled, weight) "
-        "VALUES (?, ?, 1, 1.0)",
-        ("test-acct", "OPENCODE_TEST_KEY"),
-    )
-    await db.connection.commit()
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+            "VALUES (?, ?, 1, 1.0)",
+            ("test-acct", "OPENCODE_TEST_KEY"),
+        )
 
     httpx_client = httpx.AsyncClient(
         base_url=config.upstream.base_url,
