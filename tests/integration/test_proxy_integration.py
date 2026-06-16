@@ -734,6 +734,31 @@ async def test_invalid_json_body(
     assert response.status_code == 400
 
 
+# ── 13b. JSON body must be an object ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/v1/chat/completions",
+        "/v1/messages",
+    ],
+)
+async def test_json_body_must_be_object(
+    path: str,
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+) -> None:
+    response = await client.post(
+        path,
+        content=b"[]",
+        headers={**auth_headers, "content-type": "application/json"},
+    )
+
+    assert response.status_code == 400
+
+
 # ── 14. Missing model field ──────────────────────────────────────────────────
 
 
@@ -773,6 +798,56 @@ async def test_model_not_available(
     )
 
     assert response.status_code == 404
+
+
+# ── 15b. Unresolved protocol is a controlled server error ────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "payload", "expected_error_type"),
+    [
+        (
+            "/v1/chat/completions",
+            {
+                "model": "mystery-model",
+                "messages": [{"role": "user", "content": "Hi"}],
+            },
+            "server_error",
+        ),
+        (
+            "/v1/messages",
+            {
+                "model": "mystery-model",
+                "max_tokens": 100,
+                "messages": [{"role": "user", "content": "Hi"}],
+            },
+            "api_error",
+        ),
+    ],
+)
+async def test_unresolved_protocol_returns_503(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    path: str,
+    payload: dict[str, object],
+    expected_error_type: str,
+) -> None:
+    app.state.catalog.cache.load_model(
+        model_id="mystery-model",
+        display_name="Mystery Model",
+        protocol="",
+        capabilities={},
+        source_metadata={},
+    )
+
+    response = await client.post(path, json=payload, headers=auth_headers)
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["error"]["type"] == expected_error_type
+    assert "unresolved protocol" in body["error"]["message"].lower()
 
 
 # ── 16. Request recorded in database ─────────────────────────────────────────

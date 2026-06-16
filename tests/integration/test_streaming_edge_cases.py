@@ -266,6 +266,66 @@ async def test_upstream_non_200_before_body(
     assert state.cooldown_until > time.time() + 20
 
 
+@pytest.mark.asyncio
+async def test_streaming_success_preserves_upstream_status(
+    coordinator: RequestCoordinator,
+    db: Database,
+) -> None:
+    """A successful streaming 201 response must stay 201 end-to-end."""
+    sse_lines = [
+        "data: "
+        + json.dumps(
+            {
+                "id": "cmpl-1",
+                "object": "chat.completion.chunk",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": "Hello"},
+                        "finish_reason": None,
+                    }
+                ],
+            }
+        ),
+        "",
+        "data: [DONE]",
+    ]
+
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+            return_value=httpx.Response(
+                201,
+                content="\n".join(sse_lines).encode(),
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+
+        context = ProxyRequestContext(
+            request_id="edge-stream-status-201",
+            protocol="openai",
+            model_id="gpt-4",
+            streaming=True,
+            original_body=_make_stream_body("status-201"),
+            incoming_headers={"content-type": "application/json"},
+        )
+        response = await coordinator.execute(context)
+        assert response.status_code == 201
+        assert response.stream_iterator is not None
+
+        received_chunks: list[bytes] = []
+        async for chunk in response.stream_iterator:
+            received_chunks.append(chunk)
+
+    assert received_chunks
+    request_row = await db.fetch_one(
+        "SELECT status, status_code FROM requests WHERE proxy_request_id = ?",
+        ("edge-stream-status-201",),
+    )
+    assert request_row is not None
+    assert request_row["status"] == "completed"
+    assert request_row["status_code"] == 201
+
+
 # ---------------------------------------------------------------------------
 # Test 3: Slow consumer backpressure
 # ---------------------------------------------------------------------------

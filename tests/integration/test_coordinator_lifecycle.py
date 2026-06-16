@@ -542,6 +542,82 @@ async def test_openai_stream_injects_stream_options(
     assert sent_payload["stream_options"]["include_usage"] is True
 
 
+@pytest.mark.asyncio
+async def test_openai_stream_accepts_null_stream_options(
+    coordinator: RequestCoordinator,
+    db: Database,
+) -> None:
+    """Null stream_options should be normalized rather than crashing."""
+    request_body = json.dumps(
+        {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "stream": True,
+            "stream_options": None,
+        }
+    ).encode()
+
+    captured_requests: list[bytes] = []
+
+    def _capture_handler(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request.content)
+        sse_lines = [
+            "data: "
+            + json.dumps(
+                {
+                    "id": "cmpl-1",
+                    "object": "chat.completion.chunk",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": "Hello"},
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+            ),
+            "",
+            "data: [DONE]",
+        ]
+        return httpx.Response(
+            200,
+            content="\n".join(sse_lines).encode(),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+            side_effect=_capture_handler
+        )
+
+        context = ProxyRequestContext(
+            request_id="test-req-null-opts",
+            protocol="openai",
+            model_id="gpt-4",
+            streaming=True,
+            original_body=request_body,
+            incoming_headers={"content-type": "application/json"},
+        )
+        response = await coordinator.execute(context)
+
+        assert response.status_code == 200
+        assert response.stream_iterator is not None
+        async for _chunk in response.stream_iterator:  # type: ignore[union-attr]
+            pass
+
+    assert len(captured_requests) == 1
+    sent_payload = json.loads(captured_requests[0])
+    assert sent_payload["stream_options"]["include_usage"] is True
+
+    request_row = await db.fetch_one(
+        "SELECT status, status_code FROM requests WHERE proxy_request_id = ?",
+        ("test-req-null-opts",),
+    )
+    assert request_row is not None
+    assert request_row["status"] == "completed"
+    assert request_row["status_code"] == 200
+
+
 # ---------------------------------------------------------------------------
 # Invariant tests
 # ---------------------------------------------------------------------------

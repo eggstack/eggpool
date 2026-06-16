@@ -7,7 +7,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 
@@ -593,14 +593,23 @@ class RequestCoordinator:
         # Inject stream_options.include_usage for OpenAI
         body_to_send = context.original_body
         if context.protocol == "openai":
+            payload_obj: object
             try:
-                payload = json.loads(context.original_body)
-                stream_opts = payload.get("stream_options", {})
-                stream_opts["include_usage"] = True
-                payload["stream_options"] = stream_opts
-                body_to_send = json.dumps(payload).encode()
+                payload_obj = json.loads(context.original_body)
             except (json.JSONDecodeError, ValueError):
                 pass
+            else:
+                if isinstance(payload_obj, dict):
+                    payload = cast("dict[str, Any]", payload_obj)
+                    stream_opts_value: Any = payload.get("stream_options")
+                    stream_opts: dict[str, Any]
+                    if isinstance(stream_opts_value, dict):
+                        stream_opts = cast("dict[str, Any]", stream_opts_value)
+                    else:
+                        stream_opts = {}
+                    stream_opts["include_usage"] = True
+                    payload["stream_options"] = stream_opts
+                    body_to_send = json.dumps(payload).encode()
 
         request = self._client.build_request(
             "POST",
@@ -684,7 +693,7 @@ class RequestCoordinator:
         )
 
         return PreparedProxyResponse(
-            status_code=200,
+            status_code=response.status_code,
             headers=resp_headers,
             stream_iterator=stream_iter,
             request_id=context.request_id,
@@ -731,7 +740,7 @@ class RequestCoordinator:
                     selected,
                     FinalizationData(
                         outcome=FinalizationOutcome.COMPLETED,
-                        status_code=200,
+                        status_code=upstream_response.status_code,
                         input_tokens=usage_result.input_tokens,
                         output_tokens=usage_result.output_tokens,
                         cache_read_tokens=usage_result.cache_read_tokens,

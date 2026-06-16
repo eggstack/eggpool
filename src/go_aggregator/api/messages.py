@@ -6,7 +6,7 @@ import json
 import logging
 import time
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from fastapi.responses import Response, StreamingResponse
 
@@ -16,6 +16,7 @@ from go_aggregator.catalog.protocols import ProtocolMismatchError
 from go_aggregator.errors import (
     CatalogUnavailableError,
     ModelNotFoundError,
+    ModelUnavailableError,
     NoEligibleAccountError,
     RequestTooLargeError,
     UpstreamExhaustedError,
@@ -53,24 +54,34 @@ async def handle_messages(
             error_type="invalid_request_error",
         )
 
+    payload_obj: object
     try:
-        payload = json.loads(body)
+        payload_obj = json.loads(body)
     except json.JSONDecodeError:
         return anthropic_error_response(
             status_code=400,
             message="Invalid JSON",
             error_type="invalid_request_error",
         )
+    if not isinstance(payload_obj, dict):
+        return anthropic_error_response(
+            status_code=400,
+            message="Invalid JSON",
+            error_type="invalid_request_error",
+        )
+    payload = cast("dict[str, Any]", payload_obj)
 
-    model_id = payload.get("model")
-    if not model_id:
+    model_value = payload.get("model")
+    if not isinstance(model_value, str) or not model_value:
         return anthropic_error_response(
             status_code=400,
             message="Missing model field",
             error_type="invalid_request_error",
         )
+    model_id = model_value
 
-    is_stream = payload.get("stream", False)
+    stream_value = payload.get("stream", False)
+    is_stream = bool(stream_value)
 
     context = ProxyRequestContext(
         request_id=str(uuid.uuid4()),
@@ -104,6 +115,12 @@ async def handle_messages(
             error_type="api_error",
         )
     except CatalogUnavailableError as exc:
+        return anthropic_error_response(
+            status_code=503,
+            message=str(exc),
+            error_type="api_error",
+        )
+    except ModelUnavailableError as exc:
         return anthropic_error_response(
             status_code=503,
             message=str(exc),
