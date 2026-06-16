@@ -375,6 +375,7 @@ class TestSecretBearingErrorDetail:
             request_repo=request_repo,
             attempt_repo=attempt_repo,
             reservation_repo=reservation_repo,
+            persist_error_detail=True,
         )
 
         selected = _make_selected(
@@ -435,7 +436,10 @@ class TestSecretBearingErrorDetail:
             )
 
         af = AttemptFinalizer(
-            db=db, attempt_repo=attempt_repo, reservation_repo=reservation_repo
+            db=db,
+            attempt_repo=attempt_repo,
+            reservation_repo=reservation_repo,
+            persist_error_detail=True,
         )
         await af.finalize_failed_attempt(
             attempt_id=attempt_id,

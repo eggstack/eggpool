@@ -142,6 +142,7 @@ class RequestCoordinator:
         quota_estimator: QuotaEstimator | None = None,
         max_retry_attempts: int = DEFAULT_MAX_RETRY_ATTEMPTS,
         quota_exhausted_cooldown_seconds: float = 300.0,
+        persist_error_detail: bool = False,
     ) -> None:
         self._registry = registry
         self._catalog = catalog
@@ -159,12 +160,14 @@ class RequestCoordinator:
         self._select_lock = asyncio.Lock()
         self._max_retry_attempts = max_retry_attempts
         self._quota_exhausted_cooldown_seconds = quota_exhausted_cooldown_seconds
+        self._persist_error_detail = persist_error_detail
 
         # Build the attempt finalizer with all dependencies
         self._attempt_finalizer = AttemptFinalizer(
             db=db,
             attempt_repo=attempt_repo or AttemptRepository(db),
             reservation_repo=reservation_repo or ReservationRepository(db),
+            persist_error_detail=persist_error_detail,
         )
 
         # Build the finalizer with all dependencies
@@ -178,6 +181,7 @@ class RequestCoordinator:
             router=router,
             registry=registry,
             health_manager=health_manager,
+            persist_error_detail=persist_error_detail,
         )
 
     async def execute(self, context: ProxyRequestContext) -> PreparedProxyResponse:
@@ -702,6 +706,7 @@ class RequestCoordinator:
         first_byte_ms = 0.0
         started = time.time()
         finalizer = self._finalizer
+        persist_error_detail = self._persist_error_detail
 
         async def _stream() -> AsyncIterator[bytes]:
             nonlocal bytes_emitted, first_byte_ms
@@ -762,10 +767,15 @@ class RequestCoordinator:
                 # Midstream error - finalize, no retry
                 observer.flush()
                 usage_result = observer.usage
-                redacted = redact_error_detail(str(exc))
-                error_detail_value: str | None = (
-                    redacted[:2048] if redacted is not None else None
-                )
+                # Default is fail-closed: do not persist arbitrary
+                # provider error detail. When explicitly enabled, the
+                # strengthened redactor is applied and bounded.
+                error_detail_value: str | None = None
+                if persist_error_detail:
+                    redacted = redact_error_detail(str(exc))
+                    error_detail_value = (
+                        redacted[:2048] if redacted is not None else None
+                    )
                 await finalizer.finalize(
                     selected,
                     FinalizationData(
@@ -946,16 +956,22 @@ class RequestCoordinator:
             outcome = FinalizationOutcome.UPSTREAM_ERROR
             status_code = None
             error_class = None
-            error_detail = None
+            error_detail: str | None = None
 
             if last_upstream_response is not None:
                 status_code = last_upstream_response[0]
             if last_error is not None:
                 error_class = type(last_error).__name__
-                redacted_detail = redact_error_detail(str(last_error))
-                error_detail = (
-                    redacted_detail[:2048] if redacted_detail is not None else None
-                )
+                # Default is fail-closed: do not persist arbitrary
+                # provider error detail. When explicitly enabled, the
+                # strengthened redactor is applied and bounded.
+                if self._persist_error_detail:
+                    redacted_detail = redact_error_detail(str(last_error))
+                    error_detail = (
+                        redacted_detail[:2048]
+                        if redacted_detail is not None
+                        else None
+                    )
                 if isinstance(last_error, _NonRetryableUpstreamError):
                     outcome = FinalizationOutcome.CLIENT_ERROR
                 elif isinstance(last_error, _RetryableUpstreamError):
@@ -975,13 +991,18 @@ class RequestCoordinator:
         elif context.client_metadata.get("db_request_id") is not None:
             # No selected attempt but request exists - just mark as interrupted
             db_request_id = context.client_metadata["db_request_id"]
-            if last_error is not None:
+            # Default is fail-closed: do not persist arbitrary provider
+            # error detail. When explicitly enabled, the strengthened
+            # redactor is applied and bounded.
+            if self._persist_error_detail and last_error is not None:
                 redacted_detail = redact_error_detail(str(last_error))
                 detail_value: str = (
                     redacted_detail[:2048]
                     if redacted_detail is not None
                     else "No attempts dispatched"
                 )
+            elif self._persist_error_detail:
+                detail_value = "No attempts dispatched"
             else:
                 detail_value = "No attempts dispatched"
             async with self._db.transaction():

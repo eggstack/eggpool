@@ -86,6 +86,7 @@ class RequestFinalizer:
         router: Router | None = None,
         registry: AccountRegistry | None = None,
         health_manager: HealthManager | None = None,
+        persist_error_detail: bool = False,
     ) -> None:
         self._db = db
         self._request_repo = request_repo
@@ -96,6 +97,7 @@ class RequestFinalizer:
         self._router = router
         self._registry = registry
         self._health_manager = health_manager
+        self._persist_error_detail = persist_error_detail
 
     async def finalize(
         self,
@@ -112,12 +114,16 @@ class RequestFinalizer:
         cost_microdollars = 0
         exactness = "unknown"
 
-        # Redact, then truncate error_detail before any processing.
-        # Redaction must happen first so the truncation cap applies to
-        # the safe value, not the original secret-bearing input.
-        error_detail = redact_error_detail(data.error_detail)
-        if error_detail is not None and len(error_detail) > MAX_ERROR_DETAIL_CHARS:
-            error_detail = error_detail[:MAX_ERROR_DETAIL_CHARS]
+        # Default is fail-closed: do not persist arbitrary provider
+        # error detail. When ``persist_error_detail`` is enabled the
+        # strengthened redactor is applied, then the result is bounded
+        # by ``MAX_ERROR_DETAIL_CHARS`` before any processing.
+        if self._persist_error_detail and data.error_detail is not None:
+            error_detail = redact_error_detail(data.error_detail)
+            if error_detail is not None and len(error_detail) > MAX_ERROR_DETAIL_CHARS:
+                error_detail = error_detail[:MAX_ERROR_DETAIL_CHARS]
+        else:
+            error_detail = None
 
         async with self._db.transaction():
             # 1. Calculate cost if we have usable usage

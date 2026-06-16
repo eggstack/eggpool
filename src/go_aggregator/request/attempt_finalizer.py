@@ -54,10 +54,12 @@ class AttemptFinalizer:
         db: Database,
         attempt_repo: AttemptRepository,
         reservation_repo: ReservationRepository,
+        persist_error_detail: bool = False,
     ) -> None:
         self._db = db
         self._attempt_repo = attempt_repo
         self._reservation_repo = reservation_repo
+        self._persist_error_detail = persist_error_detail
 
     async def finalize_failed_attempt(
         self,
@@ -70,14 +72,19 @@ class AttemptFinalizer:
         Returns AttemptFinalizeResult indicating whether the attempt
         transitioned and whether the reservation was actually released.
         """
-        # Redact, then truncate error_detail. Redaction first ensures the
-        # 2048-char cap applies to the safe value, not the raw input.
-        error_detail = redact_error_detail(data.error_detail)
-        if (
-            error_detail is not None
-            and len(error_detail) > ATTEMPT_MAX_ERROR_DETAIL_CHARS
-        ):
-            error_detail = error_detail[:ATTEMPT_MAX_ERROR_DETAIL_CHARS]
+        # Default is fail-closed: do not persist arbitrary provider
+        # error detail. When ``persist_error_detail`` is enabled the
+        # strengthened redactor is applied, then the result is bounded
+        # by ``ATTEMPT_MAX_ERROR_DETAIL_CHARS``.
+        if self._persist_error_detail and data.error_detail is not None:
+            error_detail = redact_error_detail(data.error_detail)
+            if (
+                error_detail is not None
+                and len(error_detail) > ATTEMPT_MAX_ERROR_DETAIL_CHARS
+            ):
+                error_detail = error_detail[:ATTEMPT_MAX_ERROR_DETAIL_CHARS]
+        else:
+            error_detail = None
 
         transitioned = False
         reservation_released = False

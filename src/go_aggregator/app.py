@@ -303,6 +303,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         quota_estimator=router._quota_estimator,  # pyright: ignore[reportPrivateUsage]
         max_retry_attempts=1 + config.routing.max_retries_before_stream,
         quota_exhausted_cooldown_seconds=config.routing.quota_exhausted_cooldown_seconds,
+        persist_error_detail=config.security.persist_redacted_error_detail,
     )
     app.state.coordinator = coordinator
 

@@ -1026,7 +1026,12 @@ class TestPrivacyRegression:
 
     @pytest.mark.asyncio
     async def test_error_detail_is_truncated(self) -> None:
-        """Error details longer than 2048 chars are truncated."""
+        """Error details longer than 2048 chars are truncated.
+
+        Phase 17 makes ``persist_redacted_error_detail`` opt-in. The
+        default (fail-closed) writes ``NULL`` for ``error_detail``
+        and truncates only when persistence is explicitly enabled.
+        """
         db = Database(path=":memory:")
         await db.connect()
         runner = MigrationRunner(db)
@@ -1068,6 +1073,7 @@ class TestPrivacyRegression:
             request_repo=request_repo,
             attempt_repo=attempt_repo,
             reservation_repo=reservation_repo,
+            persist_error_detail=True,
         )
 
         _attempt_id = attempt_id
