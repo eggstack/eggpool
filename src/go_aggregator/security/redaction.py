@@ -8,6 +8,12 @@ from typing import Any, cast
 
 REDACTED = "[REDACTED]"
 
+# Maximum length of a persisted redacted error-detail string. The
+# helper returns an already bounded value, so callers do not need to
+# re-bound the result. Plain-text redaction, JSON serialization, and
+# the fail-closed top-level array path all honor this limit.
+MAX_REDACTED_ERROR_DETAIL_CHARS = 2048
+
 # Authorization: Bearer <token>  /  Authorization: <scheme> <value>
 _AUTH_HEADER_RE = re.compile(
     r"(?i)(authorization\s*[:=]\s*)(?:[^\s,;\"'}]+(?:\s+[^\s,;\"'}]+)*)"
@@ -126,16 +132,23 @@ def sanitize_error_object(
 ) -> Any:
     """Recursively sanitize a JSON-like value for safe persistence.
 
-    Rules:
-    - Sensitive keys (case-insensitive) have their values replaced
-      with :data:`REDACTED`.
-    - User-content keys (prompt, completion, input, messages, ...)
-      have their entire value replaced with :data:`REDACTED`.
-    - Safe keys (``type``, ``code``, bounded ``message``) are
-      retained after string-level redaction.
+    Rules (allowlist policy):
+    - Only allowlisted diagnostic keys are retained: ``type``,
+      ``code``, ``status``, ``status_code``, ``error_type``, ``kind``,
+      ``param``, ``message``, ``request_id``, ``trace_id``.
+    - Recognized sensitive keys (e.g. ``api_key``, ``authorization``,
+      ``password``, ``secret``, ``token``) and user-content keys
+      (``prompt``, ``completion``, ``input``, ``messages``) are
+      retained as :data:`REDACTED` to preserve diagnostic shape.
+    - Any other key (e.g. ``payload``, ``body``, ``context``,
+      ``data``, ``details``, ``debug``) is dropped entirely, and any
+      nested object underneath is not traversed into the output.
+    - ``message`` is retained only after string-level redaction and
+      per-string length bounding.
     - Depth, item count, and serialized byte size are bounded so
       arbitrary provider detail cannot leak.
-    - Non-string scalar values are stringified and redaction-applied.
+    - Non-string scalar values are kept for allowlisted keys and
+      coerced to strings for redaction elsewhere.
     """
     if depth >= MAX_SANITIZE_DEPTH:
         return REDACTED
@@ -156,8 +169,15 @@ def sanitize_error_object(
                 break
             item_budget -= 1
             safe_key = _truncate_key(key)
+            key_lower = safe_key.lower()
             if _is_sensitive_key(key) or _is_user_content_key(key):
+                # Retain the key with [REDACTED] for diagnostic shape.
                 result[safe_key] = REDACTED
+                continue
+            if key_lower not in SAFE_JSON_KEYS:
+                # Strict allowlist: arbitrary provider payload keys
+                # such as ``payload``, ``body``, ``context``, ``data``,
+                # ``details``, ``debug`` are dropped without recursing.
                 continue
             if isinstance(item, str):
                 redacted_string = redact_error_detail(item)
@@ -165,6 +185,9 @@ def sanitize_error_object(
                     result[safe_key] = _truncate_string(redacted_string)
                 else:
                     result[safe_key] = None
+                continue
+            if item is None or isinstance(item, (bool, int, float)):
+                result[safe_key] = item
                 continue
             result[safe_key] = sanitize_error_object(
                 item,
@@ -220,6 +243,22 @@ def _try_parse_json(value: str) -> Any | None:
         return None
 
 
+def _bound_output(value: str) -> str:
+    """Bound the serialized output to :data:`MAX_REDACTED_ERROR_DETAIL_CHARS`.
+
+    The bound is applied unconditionally so the caller never has to
+    re-bound the redacted result. If truncation occurs the suffix
+    ``...[TRUNCATED]`` is appended so the truncation is observable.
+    """
+    if len(value) <= MAX_REDACTED_ERROR_DETAIL_CHARS:
+        return value
+    suffix = "...[TRUNCATED]"
+    keep = MAX_REDACTED_ERROR_DETAIL_CHARS - len(suffix)
+    if keep < 0:
+        keep = 0
+    return value[:keep] + suffix
+
+
 def redact_error_detail(value: str | None) -> str | None:
     """Replace secret-bearing fragments in an error detail string.
 
@@ -227,19 +266,31 @@ def redact_error_detail(value: str | None) -> str | None:
     logs. Matches are replaced with the ``[REDACTED]`` marker. ``None``
     and empty input are returned unchanged.
 
-    When the input looks like a JSON object or array, the redactor
-    first tries to parse it and apply :func:`sanitize_error_object`
-    recursively, then re-serializes the sanitized result. Regex
-    fallbacks are applied to non-JSON text and to scalar strings.
+    When the input looks like a JSON object, the redactor first tries
+    to parse it and apply :func:`sanitize_error_object` recursively
+    using a strict diagnostic-key allowlist, then re-serializes the
+    sanitized result. Top-level JSON arrays have no stable diagnostic
+    schema, so the conservative fail-closed behavior replaces the
+    whole payload with :data:`REDACTED`. Regex fallbacks are applied
+    to non-JSON text and to scalar strings.
+
+    The returned value is bounded to
+    :data:`MAX_REDACTED_ERROR_DETAIL_CHARS` so callers can persist
+    the result directly.
     """
     if value is None or value == "":
         return value
 
     parsed = _try_parse_json(value)
     if parsed is not None:
+        if isinstance(parsed, list):
+            # Fail-closed for top-level arrays: arbitrary provider
+            # error arrays have no stable diagnostic schema, and
+            # partial retention is more likely to leak than to help.
+            return _bound_output(REDACTED)
         sanitized = sanitize_error_object(parsed)
         try:
-            return json.dumps(sanitized, ensure_ascii=False)
+            return _bound_output(json.dumps(sanitized, ensure_ascii=False))
         except (TypeError, ValueError):
             # Fall through to regex-based redaction.
             pass
@@ -255,4 +306,4 @@ def redact_error_detail(value: str | None) -> str | None:
     redacted = _COMPLETION_FIELD_RE.sub(r'\1"' + REDACTED + '"', redacted)
     redacted = _URL_USERINFO_RE.sub(r"\g<scheme>" + REDACTED + "@", redacted)
     redacted = _SENSITIVE_QUERY_RE.sub(r"\1" + REDACTED, redacted)
-    return redacted
+    return _bound_output(redacted)

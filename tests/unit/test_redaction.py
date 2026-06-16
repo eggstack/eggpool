@@ -1,8 +1,11 @@
 """Unit tests for the security.redaction module.
 
-Phase 17 strengthens the persisted-error-detail privacy guarantee.
-The redactor now covers common JSON credential forms and
-structured sanitization for error bodies that parse as JSON.
+Phase 18 switches the structured sanitization policy from
+blocklist to allowlist. The redactor retains only a small set
+of diagnostic JSON fields, drops arbitrary provider payload
+keys (e.g. ``payload``, ``body``, ``context``, ``data``,
+``details``, ``debug``), collapses top-level arrays to
+``[REDACTED]`` (fail-closed), and bounds the helper output.
 """
 
 from __future__ import annotations
@@ -10,7 +13,9 @@ from __future__ import annotations
 import json
 
 from go_aggregator.security.redaction import (
+    MAX_REDACTED_ERROR_DETAIL_CHARS,
     REDACTED,
+    SAFE_JSON_KEYS,
     SENSITIVE_JSON_KEYS,
     USER_CONTENT_JSON_KEYS,
     redact_error_detail,
@@ -71,7 +76,7 @@ class TestRedactErrorDetailRegex:
 
 
 class TestRedactErrorDetailJson:
-    """Phase 17: JSON-shaped inputs are parsed and recursively sanitized."""
+    """Phase 18: allowlist-based structured sanitization."""
 
     def test_json_with_api_key_redacted(self) -> None:
         result = redact_error_detail('{"api_key": "secret"}')
@@ -108,31 +113,32 @@ class TestRedactErrorDetailJson:
 
     def test_json_nested(self) -> None:
         payload = {
-            "error": {
-                "type": "api_error",
-                "code": "rate_limit",
-                "message": "limit reached",
-                "details": {
-                    "api_key": "secret",
-                    "token": "another-secret",
-                },
-            }
+            "type": "api_error",
+            "code": "rate_limit",
+            "message": "limit reached",
+            "details": {
+                "api_key": "secret",
+                "token": "another-secret",
+            },
         }
         result = redact_error_detail(json.dumps(payload))
         assert result is not None
         assert "secret" not in result
         assert "another-secret" not in result
         parsed = json.loads(result)
-        assert parsed["error"]["type"] == "api_error"
-        assert parsed["error"]["code"] == "rate_limit"
-        assert parsed["error"]["details"]["api_key"] == REDACTED
-        assert parsed["error"]["details"]["token"] == REDACTED
+        assert parsed["type"] == "api_error"
+        assert parsed["code"] == "rate_limit"
+        # ``details`` is not allowlisted, so the entire object is
+        # dropped along with the credentials inside it.
+        assert "details" not in parsed
 
-    def test_json_array(self) -> None:
+    def test_json_array_fail_closed(self) -> None:
         result = redact_error_detail('[{"api_key": "a"}, {"token": "b"}]')
-        assert result is not None
-        assert "a" not in result.split("api_key")[1].split("}")[0] or REDACTED in result
-        assert REDACTED in result
+        assert result == REDACTED
+
+    def test_json_empty_array_fail_closed(self) -> None:
+        result = redact_error_detail("[]")
+        assert result == REDACTED
 
     def test_mixed_case_keys_redacted(self) -> None:
         result = redact_error_detail('{"API_KEY": "secret"}')
@@ -167,36 +173,52 @@ class TestSanitizeErrorObject:
     """Direct tests for sanitize_error_object."""
 
     def test_sensitive_keys_redacted(self) -> None:
-        result = sanitize_error_object({"api_key": "secret", "name": "ok"})
+        result = sanitize_error_object({"api_key": "secret", "type": "api_error"})
         assert result["api_key"] == REDACTED
-        assert result["name"] == "ok"
+        assert result["type"] == "api_error"
 
     def test_user_content_keys_redacted(self) -> None:
         result = sanitize_error_object(
             {
                 "input": "private",
                 "messages": [{"role": "user", "content": "private"}],
+                "type": "api_error",
             }
         )
         assert result["input"] == REDACTED
         assert result["messages"] == REDACTED
+        assert result["type"] == "api_error"
 
     def test_depth_bound(self) -> None:
-        # Build a deeply nested dict that exceeds MAX_SANITIZE_DEPTH
+        # Build a deeply nested dict that exceeds MAX_SANITIZE_DEPTH.
+        # Even with the allowlist, deep recursion must collapse to
+        # [REDACTED] before the original secret value can escape.
         nested: dict = {"api_key": "secret"}
         for _ in range(10):
             nested = {"level": nested, "api_key": "secret"}
         result = sanitize_error_object(nested)
-        # Result should be a sanitized structure; no leaked "secret"
         serialized = json.dumps(result)
         assert "secret" not in serialized
 
     def test_item_budget_bound(self) -> None:
-        # Build a large list
-        payload = {"data": [{"api_key": f"k{i}"} for i in range(200)]}
-        result = sanitize_error_object(payload, item_budget=10)
-        # Most items should be truncated to REDACTED or dropped
-        assert "REDACTED" in json.dumps(result)
+        # ``data`` is not on the allowlist, so the entire payload is
+        # dropped before the item budget can expand. The structural
+        # bound still applies for objects/arrays on the allowlist.
+        result = sanitize_error_object({"data": [{"api_key": "k0"}] * 200})
+        assert "data" not in result
+        assert "k0" not in json.dumps(result)
+
+    def test_allowlist_budget_bound(self) -> None:
+        # Lists nested under an allowlisted key still honor the
+        # item budget and collapse to REDACTED on exhaustion.
+        result = sanitize_error_object({"trace_id": ["a"] * 200}, item_budget=4)
+        # A few list entries are processed before the budget runs
+        # out; the remaining items must be REDACTED. The list must
+        # not contain more than the budgeted entries plus REDACTEDs.
+        assert result["trace_id"][-1] == REDACTED
+        assert all(entry in ("a", REDACTED) for entry in result["trace_id"])
+        # No raw original material should remain.
+        assert result["trace_id"].count("a") <= 3
 
     def test_truncates_long_string(self) -> None:
         result = sanitize_error_object({"message": "x" * 5000})
@@ -211,9 +233,9 @@ class TestSanitizeErrorObject:
         assert "a" * 200 not in serialized
 
     def test_preserves_scalar_values(self) -> None:
-        result = sanitize_error_object({"status_code": 429, "retriable": True})
+        result = sanitize_error_object({"status_code": 429, "type": "rate_limit"})
         assert result["status_code"] == 429
-        assert result["retriable"] is True
+        assert result["type"] == "rate_limit"
 
 
 class TestSensitiveKeySets:
@@ -235,3 +257,183 @@ class TestSensitiveKeySets:
     def test_user_content_keys_contains_core_set(self) -> None:
         for key in ("prompt", "completion", "input", "messages"):
             assert key in USER_CONTENT_JSON_KEYS
+
+    def test_safe_json_keys_contains_diagnostic_set(self) -> None:
+        for key in (
+            "type",
+            "code",
+            "status",
+            "status_code",
+            "error_type",
+            "kind",
+            "param",
+            "message",
+            "request_id",
+            "trace_id",
+        ):
+            assert key in SAFE_JSON_KEYS
+
+
+class TestAllowlistPolicy:
+    """Phase 18: the structured policy is allowlist-based."""
+
+    def test_payload_with_private_source_code_is_dropped(self) -> None:
+        result = redact_error_detail(
+            json.dumps(
+                {
+                    "type": "invalid_request",
+                    "message": "bad token sk-secret",
+                    "payload": "private source code body",
+                }
+            )
+        )
+        assert result is not None
+        assert "payload" not in result
+        assert "private source code body" not in result
+        parsed = json.loads(result)
+        assert parsed == {
+            "type": "invalid_request",
+            "message": "bad token [REDACTED]",
+        }
+
+    def test_data_and_details_are_dropped(self) -> None:
+        result = redact_error_detail(
+            json.dumps(
+                {
+                    "type": "api_error",
+                    "data": {"api_key": "sk-private"},
+                    "details": {"context": "private debug info"},
+                    "debug": "internal trace",
+                }
+            )
+        )
+        assert result is not None
+        parsed = json.loads(result)
+        assert parsed == {"type": "api_error"}
+        assert "data" not in parsed
+        assert "details" not in parsed
+        assert "debug" not in parsed
+
+    def test_nested_unknown_keys_are_dropped(self) -> None:
+        result = redact_error_detail(
+            json.dumps(
+                {
+                    "type": "api_error",
+                    "error": {
+                        "type": "nested",
+                        "code": "rate_limit",
+                        "context": "private context",
+                    },
+                }
+            )
+        )
+        assert result is not None
+        parsed = json.loads(result)
+        # The outer ``error`` is not allowlisted, so it and its
+        # contents are dropped entirely.
+        assert "error" not in parsed
+        assert parsed == {"type": "api_error"}
+
+    def test_safe_diagnostic_keys_are_retained(self) -> None:
+        result = redact_error_detail(
+            json.dumps(
+                {
+                    "type": "api_error",
+                    "code": "rate_limit",
+                    "status": 429,
+                    "status_code": 429,
+                    "error_type": "rate_limit_error",
+                    "kind": "rate_limit",
+                    "param": "max_tokens",
+                    "request_id": "req-abc",
+                    "trace_id": "trace-xyz",
+                }
+            )
+        )
+        assert result is not None
+        parsed = json.loads(result)
+        assert parsed == {
+            "type": "api_error",
+            "code": "rate_limit",
+            "status": 429,
+            "status_code": 429,
+            "error_type": "rate_limit_error",
+            "kind": "rate_limit",
+            "param": "max_tokens",
+            "request_id": "req-abc",
+            "trace_id": "trace-xyz",
+        }
+
+    def test_message_is_redacted_and_bounded(self) -> None:
+        long_message = "sk-supersecret " * 500
+        result = redact_error_detail(
+            json.dumps({"type": "api_error", "message": long_message})
+        )
+        assert result is not None
+        assert len(result) <= MAX_REDACTED_ERROR_DETAIL_CHARS
+        assert "sk-supersecret" not in result
+        parsed = json.loads(result)
+        assert parsed["type"] == "api_error"
+        # Per-string bound was already applied (truncation uses the
+        # ``MAX_STRING_BYTES`` constant plus a small ``...`` suffix,
+        # which keeps the per-string length bounded).
+        assert len(parsed["message"]) <= 1024 + 3
+
+    def test_prompt_completion_messages_input_markers_are_absent(self) -> None:
+        result = redact_error_detail(
+            json.dumps(
+                {
+                    "type": "api_error",
+                    "code": "rate_limit",
+                    "message": "ok",
+                    "prompt": "private prompt",
+                    "completion": "private completion",
+                    "messages": "private messages",
+                    "input": "private input",
+                    "api_key": "private-api-key",
+                    "token": "private-token",
+                    "authorization": "Bearer private-auth",
+                }
+            )
+        )
+        assert result is not None
+        for marker in (
+            "private prompt",
+            "private completion",
+            "private messages",
+            "private input",
+            "private-api-key",
+            "private-token",
+            "private-auth",
+        ):
+            assert marker not in result, f"Marker {marker!r} present in {result!r}"
+        parsed = json.loads(result)
+        assert parsed["prompt"] == REDACTED
+        assert parsed["completion"] == REDACTED
+        assert parsed["messages"] == REDACTED
+        assert parsed["input"] == REDACTED
+        assert parsed["api_key"] == REDACTED
+        assert parsed["token"] == REDACTED
+        assert parsed["authorization"] == REDACTED
+
+    def test_top_level_array_is_fail_closed(self) -> None:
+        result = redact_error_detail(json.dumps([{"api_key": "k1"}, {"token": "k2"}]))
+        assert result == REDACTED
+        # A scalar list element is also replaced.
+        result2 = redact_error_detail(json.dumps(["private", "data"]))
+        assert result2 == REDACTED
+
+    def test_helper_output_is_bounded(self) -> None:
+        huge = "x" * 10000
+        result = redact_error_detail(huge)
+        assert result is not None
+        assert len(result) <= MAX_REDACTED_ERROR_DETAIL_CHARS
+        # Bound is also applied to the JSON branch.
+        json_result = redact_error_detail(
+            json.dumps({"type": "api_error", "message": "x" * 10000})
+        )
+        assert json_result is not None
+        assert len(json_result) <= MAX_REDACTED_ERROR_DETAIL_CHARS
+
+    def test_max_redacted_error_detail_chars_constant(self) -> None:
+        assert MAX_REDACTED_ERROR_DETAIL_CHARS == 2048

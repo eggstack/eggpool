@@ -222,3 +222,71 @@ secrets are logged or echoed.
 test harness). `GOROUTER_TEST_STREAM_CANCEL=1` closes the
 response after the first nonempty chunk to exercise the client
 cancellation path.
+
+### Direct upstream authentication verifier
+
+The bundled `scripts/verify_upstream_auth.py` script bypasses
+the proxy and calls the upstream OpenAI-compatible and
+Anthropic-compatible endpoints directly using
+`Authorization: Bearer`. It is used to confirm that a
+configured key authenticates against each endpoint family and
+to distinguish upstream authentication / model compatibility
+failures from GoRouter-side proxy defects during live testing.
+The script is **not** part of automated CI execution.
+
+```bash
+GOROUTER_UPSTREAM_BASE_URL="https://api.openai.com" \
+GOROUTER_TEST_UPSTREAM_KEY=... \
+GOROUTER_OPENAI_MODEL="gpt-4" \
+GOROUTER_ANTHROPIC_MODEL="claude-3-5-sonnet" \
+  uv run python scripts/verify_upstream_auth.py
+```
+
+Required environment:
+
+- `GOROUTER_UPSTREAM_BASE_URL` - the upstream base URL.
+- `GOROUTER_TEST_UPSTREAM_KEY` - the upstream key to verify;
+  pass via environment variable, not on the command line, so
+  it does not appear in shell history or process listings.
+- `GOROUTER_OPENAI_MODEL` - a real OpenAI-protocol model id.
+- `GOROUTER_ANTHROPIC_MODEL` - a real Anthropic-protocol model
+  id.
+
+Operational sequence:
+
+1. Verify the key directly against each endpoint family
+   (this script).
+2. Run the GoRouter smoke test using the same model ids.
+3. If direct succeeds but the proxy fails, inspect GoRouter
+   header transformation and routing.
+4. If both fail, treat it as upstream model or key
+   compatibility rather than a proxy defect.
+
+The model examples in the environment variables above are
+illustrative; the operator must supply current, real model
+IDs known to be advertised by the upstream catalog. The
+verifier never enables HTTPX debug logging and never prints
+the key, body, prompt, or completion. If an operator manually
+exported a real key in an interactive shell, clear that
+history entry (`history -d <line_number>` or
+`history -c && history -w`).
+
+### Persisted error-detail privacy
+
+Error-detail persistence is disabled by default
+(`security.persist_redacted_error_detail = false`). When
+disabled, `error_detail` columns remain `NULL` and arbitrary
+provider payloads never reach the database. When explicitly
+enabled, GoRouter stores only a bounded allowlist of sanitized
+diagnostic fields. The persisted JSON is restricted to a small
+diagnostic key set: `type`, `code`, `status`, `status_code`,
+`error_type`, `kind`, `param`, `message`, `request_id`,
+`trace_id`. Recognized sensitive and user-content keys are
+retained as `[REDACTED]`. Arbitrary provider payload fields
+(e.g. `payload`, `body`, `context`, `data`, `details`, `debug`)
+are dropped entirely and never traversed into the output. The
+returned string is bounded to 2048 characters. This is **not**
+a lossless provider diagnostic; the allowlist intentionally
+discards arbitrary provider detail to prevent accidental
+retention of credentials, prompt content, or proprietary
+request bodies.
