@@ -183,6 +183,8 @@ tests/
 - [x] Phase 13: Attempt lifecycle and transaction hardening
 - [x] Phase 14: Deployment blockers and operational hardening
 - [x] Phase 15: Concurrency and accounting correctness
+- [x] Phase 16: Final polish and release validation
+- [x] Phase 17: Deployment readiness corrections
 
 ## Known Limitations
 

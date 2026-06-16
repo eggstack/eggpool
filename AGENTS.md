@@ -61,6 +61,12 @@ All must pass with zero errors.
 - Cache-only rate changes create snapshots; cache-only token usage invokes cost calculation
 - Health systems use a normalized `FailureCategory` vocabulary shared by `HealthManager` and `AccountRuntimeState`
 - `models.resolution_status` is set to `'resolved'` for all persisted models with resolved protocols
+- Every DML write must run inside `async with db.transaction():`; write helpers refuse to operate outside an owned transaction
+- Local client credentials (`Authorization`, `X-Api-Key`, `Proxy-Authorization`) are stripped before upstream forwarding; only the selected account's bearer token is injected
+- Persisted `error_detail` is fail-closed by default; the strengthened redactor (regex + JSON sanitization) only runs when `security.persist_redacted_error_detail = true`
+- The systemd unit intentionally omits `ExecReload`; all configuration changes require `sudo systemctl restart gorouter`
+- The `scripts/check_database.py` checker opens the database read-only via `file:...?mode=ro` and refuses to mutate anything
+- `tests/integration/test_phase17_deployment_readiness_matrix.py` is the cross-cutting release-gate for the matrix in the Phase 17 plan
 
 For detailed architecture documentation, see `architecture/` directory:
 - `phase-0.md`: Repository and tooling foundation
@@ -78,6 +84,7 @@ For detailed architecture documentation, see `architecture/` directory:
 - `phase-13-attempt-transaction-hardening.md`: Attempt lifecycle and transaction hardening
 - `phase-14-deployment-blockers-and-operational-hardening.md`: Deployment blockers and operational hardening
 - `phase-15-concurrency-accounting-correctness.md`: Concurrency and accounting correctness
+- `phase-17-deployment-readiness-corrections.md`: Deployment readiness corrections
 
 ## Import Organization
 

@@ -174,3 +174,120 @@ df -h /var/lib/gorouter
 # Trim old data (if retention is configured)
 # The service handles this automatically via dashboard.retain_request_stats_days
 ```
+
+## Phase 17 deployment validation
+
+Run these checks on the target Pi before exposing it to LAN
+traffic. Each one is a release-gate for the deployment-readiness
+work in `plans/phase-17-deployment-readiness-corrections.md`.
+
+### 1. Systemd unit hardening
+
+```bash
+# Unit must parse without errors.
+sudo systemd-analyze verify /etc/systemd/system/gorouter.service
+
+# Confirm ExecReload is intentionally absent: any reload attempt
+# must fail with "Job type reload is not applicable".
+sudo systemctl reload gorouter || true
+```
+
+### 2. Read-only database checker
+
+```bash
+sudo -u gorouter GOROUTER_DB_PATH=/var/lib/gorouter/usage.sqlite3 \
+  /opt/gorouter/.venv/bin/python /opt/gorouter/scripts/check_database.py
+
+# Exit 0 = all invariants pass.
+# Exit 1 = invariant violation (read the message).
+# Exit 2 = configuration or schema-version error.
+echo "checker exit: $?"
+```
+
+### 3. Configuration changes require restart
+
+```bash
+# Confirm a no-op restart is fast and clean.
+sudo systemctl restart gorouter
+sudo systemctl status gorouter --no-pager
+sudo journalctl -u gorouter -n 20 --no-pager
+```
+
+### 4. Streaming smoke test
+
+```bash
+GOROUTER_BASE_URL=http://127.0.0.1:8080 \
+GOROUTER_API_KEY=$(sudo grep ^GO_AGGREGATOR_API_KEY /etc/gorouter/env | cut -d= -f2-) \
+GOROUTER_OPENAI_MODEL="<your openai model>" \
+GOROUTER_ANTHROPIC_MODEL="<your anthropic model>" \
+  /opt/gorouter/.venv/bin/python /opt/gorouter/scripts/smoke_test.py
+```
+
+`GOROUTER_OPENAI_MODEL` and `GOROUTER_ANTHROPIC_MODEL` must be
+real model IDs advertised by the upstream catalog. The script
+exercises non-streaming and streaming requests for both
+protocol families and reports a one-line status per check.
+
+### 5. Restart-required workflow
+
+Make one deliberate config change to verify the restart-only
+workflow:
+
+```bash
+# Change a non-load-bearing setting, e.g. log level.
+sudo sed -i 's/^log_level = "INFO"/log_level = "DEBUG"/' /etc/gorouter/config.toml
+sudo systemctl restart gorouter
+sudo journalctl -u gorouter -n 50 --no-pager | grep -i "log level\|debug\|info"
+```
+
+The change should be visible in the logs after the restart,
+confirming the restart-only configuration workflow.
+
+### 6. Soak test
+
+Run the application under representative load for an extended
+period to confirm there are no resource leaks, schema drift,
+or credential exposure:
+
+```bash
+# A short synthetic soak (5 minutes) using respx-style mocks is
+# already covered by tests/integration/test_soak.py in CI. On
+# the target Pi, run a longer live soak driven by a simple
+# load generator (e.g., a shell loop hitting /v1/chat/completions
+# with a representative prompt) for at least 30 minutes.
+
+# Watch for:
+#   - Database file growth that matches expected traffic.
+#   - No growing active-request counts (dashboard -> accounts).
+#   - No 'quota exhausted' storms from a single account
+#     (which would indicate cooldown regression).
+#   - No secrets in the systemd journal.
+sudo journalctl -u gorouter --since "30 minutes ago" | \
+  grep -E "sk-[A-Za-z0-9]+|Bearer [A-Za-z0-9._-]+|api_key=" \
+  && echo "FAIL: secrets in logs" || echo "OK: no secrets in logs"
+```
+
+### 7. Database invariant checker post-soak
+
+```bash
+sudo -u gorouter GOROUTER_DB_PATH=/var/lib/gorouter/usage.sqlite3 \
+  /opt/gorouter/.venv/bin/python /opt/gorouter/scripts/check_database.py
+echo "post-soak checker exit: $?"
+```
+
+Exit 0 means the soak did not leave the database in a
+violating state.
+
+## Acceptance checklist
+
+Before declaring the Pi deployment ready:
+
+- [ ] `systemctl status gorouter` shows the service as
+      `active (running)`.
+- [ ] `systemd-analyze verify` returns 0.
+- [ ] `check_database.py` returns exit code 0.
+- [ ] The smoke test reports `OK` for every check.
+- [ ] The 30-minute soak leaves no secrets in the journal
+      and the database invariant checker still returns 0.
+- [ ] A no-op `systemctl restart gorouter` completes in
+      under five seconds and the service comes back healthy.
