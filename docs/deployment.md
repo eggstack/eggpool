@@ -95,25 +95,36 @@ sudo systemctl start gorouter
 sudo systemctl status gorouter
 ```
 
-## Configuration Reload
+## Configuration Changes
 
-Send SIGHUP to reload configuration without restarting:
+GoRouter does not support live configuration reload. **All
+configuration changes require a full restart.** The systemd unit
+intentionally omits `ExecReload` so `systemctl reload gorouter`
+fails cleanly instead of silently doing nothing.
 
-```bash
-sudo systemctl reload gorouter
-```
-
-This reloads:
-- Account list and API keys
-- Model exposure mode
-- Dashboard enable/disable
-- Log level
-
-Changes to database path, upstream URL, or server bind address require a full restart:
+To apply any change to `/etc/gorouter/config.toml` or
+`/etc/gorouter/env`:
 
 ```bash
+# Apply changes
 sudo systemctl restart gorouter
+
+# Verify the service is up
+sudo systemctl status gorouter
+
+# Inspect the most recent logs
+sudo journalctl -u gorouter -n 100 --no-pager
 ```
+
+The `restart` workflow applies to every config change, including:
+
+- Account list, weights, and offsets
+- API keys (the env file)
+- Upstream URL and timeouts
+- Quota windows and routing strategy
+- Log level
+- Database path
+- Bind address and port
 
 ## Graceful Shutdown
 

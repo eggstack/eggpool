@@ -218,8 +218,11 @@ For production (systemd):
 sudo systemctl enable --now gorouter
 ```
 
-Configuration changes require a service restart:
+Configuration changes require a service restart; the unit
+intentionally does not advertise any reload action:
 
 ```bash
 sudo systemctl restart gorouter
+sudo systemctl status gorouter
+sudo journalctl -u gorouter -n 100 --no-pager
 ```

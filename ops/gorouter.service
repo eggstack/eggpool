@@ -10,7 +10,9 @@ User=gorouter
 Group=gorouter
 WorkingDirectory=/var/lib/gorouter
 ExecStart=/opt/gorouter/.venv/bin/go-aggregator serve --config /etc/gorouter/config.toml
-ExecReload=/bin/kill -HUP $MAINPID
+# Live configuration reload is not supported; changes require
+# `sudo systemctl restart gorouter`. SIGHUP is intentionally not
+# wired to any reload action.
 Restart=on-failure
 RestartSec=5
 StartLimitIntervalSec=300
