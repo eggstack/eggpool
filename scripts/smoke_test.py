@@ -6,8 +6,9 @@ and one streaming request succeed for each of the OpenAI-compatible
 and Anthropic-compatible protocol families.
 
 The script is intentionally side-effect-light: it never logs or
-echoes request bodies, response bodies, or secrets. It only reports
-endpoint status codes, timing, and structural SSE markers.
+echoes request bodies, response bodies, model text, complete
+chunks, or secrets. It only reports endpoint status codes, timing,
+and structural SSE markers.
 
 Required environment (all values must be set explicitly; no defaults
 for model identifiers or secrets):
@@ -35,7 +36,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 
@@ -50,13 +51,22 @@ ANTHROPIC_PATH = "/v1/messages"
 OPENAI_STREAM_MARKER = b"data:"
 ANTHROPIC_STREAM_MARKER = b"event:"
 
+# Terminal SSE markers. The proxy may emit ``[DONE]`` for OpenAI
+# streams or ``message_stop`` for Anthropic streams as the final
+# frame. Cancellation mode intentionally does not require these.
+OPENAI_TERMINAL_MARKERS: tuple[bytes, ...] = (b"data: [DONE]",)
+ANTHROPIC_TERMINAL_MARKERS: tuple[bytes, ...] = (
+    b"event: message_stop",
+    b'"type":"message_stop"',
+)
+
 
 @dataclass
 class CheckResult:
     name: str
     ok: bool
     detail: str = ""
-    timings: dict[str, float] = field(default_factory=dict)
+    timings: dict[str, float] = field(default_factory=dict[str, float])
 
 
 @dataclass
@@ -69,6 +79,8 @@ class _StreamCheckState:
     completed_at: float | None = None
     chunk_count: int = 0
     saw_stream_marker: bool = False
+    saw_terminal_marker: bool = False
+    cancelled_intentionally: bool = False
     transport_error: str | None = None
 
 
@@ -113,10 +125,16 @@ def _check_models(client: httpx.Client, base: str, api_key: str) -> CheckResult:
     if resp.status_code != 200:
         return CheckResult("models", False, f"status={resp.status_code}")
     try:
-        body = resp.json()
+        body_raw: object = resp.json()
     except json.JSONDecodeError:
         return CheckResult("models", False, "non-json body")
-    data = body.get("data", []) if isinstance(body, dict) else []
+    if not isinstance(body_raw, dict):
+        return CheckResult("models", False, "non-object body")
+    body: dict[str, object] = cast("dict[str, object]", body_raw)
+    data_raw: object = body.get("data", [])
+    data: list[object] = (
+        cast("list[object]", data_raw) if isinstance(data_raw, list) else []
+    )
     return CheckResult("models", bool(data), f"count={len(data)}")
 
 
@@ -131,43 +149,108 @@ def _check_stats(client: httpx.Client, base: str) -> CheckResult:
     return CheckResult("stats", False, "no stats endpoint responded 200")
 
 
+def _parse_attempt_count(raw: str) -> int | None:
+    """Parse the ``x-proxy-attempt-count`` header.
+
+    Returns the attempt count as a positive integer, or ``None`` if
+    the header is missing, blank, non-integer, or non-positive.
+    """
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    if value < 1:
+        return None
+    return value
+
+
+class _RollingMarkerScanner:
+    """Detect a marker that may be split across transport chunks.
+
+    Maintains a trailing byte buffer of ``max(len(marker) - 1, 0)``
+    so markers split across chunk boundaries are still detected
+    without accumulating the full response body.
+    """
+
+    __slots__ = ("_marker", "_tail", "_tail_length")
+
+    def __init__(self, marker: bytes) -> None:
+        self._marker = marker
+        self._tail_length = max(len(marker) - 1, 0)
+        self._tail = b""
+
+    @property
+    def marker(self) -> bytes:
+        return self._marker
+
+    def feed(self, chunk: bytes) -> bool:
+        if not self._marker:
+            return False
+        combined = self._tail + chunk
+        if self._marker in combined:
+            return True
+        if self._tail_length > 0:
+            self._tail = combined[-self._tail_length :]
+        else:
+            self._tail = b""
+        return False
+
+
 def _validate_stream_response(
     response: httpx.Response,
     state: _StreamCheckState,
     *,
     required_marker: bytes,
+    required_terminal: tuple[bytes, ...] = (),
 ) -> CheckResult:
     """Validate a streaming response end-to-end.
 
-    Records timing of headers / first chunk / completion, requires the
-    proxy request-id and attempt-count headers, ensures at least one
-    nonempty chunk is delivered, and confirms a known SSE marker
-    (``data:`` for OpenAI, ``event:`` for Anthropic) appears.
+    Records timing of headers / first chunk / completion, requires
+    the proxy request-id and a positive-integer attempt-count
+    header, ensures at least one nonempty chunk is delivered, and
+    confirms a known SSE marker (``data:`` for OpenAI, ``event:``
+    for Anthropic) appears.
+
+    Marker detection is chunk-boundary-safe: a trailing byte buffer
+    of ``max(len(marker) - 1, 0)`` bytes is retained so markers
+    that arrive split across two or more transport chunks are
+    still detected. The full response body is never accumulated.
+
+    Terminal marker detection (e.g. ``[DONE]`` or ``message_stop``)
+    is also chunk-boundary-safe and is not required when the
+    client intentionally cancels after the first chunk.
     """
+    label = (
+        "openai_stream"
+        if required_marker == OPENAI_STREAM_MARKER
+        else "anthropic_stream"
+    )
     if response.status_code >= 400:
-        return CheckResult(
-            "openai_stream"
-            if required_marker == OPENAI_STREAM_MARKER
-            else "anthropic_stream",
-            False,
-            f"status={response.status_code}",
-        )
+        return CheckResult(label, False, f"status={response.status_code}")
 
     request_id = response.headers.get("x-proxy-request-id", "")
-    attempt = response.headers.get("x-proxy-attempt-count", "")
     if not request_id:
+        return CheckResult(label, False, "missing x-proxy-request-id header")
+
+    attempt = response.headers.get("x-proxy-attempt-count", "")
+    attempt_count = _parse_attempt_count(attempt)
+    if attempt_count is None:
         return CheckResult(
-            "openai_stream"
-            if required_marker == OPENAI_STREAM_MARKER
-            else "anthropic_stream",
+            label,
             False,
-            "missing x-proxy-request-id header",
+            f"invalid x-proxy-attempt-count header: {attempt!r}",
         )
 
     state.headers_received_at = time.time()
     saw_nonempty = False
-    saw_marker = False
+    stream_scanner = _RollingMarkerScanner(required_marker)
+    terminal_scanners = [_RollingMarkerScanner(marker) for marker in required_terminal]
     cancel_after_first = os.environ.get("GOROUTER_TEST_STREAM_CANCEL") == "1"
+    state.cancelled_intentionally = cancel_after_first
+    saw_stream_marker = False
+    saw_terminal_marker = False
 
     try:
         for chunk in response.iter_bytes():
@@ -176,8 +259,12 @@ def _validate_stream_response(
                 if not saw_nonempty:
                     state.first_chunk_at = time.time()
                     saw_nonempty = True
-                if required_marker in chunk:
-                    saw_marker = True
+                if not saw_stream_marker and stream_scanner.feed(chunk):
+                    saw_stream_marker = True
+                if not saw_terminal_marker and any(
+                    scanner.feed(chunk) for scanner in terminal_scanners
+                ):
+                    saw_terminal_marker = True
                 if cancel_after_first:
                     response.close()
                     break
@@ -192,32 +279,32 @@ def _validate_stream_response(
             response.close()
 
     state.completed_at = time.time()
-    state.saw_stream_marker = saw_marker
+    state.saw_stream_marker = saw_stream_marker
+    state.saw_terminal_marker = saw_terminal_marker
 
-    ok = saw_nonempty and saw_marker and state.transport_error is None
     timings: dict[str, float] = {}
-    if state.headers_received_at is not None:
-        timings["headers_ms"] = (
-            state.headers_received_at - state.request_started_at
-        ) * 1000.0
+    timings["headers_ms"] = (
+        state.headers_received_at - state.request_started_at
+    ) * 1000.0
     if state.first_chunk_at is not None:
         timings["first_chunk_ms"] = (
             state.first_chunk_at - state.request_started_at
         ) * 1000.0
-    if state.completed_at is not None:
-        timings["total_ms"] = (state.completed_at - state.request_started_at) * 1000.0
+    timings["total_ms"] = (state.completed_at - state.request_started_at) * 1000.0
     detail = (
-        f"status={response.status_code} attempts={attempt} "
+        f"status={response.status_code} attempts={attempt_count} "
         f"request_id={request_id} chunks={state.chunk_count}"
     )
-    return CheckResult(
-        "openai_stream"
-        if required_marker == OPENAI_STREAM_MARKER
-        else "anthropic_stream",
-        ok,
-        detail,
-        timings,
-    )
+
+    if state.transport_error is not None:
+        return CheckResult(label, False, f"{detail} transport={state.transport_error}")
+    if not saw_nonempty:
+        return CheckResult(label, False, f"{detail} no_chunks")
+    if not saw_stream_marker:
+        return CheckResult(label, False, f"{detail} no_stream_marker")
+    if required_terminal and not saw_terminal_marker and not cancel_after_first:
+        return CheckResult(label, False, f"{detail} no_terminal_marker")
+    return CheckResult(label, True, detail, timings)
 
 
 def _check_streaming(
@@ -229,6 +316,7 @@ def _check_streaming(
     model: str,
     headers: dict[str, str],
     required_marker: bytes,
+    required_terminal: tuple[bytes, ...] = (),
     label: str,
 ) -> CheckResult:
     """Send one streaming request and validate it incrementally.
@@ -252,7 +340,10 @@ def _check_streaming(
             timeout=DEFAULT_TIMEOUT,
         ) as response:
             return _validate_stream_response(
-                response, state, required_marker=required_marker
+                response,
+                state,
+                required_marker=required_marker,
+                required_terminal=required_terminal,
             )
     except httpx.HTTPError as exc:
         return CheckResult(label, False, f"transport: {exc!r}")
@@ -269,6 +360,7 @@ def _openai_stream(
         model=model,
         headers={"authorization": f"Bearer {api_key}"},
         required_marker=OPENAI_STREAM_MARKER,
+        required_terminal=OPENAI_TERMINAL_MARKERS,
         label="openai_stream",
     )
 
@@ -287,6 +379,7 @@ def _anthropic_stream(
             "anthropic-version": "2023-06-01",
         },
         required_marker=ANTHROPIC_STREAM_MARKER,
+        required_terminal=ANTHROPIC_TERMINAL_MARKERS,
         label="anthropic_stream",
     )
 
@@ -323,10 +416,19 @@ def _non_streaming(
             False,
             f"status={resp.status_code} request_id={request_id}",
         )
+    attempt_count = _parse_attempt_count(attempt)
+    if not request_id:
+        return CheckResult(label, False, "missing x-proxy-request-id header")
+    if attempt_count is None:
+        return CheckResult(
+            label,
+            False,
+            f"invalid x-proxy-attempt-count header: {attempt!r}",
+        )
     return CheckResult(
         label,
         True,
-        f"status={resp.status_code} attempts={attempt} request_id={request_id}",
+        f"status={resp.status_code} attempts={attempt_count} request_id={request_id}",
     )
 
 

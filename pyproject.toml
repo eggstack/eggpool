@@ -49,8 +49,8 @@ select = ["E", "F", "W", "I", "N", "UP", "B", "A", "SIM", "TCH"]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
 reportMissingTypeStubs = false
-include = ["src"]
-exclude = ["scripts", "tests"]
+include = ["src", "scripts"]
+exclude = ["tests"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
