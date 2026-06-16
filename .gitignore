@@ -28,6 +28,7 @@ venv/
 htmlcov/
 .pytest_cache/
 .mypy_cache/
+coverage.xml
 
 # Type checking
 .pyright/
