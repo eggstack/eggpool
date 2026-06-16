@@ -10,6 +10,7 @@ import pytest
 
 from go_aggregator.db.connection import Database
 from go_aggregator.db.migrations import MigrationRunner
+from go_aggregator.db.repositories import PriceSnapshotRepository
 from go_aggregator.errors import DatabaseError
 
 
@@ -261,6 +262,43 @@ async def test_price_snapshot_insert_and_retrieve() -> None:
         assert row is not None
         assert row["input_price_per_1k"] == 15.0
         assert row["output_price_per_1k"] == 75.0
+    finally:
+        await database.disconnect()
+
+
+@pytest.mark.asyncio()
+async def test_price_snapshot_record_from_dict_normalizes_price_strings() -> None:
+    database = Database(path=":memory:")
+    await database.connect()
+    try:
+        await _run_migrations(database)
+        await _seed_model(database, "gpt-4")
+
+        repo = PriceSnapshotRepository(database)
+        async with database.transaction():
+            await repo.record_from_dict(
+                "gpt-4",
+                {
+                    "input_price_per_1k": "$3 / 1M",
+                    "output_price_per_1k": " $15/1M ",
+                    "cache_read_per_million_microdollars": "$0.30 / 1M",
+                    "cache_write_per_million_microdollars": "750_000",
+                    "source": "upstream",
+                },
+            )
+
+        row = await database.fetch_one(
+            "SELECT * FROM model_price_snapshots WHERE model_id = ?",
+            ("gpt-4",),
+        )
+
+        assert row is not None
+        assert row["input_price_per_1k"] == pytest.approx(0.003)
+        assert row["output_price_per_1k"] == pytest.approx(0.015)
+        assert row["input_per_million_microdollars"] == 3_000_000
+        assert row["output_per_million_microdollars"] == 15_000_000
+        assert row["cache_read_per_million_microdollars"] == 300_000
+        assert row["cache_write_per_million_microdollars"] == 750_000
     finally:
         await database.disconnect()
 

@@ -9,6 +9,8 @@ import pytest
 from go_aggregator.catalog.pricing import (
     CostCalculator,
     PriceSnapshot,
+    parse_microdollars_per_million,
+    parse_price_per_1k,
 )
 
 
@@ -73,6 +75,11 @@ class TestCostCalculator:
         cost = calculator._estimate_cost(input_tokens=0, output_tokens=0)
         assert cost == 0
 
+    def test_estimate_cost_normalizes_negative_tokens(self) -> None:
+        calculator = CostCalculator(price_repo=None)  # type: ignore[arg-type]
+        cost = calculator._estimate_cost(input_tokens=-1000, output_tokens=1000)
+        assert cost == 15_000
+
     @pytest.mark.asyncio
     async def test_calculate_cost_no_snapshot(self) -> None:
         mock_repo = AsyncMock()
@@ -135,6 +142,31 @@ class TestCostCalculator:
         assert exactness == "derived"
 
     @pytest.mark.asyncio
+    async def test_calculate_cost_normalizes_negative_tokens(self) -> None:
+        snapshot = PriceSnapshot(
+            model_id="gpt-4",
+            input_price_per_1k=0.003,
+            output_price_per_1k=0.015,
+            captured_at="2024-01-01T00:00:00",
+            input_per_million_microdollars=3_000_000,
+            output_per_million_microdollars=15_000_000,
+        )
+        mock_repo = AsyncMock()
+        mock_repo.get_latest_snapshot = AsyncMock(return_value=snapshot)
+        calculator = CostCalculator(price_repo=mock_repo)
+
+        cost, exactness = await calculator.calculate_cost(
+            "gpt-4",
+            input_tokens=-1000,
+            output_tokens=1000,
+            cache_read_tokens=-50,
+            cache_write_tokens=0,
+        )
+
+        assert cost == 15_000
+        assert exactness == "derived"
+
+    @pytest.mark.asyncio
     async def test_calculate_cost_with_cache_tokens(self) -> None:
         snapshot = PriceSnapshot(
             model_id="gpt-4",
@@ -164,6 +196,51 @@ class TestCostCalculator:
         # total = 18_900_000_000 / 1_000_000 = 18900
         assert cost == 18_900
         assert exactness == "derived"
+
+
+class TestPriceParsing:
+    """Tests for price input normalization."""
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            (" $3 / 1M ", 0.003),
+            ("$3/1M", 0.003),
+            ("3 per million tokens", 0.003),
+            ("0.003 / 1K tokens", 0.003),
+            ("0.000003 per token", 0.003),
+            ("0.000003/token", 0.003),
+            ("0.003", 0.003),
+        ],
+    )
+    def test_parse_price_per_1k_spacing_and_units(
+        self, raw: str, expected: float
+    ) -> None:
+        assert parse_price_per_1k(raw) == pytest.approx(expected)
+
+    def test_parse_price_per_token_default_unit(self) -> None:
+        assert parse_price_per_1k("0.000003", default_unit="token") == pytest.approx(
+            0.003
+        )
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("500,000", 500_000),
+            ("500_000", 500_000),
+            ("$0.50 / 1M", 500_000),
+            ("0.0000005 per token", 500_000),
+        ],
+    )
+    def test_parse_microdollars_per_million_spacing_and_units(
+        self, raw: str, expected: int
+    ) -> None:
+        assert parse_microdollars_per_million(raw) == expected
+
+    @pytest.mark.parametrize("raw", ["-1", "-$3 / 1M", "nan", "inf", "free"])
+    def test_parse_price_rejects_inappropriate_values(self, raw: str) -> None:
+        with pytest.raises(ValueError):
+            parse_price_per_1k(raw)
 
     @pytest.mark.asyncio
     async def test_calculate_cost_cache_read_no_rate_estimated(self) -> None:

@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from go_aggregator.catalog.pricing import (
+    parse_microdollars_per_million,
+    parse_price_per_1k,
+)
+
 if TYPE_CHECKING:
     from go_aggregator.db.connection import Database
 
@@ -652,24 +657,18 @@ class PriceSnapshotRepository:
         source_value = prices_dict.get("source", "upstream")
         await self.record(
             model_id,
-            input_price_per_1k=float(input_price_per_1k)
-            if input_price_per_1k is not None
-            else None,
-            output_price_per_1k=float(output_price_per_1k)
-            if output_price_per_1k is not None
-            else None,
-            input_per_million_microdollars=int(input_micro)
-            if input_micro is not None
-            else None,
-            output_per_million_microdollars=int(output_micro)
-            if output_micro is not None
-            else None,
-            cache_read_per_million_microdollars=int(cache_read)
-            if cache_read is not None
-            else None,
-            cache_write_per_million_microdollars=int(cache_write)
-            if cache_write is not None
-            else None,
+            input_price_per_1k=parse_price_per_1k(input_price_per_1k),
+            output_price_per_1k=parse_price_per_1k(output_price_per_1k),
+            input_per_million_microdollars=parse_microdollars_per_million(input_micro),
+            output_per_million_microdollars=parse_microdollars_per_million(
+                output_micro
+            ),
+            cache_read_per_million_microdollars=parse_microdollars_per_million(
+                cache_read
+            ),
+            cache_write_per_million_microdollars=parse_microdollars_per_million(
+                cache_write
+            ),
             source=source_value if isinstance(source_value, str) else "upstream",
         )
 

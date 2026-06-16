@@ -6,8 +6,12 @@ import os
 import tomllib
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
+from go_aggregator.catalog.pricing import (
+    parse_microdollars_per_million,
+    parse_price_per_1k,
+)
 from go_aggregator.constants import (
     DEFAULT_DATABASE_PATH,
     DEFAULT_HOST,
@@ -119,6 +123,20 @@ class ModelOverrideConfig(BaseModel):
     output_price_per_1k: float | None = None
     cache_read_per_million_microdollars: int | None = None
     cache_write_per_million_microdollars: int | None = None
+
+    @field_validator("input_price_per_1k", "output_price_per_1k", mode="before")
+    @classmethod
+    def parse_legacy_price(cls, value: object) -> float | None:
+        return parse_price_per_1k(value)
+
+    @field_validator(
+        "cache_read_per_million_microdollars",
+        "cache_write_per_million_microdollars",
+        mode="before",
+    )
+    @classmethod
+    def parse_cache_price(cls, value: object) -> int | None:
+        return parse_microdollars_per_million(value)
 
 
 class AppConfig(BaseModel):

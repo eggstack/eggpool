@@ -176,6 +176,40 @@ enabled = false
     assert config.accounts[0].enabled is False
 
 
+def test_model_override_price_strings_are_normalized(tmp_path: Path) -> None:
+    config_file = tmp_path / "prices.toml"
+    config_file.write_text(
+        """
+[model_overrides."gpt-4"]
+input_price_per_1k = "$3 / 1M"
+output_price_per_1k = " $15/1M "
+cache_read_per_million_microdollars = "$0.30 / 1M"
+cache_write_per_million_microdollars = "750_000"
+"""
+    )
+
+    config = AppConfig.from_toml(str(config_file))
+    override = config.model_overrides["gpt-4"]
+
+    assert override.input_price_per_1k == pytest.approx(0.003)
+    assert override.output_price_per_1k == pytest.approx(0.015)
+    assert override.cache_read_per_million_microdollars == 300_000
+    assert override.cache_write_per_million_microdollars == 750_000
+
+
+def test_negative_model_override_price_rejected(tmp_path: Path) -> None:
+    config_file = tmp_path / "bad_price.toml"
+    config_file.write_text(
+        """
+[model_overrides."gpt-4"]
+input_price_per_1k = "-$3 / 1M"
+"""
+    )
+
+    with pytest.raises(ConfigError, match="Config validation failed"):
+        AppConfig.from_toml(str(config_file))
+
+
 def test_config_example_validates() -> None:
     """Verify config.example.toml validates against the schema."""
     os.environ["OPENCODE_GO_KEY_1"] = "test_key_1"

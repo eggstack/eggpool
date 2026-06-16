@@ -3,13 +3,123 @@
 from __future__ import annotations
 
 import logging
+import math
+import re
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from go_aggregator.db.connection import Database
 
 logger = logging.getLogger(__name__)
+
+_PRICE_NUMBER_RE = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[-+]?\d+)?")
+_PER_TOKEN_UNITS = ("per token", "/token", "/tok")
+_PER_1K_UNITS = ("per 1k", "/1k", "per k", "/k", "per thousand")
+_PER_MILLION_UNITS = (
+    "per 1m",
+    "/1m",
+    "per m",
+    "/m",
+    "per million",
+    "per 1 million",
+)
+
+
+def _normalize_price_text(value: str) -> str:
+    """Normalize human-entered price strings without making spacing significant."""
+    return value.strip().lower().replace("$", "").replace(",", "").replace("_", "")
+
+
+def _extract_decimal(value: object) -> Decimal | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError("price must be numeric, not boolean")
+    if isinstance(value, int | float):
+        number = Decimal(str(value))
+    elif isinstance(value, str):
+        normalized = _normalize_price_text(value)
+        if not normalized:
+            return None
+        match = _PRICE_NUMBER_RE.search(normalized)
+        if match is None:
+            raise ValueError(f"price has no numeric value: {value!r}")
+        try:
+            number = Decimal(match.group(0))
+        except InvalidOperation as exc:
+            raise ValueError(f"price is not numeric: {value!r}") from exc
+    else:
+        raise ValueError(f"unsupported price type: {type(value).__name__}")
+
+    if not number.is_finite():
+        raise ValueError("price must be finite")
+    if number < 0:
+        raise ValueError("price must be non-negative")
+    return number
+
+
+def _price_unit(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = " ".join(_normalize_price_text(value).split())
+    compact = normalized.replace(" ", "")
+    if any(unit in normalized or unit in compact for unit in _PER_TOKEN_UNITS):
+        return "token"
+    if any(unit in normalized or unit in compact for unit in _PER_1K_UNITS):
+        return "1k"
+    if any(unit in normalized or unit in compact for unit in _PER_MILLION_UNITS):
+        return "million"
+    return None
+
+
+def parse_price_per_1k(value: object, *, default_unit: str = "1k") -> float | None:
+    """Parse dollars-per-token/1K/million into legacy dollars-per-1K.
+
+    Numeric inputs keep the caller's ``default_unit``. String inputs may include
+    currency symbols, separators, and units such as ``$3 / 1M`` or
+    ``0.000003 per token``; whitespace is ignored for unit detection.
+    """
+    number = _extract_decimal(value)
+    if number is None:
+        return None
+
+    unit = _price_unit(value) or default_unit
+    if unit == "token":
+        number *= Decimal(1000)
+    elif unit == "million":
+        number /= Decimal(1000)
+    elif unit != "1k":
+        raise ValueError(f"unsupported price unit: {unit}")
+
+    result = float(number)
+    if not math.isfinite(result):
+        raise ValueError("price must be finite")
+    return result
+
+
+def parse_microdollars_per_million(value: object) -> int | None:
+    """Parse a cache rate into integer microdollars per million tokens."""
+    number = _extract_decimal(value)
+    if number is None:
+        return None
+
+    unit = _price_unit(value)
+    if unit == "token":
+        number *= Decimal(1_000_000) * Decimal(1_000_000)
+    elif unit in ("1k", "million"):
+        number *= Decimal(1_000_000)
+
+    rounded = int(number.to_integral_value())
+    if rounded < 0:
+        raise ValueError("price must be non-negative")
+    return rounded
+
+
+def _normalize_token_count(value: int) -> int:
+    """Normalize provider token counts before cost arithmetic."""
+    return max(0, int(value))
 
 
 @dataclass
@@ -170,6 +280,11 @@ class CostCalculator:
         Returns:
             Tuple of (cost_microdollars, exactness_level)
         """
+        input_tokens = _normalize_token_count(input_tokens)
+        output_tokens = _normalize_token_count(output_tokens)
+        cache_read_tokens = _normalize_token_count(cache_read_tokens)
+        cache_write_tokens = _normalize_token_count(cache_write_tokens)
+
         snapshot = await self._price_repo.get_latest_snapshot(model_id)
 
         if snapshot is None:
@@ -238,6 +353,9 @@ class CostCalculator:
 
         Uses rough estimates for common model tiers.
         """
+        input_tokens = _normalize_token_count(input_tokens)
+        output_tokens = _normalize_token_count(output_tokens)
+
         # Rough estimates in dollars per 1K tokens
         # These are fallback estimates - actual prices vary significantly
         estimated_input_price = 0.003  # $3 per 1M input tokens

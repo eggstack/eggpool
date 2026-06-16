@@ -10,6 +10,10 @@ from typing import TYPE_CHECKING, Any
 from go_aggregator.catalog.cache import ModelCatalogCache
 from go_aggregator.catalog.fetcher import fetch_models_for_account
 from go_aggregator.catalog.normalizer import normalize_models
+from go_aggregator.catalog.pricing import (
+    parse_microdollars_per_million,
+    parse_price_per_1k,
+)
 from go_aggregator.catalog.protocols import ModelProtocolResolver
 from go_aggregator.db.repositories import PriceSnapshotRepository
 
@@ -293,37 +297,65 @@ class CatalogService:
 
         meta: dict[str, Any] = model_info.get("source_metadata", {})
 
+        def _safe_parse_price_per_1k(
+            category: str, value: object, *, default_unit: str = "1k"
+        ) -> float | None:
+            try:
+                return parse_price_per_1k(value, default_unit=default_unit)
+            except ValueError as exc:
+                logger.warning(
+                    "Ignoring invalid %s price for %s: %s",
+                    category,
+                    model_id,
+                    exc,
+                )
+                return None
+
+        def _safe_parse_microdollars(category: str, value: object) -> int | None:
+            try:
+                return parse_microdollars_per_million(value)
+            except ValueError as exc:
+                logger.warning(
+                    "Ignoring invalid %s price for %s: %s",
+                    category,
+                    model_id,
+                    exc,
+                )
+                return None
+
         def _resolve_input() -> float | None:
             if "input" in override_values:
                 return override_values["input"]
             pricing: dict[str, Any] | None = meta.get("pricing")
             if isinstance(pricing, dict) and "prompt" in pricing:
-                prompt_val: Any = pricing["prompt"]
-                return float(prompt_val) * 1_000  # per token -> per 1k
+                return _safe_parse_price_per_1k(
+                    "input", pricing["prompt"], default_unit="token"
+                )
             upstream = meta.get("input_price_per_1k")
-            return float(upstream) if upstream is not None else None
+            return _safe_parse_price_per_1k("input", upstream)
 
         def _resolve_output() -> float | None:
             if "output" in override_values:
                 return override_values["output"]
             pricing: dict[str, Any] | None = meta.get("pricing")
             if isinstance(pricing, dict) and "completion" in pricing:
-                completion_val: Any = pricing["completion"]
-                return float(completion_val) * 1_000
+                return _safe_parse_price_per_1k(
+                    "output", pricing["completion"], default_unit="token"
+                )
             upstream = meta.get("output_price_per_1k")
-            return float(upstream) if upstream is not None else None
+            return _safe_parse_price_per_1k("output", upstream)
 
         def _resolve_cache_read() -> int | None:
             if "cache_read" in override_values:
                 return int(override_values["cache_read"])
             upstream = meta.get("cache_read_per_million_microdollars")
-            return int(upstream) if upstream is not None else None
+            return _safe_parse_microdollars("cache_read", upstream)
 
         def _resolve_cache_write() -> int | None:
             if "cache_write" in override_values:
                 return int(override_values["cache_write"])
             upstream = meta.get("cache_write_per_million_microdollars")
-            return int(upstream) if upstream is not None else None
+            return _safe_parse_microdollars("cache_write", upstream)
 
         input_price = _resolve_input()
         output_price = _resolve_output()
