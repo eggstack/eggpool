@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from go_aggregator.accounts.state import AccountRuntimeState
 from go_aggregator.errors import ConfigError
@@ -13,6 +13,25 @@ if TYPE_CHECKING:
     from go_aggregator.models.config import AppConfig
 
 logger = logging.getLogger(__name__)
+
+
+def account_config_rows(config: AppConfig) -> list[dict[str, Any]]:
+    """Serialize configured accounts into rows for persistence.
+
+    Returns a list of dicts with the exact fields consumed by
+    :meth:`go_aggregator.db.repositories.AccountRepository.sync_from_config`.
+    Keeping the shape in one place prevents the app lifespan and the
+    ``models refresh`` CLI command from drifting out of sync.
+    """
+    return [
+        {
+            "name": acct.name,
+            "api_key_env": acct.api_key_env,
+            "enabled": acct.enabled,
+            "weight": acct.weight,
+        }
+        for acct in config.accounts
+    ]
 
 
 class AccountRegistry:

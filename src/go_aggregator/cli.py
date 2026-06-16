@@ -10,8 +10,10 @@ from typing import NoReturn
 import click
 import httpx
 
+from go_aggregator.accounts.registry import account_config_rows
 from go_aggregator.db.connection import Database
 from go_aggregator.db.migrations import MigrationRunner
+from go_aggregator.db.repositories import AccountRepository
 from go_aggregator.errors import AggregatorError
 from go_aggregator.logging import configure_logging
 from go_aggregator.models.config import AppConfig
@@ -140,6 +142,9 @@ def models_refresh(ctx: click.Context) -> None:
             runner = MigrationRunner(db)
             await runner.run()
 
+            account_repo = AccountRepository(db)
+            await account_repo.sync_from_config(account_config_rows(config), db)
+
             registry = AccountRegistry(config)
             client = httpx.AsyncClient(base_url=config.upstream.base_url)
             try:
@@ -213,12 +218,16 @@ def db_vacuum(ctx: click.Context) -> None:
         )
         await db.connect()
         try:
-            await db.connection.execute("VACUUM")
+            await db.vacuum()
             click.echo("Database vacuum completed successfully")
         finally:
             await db.disconnect()
 
-    asyncio.run(_run())
+    try:
+        asyncio.run(_run())
+    except AggregatorError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
 
 
 def main() -> NoReturn:

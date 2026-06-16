@@ -246,6 +246,33 @@ class Database:
         except Exception as exc:
             raise DatabaseError(f"Execute returning failed: {exc}") from exc
 
+    async def vacuum(self) -> None:
+        """Run ``VACUUM`` to rebuild the database file.
+
+        ``VACUUM`` cannot run inside a transaction, so this method
+        bypasses :meth:`transaction` and acquires the connection lock
+        directly. The lock is required so no other task can start a
+        transaction while vacuum is rebuilding the file.
+
+        Preconditions:
+
+        - the database is not opened in read-only mode;
+        - the current task is not the owner of an active transaction.
+
+        Failures are wrapped in :class:`DatabaseError`. The connection
+        is left usable on success or failure.
+        """
+        if self._read_only:
+            raise DatabaseError("VACUUM cannot run on a read-only database")
+        if self._current_task_owns_transaction():
+            raise DatabaseError("VACUUM cannot run while a transaction is active")
+        async with self._connection_lock:
+            try:
+                cursor = await self.connection.execute("VACUUM")
+                await cursor.close()
+            except Exception as exc:
+                raise DatabaseError(f"VACUUM failed: {exc}") from exc
+
     async def execute_pragma(self, sql: str) -> list[aiosqlite.Row]:
         """Execute a PRAGMA statement safely.
 

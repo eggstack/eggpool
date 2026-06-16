@@ -46,6 +46,13 @@ coverage.xml
 .env
 .env.local
 .env.production
+.envrc
+.env.*
+!.env.example
+secrets.env
+*.env.local
+gorouter.env
+gorouter.env.local
 
 # Configuration with secrets
 config.toml

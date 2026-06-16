@@ -16,7 +16,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import Response as StarletteResponse
 
-from go_aggregator.accounts.registry import AccountRegistry
+from go_aggregator.accounts.registry import AccountRegistry, account_config_rows
 from go_aggregator.api.chat_completions import handle_chat_completions
 from go_aggregator.api.messages import handle_messages
 from go_aggregator.api.stats import register_stats_routes
@@ -180,15 +180,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     # 4. Sync accounts from config to SQLite
     account_repo = AccountRepository(db)
-    config_accounts = [
-        {
-            "name": acct.name,
-            "api_key_env": acct.api_key_env,
-            "enabled": acct.enabled,
-            "weight": acct.weight,
-        }
-        for acct in config.accounts
-    ]
+    config_accounts = account_config_rows(config)
     await account_repo.sync_from_config(config_accounts, db)
 
     # 5. Crash recovery
