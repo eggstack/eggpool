@@ -5,7 +5,9 @@ from __future__ import annotations
 import os
 
 import pytest
+from starlette.responses import Response as StarletteResponse
 
+from go_aggregator.app import _BodyLimitMiddleware
 from go_aggregator.errors import RequestTooLargeError
 from go_aggregator.request.body import read_body_limited
 
@@ -80,6 +82,27 @@ class TestReadBodyLimited:
         req = FakeRequest([b"hello"], content_length=None)
         result = await read_body_limited(req, max_bytes=100)
         assert result == b"hello"
+
+
+class TestBodyLimitMiddleware:
+    """Tests for the request body size middleware."""
+
+    @pytest.mark.asyncio()
+    async def test_invalid_content_length_falls_through(self) -> None:
+        middleware = _BodyLimitMiddleware(app=object(), max_bytes=100)
+        req = FakeRequest([b"hello"])
+        req.headers["content-length"] = "bogus"
+
+        called = False
+
+        async def _call_next(_request: FakeRequest) -> StarletteResponse:
+            nonlocal called
+            called = True
+            return StarletteResponse(status_code=204)
+
+        response = await middleware.dispatch(req, _call_next)
+        assert called
+        assert response.status_code == 204
 
 
 class TestHasEligiblePairing:

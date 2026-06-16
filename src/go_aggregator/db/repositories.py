@@ -358,13 +358,14 @@ class ReservationRepository:
         """Create a new reservation with expiry, return the id."""
         last_id = await self._db.execute_insert(
             "INSERT INTO reservations "
-            "(request_id, account_id, model_id, estimated_tokens, "
-            "estimated_microdollars, expires_at) "
-            "VALUES (?, ?, ?, ?, ?, datetime('now', ?))",
+            "(request_id, account_id, model_id, reserved_microdollars, "
+            "estimated_tokens, estimated_microdollars, expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, datetime('now', ?))",
             (
                 request_id,
                 account_id,
                 model_id,
+                estimated_microdollars,
                 estimated_tokens,
                 estimated_microdollars,
                 f"+{ttl_seconds} seconds",

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import pytest
@@ -10,6 +10,7 @@ import pytest_asyncio
 
 from go_aggregator.db.connection import Database
 from go_aggregator.db.migrations import MigrationRunner
+from go_aggregator.db.repositories import RequestRepository, ReservationRepository
 from go_aggregator.stats import queries
 from go_aggregator.stats.service import (
     PERIOD_PRESETS,
@@ -146,6 +147,36 @@ class TestFetchAccountStats:
         assert by_name["acct_a"]["request_count"] == 3
         assert by_name["acct_b"]["request_count"] == 2
         assert by_name["acct_b"]["error_count"] == 2
+
+    @pytest.mark.asyncio()
+    async def test_cancelled_requests_count_in_usage_windows(
+        self, seeded_db: Database
+    ) -> None:
+        async with seeded_db.transaction():
+            await seeded_db.execute_write(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, started_at, completed_at,
+                    status, input_tokens, output_tokens, cost_microdollars,
+                    upstream_latency_ms
+                ) VALUES (
+                    (SELECT id FROM accounts WHERE name = ?),
+                    ?,
+                    datetime('now', '-30 minutes'),
+                    datetime('now', '-30 minutes'),
+                    'cancelled', ?, ?, ?, ?
+                )
+                """,
+                ("acct_b", "model_y", 1, 2, 250_000, 12.0),
+            )
+
+        rows = await queries.fetch_account_stats(
+            seeded_db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+        by_name = {r["account_name"]: r for r in rows}
+        assert by_name["acct_b"]["cost_5h"] == 250_000
+        assert by_name["acct_b"]["cost_7d"] == 250_000
+        assert by_name["acct_b"]["cost_30d"] == 250_000
 
 
 class TestFetchModelStats:
@@ -352,6 +383,40 @@ class TestStatsService:
             TimeRange(
                 start=__import__("datetime").datetime.fromisoformat("2000-01-01"),
                 end=__import__("datetime").datetime.fromisoformat("2099-12-31"),
+                label="custom",
+            )
+        )
+        by_name = {r["account_name"]: r for r in rows}
+        assert by_name["acct_a"]["reserved_microdollars"] == 500_000
+
+    @pytest.mark.asyncio()
+    async def test_get_account_stats_includes_live_reservation_path(
+        self, seeded_db: Database
+    ) -> None:
+        request_repo = RequestRepository(seeded_db)
+        reservation_repo = ReservationRepository(seeded_db)
+
+        async with seeded_db.transaction():
+            request_id = await request_repo.create_pending(
+                request_id="live-reservation-req",
+                model_id="model_x",
+                protocol="openai",
+                streamed=False,
+                account_id=1,
+            )
+            await reservation_repo.create(
+                request_id=request_id,
+                account_id=1,
+                model_id="model_x",
+                estimated_tokens=1_000,
+                estimated_microdollars=500_000,
+            )
+
+        service = StatsService(seeded_db)
+        rows = await service.get_account_stats(
+            TimeRange(
+                start=datetime.fromisoformat("2000-01-01"),
+                end=datetime.fromisoformat("2099-12-31"),
                 label="custom",
             )
         )

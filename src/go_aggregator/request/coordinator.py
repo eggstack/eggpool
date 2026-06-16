@@ -515,6 +515,7 @@ class RequestCoordinator:
                     str(error),
                     status_code=response.status_code,
                     error_class=type(error).__name__,
+                    retry_after=getattr(error, "retry_after", None),
                     upstream_response=(
                         response.status_code,
                         resp_headers,
@@ -633,7 +634,7 @@ class RequestCoordinator:
         try:
             if response.status_code >= 400:
                 await response.aread()
-                resp_headers = dict(response.headers)
+                resp_headers = filter_response_headers(response.headers)
                 resp_body = response.content
 
                 error = self._classify_upstream_error(
@@ -644,6 +645,7 @@ class RequestCoordinator:
                         str(error),
                         status_code=response.status_code,
                         error_class=type(error).__name__,
+                        retry_after=getattr(error, "retry_after", None),
                         upstream_response=(
                             response.status_code,
                             resp_headers,

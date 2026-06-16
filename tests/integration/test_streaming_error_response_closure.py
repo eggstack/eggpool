@@ -230,6 +230,42 @@ async def test_streaming_500_exhausted_returns_error_response(
 
 
 @pytest.mark.asyncio
+async def test_streaming_prebody_error_headers_are_filtered(
+    coordinator: RequestCoordinator,
+) -> None:
+    """Streaming pre-body errors should not leak hop-by-hop headers."""
+
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+            return_value=httpx.Response(
+                500,
+                content=b'{"error":{"message":"fail"}}',
+                headers={
+                    "connection": "keep-alive",
+                    "transfer-encoding": "chunked",
+                    "x-request-id": "up-123",
+                },
+            )
+        )
+
+        context = ProxyRequestContext(
+            request_id="closure-header-filter-001",
+            protocol="openai",
+            model_id="gpt-4",
+            streaming=True,
+            original_body=_make_stream_body("header-filter-test"),
+            incoming_headers={"content-type": "application/json"},
+        )
+        response = await coordinator.execute(context)
+
+    assert response.status_code == 500
+    lower_headers = {key.lower() for key in response.headers}
+    assert "connection" not in lower_headers
+    assert "transfer-encoding" not in lower_headers
+    assert response.headers.get("x-request-id") == "up-123"
+
+
+@pytest.mark.asyncio
 async def test_streaming_prebody_error_response_closed_after_aread() -> None:
     """Direct test: a streaming 500 response can be read and closed cleanly."""
 

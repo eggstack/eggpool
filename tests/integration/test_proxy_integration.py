@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from typing import TYPE_CHECKING
 
 import httpx
@@ -572,6 +573,7 @@ async def test_upstream_401_passed_through(
 async def test_upstream_429_with_retry_after(
     client: httpx.AsyncClient,
     auth_headers: dict[str, str],
+    app: FastAPI,
 ) -> None:
     with respx.mock:
         respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
@@ -592,6 +594,9 @@ async def test_upstream_429_with_retry_after(
         )
 
     assert response.status_code == 429
+    health = app.state.health_manager.get_account_health("test-acct")
+    assert health.health_state == "rate_limited"
+    assert health.cooldown_until > time.time() + 20
 
 
 # ── 9b. Upstream 402 quota failure passed through ────────────────────────────

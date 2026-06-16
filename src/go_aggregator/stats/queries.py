@@ -86,19 +86,19 @@ async def fetch_account_stats(
             SELECT SUM(r2.cost_microdollars) FROM requests r2
             WHERE r2.account_id = a.id
             AND r2.started_at >= datetime('now', '-5 hours')
-            AND r2.status != 'cancelled'
+            AND r2.status != 'pending'
         ), 0) as cost_5h,
         COALESCE((
             SELECT SUM(r2.cost_microdollars) FROM requests r2
             WHERE r2.account_id = a.id
             AND r2.started_at >= datetime('now', '-7 days')
-            AND r2.status != 'cancelled'
+            AND r2.status != 'pending'
         ), 0) as cost_7d,
         COALESCE((
             SELECT SUM(r2.cost_microdollars) FROM requests r2
             WHERE r2.account_id = a.id
             AND r2.started_at >= datetime('now', '-30 days')
-            AND r2.status != 'cancelled'
+            AND r2.status != 'pending'
         ), 0) as cost_30d
     FROM accounts a
     LEFT JOIN requests r
@@ -257,7 +257,8 @@ async def fetch_active_reservations(
         r.account_id,
         a.name as account_name,
         r.model_id,
-        r.reserved_microdollars,
+        COALESCE(NULLIF(r.estimated_microdollars, 0), r.reserved_microdollars, 0)
+            as reserved_microdollars,
         r.created_at
     FROM reservations r
     JOIN accounts a ON a.id = r.account_id

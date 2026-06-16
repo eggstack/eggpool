@@ -71,13 +71,18 @@ class _BodyLimitMiddleware(BaseHTTPMiddleware):
         call_next: Any,  # noqa: ANN401
     ) -> StarletteResponse:
         content_length = request.headers.get("content-length")
-        if content_length and int(content_length) > self._max_bytes:
-            return StarletteResponse(
-                status_code=413,
-                content='{"error": {"message": "Request body too large",'
-                ' "type": "invalid_request_error"}}',
-                media_type="application/json",
-            )
+        if content_length:
+            try:
+                declared_size = int(content_length)
+            except (TypeError, ValueError):
+                declared_size = None
+            if declared_size is not None and declared_size > self._max_bytes:
+                return StarletteResponse(
+                    status_code=413,
+                    content='{"error": {"message": "Request body too large",'
+                    ' "type": "invalid_request_error"}}',
+                    media_type="application/json",
+                )
         return await call_next(request)
 
 
