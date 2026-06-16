@@ -31,7 +31,6 @@ from go_aggregator.request.finalizer import (
     RequestFinalizer,
 )
 
-
 SECRET_BEARING_INPUT: dict[str, Any] = {
     "api_key": "sk-supersecret-1",
     "authorization": "Bearer topsecret-token",
@@ -86,8 +85,7 @@ async def db_with_seed() -> Any:
             ("test-acct", "TEST_KEY"),
         )
         await database.execute_write(
-            "INSERT OR IGNORE INTO models (model_id, protocol) "
-            "VALUES (?, ?)",
+            "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
             ("gpt-4", "openai"),
         )
     yield database
@@ -193,8 +191,7 @@ class TestFailClosedByDefault:
         )
 
         row = await db_with_seed.fetch_one(
-            "SELECT error_detail, error_class FROM request_attempts "
-            "WHERE id = ?",
+            "SELECT error_detail, error_class FROM request_attempts WHERE id = ?",
             (attempt_id,),
         )
         assert row is not None
@@ -258,9 +255,7 @@ class TestPersistsRedactedWhenEnabled:
         detail = row["error_detail"]
         assert detail is not None
         for marker in FORBIDDEN_MARKERS:
-            assert marker not in detail, (
-                f"Marker {marker!r} found in persisted detail"
-            )
+            assert marker not in detail, f"Marker {marker!r} found in persisted detail"
 
     @pytest.mark.asyncio
     async def test_attempt_finalizer_persists_redacted_detail(
@@ -314,6 +309,4 @@ class TestPersistsRedactedWhenEnabled:
         detail = row["error_detail"]
         assert detail is not None
         for marker in FORBIDDEN_MARKERS:
-            assert marker not in detail, (
-                f"Marker {marker!r} found in persisted detail"
-            )
+            assert marker not in detail, f"Marker {marker!r} found in persisted detail"

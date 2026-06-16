@@ -85,9 +85,7 @@ class TestRedactErrorDetailJson:
         assert "secret" not in result
 
     def test_json_with_authorization_redacted(self) -> None:
-        result = redact_error_detail(
-            '{"authorization": "Bearer abc123"}'
-        )
+        result = redact_error_detail('{"authorization": "Bearer abc123"}')
         assert result is not None
         assert "abc123" not in result
 
@@ -131,9 +129,7 @@ class TestRedactErrorDetailJson:
         assert parsed["error"]["details"]["token"] == REDACTED
 
     def test_json_array(self) -> None:
-        result = redact_error_detail(
-            '[{"api_key": "a"}, {"token": "b"}]'
-        )
+        result = redact_error_detail('[{"api_key": "a"}, {"token": "b"}]')
         assert result is not None
         assert "a" not in result.split("api_key")[1].split("}")[0] or REDACTED in result
         assert REDACTED in result
@@ -151,22 +147,18 @@ class TestRedactErrorDetailJson:
         assert "sk-supersecret" not in result
 
     def test_sk_key_in_json_redacted(self) -> None:
-        result = redact_error_detail(
-            '{"message": "api key sk-abcdef012345 provided"}'
-        )
+        result = redact_error_detail('{"message": "api key sk-abcdef012345 provided"}')
         assert result is not None
         assert "sk-abcdef012345" not in result
 
     def test_invalid_json_falls_back_to_regex(self) -> None:
-        result = redact_error_detail(
-            'not really json but has password=secret'
-        )
+        result = redact_error_detail("not really json but has password=secret")
         assert result is not None
         assert "secret" not in result
 
     def test_non_object_json_falls_back_to_regex(self) -> None:
         # Bare scalars don't match the JSON branch (must start with { or [)
-        result = redact_error_detail('password=secret')
+        result = redact_error_detail("password=secret")
         assert result is not None
         assert "secret" not in result
 
@@ -175,9 +167,7 @@ class TestSanitizeErrorObject:
     """Direct tests for sanitize_error_object."""
 
     def test_sensitive_keys_redacted(self) -> None:
-        result = sanitize_error_object(
-            {"api_key": "secret", "name": "ok"}
-        )
+        result = sanitize_error_object({"api_key": "secret", "name": "ok"})
         assert result["api_key"] == REDACTED
         assert result["name"] == "ok"
 
@@ -221,9 +211,7 @@ class TestSanitizeErrorObject:
         assert "a" * 200 not in serialized
 
     def test_preserves_scalar_values(self) -> None:
-        result = sanitize_error_object(
-            {"status_code": 429, "retriable": True}
-        )
+        result = sanitize_error_object({"status_code": 429, "retriable": True})
         assert result["status_code"] == 429
         assert result["retriable"] is True
 

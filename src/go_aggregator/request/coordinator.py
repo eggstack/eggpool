@@ -968,9 +968,7 @@ class RequestCoordinator:
                 if self._persist_error_detail:
                     redacted_detail = redact_error_detail(str(last_error))
                     error_detail = (
-                        redacted_detail[:2048]
-                        if redacted_detail is not None
-                        else None
+                        redacted_detail[:2048] if redacted_detail is not None else None
                     )
                 if isinstance(last_error, _NonRetryableUpstreamError):
                     outcome = FinalizationOutcome.CLIENT_ERROR

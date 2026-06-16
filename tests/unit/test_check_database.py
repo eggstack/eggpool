@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import os
-import tempfile
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from scripts import check_database
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @pytest.fixture()
@@ -149,13 +150,9 @@ class TestReadOnly:
         after_hash = hashlib.sha256(target.read_bytes()).hexdigest()
 
         assert code == 0
-        assert before_hash == after_hash, (
-            "Checker modified the database file contents"
-        )
+        assert before_hash == after_hash, "Checker modified the database file contents"
 
-    def test_checker_refuses_writes_on_read_only(
-        self, fresh_db: Path
-    ) -> None:
+    def test_checker_refuses_writes_on_read_only(self, fresh_db: Path) -> None:
         from go_aggregator.db.connection import Database
         from go_aggregator.errors import DatabaseError
 
@@ -166,8 +163,7 @@ class TestReadOnly:
                 with pytest.raises(DatabaseError, match="read-only"):
                     async with db.transaction():
                         await db.execute_write(
-                            "INSERT INTO accounts (name, api_key_env) "
-                            "VALUES (?, ?)",
+                            "INSERT INTO accounts (name, api_key_env) VALUES (?, ?)",
                             ("writable-test", "ENV"),
                         )
             finally:

@@ -26,60 +26,30 @@ on the dedicated files' internals.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
-import importlib
 import json
 import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
 
-import httpx
 import pytest
-import pytest_asyncio
-import respx
 
-from go_aggregator.accounts.registry import AccountRegistry
-from go_aggregator.catalog.pricing import CostCalculator, PriceRepository
-from go_aggregator.catalog.service import CatalogService
 from go_aggregator.db.connection import Database
 from go_aggregator.db.migrations import MigrationRunner
-from go_aggregator.db.repositories import (
-    AccountRepository,
-    AttemptRepository,
-    RequestRepository,
-    ReservationRepository,
-    UsageWindowRepository,
-)
 from go_aggregator.errors import DatabaseError
-from go_aggregator.health.health_manager import HealthManager
-from go_aggregator.models.config import AppConfig
 from go_aggregator.proxy.client import (
     LOCAL_CREDENTIAL_HEADERS,
     build_upstream_auth_headers,
     filter_request_headers,
 )
-from go_aggregator.request.coordinator import (
-    ProxyRequestContext,
-    RequestCoordinator,
-)
-from go_aggregator.routing.router import Router
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
-
 
 # --- A. Fresh startup transaction safety (file-backed DB) ---
 
 
 class TestFreshStartupTransactionSafety:
     @pytest.mark.asyncio
-    async def test_file_backed_fresh_startup(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_file_backed_fresh_startup(self, tmp_path: Path) -> None:
         """A file-backed fresh database with two accounts commits and
         survives a restart without leaving an implicit transaction open.
 
@@ -97,7 +67,6 @@ class TestFreshStartupTransactionSafety:
             try:
                 runner = MigrationRunner(db)
                 await runner.run()
-                account_repo = AccountRepository(db)
                 async with db.transaction():
                     for name, env in (
                         ("acct-a", "OPENCODE_MATRIX_A"),
@@ -129,9 +98,7 @@ class TestFreshStartupTransactionSafety:
             db = Database(path=str(db_path))
             await db.connect()
             try:
-                rows = await db.fetch_all(
-                    "SELECT name FROM accounts ORDER BY name"
-                )
+                rows = await db.fetch_all("SELECT name FROM accounts ORDER BY name")
                 names = {row["name"] for row in rows}
                 assert names == {"acct-a", "acct-b"}
             finally:
@@ -163,9 +130,7 @@ class TestWriteHelperContract:
                     ("no-tx", "ENV"),
                 )
             with pytest.raises(DatabaseError, match="owned transaction"):
-                await db.execute_returning(
-                    "SELECT 1 AS x"
-                )
+                await db.execute_returning("SELECT 1 AS x")
         finally:
             await db.disconnect()
 
@@ -179,8 +144,7 @@ class TestWriteHelperContract:
         try:
             async with db.transaction():
                 last_id = await db.execute_insert(
-                    "INSERT INTO accounts (name, api_key_env) "
-                    "VALUES (?, ?)",
+                    "INSERT INTO accounts (name, api_key_env) VALUES (?, ?)",
                     ("in-tx", "ENV"),
                 )
             assert last_id > 0
@@ -199,8 +163,9 @@ class TestWriteHelperContract:
 class TestCredentialBoundary:
     def test_local_credential_headers_explicit(self) -> None:
         """The local-credential set is exactly the documented three."""
-        assert LOCAL_CREDENTIAL_HEADERS == frozenset(
-            {"authorization", "x-api-key", "proxy-authorization"}
+        assert (
+            frozenset({"authorization", "x-api-key", "proxy-authorization"})
+            == LOCAL_CREDENTIAL_HEADERS
         )
 
     def test_filter_request_headers_strips_local_credentials(self) -> None:
@@ -257,9 +222,7 @@ class TestCiDependencySmoke:
 
 class TestMigrationCompatibility:
     @pytest.mark.asyncio
-    async def test_fresh_and_upgraded_schemas_equivalent(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_fresh_and_upgraded_schemas_equivalent(self, tmp_path: Path) -> None:
         """A fresh database and an upgraded-to-current database must
         have equivalent schemas for production operations.
 

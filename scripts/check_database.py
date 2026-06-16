@@ -168,7 +168,7 @@ async def _check_no_negative_values(db: Database) -> list[str]:
         "FROM requests WHERE "
         "cost_microdollars < 0 OR input_tokens < 0 OR output_tokens < 0 OR "
         "cache_read_tokens < 0 OR cache_write_tokens < 0 OR "
-        "reasoning_tokens < 0"
+        "reasoning_tokens < 0",
     )
     return [
         f"negative values on request id={r['id']}: "
