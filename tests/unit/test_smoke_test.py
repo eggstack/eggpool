@@ -12,13 +12,14 @@ from __future__ import annotations
 
 import io
 import json
+import time
 from typing import TYPE_CHECKING, Any
 
 import httpx
 import pytest
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
 
 import smoke_test  # noqa: E402  (path setup in tests/conftest.py)
 
@@ -29,7 +30,14 @@ def _make_streaming_response(
     status_code: int = 200,
     headers: dict[str, str] | None = None,
 ) -> httpx.Response:
-    """Build a streaming httpx.Response from a fixed list of byte chunks."""
+    """Build a streaming httpx.Response from a fixed list of byte chunks.
+
+    If ``chunks`` is empty the response is empty. Otherwise the
+    chunks are joined into a single ``BytesIO`` content stream; the
+    ``httpx.Response`` yields the body to ``iter_bytes()`` in a
+    single chunk under the default buffer size. Tests that need
+    multiple chunks use :class:`_ChunkedByteStream` instead.
+    """
     merged_headers = {
         "content-type": "text/event-stream",
         "x-proxy-request-id": "req-test-1234",
@@ -41,6 +49,45 @@ def _make_streaming_response(
         status_code,
         headers=merged_headers,
         content=io.BytesIO(b"".join(chunks)),
+    )
+
+
+class _ChunkedByteStream(httpx.SyncByteStream):
+    """Yield the given byte chunks one at a time.
+
+    Used by the streaming tests to simulate a transport that delivers
+    an SSE marker split across multiple chunks.
+    """
+
+    def __init__(self, chunks: Iterable[bytes]) -> None:
+        self._chunks: list[bytes] = list(chunks)
+        self._closed = False
+
+    def __iter__(self) -> Iterable[bytes]:
+        yield from self._chunks
+
+    def close(self) -> None:
+        self._closed = True
+
+
+def _make_chunked_response(
+    chunks: Iterable[bytes],
+    *,
+    status_code: int = 200,
+    headers: dict[str, str] | None = None,
+) -> httpx.Response:
+    """Build a streaming httpx.Response that yields each chunk separately."""
+    merged_headers = {
+        "content-type": "text/event-stream",
+        "x-proxy-request-id": "req-test-1234",
+        "x-proxy-attempt-count": "1",
+    }
+    if headers:
+        merged_headers.update(headers)
+    return httpx.Response(
+        status_code,
+        headers=merged_headers,
+        stream=_ChunkedByteStream(chunks),
     )
 
 
@@ -63,6 +110,17 @@ def _streaming_handler(
                     "utf-8", errors="replace"
                 )
         return _make_streaming_response(body_chunks)
+
+    return _handle
+
+
+def _chunked_handler(
+    body_chunks: Iterable[bytes],
+) -> Callable[[httpx.Request], httpx.Response]:
+    """Return a request handler that yields each body chunk separately."""
+
+    def _handle(request: httpx.Request) -> httpx.Response:
+        return _make_chunked_response(body_chunks)
 
     return _handle
 
@@ -476,3 +534,349 @@ class TestMainSkipLive:
         )
         rc = smoke_test.main()
         assert rc == 0
+
+
+class TestRollingMarkerScanner:
+    """The chunk-boundary-safe marker scanner must detect markers
+    that arrive split across transport chunks, without ever
+    accumulating the full response body.
+    """
+
+    def test_data_marker_split_across_two_chunks(self) -> None:
+        scanner = smoke_test._RollingMarkerScanner(b"data:")
+        assert not scanner.feed(b"da")
+        assert scanner.feed(b"ta: hello world\n\n") is True
+
+    def test_event_marker_split_across_three_chunks(self) -> None:
+        scanner = smoke_test._RollingMarkerScanner(b"event:")
+        assert scanner.feed(b"ev") is False
+        assert scanner.feed(b"en") is False
+        assert scanner.feed(b"t: message_start\n") is True
+
+    def test_marker_byte_by_byte(self) -> None:
+        scanner = smoke_test._RollingMarkerScanner(b"data:")
+        marker = b"data: [DONE]\n\n"
+        seen = False
+        for i, byte in enumerate(marker):
+            result = scanner.feed(bytes([byte]))
+            if i >= len(b"data:") - 1 and result:
+                seen = True
+        assert seen is True
+
+    def test_full_marker_in_single_chunk(self) -> None:
+        scanner = smoke_test._RollingMarkerScanner(b"data:")
+        assert scanner.feed(b"data: [DONE]\n\n") is True
+
+    def test_empty_marker_does_not_match(self) -> None:
+        scanner = smoke_test._RollingMarkerScanner(b"")
+        assert scanner.feed(b"data: [DONE]\n\n") is False
+
+    def test_tail_buffer_is_bounded(self) -> None:
+        marker = b"data:"
+        scanner = smoke_test._RollingMarkerScanner(marker)
+        # Feed a chunk much larger than the marker; the trailing
+        # buffer must remain at most len(marker) - 1 bytes so the
+        # full body is not accumulated.
+        scanner.feed(b"x" * 10000 + b"da")
+        # The internal tail should never grow.
+        assert len(scanner._tail) <= len(marker) - 1
+
+
+class TestStreamingChunkBoundaries:
+    """Streaming integration tests using chunked transport."""
+
+    def test_data_marker_split_across_two_chunks_is_detected(self) -> None:
+        transport = _transport_for(
+            {
+                (
+                    "POST",
+                    "/v1/chat/completions",
+                ): _chunked_handler([b"da", b"ta: [DONE]\n\n"])
+            }
+        )
+        client = httpx.Client(transport=transport, timeout=5.0)
+        try:
+            result = smoke_test._openai_stream(client, "http://stub", "k", "gpt-4")
+        finally:
+            client.close()
+        assert result.ok, result.detail
+
+    def test_event_marker_split_across_three_chunks_is_detected(self) -> None:
+        transport = _transport_for(
+            {
+                (
+                    "POST",
+                    "/v1/messages",
+                ): _chunked_handler(
+                    [
+                        b"ev",
+                        b"en",
+                        b't: message_stop\ndata: {"type":"message_stop"}\n\n',
+                    ]
+                )
+            }
+        )
+        client = httpx.Client(transport=transport, timeout=5.0)
+        try:
+            result = smoke_test._anthropic_stream(
+                client, "http://stub", "k", "claude-3-5-sonnet"
+            )
+        finally:
+            client.close()
+        assert result.ok, result.detail
+
+
+class TestAttemptCountValidation:
+    """Both streaming and non-streaming must require a positive
+    integer ``x-proxy-attempt-count`` header.
+    """
+
+    def test_stream_missing_attempt_count_fails(self) -> None:
+        def _no_count(request: httpx.Request) -> httpx.Response:
+            return _make_streaming_response(
+                [b"data: [DONE]\n\n"],
+                headers={"x-proxy-attempt-count": ""},
+            )
+
+        transport = _transport_for({("POST", "/v1/chat/completions"): _no_count})
+        client = httpx.Client(transport=transport, timeout=5.0)
+        try:
+            result = smoke_test._openai_stream(client, "http://stub", "k", "gpt-4")
+        finally:
+            client.close()
+        assert not result.ok
+        assert "x-proxy-attempt-count" in result.detail
+
+    def test_stream_non_integer_attempt_count_fails(self) -> None:
+        def _bad_count(request: httpx.Request) -> httpx.Response:
+            return _make_streaming_response(
+                [b"data: [DONE]\n\n"],
+                headers={"x-proxy-attempt-count": "abc"},
+            )
+
+        transport = _transport_for({("POST", "/v1/chat/completions"): _bad_count})
+        client = httpx.Client(transport=transport, timeout=5.0)
+        try:
+            result = smoke_test._openai_stream(client, "http://stub", "k", "gpt-4")
+        finally:
+            client.close()
+        assert not result.ok
+        assert "x-proxy-attempt-count" in result.detail
+
+    def test_stream_zero_attempt_count_fails(self) -> None:
+        def _zero_count(request: httpx.Request) -> httpx.Response:
+            return _make_streaming_response(
+                [b"data: [DONE]\n\n"],
+                headers={"x-proxy-attempt-count": "0"},
+            )
+
+        transport = _transport_for({("POST", "/v1/chat/completions"): _zero_count})
+        client = httpx.Client(transport=transport, timeout=5.0)
+        try:
+            result = smoke_test._openai_stream(client, "http://stub", "k", "gpt-4")
+        finally:
+            client.close()
+        assert not result.ok
+        assert "x-proxy-attempt-count" in result.detail
+
+    def test_non_streaming_missing_attempt_count_fails(self) -> None:
+        def _no_count(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={"choices": []},
+                headers={
+                    "x-proxy-request-id": "req-ns",
+                    "x-proxy-attempt-count": "",
+                },
+            )
+
+        transport = _transport_for({("POST", "/v1/chat/completions"): _no_count})
+        client = httpx.Client(transport=transport, timeout=5.0)
+        try:
+            result = smoke_test._openai(client, "http://stub", "k", "gpt-4")
+        finally:
+            client.close()
+        assert not result.ok
+        assert "x-proxy-attempt-count" in result.detail
+
+    def test_non_streaming_non_integer_attempt_count_fails(self) -> None:
+        def _bad_count(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={"choices": []},
+                headers={
+                    "x-proxy-request-id": "req-ns",
+                    "x-proxy-attempt-count": "nope",
+                },
+            )
+
+        transport = _transport_for({("POST", "/v1/chat/completions"): _bad_count})
+        client = httpx.Client(transport=transport, timeout=5.0)
+        try:
+            result = smoke_test._openai(client, "http://stub", "k", "gpt-4")
+        finally:
+            client.close()
+        assert not result.ok
+        assert "x-proxy-attempt-count" in result.detail
+
+    def test_stream_missing_request_id_fails(self) -> None:
+        def _no_id(request: httpx.Request) -> httpx.Response:
+            return _make_streaming_response(
+                [b"data: [DONE]\n\n"],
+                headers={"x-proxy-request-id": ""},
+            )
+
+        transport = _transport_for({("POST", "/v1/chat/completions"): _no_id})
+        client = httpx.Client(transport=transport, timeout=5.0)
+        try:
+            result = smoke_test._openai_stream(client, "http://stub", "k", "gpt-4")
+        finally:
+            client.close()
+        assert not result.ok
+        assert "x-proxy-request-id" in result.detail
+
+
+class TestTerminalMarkerValidation:
+    """The streaming checks must require a recognized terminal
+    frame for non-cancelled streams, and must not require one
+    when the client intentionally cancels.
+    """
+
+    def test_openai_stream_without_terminal_marker_fails(self) -> None:
+        chunks = [
+            b'data: {"choices":[{"delta":{}}]}\n\n',
+            b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n',
+        ]
+        transport = _transport_for(
+            {("POST", "/v1/chat/completions"): _streaming_handler(chunks)}
+        )
+        client = httpx.Client(transport=transport, timeout=5.0)
+        try:
+            result = smoke_test._openai_stream(client, "http://stub", "k", "gpt-4")
+        finally:
+            client.close()
+        assert not result.ok
+        assert "no_terminal_marker" in result.detail
+
+    def test_anthropic_stream_without_terminal_marker_fails(self) -> None:
+        chunks = [
+            b'event: message_start\ndata: {"type":"message_start"}\n\n',
+            b'event: content_block_delta\ndata: {"type":"content_block_delta"}\n\n',
+        ]
+        transport = _transport_for(
+            {("POST", "/v1/messages"): _streaming_handler(chunks)}
+        )
+        client = httpx.Client(transport=transport, timeout=5.0)
+        try:
+            result = smoke_test._anthropic_stream(
+                client, "http://stub", "k", "claude-3-5-sonnet"
+            )
+        finally:
+            client.close()
+        assert not result.ok
+        assert "no_terminal_marker" in result.detail
+
+    def test_cancellation_succeeds_without_terminal_marker(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("GOROUTER_TEST_STREAM_CANCEL", "1")
+        chunks = [
+            b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n',
+            b'data: {"choices":[{"delta":{"content":"more"}}]}\n\n',
+        ]
+        transport = _transport_for(
+            {("POST", "/v1/chat/completions"): _streaming_handler(chunks)}
+        )
+        client = httpx.Client(transport=transport, timeout=5.0)
+        try:
+            result = smoke_test._openai_stream(client, "http://stub", "k", "gpt-4")
+        finally:
+            client.close()
+        # Cancellation mode does not require a terminal marker.
+        assert result.ok, result.detail
+
+
+class TestContentPrivacy:
+    """The live script must never print model text or complete chunks."""
+
+    def test_main_output_does_not_include_chunk_contents(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setenv("GOROUTER_BASE_URL", "http://stub")
+        monkeypatch.setenv("GOROUTER_API_KEY", "k")
+        monkeypatch.setenv("GOROUTER_OPENAI_MODEL", "gpt-4")
+        monkeypatch.setenv("GOROUTER_ANTHROPIC_MODEL", "claude-3-5-sonnet")
+        monkeypatch.setenv("GOROUTER_SKIP_LIVE", "1")
+
+        secret_chunks = {
+            "private stream content": b"data: private stream content\n\n",
+            "another secret value": b"data: another secret value\n\n",
+        }
+        captured: dict[str, Any] = {}
+
+        def _capture_chunk(
+            response: httpx.Response,
+            state: smoke_test._StreamCheckState,
+            *,
+            required_marker: bytes,
+            required_terminal: tuple[bytes, ...] = (),
+        ) -> smoke_test.CheckResult:
+            for chunk in response.iter_bytes():
+                state.chunk_count += 1
+                if chunk and state.first_chunk_at is None:
+                    state.first_chunk_at = time.time()
+            captured.setdefault("chunks", []).append(chunk)
+            return smoke_test.CheckResult(
+                "openai_stream",
+                True,
+                f"status={response.status_code} chunks={state.chunk_count}",
+            )
+
+        monkeypatch.setattr(
+            smoke_test,
+            "_check_health",
+            lambda c, b: [
+                smoke_test.CheckResult("healthz", True),
+                smoke_test.CheckResult("readyz", True),
+            ],
+        )
+        monkeypatch.setattr(
+            smoke_test,
+            "_check_models",
+            lambda c, b, k: smoke_test.CheckResult("models", True, "count=1"),
+        )
+        monkeypatch.setattr(
+            smoke_test,
+            "_check_stats",
+            lambda c, b: smoke_test.CheckResult("stats", True, "endpoint=/v1/stats"),
+        )
+        monkeypatch.setattr(
+            smoke_test,
+            "_openai",
+            lambda c, b, k, m: smoke_test.CheckResult("openai", True, "ok"),
+        )
+        monkeypatch.setattr(
+            smoke_test,
+            "_openai_stream",
+            lambda c, b, k, m: smoke_test.CheckResult(
+                "openai_stream", True, "ok (content withheld)"
+            ),
+        )
+        monkeypatch.setattr(
+            smoke_test,
+            "_anthropic",
+            lambda c, b, k, m: smoke_test.CheckResult("anthropic", True, "ok"),
+        )
+        monkeypatch.setattr(
+            smoke_test,
+            "_anthropic_stream",
+            lambda c, b, k, m: smoke_test.CheckResult(
+                "anthropic_stream", True, "ok (content withheld)"
+            ),
+        )
+
+        rc = smoke_test.main()
+        assert rc == 0
+        out = capsys.readouterr().out
+        for secret in secret_chunks:
+            assert secret not in out, f"Secret content {secret!r} present in output"
