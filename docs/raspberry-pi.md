@@ -278,6 +278,51 @@ echo "post-soak checker exit: $?"
 Exit 0 means the soak did not leave the database in a
 violating state.
 
+### 8. Direct upstream authentication verification
+
+Before diagnosing GoRouter behavior, confirm that the
+configured key actually authenticates against each upstream
+endpoint family. The bundled verifier bypasses the proxy and
+calls the upstream endpoints directly with the same
+`Authorization: Bearer` header that GoRouter emits. The
+verifier is **not** part of automated CI execution.
+
+```bash
+# Set the four required variables in the current shell, then
+# invoke the verifier.
+GOROUTER_UPSTREAM_BASE_URL="https://api.openai.com" \
+GOROUTER_TEST_UPSTREAM_KEY="$GO_AGGREGATOR_OPENCODE_KEY" \
+GOROUTER_OPENAI_MODEL="<your openai model>" \
+GOROUTER_ANTHROPIC_MODEL="<your anthropic model>" \
+  /opt/gorouter/.venv/bin/python /opt/gorouter/scripts/verify_upstream_auth.py
+```
+
+`GOROUTER_TEST_UPSTREAM_KEY` is read from the environment; do
+not pass it on the command line so it does not appear in shell
+history or process listings. If the operator manually exported
+the key in an interactive shell, clear that history entry:
+
+```bash
+history -d <line_number>
+# or
+history -c && history -w
+```
+
+Operational sequence:
+
+1. Run the verifier against each endpoint family first. A
+   non-zero exit means the upstream rejects the key or the
+   model id; GoRouter cannot fix that.
+2. Run `scripts/smoke_test.py` using the same model ids.
+3. If direct succeeds but the proxy fails, inspect
+   header transformation and routing.
+4. If both fail, treat it as upstream model or key
+   compatibility rather than a proxy defect.
+
+The model examples in the environment variables above are
+illustrative; the operator must supply current, real model
+IDs known to be advertised by the upstream catalog.
+
 ## Acceptance checklist
 
 Before declaring the Pi deployment ready:
