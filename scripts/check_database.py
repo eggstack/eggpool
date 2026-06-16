@@ -30,9 +30,11 @@ Exit codes:
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import os
 import sys
+import tomllib
 from typing import TYPE_CHECKING, Any
 
 from go_aggregator.db.connection import Database
@@ -349,7 +351,30 @@ async def _check_price_snapshot_sources(db: Database) -> list[str]:
     return [f"unknown price snapshot source(s): {sorted(unknown)}"] if unknown else []
 
 
-def _db_path() -> str:
+def _read_db_path_from_config(config_path: str) -> str:
+    """Read the database path from a TOML config file."""
+    try:
+        with open(config_path, "rb") as f:
+            config = tomllib.load(f)
+    except FileNotFoundError:
+        sys.stderr.write(f"Config file not found: {config_path}\n")
+        sys.exit(2)
+    except tomllib.TOMLDecodeError as exc:
+        sys.stderr.write(f"Failed to parse config file: {exc}\n")
+        sys.exit(2)
+    db_section = config.get("database", {})
+    path = db_section.get("path")
+    if not path:
+        sys.stderr.write(
+            f"Config file {config_path!r} has no [database] section or 'path' key\n"
+        )
+        sys.exit(2)
+    return path
+
+
+def _db_path(config_path: str | None = None) -> str:
+    if config_path:
+        return _read_db_path_from_config(config_path)
     return os.environ.get("GOROUTER_DB_PATH", "./usage.sqlite3")
 
 
@@ -391,8 +416,8 @@ async def _run_invariants(db: Database) -> list[str]:
     return all_violations
 
 
-async def main() -> int:
-    db_path = _db_path()
+async def main(config_path: str | None = None) -> int:
+    db_path = _db_path(config_path)
     if not os.path.exists(db_path):
         sys.stderr.write(f"Database not found: {db_path}\n")
         return 2
@@ -437,7 +462,22 @@ def main_sync() -> int:
     when invoked as ``__main__``; callers (tests, Click commands) get
     the exit code as the return value.
     """
-    return asyncio.run(main())
+    parser = argparse.ArgumentParser(
+        prog="check_database.py",
+        description="Read-only database invariant checker for GoRouter.",
+    )
+    parser.add_argument(
+        "--config",
+        metavar="PATH",
+        help=(
+            "Path to the TOML configuration file. "
+            "When provided, the database path is read from the [database].path key. "
+            "When not provided, the GOROUTER_DB_PATH environment variable is used "
+            "(default: ./usage.sqlite3)."
+        ),
+    )
+    args, _ = parser.parse_known_args()
+    return asyncio.run(main(config_path=args.config))
 
 
 if __name__ == "__main__":
