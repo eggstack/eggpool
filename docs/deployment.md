@@ -178,3 +178,47 @@ If you see `database is locked` errors:
 1. Verify `server.host = "0.0.0.0"` in config
 2. Check firewall rules (see `docs/firewall.md`)
 3. Verify the port is listening: `ss -tlnp | grep 8080`
+
+## Operational Scripts
+
+### Database invariant checker
+
+```bash
+GOROUTER_DB_PATH=/var/lib/gorouter/usage.sqlite3 \
+  uv run python scripts/check_database.py
+```
+
+The checker opens the database **read-only** (via a `file:...?mode=ro`
+URI) so it cannot change journal mode, create WAL files, apply
+migrations, or mutate the schema. It first inspects `_migrations`
+and reports a clear error if the on-disk schema is older or newer
+than the checker expects. The documented exit codes are:
+
+- `0` = all invariants pass
+- `1` = invariant violation (output to stderr)
+- `2` = configuration or database access error (output to stderr)
+
+### Deployment smoke test
+
+```bash
+GOROUTER_BASE_URL=http://127.0.0.1:8080 \
+GOROUTER_API_KEY=... \
+GOROUTER_OPENAI_MODEL=gpt-4 \
+GOROUTER_ANTHROPIC_MODEL=claude-3-5-sonnet \
+  uv run python scripts/smoke_test.py
+```
+
+All four environment variables are required so stale generic IDs
+cannot produce misleading deployment failures. The script
+exercises the dashboard endpoints, the models listing, and one
+non-streaming plus one streaming call for each of the
+OpenAI-compatible and Anthropic-compatible protocol families.
+It uses `httpx.Client.stream()` so headers and chunks are
+received in real time and validates at least one known SSE
+marker per protocol. No request bodies, response bodies, or
+secrets are logged or echoed.
+
+`GOROUTER_SKIP_LIVE=1` skips the live calls (used by the unit
+test harness). `GOROUTER_TEST_STREAM_CANCEL=1` closes the
+response after the first nonempty chunk to exercise the client
+cancellation path.

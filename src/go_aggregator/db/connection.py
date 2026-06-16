@@ -34,11 +34,13 @@ class Database:
         busy_timeout_ms: int = 5000,
         wal: bool = True,
         synchronous: str = "NORMAL",
+        read_only: bool = False,
     ) -> None:
         self._path = path
         self._busy_timeout_ms = busy_timeout_ms
         self._wal = wal
         self._synchronous = synchronous
+        self._read_only = read_only
         self._conn: aiosqlite.Connection | None = None
         self._connection_lock = asyncio.Lock()
         self._transaction_depth: ContextVar[int] = ContextVar(
@@ -47,9 +49,23 @@ class Database:
         )
         self._transaction_owner: asyncio.Task[object] | None = None
 
+    @property
+    def read_only(self) -> bool:
+        return self._read_only
+
     async def connect(self) -> None:
         """Open the connection and set pragmas."""
         try:
+            if self._read_only:
+                # Use a read-only URI so SQLite refuses to change
+                # journal mode, create WAL files, or apply migrations.
+                uri = self._build_read_only_uri(self._path)
+                self._conn = await aiosqlite.connect(uri, uri=True)
+                self._conn.row_factory = aiosqlite.Row
+                await self._conn.execute(
+                    f"PRAGMA busy_timeout = {self._busy_timeout_ms}"
+                )
+                return
             self._conn = await aiosqlite.connect(self._path)
             self._conn.row_factory = aiosqlite.Row
             await self._conn.execute("PRAGMA foreign_keys = ON")
@@ -60,6 +76,20 @@ class Database:
             await self._conn.commit()
         except Exception as exc:
             raise DatabaseError(f"Failed to connect to database: {exc}") from exc
+
+    @staticmethod
+    def _build_read_only_uri(path: str) -> str:
+        """Build a SQLite URI with read-only mode.
+
+        In-memory databases cannot be opened in read-only mode; we
+        fall back to the plain path in that case (the test fixtures
+        rely on it).
+        """
+        if path == ":memory:":
+            return path
+        if "://" in path:
+            return path
+        return f"file:{path}?mode=ro"
 
     async def disconnect(self) -> None:
         """Close the connection."""
@@ -90,6 +120,10 @@ class Database:
         current task.  This prevents implicit transactions and ensures
         the connection lock is held for the duration of the operation.
         """
+        if self._read_only:
+            raise DatabaseError(
+                "Database is opened read-only; writes are not permitted"
+            )
         if not self._current_task_owns_transaction():
             raise DatabaseError(
                 "Database writes require an owned transaction; "
