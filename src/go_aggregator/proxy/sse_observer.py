@@ -130,7 +130,7 @@ class IncrementalSSEObserver:
             if drop_at != -1:
                 self._buffer = self._buffer[drop_at + 1 :]
             else:
-                self._buffer = ""
+                self._buffer = self._buffer[-MAX_INCOMPLETE_FRAME_BYTES:]
             self._decoder = codecs.getincrementaldecoder("utf-8")()
 
     def _process_line(self, line: str) -> None:

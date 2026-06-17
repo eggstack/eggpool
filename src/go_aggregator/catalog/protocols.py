@@ -132,7 +132,7 @@ class ModelProtocolResolver:
         # Step 4: Known family mapping
         model_lower = model_id.lower()
         for prefix, proto in FAMILY_PROTOCOLS.items():
-            if model_lower.startswith(prefix):
+            if model_lower.startswith(prefix.lower()):
                 return ProtocolResolution(
                     protocol=proto,
                     source="family_mapping",

@@ -28,7 +28,7 @@ async def cleanup_stale_reservations(
             WHERE status = 'active'
               AND created_at < datetime('now', ? || ' seconds')
             """,
-            (f"-{int(max_age_seconds)}",),
+            (str(-int(max_age_seconds)),),
         )
     if count > 0:
         logger.info("Cleaned up %d stale reservations", count)

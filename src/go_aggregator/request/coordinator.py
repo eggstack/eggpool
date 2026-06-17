@@ -204,6 +204,8 @@ class RequestCoordinator:
         for attempt_num in range(1, self._max_retry_attempts + 1):
             try:
                 selected = await self._select_and_persist_attempt(context, attempt_num)
+            except asyncio.CancelledError:
+                raise
             except ModelUnavailableError as err:
                 # Only overwrite last_error if we don't have an upstream error
                 if last_error is None or not isinstance(

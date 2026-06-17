@@ -41,9 +41,10 @@ class ModelCatalogCache:
                 }
             else:
                 self._models[model_id]["last_seen_at"] = now
-                # Update protocol if more specific
-                if model.get("protocol"):
-                    self._models[model_id]["protocol"] = model["protocol"]
+                # Always update protocol to reflect current upstream state;
+                # an empty protocol means unresolved and should clear any
+                # previously resolved value.
+                self._models[model_id]["protocol"] = model.get("protocol")
                 # Update source if provided
                 if model.get("protocol_source"):
                     self._models[model_id]["protocol_source"] = model["protocol_source"]
