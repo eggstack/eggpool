@@ -640,29 +640,32 @@ class RequestCoordinator:
             content=body_to_send,
         )
 
+        response = None
         try:
-            response = await self._client.send(request, stream=True)
-        except httpx.ConnectError as err:
-            raise _RetryableUpstreamError(
-                f"Connection failed: {err}",
-                status_code=None,
-                error_class="ConnectError",
-            ) from err
-        except httpx.TimeoutException as err:
-            raise _RetryableUpstreamError(
-                f"Timeout: {err}",
-                status_code=504,
-                error_class="TimeoutException",
-            ) from err
-        except Exception as err:
-            raise _RetryableUpstreamError(
-                f"Upstream error: {err}",
-                status_code=None,
-                error_class=type(err).__name__,
-            ) from err
+            try:
+                response = await self._client.send(request, stream=True)
+            except httpx.ConnectError as err:
+                raise _RetryableUpstreamError(
+                    f"Connection failed: {err}",
+                    status_code=None,
+                    error_class="ConnectError",
+                ) from err
+            except httpx.TimeoutException as err:
+                raise _RetryableUpstreamError(
+                    f"Timeout: {err}",
+                    status_code=504,
+                    error_class="TimeoutException",
+                ) from err
+            except Exception as err:
+                raise _RetryableUpstreamError(
+                    f"Upstream error: {err}",
+                    status_code=None,
+                    error_class=type(err).__name__,
+                ) from err
 
-        # Check upstream status before creating downstream response
-        try:
+            assert response is not None
+
+            # Check upstream status before creating downstream response
             if response.status_code >= 400:
                 await response.aread()
                 resp_headers = filter_response_headers(response.headers)
@@ -698,8 +701,10 @@ class RequestCoordinator:
                     ),
                 )
         finally:
-            if response.status_code >= 400:
+            if response is not None and response.status_code >= 400:
                 await response.aclose()
+
+        assert response is not None
 
         # Build the response headers
         resp_headers = filter_response_headers(response.headers, streaming=True)
@@ -998,6 +1003,7 @@ class RequestCoordinator:
             status_code = None
             error_class = None
             error_detail: str | None = None
+            health_already_applied = False
 
             if last_upstream_response is not None:
                 status_code = last_upstream_response[0]
@@ -1015,6 +1021,7 @@ class RequestCoordinator:
                     outcome = FinalizationOutcome.CLIENT_ERROR
                 elif isinstance(last_error, _RetryableUpstreamError):
                     outcome = FinalizationOutcome.UPSTREAM_ERROR
+                    health_already_applied = True
 
             await self._finalizer.finalize(
                 last_selected,
@@ -1024,7 +1031,7 @@ class RequestCoordinator:
                     error_class=error_class,
                     error_detail=error_detail,
                     upstream_latency_ms=elapsed_ms,
-                    health_already_applied=True,
+                    health_already_applied=health_already_applied,
                 ),
             )
         elif context.client_metadata.get("db_request_id") is not None:

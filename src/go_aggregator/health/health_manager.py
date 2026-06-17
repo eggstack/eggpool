@@ -58,7 +58,12 @@ def classify_failure_category(
         return FailureCategory.MODEL_UNAVAILABLE
     if "connecttimeout" in ec or "connect_timeout" in ec:
         return FailureCategory.CONNECT_TIMEOUT
-    conn_terms = ("connectionfailure", "connection_failure", "connectionerror")
+    conn_terms = (
+        "connectionfailure",
+        "connection_failure",
+        "connectionerror",
+        "connecterror",
+    )
     if any(s in ec for s in conn_terms):
         return FailureCategory.CONNECTION_FAILURE
     if "timeout" in ec:
@@ -110,7 +115,7 @@ class AccountHealth:
         until = self.disabled_models[model_id]
         if until is None:
             return True
-        return (current_time or time.time()) <= until
+        return (current_time if current_time is not None else time.time()) <= until
 
 
 @dataclass
