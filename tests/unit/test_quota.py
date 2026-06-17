@@ -268,7 +268,8 @@ class TestReservationManager:
 class TestQuotaFairScorer:
     """Tests for QuotaFairScorer."""
 
-    def test_score_accounts(self) -> None:
+    @pytest.mark.asyncio()
+    async def test_score_accounts(self) -> None:
         """Test scoring accounts. Lower score = less utilized = preferred."""
         estimator = QuotaEstimator()
         estimator.set_account_limits("account1", capacity_7d_microdollars=10000)
@@ -277,7 +278,7 @@ class TestQuotaFairScorer:
         estimator.record_usage("account2", 100, 9000)
 
         scorer = QuotaFairScorer(quota_estimator=estimator)
-        scores = scorer.score_accounts(["account1", "account2"])
+        scores = await scorer.score_accounts(["account1", "account2"])
 
         assert len(scores) == 2
         # account1 used 50%, account2 used 90% — account1 should score lower

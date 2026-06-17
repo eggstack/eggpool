@@ -13,8 +13,8 @@ usage from SQLite instead of in-memory hourly/daily windows.
 
 from __future__ import annotations
 
+import asyncio
 import logging
-import threading
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -260,8 +260,9 @@ class QuotaEstimator:
     # In-memory reservation tracking for scorer
     _account_reserved_cost: dict[str, int] = field(default_factory=dict[str, int])
     # Serializes record_usage + persisted_snapshot updates so concurrent
-    # finalizers cannot interleave between the two and lose updates.
-    _snapshot_lock: threading.Lock = field(default_factory=threading.Lock)
+    # finalizers cannot interleave between the two updates and lose cost
+    # increments.
+    _snapshot_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def set_usage_window_repo(self, repo: UsageWindowRepository) -> None:
         """Set the persisted usage window repository."""
@@ -297,7 +298,7 @@ class QuotaEstimator:
                 self.global_model_ewma[model_id] = EWMAEstimate()
             self.global_model_ewma[model_id].update(cost_per_token)
 
-    def record_usage_and_snapshot(
+    async def record_usage_and_snapshot(
         self,
         account_name: str,
         tokens: int,
@@ -308,11 +309,9 @@ class QuotaEstimator:
 
         Combines :meth:`record_usage` with the per-window snapshot
         increment so concurrent finalizers cannot interleave between
-        the two updates and lose cost increments. The lock is short and
-        CPU-only so a ``threading.Lock`` is sufficient and safe across
-        async / sync call sites.
+        the two updates and lose cost increments.
         """
-        with self._snapshot_lock:
+        async with self._snapshot_lock:
             self.record_usage(
                 account_name,
                 tokens=tokens,
@@ -480,9 +479,9 @@ class QuotaEstimator:
         """Set a configured per-model price override (Tier 4)."""
         self.model_overrides[model_id] = (input_price, output_price)
 
-    def add_reservation(self, account_name: str, cost: int) -> None:
+    async def add_reservation(self, account_name: str, cost: int) -> None:
         """Track an active reservation's estimated cost for scoring."""
-        with self._snapshot_lock:
+        async with self._snapshot_lock:
             if account_name not in self._account_reserved_cost:
                 self._account_reserved_cost[account_name] = 0
             self._account_reserved_cost[account_name] += cost
@@ -491,9 +490,9 @@ class QuotaEstimator:
             if quota is not None:
                 quota.reserved_cost = self._account_reserved_cost[account_name]
 
-    def remove_reservation(self, account_name: str, cost: int) -> None:
+    async def remove_reservation(self, account_name: str, cost: int) -> None:
         """Remove a reservation's cost from tracking."""
-        with self._snapshot_lock:
+        async with self._snapshot_lock:
             if account_name in self._account_reserved_cost:
                 self._account_reserved_cost[account_name] = max(
                     0, self._account_reserved_cost[account_name] - cost
@@ -503,9 +502,9 @@ class QuotaEstimator:
                 if quota is not None:
                     quota.reserved_cost = self._account_reserved_cost[account_name]
 
-    def get_account_reserved_cost(self, account_name: str) -> int:
+    async def get_account_reserved_cost(self, account_name: str) -> int:
         """Get total reserved cost for an account from active reservations."""
-        with self._snapshot_lock:
+        async with self._snapshot_lock:
             return self._account_reserved_cost.get(account_name, 0)
 
     async def load_persisted_windows(

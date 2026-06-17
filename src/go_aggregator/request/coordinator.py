@@ -275,12 +275,12 @@ class RequestCoordinator:
                         self._quota_estimator is not None
                         and result.reservation_released
                     ):
-                        self._quota_estimator.remove_reservation(
+                        await self._quota_estimator.remove_reservation(
                             selected.account_name,
                             selected.estimated_microdollars,
                         )
                     if result.reservation_released:
-                        self._router.decrement_active_request_count(
+                        await self._router.decrement_active_request_count(
                             selected.account_name
                         )
                 # Apply health transitions only when the attempt transitioned
@@ -357,7 +357,7 @@ class RequestCoordinator:
                     )
 
             # 4. Select account using projected estimates
-            selected_state = self._router.select_account(
+            selected_state = await self._router.select_account(
                 context.model_id,
                 context.request_id,
                 request_estimates=request_estimates,
@@ -425,11 +425,11 @@ class RequestCoordinator:
             )
 
             # 11. Increment runtime active count
-            self._router.increment_active_request_count(account_name)
+            await self._router.increment_active_request_count(account_name)
 
             # 12. Add exact reserved amount to in-memory cache
             if self._quota_estimator is not None:
-                self._quota_estimator.add_reservation(
+                await self._quota_estimator.add_reservation(
                     account_name, estimated_microdollars
                 )
 

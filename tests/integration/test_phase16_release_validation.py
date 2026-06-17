@@ -184,8 +184,8 @@ class TestAlreadyReleasedReservation:
                 ttl_seconds=300,
             )
 
-        quota_estimator.add_reservation("test-acct", 100_000)
-        assert quota_estimator.get_account_reserved_cost("test-acct") == 100_000
+        await quota_estimator.add_reservation("test-acct", 100_000)
+        assert await quota_estimator.get_account_reserved_cost("test-acct") == 100_000
 
         attempt_finalizer = AttemptFinalizer(
             db=db, attempt_repo=attempt_repo, reservation_repo=reservation_repo
@@ -209,7 +209,7 @@ class TestAlreadyReleasedReservation:
         assert resv_row is not None
         assert resv_row["status"] == "released"
 
-        quota_estimator.remove_reservation("test-acct", 100_000)
+        await quota_estimator.remove_reservation("test-acct", 100_000)
 
         finalizer = RequestFinalizer(
             db=db,
@@ -297,7 +297,7 @@ class TestAlreadyReleasedReservation:
 
         price_repo = PriceRepository(db)
         cost_calc = CostCalculator(price_repo)
-        quota_estimator.remove_reservation("test-acct", 50_000)
+        await quota_estimator.remove_reservation("test-acct", 50_000)
 
         finalizer = RequestFinalizer(
             db=db,

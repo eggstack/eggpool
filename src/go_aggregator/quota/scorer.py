@@ -61,7 +61,7 @@ class QuotaFairScorer:
     quota_estimator: QuotaEstimator | None = None
     health_manager: HealthManager | None = None
 
-    def score_accounts(
+    async def score_accounts(
         self,
         account_names: list[str],
         model_name: str | None = None,
@@ -93,7 +93,9 @@ class QuotaFairScorer:
                     cost_30d = quota.get_persisted_cost_30d()
 
                     # Get reserved cost from estimator
-                    reserved = self.quota_estimator.get_account_reserved_cost(name)
+                    reserved = await self.quota_estimator.get_account_reserved_cost(
+                        name
+                    )
 
                     # Get projected request estimate for this account
                     request_estimate = estimates.get(name, 0)

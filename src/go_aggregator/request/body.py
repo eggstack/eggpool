@@ -42,7 +42,12 @@ async def read_body_limited(request: Request, max_bytes: int) -> bytes:
             # Drain the remaining stream so the upstream connection
             # is properly released; otherwise HTTP/1.1 keep-alive
             # connections may stall waiting for the body to finish.
-            async for _chunk in request.stream():
+            # Swallow any drain errors so the RequestTooLargeError
+            # raised below is the one propagated to the caller.
+            try:
+                async for _chunk in request.stream():
+                    pass
+            except Exception:
                 pass
     if too_large:
         raise RequestTooLargeError(f"Request body exceeds limit of {max_bytes} bytes")

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-import threading
 from typing import TYPE_CHECKING
 
 from go_aggregator.quota.estimation import QuotaEstimator
@@ -35,13 +35,13 @@ class Router:
         self._health_manager = health_manager
         # Serializes increment/decrement of active_request_count so
         # concurrent coordinators and cleanup tasks cannot lose updates.
-        self._active_count_lock = threading.Lock()
+        self._active_count_lock = asyncio.Lock()
         self._scorer = QuotaFairScorer(
             quota_estimator=self._quota_estimator,
             health_manager=self._health_manager,
         )
 
-    def select_account(
+    async def select_account(
         self,
         model_id: str,
         request_id: str | None = None,
@@ -65,7 +65,7 @@ class Router:
         if not eligible:
             return None
 
-        scores = self._scorer.score_accounts(
+        scores = await self._scorer.score_accounts(
             [s.name for s in eligible], model_id, active_requests, request_estimates
         )
 
@@ -97,7 +97,7 @@ class Router:
             eligible = [s for s in eligible if s.name not in exclude_accounts]
         return [s.name for s in eligible]
 
-    def select_accounts_for_failover(
+    async def select_accounts_for_failover(
         self,
         model_id: str,
         max_accounts: int = 3,
@@ -119,7 +119,7 @@ class Router:
         if not eligible:
             return []
 
-        scores = self._scorer.score_accounts(
+        scores = await self._scorer.score_accounts(
             [s.name for s in eligible], model_id, active_requests, request_estimates
         )
 
@@ -241,21 +241,21 @@ class Router:
             offset_30d_microdollars=offset_30d_microdollars,
         )
 
-    def increment_active_request_count(self, account_name: str) -> None:
+    async def increment_active_request_count(self, account_name: str) -> None:
         """Increment the active request count for an account."""
         state = self._registry.get_state(account_name)
         if state is not None:
-            with self._active_count_lock:
+            async with self._active_count_lock:
                 state.active_request_count += 1
 
-    def decrement_active_request_count(self, account_name: str) -> None:
+    async def decrement_active_request_count(self, account_name: str) -> None:
         """Decrement the active request count for an account.
 
         Never allows the count to become negative.
         """
         state = self._registry.get_state(account_name)
         if state is not None:
-            with self._active_count_lock:
+            async with self._active_count_lock:
                 if state.active_request_count > 0:
                     state.active_request_count -= 1
 

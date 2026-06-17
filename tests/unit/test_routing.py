@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 
+import pytest
+
 from go_aggregator.accounts.registry import AccountRegistry
 from go_aggregator.accounts.state import AccountRuntimeState
 from go_aggregator.catalog.cache import ModelCatalogCache
@@ -48,7 +50,8 @@ def test_eligible_accounts_model_not_supported() -> None:
     assert len(eligible) == 0
 
 
-def test_router_selects_account() -> None:
+@pytest.mark.asyncio()
+async def test_router_selects_account() -> None:
     os.environ["TEST_ROUTER_KEY"] = "key"
     config = AppConfig.from_dict(
         {
@@ -72,13 +75,14 @@ def test_router_selects_account() -> None:
 
     catalog = MockCatalog(cache)
     router = Router(registry, catalog)  # type: ignore[arg-type]
-    selected = router.select_account("gpt-4")
+    selected = await router.select_account("gpt-4")
     assert selected is not None
     assert selected.name == "acct1"
     del os.environ["TEST_ROUTER_KEY"]
 
 
-def test_router_no_eligible_account() -> None:
+@pytest.mark.asyncio()
+async def test_router_no_eligible_account() -> None:
     os.environ["TEST_ROUTER_KEY_2"] = "key"
     config = AppConfig.from_dict(
         {
@@ -104,7 +108,7 @@ def test_router_no_eligible_account() -> None:
 
     catalog = MockCatalog(cache)
     router = Router(registry, catalog)  # type: ignore[arg-type]
-    selected = router.select_account("gpt-4")
+    selected = await router.select_account("gpt-4")
     assert selected is None
     del os.environ["TEST_ROUTER_KEY_2"]
 
@@ -117,7 +121,8 @@ def _make_mock_catalog(model_id: str = "gpt-4") -> ModelCatalogCache:
     return cache
 
 
-def test_5h_usage_changes_selection() -> None:
+@pytest.mark.asyncio()
+async def test_5h_usage_changes_selection() -> None:
     """Five-hour usage on one account should route to the other."""
     estimator = QuotaEstimator()
     estimator.set_account_limits("acct1", capacity_5h_microdollars=10_000_000)
@@ -126,13 +131,14 @@ def test_5h_usage_changes_selection() -> None:
     estimator.record_usage("acct1", 1000, 5_000_000)
 
     scorer = QuotaFairScorer(quota_estimator=estimator)
-    scores = scorer.score_accounts(["acct1", "acct2"])
+    scores = await scorer.score_accounts(["acct1", "acct2"])
 
     # acct1 has usage, acct2 has none -- acct2 should score lower (better)
     assert scores[1].quota_score < scores[0].quota_score
 
 
-def test_7d_usage_changes_selection() -> None:
+@pytest.mark.asyncio()
+async def test_7d_usage_changes_selection() -> None:
     """Seven-day usage on one account should route to the other."""
     estimator = QuotaEstimator()
     from go_aggregator.quota.estimation import PersistedWindowSnapshot
@@ -153,12 +159,13 @@ def test_7d_usage_changes_selection() -> None:
     )
 
     scorer = QuotaFairScorer(quota_estimator=estimator)
-    scores = scorer.score_accounts(["acct1", "acct2"])
+    scores = await scorer.score_accounts(["acct1", "acct2"])
 
     assert scores[1].quota_score < scores[0].quota_score
 
 
-def test_30d_usage_changes_selection() -> None:
+@pytest.mark.asyncio()
+async def test_30d_usage_changes_selection() -> None:
     """Thirty-day usage on one account should route to the other."""
     estimator = QuotaEstimator()
     from go_aggregator.quota.estimation import PersistedWindowSnapshot
@@ -179,12 +186,13 @@ def test_30d_usage_changes_selection() -> None:
     )
 
     scorer = QuotaFairScorer(quota_estimator=estimator)
-    scores = scorer.score_accounts(["acct1", "acct2"])
+    scores = await scorer.score_accounts(["acct1", "acct2"])
 
     assert scores[1].quota_score < scores[0].quota_score
 
 
-def test_offsets_apply_to_correct_windows() -> None:
+@pytest.mark.asyncio()
+async def test_offsets_apply_to_correct_windows() -> None:
     """Manual offset on 5h should not affect 7d routing."""
     estimator = QuotaEstimator()
     from go_aggregator.quota.estimation import PersistedWindowSnapshot
@@ -213,14 +221,15 @@ def test_offsets_apply_to_correct_windows() -> None:
     )
 
     scorer = QuotaFairScorer(quota_estimator=estimator)
-    scores = scorer.score_accounts(["acct1", "acct2"])
+    scores = await scorer.score_accounts(["acct1", "acct2"])
 
     # acct1 has 80% offset on 5h window, acct2 has none
     # acct1 should score higher (more utilized)
     assert scores[0].quota_score > scores[1].quota_score
 
 
-def test_weights_scale_capacities() -> None:
+@pytest.mark.asyncio()
+async def test_weights_scale_capacities() -> None:
     """Account with weight=2 should have double the capacity."""
     estimator = QuotaEstimator()
     estimator.set_account_weight("acct1", 2.0)
@@ -232,7 +241,7 @@ def test_weights_scale_capacities() -> None:
     estimator.record_usage("acct2", 1000, 5_000_000)
 
     scorer = QuotaFairScorer(quota_estimator=estimator)
-    scores = scorer.score_accounts(["acct1", "acct2"])
+    scores = await scorer.score_accounts(["acct1", "acct2"])
 
     # Both have 50% of their own capacity, so scores should be similar
     # but acct1 has weight=2 vs acct2 weight=1
@@ -240,16 +249,17 @@ def test_weights_scale_capacities() -> None:
     assert scores[1].weight == 1.0
 
 
-def test_reservations_affect_selection() -> None:
+@pytest.mark.asyncio()
+async def test_reservations_affect_selection() -> None:
     """Active reservation should make an account less preferred."""
     estimator = QuotaEstimator()
     estimator.set_account_limits("acct1", capacity_5h_microdollars=10_000_000)
     estimator.set_account_limits("acct2", capacity_5h_microdollars=10_000_000)
     # Add reservation on acct1
-    estimator.add_reservation("acct1", 4_000_000)
+    await estimator.add_reservation("acct1", 4_000_000)
 
     scorer = QuotaFairScorer(quota_estimator=estimator)
-    scores = scorer.score_accounts(["acct1", "acct2"])
+    scores = await scorer.score_accounts(["acct1", "acct2"])
 
     # acct1 has reservation, acct2 has none -- acct2 should score lower
     assert scores[1].quota_score < scores[0].quota_score
@@ -276,7 +286,8 @@ def test_near_ties_randomize() -> None:
     assert len(selected_names) >= 2
 
 
-def test_restart_hydration_preserves_behavior() -> None:
+@pytest.mark.asyncio()
+async def test_restart_hydration_preserves_behavior() -> None:
     """Persisted windows should produce same routing after reload."""
     from go_aggregator.quota.estimation import PersistedWindowSnapshot
 
@@ -298,7 +309,7 @@ def test_restart_hydration_preserves_behavior() -> None:
     )
 
     scorer = QuotaFairScorer(quota_estimator=estimator)
-    scores = scorer.score_accounts(["acct1", "acct2"])
+    scores = await scorer.score_accounts(["acct1", "acct2"])
 
     # Rebuild estimator with same state (simulating restart)
     estimator2 = QuotaEstimator()
@@ -319,13 +330,14 @@ def test_restart_hydration_preserves_behavior() -> None:
     )
 
     scorer2 = QuotaFairScorer(quota_estimator=estimator2)
-    scores2 = scorer2.score_accounts(["acct1", "acct2"])
+    scores2 = await scorer2.score_accounts(["acct1", "acct2"])
 
     assert scores[0].quota_score == scores2[0].quota_score
     assert scores[1].quota_score == scores2[1].quota_score
 
 
-def test_offset_does_not_affect_wrong_window() -> None:
+@pytest.mark.asyncio()
+async def test_offset_does_not_affect_wrong_window() -> None:
     """5h offset should not affect 7d or 30d scores."""
     from go_aggregator.quota.estimation import PersistedWindowSnapshot
 
@@ -356,18 +368,19 @@ def test_offset_does_not_affect_wrong_window() -> None:
     )
 
     scorer = QuotaFairScorer(quota_estimator=estimator)
-    scores = scorer.score_accounts(["acct1", "acct2"])
+    scores = await scorer.score_accounts(["acct1", "acct2"])
 
     # acct1 has 5h offset only, 7d and 30d should be identical
     assert scores[0].quota_score != scores[1].quota_score
 
     # Verify 5h offset is the differentiator by checking without it
     estimator.accounts["acct1"].five_hour_offset = 0
-    scores_equal = scorer.score_accounts(["acct1", "acct2"])
+    scores_equal = await scorer.score_accounts(["acct1", "acct2"])
     assert scores_equal[0].quota_score == scores_equal[1].quota_score
 
 
-def test_request_estimate_affects_projected_score() -> None:
+@pytest.mark.asyncio()
+async def test_request_estimate_affects_projected_score() -> None:
     """Incoming request estimate should be included in scoring."""
     estimator = QuotaEstimator()
     estimator.set_account_limits("acct1", capacity_5h_microdollars=10_000_000)
@@ -378,17 +391,18 @@ def test_request_estimate_affects_projected_score() -> None:
 
     scorer = QuotaFairScorer(quota_estimator=estimator)
     # Without estimate, both should score equally
-    scores_no_est = scorer.score_accounts(["acct1", "acct2"])
+    scores_no_est = await scorer.score_accounts(["acct1", "acct2"])
     assert scores_no_est[0].quota_score == scores_no_est[1].quota_score
 
     # With estimate on acct1, it should score higher (more utilized)
-    scores_with_est = scorer.score_accounts(
+    scores_with_est = await scorer.score_accounts(
         ["acct1", "acct2"], request_estimates={"acct1": 5_000_000}
     )
     assert scores_with_est[0].quota_score > scores_with_est[1].quota_score
 
 
-def test_utilization_above_one_is_visible() -> None:
+@pytest.mark.asyncio()
+async def test_utilization_above_one_is_visible() -> None:
     """Utilization above 1.0 should not be clamped."""
     estimator = QuotaEstimator()
     estimator.set_account_limits("acct1", capacity_5h_microdollars=10_000_000)
@@ -396,13 +410,14 @@ def test_utilization_above_one_is_visible() -> None:
     estimator.record_usage("acct1", 1000, 15_000_000)
 
     scorer = QuotaFairScorer(quota_estimator=estimator)
-    scores = scorer.score_accounts(["acct1"])
+    scores = await scorer.score_accounts(["acct1"])
 
     # 150% utilization should produce score > 1.0
     assert scores[0].quota_score > 1.0
 
 
-def test_utilization_above_one_compare() -> None:
+@pytest.mark.asyncio()
+async def test_utilization_above_one_compare() -> None:
     """150% utilization should score higher than 110% utilization."""
     estimator = QuotaEstimator()
     estimator.set_account_limits("acct1", capacity_5h_microdollars=10_000_000)
@@ -412,13 +427,14 @@ def test_utilization_above_one_compare() -> None:
     estimator.record_usage("acct2", 1000, 11_000_000)
 
     scorer = QuotaFairScorer(quota_estimator=estimator)
-    scores = scorer.score_accounts(["acct1", "acct2"])
+    scores = await scorer.score_accounts(["acct1", "acct2"])
 
     # 150% should score higher than 110%
     assert scores[0].quota_score > scores[1].quota_score
 
 
-def test_active_request_count_increments_and_returns_to_zero() -> None:
+@pytest.mark.asyncio()
+async def test_active_request_count_increments_and_returns_to_zero() -> None:
     """Active request count should increment and decrement correctly."""
     os.environ["TEST_ROUTER_ACCT_KEY"] = "key"
     config = AppConfig.from_dict(
@@ -449,21 +465,21 @@ def test_active_request_count_increments_and_returns_to_zero() -> None:
     assert state.active_request_count == 0
 
     # Increment twice
-    router.increment_active_request_count("acct1")
+    await router.increment_active_request_count("acct1")
     assert state.active_request_count == 1
-    router.increment_active_request_count("acct1")
+    await router.increment_active_request_count("acct1")
     assert state.active_request_count == 2
 
     # Decrement once
-    router.decrement_active_request_count("acct1")
+    await router.decrement_active_request_count("acct1")
     assert state.active_request_count == 1
 
     # Decrement back to zero
-    router.decrement_active_request_count("acct1")
+    await router.decrement_active_request_count("acct1")
     assert state.active_request_count == 0
 
     # Decrement below zero should not go negative
-    router.decrement_active_request_count("acct1")
+    await router.decrement_active_request_count("acct1")
     assert state.active_request_count == 0
 
     del os.environ["TEST_ROUTER_ACCT_KEY"]

@@ -261,13 +261,15 @@ class RequestFinalizer:
             if reservation_released and not data.health_already_applied:
                 # 1a. Remove exactly the reserved amount from in-memory tracking
                 if self._quota_estimator is not None:
-                    self._quota_estimator.remove_reservation(
+                    await self._quota_estimator.remove_reservation(
                         selected.account_name, selected.estimated_microdollars
                     )
 
                 # 1b. Decrement active request count
                 if self._router is not None:
-                    self._router.decrement_active_request_count(selected.account_name)
+                    await self._router.decrement_active_request_count(
+                        selected.account_name
+                    )
 
             # 2. Add final cost to live quota state whenever the request
             #    transitioned. This is independent of the reservation path:
@@ -278,7 +280,7 @@ class RequestFinalizer:
                 total_tokens = data.input_tokens + data.output_tokens
                 # record_usage + persisted snapshot increment must be
                 # atomic so concurrent finalizers cannot interleave.
-                self._quota_estimator.record_usage_and_snapshot(
+                await self._quota_estimator.record_usage_and_snapshot(
                     selected.account_name,
                     tokens=total_tokens,
                     cost_microdollars=cost_microdollars,
