@@ -139,9 +139,10 @@ async def _crash_recovery(db: Database) -> None:
             "AND started_at < datetime('now', '-10 minutes')"
         )
 
-    # Record recovery events (separate transaction)
-    if affected_account_ids:
-        async with db.transaction():
+        # Record recovery events in the same transaction so a crash
+        # between the recovery updates and event recording cannot
+        # leave accounts without their recovery audit trail.
+        if affected_account_ids:
             event_repo = AccountEventRepository(db)
             for account_id in affected_account_ids:
                 await event_repo.record(
@@ -150,6 +151,8 @@ async def _crash_recovery(db: Database) -> None:
                     details='{"action": "marked_interrupted", '
                     '"reason": "startup_recovery"}',
                 )
+
+    if affected_account_ids:
         logger.info(
             "Crash recovery: marked %d stale requests, recorded events for %d accounts",
             len(affected),
@@ -430,8 +433,9 @@ def create_app(
 
     # Dashboard and statistics routes (read-only, no auth by default)
     if config.dashboard.enabled:
-        register_dashboard_routes(app)
-        register_stats_routes(app)
+        dashboard_require_auth = not config.dashboard.public
+        register_dashboard_routes(app, require_auth=dashboard_require_auth)
+        register_stats_routes(app, require_auth=dashboard_require_auth)
 
         @app.get("/static/dashboard.css")
         async def dashboard_css() -> FileResponse:  # pyright: ignore[reportUnusedFunction]

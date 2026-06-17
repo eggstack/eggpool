@@ -28,6 +28,7 @@ class CircuitBreaker:
     _success_count: int = 0
     _last_failure_time: float | None = None
     _last_state_change: float = time.time()
+    _half_open_in_flight: bool = False
 
     @property
     def state(self) -> CircuitState:
@@ -45,6 +46,7 @@ class CircuitBreaker:
             self._last_state_change = time.time()
 
         if self._state == CircuitState.HALF_OPEN:
+            self._half_open_in_flight = False
             self._success_count += 1
             if self._success_count >= self.success_threshold:
                 self._state = CircuitState.CLOSED
@@ -61,6 +63,7 @@ class CircuitBreaker:
             self._last_failure_time = time.time()
             self._last_state_change = time.time()
             self._success_count = 0
+            self._half_open_in_flight = False
         elif self._state == CircuitState.CLOSED:
             self._failure_count += 1
             if self._failure_count >= self.failure_threshold:
@@ -73,11 +76,17 @@ class CircuitBreaker:
         if self._state == CircuitState.CLOSED:
             return True
         if self._state == CircuitState.HALF_OPEN:
-            return True  # Allow one test request
+            # Allow only one test request at a time; subsequent
+            # concurrent requests must wait for the test to complete.
+            if self._half_open_in_flight:
+                return False
+            self._half_open_in_flight = True
+            return True
         # OPEN state
         if self._should_attempt_reset():
             self._state = CircuitState.HALF_OPEN
             self._last_state_change = time.time()
+            self._half_open_in_flight = True
             return True
         return False
 
@@ -88,6 +97,7 @@ class CircuitBreaker:
         self._success_count = 0
         self._last_failure_time = None
         self._last_state_change = time.time()
+        self._half_open_in_flight = False
 
     def _should_attempt_reset(self) -> bool:
         """Check if we should attempt to reset the circuit."""

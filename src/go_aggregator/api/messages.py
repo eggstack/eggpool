@@ -161,7 +161,7 @@ def _render_response(
             _stream_gen(),
             status_code=result.status_code,
             headers=result.headers,
-            media_type="text/event-stream",
+            media_type=None,
         )
 
     # Return raw bytes - do not decode and re-serialize

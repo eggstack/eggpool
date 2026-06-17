@@ -234,7 +234,7 @@ class RequestFinalizer:
                                 ),
                             )
                     except Exception:
-                        logger.debug("Failed to record account event", exc_info=True)
+                        logger.exception("Failed to record account event")
 
             # Commit happens via context manager
 
@@ -242,8 +242,12 @@ class RequestFinalizer:
         if transitioned:
             # 1. Reservation cleanup depends on whether the reservation was
             #    actually released. If the attempt finalizer already released
-            #    the reservation we must not decrement again.
-            if reservation_released:
+            #    the reservation (signalled by health_already_applied, which
+            #    is set when retries have been exhausted) we must not
+            #    decrement again. reservation_released additionally guards
+            #    against double-decrement when the attempt finalizer
+            #    already removed the in-memory tracking.
+            if reservation_released and not data.health_already_applied:
                 # 1a. Remove exactly the reserved amount from in-memory tracking
                 if self._quota_estimator is not None:
                     self._quota_estimator.remove_reservation(

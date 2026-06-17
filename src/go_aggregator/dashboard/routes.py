@@ -141,37 +141,52 @@ async def handle_summary_json(
     return JSONResponse(content=overview)
 
 
-def register_dashboard_routes(app: Any) -> None:
-    """Attach the dashboard HTML routes to a FastAPI app."""
+def register_dashboard_routes(app: Any, require_auth: bool = False) -> None:
+    """Attach the dashboard HTML routes to a FastAPI app.
+
+    When ``require_auth`` is True the routes are gated by the
+    standard ``require_auth`` dependency, enforcing API key
+    authentication on every dashboard page.
+    """
+    from fastapi import Depends
+
+    from go_aggregator.auth import require_auth as _require_auth
+
+    dependencies = [Depends(_require_auth)] if require_auth else None
     app.add_api_route(
         path="/",
         endpoint=handle_overview,
         methods=["GET"],
         response_class=HTMLResponse,
+        dependencies=dependencies,
     )
     app.add_api_route(
         path="/accounts",
         endpoint=handle_accounts,
         methods=["GET"],
         response_class=HTMLResponse,
+        dependencies=dependencies,
     )
     app.add_api_route(
         path="/models",
         endpoint=handle_models,
         methods=["GET"],
         response_class=HTMLResponse,
+        dependencies=dependencies,
     )
     app.add_api_route(
         path="/events",
         endpoint=handle_events,
         methods=["GET"],
         response_class=HTMLResponse,
+        dependencies=dependencies,
     )
     app.add_api_route(
         path="/timeseries",
         endpoint=handle_timeseries,
         methods=["GET"],
         response_class=HTMLResponse,
+        dependencies=dependencies,
     )
 
 

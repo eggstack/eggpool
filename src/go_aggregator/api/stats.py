@@ -114,37 +114,53 @@ async def handle_events(
     return JSONResponse(content={"limit": limit, "type": type_filter, "events": events})
 
 
-def register_stats_routes(app: Any) -> None:
-    """Attach the JSON statistics routes to a FastAPI app."""
+def register_stats_routes(app: Any, require_auth: bool = False) -> None:
+    """Attach the JSON statistics routes to a FastAPI app.
+
+    When ``require_auth`` is True the routes are gated by the
+    standard ``require_auth`` dependency, enforcing API key
+    authentication on every stats endpoint.
+    """
+    from fastapi import Depends
+
+    from go_aggregator.auth import require_auth as _require_auth
+
+    dependencies = [Depends(_require_auth)] if require_auth else None
     app.add_api_route(
         path="/api/stats/summary",
         endpoint=handle_summary,
         methods=["GET"],
+        dependencies=dependencies,
     )
     app.add_api_route(
         path="/api/stats/accounts",
         endpoint=handle_account_stats,
         methods=["GET"],
+        dependencies=dependencies,
     )
     app.add_api_route(
         path="/api/stats/models",
         endpoint=handle_model_stats,
         methods=["GET"],
+        dependencies=dependencies,
     )
     app.add_api_route(
         path="/api/stats/timeseries",
         endpoint=handle_timeseries,
         methods=["GET"],
+        dependencies=dependencies,
     )
     app.add_api_route(
         path="/api/stats/errors",
         endpoint=handle_errors,
         methods=["GET"],
+        dependencies=dependencies,
     )
     app.add_api_route(
         path="/api/events",
         endpoint=handle_events,
         methods=["GET"],
+        dependencies=dependencies,
     )
 
 

@@ -50,6 +50,11 @@ class IncrementalSSEObserver:
     - Usage extraction from recognized events
     - Tracking of bytes_emitted and first_byte_ms
     - Proper SSE event assembly: accumulates data lines across blank lines
+
+    Instances are intended to be driven from a single coroutine
+    (the streaming response generator). The asyncio event loop
+    serializes access within that coroutine, so explicit
+    synchronization is not required.
     """
 
     def __init__(self, protocol: str) -> None:
@@ -102,11 +107,30 @@ class IncrementalSSEObserver:
                 MAX_INCOMPLETE_FRAME_BYTES,
             )
             self._error_count += 1
-            # Drop the oldest data; preserve current event state so a
-            # truncated in-progress event is not silently lost. Reset
-            # the decoder so any UTF-8 sequence split by the boundary
-            # does not leave the decoder in an inconsistent state.
-            self._buffer = self._buffer[-MAX_INCOMPLETE_FRAME_BYTES:]
+            # Flush the decoder first so any incomplete multi-byte
+            # UTF-8 sequence it is holding is appended to the buffer
+            # before we truncate it. Otherwise resetting the decoder
+            # alone would drop the partial bytes silently.
+            try:
+                remainder = self._decoder.decode(b"", True)
+            except UnicodeDecodeError:
+                self._error_count += 1
+                logger.debug("Incremental decoder in error state at buffer truncation")
+                remainder = ""
+            if remainder:
+                self._buffer += remainder.replace("\r\n", "\n").replace("\r", "\n")
+            # Drop the oldest data from the front, advancing past the
+            # next newline so we never split a multi-byte UTF-8
+            # character at the new boundary. Reset the decoder so any
+            # UTF-8 sequence split by the boundary does not leave the
+            # decoder in an inconsistent state.
+            drop_at = self._buffer.find(
+                "\n", len(self._buffer) - MAX_INCOMPLETE_FRAME_BYTES
+            )
+            if drop_at != -1:
+                self._buffer = self._buffer[drop_at + 1 :]
+            else:
+                self._buffer = ""
             self._decoder = codecs.getincrementaldecoder("utf-8")()
 
     def _process_line(self, line: str) -> None:

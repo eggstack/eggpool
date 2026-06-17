@@ -185,8 +185,12 @@ class StatsService:
         if row is None:
             return 0.0
         cost = int(row["cost"])
-        # Normalize: cost per hour
-        hours = max((end - start).total_seconds() / 3600.0, 1.0)
+        # Normalize: cost per hour. An empty window has zero duration
+        # and a degenerate rate; return 0.0 instead of dividing by the
+        # 1-hour floor and reporting inflated utilization.
+        hours = (end - start).total_seconds() / 3600.0
+        if hours <= 0:
+            return 0.0
         return cost / hours
 
     async def get_model_stats(

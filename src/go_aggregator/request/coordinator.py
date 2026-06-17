@@ -421,11 +421,15 @@ class RequestCoordinator:
                     account_name, estimated_microdollars
                 )
 
-        # Transaction committed here. All rows are now durable.
+            # Record the account under the same select lock so a
+            # concurrent caller observing the same context cannot
+            # race on attempted_accounts before this attempt is
+            # fully persisted and committed.
+            context.attempted_accounts.add(account_name)
+            context.client_metadata["account_name"] = account_name
 
-        # After lock release: add to attempted accounts
-        context.attempted_accounts.add(account_name)
-        context.client_metadata["account_name"] = account_name
+        # Transaction and select lock released here. All rows are
+        # now durable and the attempted set is consistent.
 
         return SelectedAttempt(
             proxy_request_id=context.request_id,

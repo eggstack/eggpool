@@ -330,7 +330,7 @@ class CostCalculator:
                 + (cache_read_tokens * (cache_read_rate or 0))
                 + (cache_write_tokens * (cache_write_rate or 0))
             )
-            cost_microdollars = total_numerator // 1_000_000
+            cost_microdollars = round(total_numerator / 1_000_000)
             # If the integer microdollar arithmetic rounded a nonzero
             # billable event down to zero, the result is not actually
             # "derived" (i.e., exact) — it is a lower bound on the

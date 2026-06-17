@@ -29,11 +29,21 @@ async def read_body_limited(request: Request, max_bytes: int) -> bytes:
 
     chunks: list[bytes] = []
     total = 0
-    async for chunk in request.stream():
-        total += len(chunk)
-        if total > max_bytes:
-            raise RequestTooLargeError(
-                f"Request body exceeds limit of {max_bytes} bytes"
-            )
-        chunks.append(chunk)
+    too_large = False
+    try:
+        async for chunk in request.stream():
+            total += len(chunk)
+            if total > max_bytes:
+                too_large = True
+                break
+            chunks.append(chunk)
+    finally:
+        if too_large:
+            # Drain the remaining stream so the upstream connection
+            # is properly released; otherwise HTTP/1.1 keep-alive
+            # connections may stall waiting for the body to finish.
+            async for _chunk in request.stream():
+                pass
+    if too_large:
+        raise RequestTooLargeError(f"Request body exceeds limit of {max_bytes} bytes")
     return b"".join(chunks)

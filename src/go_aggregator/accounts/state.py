@@ -40,13 +40,23 @@ class AccountRuntimeState:
     )
 
     def refresh_transient_state(self, now: float | None = None) -> None:
-        """Clear transient cooldown status when it expires."""
+        """Clear transient cooldown status when it expires.
+
+        Auto-recoverable states ("rate_limited", "cooldown") are
+        cleared either when the configured cooldown has elapsed or
+        when no cooldown is set. "quota_exhausted" is treated as
+        terminal and requires operator action to clear; the cooldown
+        timestamp is still honored when present.
+        """
         if now is None:
             now = time.time()
-        if (
-            self.cooldown_until > 0
-            and now >= self.cooldown_until
-            and self.health_state in ("quota_exhausted", "rate_limited", "cooldown")
+        if self.health_state == "quota_exhausted":
+            if self.cooldown_until > 0 and now >= self.cooldown_until:
+                self.health_state = "healthy"
+                self.cooldown_until = 0.0
+            return
+        if self.health_state in ("rate_limited", "cooldown") and (
+            self.cooldown_until == 0.0 or now >= self.cooldown_until
         ):
             self.health_state = "healthy"
             self.cooldown_until = 0.0

@@ -113,11 +113,23 @@ class RequestRepository:
         model_id: str,
         protocol: str,
         streamed: bool,
-        account_id: int | None = None,
+        account_id: int,
         reserved_microdollars: int = 0,
         started_at: float | None = None,
     ) -> str:
-        """Insert a new pending request, return the id as string."""
+        """Insert a new pending request, return the id as string.
+
+        The id is the SQLite rowid for the new row. It is returned as
+        a string for parity with the rest of the persistence layer
+        (callers store it in client_metadata and pass it to other
+        repositories that accept a string request id).
+
+        ``account_id`` is required: the requests table declares it
+        NOT NULL because every durable request must be associated with
+        a concrete account. Callers that need to track a request
+        before selection must defer the INSERT until after the
+        account has been chosen.
+        """
         if started_at is not None:
             import datetime as _dt
 
@@ -544,35 +556,26 @@ class UsageWindowRepository:
         account_id: int,
         now_iso: str,
     ) -> dict[str, int]:
-        """Return aggregated costs for 5h, 7d, 30d windows."""
-        windows: dict[str, str] = {
-            "5h": (
-                "SELECT COALESCE(SUM(cost_microdollars), 0) FROM requests "
-                "WHERE account_id = ? "
-                "AND started_at >= datetime(?, '-5 hours') "
-                "AND status != 'pending' "
-                "AND cost_microdollars > 0"
-            ),
-            "7d": (
-                "SELECT COALESCE(SUM(cost_microdollars), 0) FROM requests "
-                "WHERE account_id = ? "
-                "AND started_at >= datetime(?, '-7 days') "
-                "AND status != 'pending' "
-                "AND cost_microdollars > 0"
-            ),
-            "30d": (
-                "SELECT COALESCE(SUM(cost_microdollars), 0) FROM requests "
-                "WHERE account_id = ? "
-                "AND started_at >= datetime(?, '-30 days') "
-                "AND status != 'pending' "
-                "AND cost_microdollars > 0"
-            ),
+        """Return aggregated costs for 5h, 7d, 30d windows in a single query."""
+        row = await self._db.fetch_one(
+            "SELECT "
+            "COALESCE(SUM(CASE WHEN started_at >= datetime(?, '-5 hours') "
+            "THEN cost_microdollars ELSE 0 END), 0), "
+            "COALESCE(SUM(CASE WHEN started_at >= datetime(?, '-7 days') "
+            "THEN cost_microdollars ELSE 0 END), 0), "
+            "COALESCE(SUM(CASE WHEN started_at >= datetime(?, '-30 days') "
+            "THEN cost_microdollars ELSE 0 END), 0) "
+            "FROM requests "
+            "WHERE account_id = ? AND status != 'pending'",
+            (now_iso, now_iso, now_iso, account_id),
+        )
+        if row is None:
+            return {"5h": 0, "7d": 0, "30d": 0}
+        return {
+            "5h": int(row[0]),
+            "7d": int(row[1]),
+            "30d": int(row[2]),
         }
-        result: dict[str, int] = {}
-        for key, sql in windows.items():
-            row = await self._db.fetch_one(sql, (account_id, now_iso))
-            result[key] = int(row[0]) if row is not None else 0
-        return result
 
 
 class PriceSnapshotRepository:

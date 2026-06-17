@@ -21,7 +21,14 @@ def verify_api_key(request: Request, api_key: str) -> bool:
     Returns:
         True if the keys match, False otherwise.
     """
-    provided = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+    authorization = request.headers.get("authorization", "").strip()
+    if authorization.lower().startswith("bearer"):
+        # Strip the scheme token (handles "Bearer", "bearer", "Bearer foo",
+        # "bearer\tfoo", etc.) without relying on str.removeprefix
+        # semantics that would treat "Bearerfoo" as a valid scheme.
+        provided = authorization[len("bearer") :].lstrip()
+    else:
+        provided = ""
     if not provided:
         provided = request.headers.get("x-api-key", "")
     return hmac.compare_digest(provided, api_key)

@@ -329,8 +329,11 @@ class QuotaEstimator:
         if family_cost is not None:
             input_rate, output_rate = family_cost
             avg_rate = (input_rate + output_rate) / 2.0
-            # Convert from dollars/1M tokens to microdollars/token
-            cost_per_token = (avg_rate / 1_000_000) * 1_000_000
+            # avg_rate is dollars/1M tokens; numerically equal to
+            # microdollars/token ($/1M tokens = microdollars/token),
+            # so we can use it directly as cost_per_token in
+            # microdollars/token.
+            cost_per_token = avg_rate
             cost = int(estimated_tokens * cost_per_token * self.default_safety_factor)
             return max(cost, 1)
 
@@ -339,13 +342,13 @@ class QuotaEstimator:
         if override is not None:
             input_rate, output_rate = override
             avg_rate = (input_rate + output_rate) / 2.0
-            cost_per_token = (avg_rate / 1_000_000) * 1_000_000
+            cost_per_token = avg_rate
             cost = int(estimated_tokens * cost_per_token * self.default_safety_factor)
             return max(cost, 1)
 
         # Tier 5: Global unknown-request fallback
         avg_rate = (GLOBAL_FALLBACK[0] + GLOBAL_FALLBACK[1]) / 2.0
-        cost_per_token = (avg_rate / 1_000_000) * 1_000_000
+        cost_per_token = avg_rate
         cost = int(estimated_tokens * cost_per_token * self.default_safety_factor)
         return max(cost, 1)
 
@@ -433,13 +436,10 @@ class QuotaEstimator:
             The scorer does not read manual_offset. Use per-window explicit
             offsets (five_hour_offset, weekly_offset, monthly_offset) instead.
         """
-        if account_name not in self.accounts:
-            self.accounts[account_name] = AccountQuota(account_name=account_name)
-        quota = self.accounts[account_name]
-        quota.manual_offset = ManualOffset(
-            tokens=tokens,
-            cost_microdollars=cost_microdollars,
-            reason=reason,
+        raise NotImplementedError(
+            "QuotaEstimator.apply_manual_offset is deprecated; use per-window "
+            "explicit offsets (five_hour_offset, weekly_offset, monthly_offset) "
+            "via configure_account_policy instead."
         )
 
     def set_model_override(

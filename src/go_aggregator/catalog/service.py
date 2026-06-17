@@ -212,6 +212,7 @@ class CatalogService:
                 )
         except Exception:
             logger.exception("Failed to load cached models")
+            raise
 
     async def _persist_catalog(self) -> None:
         """Persist the in-memory catalog to the database."""

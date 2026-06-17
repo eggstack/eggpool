@@ -143,7 +143,10 @@ class Router:
             The coordinator now uses QuotaEstimator.add_reservation directly.
             This method is retained for backward compatibility only.
         """
-        logger.debug("create_reservation called (deprecated path) for %s", account_name)
+        raise NotImplementedError(
+            "Router.create_reservation is deprecated; the coordinator now uses "
+            "QuotaEstimator.add_reservation directly."
+        )
 
     def release_reservation(
         self, reservation_id: str, reason: str = "completed"
@@ -154,8 +157,9 @@ class Router:
             The coordinator now uses QuotaEstimator.remove_reservation directly.
             This method is retained for backward compatibility only.
         """
-        logger.debug(
-            "release_reservation called (deprecated path) for %s", reservation_id
+        raise NotImplementedError(
+            "Router.release_reservation is deprecated; the coordinator now uses "
+            "QuotaEstimator.remove_reservation directly."
         )
 
     def record_usage(
@@ -174,7 +178,10 @@ class Router:
             The coordinator and background tasks now handle reservation
             reconciliation via SQLite directly.
         """
-        return 0
+        raise NotImplementedError(
+            "Router.reconcile_reservations is deprecated; reconciliation is "
+            "now handled by the coordinator and background tasks via SQLite."
+        )
 
     def get_account_usage(self, account_name: str) -> tuple[int, int]:
         """Get account usage (tokens, cost)."""
