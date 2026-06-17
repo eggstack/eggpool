@@ -32,7 +32,7 @@ async def test_unresolved_model_does_not_block_resolved() -> None:
     cache = ModelCatalogCache()
     resolver = ModelProtocolResolver()
 
-    # Resolved model 1
+    # One account refresh containing both resolved and unresolved models.
     cache.update_from_account(
         "test-acct",
         [
@@ -44,13 +44,6 @@ async def test_unresolved_model_does_not_block_resolved() -> None:
                 "capabilities": {},
                 "source_metadata": {},
             },
-        ],
-    )
-
-    # Unresolved model (no valid protocol)
-    cache.update_from_account(
-        "test-acct",
-        [
             {
                 "model_id": "unknown-weird-model",
                 "display_name": "Weird Model",
@@ -59,13 +52,6 @@ async def test_unresolved_model_does_not_block_resolved() -> None:
                 "capabilities": {},
                 "source_metadata": {},
             },
-        ],
-    )
-
-    # Resolved model 2
-    cache.update_from_account(
-        "test-acct",
-        [
             {
                 "model_id": "claude-3-5-sonnet-20241022",
                 "display_name": "Claude 3.5 Sonnet",

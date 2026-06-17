@@ -5,10 +5,13 @@ from __future__ import annotations
 import hmac
 import logging
 import os
+import re
 
 from fastapi import HTTPException, Request
 
 logger = logging.getLogger(__name__)
+
+_BEARER_RE = re.compile(r"^bearer[ \t]+(.+)$", re.IGNORECASE)
 
 
 def verify_api_key(request: Request, api_key: str) -> bool:
@@ -22,13 +25,8 @@ def verify_api_key(request: Request, api_key: str) -> bool:
         True if the keys match, False otherwise.
     """
     authorization = request.headers.get("authorization", "").strip()
-    if authorization.lower().startswith("bearer"):
-        # Strip the scheme token (handles "Bearer", "bearer", "Bearer foo",
-        # "bearer\tfoo", etc.) without relying on str.removeprefix
-        # semantics that would treat "Bearerfoo" as a valid scheme.
-        provided = authorization[len("bearer") :].lstrip()
-    else:
-        provided = ""
+    match = _BEARER_RE.match(authorization)
+    provided = match.group(1).strip() if match is not None else ""
     if not provided:
         provided = request.headers.get("x-api-key", "")
     return hmac.compare_digest(provided, api_key)

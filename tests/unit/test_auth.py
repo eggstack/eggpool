@@ -25,6 +25,11 @@ def test_verify_api_key_valid(mock_request: MagicMock) -> None:
     assert verify_api_key(mock_request, "secret123") is True
 
 
+def test_verify_api_key_valid_with_tab_after_bearer(mock_request: MagicMock) -> None:
+    mock_request.headers = {"authorization": "Bearer\tsecret123"}
+    assert verify_api_key(mock_request, "secret123") is True
+
+
 def test_verify_api_key_x_api_key_header(mock_request: MagicMock) -> None:
     mock_request.headers = {"x-api-key": "secret123"}
     assert verify_api_key(mock_request, "secret123") is True
@@ -32,6 +37,13 @@ def test_verify_api_key_x_api_key_header(mock_request: MagicMock) -> None:
 
 def test_verify_api_key_invalid(mock_request: MagicMock) -> None:
     mock_request.headers = {"authorization": "Bearer wrongkey"}
+    assert verify_api_key(mock_request, "secret123") is False
+
+
+def test_verify_api_key_rejects_bearer_without_separator(
+    mock_request: MagicMock,
+) -> None:
+    mock_request.headers = {"authorization": "Bearersecret123"}
     assert verify_api_key(mock_request, "secret123") is False
 
 

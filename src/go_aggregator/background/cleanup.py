@@ -15,21 +15,50 @@ logger = logging.getLogger(__name__)
 async def cleanup_stale_reservations(
     db: Database,
     max_age_seconds: float = 600.0,
+    quota_estimator: QuotaEstimator | None = None,
+    router: Any | None = None,
 ) -> int:
-    """Mark stale reservations as interrupted and release them.
+    """Release stale reservations whose request is no longer pending.
 
     Returns the number of reservations cleaned up.
     """
     async with db.transaction():
-        count = await db.execute_write(
+        rows = await db.execute_returning(
             """
             UPDATE reservations
             SET status = 'released', released_at = datetime('now')
             WHERE status = 'active'
               AND created_at < datetime('now', ? || ' seconds')
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM requests
+                  WHERE requests.id = reservations.request_id
+                    AND requests.status = 'pending'
+              )
+            RETURNING id, account_id, reserved_microdollars,
+                (SELECT name FROM accounts WHERE id = reservations.account_id)
+                AS account_name
             """,
             (f"-{int(max_age_seconds)}",),
         )
+        transitioned_rows = [dict(row) for row in rows]
+
+    count = len(transitioned_rows)
+
+    if quota_estimator is not None and transitioned_rows:
+        for row in transitioned_rows:
+            estimated_microdollars = row.get("reserved_microdollars") or 0
+            if estimated_microdollars <= 0:
+                continue
+            account_name = row.get("account_name")
+            if account_name is None:
+                continue
+            await quota_estimator.remove_reservation(
+                account_name, estimated_microdollars
+            )
+            if router is not None:
+                await router.decrement_active_request_count(account_name)
+
     if count > 0:
         logger.info("Cleaned up %d stale reservations", count)
     return count

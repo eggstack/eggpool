@@ -578,6 +578,52 @@ async def test_stale_reservation_cleanup_on_startup() -> None:
         await db.disconnect()
 
 
+@pytest.mark.asyncio
+async def test_stale_reservation_cleanup_skips_pending_requests() -> None:
+    """Stale cleanup must not release reservations for active pending requests."""
+    os.environ["OPENCODE_TEST_KEY"] = "test-key-123"
+    os.environ["GO_AGG_TEST_KEY"] = "test-key-123"
+    try:
+        db = Database(path=":memory:")
+        await db.connect()
+
+        runner = MigrationRunner(db)
+        await runner.run()
+
+        async with db.transaction():
+            await db.execute_write(
+                "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+                "VALUES (?, ?, 1, 1.0)",
+                ("test-acct", "OPENCODE_TEST_KEY"),
+            )
+            await db.execute_write(
+                "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+                ("gpt-4", "openai"),
+            )
+            await db.execute_write(
+                "INSERT INTO requests (account_id, model_id, status) "
+                "VALUES (1, 'gpt-4', 'pending')"
+            )
+            await db.execute_write(
+                "INSERT INTO reservations "
+                "(request_id, account_id, model_id, reserved_microdollars, status, "
+                " created_at) "
+                "VALUES (1, 1, 'gpt-4', 1000000, 'active', "
+                "datetime('now', '-1200 seconds'))"
+            )
+
+        cleaned = await cleanup_stale_reservations(db)
+        assert cleaned == 0
+
+        row = await db.fetch_one("SELECT status FROM reservations")
+        assert row is not None
+        assert row["status"] == "active"
+    finally:
+        os.environ.pop("OPENCODE_TEST_KEY", None)
+        os.environ.pop("GO_AGG_TEST_KEY", None)
+        await db.disconnect()
+
+
 # ── 7. Multiple accounts routing with weighted distribution ───────────────────
 
 

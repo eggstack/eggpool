@@ -73,9 +73,12 @@ def test_cache_multi_account_support() -> None:
 
 def test_cache_exposure_union() -> None:
     cache = ModelCatalogCache()
-    cache.update_from_account("acct1", [{"model_id": "gpt-4", "protocol": "openai"}])
     cache.update_from_account(
-        "acct1", [{"model_id": "claude-3", "protocol": "anthropic"}]
+        "acct1",
+        [
+            {"model_id": "gpt-4", "protocol": "openai"},
+            {"model_id": "claude-3", "protocol": "anthropic"},
+        ],
     )
 
     # Union mode: expose if any eligible account supports it
@@ -85,11 +88,14 @@ def test_cache_exposure_union() -> None:
 
 def test_cache_exposure_intersection() -> None:
     cache = ModelCatalogCache()
-    cache.update_from_account("acct1", [{"model_id": "gpt-4", "protocol": "openai"}])
-    cache.update_from_account("acct2", [{"model_id": "gpt-4", "protocol": "openai"}])
     cache.update_from_account(
-        "acct1", [{"model_id": "claude-3", "protocol": "anthropic"}]
+        "acct1",
+        [
+            {"model_id": "gpt-4", "protocol": "openai"},
+            {"model_id": "claude-3", "protocol": "anthropic"},
+        ],
     )
+    cache.update_from_account("acct2", [{"model_id": "gpt-4", "protocol": "openai"}])
 
     # Intersection: only models supported by all eligible accounts
     models = cache.get_models_for_exposure("intersection", {"acct1", "acct2"})
@@ -110,6 +116,17 @@ def test_cache_mark_unavailable() -> None:
     cache.update_from_account("acct1", [{"model_id": "gpt-4", "protocol": "openai"}])
     cache.mark_model_unavailable("acct1", "gpt-4")
     assert cache.get_supporting_accounts("gpt-4") == set()
+
+
+def test_cache_refresh_removes_withdrawn_account_support() -> None:
+    cache = ModelCatalogCache()
+    cache.update_from_account("acct1", [{"model_id": "gpt-4", "protocol": "openai"}])
+    cache.update_from_account("acct2", [{"model_id": "gpt-4", "protocol": "openai"}])
+
+    cache.update_from_account("acct1", [])
+
+    assert cache.get_supporting_accounts("gpt-4") == {"acct2"}
+    assert cache.get_models_for_exposure("union", {"acct1"}) == []
 
 
 def test_cache_staleness() -> None:

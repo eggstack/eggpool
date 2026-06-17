@@ -26,6 +26,11 @@ class ModelCatalogCache:
     ) -> None:
         """Update cache with models from a specific account."""
         now = time.time()
+        # A refresh response is authoritative for this account. Clear
+        # prior support first so models withdrawn upstream stop being
+        # exposed or routed for this account while other accounts'
+        # support remains intact.
+        self.mark_account_models_unavailable(account_name)
         for model in models:
             model_id = model["model_id"]
             if model_id not in self._models:
