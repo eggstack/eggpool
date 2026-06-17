@@ -107,7 +107,8 @@ def parse_microdollars_per_million(value: object) -> int | None:
 
     unit = _price_unit(value)
     if unit == "token":
-        number *= Decimal(1_000_000) * Decimal(1_000_000)
+        # Dollars per token → microdollars per million tokens = × 10^12
+        number *= Decimal(1_000_000) * Decimal(1_000_000)  # noqa: SIM114
     elif unit in ("1k", "million"):
         number *= Decimal(1_000_000)
 

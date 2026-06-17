@@ -210,6 +210,16 @@ class RequestCoordinator:
                     last_error, (_RetryableUpstreamError, _NonRetryableUpstreamError)
                 ):
                     last_error = err
+                # If a request row was created, finalize it as error so it
+                # does not remain pending indefinitely.
+                db_request_id = context.client_metadata.get("db_request_id")
+                if db_request_id is not None and self._request_repo is not None:
+                    async with self._db.transaction():
+                        await self._request_repo.finalize_if_pending(
+                            request_id=db_request_id,
+                            status="error",
+                            error_class=type(err).__name__,
+                        )
                 break
             except AuthenticationError as err:
                 last_error = err
@@ -488,7 +498,7 @@ class RequestCoordinator:
                 upstream_path,
                 headers=headers,
                 content=context.original_body,
-                timeout=300.0,
+                timeout=self._client.timeout.read,
             )
         except httpx.ConnectError as err:
             raise _RetryableUpstreamError(

@@ -185,8 +185,8 @@ class AppConfig(BaseModel):
         try:
             with open(path, "rb") as f:
                 raw = tomllib.load(f)
-        except FileNotFoundError:
-            raise ConfigError(f"Config file not found: {path}") from None
+        except FileNotFoundError as exc:
+            raise ConfigError(f"Config file not found: {path}") from exc
         except tomllib.TOMLDecodeError as exc:
             raise ConfigError(f"Invalid TOML in {path}: {exc}") from exc
 

@@ -47,12 +47,12 @@ def _resolve(request: Request, period: str | None) -> TimeRange:
 
 async def handle_overview(request: Request, period: str | None = "24h") -> Response:
     """Render the overview page."""
-    _get_dashboard_config(request)
+    dashboard_config = _get_dashboard_config(request)
     time_range = _resolve(request, period)
     stats = request.app.state.stats
     overview = await stats.get_dashboard_overview(time_range)
     accounts = await stats.get_account_stats(time_range)
-    refresh_s = _get_dashboard_config(request).refresh_interval_s
+    refresh_s = dashboard_config.refresh_interval_s
     html = render_overview(
         overview=overview,
         accounts=accounts,

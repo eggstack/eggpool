@@ -189,8 +189,8 @@ class AccountQuota:
         if self.capacity_7d_microdollars is None:
             return 1.0
 
-        _, daily_cost = self.daily_window.get_usage()
-        used_ratio = daily_cost / self.capacity_7d_microdollars
+        cost_7d = self.get_persisted_cost_7d()
+        used_ratio = cost_7d / self.capacity_7d_microdollars
         return max(0.0, 1.0 - used_ratio)
 
     def get_persisted_cost_5h(self) -> int:
@@ -522,7 +522,7 @@ class QuotaEstimator:
             self._usage_window_repo._db  # pyright: ignore[reportPrivateUsage]
         )
         enabled = await acct_repo.list_enabled()
-        now_iso = time.strftime("%Y-%m-%d %H:%M:%S")
+        now_iso = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
         for acct in enabled:
             name = acct["name"]
             if name not in self.accounts:
