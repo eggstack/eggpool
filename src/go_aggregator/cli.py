@@ -146,7 +146,20 @@ def models_refresh(ctx: click.Context) -> None:
             await account_repo.sync_from_config(account_config_rows(config), db)
 
             registry = AccountRegistry(config)
-            client = httpx.AsyncClient(base_url=config.upstream.base_url)
+            client = httpx.AsyncClient(
+                base_url=config.upstream.base_url,
+                timeout=httpx.Timeout(
+                    connect=config.upstream.connect_timeout_s,
+                    read=config.upstream.read_timeout_s,
+                    write=config.upstream.write_timeout_s,
+                    pool=config.upstream.connect_timeout_s,
+                ),
+                limits=httpx.Limits(
+                    max_connections=config.upstream.max_connections,
+                    max_keepalive_connections=config.upstream.max_keepalive,
+                    keepalive_expiry=config.upstream.keepalive_timeout_s,
+                ),
+            )
             try:
                 catalog = CatalogService(config, registry, db, client)
                 await catalog.refresh()

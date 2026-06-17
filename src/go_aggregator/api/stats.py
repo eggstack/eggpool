@@ -97,6 +97,7 @@ async def handle_errors(
     request: Request, period: str | None = "24h", limit: int = 20
 ) -> Response:
     """GET /api/stats/errors."""
+    limit = max(1, min(limit, 100))
     time_range = _resolve(request, period)
     stats = request.app.state.stats
     errors = await stats.get_error_breakdown(time_range, limit=limit)
@@ -109,6 +110,7 @@ async def handle_events(
     type_filter: str | None = None,
 ) -> Response:
     """GET /api/events."""
+    limit = max(1, min(limit, 100))
     stats = request.app.state.stats
     events = await stats.get_recent_events(limit=limit, event_type=type_filter or None)
     return JSONResponse(content={"limit": limit, "type": type_filter, "events": events})

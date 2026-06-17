@@ -249,7 +249,37 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     router = Router(registry, catalog, health_manager=health_manager)
     app.state.router = router
 
-    # 16. Load persisted usage windows and set account weights/offsets
+    # 16. Wire routing config into scorer and estimator
+    five_hour_capacity = float(config.limits.five_hour_microdollars)
+    router._scorer.tiebreaker_range = config.routing.near_tie_epsilon  # pyright: ignore[reportPrivateUsage]
+    if not config.routing.randomize_near_ties:
+        router._scorer.tiebreaker_range = 0.0  # pyright: ignore[reportPrivateUsage]
+    if five_hour_capacity > 0:
+        router._scorer.inflight_penalty_per_request = (  # pyright: ignore[reportPrivateUsage]
+            config.routing.inflight_penalty / five_hour_capacity
+        )
+        router._scorer.health_penalty_value = (  # pyright: ignore[reportPrivateUsage]
+            config.routing.health_penalty / five_hour_capacity
+        )
+    router._quota_estimator.default_unknown_reservation_microdollars = (  # pyright: ignore[reportPrivateUsage]
+        config.routing.unknown_request_reservation_microdollars
+    )
+
+    # 17b. Load configured model price overrides into estimator
+    for model_id, override in config.model_overrides.items():
+        has_both = (
+            override.input_price_per_1k is not None
+            and override.output_price_per_1k is not None
+        )
+        if has_both:
+            # Convert dollars/1K → dollars/1M (estimator Tier 4 units)
+            router._quota_estimator.set_model_override(  # pyright: ignore[reportPrivateUsage]
+                model_id,
+                override.input_price_per_1k * 1000,  # pyright: ignore[reportOptionalOperand]
+                override.output_price_per_1k * 1000,  # pyright: ignore[reportOptionalOperand]
+            )
+
+    # 18. Load persisted usage windows and set account weights/offsets
     router._quota_estimator.set_usage_window_repo(  # pyright: ignore[reportPrivateUsage]
         usage_window_repo
     )
@@ -309,7 +339,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     )
     app.state.coordinator = coordinator
 
-    # 19. Background task supervisor
+    # 19. Reconcile expired reservations at startup so dashboard counts
+    # and in-memory quota state are accurate before readiness reports OK.
+    await reconcile_expired_reservations(
+        db,
+        quota_estimator=router._quota_estimator,  # pyright: ignore[reportPrivateUsage]
+        router=router,
+    )
+
+    # 20. Background task supervisor
     supervisor = TaskSupervisor()
     app.state.supervisor = supervisor
 
@@ -353,10 +391,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     supervisor.register("usage_window_refresh", _refresh_usage_windows)
 
-    # 20. Start background tasks
+    # 21. Start background tasks
     await supervisor.start_all()
 
-    # 21. Startup complete
+    # 22. Startup complete
     logger.info(
         "Application started (%d accounts, %d models). "
         "Note: configuration changes require service restart.",

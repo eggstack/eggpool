@@ -500,7 +500,6 @@ class RequestCoordinator:
                 upstream_path,
                 headers=headers,
                 content=context.original_body,
-                timeout=self._client.timeout.read,
             )
         except httpx.ConnectError as err:
             raise _RetryableUpstreamError(

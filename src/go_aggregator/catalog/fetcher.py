@@ -24,7 +24,7 @@ async def fetch_models_for_account(
         "Accept": "application/json",
     }
     try:
-        response = await client.get("/models", headers=headers, timeout=30.0)
+        response = await client.get("/models", headers=headers)
         response.raise_for_status()
         return response.json()
     except httpx.HTTPStatusError as exc:
