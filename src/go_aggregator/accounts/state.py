@@ -54,12 +54,14 @@ class AccountRuntimeState:
             if self.cooldown_until > 0 and now >= self.cooldown_until:
                 self.health_state = "healthy"
                 self.cooldown_until = 0.0
+                self.consecutive_failures = 0
             return
         if self.health_state in ("rate_limited", "cooldown") and (
             self.cooldown_until == 0.0 or now >= self.cooldown_until
         ):
             self.health_state = "healthy"
             self.cooldown_until = 0.0
+            self.consecutive_failures = 0
 
     def is_eligible(self) -> bool:
         """Check if account is eligible for routing."""

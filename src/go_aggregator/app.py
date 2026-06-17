@@ -347,7 +347,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             try:
                 await router._quota_estimator.load_persisted_windows()  # pyright: ignore[reportPrivateUsage]
             except Exception:
-                logger.debug("Failed to refresh usage windows")
+                logger.exception("Failed to refresh usage windows")
 
     supervisor.register("usage_window_refresh", _refresh_usage_windows)
 

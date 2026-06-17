@@ -818,7 +818,10 @@ class RequestCoordinator:
                 )
                 raise
             finally:
-                await upstream_response.aclose()
+                try:
+                    await upstream_response.aclose()
+                except Exception:
+                    logger.debug("Error closing upstream response", exc_info=True)
 
         return _stream()
 

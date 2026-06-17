@@ -127,7 +127,7 @@ async def reconcile_expired_reservations(
             transitioned_rows = [dict(row) for row in rows]
     except Exception:
         logger.exception("Failed to reconcile expired reservations")
-        return 0
+        raise
 
     count = len(transitioned_rows)
 
