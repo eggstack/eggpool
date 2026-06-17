@@ -214,7 +214,7 @@ class TestNonStreaming:
                     200,
                     json={"data": [{"id": "gpt-4"}]},
                 ),
-                ("GET", "/v1/stats"): lambda r: httpx.Response(200, json={}),
+                ("GET", "/api/stats/summary"): lambda r: httpx.Response(200, json={}),
                 (
                     "POST",
                     "/v1/chat/completions",
@@ -430,16 +430,16 @@ class TestCheckHealthAndStats:
     def test_stats_finds_first_200(self) -> None:
         transport = _transport_for(
             {
-                ("GET", "/v1/stats"): lambda r: httpx.Response(200, json={}),
+                ("GET", "/api/stats/summary"): lambda r: httpx.Response(200, json={}),
             }
         )
         client = httpx.Client(transport=transport, timeout=5.0)
         try:
-            result = smoke_test._check_stats(client, "http://stub")
+            result = smoke_test._check_stats(client, "http://stub", "k")
         finally:
             client.close()
         assert result.ok
-        assert "endpoint=/v1/stats" in result.detail
+        assert "endpoint=/api/stats/summary" in result.detail
 
     def test_stats_fails_when_no_endpoint_returns_200(self) -> None:
         def _all_500(request: httpx.Request) -> httpx.Response:
@@ -447,14 +447,13 @@ class TestCheckHealthAndStats:
 
         transport = _transport_for(
             {
-                ("GET", "/v1/stats"): _all_500,
-                ("GET", "/v1/stats/accounts"): _all_500,
-                ("GET", "/v1/stats/usage"): _all_500,
+                ("GET", "/api/stats/summary"): _all_500,
+                ("GET", "/api/stats/accounts"): _all_500,
             }
         )
         client = httpx.Client(transport=transport, timeout=5.0)
         try:
-            result = smoke_test._check_stats(client, "http://stub")
+            result = smoke_test._check_stats(client, "http://stub", "k")
         finally:
             client.close()
         assert not result.ok
@@ -530,7 +529,9 @@ class TestMainSkipLive:
         monkeypatch.setattr(
             smoke_test,
             "_check_stats",
-            lambda c, b: smoke_test.CheckResult("stats", True, "endpoint=/v1/stats"),
+            lambda c, b, k: smoke_test.CheckResult(
+                "stats", True, "endpoint=/api/stats/summary"
+            ),
         )
         rc = smoke_test.main()
         assert rc == 0
@@ -848,7 +849,9 @@ class TestContentPrivacy:
         monkeypatch.setattr(
             smoke_test,
             "_check_stats",
-            lambda c, b: smoke_test.CheckResult("stats", True, "endpoint=/v1/stats"),
+            lambda c, b, k: smoke_test.CheckResult(
+                "stats", True, "endpoint=/api/stats/summary"
+            ),
         )
         monkeypatch.setattr(
             smoke_test,

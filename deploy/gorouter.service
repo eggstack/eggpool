@@ -22,7 +22,8 @@ StartLimitBurst=5
 TimeoutStopSec=30
 KillSignal=SIGTERM
 
-# Security hardening
+# Security hardening (note: MemoryDenyWriteExecute removed; PyTorch-style
+# runtimes in newer Python builds may legitimately need W^X relaxations).
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
@@ -35,7 +36,6 @@ RestrictSUIDSGID=yes
 RestrictNamespaces=yes
 RestrictRealtime=yes
 LockPersonality=yes
-MemoryDenyWriteExecute=yes
 
 # Network
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX

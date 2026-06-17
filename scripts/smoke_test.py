@@ -138,10 +138,14 @@ def _check_models(client: httpx.Client, base: str, api_key: str) -> CheckResult:
     return CheckResult("models", bool(data), f"count={len(data)}")
 
 
-def _check_stats(client: httpx.Client, base: str) -> CheckResult:
-    for path in ("/v1/stats", "/v1/stats/accounts", "/v1/stats/usage"):
+def _check_stats(client: httpx.Client, base: str, api_key: str) -> CheckResult:
+    for path in ("/api/stats/summary", "/api/stats/accounts"):
         try:
-            resp = client.get(f"{base}{path}", timeout=DEFAULT_TIMEOUT)
+            resp = client.get(
+                f"{base}{path}",
+                headers={"authorization": f"Bearer {api_key}"},
+                timeout=DEFAULT_TIMEOUT,
+            )
         except httpx.HTTPError:
             continue
         if resp.status_code == 200:
@@ -479,7 +483,7 @@ def main() -> int:
     with httpx.Client(timeout=DEFAULT_TIMEOUT) as client:
         results.extend(_check_health(client, base))
         results.append(_check_models(client, base, api_key))
-        results.append(_check_stats(client, base))
+        results.append(_check_stats(client, base, api_key))
 
         if os.environ.get("GOROUTER_SKIP_LIVE") != "1":
             results.append(_openai(client, base, api_key, openai_model))
