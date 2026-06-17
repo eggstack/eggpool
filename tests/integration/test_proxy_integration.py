@@ -717,8 +717,8 @@ async def test_all_accounts_unavailable(
     )
 
     # Model check runs before account selection; no eligible accounts means
-    # the model appears unavailable from the proxy's perspective.
-    assert response.status_code == 404
+    # the service cannot fulfill the request, so the proxy reports 503.
+    assert response.status_code == 503
 
 
 # ── 13. Invalid JSON body ────────────────────────────────────────────────────
@@ -801,7 +801,9 @@ async def test_model_not_available(
         headers=auth_headers,
     )
 
-    assert response.status_code == 404
+    # No accounts are eligible for an unknown model, so the proxy returns 503
+    # (Service Unavailable) rather than the misleading 404.
+    assert response.status_code == 503
 
 
 # ── 15b. Unresolved protocol is a controlled server error ────────────────────

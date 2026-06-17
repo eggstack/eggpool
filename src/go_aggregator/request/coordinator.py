@@ -1176,7 +1176,7 @@ class RequestCoordinator:
         if isinstance(err, QuotaExhaustedError):
             return 503
         if isinstance(err, ModelUnavailableError):
-            return 404
+            return 503
         return 502
 
 

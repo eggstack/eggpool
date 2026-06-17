@@ -78,15 +78,15 @@ class TestAccountQuota:
         capacity = quota.get_remaining_capacity()
         assert capacity == pytest.approx(0.5)
 
-    def test_manual_offset(self) -> None:
-        """Test manual offset application."""
+    def test_manual_offset_is_deprecated(self) -> None:
+        """Deprecated ``manual_offset`` must not affect reported usage."""
         quota = AccountQuota(account_name="test-account")
         quota.record_usage(100, 500)
 
         quota.manual_offset = ManualOffset(tokens=50, cost_microdollars=250)
         tokens, cost = quota.get_effective_usage()
-        assert tokens == 150
-        assert cost == 750
+        assert tokens == 100
+        assert cost == 500
 
 
 class TestQuotaEstimator:

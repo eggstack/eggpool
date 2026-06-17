@@ -108,8 +108,11 @@ class AttemptFinalizer:
                 )
             )
 
-            # 2. Release reservation if still active
-            if reservation_id:
+            # 2. Release reservation only if the attempt actually transitioned
+            #    to a terminal state. When the attempt was already completed
+            #    (e.g. by the request finalizer racing this call), releasing
+            #    the reservation here would cause a double-release.
+            if transitioned and reservation_id:
                 reservation_released = bool(
                     await self._db.execute_write(
                         "UPDATE reservations SET status = 'released', "

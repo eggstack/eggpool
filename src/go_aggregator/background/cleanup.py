@@ -121,7 +121,9 @@ async def reconcile_expired_reservations(
                       WHERE requests.id = reservations.request_id
                         AND requests.status = 'pending'
                   )
-                RETURNING id, account_id, reserved_microdollars
+                RETURNING id, account_id, reserved_microdollars,
+                    (SELECT name FROM accounts WHERE id = reservations.account_id)
+                    AS account_name
                 """,
             )
             transitioned_rows = [dict(row) for row in rows]
@@ -140,25 +142,15 @@ async def reconcile_expired_reservations(
             estimated_microdollars = row.get("reserved_microdollars") or 0
             if estimated_microdollars <= 0:
                 continue
-            # Resolve account name from account_id
-            try:
-                acct_row = await db.fetch_one(
-                    "SELECT name FROM accounts WHERE id = ?", (account_id,)
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to resolve account name for expired reservation %s",
-                    row.get("id"),
-                )
+            account_name = row.get("account_name")
+            if account_name is None:
                 continue
-            if acct_row is not None:
-                account_name = acct_row["name"]
-                await quota_estimator.remove_reservation(
-                    account_name, estimated_microdollars
-                )
-                # Also decrement active request count if router is available
-                if router is not None:
-                    await router.decrement_active_request_count(account_name)
+            await quota_estimator.remove_reservation(
+                account_name, estimated_microdollars
+            )
+            # Also decrement active request count if router is available
+            if router is not None:
+                await router.decrement_active_request_count(account_name)
 
     if count > 0:
         logger.info("Reconciled %d expired reservations", count)

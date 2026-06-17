@@ -1202,8 +1202,9 @@ class TestProtocolFailClosed:
             )
             resp = await coordinator.execute(ctx)
 
-        # Should return 404 (model not found)
-        assert resp.status_code == 404
+        # Should return 503 (no accounts available) - not 404, which is
+        # reserved for genuine model-not-found semantics.
+        assert resp.status_code == 503
 
         # Verify no request rows were created
         req_rows = await two_account_db.fetch_all(

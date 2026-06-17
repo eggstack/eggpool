@@ -144,13 +144,15 @@ class AccountQuota:
         self.hourly_window.add_observation(timestamp, tokens, cost_microdollars)
 
     def get_effective_usage(self) -> tuple[int, int]:
-        """Get effective usage including manual offsets."""
+        """Get effective usage from the daily window.
+
+        ``manual_offset`` is deprecated and is intentionally not
+        included here so that the reported usage matches what the
+        routing scorer observes.
+        """
         daily_tokens, daily_cost = self.daily_window.get_usage()
         _hourly_tokens, _hourly_cost = self.hourly_window.get_usage()
-        return (
-            daily_tokens + self.manual_offset.tokens,
-            daily_cost + self.manual_offset.cost_microdollars,
-        )
+        return daily_tokens, daily_cost
 
     def is_within_limits(self) -> bool:
         """Check if account is within quota limits.
