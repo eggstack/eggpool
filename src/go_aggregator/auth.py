@@ -60,7 +60,7 @@ async def require_auth(request: Request) -> None:
         # Startup check should have caught this, but if env var
         # disappears at runtime, fail closed
         raise HTTPException(
-            status_code=503,
+            status_code=401,
             detail="Authentication unavailable: API key not configured",
         )
 

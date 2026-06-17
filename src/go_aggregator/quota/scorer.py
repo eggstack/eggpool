@@ -74,7 +74,7 @@ class QuotaFairScorer:
         scores: list[RoutingScore] = []
 
         for name in account_names:
-            weight = 1.0
+            weight = 0.0
             is_eligible = True
             p5 = 0.0
             pw = 0.0
@@ -153,7 +153,7 @@ class QuotaFairScorer:
         """Calculate utilization ratio for a single window."""
         if max_cost is None or max_cost <= 0:
             return 0.0
-        total = used_cost + offset_cost
+        total = max(0, used_cost + offset_cost)
         return total / max_cost
 
     def select_account(self, scores: list[RoutingScore]) -> RoutingScore | None:

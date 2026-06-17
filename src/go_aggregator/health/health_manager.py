@@ -89,9 +89,9 @@ class AccountHealth:
             current_time = time.time()
 
         disabled = (
-            self.disabled_until is not None and current_time < self.disabled_until
+            self.disabled_until is not None and current_time <= self.disabled_until
         )
-        cooled = self.cooldown_until > 0 and current_time < self.cooldown_until
+        cooled = self.cooldown_until > 0 and current_time <= self.cooldown_until
         return disabled or cooled
 
     def is_model_disabled(
@@ -203,7 +203,7 @@ class HealthManager:
         if (
             health.cooldown_until > 0
             and now >= health.cooldown_until
-            and health.health_state in ("quota_exhausted", "rate_limited")
+            and health.health_state in ("quota_exhausted", "rate_limited", "cooldown")
         ):
             health.health_state = "healthy"
             health.is_healthy = True
@@ -213,12 +213,6 @@ class HealthManager:
         """Check if an account is healthy."""
         health = self.get_account_health(account_name)
         self._refresh_transient_state(health)
-        if (
-            not health.is_healthy
-            and health.cooldown_until > 0
-            and not health.is_disabled()
-        ):
-            health.is_healthy = True
         return health.is_healthy and not health.is_disabled()
 
     def is_model_healthy(self, account_name: str, model_id: str) -> bool:

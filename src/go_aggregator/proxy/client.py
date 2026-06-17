@@ -95,24 +95,3 @@ def filter_response_headers(
             continue
         filtered[key] = value
     return filtered
-
-
-async def forward_to_upstream(
-    client: httpx.AsyncClient,
-    method: str,
-    path: str,
-    upstream_api_key: str,
-    request_headers: dict[str, str],
-    body: bytes | None = None,
-) -> httpx.Response:
-    """Forward a request to the upstream API."""
-    headers = filter_request_headers(request_headers, upstream_api_key)
-
-    response = await client.request(
-        method=method,
-        url=path,
-        headers=headers,
-        content=body,
-        timeout=300.0,
-    )
-    return response

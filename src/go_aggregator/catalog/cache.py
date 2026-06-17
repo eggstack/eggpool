@@ -136,6 +136,8 @@ class ModelCatalogCache:
         capabilities: dict[str, Any],
         source_metadata: dict[str, Any],
         protocol_source: str | None = None,
+        first_seen_at: float = 0.0,
+        last_seen_at: float = 0.0,
     ) -> None:
         """Load a model from database into cache."""
         self._models[model_id] = {
@@ -145,8 +147,8 @@ class ModelCatalogCache:
             "protocol_source": protocol_source,
             "capabilities": capabilities,
             "source_metadata": source_metadata,
-            "first_seen_at": 0,
-            "last_seen_at": 0,
+            "first_seen_at": first_seen_at,
+            "last_seen_at": last_seen_at,
         }
 
     def add_account_support(self, model_id: str, account_name: str) -> None:

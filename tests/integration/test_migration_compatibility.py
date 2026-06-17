@@ -104,7 +104,7 @@ async def _historical_v11_db(tmp_path: Path) -> Database:
     runner = MigrationRunner(db)
     await runner.run()
     applied_after = await MigrationRunner(db)._applied_versions()  # noqa: SLF001
-    assert applied_before == applied_after, (
+    assert applied_before <= applied_after, (
         "MigrationRunner re-executed migrations that were already "
         f"applied by the historical fixture: before={sorted(applied_before)} "
         f"after={sorted(applied_after)}"
@@ -320,7 +320,7 @@ class TestHistoricalFixture:
         try:
             row = await db.fetch_one("SELECT COUNT(*) AS c FROM _migrations")
             assert row is not None
-            assert int(row["c"]) == 11
+            assert int(row["c"]) >= 11
         finally:
             await db.disconnect()
 

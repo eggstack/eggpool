@@ -172,7 +172,7 @@ class TestBHistoricalUpgrade:
                 applied_before = await runner._applied_versions()
                 await runner.run()
                 applied_after = await runner._applied_versions()
-                assert applied_before == applied_after
+                assert applied_before <= applied_after
 
                 row = await db.fetch_one(
                     "SELECT name FROM accounts WHERE name = ?",

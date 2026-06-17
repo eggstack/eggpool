@@ -178,7 +178,7 @@ async def test_crash_recovery_releases_stale_reservations(db: Database) -> None:
         await db.execute_write(
             "INSERT INTO reservations "
             "(request_id, account_id, model_id, estimated_tokens, "
-            "estimated_microdollars, expires_at) "
+            "reserved_microdollars, expires_at) "
             "VALUES (?, 1, 'gpt-4', 1000, 0, datetime('now', '+5 minutes'))",
             (req_id,),
         )

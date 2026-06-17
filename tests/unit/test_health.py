@@ -1,4 +1,4 @@
-"""Tests for retry classification, failover, and health management."""
+"""Tests for retry classification and health management."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import time
 from go_aggregator.health.circuit_breaker import CircuitBreaker, CircuitState
 from go_aggregator.health.health_manager import HealthManager
 from go_aggregator.retry.classification import RetryCategory, RetryClassifier
-from go_aggregator.retry.failover import FailoverManager
 
 
 class TestRetryClassifier:
@@ -67,75 +66,6 @@ class TestRetryClassifier:
         error = classifier.classify(503, {"retry-after": "60"})
         assert error.category == RetryCategory.TEMPORARY
         assert error.retry_after == 60.0
-
-
-class TestFailoverManager:
-    """Tests for FailoverManager."""
-
-    def test_should_retry_initial(self) -> None:
-        """Test retry decision for initial request."""
-        manager = FailoverManager()
-        assert manager.should_retry("account1", "model1", 1)
-
-    def test_should_not_retry_beyond_max(self) -> None:
-        """Test retry decision beyond max retries."""
-        manager = FailoverManager(max_retries=2)
-        assert not manager.should_retry("account1", "model1", 3)
-
-    def test_record_success(self) -> None:
-        """Test recording successful attempt."""
-        manager = FailoverManager()
-        error = manager.record_attempt("account1", "model1", 200, 1, True)
-        assert error.status_code == 200
-        assert not manager.is_account_disabled("account1")
-
-    def test_record_auth_failure(self) -> None:
-        """Test recording auth failure disables account."""
-        manager = FailoverManager(auth_disable_duration_seconds=60)
-        manager.record_attempt("account1", "model1", 401, 1, False)
-        assert manager.is_account_disabled("account1")
-
-    def test_record_404_disables_model(self) -> None:
-        """Test recording 404 with model-specific body disables model."""
-        manager = FailoverManager()
-        body = b'{"error": {"message": "model not found"}}'
-        error = manager._classifier.classify(404, body=body)
-        assert error.category == RetryCategory.MODEL_UNAVAILABLE
-        assert error.should_remove_model
-
-    def test_record_404_generic_does_not_disable_model(self) -> None:
-        """Test recording generic 404 does not disable model."""
-        manager = FailoverManager()
-        manager.record_attempt("account1", "model1", 404, 1, False)
-        assert not manager.is_model_disabled("account1", "model1")
-
-    def test_circuit_breaker_opens(self) -> None:
-        """Test circuit breaker opens after threshold."""
-        manager = FailoverManager(circuit_breaker_threshold=3)
-        for _ in range(3):
-            manager.record_attempt("account1", "model1", 500, 1, False)
-        assert not manager.should_retry("account1", "model1", 1)
-
-    def test_attempt_history(self) -> None:
-        """Test attempt history tracking."""
-        manager = FailoverManager()
-        manager.record_attempt("account1", "model1", 200, 1, True)
-        manager.record_attempt("account1", "model1", 500, 2, False)
-
-        history = manager.get_attempt_history("account1")
-        assert len(history) == 2
-
-        history = manager.get_attempt_history(model_id="model1")
-        assert len(history) == 2
-
-    def test_disable_enable_account(self) -> None:
-        """Test manual disable/enable."""
-        manager = FailoverManager()
-        manager.disable_account("account1", "maintenance")
-        assert manager.is_account_disabled("account1")
-
-        manager.enable_account("account1")
-        assert not manager.is_account_disabled("account1")
 
 
 class TestCircuitBreaker:

@@ -266,6 +266,14 @@ class Router:
             quota = self._quota_estimator.get_account_quota(state.name)
             if quota is not None and not quota.is_within_limits():
                 continue
+            # Check account-level health (disabled, cooled, etc.) so we
+            # don't report an eligible pairing for an account that would
+            # be rejected by the routing eligibility check.
+            if (
+                self._health_manager is not None
+                and not self._health_manager.is_account_healthy(state.name)
+            ):
+                continue
             # Check model availability with model-level health
             all_models = self._catalog.cache.get_all_models()
             for model_id in all_models:

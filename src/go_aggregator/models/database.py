@@ -74,7 +74,6 @@ class ReservationRow(BaseModel):
     released_at: datetime | None = None
     status: str
     estimated_tokens: int = 0
-    estimated_microdollars: int = 0
     expires_at: datetime | None = None
     release_reason: str | None = None
 

@@ -363,7 +363,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # Shutdown
     logger.info("Application shutting down")
     await supervisor.stop_all()
-    await app.state.httpx_client.aclose()
+    httpx_client = getattr(app.state, "httpx_client", None)
+    if httpx_client is not None:
+        try:
+            await httpx_client.aclose()
+        except Exception:
+            logger.exception("Error closing httpx client during shutdown")
     await db.disconnect()
 
 

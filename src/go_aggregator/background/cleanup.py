@@ -120,7 +120,7 @@ async def reconcile_expired_reservations(
                   WHERE requests.id = reservations.request_id
                     AND requests.status = 'pending'
               )
-            RETURNING id, account_id, estimated_microdollars
+            RETURNING id, account_id, reserved_microdollars
             """,
         )
         transitioned_rows = [dict(row) for row in rows]
@@ -131,7 +131,7 @@ async def reconcile_expired_reservations(
     if quota_estimator is not None and transitioned_rows:
         for row in transitioned_rows:
             account_id = row["account_id"]
-            estimated_microdollars = row["estimated_microdollars"] or 0
+            estimated_microdollars = row["reserved_microdollars"] or 0
             if estimated_microdollars <= 0:
                 continue
             # Resolve account name from account_id

@@ -10,6 +10,7 @@
     "0008_proxy_request_identity.sql": "114cb4a6143f8c5be7622521ab951001c47613a3aac4bcdc59a3155af82efe60",
     "0009_model_protocol_source.sql": "412df595e6f1eaa6517771ae2fb68f52298deff53dde57927bbaae574a39b661",
     "0010_health_probe.sql": "3df513e857c834b011caae91a0fbe39f4b5d851aab2b5761c46959b23416d976",
-    "0011_model_resolution_status.sql": "8ee03f7c63653fb5b5d0f2dd8caee2594aae106b935443eb42909ee2f9226fae"
+    "0011_model_resolution_status.sql": "8ee03f7c63653fb5b5d0f2dd8caee2594aae106b935443eb42909ee2f9226fae",
+    "0012_drop_reservations_estimated_microdollars.sql": "f467f4eaf7c53354ba8e5d5bd4313275ff86cf72339d3c08a6e208df3a3a23ed"
   }
 }

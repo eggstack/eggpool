@@ -102,10 +102,12 @@ class IncrementalSSEObserver:
                 MAX_INCOMPLETE_FRAME_BYTES,
             )
             self._error_count += 1
-            # Discard the current event state for the oversized frame
-            self._current_event = ""
-            self._current_data_lines.clear()
+            # Drop the oldest data; preserve current event state so a
+            # truncated in-progress event is not silently lost. Reset
+            # the decoder so any UTF-8 sequence split by the boundary
+            # does not leave the decoder in an inconsistent state.
             self._buffer = self._buffer[-MAX_INCOMPLETE_FRAME_BYTES:]
+            self._decoder = codecs.getincrementaldecoder("utf-8")()
 
     def _process_line(self, line: str) -> None:
         """Process a single SSE line."""
@@ -187,6 +189,8 @@ class IncrementalSSEObserver:
         try:
             remainder = self._decoder.decode(b"", True)
         except UnicodeDecodeError:
+            self._error_count += 1
+            logger.debug("Incremental decoder in error state at flush")
             remainder = ""
         if remainder:
             self._buffer += remainder.replace("\r\n", "\n").replace("\r", "\n")

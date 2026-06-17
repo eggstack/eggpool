@@ -56,7 +56,11 @@ class AccountRuntimeState:
         if not self.enabled:
             return False
         self.refresh_transient_state()
-        if self.health_state in ("authentication_failed", "quota_exhausted"):
+        if self.health_state in (
+            "authentication_failed",
+            "quota_exhausted",
+            "cooldown",
+        ):
             return False
         return self.cooldown_until <= time.time()
 

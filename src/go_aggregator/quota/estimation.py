@@ -352,9 +352,12 @@ class QuotaEstimator:
     def _get_family_estimate(self, model_id: str) -> tuple[float, float] | None:
         """Get model-family fallback estimate."""
         model_lower = model_id.lower()
-        for family, rates in MODEL_FAMILY_FALLBACKS.items():
+        # Match longer (more specific) family names first so e.g.
+        # "gpt-4o-mini" resolves to the mini rate rather than the
+        # generic "gpt-4" rate.
+        for family in sorted(MODEL_FAMILY_FALLBACKS, key=len, reverse=True):
             if family in model_lower:
-                return rates
+                return MODEL_FAMILY_FALLBACKS[family]
         return None
 
     def get_account_quota(self, account_name: str) -> AccountQuota | None:

@@ -53,8 +53,8 @@ def test_require_auth_no_env_var() -> None:
 
     client = TestClient(app)
     response = client.get("/protected")
-    # Auth is now fail-closed: missing env var at runtime returns 503
-    assert response.status_code == 503
+    # Auth is now fail-closed: missing env var at runtime returns 401
+    assert response.status_code == 401
 
 
 def test_require_auth_valid_key() -> None:
@@ -98,7 +98,7 @@ def test_require_auth_invalid_key() -> None:
 
 @pytest.mark.asyncio()
 async def test_auth_fail_closed_at_runtime() -> None:
-    """Missing env var at runtime should return 503, not disable auth."""
+    """Missing env var at runtime should return 401, not disable auth."""
     config = AppConfig()
     config.server.api_key_env = "RUNTIME_MISSING_KEY"
     app = FastAPI()
@@ -116,5 +116,5 @@ async def test_auth_fail_closed_at_runtime() -> None:
 
     client = AsyncClient(app)
     response = client.get("/protected")
-    assert response.status_code == 503
+    assert response.status_code == 401
     assert "Authentication unavailable" in response.json()["detail"]

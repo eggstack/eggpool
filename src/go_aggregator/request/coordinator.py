@@ -293,8 +293,13 @@ class RequestCoordinator:
                 break
 
         # All retries exhausted or non-retryable error
+        actual_attempts = attempt_num if last_selected is not None else 0
         return await self._handle_exhausted(
-            context, last_error, last_upstream_response, attempt_num, last_selected
+            context,
+            last_error,
+            last_upstream_response,
+            actual_attempts,
+            last_selected,
         )
 
     async def _select_and_persist_attempt(
@@ -501,82 +506,85 @@ class RequestCoordinator:
             ) from err
 
         # Check for upstream errors before consuming body
-        if response.status_code >= 400:
-            resp_headers = filter_response_headers(response.headers)
-            resp_body = response.content
+        try:
+            if response.status_code >= 400:
+                resp_headers = filter_response_headers(response.headers)
+                resp_body = response.content
 
-            # Check if this is retryable
-            error = self._classify_upstream_error(
-                response.status_code, resp_headers, body=resp_body
-            )
-            if error is not None:
-                # Retryable error - raise for retry
-                raise _RetryableUpstreamError(
-                    str(error),
+                # Check if this is retryable
+                error = self._classify_upstream_error(
+                    response.status_code, resp_headers, body=resp_body
+                )
+                if error is not None:
+                    # Retryable error - raise for retry
+                    raise _RetryableUpstreamError(
+                        str(error),
+                        status_code=response.status_code,
+                        error_class=type(error).__name__,
+                        retry_after=getattr(error, "retry_after", None),
+                        upstream_response=(
+                            response.status_code,
+                            resp_headers,
+                            resp_body,
+                        ),
+                    ) from error
+
+                # Non-retryable client error (400, 404) - finalize and pass through
+                await self._finalize_non_retryable(
+                    context, selected, response.status_code, resp_headers, resp_body
+                )
+                elapsed_ms = int((time.time() - context.started_at) * 1000)
+                return PreparedProxyResponse(
                     status_code=response.status_code,
-                    error_class=type(error).__name__,
-                    retry_after=getattr(error, "retry_after", None),
-                    upstream_response=(
-                        response.status_code,
-                        resp_headers,
-                        resp_body,
-                    ),
-                ) from error
+                    headers=resp_headers,
+                    body=resp_body,
+                    request_id=context.request_id,
+                    account_name=selected.account_name,
+                    latency_ms=elapsed_ms,
+                    attempt_count=attempt_num,
+                )
 
-            # Non-retryable client error (400, 404) - finalize and pass through
-            await self._finalize_non_retryable(
-                context, selected, response.status_code, resp_headers, resp_body
-            )
+            # Success path
+            body = response.content
+            resp_headers = filter_response_headers(response.headers)
             elapsed_ms = int((time.time() - context.started_at) * 1000)
+
+            usage = self._extract_non_stream_usage(context.protocol, body)
+            upstream_req_id = resp_headers.get("x-request-id")
+
+            # Finalize via RequestFinalizer
+            await self._finalizer.finalize(
+                selected,
+                FinalizationData(
+                    outcome=FinalizationOutcome.COMPLETED,
+                    status_code=response.status_code,
+                    input_tokens=usage.input_tokens if usage else 0,
+                    output_tokens=usage.output_tokens if usage else 0,
+                    cache_read_tokens=usage.cache_read_tokens if usage else 0,
+                    cache_write_tokens=usage.cache_creation_tokens if usage else 0,
+                    reasoning_tokens=usage.reasoning_tokens if usage else 0,
+                    thinking_characters=usage.thinking_characters if usage else 0,
+                    first_byte_ms=0,
+                    upstream_latency_ms=elapsed_ms,
+                    bytes_emitted=len(body),
+                    upstream_request_id=upstream_req_id,
+                ),
+            )
+
+            resp_headers["x-proxy-request-id"] = context.request_id
+            resp_headers["x-proxy-attempt-count"] = str(attempt_num)
             return PreparedProxyResponse(
                 status_code=response.status_code,
                 headers=resp_headers,
-                body=resp_body,
+                body=body,
                 request_id=context.request_id,
                 account_name=selected.account_name,
+                usage=usage,
                 latency_ms=elapsed_ms,
                 attempt_count=attempt_num,
             )
-
-        # Success path
-        body = response.content
-        resp_headers = filter_response_headers(response.headers)
-        elapsed_ms = int((time.time() - context.started_at) * 1000)
-
-        usage = self._extract_non_stream_usage(context.protocol, body)
-        upstream_req_id = resp_headers.get("x-request-id")
-
-        # Finalize via RequestFinalizer
-        await self._finalizer.finalize(
-            selected,
-            FinalizationData(
-                outcome=FinalizationOutcome.COMPLETED,
-                status_code=response.status_code,
-                input_tokens=usage.input_tokens if usage else 0,
-                output_tokens=usage.output_tokens if usage else 0,
-                cache_read_tokens=usage.cache_read_tokens if usage else 0,
-                cache_write_tokens=usage.cache_creation_tokens if usage else 0,
-                reasoning_tokens=usage.reasoning_tokens if usage else 0,
-                thinking_characters=usage.thinking_characters if usage else 0,
-                first_byte_ms=0,
-                upstream_latency_ms=elapsed_ms,
-                bytes_emitted=len(body),
-                upstream_request_id=upstream_req_id,
-            ),
-        )
-
-        resp_headers["x-proxy-request-id"] = context.request_id
-        resp_headers["x-proxy-attempt-count"] = str(attempt_num)
-        return PreparedProxyResponse(
-            status_code=response.status_code,
-            headers=resp_headers,
-            body=body,
-            request_id=context.request_id,
-            account_name=selected.account_name,
-            usage=usage,
-            latency_ms=elapsed_ms,
-            attempt_count=attempt_num,
-        )
+        finally:
+            await response.aclose()
 
     async def _execute_streaming(
         self,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as _dt
 import json
 import logging
 from typing import TYPE_CHECKING, Any
@@ -25,6 +26,28 @@ if TYPE_CHECKING:
     from go_aggregator.models.config import AppConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _ts_to_unix(value: object) -> float:
+    """Convert a DB TIMESTAMP string (or numeric) to a Unix float.
+
+    Returns 0.0 for None or unparseable values so cache loads never
+    fail on a malformed timestamp.
+    """
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    if not text:
+        return 0.0
+    try:
+        return _dt.datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        try:
+            return _dt.datetime.strptime(text, "%Y-%m-%d %H:%M:%S").timestamp()
+        except ValueError:
+            return 0.0
 
 
 class CatalogService:
@@ -164,6 +187,8 @@ class CatalogService:
                     capabilities=caps,
                     source_metadata=meta,
                     protocol_source=row["protocol_source"],
+                    first_seen_at=_ts_to_unix(row["first_seen_at"]),
+                    last_seen_at=_ts_to_unix(row["last_seen_at"]),
                 )
 
             # Load account-model relationships

@@ -98,7 +98,7 @@ class CircuitBreaker:
     def get_stats(self) -> dict[str, float | int | str]:
         """Get circuit breaker statistics."""
         return {
-            "state": self._state.value,
+            "state": self.state.value,
             "failure_count": self._failure_count,
             "success_count": self._success_count,
             "last_failure_time": self._last_failure_time or 0,

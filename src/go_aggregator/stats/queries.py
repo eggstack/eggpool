@@ -257,8 +257,7 @@ async def fetch_active_reservations(
         r.account_id,
         a.name as account_name,
         r.model_id,
-        COALESCE(NULLIF(r.estimated_microdollars, 0), r.reserved_microdollars, 0)
-            as reserved_microdollars,
+        r.reserved_microdollars,
         r.created_at
     FROM reservations r
     JOIN accounts a ON a.id = r.account_id
