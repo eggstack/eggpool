@@ -66,19 +66,21 @@ def test_account_runtime_state_reset_health() -> None:
 def test_account_registry_loads_accounts() -> None:
     os.environ["TEST_REG_KEY_1"] = "key1"
     os.environ["TEST_REG_KEY_2"] = "key2"
-    config = AppConfig.from_dict(
-        {
-            "accounts": [
-                {"name": "acct1", "api_key_env": "TEST_REG_KEY_1"},
-                {"name": "acct2", "api_key_env": "TEST_REG_KEY_2"},
-            ]
-        }
-    )
-    registry = AccountRegistry(config)
-    assert len(registry.get_all_states()) == 2
-    assert registry.get_api_key("acct1") == "key1"
-    del os.environ["TEST_REG_KEY_1"]
-    del os.environ["TEST_REG_KEY_2"]
+    try:
+        config = AppConfig.from_dict(
+            {
+                "accounts": [
+                    {"name": "acct1", "api_key_env": "TEST_REG_KEY_1"},
+                    {"name": "acct2", "api_key_env": "TEST_REG_KEY_2"},
+                ]
+            }
+        )
+        registry = AccountRegistry(config)
+        assert len(registry.get_all_states()) == 2
+        assert registry.get_api_key("acct1") == "key1"
+    finally:
+        del os.environ["TEST_REG_KEY_1"]
+        del os.environ["TEST_REG_KEY_2"]
 
 
 def test_account_registry_rejects_missing_key() -> None:
@@ -111,20 +113,22 @@ def test_account_registry_disabled_skips_key_check() -> None:
 
 def test_account_registry_eligible_states() -> None:
     os.environ["TEST_ELIGIBLE_KEY"] = "key"
-    config = AppConfig.from_dict(
-        {
-            "accounts": [
-                {"name": "enabled", "api_key_env": "TEST_ELIGIBLE_KEY"},
-                {
-                    "name": "disabled",
-                    "api_key_env": "TEST_ELIGIBLE_KEY",
-                    "enabled": False,
-                },
-            ]
-        }
-    )
-    registry = AccountRegistry(config)
-    eligible = registry.get_eligible_states()
-    assert len(eligible) == 1
-    assert eligible[0].name == "enabled"
-    del os.environ["TEST_ELIGIBLE_KEY"]
+    try:
+        config = AppConfig.from_dict(
+            {
+                "accounts": [
+                    {"name": "enabled", "api_key_env": "TEST_ELIGIBLE_KEY"},
+                    {
+                        "name": "disabled",
+                        "api_key_env": "TEST_ELIGIBLE_KEY",
+                        "enabled": False,
+                    },
+                ]
+            }
+        )
+        registry = AccountRegistry(config)
+        eligible = registry.get_eligible_states()
+        assert len(eligible) == 1
+        assert eligible[0].name == "enabled"
+    finally:
+        del os.environ["TEST_ELIGIBLE_KEY"]

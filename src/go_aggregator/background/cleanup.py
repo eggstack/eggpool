@@ -28,7 +28,7 @@ async def cleanup_stale_reservations(
             WHERE status = 'active'
               AND created_at < datetime('now', ? || ' seconds')
             """,
-            (str(-int(max_age_seconds)),),
+            (f"-{int(max_age_seconds)}",),
         )
     if count > 0:
         logger.info("Cleaned up %d stale reservations", count)
@@ -156,9 +156,9 @@ async def reconcile_expired_reservations(
                 await quota_estimator.remove_reservation(
                     account_name, estimated_microdollars
                 )
-            # Also decrement active request count if router is available
-            if router is not None and acct_row is not None:
-                await router.decrement_active_request_count(acct_row["name"])
+                # Also decrement active request count if router is available
+                if router is not None:
+                    await router.decrement_active_request_count(account_name)
 
     if count > 0:
         logger.info("Reconciled %d expired reservations", count)

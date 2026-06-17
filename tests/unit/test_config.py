@@ -62,13 +62,15 @@ weight = 2.0
 def test_load_valid_config(valid_config: Path) -> None:
     os.environ["TEST_KEY_1"] = "key1"
     os.environ["TEST_KEY_2"] = "key2"
-    config = AppConfig.from_toml(str(valid_config))
-    assert config.server.host == "127.0.0.1"
-    assert config.server.port == 9000
-    assert len(config.accounts) == 2
-    assert config.accounts[0].name == "test_account"
-    del os.environ["TEST_KEY_1"]
-    del os.environ["TEST_KEY_2"]
+    try:
+        config = AppConfig.from_toml(str(valid_config))
+        assert config.server.host == "127.0.0.1"
+        assert config.server.port == 9000
+        assert len(config.accounts) == 2
+        assert config.accounts[0].name == "test_account"
+    finally:
+        del os.environ["TEST_KEY_1"]
+        del os.environ["TEST_KEY_2"]
 
 
 def test_missing_required_fields(tmp_path: Path) -> None:
@@ -80,9 +82,10 @@ def test_missing_required_fields(tmp_path: Path) -> None:
 
 def test_duplicate_account_names(tmp_path: Path) -> None:
     os.environ["DUP_KEY"] = "key"
-    config_file = tmp_path / "dup.toml"
-    config_file.write_text(
-        """
+    try:
+        config_file = tmp_path / "dup.toml"
+        config_file.write_text(
+            """
 [[accounts]]
 name = "same_name"
 api_key_env = "DUP_KEY"
@@ -91,10 +94,11 @@ api_key_env = "DUP_KEY"
 name = "same_name"
 api_key_env = "DUP_KEY"
 """
-    )
-    with pytest.raises(ConfigError, match="Duplicate account name"):
-        AppConfig.from_toml(str(config_file))
-    del os.environ["DUP_KEY"]
+        )
+        with pytest.raises(ConfigError, match="Duplicate account name"):
+            AppConfig.from_toml(str(config_file))
+    finally:
+        del os.environ["DUP_KEY"]
 
 
 def test_missing_env_var_for_enabled_account(tmp_path: Path) -> None:
@@ -112,34 +116,38 @@ api_key_env = "NONEXISTENT_ENV_VAR_XYZ"
 
 def test_zero_weight_rejected(tmp_path: Path) -> None:
     os.environ["ZERO_KEY"] = "key"
-    config_file = tmp_path / "zero.toml"
-    config_file.write_text(
-        """
+    try:
+        config_file = tmp_path / "zero.toml"
+        config_file.write_text(
+            """
 [[accounts]]
 name = "zero_weight"
 api_key_env = "ZERO_KEY"
 weight = 0
 """
-    )
-    with pytest.raises(ConfigError, match="non-positive weight"):
-        AppConfig.from_toml(str(config_file))
-    del os.environ["ZERO_KEY"]
+        )
+        with pytest.raises(ConfigError, match="non-positive weight"):
+            AppConfig.from_toml(str(config_file))
+    finally:
+        del os.environ["ZERO_KEY"]
 
 
 def test_negative_weight_rejected(tmp_path: Path) -> None:
     os.environ["NEG_KEY"] = "key"
-    config_file = tmp_path / "neg.toml"
-    config_file.write_text(
-        """
+    try:
+        config_file = tmp_path / "neg.toml"
+        config_file.write_text(
+            """
 [[accounts]]
 name = "neg_weight"
 api_key_env = "NEG_KEY"
 weight = -1.5
 """
-    )
-    with pytest.raises(ConfigError, match="non-positive weight"):
-        AppConfig.from_toml(str(config_file))
-    del os.environ["NEG_KEY"]
+        )
+        with pytest.raises(ConfigError, match="non-positive weight"):
+            AppConfig.from_toml(str(config_file))
+    finally:
+        del os.environ["NEG_KEY"]
 
 
 def test_file_not_found() -> None:

@@ -53,64 +53,70 @@ def test_eligible_accounts_model_not_supported() -> None:
 @pytest.mark.asyncio()
 async def test_router_selects_account() -> None:
     os.environ["TEST_ROUTER_KEY"] = "key"
-    config = AppConfig.from_dict(
-        {
-            "accounts": [
-                {"name": "acct1", "api_key_env": "TEST_ROUTER_KEY"},
-            ]
-        }
-    )
-    registry = AccountRegistry(config)
-    cache = ModelCatalogCache()
-    cache.update_from_account("acct1", [{"model_id": "gpt-4", "protocol": "openai"}])
+    try:
+        config = AppConfig.from_dict(
+            {
+                "accounts": [
+                    {"name": "acct1", "api_key_env": "TEST_ROUTER_KEY"},
+                ]
+            }
+        )
+        registry = AccountRegistry(config)
+        cache = ModelCatalogCache()
+        cache.update_from_account(
+            "acct1", [{"model_id": "gpt-4", "protocol": "openai"}]
+        )
 
-    # Create a mock catalog service with the cache
-    class MockCatalog:
-        def __init__(self, c: ModelCatalogCache) -> None:
-            self._cache = c
+        # Create a mock catalog service with the cache
+        class MockCatalog:
+            def __init__(self, c: ModelCatalogCache) -> None:
+                self._cache = c
 
-        @property
-        def cache(self) -> ModelCatalogCache:
-            return self._cache
+            @property
+            def cache(self) -> ModelCatalogCache:
+                return self._cache
 
-    catalog = MockCatalog(cache)
-    router = Router(registry, catalog)  # type: ignore[arg-type]
-    selected = await router.select_account("gpt-4")
-    assert selected is not None
-    assert selected.name == "acct1"
-    del os.environ["TEST_ROUTER_KEY"]
+        catalog = MockCatalog(cache)
+        router = Router(registry, catalog)  # type: ignore[arg-type]
+        selected = await router.select_account("gpt-4")
+        assert selected is not None
+        assert selected.name == "acct1"
+    finally:
+        del os.environ["TEST_ROUTER_KEY"]
 
 
 @pytest.mark.asyncio()
 async def test_router_no_eligible_account() -> None:
     os.environ["TEST_ROUTER_KEY_2"] = "key"
-    config = AppConfig.from_dict(
-        {
-            "accounts": [
-                {
-                    "name": "acct1",
-                    "api_key_env": "TEST_ROUTER_KEY_2",
-                    "enabled": False,
-                },
-            ]
-        }
-    )
-    registry = AccountRegistry(config)
-    cache = ModelCatalogCache()
+    try:
+        config = AppConfig.from_dict(
+            {
+                "accounts": [
+                    {
+                        "name": "acct1",
+                        "api_key_env": "TEST_ROUTER_KEY_2",
+                        "enabled": False,
+                    },
+                ]
+            }
+        )
+        registry = AccountRegistry(config)
+        cache = ModelCatalogCache()
 
-    class MockCatalog:
-        def __init__(self, c: ModelCatalogCache) -> None:
-            self._cache = c
+        class MockCatalog:
+            def __init__(self, c: ModelCatalogCache) -> None:
+                self._cache = c
 
-        @property
-        def cache(self) -> ModelCatalogCache:
-            return self._cache
+            @property
+            def cache(self) -> ModelCatalogCache:
+                return self._cache
 
-    catalog = MockCatalog(cache)
-    router = Router(registry, catalog)  # type: ignore[arg-type]
-    selected = await router.select_account("gpt-4")
-    assert selected is None
-    del os.environ["TEST_ROUTER_KEY_2"]
+        catalog = MockCatalog(cache)
+        router = Router(registry, catalog)  # type: ignore[arg-type]
+        selected = await router.select_account("gpt-4")
+        assert selected is None
+    finally:
+        del os.environ["TEST_ROUTER_KEY_2"]
 
 
 def _make_mock_catalog(model_id: str = "gpt-4") -> ModelCatalogCache:
@@ -437,49 +443,52 @@ async def test_utilization_above_one_compare() -> None:
 async def test_active_request_count_increments_and_returns_to_zero() -> None:
     """Active request count should increment and decrement correctly."""
     os.environ["TEST_ROUTER_ACCT_KEY"] = "key"
-    config = AppConfig.from_dict(
-        {
-            "accounts": [
-                {"name": "acct1", "api_key_env": "TEST_ROUTER_ACCT_KEY"},
-            ]
-        }
-    )
-    registry = AccountRegistry(config)
-    cache = ModelCatalogCache()
-    cache.update_from_account("acct1", [{"model_id": "gpt-4", "protocol": "openai"}])
+    try:
+        config = AppConfig.from_dict(
+            {
+                "accounts": [
+                    {"name": "acct1", "api_key_env": "TEST_ROUTER_ACCT_KEY"},
+                ]
+            }
+        )
+        registry = AccountRegistry(config)
+        cache = ModelCatalogCache()
+        cache.update_from_account(
+            "acct1", [{"model_id": "gpt-4", "protocol": "openai"}]
+        )
 
-    class MockCatalog:
-        def __init__(self, c: ModelCatalogCache) -> None:
-            self._cache = c
+        class MockCatalog:
+            def __init__(self, c: ModelCatalogCache) -> None:
+                self._cache = c
 
-        @property
-        def cache(self) -> ModelCatalogCache:
-            return self._cache
+            @property
+            def cache(self) -> ModelCatalogCache:
+                return self._cache
 
-    catalog = MockCatalog(cache)
-    router = Router(registry, catalog)  # type: ignore[arg-type]
+        catalog = MockCatalog(cache)
+        router = Router(registry, catalog)  # type: ignore[arg-type]
 
-    # Initially zero
-    state = registry.get_state("acct1")
-    assert state is not None
-    assert state.active_request_count == 0
+        # Initially zero
+        state = registry.get_state("acct1")
+        assert state is not None
+        assert state.active_request_count == 0
 
-    # Increment twice
-    await router.increment_active_request_count("acct1")
-    assert state.active_request_count == 1
-    await router.increment_active_request_count("acct1")
-    assert state.active_request_count == 2
+        # Increment twice
+        await router.increment_active_request_count("acct1")
+        assert state.active_request_count == 1
+        await router.increment_active_request_count("acct1")
+        assert state.active_request_count == 2
 
-    # Decrement once
-    await router.decrement_active_request_count("acct1")
-    assert state.active_request_count == 1
+        # Decrement once
+        await router.decrement_active_request_count("acct1")
+        assert state.active_request_count == 1
 
-    # Decrement back to zero
-    await router.decrement_active_request_count("acct1")
-    assert state.active_request_count == 0
+        # Decrement back to zero
+        await router.decrement_active_request_count("acct1")
+        assert state.active_request_count == 0
 
-    # Decrement below zero should not go negative
-    await router.decrement_active_request_count("acct1")
-    assert state.active_request_count == 0
-
-    del os.environ["TEST_ROUTER_ACCT_KEY"]
+        # Decrement below zero should not go negative
+        await router.decrement_active_request_count("acct1")
+        assert state.active_request_count == 0
+    finally:
+        del os.environ["TEST_ROUTER_ACCT_KEY"]

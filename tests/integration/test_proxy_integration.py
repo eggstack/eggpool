@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 from typing import TYPE_CHECKING
 
@@ -36,9 +35,14 @@ if TYPE_CHECKING:
 UPSTREAM_BASE = "https://test-upstream.example.com"
 
 
+@pytest.fixture(autouse=True)
+def _set_test_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Set test API key env vars for every test; monkeypatch restores them."""
+    monkeypatch.setenv("OPENCODE_TEST_KEY", "test-key-123")
+    monkeypatch.setenv("GO_AGG_TEST_KEY", "test-key-123")
+
+
 def _build_config() -> AppConfig:
-    os.environ["OPENCODE_TEST_KEY"] = "test-key-123"
-    os.environ["GO_AGG_TEST_KEY"] = "test-key-123"
     return AppConfig.from_dict(
         {
             "server": {
