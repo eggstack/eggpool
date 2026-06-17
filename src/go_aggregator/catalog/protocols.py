@@ -45,7 +45,7 @@ FAMILY_PROTOCOLS: dict[str, str] = {
     "mimo-": "openai",
     "deepseek-": "openai",
     "minimax-": "anthropic",
-    "qwen3.": "anthropic",
+    "qwen3": "anthropic",
 }
 
 

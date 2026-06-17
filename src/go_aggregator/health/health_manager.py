@@ -77,7 +77,12 @@ class AccountHealth:
     last_check: float = field(default_factory=time.time)
     consecutive_failures: int = 0
     circuit_breaker: CircuitBreaker = field(default_factory=CircuitBreaker)
-    disabled_models: set[str] = field(default_factory=set[str])
+    # model_id -> disabled_until timestamp (``None`` means disabled
+    # indefinitely, matching the account-level ``disabled_until``
+    # convention).
+    disabled_models: dict[str, float | None] = field(
+        default_factory=dict[str, float | None]
+    )
     disabled_until: float | None = None
     disabled_reason: str = ""
     cooldown_until: float = 0.0
@@ -100,7 +105,12 @@ class AccountHealth:
         """Check if a model is disabled for this account."""
         if self.is_disabled(current_time):
             return True
-        return model_id in self.disabled_models
+        if model_id not in self.disabled_models:
+            return False
+        until = self.disabled_models[model_id]
+        if until is None:
+            return True
+        return (current_time or time.time()) <= until
 
 
 @dataclass
@@ -188,14 +198,23 @@ class HealthManager:
         model_id: str,
         duration_seconds: float | None = None,
     ) -> None:
-        """Disable a model for an account."""
+        """Disable a model for an account.
+
+        Mirrors :meth:`disable_account`: when ``duration_seconds`` is
+        provided, the disable expires after that interval. ``None``
+        disables the model indefinitely until :meth:`enable_model` is
+        called.
+        """
         health = self.get_account_health(account_name)
-        health.disabled_models.add(model_id)
+        if duration_seconds:
+            health.disabled_models[model_id] = time.time() + duration_seconds
+        else:
+            health.disabled_models[model_id] = None
 
     def enable_model(self, account_name: str, model_id: str) -> None:
         """Enable a model for an account."""
         health = self.get_account_health(account_name)
-        health.disabled_models.discard(model_id)
+        health.disabled_models.pop(model_id, None)
 
     def _refresh_transient_state(self, health: AccountHealth) -> None:
         """Restore transient health states after cooldown expiration."""

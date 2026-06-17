@@ -358,7 +358,7 @@ class RequestCoordinator:
 
             account_name = selected_state.name
             api_key = self._registry.get_api_key(account_name)
-            if not api_key:
+            if not api_key or not api_key.strip():
                 raise AuthenticationError(
                     f"API key not available for account {account_name!r}"
                 )
@@ -829,6 +829,11 @@ class RequestCoordinator:
         try:
             data = json.loads(body)
         except (json.JSONDecodeError, ValueError):
+            logger.warning(
+                "Non-streaming upstream response body is not valid JSON; "
+                "usage will not be extracted (body_len=%d)",
+                len(body),
+            )
             return None
 
         if protocol == "anthropic":

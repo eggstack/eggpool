@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from typing import TYPE_CHECKING
 
 from go_aggregator.quota.estimation import QuotaEstimator
@@ -32,6 +33,9 @@ class Router:
         self._catalog = catalog
         self._quota_estimator = quota_estimator or QuotaEstimator()
         self._health_manager = health_manager
+        # Serializes increment/decrement of active_request_count so
+        # concurrent coordinators and cleanup tasks cannot lose updates.
+        self._active_count_lock = threading.Lock()
         self._scorer = QuotaFairScorer(
             quota_estimator=self._quota_estimator,
             health_manager=self._health_manager,
@@ -187,6 +191,10 @@ class Router:
         """Get account usage (tokens, cost)."""
         quota = self._quota_estimator.get_account_quota(account_name)
         if quota is None:
+            logger.debug(
+                "No quota entry for account %r; returning zero usage",
+                account_name,
+            )
             return 0, 0
         return quota.get_effective_usage()
 
@@ -237,7 +245,8 @@ class Router:
         """Increment the active request count for an account."""
         state = self._registry.get_state(account_name)
         if state is not None:
-            state.active_request_count += 1
+            with self._active_count_lock:
+                state.active_request_count += 1
 
     def decrement_active_request_count(self, account_name: str) -> None:
         """Decrement the active request count for an account.
@@ -245,8 +254,10 @@ class Router:
         Never allows the count to become negative.
         """
         state = self._registry.get_state(account_name)
-        if state is not None and state.active_request_count > 0:
-            state.active_request_count -= 1
+        if state is not None:
+            with self._active_count_lock:
+                if state.active_request_count > 0:
+                    state.active_request_count -= 1
 
     def has_eligible_pairing(self) -> bool:
         """Check if at least one eligible account-model pairing exists.

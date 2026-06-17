@@ -14,6 +14,7 @@ usage from SQLite instead of in-memory hourly/daily windows.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -258,6 +259,9 @@ class QuotaEstimator:
     _usage_window_repo: UsageWindowRepository | None = field(default=None, repr=False)
     # In-memory reservation tracking for scorer
     _account_reserved_cost: dict[str, int] = field(default_factory=dict[str, int])
+    # Serializes record_usage + persisted_snapshot updates so concurrent
+    # finalizers cannot interleave between the two and lose updates.
+    _snapshot_lock: threading.Lock = field(default_factory=threading.Lock)
 
     def set_usage_window_repo(self, repo: UsageWindowRepository) -> None:
         """Set the persisted usage window repository."""
@@ -288,10 +292,38 @@ class QuotaEstimator:
                 self.account_model_ewma[account_name][am_key] = EWMAEstimate()
             self.account_model_ewma[account_name][am_key].update(cost_per_token)
 
-            # Tier 2: global model EWMA
+            # Tier 2: Global model EWMA
             if model_id not in self.global_model_ewma:
                 self.global_model_ewma[model_id] = EWMAEstimate()
             self.global_model_ewma[model_id].update(cost_per_token)
+
+    def record_usage_and_snapshot(
+        self,
+        account_name: str,
+        tokens: int,
+        cost_microdollars: int,
+        model_id: str | None = None,
+    ) -> None:
+        """Record usage and atomically refresh the persisted snapshot.
+
+        Combines :meth:`record_usage` with the per-window snapshot
+        increment so concurrent finalizers cannot interleave between
+        the two updates and lose cost increments. The lock is short and
+        CPU-only so a ``threading.Lock`` is sufficient and safe across
+        async / sync call sites.
+        """
+        with self._snapshot_lock:
+            self.record_usage(
+                account_name,
+                tokens=tokens,
+                cost_microdollars=cost_microdollars,
+                model_id=model_id,
+            )
+            quota = self.get_account_quota(account_name)
+            if quota is not None and quota.persisted_snapshot is not None:
+                quota.persisted_snapshot.cost_5h += cost_microdollars
+                quota.persisted_snapshot.cost_7d += cost_microdollars
+                quota.persisted_snapshot.cost_30d += cost_microdollars
 
     def estimate_cost(
         self,

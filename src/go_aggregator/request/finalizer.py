@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
@@ -146,8 +147,12 @@ class RequestFinalizer:
                     data.cache_write_tokens,
                 )
 
-            # 2. Always use reservation estimate when cost is unknown
-            if cost_microdollars == 0 and exactness == "unknown":
+            # 2. Always use reservation estimate when cost is unknown or
+            #    the calculator returned a zero cost (e.g. unknown model
+            #    in the pricing tables). A zero cost with exactness ==
+            #    "exact" should not occur, but treating it the same way
+            #    keeps the reservation-estimate fallback robust.
+            if cost_microdollars == 0 and exactness != "exact":
                 cost_microdollars = selected.estimated_microdollars
                 exactness = "estimated"
 
@@ -233,6 +238,12 @@ class RequestFinalizer:
                                     }
                                 ),
                             )
+                    except (
+                        asyncio.CancelledError,
+                        SystemExit,
+                        KeyboardInterrupt,
+                    ):
+                        raise
                     except Exception:
                         logger.exception("Failed to record account event")
 
@@ -265,22 +276,14 @@ class RequestFinalizer:
             #    so that routing decisions observe it immediately.
             if self._quota_estimator is not None and cost_microdollars > 0:
                 total_tokens = data.input_tokens + data.output_tokens
-                self._quota_estimator.record_usage(
+                # record_usage + persisted snapshot increment must be
+                # atomic so concurrent finalizers cannot interleave.
+                self._quota_estimator.record_usage_and_snapshot(
                     selected.account_name,
                     tokens=total_tokens,
                     cost_microdollars=cost_microdollars,
                     model_id=_get_model_id(selected),
                 )
-
-                # 3. Refresh persisted snapshot locally
-                #    Increment cached 5h/7d/30d values by final cost
-                snapshot = self._quota_estimator.get_account_quota(
-                    selected.account_name
-                )
-                if snapshot is not None and snapshot.persisted_snapshot is not None:
-                    snapshot.persisted_snapshot.cost_5h += cost_microdollars
-                    snapshot.persisted_snapshot.cost_7d += cost_microdollars
-                    snapshot.persisted_snapshot.cost_30d += cost_microdollars
 
             # 4. Update health state. health_already_applied is honored to
             #    keep health transitions idempotent across retried attempts.

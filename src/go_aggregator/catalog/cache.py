@@ -139,17 +139,47 @@ class ModelCatalogCache:
         first_seen_at: float = 0.0,
         last_seen_at: float = 0.0,
     ) -> None:
-        """Load a model from database into cache."""
-        self._models[model_id] = {
-            "model_id": model_id,
-            "display_name": display_name,
-            "protocol": protocol,
-            "protocol_source": protocol_source,
-            "capabilities": capabilities,
-            "source_metadata": source_metadata,
-            "first_seen_at": first_seen_at,
-            "last_seen_at": last_seen_at,
-        }
+        """Load a model from database into cache.
+
+        When the model already exists, merge with the existing entry so
+        fields such as ``first_seen_at`` and any per-account resolved
+        ``protocol_source`` are not lost on a refresh cycle. New
+        non-empty values from the database take precedence over the
+        in-memory entry.
+        """
+        existing = self._models.get(model_id)
+        if existing is None:
+            self._models[model_id] = {
+                "model_id": model_id,
+                "display_name": display_name,
+                "protocol": protocol,
+                "protocol_source": protocol_source,
+                "capabilities": capabilities,
+                "source_metadata": source_metadata,
+                "first_seen_at": first_seen_at,
+                "last_seen_at": last_seen_at,
+            }
+            return
+
+        # Merge: keep first_seen_at from the existing entry unless the
+        # caller provides a non-zero value. Prefer DB-supplied values
+        # for fields that the caller populated.
+        merged = dict(existing)
+        if display_name is not None:
+            merged["display_name"] = display_name
+        if protocol:
+            merged["protocol"] = protocol
+        if protocol_source:
+            merged["protocol_source"] = protocol_source
+        if capabilities:
+            merged["capabilities"] = capabilities
+        if source_metadata:
+            merged["source_metadata"] = source_metadata
+        if first_seen_at > 0:
+            merged["first_seen_at"] = first_seen_at
+        if last_seen_at > 0:
+            merged["last_seen_at"] = last_seen_at
+        self._models[model_id] = merged
 
     def add_account_support(self, model_id: str, account_name: str) -> None:
         """Add account support for a model."""

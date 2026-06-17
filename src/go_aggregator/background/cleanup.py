@@ -104,26 +104,30 @@ async def reconcile_expired_reservations(
 
     Returns the number of reservations reconciled.
     """
-    async with db.transaction():
-        rows = await db.execute_returning(
-            """
-            UPDATE reservations
-            SET status = 'expired',
-                released_at = CURRENT_TIMESTAMP,
-                release_reason = 'expired'
-            WHERE status = 'active'
-              AND expires_at IS NOT NULL
-              AND expires_at < CURRENT_TIMESTAMP
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM requests
-                  WHERE requests.id = reservations.request_id
-                    AND requests.status = 'pending'
-              )
-            RETURNING id, account_id, reserved_microdollars
-            """,
-        )
-        transitioned_rows = [dict(row) for row in rows]
+    try:
+        async with db.transaction():
+            rows = await db.execute_returning(
+                """
+                UPDATE reservations
+                SET status = 'expired',
+                    released_at = CURRENT_TIMESTAMP,
+                    release_reason = 'expired'
+                WHERE status = 'active'
+                  AND expires_at IS NOT NULL
+                  AND expires_at < CURRENT_TIMESTAMP
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM requests
+                      WHERE requests.id = reservations.request_id
+                        AND requests.status = 'pending'
+                  )
+                RETURNING id, account_id, reserved_microdollars
+                """,
+            )
+            transitioned_rows = [dict(row) for row in rows]
+    except Exception:
+        logger.exception("Failed to reconcile expired reservations")
+        return 0
 
     count = len(transitioned_rows)
 
@@ -135,9 +139,16 @@ async def reconcile_expired_reservations(
             if estimated_microdollars <= 0:
                 continue
             # Resolve account name from account_id
-            acct_row = await db.fetch_one(
-                "SELECT name FROM accounts WHERE id = ?", (account_id,)
-            )
+            try:
+                acct_row = await db.fetch_one(
+                    "SELECT name FROM accounts WHERE id = ?", (account_id,)
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to resolve account name for expired reservation %s",
+                    row.get("id"),
+                )
+                continue
             if acct_row is not None:
                 account_name = acct_row["name"]
                 quota_estimator.remove_reservation(account_name, estimated_microdollars)

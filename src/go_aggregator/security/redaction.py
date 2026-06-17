@@ -158,8 +158,6 @@ def sanitize_error_object(
         return REDACTED
 
     if isinstance(value, dict):
-        if item_budget <= 0:
-            return REDACTED
         result: dict[str, Any] = {}
         items_view = cast("dict[Any, Any]", value).items()
         for entry in items_view:
@@ -198,8 +196,6 @@ def sanitize_error_object(
         return result
 
     if isinstance(value, list):
-        if item_budget <= 0:
-            return REDACTED
         result_list: list[Any] = []
         for entry in cast("list[Any]", value):
             item: Any = entry
@@ -254,8 +250,11 @@ def _bound_output(value: str) -> str:
         return value
     suffix = "...[TRUNCATED]"
     keep = MAX_REDACTED_ERROR_DETAIL_CHARS - len(suffix)
-    if keep < 0:
-        keep = 0
+    if keep <= 0:
+        # The bound is smaller than the truncation marker, so any
+        # prefix would be lost. Return only the marker truncated to
+        # the bound so the result is still bounded and informative.
+        return suffix[:MAX_REDACTED_ERROR_DETAIL_CHARS]
     return value[:keep] + suffix
 
 
