@@ -158,6 +158,9 @@ class HealthManager:
         if reason == "authentication_failed":
             health.health_state = "authentication_failed"
             health.is_healthy = False
+        elif reason in ("rate_limited", "quota_exhausted"):
+            health.health_state = reason
+            health.is_healthy = False
 
     def record_quota_exhausted(
         self,
@@ -175,6 +178,7 @@ class HealthManager:
         health = self.get_account_health(account_name)
         health.cooldown_until = time.time() + retry_after_seconds
         health.health_state = "rate_limited"
+        health.is_healthy = False
 
     def disable_account(
         self,

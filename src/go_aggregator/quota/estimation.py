@@ -482,28 +482,31 @@ class QuotaEstimator:
 
     def add_reservation(self, account_name: str, cost: int) -> None:
         """Track an active reservation's estimated cost for scoring."""
-        if account_name not in self._account_reserved_cost:
-            self._account_reserved_cost[account_name] = 0
-        self._account_reserved_cost[account_name] += cost
-        # Keep AccountQuota in sync for eligibility checks
-        quota = self.get_account_quota(account_name)
-        if quota is not None:
-            quota.reserved_cost = self._account_reserved_cost[account_name]
-
-    def remove_reservation(self, account_name: str, cost: int) -> None:
-        """Remove a reservation's cost from tracking."""
-        if account_name in self._account_reserved_cost:
-            self._account_reserved_cost[account_name] = max(
-                0, self._account_reserved_cost[account_name] - cost
-            )
+        with self._snapshot_lock:
+            if account_name not in self._account_reserved_cost:
+                self._account_reserved_cost[account_name] = 0
+            self._account_reserved_cost[account_name] += cost
             # Keep AccountQuota in sync for eligibility checks
             quota = self.get_account_quota(account_name)
             if quota is not None:
                 quota.reserved_cost = self._account_reserved_cost[account_name]
 
+    def remove_reservation(self, account_name: str, cost: int) -> None:
+        """Remove a reservation's cost from tracking."""
+        with self._snapshot_lock:
+            if account_name in self._account_reserved_cost:
+                self._account_reserved_cost[account_name] = max(
+                    0, self._account_reserved_cost[account_name] - cost
+                )
+                # Keep AccountQuota in sync for eligibility checks
+                quota = self.get_account_quota(account_name)
+                if quota is not None:
+                    quota.reserved_cost = self._account_reserved_cost[account_name]
+
     def get_account_reserved_cost(self, account_name: str) -> int:
         """Get total reserved cost for an account from active reservations."""
-        return self._account_reserved_cost.get(account_name, 0)
+        with self._snapshot_lock:
+            return self._account_reserved_cost.get(account_name, 0)
 
     async def load_persisted_windows(
         self, offsets: dict[str, dict[str, int]] | None = None

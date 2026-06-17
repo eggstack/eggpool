@@ -43,6 +43,11 @@ def clean_import_env(
         "GOROUTER_ANTHROPIC_MODEL",
         "GOROUTER_SKIP_LIVE",
         "GOROUTER_TEST_STREAM_CANCEL",
+        "GOROUTER_UPSTREAM_BASE_URL",
+        "GOROUTER_TEST_UPSTREAM_KEY",
+        "GOROUTER_UPSTREAM_KEY",
+        "GOROUTER_P14_KEY_A",
+        "GOROUTER_P14_KEY_B",
     ):
         monkeypatch.delenv(var, raising=False)
     yield

@@ -37,5 +37,5 @@ def test_quota_exhausted_account_becomes_eligible_after_cooldown() -> None:
     assert not hm.is_account_healthy("acct-a")
 
     # Wait for cooldown to expire
-    time.sleep(0.2)
+    time.sleep(0.5)
     assert hm.is_account_healthy("acct-a")

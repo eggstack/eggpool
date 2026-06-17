@@ -303,7 +303,6 @@ async def _assert_failover_invariants(
 class TestAttemptLifecycle:
     """Section A: Successful failover cleanup."""
 
-    @respx.mock
     @pytest.mark.asyncio
     async def test_failover_429_then_success(
         self, coordinator: RequestCoordinator, two_account_db: Database

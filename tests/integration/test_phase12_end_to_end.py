@@ -1237,8 +1237,6 @@ async def test_l_privacy(
     # Set the API key env var to the secret value
     os.environ["OPENCODE_TEST_KEY_A"] = secret_api_key
     _build_two_account_config()
-    # Override to use our secret key
-    os.environ["OPENCODE_TEST_KEY_A"] = secret_api_key
 
     with caplog.at_level(logging.DEBUG), respx.mock:
         respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(

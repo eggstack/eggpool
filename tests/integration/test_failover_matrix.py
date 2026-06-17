@@ -308,6 +308,7 @@ async def test_failover_connect_error_to_success(
 
     assert response.status_code == 200
     assert response.account_name in ("acct-a", "acct-b")
+    assert call_count[0] == 2
 
 
 @pytest.mark.asyncio

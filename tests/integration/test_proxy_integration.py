@@ -662,11 +662,11 @@ async def test_upstream_404_passed_through(
     assert response.status_code == 404
 
 
-# ── 11. Upstream 500 returns 502 ─────────────────────────────────────────────
+# ── 11. Upstream 500 returns 500 ─────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_upstream_500_returns_502(
+async def test_upstream_500_returns_500(
     client: httpx.AsyncClient,
     auth_headers: dict[str, str],
 ) -> None:
