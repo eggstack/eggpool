@@ -46,6 +46,7 @@ class ModelCatalogCache:
                 }
             else:
                 self._models[model_id]["last_seen_at"] = now
+                self._models[model_id]["display_name"] = model.get("display_name")
                 # Always update protocol to reflect current upstream state;
                 # an empty protocol means unresolved and should clear any
                 # previously resolved value.
@@ -53,6 +54,10 @@ class ModelCatalogCache:
                 # Update source if provided
                 if model.get("protocol_source"):
                     self._models[model_id]["protocol_source"] = model["protocol_source"]
+                self._models[model_id]["capabilities"] = model.get("capabilities", {})
+                self._models[model_id]["source_metadata"] = model.get(
+                    "source_metadata", {}
+                )
 
             if model_id not in self._account_support:
                 self._account_support[model_id] = set()

@@ -267,16 +267,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     # 17b. Load configured model price overrides into estimator
     for model_id, override in config.model_overrides.items():
-        has_both = (
-            override.input_price_per_1k is not None
-            and override.output_price_per_1k is not None
-        )
-        if has_both:
+        input_price = override.input_price_per_1k
+        output_price = override.output_price_per_1k
+        if input_price is not None and output_price is not None:
             # Convert dollars/1K → dollars/1M (estimator Tier 4 units)
             router._quota_estimator.set_model_override(  # pyright: ignore[reportPrivateUsage]
                 model_id,
-                override.input_price_per_1k * 1000,  # pyright: ignore[reportOptionalOperand]
-                override.output_price_per_1k * 1000,  # pyright: ignore[reportOptionalOperand]
+                input_price * 1000,
+                output_price * 1000,
             )
 
     # 18. Load persisted usage windows and set account weights/offsets

@@ -147,12 +147,34 @@ class RequestFinalizer:
                     data.cache_write_tokens,
                 )
 
-            # 2. Always use reservation estimate when cost is unknown or
-            #    the calculator returned a zero cost (e.g. unknown model
-            #    in the pricing tables). A zero cost with exactness ==
-            #    "exact" should not occur, but treating it the same way
-            #    keeps the reservation-estimate fallback robust.
-            if cost_microdollars == 0 and exactness != "exact":
+            # 2. Use reservation estimate as fallback when cost is unknown
+            #    or the calculator returned zero, but only for outcomes
+            #    that may have billable work (success, or cancellation/
+            #    midstream error with observed bytes). Pure upstream
+            #    failures with no usage must not consume quota.
+            has_usage = any(
+                (
+                    data.input_tokens,
+                    data.output_tokens,
+                    data.cache_read_tokens,
+                    data.cache_write_tokens,
+                )
+            )
+            may_have_billable_work = data.outcome in (
+                FinalizationOutcome.COMPLETED,
+            ) or (
+                data.outcome
+                in (
+                    FinalizationOutcome.CLIENT_CANCELLED,
+                    FinalizationOutcome.MIDSTREAM_ERROR,
+                )
+                and (has_usage or data.bytes_emitted > 0)
+            )
+            if (
+                cost_microdollars == 0
+                and exactness != "exact"
+                and may_have_billable_work
+            ):
                 cost_microdollars = selected.estimated_microdollars
                 exactness = "estimated"
 
