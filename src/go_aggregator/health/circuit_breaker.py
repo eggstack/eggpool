@@ -36,11 +36,8 @@ class CircuitBreaker:
 
     @property
     def state(self) -> CircuitState:
-        """Get current circuit state."""
+        """Get current circuit state without mutating it."""
         with self._lock:
-            if self._state == CircuitState.OPEN and self._should_attempt_reset():
-                self._state = CircuitState.HALF_OPEN
-                self._last_state_change = time.time()
             return self._state
 
     def record_success(self) -> None:
@@ -52,9 +49,9 @@ class CircuitBreaker:
                 self._last_state_change = time.time()
 
             if self._state == CircuitState.HALF_OPEN:
-                self._half_open_in_flight = False
                 self._success_count += 1
                 if self._success_count >= self.success_threshold:
+                    self._half_open_in_flight = False
                     self._state = CircuitState.CLOSED
                     self._failure_count = 0
                     self._success_count = 0

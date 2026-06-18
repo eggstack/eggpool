@@ -132,7 +132,7 @@ class AccountConfig(BaseModel):
     name: str
     api_key_env: str
     enabled: bool = True
-    weight: float = 1.0
+    weight: float = Field(default=1.0, gt=0)
     five_hour_offset_microdollars: int = 0
     weekly_offset_microdollars: int = 0
     monthly_offset_microdollars: int = 0

@@ -30,6 +30,7 @@ class AccountRuntimeState:
     consecutive_failures: int = 0
     last_success_at: float = 0.0
     last_failure_at: float = 0.0
+    last_failure_category: str = ""
 
     active_request_count: int = 0
     reserved_microdollars: int = 0
@@ -80,6 +81,7 @@ class AccountRuntimeState:
         """Record a successful request."""
         self.consecutive_failures = 0
         self.last_success_at = time.time()
+        self.last_failure_category = ""
         if self.health_state == "cooldown":
             self.health_state = "healthy"
 
@@ -103,6 +105,10 @@ class AccountRuntimeState:
         """
         self.consecutive_failures += 1
         self.last_failure_at = time.time()
+
+        if self.last_failure_category and error_class != self.last_failure_category:
+            self.consecutive_failures = 1
+        self.last_failure_category = error_class
 
         if error_class in ("authentication_failed", "authentication"):
             self.health_state = "authentication_failed"
@@ -140,3 +146,4 @@ class AccountRuntimeState:
         self.health_state = "healthy"
         self.cooldown_until = 0.0
         self.consecutive_failures = 0
+        self.last_failure_category = ""

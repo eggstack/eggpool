@@ -86,15 +86,15 @@ class TestCircuitBreaker:
         assert not cb.allow_request()
 
     def test_half_open_after_timeout(self) -> None:
-        """Test circuit goes to half-open after timeout."""
+        """Test circuit goes to half-open after timeout via allow_request."""
         cb = CircuitBreaker(failure_threshold=2, recovery_timeout=0.1)
         cb.record_failure()
         cb.record_failure()
         assert cb.state == CircuitState.OPEN
 
         time.sleep(0.11)
-        assert cb.state == CircuitState.HALF_OPEN
         assert cb.allow_request()
+        assert cb.state == CircuitState.HALF_OPEN
 
     def test_closes_after_successes(self) -> None:
         """Test circuit closes after success threshold."""
@@ -114,6 +114,7 @@ class TestCircuitBreaker:
         cb.record_failure()
         cb.record_failure()
         time.sleep(0.11)
+        assert cb.allow_request()
         assert cb.state == CircuitState.HALF_OPEN
         cb.record_failure()
         assert cb.state == CircuitState.OPEN
@@ -239,15 +240,26 @@ class TestHealthManager:
         assert not health.is_healthy
 
     def test_record_success_resets_health_state(self) -> None:
-        """Success should reset health_state to healthy."""
+        """Success should reset health_state to healthy, except for auth failures."""
+        manager = HealthManager()
+        # Non-auth failure: success should clear it
+        manager.record_failure("account1", reason="rate_limited")
+        assert manager.get_account_health("account1").health_state == "rate_limited"
+        manager.record_success("account1")
+        assert manager.get_account_health("account1").health_state == "healthy"
+        assert manager.is_account_healthy("account1")
+
+    def test_record_success_preserves_auth_failure_state(self) -> None:
+        """Success should NOT clear authentication_failed state (terminal)."""
         manager = HealthManager()
         manager.record_failure("account1", reason="authentication_failed")
         assert manager.get_account_health("account1").health_state == (
             "authentication_failed"
         )
         manager.record_success("account1")
-        assert manager.get_account_health("account1").health_state == "healthy"
-        assert manager.is_account_healthy("account1")
+        assert manager.get_account_health("account1").health_state == (
+            "authentication_failed"
+        )
 
     def test_disable_model_only_affects_that_model(self) -> None:
         """Disabling model A should not affect model B on same account."""

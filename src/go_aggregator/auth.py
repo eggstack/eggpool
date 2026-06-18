@@ -29,6 +29,8 @@ def verify_api_key(request: Request, api_key: str) -> bool:
     provided = match.group(1).strip() if match is not None else ""
     if not provided:
         provided = request.headers.get("x-api-key", "").strip()
+    if not api_key:
+        return False
     return hmac.compare_digest(provided, api_key)
 
 

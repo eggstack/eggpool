@@ -127,7 +127,7 @@ api_key_env = "ZERO_KEY"
 weight = 0
 """
         )
-        with pytest.raises(ConfigError, match="non-positive weight"):
+        with pytest.raises(ConfigError):
             AppConfig.from_toml(str(config_file))
     finally:
         del os.environ["ZERO_KEY"]
@@ -145,7 +145,7 @@ api_key_env = "NEG_KEY"
 weight = -1.5
 """
         )
-        with pytest.raises(ConfigError, match="non-positive weight"):
+        with pytest.raises(ConfigError):
             AppConfig.from_toml(str(config_file))
     finally:
         del os.environ["NEG_KEY"]

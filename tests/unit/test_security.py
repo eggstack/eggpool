@@ -547,7 +547,7 @@ def test_openai_error_response_structure() -> None:
     data = json.loads(body)
     assert data["error"]["message"] == "Bad request"
     assert data["error"]["type"] == "invalid_request_error"
-    assert data["error"]["code"] == 400
+    assert data["error"]["code"] == "400"
 
 
 def test_anthropic_error_response_structure() -> None:

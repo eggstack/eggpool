@@ -146,7 +146,7 @@ class IncrementalSSEObserver:
         if ":" in line:
             field_name, _, value = line.partition(":")
             # Accept both "data:value" and "data: value"
-            value = value.lstrip(" ") if field_name != "data" else value
+            value = value.lstrip(" ")
             if field_name == "data":
                 self._current_data_lines.append(value)
             elif field_name == "event":

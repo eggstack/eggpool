@@ -143,9 +143,10 @@ class HealthManager:
         """Record a successful request."""
         health = self.get_account_health(account_name)
         health.consecutive_failures = 0
-        health.is_healthy = True
-        health.health_state = "healthy"
         health.last_check = time.time()
+        if health.health_state != "authentication_failed":
+            health.is_healthy = True
+            health.health_state = "healthy"
         health.circuit_breaker.record_success()
 
     def record_failure(
@@ -201,6 +202,7 @@ class HealthManager:
         """Enable an account."""
         health = self.get_account_health(account_name)
         health.is_healthy = True
+        health.health_state = "healthy"
         health.disabled_until = None
         health.disabled_reason = ""
         health.circuit_breaker.reset()

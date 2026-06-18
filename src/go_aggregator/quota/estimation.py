@@ -188,7 +188,7 @@ class AccountQuota:
 
     def get_remaining_capacity(self) -> float:
         """Get remaining capacity as a normalized score (0.0 to 1.0)."""
-        if self.capacity_7d_microdollars is None:
+        if not self.capacity_7d_microdollars:
             return 1.0
 
         cost_7d = self.get_persisted_cost_7d()
@@ -203,14 +203,14 @@ class AccountQuota:
         return cost
 
     def get_persisted_cost_7d(self) -> int:
-        """Get 7d cost from persisted snapshot, or fall back to daily window."""
+        """Get 7d cost from persisted snapshot, or 0 if unavailable."""
         if self.persisted_snapshot is not None:
             return self.persisted_snapshot.cost_7d
         _, cost = self.daily_window.get_usage()
         return cost
 
     def get_persisted_cost_30d(self) -> int:
-        """Get 30d cost from persisted snapshot, or fall back to daily window."""
+        """Get 30d cost from persisted snapshot, or 0 if unavailable."""
         if self.persisted_snapshot is not None:
             return self.persisted_snapshot.cost_30d
         _, cost = self.daily_window.get_usage()

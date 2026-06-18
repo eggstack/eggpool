@@ -21,7 +21,7 @@ def openai_error_response(
             "error": {
                 "message": message,
                 "type": error_type,
-                "code": status_code,
+                "code": str(status_code),
             }
         },
     )

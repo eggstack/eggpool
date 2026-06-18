@@ -661,7 +661,10 @@ class RequestCoordinator:
             )
         finally:
             if response is not None:  # type: ignore[unnecessary-comparison]
-                await response.aclose()
+                try:
+                    await response.aclose()
+                except Exception:
+                    logger.debug("Error closing upstream response", exc_info=True)
 
     async def _execute_streaming(
         self,
@@ -1021,6 +1024,9 @@ class RequestCoordinator:
             if error.category == RetryCategory.TEMPORARY:
                 return TemporaryUpstreamError(error.message, status_code=status_code)
             return TransientUpstreamError(error.message, status_code=status_code)
+
+        if error.category in (RetryCategory.FATAL, RetryCategory.NEVER):
+            return UpstreamError(error.message, status_code=status_code)
 
         return None
 
