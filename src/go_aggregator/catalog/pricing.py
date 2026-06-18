@@ -109,7 +109,10 @@ def parse_microdollars_per_million(value: object) -> int | None:
     if unit == "token":
         # Dollars per token → microdollars per million tokens = × 10^12
         number *= Decimal(1_000_000) * Decimal(1_000_000)  # noqa: SIM114
-    elif unit in ("1k", "million"):
+    elif unit == "1k":
+        # $X / 1K → $X*1000 / 1M → X*1000*1_000_000 microdollars/M
+        number *= Decimal(1_000_000_000)
+    elif unit == "million":
         number *= Decimal(1_000_000)
 
     rounded = int(number.to_integral_value())
@@ -118,9 +121,41 @@ def parse_microdollars_per_million(value: object) -> int | None:
     return rounded
 
 
+def coerce_token_count(value: object) -> int:
+    """Coerce a provider token count to a non-negative int.
+
+    Accepts ints, numeric strings, and floats.  ``None``, empty
+    strings, non-numeric strings, and negative values are silently
+    treated as ``0`` so that malformed provider usage never raises
+    during cost calculation.
+    """
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return max(0, value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return 0
+        return max(0, int(value))
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return 0
+        try:
+            num = float(value)
+        except (ValueError, OverflowError):
+            return 0
+        if not math.isfinite(num):
+            return 0
+        return max(0, int(num))
+    return 0
+
+
 def _normalize_token_count(value: int) -> int:
     """Normalize provider token counts before cost arithmetic."""
-    return max(0, int(value))
+    return coerce_token_count(value)
 
 
 @dataclass

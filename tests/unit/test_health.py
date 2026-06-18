@@ -136,6 +136,37 @@ class TestCircuitBreaker:
         assert stats["state"] == "closed"
         assert stats["failure_count"] == 0
 
+    def test_can_request_does_not_consume_half_open_slot(self) -> None:
+        """can_request() must not transition OPEN→HALF_OPEN or set in-flight."""
+        cb = CircuitBreaker(failure_threshold=2, recovery_timeout=0.1)
+        cb.record_failure()
+        cb.record_failure()
+        assert cb.state == CircuitState.OPEN
+
+        time.sleep(0.11)
+        # can_request should return True (recovery timeout elapsed)
+        # but must NOT transition to HALF_OPEN or set half_open_in_flight
+        assert cb.can_request()
+        # State should still report HALF_OPEN via the property (lazy transition)
+        # but allow_request should still be available (slot not consumed)
+        assert cb.allow_request()
+        # A second allow_request should fail (slot now consumed)
+        assert not cb.allow_request()
+        # But a second can_request should still return False (slot consumed)
+        assert not cb.can_request()
+
+    def test_can_request_closed_circuit(self) -> None:
+        """can_request() returns True for a closed circuit."""
+        cb = CircuitBreaker()
+        assert cb.can_request()
+
+    def test_can_request_open_circuit(self) -> None:
+        """can_request() returns False for an open circuit within recovery."""
+        cb = CircuitBreaker(failure_threshold=2, recovery_timeout=10)
+        cb.record_failure()
+        cb.record_failure()
+        assert not cb.can_request()
+
 
 class TestHealthManager:
     """Tests for HealthManager."""

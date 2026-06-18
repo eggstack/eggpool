@@ -79,7 +79,12 @@ class CircuitBreaker:
                     self._last_state_change = time.time()
 
     def allow_request(self) -> bool:
-        """Check if a request should be allowed."""
+        """Check if a request should be allowed and acquire the probe slot.
+
+        Mutates state: transitions OPEN to HALF_OPEN and sets the
+        half-open in-flight flag.  Use :meth:`can_request` for
+        read-only health checks that must not consume the probe slot.
+        """
         with self._lock:
             if self._state == CircuitState.CLOSED:
                 return True
@@ -97,6 +102,22 @@ class CircuitBreaker:
                 self._half_open_in_flight = True
                 return True
             return False
+
+    def can_request(self) -> bool:
+        """Check if a request would be allowed without mutating state.
+
+        Returns the same decision as :meth:`allow_request` but never
+        transitions OPEN → HALF_OPEN or sets the half-open in-flight
+        flag.  Suitable for readiness probes, model listing, and
+        candidate enumeration.
+        """
+        with self._lock:
+            if self._state == CircuitState.CLOSED:
+                return True
+            if self._state == CircuitState.HALF_OPEN:
+                return not self._half_open_in_flight
+            # OPEN state
+            return self._should_attempt_reset()
 
     def reset(self) -> None:
         """Reset the circuit breaker."""

@@ -84,8 +84,10 @@ class QuotaFairScorer:
                 quota = self.quota_estimator.get_account_quota(name)
                 if quota:
                     weight = quota.weight
-                    if not quota.is_within_limits():
-                        is_eligible = False
+                    # Above-capacity accounts remain scoreable with
+                    # high utilization; they are not hard-gated here.
+                    # Upstream quota_exhausted health makes them
+                    # temporarily ineligible when authoritative.
 
                     # Use persisted window costs when available
                     cost_5h = quota.get_persisted_cost_5h()

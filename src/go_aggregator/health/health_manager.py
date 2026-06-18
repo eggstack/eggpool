@@ -244,14 +244,19 @@ class HealthManager:
         return health.is_healthy and not health.is_disabled()
 
     def is_model_healthy(self, account_name: str, model_id: str) -> bool:
-        """Check if a model is healthy for an account."""
+        """Check if a model is healthy for an account.
+
+        Uses the non-mutating :meth:`CircuitBreaker.can_request` so
+        readiness probes and candidate enumeration never consume the
+        half-open probe slot.
+        """
         if not self.is_account_healthy(account_name):
             return False
         health = self.get_account_health(account_name)
         return (
             not health.is_disabled()
             and not health.is_model_disabled(model_id)
-            and health.circuit_breaker.allow_request()
+            and health.circuit_breaker.can_request()
         )
 
     def get_healthy_accounts(self, account_names: list[str]) -> list[str]:

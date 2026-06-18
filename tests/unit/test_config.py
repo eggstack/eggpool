@@ -110,8 +110,9 @@ name = "missing_env"
 api_key_env = "NONEXISTENT_ENV_VAR_XYZ"
 """
     )
+    config = AppConfig.from_toml(str(config_file))
     with pytest.raises(ConfigError, match="is not set"):
-        AppConfig.from_toml(str(config_file))
+        config.validate_account_credentials()
 
 
 def test_zero_weight_rejected(tmp_path: Path) -> None:

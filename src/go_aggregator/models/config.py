@@ -179,6 +179,20 @@ class AppConfig(BaseModel):
             if acct.name in names:
                 raise ConfigError(f"Duplicate account name: {acct.name!r}")
             names.append(acct.name)
+            if acct.weight <= 0:
+                raise ConfigError(
+                    f"Account {acct.name!r} has non-positive weight: {acct.weight}"
+                )
+        return self
+
+    def validate_account_credentials(self) -> None:
+        """Validate that enabled accounts have their API key env vars set.
+
+        Called separately from structural validation so CLI commands that
+        do not need upstream credentials (``migrate``, ``accounts status``,
+        ``db vacuum``) can skip this check.
+        """
+        for acct in self.accounts:
             if acct.enabled:
                 raw_key = os.environ.get(acct.api_key_env)
                 if not raw_key:
@@ -191,11 +205,6 @@ class AppConfig(BaseModel):
                         f"Account {acct.name!r} has a whitespace-only API key "
                         f"in env var {acct.api_key_env!r}"
                     )
-            if acct.weight <= 0:
-                raise ConfigError(
-                    f"Account {acct.name!r} has non-positive weight: {acct.weight}"
-                )
-        return self
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> AppConfig:

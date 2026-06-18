@@ -28,11 +28,13 @@ class Router:
         catalog: CatalogService,
         quota_estimator: QuotaEstimator | None = None,
         health_manager: HealthManager | None = None,
+        stale_after_s: float | None = None,
     ) -> None:
         self._registry = registry
         self._catalog = catalog
         self._quota_estimator = quota_estimator or QuotaEstimator()
         self._health_manager = health_manager
+        self._stale_after_s = stale_after_s
         # Serializes increment/decrement of active_request_count so
         # concurrent coordinators and cleanup tasks cannot lose updates.
         self._active_count_lock = asyncio.Lock()
@@ -55,7 +57,11 @@ class Router:
         active_requests = {s.name: s.active_request_count for s in all_states}
 
         eligible = get_eligible_accounts(
-            all_states, model_id, self._catalog.cache, self._health_manager
+            all_states,
+            model_id,
+            self._catalog.cache,
+            self._health_manager,
+            stale_after_s=self._stale_after_s,
         )
 
         # Exclude already-attempted accounts
@@ -91,7 +97,11 @@ class Router:
         """
         all_states = self._registry.get_enabled_states()
         eligible = get_eligible_accounts(
-            all_states, model_id, self._catalog.cache, self._health_manager
+            all_states,
+            model_id,
+            self._catalog.cache,
+            self._health_manager,
+            stale_after_s=self._stale_after_s,
         )
         if exclude_accounts:
             eligible = [s for s in eligible if s.name not in exclude_accounts]
@@ -109,7 +119,11 @@ class Router:
         active_requests = {s.name: s.active_request_count for s in all_states}
 
         eligible = get_eligible_accounts(
-            all_states, model_id, self._catalog.cache, self._health_manager
+            all_states,
+            model_id,
+            self._catalog.cache,
+            self._health_manager,
+            stale_after_s=self._stale_after_s,
         )
 
         # Exclude already-attempted accounts
@@ -280,10 +294,6 @@ class Router:
             # Check credential loaded
             if not self._registry.get_api_key(state.name):
                 continue
-            # Check quota within limits
-            quota = self._quota_estimator.get_account_quota(state.name)
-            if quota is not None and not quota.is_within_limits():
-                continue
             # Check account-level health (disabled, cooled, etc.) so we
             # don't report an eligible pairing for an account that would
             # be rejected by the routing eligibility check.
@@ -295,7 +305,12 @@ class Router:
             # Check model availability with model-level health
             all_models = self._catalog.cache.get_all_models()
             for model_id in all_models:
-                supporting = self._catalog.cache.get_supporting_accounts(model_id)
+                if self._stale_after_s is not None:
+                    supporting = self._catalog.cache.get_fresh_supporting_accounts(
+                        model_id, self._stale_after_s
+                    )
+                else:
+                    supporting = self._catalog.cache.get_supporting_accounts(model_id)
                 if state.name not in supporting:
                     continue
                 # Use model-level health check (includes circuit breaker

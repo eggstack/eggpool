@@ -1308,3 +1308,129 @@ async def test_connect_error_before_response_allows_retry(
     )
     assert len(resv_rows) == 1
     assert resv_rows[0]["status"] == "released"
+
+
+# ---------------------------------------------------------------------------
+# Bug 3: Malformed non-streaming usage does not produce a proxy 500
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_malformed_usage_strings_do_not_500(
+    coordinator: RequestCoordinator,
+    db: Database,
+) -> None:
+    """Upstream with string usage values should finalize, not return 500."""
+    request_body = json.dumps(
+        {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hi"}],
+        }
+    ).encode()
+
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "cmpl-1",
+                    "object": "chat.completion",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "Hello"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": "10",
+                        "completion_tokens": "abc",
+                        "total_tokens": "not_a_number",
+                    },
+                },
+            )
+        )
+
+        context = ProxyRequestContext(
+            request_id="test-malformed-usage",
+            protocol="openai",
+            model_id="gpt-4",
+            streaming=False,
+            original_body=request_body,
+            incoming_headers={"content-type": "application/json"},
+        )
+        response = await coordinator.execute(context)
+
+    # The upstream body should be passed through; usage coerced to zero/valid ints
+    assert response.status_code == 200
+    assert response.usage is not None
+    # "10" should parse to 10
+    assert response.usage.input_tokens == 10
+    # "abc" should coerce to 0
+    assert response.usage.output_tokens == 0
+
+    req_row = await db.fetch_one(
+        "SELECT status FROM requests WHERE proxy_request_id = ?",
+        ("test-malformed-usage",),
+    )
+    assert req_row is not None
+    assert req_row["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_malformed_usage_null_values_do_not_500(
+    coordinator: RequestCoordinator,
+    db: Database,
+) -> None:
+    """Upstream with null usage values should finalize, not return 500."""
+    request_body = json.dumps(
+        {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hi"}],
+        }
+    ).encode()
+
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "cmpl-1",
+                    "object": "chat.completion",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "Hello"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": None,
+                        "completion_tokens": None,
+                        "total_tokens": None,
+                    },
+                },
+            )
+        )
+
+        context = ProxyRequestContext(
+            request_id="test-null-usage",
+            protocol="openai",
+            model_id="gpt-4",
+            streaming=False,
+            original_body=request_body,
+            incoming_headers={"content-type": "application/json"},
+        )
+        response = await coordinator.execute(context)
+
+    assert response.status_code == 200
+    assert response.usage is not None
+    assert response.usage.input_tokens == 0
+    assert response.usage.output_tokens == 0
+
+    req_row = await db.fetch_one(
+        "SELECT status FROM requests WHERE proxy_request_id = ?",
+        ("test-null-usage",),
+    )
+    assert req_row is not None
+    assert req_row["status"] == "completed"

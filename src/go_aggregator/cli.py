@@ -49,6 +49,12 @@ def serve(ctx: click.Context) -> None:
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)
 
+    try:
+        config.validate_account_credentials()
+    except AggregatorError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
     configure_logging(level=config.server.log_level)
 
     from go_aggregator.app import create_app
@@ -78,6 +84,12 @@ def check_config(ctx: click.Context) -> None:
     try:
         require_auth_at_startup(config.server.api_key_env)
     except RuntimeError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
+    try:
+        config.validate_account_credentials()
+    except AggregatorError as exc:
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)
 

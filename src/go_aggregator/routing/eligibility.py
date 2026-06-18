@@ -6,7 +6,7 @@ An account is eligible only when all of the following are true:
 - Not in authentication-failed state
 - Not in an active circuit-breaker cooldown
 - Not locally considered exhausted for the relevant quota policy
-- Supports the requested model
+- Supports the requested model (with recent catalog refresh)
 - Supports the requested protocol
 - Has not exceeded any configured local concurrency ceiling
 """
@@ -26,6 +26,7 @@ def get_eligible_accounts(
     model_id: str,
     catalog: ModelCatalogCache,
     health_manager: HealthManager | None = None,
+    stale_after_s: float | None = None,
 ) -> list[AccountRuntimeState]:
     """Get accounts eligible for routing a specific model.
 
@@ -35,7 +36,8 @@ def get_eligible_accounts(
     - not in quota_exhausted state
     - not in cooldown
     - circuit breaker allows requests (if health_manager provided)
-    - supports the requested model
+    - supports the requested model (with recent catalog refresh when
+      stale_after_s is provided)
     """
     eligible: list[AccountRuntimeState] = []
     for state in all_states:
@@ -48,7 +50,10 @@ def get_eligible_accounts(
         ):
             continue
 
-        supporting = catalog.get_supporting_accounts(model_id)
+        if stale_after_s is not None:
+            supporting = catalog.get_fresh_supporting_accounts(model_id, stale_after_s)
+        else:
+            supporting = catalog.get_supporting_accounts(model_id)
         if state.name in supporting:
             eligible.append(state)
     return eligible

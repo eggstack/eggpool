@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 
+from go_aggregator.catalog.pricing import coerce_token_count
 from go_aggregator.db.repositories import (
     AccountRepository,
     AttemptRepository,
@@ -536,12 +537,17 @@ class RequestCoordinator:
 
         response: httpx.Response | None = None
         try:
-            response = await self._client.request(
+            upstream_request = self._client.build_request(
                 "POST",
                 upstream_path,
                 headers=headers,
                 content=context.original_body,
             )
+            response = await self._client.send(upstream_request, stream=True)
+            # Headers available immediately after send(); capture
+            # first-byte time before reading the body.
+            first_byte_ms = int((time.time() - context.started_at) * 1000)
+            await response.aread()
         except httpx.ConnectError as err:
             raise _RetryableUpstreamError(
                 f"Connection failed: {err}",
@@ -620,7 +626,7 @@ class RequestCoordinator:
                     cache_write_tokens=usage.cache_creation_tokens if usage else 0,
                     reasoning_tokens=usage.reasoning_tokens if usage else 0,
                     thinking_characters=usage.thinking_characters if usage else 0,
-                    first_byte_ms=0,
+                    first_byte_ms=first_byte_ms,
                     upstream_latency_ms=elapsed_ms,
                     bytes_emitted=len(body),
                     upstream_request_id=upstream_req_id,
@@ -763,6 +769,7 @@ class RequestCoordinator:
             upstream_response=response,
             selected=selected,
             resp_headers=resp_headers,
+            request_started_at=context.started_at,
         )
 
         return PreparedProxyResponse(
@@ -781,6 +788,7 @@ class RequestCoordinator:
         upstream_response: httpx.Response,
         selected: SelectedAttempt,
         resp_headers: list[tuple[str, str]],
+        request_started_at: float | None = None,
     ) -> AsyncIterator[bytes]:
         """Build an async generator that streams upstream bytes downstream,
         extracts usage via IncrementalSSEObserver, and finalizes the request
@@ -789,6 +797,10 @@ class RequestCoordinator:
         bytes_emitted = 0
         first_byte_ms = 0.0
         started = time.time()
+        # Use the caller-provided request start time so first_byte_ms
+        # and upstream_latency_ms include routing, persistence, and
+        # upstream connection/header time.
+        reference = request_started_at if request_started_at is not None else started
         finalizer = self._finalizer
         persist_error_detail = self._persist_error_detail
 
@@ -797,7 +809,7 @@ class RequestCoordinator:
             try:
                 async for chunk in upstream_response.aiter_bytes():
                     if first_byte_ms == 0.0:
-                        first_byte_ms = (time.time() - started) * 1000
+                        first_byte_ms = (time.time() - reference) * 1000
 
                     observer.observe(chunk)
                     bytes_emitted = observer.bytes_emitted
@@ -821,7 +833,7 @@ class RequestCoordinator:
                         reasoning_tokens=usage_result.reasoning_tokens,
                         thinking_characters=usage_result.thinking_characters,
                         first_byte_ms=int(first_byte_ms) if first_byte_ms > 0 else None,
-                        upstream_latency_ms=int((time.time() - started) * 1000),
+                        upstream_latency_ms=int((time.time() - reference) * 1000),
                         bytes_emitted=bytes_emitted,
                         upstream_request_id=self._get_header_value(
                             resp_headers, "x-request-id"
@@ -838,7 +850,7 @@ class RequestCoordinator:
                     FinalizationData(
                         outcome=FinalizationOutcome.CLIENT_CANCELLED,
                         first_byte_ms=int(first_byte_ms) if first_byte_ms > 0 else None,
-                        upstream_latency_ms=int((time.time() - started) * 1000),
+                        upstream_latency_ms=int((time.time() - reference) * 1000),
                         bytes_emitted=bytes_emitted,
                         input_tokens=usage_result.input_tokens,
                         output_tokens=usage_result.output_tokens,
@@ -867,7 +879,7 @@ class RequestCoordinator:
                     FinalizationData(
                         outcome=FinalizationOutcome.MIDSTREAM_ERROR,
                         first_byte_ms=int(first_byte_ms) if first_byte_ms > 0 else None,
-                        upstream_latency_ms=int((time.time() - started) * 1000),
+                        upstream_latency_ms=int((time.time() - reference) * 1000),
                         bytes_emitted=bytes_emitted,
                         input_tokens=usage_result.input_tokens,
                         output_tokens=usage_result.output_tokens,
@@ -917,10 +929,14 @@ class RequestCoordinator:
             if usage_raw is None:
                 return None
             return StreamUsageResult(
-                input_tokens=usage_raw.get("input_tokens", 0),
-                output_tokens=usage_raw.get("output_tokens", 0),
-                cache_read_tokens=usage_raw.get("cache_read_input_tokens", 0),
-                cache_creation_tokens=usage_raw.get("cache_creation_input_tokens", 0),
+                input_tokens=coerce_token_count(usage_raw.get("input_tokens", 0)),
+                output_tokens=coerce_token_count(usage_raw.get("output_tokens", 0)),
+                cache_read_tokens=coerce_token_count(
+                    usage_raw.get("cache_read_input_tokens", 0)
+                ),
+                cache_creation_tokens=coerce_token_count(
+                    usage_raw.get("cache_creation_input_tokens", 0)
+                ),
                 is_complete=True,
             )
         else:
@@ -930,14 +946,14 @@ class RequestCoordinator:
             prompt_details = _safe_dict(usage_raw.get("prompt_tokens_details"))
             completion_details = _safe_dict(usage_raw.get("completion_tokens_details"))
             return StreamUsageResult(
-                input_tokens=usage_raw.get("prompt_tokens", 0),
-                output_tokens=usage_raw.get("completion_tokens", 0),
-                cache_read_tokens=(
+                input_tokens=coerce_token_count(usage_raw.get("prompt_tokens", 0)),
+                output_tokens=coerce_token_count(usage_raw.get("completion_tokens", 0)),
+                cache_read_tokens=coerce_token_count(
                     prompt_details.get("cached_tokens", 0)
                     if prompt_details is not None
                     else 0
                 ),
-                reasoning_tokens=(
+                reasoning_tokens=coerce_token_count(
                     completion_details.get("reasoning_tokens", 0)
                     if completion_details is not None
                     else 0

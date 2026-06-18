@@ -155,12 +155,12 @@ class AccountQuota:
         return daily_tokens, daily_cost
 
     def is_within_limits(self) -> bool:
-        """Check if account is within quota limits.
+        """Check if account is within configured quota capacity thresholds.
 
-        Uses the three persisted windows (5h, 7d, 30d) when available,
-        with per-window offsets and active reserved cost. Returns False
-        (ineligible) when any configured capacity threshold is exceeded,
-        preventing further routing to this account.
+        Used as a scoring input (utilization > 1.0) rather than a hard
+        eligibility gate.  Above-capacity accounts remain routable;
+        upstream ``quota_exhausted`` health makes them temporarily
+        ineligible when authoritative.
         """
         cost_5h = (
             self.get_persisted_cost_5h() + self.five_hour_offset + self.reserved_cost
@@ -551,18 +551,20 @@ class QuotaEstimator:
     def get_eligible_accounts(
         self, account_names: list[str]
     ) -> list[tuple[str, float]]:
-        """Get eligible accounts with their remaining capacity scores."""
+        """Get eligible accounts with their remaining capacity scores.
+
+        Above-capacity accounts are included with zero remaining
+        capacity so they can still be scored; upstream quota_exhausted
+        health makes them temporarily ineligible when authoritative.
+        """
         eligible: list[tuple[str, float]] = []
         for name in account_names:
             quota = self.accounts.get(name)
             if quota is None:
                 eligible.append((name, 1.0))
                 continue
-            if not quota.is_within_limits():
-                continue
             capacity = quota.get_remaining_capacity()
-            if capacity > 0:
-                eligible.append((name, capacity))
+            eligible.append((name, capacity))
 
         return sorted(eligible, key=lambda x: x[1], reverse=True)
 

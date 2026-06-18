@@ -237,6 +237,23 @@ class TestPriceParsing:
     ) -> None:
         assert parse_microdollars_per_million(raw) == expected
 
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("$0.003 / 1K", 3_000_000),
+            ("$3 / 1M", 3_000_000),
+            ("$0.000003 / token", 3_000_000),
+            ("0.003 per 1k", 3_000_000),
+            ("3 per million", 3_000_000),
+            ("0.000003 per token", 3_000_000),
+        ],
+    )
+    def test_parse_microdollars_per_million_equivalent_rates(
+        self, raw: str, expected: int
+    ) -> None:
+        """Unit forms ($/token, $/1K, $/1M) produce the same microdollars."""
+        assert parse_microdollars_per_million(raw) == expected
+
     @pytest.mark.parametrize("raw", ["-1", "-$3 / 1M", "nan", "inf", "free"])
     def test_parse_price_rejects_inappropriate_values(self, raw: str) -> None:
         with pytest.raises(ValueError):

@@ -18,6 +18,8 @@ class ModelCatalogCache:
         # model_id -> set of account names that support it
         self._account_support: dict[str, set[str]] = {}
         self._last_refresh: float = 0.0
+        # Per-account last successful refresh timestamp
+        self._account_last_refresh: dict[str, float] = {}
 
     def update_from_account(
         self,
@@ -64,6 +66,7 @@ class ModelCatalogCache:
             self._account_support[model_id].add(account_name)
 
         self._last_refresh = now
+        self._account_last_refresh[account_name] = now
 
     def mark_account_models_unavailable(self, account_name: str) -> None:
         """Mark all models as unavailable for an account."""
@@ -151,6 +154,22 @@ class ModelCatalogCache:
         if self._last_refresh == 0:
             return True
         return (time.time() - self._last_refresh) > max_age_s
+
+    def is_account_stale(self, account_name: str, max_age_s: float) -> bool:
+        """Check if an account's catalog data is older than max_age_s."""
+        last = self._account_last_refresh.get(account_name)
+        if last is None or last == 0:
+            return True
+        return (time.time() - last) > max_age_s
+
+    def get_fresh_supporting_accounts(
+        self, model_id: str, max_age_s: float
+    ) -> set[str]:
+        """Get supporting accounts for a model that refreshed within max_age_s."""
+        supporting = self._account_support.get(model_id, set())
+        return {
+            name for name in supporting if not self.is_account_stale(name, max_age_s)
+        }
 
     def load_model(
         self,

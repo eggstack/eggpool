@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -78,10 +79,24 @@ class _BodyLimitMiddleware(BaseHTTPMiddleware):
             except (TypeError, ValueError):
                 declared_size = None
             if declared_size is not None and declared_size > self._max_bytes:
+                if request.url.path.endswith("/messages"):
+                    error_body = json.dumps(
+                        {
+                            "type": "error",
+                            "error": {
+                                "type": "invalid_request_error",
+                                "message": "Request body too large",
+                            },
+                        }
+                    )
+                else:
+                    error_body = (
+                        '{"error": {"message": "Request body too large",'
+                        ' "type": "invalid_request_error"}}'
+                    )
                 return StarletteResponse(
                     status_code=413,
-                    content='{"error": {"message": "Request body too large",'
-                    ' "type": "invalid_request_error"}}',
+                    content=error_body,
                     media_type="application/json",
                 )
         return await call_next(request)
@@ -175,6 +190,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # 1. Validate auth at startup
     require_auth_at_startup(config.server.api_key_env)
 
+    # 1b. Validate account credentials
+    config.validate_account_credentials()
+
     # 2. Database
     db = Database(
         path=config.database.path,
@@ -262,7 +280,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     app.state.cost_calculator = cost_calculator
 
     # 15. Router (with health manager for circuit breaker integration)
-    router = Router(registry, catalog, health_manager=health_manager)
+    router = Router(
+        registry,
+        catalog,
+        health_manager=health_manager,
+        stale_after_s=float(config.models.stale_after_s),
+    )
     app.state.router = router
 
     # 16. Wire routing config into scorer and estimator

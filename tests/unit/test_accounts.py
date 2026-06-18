@@ -84,14 +84,15 @@ def test_account_registry_loads_accounts() -> None:
 
 
 def test_account_registry_rejects_missing_key() -> None:
+    config = AppConfig.from_dict(
+        {
+            "accounts": [
+                {"name": "acct1", "api_key_env": "MISSING_KEY_XYZ"},
+            ]
+        }
+    )
     with pytest.raises(ConfigError, match="is not set"):
-        AppConfig.from_dict(
-            {
-                "accounts": [
-                    {"name": "acct1", "api_key_env": "MISSING_KEY_XYZ"},
-                ]
-            }
-        )
+        config.validate_account_credentials()
 
 
 def test_account_registry_disabled_skips_key_check() -> None:

@@ -653,3 +653,61 @@ async def test_hop_by_hop_headers_stripped_from_response(
         assert header.lower() not in {k.lower() for k in response.headers}, (
             f"Hop-by-hop header '{header}' should be stripped"
         )
+
+
+# ---------------------------------------------------------------------------
+# Bug 5: Oversized Content-Length returns protocol-appropriate error
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_oversized_content_length_openai_envelope(
+    app: FastAPI,
+) -> None:
+    """Oversized Content-Length on /v1/chat/completions returns OpenAI envelope."""
+    from go_aggregator.constants import MAX_REQUEST_BODY_BYTES
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/v1/chat/completions",
+            content=b"x" * 100,
+            headers={
+                "content-length": str(MAX_REQUEST_BODY_BYTES + 1),
+                "content-type": "application/json",
+                "authorization": "Bearer test-key-123",
+            },
+        )
+
+    assert response.status_code == 413
+    body = response.json()
+    assert "error" in body
+    assert body["error"]["type"] == "invalid_request_error"
+
+
+@pytest.mark.asyncio
+async def test_oversized_content_length_anthropic_envelope(
+    app: FastAPI,
+) -> None:
+    """Oversized Content-Length on /v1/messages returns Anthropic envelope."""
+    from go_aggregator.constants import MAX_REQUEST_BODY_BYTES
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/v1/messages",
+            content=b"x" * 100,
+            headers={
+                "content-length": str(MAX_REQUEST_BODY_BYTES + 1),
+                "content-type": "application/json",
+                "x-api-key": "test-key-123",
+                "anthropic-version": "2023-06-01",
+            },
+        )
+
+    assert response.status_code == 413
+    body = response.json()
+    assert body["type"] == "error"
+    assert body["error"]["type"] == "invalid_request_error"
