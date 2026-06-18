@@ -17,6 +17,8 @@ from go_aggregator.stats.queries import (
     fetch_active_reservations,
     fetch_bandwidth_timeseries,
     fetch_error_breakdown,
+    fetch_provider_model_ttft,
+    fetch_provider_ttft_summary,
     fetch_recent_events,
     fetch_summary,
     fetch_timeseries,
@@ -24,6 +26,7 @@ from go_aggregator.stats.queries import (
 
 if TYPE_CHECKING:
     from go_aggregator.db.connection import Database
+    from go_aggregator.db.repositories import PingRepository
     from go_aggregator.health.health_manager import HealthManager
 
 
@@ -120,10 +123,14 @@ class StatsService:
     """
 
     def __init__(
-        self, db: Database, health_manager: HealthManager | None = None
+        self,
+        db: Database,
+        health_manager: HealthManager | None = None,
+        ping_repo: PingRepository | None = None,
     ) -> None:
         self._db = db
         self._health_manager = health_manager
+        self._ping_repo = ping_repo
 
     async def get_summary(self, time_range: TimeRange) -> dict[str, Any]:
         """Get a top-line summary for the given time range."""
@@ -348,3 +355,53 @@ class StatsService:
             "start": time_range.start_str(),
             "end": time_range.end_str(),
         }
+
+    async def get_provider_ttft_summary(
+        self, time_range: TimeRange
+    ) -> list[dict[str, Any]]:
+        """Get per-provider TTFT aggregate (streamed requests only)."""
+        return await fetch_provider_ttft_summary(
+            self._db, time_range.start_str(), time_range.end_str()
+        )
+
+    async def get_provider_model_ttft(
+        self, time_range: TimeRange
+    ) -> list[dict[str, Any]]:
+        """Get per-provider, per-model TTFT breakdown (streamed requests only)."""
+        return await fetch_provider_model_ttft(
+            self._db, time_range.start_str(), time_range.end_str()
+        )
+
+    async def get_ping_summary(self, time_range: TimeRange) -> list[dict[str, Any]]:
+        """Get per-provider ping summary: avg/min/max latency, success rate."""
+        if self._ping_repo is None:
+            return []
+        return await self._ping_repo.get_provider_ping_summary(
+            time_range.start_str(), time_range.end_str()
+        )
+
+    async def get_ping_timeseries(
+        self,
+        provider_id: str,
+        time_range: TimeRange,
+        bucket: str = "hour",
+    ) -> list[dict[str, Any]]:
+        """Get per-bucket ping latency trend for one provider."""
+        if self._ping_repo is None:
+            return []
+        return await self._ping_repo.get_ping_timeseries(
+            provider_id,
+            time_range.start_str(),
+            time_range.end_str(),
+            bucket=bucket,
+        )
+
+    async def get_ping_recent(
+        self,
+        provider_id: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Get most recent pings, optionally filtered by provider."""
+        if self._ping_repo is None:
+            return []
+        return await self._ping_repo.get_ping_recent(provider_id, limit)

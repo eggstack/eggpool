@@ -38,6 +38,7 @@ from go_aggregator.db.repositories import (
     AccountEventRepository,
     AccountRepository,
     AttemptRepository,
+    PingRepository,
     ProviderRepository,
     RequestRepository,
     ReservationRepository,
@@ -235,6 +236,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     reservation_repo = ReservationRepository(db)
     attempt_repo = AttemptRepository(db)
     usage_window_repo = UsageWindowRepository(db)
+    ping_repo = PingRepository(db)
 
     # 7. HTTPX client pool
     client_pool = ProviderClientPool.from_config(config.providers)
@@ -252,7 +254,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     app.state.health_manager = health_manager
 
     # 10. Catalog service
-    catalog = CatalogService(config, registry, db, client_pool)
+    catalog = CatalogService(config, registry, db, client_pool, ping_repo=ping_repo)
     app.state.catalog = catalog
 
     # 11. Load cached catalog
@@ -360,7 +362,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         )
 
     # 17. Statistics service
-    app.state.stats = StatsService(db, health_manager=health_manager)
+    app.state.stats = StatsService(
+        db, health_manager=health_manager, ping_repo=ping_repo
+    )
 
     # 18. Request coordinator
     coordinator = RequestCoordinator(
@@ -408,6 +412,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             await asyncio.sleep(3600)
             await cleanup_old_requests(db, config.dashboard.retain_request_stats_days)
             await cleanup_old_events(db, config.dashboard.retain_event_days)
+            await ping_repo.cleanup_old_pings(config.models.ping_retain_days)
             # Reconcile expired reservations and sync in-memory state
             await reconcile_expired_reservations(
                 db,

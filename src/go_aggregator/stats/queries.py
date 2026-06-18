@@ -56,14 +56,23 @@ async def fetch_summary(
             as unknown_count,
         COALESCE(SUM(bytes_received), 0) as total_bytes_received,
         COALESCE(SUM(bytes_emitted), 0) as total_bytes_emitted,
-        (SELECT COUNT(DISTINCT provider_id) FROM accounts) as total_providers
+        (SELECT COUNT(DISTINCT provider_id) FROM accounts) as total_providers,
+        COALESCE(AVG(CASE WHEN streamed = 1 THEN first_byte_ms END), 0)
+            as avg_ttft_ms
     FROM requests
     WHERE started_at >= ? AND started_at < ?
     """
     row = await db.fetch_one(sql, (_format_dt(start), _format_dt(end)))
     if row is None:
         return _empty_summary()
-    return _build_summary(dict(row))
+
+    result = _build_summary(dict(row))
+
+    # Compute TTFT percentiles (streamed only) — requires window functions
+    ttft = await _fetch_ttft_percentiles(db, start, end)
+    result.update(ttft)
+
+    return result
 
 
 async def fetch_account_stats(
@@ -105,7 +114,9 @@ async def fetch_account_stats(
             AND r2.status != 'pending'
         ), 0) as cost_30d,
         COALESCE(SUM(r.bytes_received), 0) as bytes_received,
-        COALESCE(SUM(r.bytes_emitted), 0) as bytes_emitted
+        COALESCE(SUM(r.bytes_emitted), 0) as bytes_emitted,
+        COALESCE(AVG(CASE WHEN r.streamed = 1 THEN r.first_byte_ms END), 0)
+            as avg_ttft_ms
     FROM accounts a
     LEFT JOIN requests r
         ON r.account_id = a.id
@@ -133,16 +144,19 @@ async def fetch_model_stats(
     sql = f"""
     SELECT
         r.model_id,
+        r.provider_id,
         COUNT(*) as request_count,
         COALESCE(SUM(r.input_tokens), 0) as input_tokens,
         COALESCE(SUM(r.output_tokens), 0) as output_tokens,
         COALESCE(SUM(r.cost_microdollars), 0) as cost_microdollars,
         COALESCE(AVG(r.upstream_latency_ms), 0) as avg_latency_ms,
         COALESCE(SUM(CASE WHEN r.status = 'error' THEN 1 ELSE 0 END), 0)
-            as error_count
+            as error_count,
+        COALESCE(AVG(CASE WHEN r.streamed = 1 THEN r.first_byte_ms END), 0)
+            as avg_ttft_ms
     FROM requests r
     WHERE r.started_at >= ? AND r.started_at < ?{account_filter}
-    GROUP BY r.model_id
+    GROUP BY r.model_id, r.provider_id
     ORDER BY request_count DESC
     """
     rows = await db.fetch_all(sql, tuple(params))
@@ -185,7 +199,9 @@ async def fetch_timeseries(
         COALESCE(SUM(CASE WHEN r.status = 'error' THEN 1 ELSE 0 END), 0)
             as error_count,
         COALESCE(SUM(r.bytes_received), 0) as bytes_received,
-        COALESCE(SUM(r.bytes_emitted), 0) as bytes_emitted
+        COALESCE(SUM(r.bytes_emitted), 0) as bytes_emitted,
+        COALESCE(AVG(CASE WHEN r.streamed = 1 THEN r.first_byte_ms END), 0)
+            as avg_ttft_ms
     FROM requests r
     WHERE r.started_at >= ? AND r.started_at < ?{account_filter}{model_filter}
     GROUP BY bucket
@@ -340,6 +356,7 @@ def _build_summary(row: dict[str, Any]) -> dict[str, Any]:
         "total_bytes_received": int(row.get("total_bytes_received", 0)),
         "total_bytes_emitted": int(row.get("total_bytes_emitted", 0)),
         "total_providers": int(row.get("total_providers", 0)),
+        "avg_ttft_ms": float(row.get("avg_ttft_ms", 0.0)),
     }
 
 
@@ -366,4 +383,124 @@ def _empty_summary() -> dict[str, Any]:
         "total_bytes_received": 0,
         "total_bytes_emitted": 0,
         "total_providers": 0,
+        "avg_ttft_ms": 0.0,
+        "p50_ttft_ms": 0.0,
+        "p99_ttft_ms": 0.0,
     }
+
+
+async def _fetch_ttft_percentiles(
+    db: Database,
+    start: str,
+    end: str,
+    provider_id: str | None = None,
+    model_id: str | None = None,
+) -> dict[str, Any]:
+    """Compute P50 and P99 of first_byte_ms for streamed requests.
+
+    Uses a window-function subquery to find the median and 99th percentile
+    value from the sorted distribution. Returns a dict with p50_ttft_ms and
+    p99_ttft_ms (floats). Returns zeros when no streamed data exists.
+    """
+    params: list[Any] = [_format_dt(start), _format_dt(end)]
+    extra_filters = ""
+    if provider_id is not None:
+        extra_filters += " AND provider_id = ?"
+        params.append(provider_id)
+    if model_id is not None:
+        extra_filters += " AND model_id = ?"
+        params.append(model_id)
+
+    sql = f"""
+    SELECT
+        AVG(sub.first_byte_ms) as p50_ttft_ms,
+        MAX(CASE WHEN sub.rn = sub.p99_idx THEN sub.first_byte_ms END)
+            as p99_ttft_ms
+    FROM (
+        SELECT
+            first_byte_ms,
+            ROW_NUMBER() OVER (ORDER BY first_byte_ms) as rn,
+            CAST(CEIL(0.99 * COUNT(*) OVER ()) AS INTEGER) as p99_idx
+        FROM requests
+        WHERE streamed = 1
+          AND first_byte_ms IS NOT NULL
+          AND started_at >= ? AND started_at < ?
+          {extra_filters}
+    ) sub
+    WHERE sub.rn IN ((sub.p99_idx + 1) / 2, (sub.p99_idx + 2) / 2)
+       OR sub.rn = sub.p99_idx
+    """
+    row = await db.fetch_one(sql, tuple(params))
+    if row is None:
+        return {"p50_ttft_ms": 0.0, "p99_ttft_ms": 0.0}
+    d = dict(row)
+    return {
+        "p50_ttft_ms": float(d.get("p50_ttft_ms") or 0.0),
+        "p99_ttft_ms": float(d.get("p99_ttft_ms") or 0.0),
+    }
+
+
+async def fetch_provider_model_ttft(
+    db: Database,
+    start: str,
+    end: str,
+) -> list[dict[str, Any]]:
+    """Per-provider, per-model TTFT breakdown (streamed requests only)."""
+    sql = """
+    SELECT
+        r.provider_id,
+        r.model_id,
+        COUNT(*) as request_count,
+        COALESCE(AVG(r.first_byte_ms), 0) as avg_ttft_ms
+    FROM requests r
+    WHERE r.streamed = 1
+      AND r.first_byte_ms IS NOT NULL
+      AND r.started_at >= ? AND r.started_at < ?
+    GROUP BY r.provider_id, r.model_id
+    ORDER BY r.provider_id, request_count DESC
+    """
+    rows = await db.fetch_all(sql, (_format_dt(start), _format_dt(end)))
+    result = [dict(row) for row in rows]
+
+    # Enrich with P50/P99 per provider+model
+    for row in result:
+        pid = row.get("provider_id")
+        mid = row.get("model_id")
+        if pid is not None and mid is not None:
+            percentiles = await _fetch_ttft_percentiles(
+                db, start, end, provider_id=pid, model_id=mid
+            )
+            row.update(percentiles)
+
+    return result
+
+
+async def fetch_provider_ttft_summary(
+    db: Database,
+    start: str,
+    end: str,
+) -> list[dict[str, Any]]:
+    """Per-provider TTFT aggregate (streamed requests only)."""
+    sql = """
+    SELECT
+        r.provider_id,
+        COUNT(*) as request_count,
+        COALESCE(AVG(r.first_byte_ms), 0) as avg_ttft_ms
+    FROM requests r
+    WHERE r.streamed = 1
+      AND r.first_byte_ms IS NOT NULL
+      AND r.started_at >= ? AND r.started_at < ?
+    GROUP BY r.provider_id
+    ORDER BY r.provider_id
+    """
+    rows = await db.fetch_all(sql, (_format_dt(start), _format_dt(end)))
+    result = [dict(row) for row in rows]
+
+    # Enrich with P50/P99 per provider
+    for row in result:
+        pid = row.get("provider_id")
+        if pid is not None:
+            percentiles = await _fetch_ttft_percentiles(db, start, end, provider_id=pid)
+            row.update(percentiles)
+
+    return result

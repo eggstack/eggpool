@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 from go_aggregator.catalog.pricing import (
@@ -11,6 +12,8 @@ from go_aggregator.catalog.pricing import (
 
 if TYPE_CHECKING:
     from go_aggregator.db.connection import Database
+
+logger = logging.getLogger(__name__)
 
 
 class AccountRepository:
@@ -775,3 +778,139 @@ class ProviderRepository:
                     "UPDATE providers SET enabled = 0 WHERE provider_id = ?",
                     (row["provider_id"],),
                 )
+
+
+class PingRepository:
+    """Repository for provider ping probe results."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def record_ping(
+        self,
+        provider_id: str,
+        account_name: str,
+        latency_ms: int | None,
+        status_code: int | None,
+        error: str | None,
+        model_count: int = 0,
+    ) -> None:
+        """Record a single ping result from a catalog refresh."""
+        await self._db.execute_write(
+            """
+            INSERT INTO provider_pings
+                (provider_id, account_name, latency_ms, status_code, error, model_count)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (provider_id, account_name, latency_ms, status_code, error, model_count),
+        )
+
+    async def get_provider_ping_summary(
+        self,
+        start: str,
+        end: str,
+    ) -> list[dict[str, Any]]:
+        """Per-provider aggregate: avg/min/max latency, success rate, last ping."""
+        sql = """
+        SELECT
+            pp.provider_id,
+            COUNT(*) as ping_count,
+            COALESCE(AVG(pp.latency_ms), 0) as avg_latency_ms,
+            COALESCE(MIN(pp.latency_ms), 0) as min_latency_ms,
+            COALESCE(MAX(pp.latency_ms), 0) as max_latency_ms,
+            SUM(CASE WHEN pp.error IS NULL THEN 1 ELSE 0 END) as success_count,
+            SUM(CASE WHEN pp.error IS NOT NULL THEN 1 ELSE 0 END) as failure_count,
+            ROUND(
+                100.0 * SUM(CASE WHEN pp.error IS NULL THEN 1 ELSE 0 END) / COUNT(*),
+                1
+            ) as success_rate,
+            MAX(pp.probed_at) as last_ping_at,
+            (SELECT pp2.latency_ms FROM provider_pings pp2
+             WHERE pp2.provider_id = pp.provider_id
+             ORDER BY pp2.probed_at DESC LIMIT 1) as last_latency_ms,
+            (SELECT pp3.model_count FROM provider_pings pp3
+             WHERE pp3.provider_id = pp.provider_id
+             ORDER BY pp3.probed_at DESC LIMIT 1) as last_model_count
+        FROM provider_pings pp
+        WHERE pp.probed_at >= ? AND pp.probed_at < ?
+        GROUP BY pp.provider_id
+        ORDER BY pp.provider_id
+        """
+        rows = await self._db.fetch_all(sql, (start, end))
+        return [dict(row) for row in rows]
+
+    async def get_ping_timeseries(
+        self,
+        provider_id: str,
+        start: str,
+        end: str,
+        bucket: str = "hour",
+    ) -> list[dict[str, Any]]:
+        """Per-bucket ping latency trend for one provider."""
+        if bucket not in ("hour", "day"):
+            bucket = "hour"
+        fmt = "%Y-%m-%d %H:00:00" if bucket == "hour" else "%Y-%m-%d 00:00:00"
+        sql = """
+        SELECT
+            strftime(?, pp.probed_at) as bucket,
+            COUNT(*) as ping_count,
+            COALESCE(AVG(pp.latency_ms), 0) as avg_latency_ms,
+            COALESCE(MIN(pp.latency_ms), 0) as min_latency_ms,
+            COALESCE(MAX(pp.latency_ms), 0) as max_latency_ms,
+            SUM(CASE WHEN pp.error IS NULL THEN 1 ELSE 0 END) as success_count,
+            SUM(CASE WHEN pp.error IS NOT NULL THEN 1 ELSE 0 END) as failure_count
+        FROM provider_pings pp
+        WHERE pp.provider_id = ?
+          AND pp.probed_at >= ? AND pp.probed_at < ?
+        GROUP BY bucket
+        ORDER BY bucket
+        """
+        rows = await self._db.fetch_all(sql, (fmt, provider_id, start, end))
+        return [dict(row) for row in rows]
+
+    async def get_ping_recent(
+        self,
+        provider_id: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Most recent pings, optionally filtered by provider."""
+        params: list[Any] = []
+        provider_filter = ""
+        if provider_id:
+            provider_filter = " WHERE pp.provider_id = ?"
+            params.append(provider_id)
+        params.append(limit)
+        sql = f"""
+        SELECT
+            pp.provider_id,
+            pp.account_name,
+            pp.probed_at,
+            pp.latency_ms,
+            pp.status_code,
+            pp.error,
+            pp.model_count
+        FROM provider_pings pp
+        {provider_filter}
+        ORDER BY pp.probed_at DESC
+        LIMIT ?
+        """
+        rows = await self._db.fetch_all(sql, tuple(params))
+        return [dict(row) for row in rows]
+
+    async def cleanup_old_pings(self, retain_days: int = 7) -> int:
+        """Delete pings older than the retention period."""
+        async with self._db.transaction():
+            count = await self._db.execute_write(
+                """
+                DELETE FROM provider_pings
+                WHERE probed_at < datetime('now', ? || ' days')
+                """,
+                (f"-{retain_days}",),
+            )
+        if count > 0:
+            logger.info(
+                "Deleted %d old provider pings (retention=%d days)",
+                count,
+                retain_days,
+            )
+        return count

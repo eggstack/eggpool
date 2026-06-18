@@ -6,6 +6,8 @@ Endpoints:
 - GET /api/stats/models
 - GET /api/stats/timeseries
 - GET /api/stats/errors
+- GET /api/stats/latency
+- GET /api/stats/pings
 - GET /api/events
 """
 
@@ -146,6 +148,44 @@ async def handle_bandwidth(
     )
 
 
+async def handle_latency(
+    request: Request,
+    period: str | None = "24h",
+) -> Response:
+    """GET /api/stats/latency."""
+    time_range = _resolve(request, period)
+    stats = request.app.state.stats
+    provider_ttft = await stats.get_provider_ttft_summary(time_range)
+    model_ttft = await stats.get_provider_model_ttft(time_range)
+    return JSONResponse(
+        content={
+            "period": time_range.label,
+            "provider_ttft": provider_ttft,
+            "model_ttft": model_ttft,
+        }
+    )
+
+
+async def handle_pings(
+    request: Request,
+    period: str | None = "24h",
+    provider: str | None = None,
+) -> Response:
+    """GET /api/stats/pings."""
+    time_range = _resolve(request, period)
+    stats = request.app.state.stats
+    ping_summary = await stats.get_ping_summary(time_range)
+    recent_pings = await stats.get_ping_recent(provider_id=provider or None, limit=50)
+    return JSONResponse(
+        content={
+            "period": time_range.label,
+            "provider_filter": provider or None,
+            "summary": ping_summary,
+            "recent": recent_pings,
+        }
+    )
+
+
 def register_stats_routes(app: Any, require_auth: bool = False) -> None:
     """Attach the JSON statistics routes to a FastAPI app.
 
@@ -200,6 +240,18 @@ def register_stats_routes(app: Any, require_auth: bool = False) -> None:
         methods=["GET"],
         dependencies=dependencies,
     )
+    app.add_api_route(
+        path="/api/stats/latency",
+        endpoint=handle_latency,
+        methods=["GET"],
+        dependencies=dependencies,
+    )
+    app.add_api_route(
+        path="/api/stats/pings",
+        endpoint=handle_pings,
+        methods=["GET"],
+        dependencies=dependencies,
+    )
 
 
 __all__ = [
@@ -207,7 +259,9 @@ __all__ = [
     "handle_bandwidth",
     "handle_errors",
     "handle_events",
+    "handle_latency",
     "handle_model_stats",
+    "handle_pings",
     "handle_summary",
     "handle_timeseries",
     "register_stats_routes",

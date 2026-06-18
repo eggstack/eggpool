@@ -16,8 +16,10 @@ from go_aggregator.dashboard.render import (
     render_accounts,
     render_bandwidth,
     render_events,
+    render_latency,
     render_models,
     render_overview,
+    render_pings,
     render_timeseries,
 )
 from go_aggregator.dashboard.theme import list_themes
@@ -95,12 +97,14 @@ async def handle_overview(
     theme_css, heatmap_colors, current_theme, available = _get_theme_data(
         request, theme
     )
+    ping_summary = await stats.get_ping_summary(time_range)
     html = render_overview(
         overview=overview,
         accounts=accounts,
         period=time_range.label,
         refresh_interval_s=refresh_s,
         bandwidth_daily=bandwidth_daily,
+        ping_summary=ping_summary,
         theme_css=theme_css,
         heatmap_colors=heatmap_colors,
         available_themes=available,
@@ -148,6 +152,50 @@ async def handle_models(
         content=render_models(
             models if models is not None else [],
             account_filter=account or "",
+            period=time_range.label,
+            theme_css=theme_css,
+            available_themes=available,
+            current_theme=current_theme,
+        )
+    )
+
+
+async def handle_latency(
+    request: Request, period: str | None = "24h", theme: str | None = None
+) -> Response:
+    """Render the latency breakdown page."""
+    _get_dashboard_config(request)
+    time_range = _resolve(request, period)
+    stats = request.app.state.stats
+    provider_ttft = await stats.get_provider_ttft_summary(time_range)
+    model_ttft = await stats.get_provider_model_ttft(time_range)
+    theme_css, _, current_theme, available = _get_theme_data(request, theme)
+    return HTMLResponse(
+        content=render_latency(
+            provider_ttft,
+            model_ttft,
+            period=time_range.label,
+            theme_css=theme_css,
+            available_themes=available,
+            current_theme=current_theme,
+        )
+    )
+
+
+async def handle_pings(
+    request: Request, period: str | None = "24h", theme: str | None = None
+) -> Response:
+    """Render the provider pings health page."""
+    _get_dashboard_config(request)
+    time_range = _resolve(request, period)
+    stats = request.app.state.stats
+    ping_summary = await stats.get_ping_summary(time_range)
+    recent_pings = await stats.get_ping_recent(limit=50)
+    theme_css, _, current_theme, available = _get_theme_data(request, theme)
+    return HTMLResponse(
+        content=render_pings(
+            ping_summary,
+            recent_pings,
             period=time_range.label,
             theme_css=theme_css,
             available_themes=available,
@@ -285,6 +333,13 @@ def register_dashboard_routes(app: Any, require_auth: bool = False) -> None:
         dependencies=dependencies,
     )
     app.add_api_route(
+        path="/latency",
+        endpoint=handle_latency,
+        methods=["GET"],
+        response_class=HTMLResponse,
+        dependencies=dependencies,
+    )
+    app.add_api_route(
         path="/events",
         endpoint=handle_events,
         methods=["GET"],
@@ -305,14 +360,23 @@ def register_dashboard_routes(app: Any, require_auth: bool = False) -> None:
         response_class=HTMLResponse,
         dependencies=dependencies,
     )
+    app.add_api_route(
+        path="/pings",
+        endpoint=handle_pings,
+        methods=["GET"],
+        response_class=HTMLResponse,
+        dependencies=dependencies,
+    )
 
 
 __all__ = [
     "handle_accounts",
     "handle_bandwidth",
     "handle_events",
+    "handle_latency",
     "handle_models",
     "handle_overview",
+    "handle_pings",
     "handle_timeseries",
     "register_dashboard_routes",
 ]

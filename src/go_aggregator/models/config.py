@@ -64,11 +64,12 @@ class DatabaseConfig(BaseModel):
 class ModelsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    refresh_interval_s: int = Field(default=3600, ge=0)
+    refresh_interval_s: int = Field(default=300, ge=0)
     expose_mode: Literal["union", "intersection", "healthy_union"] = "union"
     startup_refresh: bool = True
     stale_after_s: int = Field(default=7200, gt=0)
     allow_stale_catalog: bool = True
+    ping_retain_days: int = Field(default=7, ge=1)
 
 
 class RoutingConfig(BaseModel):

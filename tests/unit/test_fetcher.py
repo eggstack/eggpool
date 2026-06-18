@@ -5,7 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from go_aggregator.catalog.fetcher import fetch_models_for_account
+from go_aggregator.catalog.fetcher import FetchResult, fetch_models_for_account
 
 
 @pytest.mark.asyncio
@@ -21,7 +21,12 @@ async def test_fetch_models_get_default() -> None:
         transport=transport, base_url="https://example.com"
     ) as client:
         result = await fetch_models_for_account(client, "test-key", "acct1")
-    assert result == {"data": [{"id": "gpt-4"}]}
+    assert isinstance(result, FetchResult)
+    assert result.response == {"data": [{"id": "gpt-4"}]}
+    assert result.status_code == 200
+    assert result.error is None
+    assert result.model_count == 1
+    assert result.latency_ms >= 0
 
 
 @pytest.mark.asyncio
@@ -48,7 +53,10 @@ async def test_fetch_models_post_method() -> None:
             models_method="POST",
             models_path="/v1/models",
         )
-    assert result == {"data": [{"id": "claude-3"}]}
+    assert isinstance(result, FetchResult)
+    assert result.response == {"data": [{"id": "claude-3"}]}
+    assert result.status_code == 200
+    assert result.model_count == 1
     assert len(captured_requests) == 1
     assert captured_requests[0].method == "POST"
     assert str(captured_requests[0].url) == "https://example.com/v1/models"
@@ -71,18 +79,20 @@ async def test_fetch_models_custom_path() -> None:
     async with httpx.AsyncClient(
         transport=transport, base_url="https://example.com"
     ) as client:
-        await fetch_models_for_account(
+        result = await fetch_models_for_account(
             client,
             "test-key",
             "acct1",
             models_path="/api/models",
         )
+    assert isinstance(result, FetchResult)
+    assert result.model_count == 0
     assert str(captured_requests[0].url) == "https://example.com/api/models"
 
 
 @pytest.mark.asyncio
 async def test_fetch_models_http_error_returns_empty() -> None:
-    """HTTP errors are caught and return empty dict."""
+    """HTTP errors are caught and return empty response."""
     transport = httpx.MockTransport(
         lambda request: httpx.Response(403, text="Forbidden", request=request)
     )
@@ -90,12 +100,16 @@ async def test_fetch_models_http_error_returns_empty() -> None:
         transport=transport, base_url="https://example.com"
     ) as client:
         result = await fetch_models_for_account(client, "test-key", "acct1")
-    assert result == {}
+    assert isinstance(result, FetchResult)
+    assert result.response == {}
+    assert result.status_code == 403
+    assert result.error == "HTTP 403"
+    assert result.model_count == 0
 
 
 @pytest.mark.asyncio
 async def test_fetch_models_request_error_returns_empty() -> None:
-    """Request errors are caught and return empty dict."""
+    """Request errors are caught and return empty response."""
 
     def _raise(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("Connection refused")
@@ -105,4 +119,8 @@ async def test_fetch_models_request_error_returns_empty() -> None:
         transport=transport, base_url="https://example.com"
     ) as client:
         result = await fetch_models_for_account(client, "test-key", "acct1")
-    assert result == {}
+    assert isinstance(result, FetchResult)
+    assert result.response == {}
+    assert result.status_code is None
+    assert result.error is not None
+    assert result.model_count == 0

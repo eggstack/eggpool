@@ -117,6 +117,8 @@ def _render_nav(
         ("overview", "/", "Overview"),
         ("accounts", "/accounts", "Accounts"),
         ("models", "/models", "Models"),
+        ("latency", "/latency", "Latency"),
+        ("pings", "/pings", "Pings"),
         ("bandwidth", "/bandwidth", "Bandwidth"),
         ("events", "/events", "Events"),
         ("timeseries", "/timeseries", "Timeseries"),
@@ -179,6 +181,46 @@ def _render_period_selector(current: str, current_theme: str = "") -> str:
         )
     parts.append("</form>")
     return "".join(parts)
+
+
+def _render_provider_health(ping_summary: list[dict[str, Any]]) -> str:
+    """Render the provider health section for the overview page."""
+    if not ping_summary:
+        return ""
+    rows: list[str] = []
+    for row in ping_summary:
+        pid = escape(str(row.get("provider_id", "")))
+        avg_lat = format_latency(row.get("avg_latency_ms", 0))
+        success_rate = row.get("success_rate", 0)
+        last_at = str(row.get("last_ping_at", ""))
+        model_count = int(row.get("last_model_count", 0))
+        status = "healthy" if float(success_rate or 0) >= 90 else "degraded"
+        rows.append(
+            f"<tr>"
+            f"<td>{pid}</td>"
+            f'<td class="{status}">{status}</td>'
+            f"<td>{avg_lat}</td>"
+            f"<td>{success_rate}%</td>"
+            f"<td>{model_count}</td>"
+            f"<td>{last_at}</td>"
+            f"</tr>"
+        )
+    return (
+        '<section class="panel">'
+        "<h3>Provider health</h3>"
+        '<table class="data">'
+        "<thead><tr>"
+        "<th>Provider</th>"
+        "<th>Status</th>"
+        "<th>Avg latency</th>"
+        "<th>Success rate</th>"
+        "<th>Models</th>"
+        "<th>Last ping</th>"
+        "</tr></thead><tbody>"
+        f"{''.join(rows)}"
+        "</tbody></table>"
+        "</section>"
+    )
 
 
 def _render_bandwidth_heatmap(
@@ -309,6 +351,7 @@ def render_overview(
     period: str = "24h",
     refresh_interval_s: int = 60,
     bandwidth_daily: list[dict[str, Any]] | None = None,
+    ping_summary: list[dict[str, Any]] | None = None,
     theme_css: str = "",
     heatmap_colors: list[str] | None = None,
     available_themes: list[str] | None = None,
@@ -339,6 +382,10 @@ def render_overview(
     unknown_exc = int(summary.get("unknown_count", 0))
     bytes_in = format_bytes(summary.get("total_bytes_received", 0))
     bytes_out = format_bytes(summary.get("total_bytes_emitted", 0))
+
+    avg_ttft = format_latency(summary.get("avg_ttft_ms", 0.0))
+    p50_ttft = format_latency(summary.get("p50_ttft_ms", 0.0))
+    p99_ttft = format_latency(summary.get("p99_ttft_ms", 0.0))
 
     most: dict[str, Any] = imbalance.get("most_used") or {}
     least: dict[str, Any] = imbalance.get("least_used") or {}
@@ -405,6 +452,11 @@ def render_overview(
     <p class="metric">{bytes_out}</p>
     <p class="sub">upstream → proxy</p>
   </div>
+  <div class="card">
+    <h3>Avg TTFT (streamed)</h3>
+    <p class="metric">{avg_ttft}</p>
+    <p class="sub">P50 {p50_ttft} · P99 {p99_ttft}</p>
+  </div>
 </section>
 
 <section class="panel">
@@ -427,6 +479,8 @@ def render_overview(
   <h3>Bandwidth activity</h3>
   {_render_bandwidth_heatmap(bandwidth_daily or [], heatmap_colors=heatmap_colors)}
 </section>
+
+{_render_provider_health(ping_summary or [])}
 """
     return _render_layout(
         title="Overview",
@@ -548,28 +602,34 @@ def render_models(
             '<table class="data">',
             "<thead><tr>",
             "<th>Model</th>",
+            "<th>Provider</th>",
             "<th>Requests</th>",
             "<th>Errors</th>",
             "<th>Input tokens</th>",
             "<th>Output tokens</th>",
             "<th>Cost</th>",
             "<th>Avg latency</th>",
+            "<th>Avg TTFT</th>",
             "</tr></thead><tbody>",
         ]
         for row in models:
             cost = format_microdollars(row.get("cost_microdollars", 0))
             latency = format_latency(row.get("avg_latency_ms", 0.0))
+            ttft = format_latency(row.get("avg_ttft_ms", 0.0))
             in_tok = format_tokens(row.get("input_tokens", 0))
             out_tok = format_tokens(row.get("output_tokens", 0))
+            provider = escape(row.get("provider_id", ""))
             parts.append(
                 f"<tr>"
                 f"<td>{escape(row.get('model_id', ''))}</td>"
+                f"<td>{provider}</td>"
                 f"<td>{int(row.get('request_count', 0)):,}</td>"
                 f"<td>{int(row.get('error_count', 0)):,}</td>"
                 f"<td>{in_tok}</td>"
                 f"<td>{out_tok}</td>"
                 f"<td>{cost}</td>"
                 f"<td>{latency}</td>"
+                f"<td>{ttft}</td>"
                 f"</tr>"
             )
         parts.append("</tbody></table>")
@@ -833,11 +893,209 @@ def render_bandwidth(
     )
 
 
+def render_latency(
+    provider_ttft: list[dict[str, Any]],
+    model_ttft: list[dict[str, Any]],
+    period: str = "24h",
+    theme_css: str = "",
+    available_themes: list[str] | None = None,
+    current_theme: str = "",
+) -> str:
+    """Render the latency breakdown page."""
+    # Provider summary cards
+    provider_cards = ""
+    if provider_ttft:
+        cards: list[str] = []
+        for row in provider_ttft:
+            pid = escape(str(row.get("provider_id", "")))
+            avg = format_latency(row.get("avg_ttft_ms", 0.0))
+            p50 = format_latency(row.get("p50_ttft_ms", 0.0))
+            p99 = format_latency(row.get("p99_ttft_ms", 0.0))
+            count = int(row.get("request_count", 0))
+            cards.append(
+                f'<div class="card">'
+                f"<h3>{pid}</h3>"
+                f'<p class="metric">{avg}</p>'
+                f'<p class="sub">P50 {p50} · P99 {p99} · {count:,} reqs</p>'
+                f"</div>"
+            )
+        provider_cards = f'<section class="cards">{"".join(cards)}</section>'
+    else:
+        provider_cards = '<p class="empty">No TTFT data for this period.</p>'
+
+    # Per-provider/model breakdown table
+    if model_ttft:
+        model_parts = [
+            '<table class="data">',
+            "<thead><tr>",
+            "<th>Provider</th>",
+            "<th>Model</th>",
+            "<th>Requests</th>",
+            "<th>Avg TTFT</th>",
+            "<th>P50 TTFT</th>",
+            "<th>P99 TTFT</th>",
+            "</tr></thead><tbody>",
+        ]
+        for row in model_ttft:
+            pid = escape(str(row.get("provider_id", "")))
+            mid = escape(str(row.get("model_id", "")))
+            avg = format_latency(row.get("avg_ttft_ms", 0.0))
+            p50 = format_latency(row.get("p50_ttft_ms", 0.0))
+            p99 = format_latency(row.get("p99_ttft_ms", 0.0))
+            count = int(row.get("request_count", 0))
+            model_parts.append(
+                f"<tr>"
+                f"<td>{pid}</td>"
+                f"<td>{mid}</td>"
+                f"<td>{count:,}</td>"
+                f"<td>{avg}</td>"
+                f"<td>{p50}</td>"
+                f"<td>{p99}</td>"
+                f"</tr>"
+            )
+        model_parts.append("</tbody></table>")
+        model_table = (
+            '<section class="panel">'
+            "<h3>Per-model breakdown</h3>"
+            f"{''.join(model_parts)}</section>"
+        )
+    else:
+        model_table = (
+            '<section class="panel">'
+            "<h3>Per-model breakdown</h3>"
+            '<p class="empty">No model data for this period.</p>'
+            "</section>"
+        )
+
+    body = f"""
+<h2>Latency</h2>
+{_render_period_selector(period, current_theme)}
+
+{provider_cards}
+
+{model_table}
+"""
+    return _render_layout(
+        title="Latency",
+        body=body,
+        active_nav="latency",
+        period=period,
+        theme_css=theme_css,
+        available_themes=available_themes,
+        current_theme=current_theme,
+    )
+
+
+def render_pings(
+    ping_summary: list[dict[str, Any]],
+    recent_pings: list[dict[str, Any]],
+    period: str = "24h",
+    theme_css: str = "",
+    available_themes: list[str] | None = None,
+    current_theme: str = "",
+) -> str:
+    """Render the provider pings health page."""
+    # Provider health summary cards
+    if ping_summary:
+        cards: list[str] = []
+        for row in ping_summary:
+            pid = escape(str(row.get("provider_id", "")))
+            avg_lat = format_latency(row.get("avg_latency_ms", 0))
+            success_rate = row.get("success_rate", 0)
+            model_count = int(row.get("last_model_count", 0))
+            status = "healthy" if float(success_rate or 0) >= 90 else "degraded"
+            cards.append(
+                f'<div class="card">'
+                f"<h3>{pid}</h3>"
+                f'<p class="metric">{avg_lat}</p>'
+                f'<p class="sub">'
+                f'<span class="{status}">{status}</span>'
+                f" · {success_rate}% success"
+                f" · {model_count} models"
+                f"</p>"
+                f"</div>"
+            )
+        provider_cards = f'<section class="cards">{"".join(cards)}</section>'
+    else:
+        provider_cards = (
+            '<p class="empty">No ping data yet. '
+            "Data appears after the first catalog refresh.</p>"
+        )
+
+    # Recent pings table
+    if recent_pings:
+        ping_parts = [
+            '<table class="data">',
+            "<thead><tr>",
+            "<th>Provider</th>",
+            "<th>Account</th>",
+            "<th>Time</th>",
+            "<th>Latency</th>",
+            "<th>Status</th>",
+            "<th>Models</th>",
+            "<th>Error</th>",
+            "</tr></thead><tbody>",
+        ]
+        for row in recent_pings:
+            pid = escape(str(row.get("provider_id", "")))
+            acct = escape(str(row.get("account_name", "")))
+            ts = escape(str(row.get("probed_at", "")))
+            lat = format_latency(row.get("latency_ms", 0))
+            status_code = row.get("status_code")
+            status_str = str(status_code) if status_code else "—"
+            model_count = int(row.get("model_count", 0))
+            error = escape(str(row.get("error") or ""))
+            ping_parts.append(
+                f"<tr>"
+                f"<td>{pid}</td>"
+                f"<td>{acct}</td>"
+                f"<td>{ts}</td>"
+                f"<td>{lat}</td>"
+                f"<td>{status_str}</td>"
+                f"<td>{model_count}</td>"
+                f"<td>{error}</td>"
+                f"</tr>"
+            )
+        ping_parts.append("</tbody></table>")
+        recent_table = (
+            '<section class="panel">'
+            "<h3>Recent pings</h3>"
+            f"{''.join(ping_parts)}</section>"
+        )
+    else:
+        recent_table = (
+            '<section class="panel">'
+            "<h3>Recent pings</h3>"
+            '<p class="empty">No pings recorded yet.</p>'
+            "</section>"
+        )
+
+    body = f"""
+<h2>Provider Pings</h2>
+{_render_period_selector(period, current_theme)}
+
+{provider_cards}
+
+{recent_table}
+"""
+    return _render_layout(
+        title="Provider Pings",
+        body=body,
+        active_nav="pings",
+        period=period,
+        theme_css=theme_css,
+        available_themes=available_themes,
+        current_theme=current_theme,
+    )
+
+
 __all__ = [
     "render_accounts",
     "render_bandwidth",
     "render_events",
+    "render_latency",
     "render_models",
     "render_overview",
+    "render_pings",
     "render_timeseries",
 ]

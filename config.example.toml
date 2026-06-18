@@ -21,11 +21,16 @@ wal = true
 synchronous = "NORMAL"
 
 [models]
-refresh_interval_s = 3600
+# How often to refresh the model catalog from upstream providers (seconds).
+# Also serves as the provider ping interval — each GET /models call measures
+# latency and records health data.
+refresh_interval_s = 300
 expose_mode = "union"
 startup_refresh = true
 stale_after_s = 7200
 allow_stale_catalog = true
+# How many days to retain provider ping data.
+ping_retain_days = 7
 
 [routing]
 strategy = "quota_fair"

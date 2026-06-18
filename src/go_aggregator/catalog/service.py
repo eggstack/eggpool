@@ -16,7 +16,7 @@ from go_aggregator.catalog.pricing import (
     parse_price_per_1k,
 )
 from go_aggregator.catalog.protocols import ModelProtocolResolver
-from go_aggregator.db.repositories import PriceSnapshotRepository
+from go_aggregator.db.repositories import PingRepository, PriceSnapshotRepository
 from go_aggregator.providers.client_pool import ProviderClientPool
 
 if TYPE_CHECKING:
@@ -69,10 +69,12 @@ class CatalogService:
         registry: AccountRegistry,
         db: Database,
         client_pool: ProviderClientPool | httpx.AsyncClient,
+        ping_repo: PingRepository | None = None,
     ) -> None:
         self._config = config
         self._registry = registry
         self._db = db
+        self._ping_repo = ping_repo
         if isinstance(client_pool, ProviderClientPool):
             self._client_pool: ProviderClientPool | None = client_pool
             if "opencode-go" in client_pool.providers:
@@ -173,17 +175,29 @@ class CatalogService:
     ) -> None:
         """Fetch models for one account and update the cache."""
         try:
-            raw_response = await fetch_models_for_account(
+            result = await fetch_models_for_account(
                 client,
                 api_key,
                 account_name,
                 models_method=models_method,
                 models_path=models_path,
             )
-            if not raw_response:
+
+            # Record ping data for this provider/account
+            if self._ping_repo is not None:
+                await self._ping_repo.record_ping(
+                    provider_id=provider_id,
+                    account_name=account_name,
+                    latency_ms=result.latency_ms,
+                    status_code=result.status_code,
+                    error=result.error,
+                    model_count=result.model_count,
+                )
+
+            if not result.response:
                 return
 
-            models = normalize_models(raw_response)
+            models = normalize_models(result.response)
 
             # Apply per-model protocol resolution (Section 11)
             for model in models:
