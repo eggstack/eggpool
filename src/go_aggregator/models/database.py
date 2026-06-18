@@ -46,6 +46,8 @@ class RequestRow(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     cost_microdollars: int = 0
+    bytes_received: int = 0
+    bytes_emitted: int = 0
     upstream_latency_ms: float = 0
     error_message: str | None = None
     protocol: str = "openai"

@@ -574,3 +574,211 @@ class TestStatsService:
         assert summary["total_input_tokens"] == int(row["in_tok"])
         assert summary["total_output_tokens"] == int(row["out_tok"])
         assert summary["total_cost_microdollars"] == int(row["cost"])
+
+
+class TestBandwidthQueries:
+    """Tests for bandwidth tracking in queries."""
+
+    @pytest.mark.asyncio()
+    async def test_summary_includes_bandwidth(self, seeded_db: Database) -> None:
+        """Summary should include total_bytes_received and total_bytes_emitted."""
+        result = await queries.fetch_summary(
+            seeded_db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+        assert "total_bytes_received" in result
+        assert "total_bytes_emitted" in result
+        assert result["total_bytes_received"] == 0
+        assert result["total_bytes_emitted"] == 0
+
+    @pytest.mark.asyncio()
+    async def test_summary_bandwidth_with_data(self, db: Database) -> None:
+        """Summary bandwidth should aggregate from requests with bandwidth data."""
+        async with db.transaction():
+            await db.execute_write(
+                "INSERT INTO accounts (name, api_key_env, enabled) VALUES (?, ?, ?)",
+                ("acct_bw", "ENV_BW", 1),
+            )
+            await db.execute_write(
+                "INSERT INTO models (model_id, protocol) VALUES (?, ?)",
+                ("model_bw", "openai"),
+            )
+            await db.execute_write(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, started_at, completed_at,
+                    status, bytes_received, bytes_emitted
+                ) VALUES (
+                    (SELECT id FROM accounts WHERE name = 'acct_bw'),
+                    'model_bw',
+                    datetime('now', '-1 hour'),
+                    datetime('now', '-1 hour'),
+                    'completed', 5000, 2500
+                )
+                """
+            )
+            await db.execute_write(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, started_at, completed_at,
+                    status, bytes_received, bytes_emitted
+                ) VALUES (
+                    (SELECT id FROM accounts WHERE name = 'acct_bw'),
+                    'model_bw',
+                    datetime('now', '-30 minutes'),
+                    datetime('now', '-30 minutes'),
+                    'completed', 3000, 1500
+                )
+                """
+            )
+
+        result = await queries.fetch_summary(
+            db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+        assert result["total_bytes_received"] == 8000
+        assert result["total_bytes_emitted"] == 4000
+
+    @pytest.mark.asyncio()
+    async def test_account_stats_includes_bandwidth(self, seeded_db: Database) -> None:
+        """Account stats should include bytes_received and bytes_emitted."""
+        rows = await queries.fetch_account_stats(
+            seeded_db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+        for row in rows:
+            assert "bytes_received" in row
+            assert "bytes_emitted" in row
+
+    @pytest.mark.asyncio()
+    async def test_timeseries_includes_bandwidth(self, seeded_db: Database) -> None:
+        """Timeseries should include bytes_received and bytes_emitted."""
+        rows = await queries.fetch_timeseries(
+            seeded_db,
+            "2000-01-01 00:00:00",
+            "2099-12-31 23:59:59",
+            bucket="hour",
+        )
+        for row in rows:
+            assert "bytes_received" in row
+            assert "bytes_emitted" in row
+
+    @pytest.mark.asyncio()
+    async def test_fetch_bandwidth_timeseries(self, db: Database) -> None:
+        """fetch_bandwidth_timeseries should return daily-bucketed bandwidth."""
+        async with db.transaction():
+            await db.execute_write(
+                "INSERT INTO accounts (name, api_key_env, enabled) VALUES (?, ?, ?)",
+                ("acct_bw2", "ENV_BW2", 1),
+            )
+            await db.execute_write(
+                "INSERT INTO models (model_id, protocol) VALUES (?, ?)",
+                ("model_bw2", "openai"),
+            )
+            await db.execute_write(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, started_at, completed_at,
+                    status, bytes_received, bytes_emitted
+                ) VALUES (
+                    (SELECT id FROM accounts WHERE name = 'acct_bw2'),
+                    'model_bw2',
+                    datetime('now', '-1 day'),
+                    datetime('now', '-1 day'),
+                    'completed', 10000, 5000
+                )
+                """
+            )
+
+        rows = await queries.fetch_bandwidth_timeseries(
+            db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+        assert len(rows) >= 1
+        assert "day" in rows[0]
+        assert "bytes_received" in rows[0]
+        assert "bytes_emitted" in rows[0]
+        assert "request_count" in rows[0]
+
+    @pytest.mark.asyncio()
+    async def test_fetch_bandwidth_timeseries_with_account_filter(
+        self, db: Database
+    ) -> None:
+        """fetch_bandwidth_timeseries should filter by account_id."""
+        async with db.transaction():
+            await db.execute_write(
+                "INSERT INTO accounts (name, api_key_env, enabled) VALUES (?, ?, ?)",
+                ("acct_bw3", "ENV_BW3", 1),
+            )
+            await db.execute_write(
+                "INSERT INTO models (model_id, protocol) VALUES (?, ?)",
+                ("model_bw3", "openai"),
+            )
+            await db.execute_write(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, started_at, completed_at,
+                    status, bytes_received, bytes_emitted
+                ) VALUES (
+                    (SELECT id FROM accounts WHERE name = 'acct_bw3'),
+                    'model_bw3',
+                    datetime('now', '-1 day'),
+                    datetime('now', '-1 day'),
+                    'completed', 10000, 5000
+                )
+                """
+            )
+
+        account_id = await queries.fetch_account_id(db, "acct_bw3")
+        assert account_id is not None
+
+        rows = await queries.fetch_bandwidth_timeseries(
+            db,
+            "2000-01-01 00:00:00",
+            "2099-12-31 23:59:59",
+            account_id=account_id,
+        )
+        assert len(rows) >= 1
+        assert rows[0]["bytes_received"] == 10000
+        assert rows[0]["bytes_emitted"] == 5000
+
+
+class TestStatsServiceBandwidth:
+    """Tests for StatsService.get_bandwidth_timeseries."""
+
+    @pytest.mark.asyncio()
+    async def test_get_bandwidth_timeseries(self, seeded_db: Database) -> None:
+        service = StatsService(seeded_db)
+        time_range = TimeRange(
+            start=__import__("datetime").datetime.fromisoformat("2000-01-01"),
+            end=__import__("datetime").datetime.fromisoformat("2099-12-31"),
+            label="custom",
+        )
+        daily = await service.get_bandwidth_timeseries(time_range)
+        assert isinstance(daily, list)
+
+    @pytest.mark.asyncio()
+    async def test_get_bandwidth_timeseries_with_account(
+        self, seeded_db: Database
+    ) -> None:
+        service = StatsService(seeded_db)
+        time_range = TimeRange(
+            start=__import__("datetime").datetime.fromisoformat("2000-01-01"),
+            end=__import__("datetime").datetime.fromisoformat("2099-12-31"),
+            label="custom",
+        )
+        daily = await service.get_bandwidth_timeseries(
+            time_range, account_name="acct_a"
+        )
+        assert isinstance(daily, list)
+
+    @pytest.mark.asyncio()
+    async def test_get_bandwidth_timeseries_unknown_account(
+        self, seeded_db: Database
+    ) -> None:
+        service = StatsService(seeded_db)
+        time_range = TimeRange(
+            start=__import__("datetime").datetime.fromisoformat("2000-01-01"),
+            end=__import__("datetime").datetime.fromisoformat("2099-12-31"),
+            label="custom",
+        )
+        daily = await service.get_bandwidth_timeseries(
+            time_range, account_name="nonexistent"
+        )
+        assert daily == []

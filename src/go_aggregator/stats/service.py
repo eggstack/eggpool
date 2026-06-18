@@ -15,6 +15,7 @@ from go_aggregator.stats import queries
 from go_aggregator.stats.queries import (
     fetch_account_id,
     fetch_active_reservations,
+    fetch_bandwidth_timeseries,
     fetch_error_breakdown,
     fetch_recent_events,
     fetch_summary,
@@ -245,6 +246,24 @@ class StatsService:
             bucket=bucket,
             account_id=account_id,
             model_id=model_filter,
+        )
+
+    async def get_bandwidth_timeseries(
+        self,
+        time_range: TimeRange,
+        account_name: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Get daily-bucketed bandwidth for heatmap and detail views."""
+        account_id: int | None = None
+        if account_name is not None and account_name != "":
+            account_id = await fetch_account_id(self._db, account_name)
+            if account_id is None:
+                return []
+        return await fetch_bandwidth_timeseries(
+            self._db,
+            time_range.start_str(),
+            time_range.end_str(),
+            account_id=account_id,
         )
 
     async def get_error_breakdown(

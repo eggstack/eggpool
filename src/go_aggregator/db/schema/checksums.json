@@ -12,6 +12,7 @@
     "0010_health_probe.sql": "3df513e857c834b011caae91a0fbe39f4b5d851aab2b5761c46959b23416d976",
     "0011_model_resolution_status.sql": "8ee03f7c63653fb5b5d0f2dd8caee2594aae106b935443eb42909ee2f9226fae",
     "0012_drop_reservations_estimated_microdollars.sql": "f467f4eaf7c53354ba8e5d5bd4313275ff86cf72339d3c08a6e208df3a3a23ed",
-    "0013_request_attempts_account_id_index.sql": "d50fb9187b6e01bb2547832a869b2493561233b8c3393f0756e1f88d703416f7"
+    "0013_request_attempts_account_id_index.sql": "d50fb9187b6e01bb2547832a869b2493561233b8c3393f0756e1f88d703416f7",
+    "0014_bandwidth_tracking.sql": "986c80a30a7c8b15c7acdd0ea19460329beb3f6ae6f634f3608bf1f101413e21"
   }
 }

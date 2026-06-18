@@ -6,12 +6,14 @@ All free-text fields are HTML-escaped.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from fastapi.responses import HTMLResponse
 
 from go_aggregator.dashboard.render import (
     render_accounts,
+    render_bandwidth,
     render_events,
     render_models,
     render_overview,
@@ -51,12 +53,24 @@ async def handle_overview(request: Request, period: str | None = "24h") -> Respo
     stats = request.app.state.stats
     overview = await stats.get_dashboard_overview(time_range)
     accounts = await stats.get_account_stats(time_range)
+
+    heatmap_start_dt = datetime.now(UTC) - timedelta(days=90)
+    heatmap_end_dt = datetime.now(UTC)
+    bandwidth_daily = await stats.get_bandwidth_timeseries(
+        TimeRange(
+            start=heatmap_start_dt,
+            end=heatmap_end_dt,
+            label="90d",
+        )
+    )
+
     refresh_s = dashboard_config.refresh_interval_s
     html = render_overview(
         overview=overview,
         accounts=accounts,
         period=time_range.label,
         refresh_interval_s=refresh_s,
+        bandwidth_daily=bandwidth_daily,
     )
     return HTMLResponse(
         content=html,
@@ -134,6 +148,37 @@ async def handle_timeseries(
     )
 
 
+async def handle_bandwidth(
+    request: Request,
+    period: str | None = "24h",
+    bucket: str = "hour",
+    account: str | None = None,
+) -> Response:
+    """Render the bandwidth page."""
+    _get_dashboard_config(request)
+    time_range = _resolve(request, period)
+    if bucket not in ("hour", "day"):
+        bucket = "hour"
+    stats = request.app.state.stats
+    summary = await stats.get_summary(time_range)
+    daily = await stats.get_bandwidth_timeseries(
+        time_range, account_name=account or None
+    )
+    timeseries = await stats.get_timeseries(
+        time_range, bucket=bucket, account_name=account or None
+    )
+    return HTMLResponse(
+        content=render_bandwidth(
+            summary=summary,
+            daily=daily,
+            timeseries=timeseries if timeseries is not None else [],
+            bucket=bucket,
+            period=time_range.label,
+            account_filter=account or "",
+        )
+    )
+
+
 def register_dashboard_routes(app: Any, require_auth: bool = False) -> None:
     """Attach the dashboard HTML routes to a FastAPI app.
 
@@ -181,10 +226,18 @@ def register_dashboard_routes(app: Any, require_auth: bool = False) -> None:
         response_class=HTMLResponse,
         dependencies=dependencies,
     )
+    app.add_api_route(
+        path="/bandwidth",
+        endpoint=handle_bandwidth,
+        methods=["GET"],
+        response_class=HTMLResponse,
+        dependencies=dependencies,
+    )
 
 
 __all__ = [
     "handle_accounts",
+    "handle_bandwidth",
     "handle_events",
     "handle_models",
     "handle_overview",

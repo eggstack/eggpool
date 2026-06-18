@@ -302,6 +302,8 @@ class RequestRepository:
         thinking_characters: int | None = None,
         retry_count: int = 0,
         upstream_latency_ms: float = 0,
+        bytes_received: int = 0,
+        bytes_emitted: int = 0,
     ) -> bool:
         """Finalize a request only if it is still pending.
 
@@ -316,7 +318,8 @@ class RequestRepository:
             "error_class = ?, error_detail = ?, upstream_request_id = ?, "
             "cache_read_tokens = ?, cache_write_tokens = ?, "
             "reasoning_tokens = ?, thinking_characters = ?, "
-            "retry_count = ?, status_code = ?, upstream_latency_ms = ? "
+            "retry_count = ?, status_code = ?, upstream_latency_ms = ?, "
+            "bytes_received = ?, bytes_emitted = ? "
             "WHERE id = ? AND status = 'pending'",
             (
                 status,
@@ -335,6 +338,8 @@ class RequestRepository:
                 retry_count,
                 status_code,
                 upstream_latency_ms,
+                bytes_received,
+                bytes_emitted,
                 request_id,
             ),
         )

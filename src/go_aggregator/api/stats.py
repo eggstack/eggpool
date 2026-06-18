@@ -126,6 +126,26 @@ async def handle_events(
     return JSONResponse(content={"limit": limit, "type": type_filter, "events": events})
 
 
+async def handle_bandwidth(
+    request: Request,
+    period: str | None = "24h",
+    account: str | None = None,
+) -> Response:
+    """GET /api/stats/bandwidth."""
+    time_range = _resolve(request, period)
+    stats = request.app.state.stats
+    daily = await stats.get_bandwidth_timeseries(
+        time_range, account_name=account or None
+    )
+    return JSONResponse(
+        content={
+            "period": time_range.label,
+            "account_filter": account or None,
+            "daily": daily,
+        }
+    )
+
+
 def register_stats_routes(app: Any, require_auth: bool = False) -> None:
     """Attach the JSON statistics routes to a FastAPI app.
 
@@ -174,10 +194,17 @@ def register_stats_routes(app: Any, require_auth: bool = False) -> None:
         methods=["GET"],
         dependencies=dependencies,
     )
+    app.add_api_route(
+        path="/api/stats/bandwidth",
+        endpoint=handle_bandwidth,
+        methods=["GET"],
+        dependencies=dependencies,
+    )
 
 
 __all__ = [
     "handle_account_stats",
+    "handle_bandwidth",
     "handle_errors",
     "handle_events",
     "handle_model_stats",

@@ -59,6 +59,24 @@ def format_latency(value: float | None) -> str:
     return f"{float(value):.1f} ms"
 
 
+def format_bytes(value: int | float | None) -> str:
+    """Format a byte count as a human-readable string (B, KB, MB, GB, TB).
+
+    Uses 1000-based (SI) divisions for network bandwidth readability.
+    """
+    if value is None:
+        value = 0
+    value = float(value)
+    units = ["B", "KB", "MB", "GB", "TB"]
+    for unit in units:
+        if abs(value) < 1000.0 or unit == "TB":
+            if unit == "B":
+                return f"{int(value)} B"
+            return f"{value:.1f} {unit}"
+        value /= 1000.0
+    return f"{value:.1f} PB"
+
+
 def format_timestamp(value: Any) -> str:
     """Format a timestamp for display."""
     if value is None:

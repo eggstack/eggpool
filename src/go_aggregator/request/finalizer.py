@@ -58,6 +58,7 @@ class FinalizationData:
     upstream_latency_ms: int | None = None
     first_byte_ms: int | None = None
     bytes_emitted: int = 0
+    bytes_received: int = 0
     upstream_request_id: str | None = None
     error_class: str | None = None
     error_detail: str | None = None
@@ -207,6 +208,8 @@ class RequestFinalizer:
                 reasoning_tokens=data.reasoning_tokens,
                 thinking_characters=data.thinking_characters,
                 retry_count=retry_count,
+                bytes_received=data.bytes_received,
+                bytes_emitted=data.bytes_emitted,
                 upstream_latency_ms=data.upstream_latency_ms
                 if data.upstream_latency_ms is not None
                 else 0,

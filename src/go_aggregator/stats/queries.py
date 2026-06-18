@@ -53,7 +53,9 @@ async def fetch_summary(
         COALESCE(SUM(CASE WHEN exactness = 'estimated' THEN 1 ELSE 0 END), 0)
             as estimated_count,
         COALESCE(SUM(CASE WHEN exactness = 'unknown' THEN 1 ELSE 0 END), 0)
-            as unknown_count
+            as unknown_count,
+        COALESCE(SUM(bytes_received), 0) as total_bytes_received,
+        COALESCE(SUM(bytes_emitted), 0) as total_bytes_emitted
     FROM requests
     WHERE started_at >= ? AND started_at < ?
     """
@@ -99,7 +101,9 @@ async def fetch_account_stats(
             WHERE r2.account_id = a.id
             AND r2.started_at >= datetime('now', '-30 days')
             AND r2.status != 'pending'
-        ), 0) as cost_30d
+        ), 0) as cost_30d,
+        COALESCE(SUM(r.bytes_received), 0) as bytes_received,
+        COALESCE(SUM(r.bytes_emitted), 0) as bytes_emitted
     FROM accounts a
     LEFT JOIN requests r
         ON r.account_id = a.id
@@ -177,7 +181,9 @@ async def fetch_timeseries(
         COALESCE(SUM(r.output_tokens), 0) as output_tokens,
         COALESCE(SUM(r.cost_microdollars), 0) as cost_microdollars,
         COALESCE(SUM(CASE WHEN r.status = 'error' THEN 1 ELSE 0 END), 0)
-            as error_count
+            as error_count,
+        COALESCE(SUM(r.bytes_received), 0) as bytes_received,
+        COALESCE(SUM(r.bytes_emitted), 0) as bytes_emitted
     FROM requests r
     WHERE r.started_at >= ? AND r.started_at < ?{account_filter}{model_filter}
     GROUP BY bucket
@@ -276,6 +282,36 @@ async def fetch_account_id(db: Database, name: str) -> int | None:
     return int(row["id"])
 
 
+async def fetch_bandwidth_timeseries(
+    db: Database,
+    start: str,
+    end: str,
+    account_id: int | None = None,
+) -> list[dict[str, Any]]:
+    """Get daily-bucketed bandwidth for heatmap and detail views."""
+    params: list[Any] = [_format_dt(start), _format_dt(end)]
+    account_filter = ""
+    if account_id is not None:
+        account_filter = " AND r.account_id = ?"
+        params.append(account_id)
+
+    sql = f"""
+    SELECT
+        strftime('%Y-%m-%d', r.started_at) as day,
+        COALESCE(SUM(r.bytes_received), 0) as bytes_received,
+        COALESCE(SUM(r.bytes_emitted), 0) as bytes_emitted,
+        COUNT(*) as request_count
+    FROM requests r
+    WHERE r.started_at >= ? AND r.started_at < ?
+        AND r.status != 'pending'
+        {account_filter}
+    GROUP BY day
+    ORDER BY day
+    """
+    rows = await db.fetch_all(sql, tuple(params))
+    return [dict(row) for row in rows]
+
+
 def _build_summary(row: dict[str, Any]) -> dict[str, Any]:
     """Build a summary dict from a SQL row."""
     total = int(row.get("total_requests", 0))
@@ -299,6 +335,8 @@ def _build_summary(row: dict[str, Any]) -> dict[str, Any]:
         "derived_count": int(row.get("derived_count", 0)),
         "estimated_count": int(row.get("estimated_count", 0)),
         "unknown_count": int(row.get("unknown_count", 0)),
+        "total_bytes_received": int(row.get("total_bytes_received", 0)),
+        "total_bytes_emitted": int(row.get("total_bytes_emitted", 0)),
     }
 
 
@@ -322,4 +360,6 @@ def _empty_summary() -> dict[str, Any]:
         "derived_count": 0,
         "estimated_count": 0,
         "unknown_count": 0,
+        "total_bytes_received": 0,
+        "total_bytes_emitted": 0,
     }

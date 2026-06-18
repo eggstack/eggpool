@@ -1,0 +1,2 @@
+ALTER TABLE requests ADD COLUMN bytes_received INTEGER DEFAULT 0;
+ALTER TABLE requests ADD COLUMN bytes_emitted INTEGER DEFAULT 0;

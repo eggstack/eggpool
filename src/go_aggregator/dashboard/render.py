@@ -6,12 +6,14 @@ small. All values rendered into HTML are escaped via the `escape` module.
 
 from __future__ import annotations
 
+from datetime import date, timedelta
 from html import escape as _html_escape
 from typing import Any
 
 from go_aggregator.dashboard.escape import (
     escape,
     escape_attr,
+    format_bytes,
     format_latency,
     format_microdollars,
     format_percent,
@@ -60,6 +62,7 @@ def _render_nav(active_nav: str, period: str) -> str:
         ("overview", "/", "Overview"),
         ("accounts", "/accounts", "Accounts"),
         ("models", "/models", "Models"),
+        ("bandwidth", "/bandwidth", "Bandwidth"),
         ("events", "/events", "Events"),
         ("timeseries", "/timeseries", "Timeseries"),
     ]
@@ -97,12 +100,133 @@ def _render_period_selector(current: str) -> str:
     return "".join(parts)
 
 
+def _render_bandwidth_heatmap(
+    daily_data: list[dict[str, Any]],
+    title: str = "Bandwidth activity (last 90 days)",
+) -> str:
+    """Render a GitHub-style contribution heatmap as inline SVG."""
+    if not daily_data:
+        return '<p class="empty">No bandwidth data available.</p>'
+
+    # Build day -> bytes_emitted lookup
+    day_values: dict[str, int] = {}
+    for row in daily_data:
+        day_str = str(row.get("day", ""))
+        val = int(row.get("bytes_emitted", 0)) + int(row.get("bytes_received", 0))
+        day_values[day_str] = val
+
+    # Date range: last 90 days ending today
+    today = date.today()
+    start_date = today - timedelta(days=89)
+
+    # Pad start to Sunday (GitHub convention: weeks start on Sunday)
+    weekday = start_date.weekday()  # Monday=0, Sunday=6
+    padding_days = (weekday + 1) % 7  # days to go back to Sunday
+    grid_start = start_date - timedelta(days=padding_days)
+
+    # Calculate number of weeks
+    num_weeks = ((today - grid_start).days // 7) + 1
+
+    # Find max value for color scaling
+    max_val = max(day_values.values()) if day_values else 1
+    if max_val == 0:
+        max_val = 1
+
+    # Color scale (GitHub Primer green)
+    colors = ["#ebedf0", "#9be9a8", "#40c463", "#30a14e", "#216e39"]
+
+    def _get_color(value: int) -> str:
+        if value == 0:
+            return colors[0]
+        ratio = value / max_val
+        if ratio < 0.25:
+            return colors[1]
+        if ratio < 0.5:
+            return colors[2]
+        if ratio < 0.75:
+            return colors[3]
+        return colors[4]
+
+    cell_size = 13
+    cell_gap = 3
+    step = cell_size + cell_gap
+    left_margin = 36
+    top_margin = 20
+    svg_width = left_margin + num_weeks * step + 10
+    svg_height = top_margin + 7 * step + 10
+
+    # Day-of-week labels (Mon, Wed, Fri)
+    day_labels = {1: "Mon", 3: "Wed", 5: "Fri"}
+
+    # Month labels
+    month_labels: dict[int, str] = {}
+    for i in range(12):
+        dt = date(2000, i + 1, 1)
+        month_labels[i + 1] = dt.strftime("%b")
+
+    cells: list[str] = []
+
+    # Day-of-week labels
+    for day_num, label_text in day_labels.items():
+        y = top_margin + day_num * step + cell_size // 2
+        cells.append(
+            f'<text x="0" y="{y}" class="heatmap-label" '
+            f'text-anchor="start" dominant-baseline="central">'
+            f"{label_text}</text>"
+        )
+
+    # Month labels
+    month_positions: dict[int, int] = {}
+    current_month = -1
+    for week in range(num_weeks):
+        week_start = grid_start + timedelta(weeks=week)
+        if week_start.month != current_month:
+            current_month = week_start.month
+            month_positions[current_month] = week
+
+    for month_num, week_pos in month_positions.items():
+        x = left_margin + week_pos * step
+        cells.append(
+            f'<text x="{x}" y="10" class="heatmap-label" '
+            f'text-anchor="start">{month_labels.get(month_num, "")}</text>'
+        )
+
+    # Day cells
+    for week in range(num_weeks):
+        for day_of_week in range(7):
+            cell_date = grid_start + timedelta(weeks=week, days=day_of_week)
+            if cell_date < start_date or cell_date > today:
+                continue
+            day_str = cell_date.isoformat()
+            value = day_values.get(day_str, 0)
+            color = _get_color(value)
+            x = left_margin + week * step
+            y = top_margin + day_of_week * step
+            tooltip = f"{day_str}: {format_bytes(value)}"
+            cells.append(
+                f'<rect x="{x}" y="{y}" width="{cell_size}" '
+                f'height="{cell_size}" rx="2" fill="{color}" '
+                f'class="heatmap-cell">'
+                f"<title>{tooltip}</title></rect>"
+            )
+
+    svg = (
+        f'<svg width="{svg_width}" height="{svg_height}" '
+        f'viewBox="0 0 {svg_width} {svg_height}" '
+        f'role="img" aria-label="{_html_escape(title)}">'
+        f"{''.join(cells)}</svg>"
+    )
+
+    return f'<div class="heatmap">{svg}</div>'
+
+
 def render_overview(
     overview: dict[str, Any],
     accounts: list[dict[str, Any]],
     account_filter: str = "",
     period: str = "24h",
     refresh_interval_s: int = 60,
+    bandwidth_daily: list[dict[str, Any]] | None = None,
 ) -> str:
     """Render the overview dashboard page."""
     summary = overview.get("summary", {})
@@ -127,6 +251,8 @@ def render_overview(
     derived = int(summary.get("derived_count", 0))
     estimated = int(summary.get("estimated_count", 0))
     unknown_exc = int(summary.get("unknown_count", 0))
+    bytes_in = format_bytes(summary.get("total_bytes_received", 0))
+    bytes_out = format_bytes(summary.get("total_bytes_emitted", 0))
 
     most: dict[str, Any] = imbalance.get("most_used") or {}
     least: dict[str, Any] = imbalance.get("least_used") or {}
@@ -182,6 +308,19 @@ def render_overview(
   </div>
 </section>
 
+<section class="cards">
+  <div class="card">
+    <h3>Bandwidth received</h3>
+    <p class="metric">{bytes_in}</p>
+    <p class="sub">client → proxy</p>
+  </div>
+  <div class="card">
+    <h3>Bandwidth emitted</h3>
+    <p class="metric">{bytes_out}</p>
+    <p class="sub">upstream → proxy</p>
+  </div>
+</section>
+
 <section class="panel">
   <h3>Account breakdown</h3>
   {_render_account_table(accounts)}
@@ -196,6 +335,11 @@ def render_overview(
     <strong>{_html_escape(str(least.get("name", "—")))}</strong>
     ({format_microdollars(least.get("cost_microdollars", 0))})
   </p>
+</section>
+
+<section class="panel">
+  <h3>Bandwidth activity</h3>
+  {_render_bandwidth_heatmap(bandwidth_daily or [])}
 </section>
 """
     return _render_layout(
@@ -228,6 +372,8 @@ def _render_account_table(accounts: list[dict[str, Any]]) -> str:
         "<th>5h rate</th>",
         "<th>7d rate</th>",
         "<th>30d rate</th>",
+        "<th>BW received</th>",
+        "<th>BW emitted</th>",
         "</tr></thead><tbody>",
     ]
     for row in accounts:
@@ -260,6 +406,8 @@ def _render_account_table(accounts: list[dict[str, Any]]) -> str:
             f"<td>{util_5h}</td>"
             f"<td>{util_7d}</td>"
             f"<td>{util_30d}</td>"
+            f"<td>{format_bytes(row.get('bytes_received', 0))}</td>"
+            f"<td>{format_bytes(row.get('bytes_emitted', 0))}</td>"
             f"</tr>"
         )
     parts.append("</tbody></table>")
@@ -433,6 +581,8 @@ def render_timeseries(
             "<th>Input tokens</th>",
             "<th>Output tokens</th>",
             "<th>Cost</th>",
+            "<th>BW received</th>",
+            "<th>BW emitted</th>",
             "</tr></thead><tbody>",
         ]
         for row in series:
@@ -447,6 +597,8 @@ def render_timeseries(
                 f"<td>{in_tok}</td>"
                 f"<td>{out_tok}</td>"
                 f"<td>{cost}</td>"
+                f"<td>{format_bytes(row.get('bytes_received', 0))}</td>"
+                f"<td>{format_bytes(row.get('bytes_emitted', 0))}</td>"
                 f"</tr>"
             )
         parts.append("</tbody></table>")
@@ -467,8 +619,97 @@ def render_timeseries(
     )
 
 
+def _render_bandwidth_timeseries_table(
+    series: list[dict[str, Any]],
+) -> str:
+    """Render a timeseries table with bandwidth columns."""
+    if not series:
+        return '<p class="empty">No bandwidth data in this window.</p>'
+    parts = [
+        '<table class="data">',
+        "<thead><tr>",
+        "<th>Bucket</th>",
+        "<th>Requests</th>",
+        "<th>BW received</th>",
+        "<th>BW emitted</th>",
+        "</tr></thead><tbody>",
+    ]
+    for row in series:
+        parts.append(
+            f"<tr>"
+            f"<td>{escape(row.get('bucket', row.get('day', '')))}</td>"
+            f"<td>{int(row.get('request_count', 0)):,}</td>"
+            f"<td>{format_bytes(row.get('bytes_received', 0))}</td>"
+            f"<td>{format_bytes(row.get('bytes_emitted', 0))}</td>"
+            f"</tr>"
+        )
+    parts.append("</tbody></table>")
+    return "".join(parts)
+
+
+def render_bandwidth(
+    summary: dict[str, Any],
+    daily: list[dict[str, Any]],
+    timeseries: list[dict[str, Any]],
+    bucket: str = "hour",
+    period: str = "24h",
+    account_filter: str = "",
+) -> str:
+    """Render the bandwidth page."""
+    bytes_in = format_bytes(summary.get("total_bytes_received", 0))
+    bytes_out = format_bytes(summary.get("total_bytes_emitted", 0))
+
+    filter_form = f"""
+<form method="get" class="filter-form">
+  <label>Account:
+    <input type="text" name="account" value="{escape_attr(account_filter)}"
+           placeholder="(all)">
+  </label>
+  <input type="hidden" name="period" value="{escape_attr(period)}">
+  <input type="hidden" name="bucket" value="{escape_attr(bucket)}">
+  <button type="submit">Apply</button>
+</form>
+"""
+
+    body = f"""
+<h2>Bandwidth</h2>
+{filter_form}
+{_render_period_selector(period)}
+
+<section class="cards">
+  <div class="card">
+    <h3>Total received</h3>
+    <p class="metric">{bytes_in}</p>
+    <p class="sub">client → proxy</p>
+  </div>
+  <div class="card">
+    <h3>Total emitted</h3>
+    <p class="metric">{bytes_out}</p>
+    <p class="sub">upstream → proxy</p>
+  </div>
+</section>
+
+<section class="panel">
+  <h3>Bandwidth activity (last 90 days)</h3>
+  {_render_bandwidth_heatmap(daily)}
+</section>
+
+<section class="panel">
+  <h3>Bandwidth timeseries ({escape(bucket)} buckets)</h3>
+  {_render_bandwidth_timeseries_table(timeseries)}
+</section>
+"""
+    return _render_layout(
+        title="Bandwidth",
+        body=body,
+        active_nav="bandwidth",
+        period=period,
+    )
+
+
 __all__ = [
     "render_accounts",
+    "render_bandwidth",
     "render_events",
     "render_models",
     "render_overview",

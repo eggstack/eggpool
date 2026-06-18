@@ -573,6 +573,7 @@ class RequestCoordinator:
                     outcome=FinalizationOutcome.CLIENT_CANCELLED,
                     error_class="CancelledError",
                     upstream_latency_ms=elapsed_ms,
+                    bytes_received=len(context.original_body),
                 ),
             )
             raise
@@ -694,6 +695,7 @@ class RequestCoordinator:
                     upstream_latency_ms=elapsed_ms,
                     bytes_emitted=len(body),
                     upstream_request_id=upstream_req_id,
+                    bytes_received=len(context.original_body),
                 ),
             )
 
@@ -909,6 +911,7 @@ class RequestCoordinator:
                         upstream_request_id=self._get_header_value(
                             resp_headers, _UPSTREAM_REQUEST_ID_HEADERS
                         ),
+                        bytes_received=len(context.original_body),
                     ),
                 )
 
@@ -929,6 +932,7 @@ class RequestCoordinator:
                         cache_write_tokens=usage_result.cache_creation_tokens,
                         reasoning_tokens=usage_result.reasoning_tokens,
                         thinking_characters=usage_result.thinking_characters,
+                        bytes_received=len(context.original_body),
                     ),
                 )
                 raise
@@ -960,6 +964,7 @@ class RequestCoordinator:
                         thinking_characters=usage_result.thinking_characters,
                         error_class=type(exc).__name__,
                         error_detail=error_detail_value,
+                        bytes_received=len(context.original_body),
                     ),
                 )
                 raise
@@ -1157,6 +1162,7 @@ class RequestCoordinator:
                 upstream_request_id=self._get_header_value(
                     resp_headers, _UPSTREAM_REQUEST_ID_HEADERS
                 ),
+                bytes_received=len(context.original_body),
             ),
         )
 
@@ -1222,6 +1228,7 @@ class RequestCoordinator:
                     error_detail=error_detail,
                     upstream_latency_ms=elapsed_ms,
                     health_already_applied=health_already_applied,
+                    bytes_received=len(context.original_body),
                 ),
             )
         elif context.client_metadata.get("db_request_id") is not None:
