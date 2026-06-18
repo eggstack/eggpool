@@ -800,3 +800,277 @@ class TestStatsServiceBandwidth:
             time_range, account_name="nonexistent"
         )
         assert daily == []
+
+
+# ===================================================================
+# TTFT (Time-to-First-Token) tests
+# ===================================================================
+
+
+@pytest_asyncio.fixture()
+async def ttft_db(db: Database) -> Database:
+    """Seed the database with TTFT-specific data: streamed and non-streamed requests."""
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled) VALUES (?, ?, ?)",
+            ("ttft_acct", "ENV_TTFT", 1),
+        )
+        await db.execute_write(
+            "INSERT INTO models (model_id, protocol) VALUES (?, ?)",
+            ("model_ttft", "openai"),
+        )
+    # Insert streamed requests with known first_byte_ms values
+    async with db.transaction():
+        for fbt in [100, 200, 300, 400, 500]:
+            await db.execute_write(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, started_at, completed_at,
+                    status, streamed, first_byte_ms
+                ) VALUES (
+                    (SELECT id FROM accounts WHERE name = ?),
+                    'model_ttft',
+                    datetime('now', '-1 hour'),
+                    datetime('now', '-1 hour'),
+                    'completed', 1, ?
+                )
+                """,
+                ("ttft_acct", fbt),
+            )
+        # Insert non-streamed request with first_byte_ms (should be excluded)
+        await db.execute_write(
+            """
+            INSERT INTO requests (
+                account_id, model_id, started_at, completed_at,
+                status, streamed, first_byte_ms
+            ) VALUES (
+                (SELECT id FROM accounts WHERE name = ?),
+                'model_ttft',
+                datetime('now', '-1 hour'),
+                datetime('now', '-1 hour'),
+                'completed', 0, 9999
+            )
+            """,
+            ("ttft_acct",),
+        )
+    return db
+
+
+class TestTTFTStatsQueries:
+    """Tests for TTFT fields in stats queries."""
+
+    @pytest.mark.asyncio()
+    async def test_summary_includes_ttft_fields(self, ttft_db: Database) -> None:
+        """fetch_summary includes avg_ttft_ms, p50_ttft_ms, p99_ttft_ms."""
+        result = await queries.fetch_summary(
+            ttft_db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+        assert "avg_ttft_ms" in result
+        assert "p50_ttft_ms" in result
+        assert "p99_ttft_ms" in result
+
+    @pytest.mark.asyncio()
+    async def test_summary_ttft_avg_correct(self, ttft_db: Database) -> None:
+        """avg_ttft_ms is the average of streamed first_byte_ms values."""
+        result = await queries.fetch_summary(
+            ttft_db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+        # Average of [100, 200, 300, 400, 500] = 300.0
+        assert float(result["avg_ttft_ms"]) == pytest.approx(300.0)
+
+    @pytest.mark.asyncio()
+    async def test_summary_ttft_p50_correct(self, ttft_db: Database) -> None:
+        """p50_ttft_ms approximates the median of streamed first_byte_ms."""
+        result = await queries.fetch_summary(
+            ttft_db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+        # P50 of [100, 200, 300, 400, 500] should be ~300
+        assert float(result["p50_ttft_ms"]) == pytest.approx(300.0, abs=100.0)
+
+    @pytest.mark.asyncio()
+    async def test_summary_ttft_p99_correct(self, ttft_db: Database) -> None:
+        """p99_ttft_ms approximates the 99th percentile."""
+        result = await queries.fetch_summary(
+            ttft_db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+        # P99 of 5 values should be close to the max (500)
+        assert float(result["p99_ttft_ms"]) >= 400.0
+
+    @pytest.mark.asyncio()
+    async def test_streamed_only_filtering(self, db: Database) -> None:
+        """Non-streamed requests are excluded from TTFT calculations."""
+        async with db.transaction():
+            await db.execute_write(
+                "INSERT INTO accounts (name, api_key_env, enabled) VALUES (?, ?, ?)",
+                ("stream_acct", "ENV_STREAM", 1),
+            )
+            await db.execute_write(
+                "INSERT INTO models (model_id, protocol) VALUES (?, ?)",
+                ("model_s", "openai"),
+            )
+        async with db.transaction():
+            # One streamed request with first_byte_ms=100
+            await db.execute_write(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, started_at, completed_at,
+                    status, streamed, first_byte_ms
+                ) VALUES (
+                    (SELECT id FROM accounts WHERE name = ?),
+                    'model_s', datetime('now'), datetime('now'),
+                    'completed', 1, 100
+                )
+                """,
+                ("stream_acct",),
+            )
+            # One non-streamed request with first_byte_ms=9999 (should not count)
+            await db.execute_write(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, started_at, completed_at,
+                    status, streamed, first_byte_ms
+                ) VALUES (
+                    (SELECT id FROM accounts WHERE name = ?),
+                    'model_s', datetime('now'), datetime('now'),
+                    'completed', 0, 9999
+                )
+                """,
+                ("stream_acct",),
+            )
+
+        result = await queries.fetch_summary(
+            db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+        # Only the streamed request (100ms) should be counted
+        assert float(result["avg_ttft_ms"]) == pytest.approx(100.0)
+
+    @pytest.mark.asyncio()
+    async def test_ttft_zero_when_no_streamed(self, db: Database) -> None:
+        """TTFT fields are 0 when no streamed requests exist."""
+        async with db.transaction():
+            await db.execute_write(
+                "INSERT INTO accounts (name, api_key_env, enabled) VALUES (?, ?, ?)",
+                ("no_stream", "ENV_NS", 1),
+            )
+            await db.execute_write(
+                "INSERT INTO models (model_id, protocol) VALUES (?, ?)",
+                ("model_ns", "openai"),
+            )
+        async with db.transaction():
+            await db.execute_write(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, started_at, completed_at,
+                    status, streamed
+                ) VALUES (
+                    (SELECT id FROM accounts WHERE name = ?),
+                    'model_ns', datetime('now'), datetime('now'),
+                    'completed', 0
+                )
+                """,
+                ("no_stream",),
+            )
+
+        result = await queries.fetch_summary(
+            db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+        assert float(result["avg_ttft_ms"]) == 0.0
+        assert float(result["p50_ttft_ms"]) == 0.0
+        assert float(result["p99_ttft_ms"]) == 0.0
+
+
+class TestTTFTProviderModelQueries:
+    """Tests for per-provider/model TTFT breakdown queries."""
+
+    @pytest.mark.asyncio()
+    async def test_fetch_provider_model_ttft(self, ttft_db: Database) -> None:
+        """fetch_provider_model_ttft returns per-provider/model breakdown."""
+        rows = await queries.fetch_provider_model_ttft(
+            ttft_db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["provider_id"] == "opencode-go"
+        assert row["model_id"] == "model_ttft"
+        assert row["request_count"] == 5
+        assert float(row["avg_ttft_ms"]) == pytest.approx(300.0)
+        assert "p50_ttft_ms" in row
+        assert "p99_ttft_ms" in row
+
+    @pytest.mark.asyncio()
+    async def test_fetch_provider_ttft_summary(self, ttft_db: Database) -> None:
+        """fetch_provider_ttft_summary returns per-provider aggregate."""
+        rows = await queries.fetch_provider_ttft_summary(
+            ttft_db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["provider_id"] == "opencode-go"
+        assert row["request_count"] == 5
+        assert float(row["avg_ttft_ms"]) == pytest.approx(300.0)
+        assert "p50_ttft_ms" in row
+        assert "p99_ttft_ms" in row
+
+    @pytest.mark.asyncio()
+    async def test_provider_model_ttft_empty_when_no_data(self, db: Database) -> None:
+        """Returns empty list when no TTFT data exists."""
+        rows = await queries.fetch_provider_model_ttft(
+            db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+        assert rows == []
+
+    @pytest.mark.asyncio()
+    async def test_provider_ttft_summary_empty_when_no_data(self, db: Database) -> None:
+        """Returns empty list when no TTFT data exists."""
+        rows = await queries.fetch_provider_ttft_summary(
+            db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+        assert rows == []
+
+
+class TestTTFTStatsService:
+    """Tests for StatsService TTFT methods."""
+
+    @pytest.mark.asyncio()
+    async def test_get_provider_ttft_summary(self, ttft_db: Database) -> None:
+        """StatsService.get_provider_ttft_summary returns TTFT data."""
+        service = StatsService(ttft_db)
+        time_range = TimeRange(
+            start=__import__("datetime").datetime.fromisoformat("2000-01-01"),
+            end=__import__("datetime").datetime.fromisoformat("2099-12-31"),
+            label="custom",
+        )
+        rows = await service.get_provider_ttft_summary(time_range)
+        assert len(rows) == 1
+        assert rows[0]["provider_id"] == "opencode-go"
+        assert float(rows[0]["avg_ttft_ms"]) == pytest.approx(300.0)
+
+    @pytest.mark.asyncio()
+    async def test_get_provider_model_ttft(self, ttft_db: Database) -> None:
+        """StatsService.get_provider_model_ttft returns per-model TTFT."""
+        service = StatsService(ttft_db)
+        time_range = TimeRange(
+            start=__import__("datetime").datetime.fromisoformat("2000-01-01"),
+            end=__import__("datetime").datetime.fromisoformat("2099-12-31"),
+            label="custom",
+        )
+        rows = await service.get_provider_model_ttft(time_range)
+        assert len(rows) == 1
+        assert rows[0]["model_id"] == "model_ttft"
+        assert float(rows[0]["avg_ttft_ms"]) == pytest.approx(300.0)
+
+    @pytest.mark.asyncio()
+    async def test_ttft_in_dashboard_overview(self, ttft_db: Database) -> None:
+        """Dashboard overview includes TTFT summary fields."""
+        service = StatsService(ttft_db)
+        time_range = TimeRange(
+            start=__import__("datetime").datetime.fromisoformat("2000-01-01"),
+            end=__import__("datetime").datetime.fromisoformat("2099-12-31"),
+            label="custom",
+        )
+        overview = await service.get_dashboard_overview(time_range)
+        summary = overview["summary"]
+        assert "avg_ttft_ms" in summary
+        assert "p50_ttft_ms" in summary
+        assert "p99_ttft_ms" in summary
+        assert float(summary["avg_ttft_ms"]) == pytest.approx(300.0)

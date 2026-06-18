@@ -21,8 +21,10 @@ from go_aggregator.dashboard.render import (
     render_accounts,
     render_bandwidth,
     render_events,
+    render_latency,
     render_models,
     render_overview,
+    render_pings,
     render_timeseries,
 )
 
@@ -738,3 +740,313 @@ class TestRenderOverviewBandwidth:
         assert "BW emitted" in html
         assert "3.0 MB" in html
         assert "1.5 MB" in html
+
+
+class TestRenderLatency:
+    """Tests for the latency page renderer."""
+
+    def test_renders_empty(self) -> None:
+        html = render_latency(provider_ttft=[], model_ttft=[], period="24h")
+        assert "Latency" in html
+        assert "No TTFT data" in html
+
+    def test_renders_provider_cards(self) -> None:
+        provider_ttft = [
+            {
+                "provider_id": "opencode-go",
+                "request_count": 100,
+                "avg_ttft_ms": 245.0,
+                "p50_ttft_ms": 180.0,
+                "p99_ttft_ms": 890.0,
+            }
+        ]
+        html = render_latency(provider_ttft=provider_ttft, model_ttft=[], period="24h")
+        assert "opencode-go" in html
+        assert "245.0 ms" in html
+        assert "180.0 ms" in html
+        assert "890.0 ms" in html
+        assert "100" in html
+
+    def test_renders_model_table(self) -> None:
+        model_ttft = [
+            {
+                "provider_id": "opencode-go",
+                "model_id": "gpt-4",
+                "request_count": 50,
+                "avg_ttft_ms": 200.0,
+                "p50_ttft_ms": 150.0,
+                "p99_ttft_ms": 700.0,
+            }
+        ]
+        html = render_latency(provider_ttft=[], model_ttft=model_ttft, period="24h")
+        assert "gpt-4" in html
+        assert "Per-model breakdown" in html
+        assert "200.0 ms" in html
+
+    def test_empty_model_table(self) -> None:
+        html = render_latency(provider_ttft=[], model_ttft=[], period="24h")
+        assert "No model data" in html
+
+    def test_escapes_html_in_provider_id(self) -> None:
+        provider_ttft = [
+            {
+                "provider_id": "<script>alert(1)</script>",
+                "request_count": 1,
+                "avg_ttft_ms": 100.0,
+                "p50_ttft_ms": 100.0,
+                "p99_ttft_ms": 100.0,
+            }
+        ]
+        html = render_latency(provider_ttft=provider_ttft, model_ttft=[], period="24h")
+        assert "<script>" not in html
+        assert "&lt;script&gt;" in html
+
+
+class TestRenderPings:
+    """Tests for the pings page renderer."""
+
+    def test_renders_empty(self) -> None:
+        html = render_pings(ping_summary=[], recent_pings=[], period="24h")
+        assert "Provider Pings" in html
+        assert "No ping data yet" in html
+        assert "No pings recorded" in html
+
+    def test_renders_provider_cards(self) -> None:
+        ping_summary = [
+            {
+                "provider_id": "opencode-go",
+                "avg_latency_ms": 142,
+                "success_rate": 100.0,
+                "last_model_count": 47,
+            }
+        ]
+        html = render_pings(ping_summary=ping_summary, recent_pings=[], period="24h")
+        assert "opencode-go" in html
+        assert "142.0 ms" in html
+        assert "healthy" in html
+        assert "100.0% success" in html
+
+    def test_degraded_provider(self) -> None:
+        ping_summary = [
+            {
+                "provider_id": "bad-provider",
+                "avg_latency_ms": 500,
+                "success_rate": 50.0,
+                "last_model_count": 0,
+            }
+        ]
+        html = render_pings(ping_summary=ping_summary, recent_pings=[], period="24h")
+        assert "degraded" in html
+
+    def test_renders_recent_pings_table(self) -> None:
+        recent_pings = [
+            {
+                "provider_id": "opencode-go",
+                "account_name": "acct1",
+                "probed_at": "2024-01-01 12:00:00",
+                "latency_ms": 142,
+                "status_code": 200,
+                "model_count": 47,
+                "error": None,
+            }
+        ]
+        html = render_pings(ping_summary=[], recent_pings=recent_pings, period="24h")
+        assert "acct1" in html
+        assert "142.0 ms" in html
+        assert "200" in html
+        assert "Recent pings" in html
+
+    def test_escapes_html_in_ping_data(self) -> None:
+        recent_pings = [
+            {
+                "provider_id": "<script>xss</script>",
+                "account_name": "acct1",
+                "probed_at": "2024-01-01 12:00:00",
+                "latency_ms": 100,
+                "status_code": 200,
+                "model_count": 5,
+                "error": None,
+            }
+        ]
+        html = render_pings(ping_summary=[], recent_pings=recent_pings, period="24h")
+        assert "<script>" not in html
+        assert "&lt;script&gt;" in html
+
+
+class TestRenderOverviewTTFT:
+    """Tests for TTFT cards on the overview page."""
+
+    def test_ttft_cards_present(self) -> None:
+        html = render_overview(
+            overview={
+                "summary": {
+                    "total_requests": 10,
+                    "successful_requests": 8,
+                    "error_requests": 2,
+                    "error_rate": 0.2,
+                    "total_input_tokens": 1000,
+                    "total_output_tokens": 2000,
+                    "total_cost_microdollars": 1_500_000,
+                    "avg_latency_ms": 250.0,
+                    "avg_ttft_ms": 245.0,
+                    "p50_ttft_ms": 180.0,
+                    "p99_ttft_ms": 890.0,
+                },
+                "imbalance": {
+                    "imbalance_ratio": 0.1,
+                    "active_accounts": 2,
+                    "most_used": {"name": "acct_a", "cost_microdollars": 1000},
+                    "least_used": {"name": "acct_b", "cost_microdollars": 500},
+                },
+                "period_label": "24h",
+                "start": "2024-01-01 00:00:00",
+                "end": "2024-01-02 00:00:00",
+            },
+            accounts=[],
+        )
+        assert "Avg TTFT (streamed)" in html
+        assert "245.0 ms" in html
+        assert "180.0 ms" in html
+        assert "890.0 ms" in html
+
+    def test_ttft_zero_when_no_data(self) -> None:
+        html = render_overview(
+            overview={
+                "summary": {
+                    "total_requests": 0,
+                    "successful_requests": 0,
+                    "error_requests": 0,
+                    "error_rate": 0.0,
+                    "total_input_tokens": 0,
+                    "total_output_tokens": 0,
+                    "total_cost_microdollars": 0,
+                    "avg_latency_ms": 0.0,
+                    "avg_ttft_ms": 0.0,
+                    "p50_ttft_ms": 0.0,
+                    "p99_ttft_ms": 0.0,
+                },
+                "imbalance": {
+                    "imbalance_ratio": 0.0,
+                    "active_accounts": 0,
+                    "most_used": None,
+                    "least_used": None,
+                },
+                "period_label": "24h",
+                "start": "2024-01-01 00:00:00",
+                "end": "2024-01-02 00:00:00",
+            },
+            accounts=[],
+        )
+        assert "Avg TTFT (streamed)" in html
+        assert "0.0 ms" in html
+
+
+class TestRenderOverviewProviderHealth:
+    """Tests for the provider health section on the overview page."""
+
+    def test_provider_health_section_present(self) -> None:
+        ping_summary = [
+            {
+                "provider_id": "opencode-go",
+                "avg_latency_ms": 142,
+                "success_rate": 100.0,
+                "last_model_count": 47,
+                "last_ping_at": "2024-01-01 12:00:00",
+            }
+        ]
+        html = render_overview(
+            overview={
+                "summary": {
+                    "total_requests": 10,
+                    "successful_requests": 8,
+                    "error_requests": 2,
+                    "error_rate": 0.2,
+                    "total_input_tokens": 1000,
+                    "total_output_tokens": 2000,
+                    "total_cost_microdollars": 1_500_000,
+                    "avg_latency_ms": 250.0,
+                },
+                "imbalance": {
+                    "imbalance_ratio": 0.1,
+                    "active_accounts": 2,
+                    "most_used": {"name": "acct_a", "cost_microdollars": 1000},
+                    "least_used": {"name": "acct_b", "cost_microdollars": 500},
+                },
+                "period_label": "24h",
+                "start": "2024-01-01 00:00:00",
+                "end": "2024-01-02 00:00:00",
+            },
+            accounts=[],
+            ping_summary=ping_summary,
+        )
+        assert "Provider health" in html
+        assert "opencode-go" in html
+        assert "healthy" in html
+        assert "142.0 ms" in html
+        assert "100.0%" in html
+
+    def test_no_provider_health_when_empty(self) -> None:
+        html = render_overview(
+            overview={
+                "summary": {
+                    "total_requests": 0,
+                    "successful_requests": 0,
+                    "error_requests": 0,
+                    "error_rate": 0.0,
+                    "total_input_tokens": 0,
+                    "total_output_tokens": 0,
+                    "total_cost_microdollars": 0,
+                    "avg_latency_ms": 0.0,
+                },
+                "imbalance": {
+                    "imbalance_ratio": 0.0,
+                    "active_accounts": 0,
+                    "most_used": None,
+                    "least_used": None,
+                },
+                "period_label": "24h",
+                "start": "2024-01-01 00:00:00",
+                "end": "2024-01-02 00:00:00",
+            },
+            accounts=[],
+            ping_summary=[],
+        )
+        assert "Provider health" not in html
+
+    def test_degraded_provider_health(self) -> None:
+        ping_summary = [
+            {
+                "provider_id": "bad-provider",
+                "avg_latency_ms": 500,
+                "success_rate": 50.0,
+                "last_model_count": 0,
+                "last_ping_at": "2024-01-01 12:00:00",
+            }
+        ]
+        html = render_overview(
+            overview={
+                "summary": {
+                    "total_requests": 5,
+                    "successful_requests": 3,
+                    "error_requests": 2,
+                    "error_rate": 0.4,
+                    "total_input_tokens": 100,
+                    "total_output_tokens": 200,
+                    "total_cost_microdollars": 500_000,
+                    "avg_latency_ms": 200.0,
+                },
+                "imbalance": {
+                    "imbalance_ratio": 0.0,
+                    "active_accounts": 1,
+                    "most_used": None,
+                    "least_used": None,
+                },
+                "period_label": "24h",
+                "start": "2024-01-01 00:00:00",
+                "end": "2024-01-02 00:00:00",
+            },
+            accounts=[],
+            ping_summary=ping_summary,
+        )
+        assert "degraded" in html
+        assert "bad-provider" in html

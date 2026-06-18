@@ -185,14 +185,15 @@ class CatalogService:
 
             # Record ping data for this provider/account
             if self._ping_repo is not None:
-                await self._ping_repo.record_ping(
-                    provider_id=provider_id,
-                    account_name=account_name,
-                    latency_ms=result.latency_ms,
-                    status_code=result.status_code,
-                    error=result.error,
-                    model_count=result.model_count,
-                )
+                async with self._db.transaction():
+                    await self._ping_repo.record_ping(
+                        provider_id=provider_id,
+                        account_name=account_name,
+                        latency_ms=result.latency_ms,
+                        status_code=result.status_code,
+                        error=result.error,
+                        model_count=result.model_count,
+                    )
 
             if not result.response:
                 return
