@@ -145,6 +145,25 @@ class ModelCatalogCache:
         if newest > self._last_refresh:
             self._last_refresh = newest
 
+    def hydrate_account_refresh_ages(self) -> None:
+        """Set per-account refresh timestamps from loaded model data.
+
+        Called after loading cached account-model relationships so that
+        ``is_account_stale()`` does not reject every supporting account
+        that lacks a prior in-memory refresh timestamp.
+        """
+        for model_id, accounts in self._account_support.items():
+            model_info = self._models.get(model_id)
+            if model_info is None:
+                continue
+            last_seen = model_info.get("last_seen_at", 0.0)
+            if last_seen <= 0:
+                continue
+            for account_name in accounts:
+                existing = self._account_last_refresh.get(account_name, 0.0)
+                if last_seen > existing:
+                    self._account_last_refresh[account_name] = last_seen
+
     @property
     def model_count(self) -> int:
         return len(self._models)

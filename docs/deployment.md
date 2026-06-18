@@ -81,8 +81,8 @@ sudo cp deploy/logrotate.conf /etc/logrotate.d/gorouter
 ### 6. Start service
 
 ```bash
-# Validate configuration
-sudo -u gorouter /opt/gorouter/.venv/bin/go-aggregator --config /etc/gorouter/config.toml check-config
+# Validate configuration (env vars must be exported first)
+sudo -u gorouter bash -c 'set -a; source /etc/gorouter/env; set +a; /opt/gorouter/.venv/bin/go-aggregator --config /etc/gorouter/config.toml check-config'
 
 # Run initial migrations
 sudo -u gorouter /opt/gorouter/.venv/bin/go-aggregator --config /etc/gorouter/config.toml migrate

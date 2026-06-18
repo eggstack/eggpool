@@ -121,7 +121,6 @@ class SecurityConfig(BaseModel):
 
     allowed_hosts: list[str] = []
     cors_origins: list[str] = []
-    trust_proxy_headers: bool = False
     redact_headers: list[str] = ["authorization", "x-api-key"]
     persist_redacted_error_detail: bool = False
 

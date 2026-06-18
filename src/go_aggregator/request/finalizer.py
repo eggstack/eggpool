@@ -329,8 +329,10 @@ class RequestFinalizer:
 
             # 5. Update runtime state. Request-level success and terminal
             #    state must always update the runtime view, independent of
-            #    the reservation path.
-            if self._registry is not None:
+            #    the reservation path.  health_already_applied also
+            #    guards runtime state to prevent duplicate failure records
+            #    when the coordinator already applied the health transition.
+            if self._registry is not None and not data.health_already_applied:
                 state = self._registry.get_state(selected.account_name)
                 if state is not None:
                     if data.outcome == FinalizationOutcome.COMPLETED:

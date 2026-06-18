@@ -46,7 +46,8 @@ cp .env.example .env
 # Edit config.toml with your settings (accounts, upstream URL, etc.)
 # Edit .env with your API keys
 
-# Validate configuration
+# Validate configuration (env vars must be exported first)
+set -a; source .env; set +a
 uv run go-aggregator --config config.toml check-config
 
 # Run database migrations
@@ -243,7 +244,7 @@ tests/
 - Accounts used outside the proxy require manual offsets for accurate balancing.
 - Model metadata and protocol behavior can change without notice.
 - Both `/v1/chat/completions` (OpenAI) and `/v1/messages` (Anthropic) endpoints are required because mixed protocol catalogs resolve per-model.
-- The dashboard is unauthenticated by default and intended for trusted LAN use only.
+- The dashboard and stats routes require the local API key by default; set `dashboard.public = true` for unauthenticated access.
 - LAN-only deployment reduces but does not eliminate security obligations.
 - Configuration changes require service restart (live reload disabled for correctness).
 

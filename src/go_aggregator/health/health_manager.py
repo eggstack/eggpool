@@ -205,6 +205,7 @@ class HealthManager:
         health.health_state = "healthy"
         health.disabled_until = None
         health.disabled_reason = ""
+        health.cooldown_until = 0.0
         health.circuit_breaker.reset()
 
     def disable_model(

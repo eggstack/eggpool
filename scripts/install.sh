@@ -66,7 +66,7 @@ fi
 # Validate configuration
 echo ""
 echo "Validating configuration..."
-if uv run go-aggregator --config config.toml check-config 2>&1; then
+if set -a && source .env 2>/dev/null && set +a && uv run go-aggregator --config config.toml check-config 2>&1; then
     echo "  Configuration is valid"
 else
     echo "  Warning: Configuration validation failed"

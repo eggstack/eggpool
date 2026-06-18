@@ -87,7 +87,6 @@ refresh_interval_s = 60
 [security]
 allowed_hosts = []
 cors_origins = []
-trust_proxy_headers = false
 redact_headers = ["authorization", "x-api-key"]
 persist_redacted_error_detail = false
 

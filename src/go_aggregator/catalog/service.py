@@ -219,6 +219,7 @@ class CatalogService:
                     "Loaded %d cached models from database",
                     self._cache.model_count,
                 )
+            self._cache.hydrate_account_refresh_ages()
             self._cache.hydrate_refresh_age()
         except Exception:
             logger.exception("Failed to load cached models")

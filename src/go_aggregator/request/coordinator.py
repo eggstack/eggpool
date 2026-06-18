@@ -224,16 +224,20 @@ class RequestCoordinator:
                     last_error, (_RetryableUpstreamError, _NonRetryableUpstreamError)
                 ):
                     last_error = err
-                # If a request row was created, finalize it as error so it
-                # does not remain pending indefinitely.
-                db_request_id = context.client_metadata.get("db_request_id")
-                if db_request_id is not None and self._request_repo is not None:
-                    async with self._db.transaction():
-                        await self._request_repo.finalize_if_pending(
-                            request_id=db_request_id,
-                            status="error",
-                            error_class=type(err).__name__,
-                        )
+                # If no upstream attempt was dispatched yet, finalize the
+                # request directly so it does not remain pending.  When
+                # last_selected exists, upstream attempts already ran; break
+                # and let _handle_exhausted() finalize from the last
+                # upstream error/response.
+                if last_selected is None:
+                    db_request_id = context.client_metadata.get("db_request_id")
+                    if db_request_id is not None and self._request_repo is not None:
+                        async with self._db.transaction():
+                            await self._request_repo.finalize_if_pending(
+                                request_id=db_request_id,
+                                status="error",
+                                error_class=type(err).__name__,
+                            )
                 break
             except AuthenticationError as err:
                 last_error = err
@@ -326,7 +330,9 @@ class RequestCoordinator:
                 break
 
         # All retries exhausted or non-retryable error
-        actual_attempts = attempt_num if last_selected is not None else 0
+        actual_attempts = (
+            last_selected.attempt_number if last_selected is not None else 0
+        )
         return await self._handle_exhausted(
             context,
             last_error,
@@ -563,18 +569,24 @@ class RequestCoordinator:
             first_byte_ms = int((time.time() - context.started_at) * 1000)
             await response.aread()
         except httpx.ConnectError as err:
+            if response is not None:
+                await response.aclose()
             raise _RetryableUpstreamError(
                 f"Connection failed: {err}",
                 status_code=None,
                 error_class="ConnectError",
             ) from err
         except httpx.TimeoutException as err:
+            if response is not None:
+                await response.aclose()
             raise _RetryableUpstreamError(
                 f"Timeout: {err}",
                 status_code=504,
                 error_class="TimeoutException",
             ) from err
         except Exception as err:
+            if response is not None:
+                await response.aclose()
             raise _RetryableUpstreamError(
                 f"Upstream error: {err}",
                 status_code=None,

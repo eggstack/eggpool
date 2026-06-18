@@ -518,7 +518,7 @@ def create_app(
         max_bytes=MAX_REQUEST_BODY_BYTES,
     )
 
-    # Dashboard and statistics routes (read-only, no auth by default)
+    # Dashboard and statistics routes (require auth unless dashboard.public = true)
     if config.dashboard.enabled:
         dashboard_require_auth = not config.dashboard.public
         register_dashboard_routes(app, require_auth=dashboard_require_auth)

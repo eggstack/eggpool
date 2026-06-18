@@ -167,66 +167,27 @@ class ReservationManager:
         return len(to_remove)
 
     async def persist_reservations(self, db: Database) -> None:
-        """Persist reservations to database."""
-        async with db.transaction():
-            for reservation in self._reservations.values():
-                await db.execute_write(
-                    """
-                    INSERT OR REPLACE INTO reservations (
-                        id, request_id, account_id, reserved_tokens,
-                        reserved_cost_microdollars, created_at, expires_at,
-                        released, released_at, release_reason
-                    ) VALUES (
-                        ?, ?,
-                        (SELECT id FROM accounts WHERE name = ?),
-                        ?, ?, datetime(?, 'unixepoch'), datetime(?, 'unixepoch'),
-                        ?, ?, ?
-                    )
-                    """,
-                    (
-                        reservation.reservation_id,
-                        reservation.request_id,
-                        reservation.account_name,
-                        reservation.estimated_tokens,
-                        reservation.estimated_cost_microdollars,
-                        reservation.created_at,
-                        reservation.expires_at,
-                        reservation.released,
-                        reservation.released_at,
-                        reservation.release_reason,
-                    ),
-                )
+        """Persist reservations to database.
+
+        .. deprecated::
+            This method references obsolete schema columns and is no
+            longer compatible with the current database.  Use
+            ``ReservationRepository`` instead.
+        """
+        raise NotImplementedError(
+            "persist_reservations() is deprecated and incompatible "
+            "with the current schema; use ReservationRepository instead"
+        )
 
     async def load_reservations(self, db: Database) -> None:
-        """Load active reservations from database."""
-        rows = await db.fetch_all(
-            """
-            SELECT r.id, r.request_id, a.name, r.reserved_tokens,
-                   r.reserved_cost_microdollars,
-                   strftime('%%s', r.created_at),
-                   strftime('%%s', r.expires_at),
-                   r.released, r.released_at, r.release_reason
-            FROM reservations r
-            JOIN accounts a ON r.account_id = a.id
-            WHERE r.released = 0 AND r.expires_at > datetime('now')
-            """
+        """Load active reservations from database.
+
+        .. deprecated::
+            This method references obsolete schema columns and is no
+            longer compatible with the current database.  Use
+            ``ReservationRepository`` instead.
+        """
+        raise NotImplementedError(
+            "load_reservations() is deprecated and incompatible "
+            "with the current schema; use ReservationRepository instead"
         )
-        for row in rows:
-            reservation = Reservation(
-                reservation_id=row[0],
-                request_id=row[1],
-                account_name=row[2],
-                estimated_tokens=row[3],
-                estimated_cost_microdollars=row[4],
-                created_at=float(row[5]) if row[5] else 0.0,
-                expires_at=float(row[6]) if row[6] else 0.0,
-                released=bool(row[7]),
-                released_at=float(row[8]) if row[8] else None,
-                release_reason=row[9] or "",
-            )
-            self._reservations[reservation.reservation_id] = reservation
-            if reservation.account_name not in self._account_reservations:
-                self._account_reservations[reservation.account_name] = []
-            self._account_reservations[reservation.account_name].append(
-                reservation.reservation_id
-            )
