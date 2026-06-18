@@ -11,7 +11,7 @@ import pytest
 from go_aggregator.accounts.registry import account_config_rows
 from go_aggregator.db.connection import Database
 from go_aggregator.db.migrations import MigrationRunner
-from go_aggregator.db.repositories import AccountRepository
+from go_aggregator.db.repositories import AccountRepository, RequestRepository
 from go_aggregator.models.config import AccountConfig, AppConfig, ProviderConfig
 from go_aggregator.models.database import AccountRow, ModelRow
 from go_aggregator.models.domain import Account, Provider
@@ -491,6 +491,81 @@ def test_registry_get_provider_ids() -> None:
         assert set(ids) == {"p1", "p2"}
     finally:
         del os.environ["REG_PID_KEY"]
+
+
+@pytest.mark.asyncio()
+async def test_create_pending_persists_provider_id() -> None:
+    database = Database(path=":memory:")
+    await database.connect()
+    try:
+        await _run_migrations(database)
+        repo = RequestRepository(database)
+
+        async with database.transaction():
+            await database.execute_write(
+                "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+                "VALUES (?, ?, ?, ?)",
+                ("acct1", "KEY1", 1, 1.0),
+            )
+            await database.execute_write(
+                "INSERT INTO models (model_id, protocol) VALUES (?, ?)",
+                ("gpt-4", "openai"),
+            )
+            request_id = await repo.create_pending(
+                request_id="test-req-1",
+                model_id="gpt-4",
+                protocol="openai",
+                streamed=False,
+                account_id=1,
+                provider_id="custom-provider",
+            )
+        assert request_id
+
+        row = await database.fetch_one(
+            "SELECT provider_id FROM requests WHERE id = ?",
+            (request_id,),
+        )
+        assert row is not None
+        assert row["provider_id"] == "custom-provider"
+    finally:
+        await database.disconnect()
+
+
+@pytest.mark.asyncio()
+async def test_create_pending_defaults_provider_id() -> None:
+    database = Database(path=":memory:")
+    await database.connect()
+    try:
+        await _run_migrations(database)
+        repo = RequestRepository(database)
+
+        async with database.transaction():
+            await database.execute_write(
+                "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+                "VALUES (?, ?, ?, ?)",
+                ("acct1", "KEY1", 1, 1.0),
+            )
+            await database.execute_write(
+                "INSERT INTO models (model_id, protocol) VALUES (?, ?)",
+                ("gpt-4", "openai"),
+            )
+            request_id = await repo.create_pending(
+                request_id="test-req-2",
+                model_id="gpt-4",
+                protocol="openai",
+                streamed=False,
+                account_id=1,
+            )
+        assert request_id
+
+        row = await database.fetch_one(
+            "SELECT provider_id FROM requests WHERE id = ?",
+            (request_id,),
+        )
+        assert row is not None
+        assert row["provider_id"] == "opencode-go"
+    finally:
+        await database.disconnect()
 
 
 def test_registry_multiple_providers_default_normalize() -> None:

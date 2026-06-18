@@ -55,23 +55,24 @@ cors_origins = []
 redact_headers = ["authorization", "x-api-key"]
 persist_redacted_error_detail = false
 
-[[accounts]]
+# Provider-based configuration (recommended)
+[providers.opencode-go]
+id = "opencode-go"
+base_url = "https://opencode.ai/zen/go/v1"
+protocols = ["openai", "anthropic"]
+
+[[providers.opencode-go.accounts]]
 name = "personal"
 api_key_env = "OPENCODE_GO_KEY_1"
-enabled = true
-weight = 1.0
-five_hour_offset_microdollars = 0
-weekly_offset_microdollars = 0
-monthly_offset_microdollars = 0
 
-[[accounts]]
+[[providers.opencode-go.accounts]]
 name = "team"
 api_key_env = "OPENCODE_GO_KEY_2"
-enabled = true
-weight = 1.0
-five_hour_offset_microdollars = 0
-weekly_offset_microdollars = 0
-monthly_offset_microdollars = 0
+
+# Backward-compatible flat config (auto-normalizes to opencode-go provider)
+# [[accounts]]
+# name = "personal"
+# api_key_env = "OPENCODE_GO_KEY_1"
 
 [model_overrides."claude-opus-4"]
 protocol = "anthropic"

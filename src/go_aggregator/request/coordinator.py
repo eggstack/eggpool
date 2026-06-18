@@ -58,6 +58,7 @@ if TYPE_CHECKING:
     from go_aggregator.catalog.service import CatalogService
     from go_aggregator.db.connection import Database
     from go_aggregator.health.health_manager import HealthManager
+    from go_aggregator.models.config import AppConfig
     from go_aggregator.quota.estimation import QuotaEstimator
     from go_aggregator.routing.router import Router
 
@@ -117,6 +118,7 @@ class SelectedAttempt:
     estimated_tokens: int
     estimated_microdollars: int
     attempt_number: int
+    provider_id: str = "opencode-go"
 
 
 @dataclass
@@ -165,11 +167,13 @@ class RequestCoordinator:
         max_retry_attempts: int = DEFAULT_MAX_RETRY_ATTEMPTS,
         quota_exhausted_cooldown_seconds: float = 300.0,
         persist_error_detail: bool = False,
+        config: AppConfig | None = None,
     ) -> None:
         self._registry = registry
         self._catalog = catalog
         self._router = router
         self._db = db
+        self._config = config
         if isinstance(client_pool, ProviderClientPool):
             self._client_pool: ProviderClientPool | None = client_pool
             if "opencode-go" in client_pool.providers:
@@ -216,8 +220,13 @@ class RequestCoordinator:
             persist_error_detail=persist_error_detail,
         )
 
-    def _get_client(self) -> httpx.AsyncClient:
-        """Return the HTTP client, raising if unavailable."""
+    def _get_client(self, provider_id: str | None = None) -> httpx.AsyncClient:
+        """Return the HTTP client for a provider, falling back to default."""
+        if provider_id and self._client_pool is not None:
+            try:
+                return self._client_pool.get_client(provider_id)
+            except Exception:
+                pass
         if self._client is None:
             raise UpstreamError("No HTTP client available for upstream requests")
         return self._client
@@ -479,6 +488,7 @@ class RequestCoordinator:
                         streamed=context.streaming,
                         account_id=account_id,
                         started_at=context.started_at,
+                        provider_id=context.provider_id or "opencode-go",
                     )
                     context.client_metadata["db_request_id"] = db_request_id
                 db_request_id = context.client_metadata["db_request_id"]
@@ -570,6 +580,7 @@ class RequestCoordinator:
             estimated_tokens=estimated_tokens,
             estimated_microdollars=estimated_microdollars,
             attempt_number=attempt_number,
+            provider_id=context.provider_id or "opencode-go",
         )
 
     async def _execute_upstream(
@@ -608,11 +619,11 @@ class RequestCoordinator:
         headers = filter_request_headers(
             dict(context.incoming_headers), selected.api_key
         )
-        upstream_path = self._get_upstream_path(context.protocol)
+        upstream_path = self._get_upstream_path(context.protocol, context.provider_id)
 
         response: httpx.Response | None = None
         try:
-            client = self._get_client()
+            client = self._get_client(context.provider_id)
             upstream_request = client.build_request(
                 "POST",
                 upstream_path,
@@ -749,7 +760,7 @@ class RequestCoordinator:
         headers = filter_request_headers(
             dict(context.incoming_headers), selected.api_key
         )
-        upstream_path = self._get_upstream_path(context.protocol)
+        upstream_path = self._get_upstream_path(context.protocol, context.provider_id)
 
         # Inject stream_options.include_usage for OpenAI
         body_to_send = context.original_body
@@ -775,7 +786,7 @@ class RequestCoordinator:
                         # leave the body unchanged and let upstream reject it.
                         pass
 
-        client = self._get_client()
+        client = self._get_client(context.provider_id)
         request = client.build_request(
             "POST",
             upstream_path,
@@ -1115,8 +1126,14 @@ class RequestCoordinator:
 
         return None
 
-    def _get_upstream_path(self, protocol: str) -> str:
-        """Get the upstream path for a protocol."""
+    def _get_upstream_path(self, protocol: str, provider_id: str | None = None) -> str:
+        """Get the upstream path for a protocol and provider."""
+        if provider_id and self._config is not None:
+            provider_cfg = self._config.providers.get(provider_id)
+            if provider_cfg is not None:
+                if protocol == "anthropic":
+                    return provider_cfg.anthropic_path
+                return provider_cfg.openai_path
         if protocol == "anthropic":
             return "/messages"
         return "/chat/completions"

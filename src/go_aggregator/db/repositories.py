@@ -120,6 +120,7 @@ class RequestRepository:
         account_id: int,
         reserved_microdollars: int = 0,
         started_at: float | None = None,
+        provider_id: str = "opencode-go",
     ) -> str:
         """Insert a new pending request, return the id as string.
 
@@ -143,8 +144,9 @@ class RequestRepository:
             last_id = await self._db.execute_insert(
                 "INSERT INTO requests "
                 "(account_id, model_id, started_at, status, protocol, "
-                "streamed, reserved_microdollars, proxy_request_id) "
-                "VALUES (?, ?, ?, 'pending', ?, ?, ?, ?)",
+                "streamed, reserved_microdollars, proxy_request_id, "
+                "provider_id) "
+                "VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?)",
                 (
                     account_id,
                     model_id,
@@ -153,14 +155,15 @@ class RequestRepository:
                     int(streamed),
                     reserved_microdollars,
                     request_id,
+                    provider_id,
                 ),
             )
         else:
             last_id = await self._db.execute_insert(
                 "INSERT INTO requests "
                 "(account_id, model_id, status, protocol, streamed, "
-                "reserved_microdollars, proxy_request_id) "
-                "VALUES (?, ?, 'pending', ?, ?, ?, ?)",
+                "reserved_microdollars, proxy_request_id, provider_id) "
+                "VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)",
                 (
                     account_id,
                     model_id,
@@ -168,6 +171,7 @@ class RequestRepository:
                     int(streamed),
                     reserved_microdollars,
                     request_id,
+                    provider_id,
                 ),
             )
         return str(last_id)
@@ -702,3 +706,40 @@ class AccountEventRepository:
             "VALUES (?, ?, ?)",
             (account_id, event_type, details),
         )
+
+
+class ProviderRepository:
+    """CRUD operations for providers."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def upsert(
+        self,
+        provider_id: str,
+        base_url: str,
+        protocols: list[str],
+    ) -> None:
+        """Insert or update a provider record."""
+        import json
+
+        await self._db.execute_write(
+            "INSERT INTO providers (provider_id, base_url, protocols) "
+            "VALUES (?, ?, ?) "
+            "ON CONFLICT(provider_id) DO UPDATE SET "
+            "base_url = excluded.base_url, protocols = excluded.protocols",
+            (provider_id, base_url, json.dumps(protocols)),
+        )
+
+    async def list_enabled(self) -> list[dict[str, Any]]:
+        """List all enabled providers."""
+        rows = await self._db.fetch_all("SELECT * FROM providers WHERE enabled = 1")
+        return [dict(r) for r in rows]
+
+    async def get_by_provider_id(self, provider_id: str) -> dict[str, Any] | None:
+        """Fetch a provider by provider_id."""
+        row = await self._db.fetch_one(
+            "SELECT * FROM providers WHERE provider_id = ?",
+            (provider_id,),
+        )
+        return dict(row) if row is not None else None

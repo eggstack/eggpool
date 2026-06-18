@@ -61,7 +61,7 @@ class InvariantQueryError(CheckerError):
 #: Highest migration number this checker knows how to inspect.
 #: If the database is older or newer than this, the checker
 #: returns exit code 2 with a clear message.
-EXPECTED_SCHEMA_VERSION = 15
+EXPECTED_SCHEMA_VERSION = 16
 
 #: Required tables for the production GoRouter schema.
 REQUIRED_TABLES: frozenset[str] = frozenset(
@@ -94,6 +94,7 @@ REQUIRED_COLUMNS: dict[str, frozenset[str]] = {
             "cache_read_tokens",
             "cache_write_tokens",
             "reasoning_tokens",
+            "provider_id",
         }
     ),
     "request_attempts": frozenset({"id", "request_id", "completed_at"}),
