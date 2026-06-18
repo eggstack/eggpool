@@ -69,7 +69,7 @@ def serve(ctx: click.Context) -> None:
     )
 
 
-@cli.command()
+@cli.group(invoke_without_command=True)
 @click.option(
     "--providers",
     "providers_path",
@@ -80,12 +80,85 @@ def serve(ctx: click.Context) -> None:
 @click.pass_context
 def connect(ctx: click.Context, providers_path: str) -> None:
     """Connect to a new provider interactively."""
+    if ctx.invoked_subcommand is not None:
+        ctx.obj["providers_path"] = providers_path
+        return
+
     from go_aggregator.providers.connect import connect as do_connect
 
     config_path: str = ctx.obj["config_path"]
     ok = do_connect(config_path, providers_path)
     if not ok:
         sys.exit(1)
+
+
+@connect.command("list")
+@click.pass_context
+def connect_list(ctx: click.Context) -> None:
+    """List providers available for connection."""
+    from go_aggregator.providers.connect import load_provider_templates
+
+    providers_path: str = ctx.obj.get("providers_path", "providers.toml")
+    templates = load_provider_templates(providers_path)
+    if not templates:
+        click.echo(f"No provider templates found in {providers_path}")
+        return
+
+    click.echo("Available providers:")
+    for provider_id, tmpl in templates.items():
+        click.echo(f"  {provider_id}: {tmpl['display']} ({tmpl['url']})")
+
+
+@cli.command()
+@click.argument("target")
+@click.pass_context
+def logout(ctx: click.Context, target: str) -> None:
+    """Remove a configured provider account by provider, env var, or API key."""
+    from go_aggregator.providers.connect import (
+        TerminalMenu,
+        matching_logout_accounts,
+        remove_account_from_config,
+        send_reload_signal,
+    )
+
+    config_path: str = ctx.obj["config_path"]
+
+    try:
+        matches = matching_logout_accounts(config_path, target)
+    except AggregatorError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
+    if not matches:
+        click.echo(f"No configured provider or API key found for {target!r}.")
+        return
+
+    account = matches[0]
+    if len(matches) > 1:
+        menu = TerminalMenu(
+            f"Select provider account to remove for {target}:",
+            [match.label for match in matches],
+        )
+        selected = menu.run()
+        if selected is None:
+            click.echo("Cancelled.")
+            return
+        selected_index = [match.label for match in matches].index(selected)
+        account = matches[selected_index]
+
+    if not remove_account_from_config(config_path, account):
+        click.echo(
+            f"Could not remove {account.provider_id}/{account.name} "
+            f"from {config_path}.",
+            err=True,
+        )
+        sys.exit(1)
+
+    click.echo(f"Removed {account.provider_id}/{account.name} from {config_path}.")
+    if send_reload_signal(config_path):
+        click.echo("Sent reload signal to running server.")
+    else:
+        click.echo("No running server detected. Changes take effect on next start.")
 
 
 @cli.command("check-config")

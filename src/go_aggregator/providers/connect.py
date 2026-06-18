@@ -8,8 +8,25 @@ import sys
 import termios
 import tomllib
 import tty
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+
+@dataclass(frozen=True)
+class ConfiguredAccount:
+    """Configured provider account with optional resolved API key."""
+
+    provider_id: str
+    name: str
+    api_key_env: str
+    api_key: str | None
+
+    @property
+    def label(self) -> str:
+        """Human-readable label for terminal selection."""
+        masked = _mask_secret(self.api_key) if self.api_key else "unset"
+        return f"{self.provider_id}/{self.name}  {self.api_key_env}={masked}"
 
 
 def load_provider_templates(providers_path: str) -> dict[str, dict[str, Any]]:
@@ -75,6 +92,68 @@ def _extract_raw_block(text: str, provider_id: str) -> str:
             block_lines.append(line)
 
     return "\n".join(block_lines)
+
+
+def configured_accounts(config_path: str) -> list[ConfiguredAccount]:
+    """Return configured accounts in display order."""
+    from go_aggregator.models.config import AppConfig
+
+    config = AppConfig.from_toml(config_path)
+    accounts: list[ConfiguredAccount] = []
+    for provider_id, provider in config.providers.items():
+        for account in provider.accounts:
+            api_key = os.environ.get(account.api_key_env)
+            accounts.append(
+                ConfiguredAccount(
+                    provider_id=provider_id,
+                    name=account.name,
+                    api_key_env=account.api_key_env,
+                    api_key=api_key,
+                )
+            )
+    return accounts
+
+
+def matching_logout_accounts(
+    config_path: str,
+    target: str,
+) -> list[ConfiguredAccount]:
+    """Find accounts matching a provider id, account name, env var, or API key."""
+    normalized_target = _normalize_identifier(target)
+    accounts = configured_accounts(config_path)
+    matches: list[ConfiguredAccount] = []
+
+    for account in accounts:
+        if account.api_key == target:
+            matches.append(account)
+            continue
+        if account.api_key_env == target:
+            matches.append(account)
+            continue
+        if account.name == target:
+            matches.append(account)
+            continue
+        if account.provider_id == target:
+            matches.append(account)
+            continue
+        if _normalize_identifier(account.provider_id) == normalized_target:
+            matches.append(account)
+
+    return matches
+
+
+def _normalize_identifier(value: str) -> str:
+    """Normalize provider ids for forgiving CLI matching."""
+    return "".join(ch for ch in value.lower() if ch.isalnum())
+
+
+def _mask_secret(value: str | None) -> str:
+    """Mask a secret for terminal display."""
+    if not value:
+        return "unset"
+    if len(value) <= 8:
+        return "*" * len(value)
+    return f"{value[:4]}...{value[-4:]}"
 
 
 class TerminalMenu:
@@ -363,6 +442,133 @@ def _append_account(
 
     new_lines = lines[:insert_idx] + account_lines + lines[insert_idx:]
     return "\n".join(new_lines)
+
+
+def remove_account_from_config(
+    config_path: str,
+    account: ConfiguredAccount,
+) -> bool:
+    """Remove an account from the config TOML file.
+
+    If the account is the provider's final account, remove the provider section.
+    Returns True if the config was modified.
+    """
+    path = Path(config_path)
+    if not path.exists():
+        return False
+
+    content = path.read_text(encoding="utf-8")
+    updated, removed = _remove_account_block(
+        content,
+        provider_id=account.provider_id,
+        account_name=account.name,
+        api_key_env=account.api_key_env,
+    )
+    if not removed:
+        return False
+
+    if _provider_account_count(updated, account.provider_id) == 0:
+        updated = _remove_provider_block(updated, account.provider_id)
+
+    path.write_text(updated, encoding="utf-8")
+    return True
+
+
+def _remove_account_block(
+    content: str,
+    provider_id: str,
+    account_name: str,
+    api_key_env: str,
+) -> tuple[str, bool]:
+    """Remove a single [[providers.<id>.accounts]] block."""
+    lines = content.split("\n")
+    header = f"[[providers.{provider_id}.accounts]]"
+    output: list[str] = []
+    i = 0
+    removed = False
+
+    while i < len(lines):
+        if lines[i].strip() != header:
+            output.append(lines[i])
+            i += 1
+            continue
+
+        block_start = i
+        block_end = i + 1
+        while block_end < len(lines):
+            stripped = lines[block_end].strip()
+            if stripped.startswith("[") and stripped.endswith("]"):
+                break
+            block_end += 1
+
+        block = lines[block_start:block_end]
+        if (
+            _block_value(block, "name") == account_name
+            and _block_value(block, "api_key_env") == api_key_env
+        ):
+            removed = True
+            if output and output[-1] == "":
+                output.pop()
+            i = block_end
+            if i < len(lines) and lines[i] == "":
+                i += 1
+            continue
+
+        output.extend(block)
+        i = block_end
+
+    return "\n".join(output), removed
+
+
+def _block_value(lines: list[str], key: str) -> str | None:
+    """Return a simple scalar TOML value from a block."""
+    prefix = f"{key} ="
+    for line in lines:
+        stripped = line.strip()
+        if not stripped.startswith(prefix):
+            continue
+        value = stripped.split("=", 1)[1].strip()
+        return value.strip('"').strip("'")
+    return None
+
+
+def _provider_account_count(content: str, provider_id: str) -> int:
+    """Count account tables for a provider."""
+    header = f"[[providers.{provider_id}.accounts]]"
+    return sum(1 for line in content.split("\n") if line.strip() == header)
+
+
+def _remove_provider_block(content: str, provider_id: str) -> str:
+    """Remove a [providers.<id>] section and its child tables."""
+    lines = content.split("\n")
+    header = f"[providers.{provider_id}]"
+    output: list[str] = []
+    i = 0
+
+    while i < len(lines):
+        if lines[i].strip() != header:
+            output.append(lines[i])
+            i += 1
+            continue
+
+        if output and output[-1] == "":
+            output.pop()
+        i += 1
+        child_prefix = f"[providers.{provider_id}."
+        child_array_prefix = f"[[providers.{provider_id}."
+        while i < len(lines):
+            stripped = lines[i].strip()
+            is_section = stripped.startswith("[") and stripped.endswith("]")
+            if is_section and not (
+                stripped.startswith(child_prefix)
+                or stripped.startswith(child_array_prefix)
+            ):
+                break
+            i += 1
+        if i < len(lines) and lines[i] == "":
+            i += 1
+
+    return "\n".join(output)
 
 
 def find_shell_profile() -> Path | None:

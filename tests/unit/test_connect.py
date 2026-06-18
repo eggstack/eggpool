@@ -6,10 +6,14 @@ import textwrap
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 
+from go_aggregator.cli import cli
 from go_aggregator.providers.connect import (
+    ConfiguredAccount,
     _extract_raw_block,
     _format_provider_block,
+    _provider_account_count,
     _provider_id_to_env_name,
     _toml_value,
     _unique_account_name,
@@ -17,6 +21,7 @@ from go_aggregator.providers.connect import (
     export_env_var,
     load_provider_templates,
     merge_provider_into_config,
+    remove_account_from_config,
 )
 
 
@@ -340,6 +345,98 @@ class TestMergeProviderIntoConfig:
         assert ok is False
 
 
+class TestRemoveAccountFromConfig:
+    """Tests for removing provider accounts from config files."""
+
+    def test_removes_account_and_keeps_provider_with_remaining_account(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Removing one of two accounts leaves the provider block."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(
+            textwrap.dedent("""\
+                [providers.opencode-go]
+                id = "opencode-go"
+                base_url = "https://api.example.com"
+
+                [[providers.opencode-go.accounts]]
+                name = "default"
+                api_key_env = "OPENCODE_GO_API_KEY"
+
+                [[providers.opencode-go.accounts]]
+                name = "default-2"
+                api_key_env = "OPENCODE_GO_API_KEY_2"
+            """),
+            encoding="utf-8",
+        )
+
+        ok = remove_account_from_config(
+            str(config_file),
+            ConfiguredAccount(
+                provider_id="opencode-go",
+                name="default",
+                api_key_env="OPENCODE_GO_API_KEY",
+                api_key=None,
+            ),
+        )
+
+        assert ok is True
+        content = config_file.read_text(encoding="utf-8")
+        assert "[providers.opencode-go]" in content
+        assert 'name = "default"' not in content
+        assert 'name = "default-2"' in content
+        assert _provider_account_count(content, "opencode-go") == 1
+
+    def test_removes_provider_when_final_account_removed(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Removing the last account removes the provider section."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(
+            textwrap.dedent("""\
+                [server]
+                port = 8080
+
+                [providers.opencode-go]
+                id = "opencode-go"
+                base_url = "https://api.example.com"
+
+                [[providers.opencode-go.accounts]]
+                name = "default"
+                api_key_env = "OPENCODE_GO_API_KEY"
+
+                [providers.other]
+                id = "other"
+                base_url = "https://other.example.com"
+
+                [[providers.other.accounts]]
+                name = "other-default"
+                api_key_env = "OTHER_API_KEY"
+            """),
+            encoding="utf-8",
+        )
+
+        ok = remove_account_from_config(
+            str(config_file),
+            ConfiguredAccount(
+                provider_id="opencode-go",
+                name="default",
+                api_key_env="OPENCODE_GO_API_KEY",
+                api_key=None,
+            ),
+        )
+
+        assert ok is True
+        content = config_file.read_text(encoding="utf-8")
+        assert "[server]" in content
+        assert "[providers.opencode-go]" not in content
+        assert "OPENCODE_GO_API_KEY" not in content
+        assert "[providers.other]" in content
+        assert "OTHER_API_KEY" in content
+
+
 class TestExportEnvVar:
     """Tests for exporting environment variables to shell profile."""
 
@@ -390,3 +487,144 @@ class TestExportEnvVar:
         content = profile.read_text()
         assert "export PATH=/usr/bin" in content
         assert "export NEW_KEY=new-value" in content
+
+
+class TestCliConnectList:
+    """Tests for ``connect list``."""
+
+    def test_connect_list_displays_templates(self, tmp_path: Path) -> None:
+        """Lists providers from the providers template file."""
+        providers_toml = tmp_path / "providers.toml"
+        providers_toml.write_text(
+            textwrap.dedent("""\
+                [providers.opencode-go]
+                _display = "OpenCode Go"
+                base_url = "https://api.example.com"
+                protocols = ["openai"]
+            """),
+            encoding="utf-8",
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["connect", "--providers", str(providers_toml), "list"],
+        )
+
+        assert result.exit_code == 0
+        assert "Available providers:" in result.stdout
+        assert "opencode-go: OpenCode Go" in result.stdout
+
+
+class TestCliLogout:
+    """Tests for ``logout`` command behavior."""
+
+    def test_logout_by_api_key_removes_matching_account(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A direct API key argument removes the account using that key."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            textwrap.dedent("""\
+                [providers.opencode-go]
+                id = "opencode-go"
+                base_url = "https://api.example.com"
+
+                [[providers.opencode-go.accounts]]
+                name = "default"
+                api_key_env = "OPENCODE_GO_API_KEY"
+            """),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("OPENCODE_GO_API_KEY", "sk-live-key")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "logout", "sk-live-key"],
+        )
+
+        assert result.exit_code == 0
+        assert "Removed opencode-go/default" in result.stdout
+        assert "[providers.opencode-go]" not in config_path.read_text(encoding="utf-8")
+
+    def test_logout_missing_api_key_reports_not_found(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Unknown API keys produce a not-found message."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            textwrap.dedent("""\
+                [providers.opencode-go]
+                id = "opencode-go"
+                base_url = "https://api.example.com"
+
+                [[providers.opencode-go.accounts]]
+                name = "default"
+                api_key_env = "OPENCODE_GO_API_KEY"
+            """),
+            encoding="utf-8",
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "logout", "missing-key"],
+        )
+
+        assert result.exit_code == 0
+        assert "No configured provider or API key found" in result.stdout
+
+    def test_logout_duplicate_provider_uses_selected_account(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Multiple matching provider accounts are resolved by menu selection."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            textwrap.dedent("""\
+                [providers.opencode-go]
+                id = "opencode-go"
+                base_url = "https://api.example.com"
+
+                [[providers.opencode-go.accounts]]
+                name = "default"
+                api_key_env = "OPENCODE_GO_API_KEY"
+
+                [[providers.opencode-go.accounts]]
+                name = "default-2"
+                api_key_env = "OPENCODE_GO_API_KEY_2"
+            """),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("OPENCODE_GO_API_KEY", "sk-first-key")
+        monkeypatch.setenv("OPENCODE_GO_API_KEY_2", "sk-second-key")
+
+        from go_aggregator.providers import connect as connect_module
+
+        class FakeMenu:
+            """Deterministic stand-in for the terminal menu."""
+
+            def __init__(self, title: str, options: list[str]) -> None:
+                self.title = title
+                self.options = options
+
+            def run(self) -> str:
+                return self.options[1]
+
+        monkeypatch.setattr(connect_module, "TerminalMenu", FakeMenu)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "logout", "opencodego"],
+        )
+
+        assert result.exit_code == 0
+        content = config_path.read_text(encoding="utf-8")
+        assert 'name = "default"' in content
+        assert 'name = "default-2"' not in content
