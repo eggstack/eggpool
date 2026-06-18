@@ -157,17 +157,21 @@ def _render_response(
             async for chunk in stream_iter:
                 yield chunk
 
-        return StreamingResponse(
+        resp: Response = StreamingResponse(
             _stream_gen(),
             status_code=result.status_code,
-            headers=result.headers,
-            media_type="text/event-stream",
+            media_type=None,
         )
+        for name, value in result.headers:
+            resp.headers.append(name, value)
+        return resp
 
     # Return raw bytes - do not decode and re-serialize
-    return Response(
+    resp = Response(
         content=result.body,
         status_code=result.status_code,
-        headers=result.headers,
         media_type=None,
     )
+    for name, value in result.headers:
+        resp.headers.append(name, value)
+    return resp

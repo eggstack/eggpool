@@ -136,23 +136,25 @@ def test_filter_request_headers_no_local_secrets_in_output() -> None:
 
 def test_filter_response_headers_removes_hop_by_hop() -> None:
     class MockHeaders:
-        def __init__(self, h: dict[str, str]) -> None:
-            self._h = h
+        def __init__(self, h: list[tuple[bytes, bytes]]) -> None:
+            self._raw = h
 
-        def items(self) -> list[tuple[str, str]]:
-            return list(self._h.items())
+        @property
+        def raw(self) -> list[tuple[bytes, bytes]]:
+            return self._raw
 
     headers = MockHeaders(
-        {
-            "Content-Type": "application/json",
-            "Connection": "keep-alive",
-            "X-Custom": "value",
-        }
+        [
+            (b"Content-Type", b"application/json"),
+            (b"Connection", b"keep-alive"),
+            (b"X-Custom", b"value"),
+        ]
     )
     result = filter_response_headers(headers)  # type: ignore[arg-type]
-    assert "Content-Type" in result
-    assert "Connection" not in result
-    assert "X-Custom" in result
+    result_dict = {k.lower(): v for k, v in result}
+    assert "content-type" in result_dict
+    assert "connection" not in result_dict
+    assert "x-custom" in result_dict
 
 
 def test_hop_by_hop_headers_complete() -> None:

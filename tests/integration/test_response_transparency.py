@@ -13,7 +13,7 @@ class TestRawResponseRendering:
         body = b'{"id":"chatcmpl-123","object":"chat.completion"}'
         result = PreparedProxyResponse(
             status_code=200,
-            headers={"content-type": "application/json"},
+            headers=[("content-type", "application/json")],
             body=body,
         )
         assert result.body == body
@@ -24,7 +24,7 @@ class TestRawResponseRendering:
         body = b"This is not JSON, just plain text error"
         result = PreparedProxyResponse(
             status_code=500,
-            headers={"content-type": "text/plain"},
+            headers=[("content-type", "text/plain")],
             body=body,
         )
         assert result.body == body
@@ -34,7 +34,7 @@ class TestRawResponseRendering:
         body = bytes(range(256))
         result = PreparedProxyResponse(
             status_code=200,
-            headers={"content-type": "application/octet-stream"},
+            headers=[("content-type", "application/octet-stream")],
             body=body,
         )
         assert result.body == body
@@ -44,20 +44,23 @@ class TestRawResponseRendering:
         body = b'{  "key":  "value"  }'
         result = PreparedProxyResponse(
             status_code=200,
-            headers={"content-type": "application/json"},
+            headers=[("content-type", "application/json")],
             body=body,
         )
         assert result.body == body
 
     def test_content_type_passthrough(self) -> None:
         """Upstream content-type header should be preserved."""
-        headers = {
-            "content-type": "application/json; charset=utf-8",
-            "x-request-id": "req-123",
-        }
+        headers = [
+            ("content-type", "application/json; charset=utf-8"),
+            ("x-request-id", "req-123"),
+        ]
         result = PreparedProxyResponse(
             status_code=200,
             headers=headers,
             body=b"{}",
         )
-        assert result.headers["content-type"] == "application/json; charset=utf-8"
+        assert any(
+            k == "content-type" and v == "application/json; charset=utf-8"
+            for k, v in result.headers
+        )

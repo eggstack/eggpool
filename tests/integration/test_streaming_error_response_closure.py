@@ -259,10 +259,11 @@ async def test_streaming_prebody_error_headers_are_filtered(
         response = await coordinator.execute(context)
 
     assert response.status_code == 500
-    lower_headers = {key.lower() for key in response.headers}
+    headers_dict = dict(response.headers)
+    lower_headers = {key.lower() for key in headers_dict}
     assert "connection" not in lower_headers
     assert "transfer-encoding" not in lower_headers
-    assert response.headers.get("x-request-id") == "up-123"
+    assert headers_dict.get("x-request-id") == "up-123"
 
 
 @pytest.mark.asyncio

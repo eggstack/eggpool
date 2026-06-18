@@ -62,6 +62,13 @@ logger = logging.getLogger(__name__)
 DEFAULT_MAX_RETRY_ATTEMPTS = 3
 
 
+def _safe_dict(value: Any) -> dict[str, Any] | None:
+    """Return value if it is a dict, else None."""
+    if isinstance(value, dict):
+        return cast("dict[str, Any]", value)
+    return None
+
+
 @dataclass
 class ProxyRequestContext:
     """Input context for a proxy request."""
@@ -102,7 +109,7 @@ class PreparedProxyResponse:
     """Result of executing a proxy request through the coordinator."""
 
     status_code: int
-    headers: dict[str, str]
+    headers: list[tuple[str, str]]
     body: bytes | None = None  # for non-streaming
     stream_iterator: AsyncIterator[bytes] | None = None  # for streaming
     request_id: str = ""
@@ -197,7 +204,7 @@ class RequestCoordinator:
         self._validate_endpoint(context)
 
         last_error: Exception | None = None
-        last_upstream_response: tuple[int, dict[str, str], bytes] | None = None
+        last_upstream_response: tuple[int, list[tuple[str, str]], bytes] | None = None
         attempt_num = 0
         last_selected: SelectedAttempt | None = None
 
@@ -565,7 +572,7 @@ class RequestCoordinator:
             elapsed_ms = int((time.time() - context.started_at) * 1000)
 
             usage = self._extract_non_stream_usage(context.protocol, body)
-            upstream_req_id = resp_headers.get("x-request-id")
+            upstream_req_id = self._get_header_value(resp_headers, "x-request-id")
 
             # Finalize via RequestFinalizer
             await self._finalizer.finalize(
@@ -586,8 +593,8 @@ class RequestCoordinator:
                 ),
             )
 
-            resp_headers["x-proxy-request-id"] = context.request_id
-            resp_headers["x-proxy-attempt-count"] = str(attempt_num)
+            resp_headers.append(("x-proxy-request-id", context.request_id))
+            resp_headers.append(("x-proxy-attempt-count", str(attempt_num)))
             return PreparedProxyResponse(
                 status_code=response.status_code,
                 headers=resp_headers,
@@ -709,8 +716,8 @@ class RequestCoordinator:
 
         # Build the response headers
         resp_headers = filter_response_headers(response.headers, streaming=True)
-        resp_headers["x-proxy-request-id"] = context.request_id
-        resp_headers["x-proxy-attempt-count"] = str(attempt_num)
+        resp_headers.append(("x-proxy-request-id", context.request_id))
+        resp_headers.append(("x-proxy-attempt-count", str(attempt_num)))
 
         # Build streaming generator
         stream_iter = self._build_stream_generator(
@@ -735,7 +742,7 @@ class RequestCoordinator:
         context: ProxyRequestContext,
         upstream_response: httpx.Response,
         selected: SelectedAttempt,
-        resp_headers: dict[str, str],
+        resp_headers: list[tuple[str, str]],
     ) -> AsyncIterator[bytes]:
         """Build an async generator that streams upstream bytes downstream,
         extracts usage via IncrementalSSEObserver, and finalizes the request
@@ -778,7 +785,9 @@ class RequestCoordinator:
                         first_byte_ms=int(first_byte_ms) if first_byte_ms > 0 else None,
                         upstream_latency_ms=int((time.time() - started) * 1000),
                         bytes_emitted=bytes_emitted,
-                        upstream_request_id=resp_headers.get("x-request-id"),
+                        upstream_request_id=self._get_header_value(
+                            resp_headers, "x-request-id"
+                        ),
                     ),
                 )
 
@@ -855,37 +864,62 @@ class RequestCoordinator:
             )
             return None
 
+        if not isinstance(data, dict):
+            logger.debug(
+                "Non-streaming upstream response is not a JSON object "
+                "(type=%s); usage will not be extracted",
+                type(data).__name__,
+            )
+            return None
+
+        data_dict = cast("dict[str, Any]", data)
+
         if protocol == "anthropic":
-            usage = data.get("usage")
-            if not usage:
+            usage_raw = _safe_dict(data_dict.get("usage"))
+            if usage_raw is None:
                 return None
             return StreamUsageResult(
-                input_tokens=usage.get("input_tokens", 0),
-                output_tokens=usage.get("output_tokens", 0),
-                cache_read_tokens=usage.get("cache_read_input_tokens", 0),
-                cache_creation_tokens=usage.get("cache_creation_input_tokens", 0),
+                input_tokens=usage_raw.get("input_tokens", 0),
+                output_tokens=usage_raw.get("output_tokens", 0),
+                cache_read_tokens=usage_raw.get("cache_read_input_tokens", 0),
+                cache_creation_tokens=usage_raw.get("cache_creation_input_tokens", 0),
                 is_complete=True,
             )
         else:
-            usage = data.get("usage")
-            if not usage:
+            usage_raw = _safe_dict(data_dict.get("usage"))
+            if not usage_raw:
                 return None
+            prompt_details = _safe_dict(usage_raw.get("prompt_tokens_details"))
+            completion_details = _safe_dict(usage_raw.get("completion_tokens_details"))
             return StreamUsageResult(
-                input_tokens=usage.get("prompt_tokens", 0),
-                output_tokens=usage.get("completion_tokens", 0),
-                cache_read_tokens=usage.get("prompt_tokens_details", {}).get(
-                    "cached_tokens", 0
+                input_tokens=usage_raw.get("prompt_tokens", 0),
+                output_tokens=usage_raw.get("completion_tokens", 0),
+                cache_read_tokens=(
+                    prompt_details.get("cached_tokens", 0)
+                    if prompt_details is not None
+                    else 0
                 ),
-                reasoning_tokens=usage.get("completion_tokens_details", {}).get(
-                    "reasoning_tokens", 0
+                reasoning_tokens=(
+                    completion_details.get("reasoning_tokens", 0)
+                    if completion_details is not None
+                    else 0
                 ),
                 is_complete=True,
             )
 
+    @staticmethod
+    def _get_header_value(headers: list[tuple[str, str]], name: str) -> str | None:
+        """Return the value for a single-valued header, or None."""
+        lower_name = name.lower()
+        for key, value in headers:
+            if key.lower() == lower_name:
+                return value
+        return None
+
     def _classify_upstream_error(
         self,
         status_code: int,
-        headers: dict[str, str],
+        headers: list[tuple[str, str]],
         body: bytes | None = None,
     ) -> UpstreamError | None:
         """Classify an upstream error status code into an exception.
@@ -893,7 +927,8 @@ class RequestCoordinator:
         Returns None for non-retryable client errors (400, non-model-specific 404)
         where the response body should be passed through as-is.
         """
-        error = self._classifier.classify(status_code, headers, body=body)
+        headers_dict = dict(headers)
+        error = self._classifier.classify(status_code, headers_dict, body=body)
 
         if error.category == RetryCategory.AUTH_FAILURE:
             return AuthenticationError(error.message, status_code=status_code)
@@ -966,7 +1001,7 @@ class RequestCoordinator:
         context: ProxyRequestContext,
         selected: SelectedAttempt,
         status_code: int,
-        resp_headers: dict[str, str],
+        resp_headers: list[tuple[str, str]],
         resp_body: bytes,
     ) -> None:
         """Finalize a non-retryable client error (4xx)."""
@@ -978,7 +1013,9 @@ class RequestCoordinator:
                 status_code=status_code,
                 upstream_latency_ms=elapsed_ms,
                 bytes_emitted=len(resp_body),
-                upstream_request_id=resp_headers.get("x-request-id"),
+                upstream_request_id=self._get_header_value(
+                    resp_headers, "x-request-id"
+                ),
             ),
         )
 
@@ -986,7 +1023,7 @@ class RequestCoordinator:
         self,
         context: ProxyRequestContext,
         last_error: Exception | None,
-        last_upstream_response: tuple[int, dict[str, str], bytes] | None,
+        last_upstream_response: tuple[int, list[tuple[str, str]], bytes] | None,
         attempt_num: int,
         last_selected: SelectedAttempt | None = None,
     ) -> PreparedProxyResponse:
@@ -1068,8 +1105,8 @@ class RequestCoordinator:
         # Use last upstream response if available
         if last_upstream_response is not None:
             status, headers, body = last_upstream_response
-            headers["x-proxy-request-id"] = context.request_id
-            headers["x-proxy-attempt-count"] = str(attempt_num)
+            headers.append(("x-proxy-request-id", context.request_id))
+            headers.append(("x-proxy-attempt-count", str(attempt_num)))
             return PreparedProxyResponse(
                 status_code=status,
                 headers=headers,
@@ -1105,11 +1142,11 @@ class RequestCoordinator:
             ).encode()
         return PreparedProxyResponse(
             status_code=status_code,
-            headers={
-                "content-type": "application/json",
-                "x-proxy-request-id": context.request_id,
-                "x-proxy-attempt-count": str(attempt_num),
-            },
+            headers=[
+                ("content-type", "application/json"),
+                ("x-proxy-request-id", context.request_id),
+                ("x-proxy-attempt-count", str(attempt_num)),
+            ],
             body=error_body,
             request_id=context.request_id,
             account_name=context.client_metadata.get("account_name", ""),
@@ -1189,7 +1226,7 @@ class _RetryableUpstreamError(Exception):
         status_code: int | None = None,
         error_class: str | None = None,
         retry_after: float | None = None,
-        upstream_response: tuple[int, dict[str, str], bytes] | None = None,
+        upstream_response: tuple[int, list[tuple[str, str]], bytes] | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
@@ -1206,7 +1243,7 @@ class _NonRetryableUpstreamError(Exception):
         message: str = "",
         *,
         status_code: int | None = None,
-        upstream_response: tuple[int, dict[str, str], bytes] | None = None,
+        upstream_response: tuple[int, list[tuple[str, str]], bytes] | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code

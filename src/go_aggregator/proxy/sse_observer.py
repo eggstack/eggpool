@@ -15,6 +15,7 @@ from go_aggregator.proxy.usage import (
     AnthropicStreamUsageExtractor,
     OpenAIStreamUsageExtractor,
     StreamUsageResult,
+    safe_dict,
 )
 
 logger = logging.getLogger(__name__)
@@ -168,11 +169,19 @@ class IncrementalSSEObserver:
             return
 
         try:
-            parsed = json.loads(data)
+            parsed_raw = json.loads(data)
+            parsed = safe_dict(parsed_raw)
+            if parsed is None:
+                self._error_count += 1
+                logger.debug(
+                    "SSE data frame is not a JSON object (type=%s), ignoring",
+                    type(parsed_raw).__name__,
+                )
+                return
             usage = self._extractor.extract(parsed)
             if usage:
                 self._merge_usage(usage)
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError, TypeError, AttributeError):
             self._error_count += 1
             logger.debug("Malformed SSE data frame, ignoring")
 

@@ -79,19 +79,20 @@ def filter_request_headers(
 def filter_response_headers(
     headers: httpx.Headers,
     streaming: bool = False,
-) -> dict[str, str]:
+) -> list[tuple[str, str]]:
     """Filter response headers for downstream.
 
     - Remove hop-by-hop headers
     - Remove content-length for streaming (chunked transfer)
     - Preserve useful headers
+    - Preserve duplicate headers (e.g. multiple Set-Cookie) as separate entries
     """
-    filtered: dict[str, str] = {}
-    for key, value in headers.items():
-        lower_key = key.lower()
-        if lower_key in HOP_BY_HOP_HEADERS:
+    filtered: list[tuple[str, str]] = []
+    for raw_name, raw_value in headers.raw:
+        lower_name = raw_name.decode("latin-1").lower()
+        if lower_name in HOP_BY_HOP_HEADERS:
             continue
-        if streaming and lower_key == "content-length":
+        if streaming and lower_name == "content-length":
             continue
-        filtered[key] = value
+        filtered.append((raw_name.decode("latin-1"), raw_value.decode("latin-1")))
     return filtered
