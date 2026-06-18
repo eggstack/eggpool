@@ -82,7 +82,10 @@ async def handle_messages(
     model_id = model_value
 
     # Parse provider-suffixed model IDs (e.g. "claude-3/anthropic-ai")
-    base_model_id, provider_id = parse_model_id(model_id)
+    known_providers: set[str] | None = None
+    if hasattr(request.app.state, "config"):
+        known_providers = set(request.app.state.config.providers)  # type: ignore[union-attr]
+    base_model_id, provider_id = parse_model_id(model_id, known_providers)
 
     stream_value = payload.get("stream", False)
     if stream_value is not None and not isinstance(stream_value, bool):

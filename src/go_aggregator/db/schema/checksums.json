@@ -15,6 +15,7 @@
     "0013_request_attempts_account_id_index.sql": "d50fb9187b6e01bb2547832a869b2493561233b8c3393f0756e1f88d703416f7",
     "0014_bandwidth_tracking.sql": "986c80a30a7c8b15c7acdd0ea19460329beb3f6ae6f634f3608bf1f101413e21",
     "0015_multi_provider.sql": "6fee7813419d5d9467aa6316786d598bede9488df8ae149ede51b180ff72ce24",
-    "0016_requests_provider_id.sql": "5a1d3ab6e58fe37434d410d12187238d516cd8a549fae17eda43b77e09cefb66"
+    "0016_requests_provider_id.sql": "5a1d3ab6e58fe37434d410d12187238d516cd8a549fae17eda43b77e09cefb66",
+    "0017_price_snapshots_provider_id.sql": "af44d3bcc8704cac626b2ac59a65f85c32ff50bda7469c7bbd4328601e062323"
   }
 }

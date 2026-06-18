@@ -13,7 +13,7 @@ from go_aggregator.accounts.registry import account_config_rows
 from go_aggregator.auth import require_auth_at_startup
 from go_aggregator.db.connection import Database
 from go_aggregator.db.migrations import MigrationRunner
-from go_aggregator.db.repositories import AccountRepository
+from go_aggregator.db.repositories import AccountRepository, ProviderRepository
 from go_aggregator.errors import AggregatorError
 from go_aggregator.logging import configure_logging
 from go_aggregator.models.config import AppConfig
@@ -170,6 +170,13 @@ def models_refresh(ctx: click.Context) -> None:
         try:
             runner = MigrationRunner(db)
             await runner.run()
+
+            provider_repo = ProviderRepository(db)
+            configured_providers = {
+                pid: {"base_url": pcfg.base_url, "protocols": pcfg.protocols}
+                for pid, pcfg in config.providers.items()
+            }
+            await provider_repo.sync_from_config(configured_providers)
 
             account_repo = AccountRepository(db)
             await account_repo.sync_from_config(account_config_rows(config), db)

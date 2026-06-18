@@ -38,6 +38,7 @@ from go_aggregator.db.repositories import (
     AccountEventRepository,
     AccountRepository,
     AttemptRepository,
+    ProviderRepository,
     RequestRepository,
     ReservationRepository,
     UsageWindowRepository,
@@ -213,15 +214,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     runner = MigrationRunner(db)
     await runner.run()
 
-    # 4. Sync accounts from config to SQLite
+    # 4. Sync providers from config to SQLite
+    provider_repo = ProviderRepository(db)
+    configured_providers = {
+        pid: {"base_url": pcfg.base_url, "protocols": pcfg.protocols}
+        for pid, pcfg in config.providers.items()
+    }
+    await provider_repo.sync_from_config(configured_providers)
+
+    # 5. Sync accounts from config to SQLite
     account_repo = AccountRepository(db)
     config_accounts = account_config_rows(config)
     await account_repo.sync_from_config(config_accounts, db)
 
-    # 5. Crash recovery
+    # 6. Crash recovery
     await _crash_recovery(db)
 
-    # 6. Initialize repositories
+    # 7. Initialize repositories
     request_repo = RequestRepository(db)
     reservation_repo = ReservationRepository(db)
     attempt_repo = AttemptRepository(db)

@@ -146,6 +146,7 @@ class RequestFinalizer:
                     data.output_tokens,
                     data.cache_read_tokens,
                     data.cache_write_tokens,
+                    provider_id=selected.provider_id,
                 )
 
             # 2. Use reservation estimate as fallback when cost is unknown

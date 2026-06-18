@@ -217,6 +217,25 @@ class CatalogService:
                             model["protocol"] = resolution.protocol
                             model["protocol_source"] = resolution.source
 
+            # Enforce provider protocol constraints: clear protocol for
+            # models whose resolved protocol is not supported by this
+            # provider so they are not routed through an incompatible
+            # upstream.
+            provider_cfg = self._config.providers.get(provider_id)
+            if provider_cfg is not None:
+                supported = set(provider_cfg.protocols)
+                for model in models:
+                    proto = model.get("protocol")
+                    if proto and proto not in supported:
+                        logger.debug(
+                            "Clearing unsupported protocol %r for %s on provider %s",
+                            proto,
+                            model["model_id"],
+                            provider_id,
+                        )
+                        model["protocol"] = None
+                        model["protocol_source"] = "provider_mismatch"
+
             self._cache.update_from_account(account_name, provider_id, models)
             logger.debug(
                 "Account %r: found %d models",
@@ -275,6 +294,16 @@ class CatalogService:
                     self._cache.set_account_provider(account_name, provider_id)
                     if self._cache.has_model(model_id):
                         self._cache.add_account_support(model_id, account_name)
+                        # Populate per-provider metadata from global entry
+                        # so provider-suffixed exposure works before the
+                        # next live refresh.
+                        provider_key = (model_id, provider_id)
+                        if provider_key not in self._cache.get_provider_model_entries():
+                            model_info = self._cache.get_model(model_id)
+                            if model_info is not None:
+                                self._cache.set_provider_model_entry(
+                                    model_id, provider_id, dict(model_info)
+                                )
 
             if self._cache.model_count > 0:
                 logger.info(
@@ -358,8 +387,21 @@ class CatalogService:
                 # 7.5: Insert price snapshot if pricing data is available
                 await self._maybe_insert_price_snapshot(model_id, model_info)
 
+            # 7.6: Insert per-provider price snapshots
+            for (
+                pid_model_id,
+                pid,
+            ), pinfo in self._cache.get_provider_model_entries().items():
+                if self._cache.has_model(pid_model_id):
+                    await self._maybe_insert_price_snapshot(
+                        pid_model_id, pinfo, provider_id=pid
+                    )
+
     async def _maybe_insert_price_snapshot(
-        self, model_id: str, model_info: dict[str, Any]
+        self,
+        model_id: str,
+        model_info: dict[str, Any],
+        provider_id: str = "opencode-go",
     ) -> None:
         """Insert a price snapshot if pricing data is available.
 
@@ -505,12 +547,14 @@ class CatalogService:
             old_cache_read = latest.get("cache_read_per_million_microdollars")
             old_cache_write = latest.get("cache_write_per_million_microdollars")
             old_source = latest.get("source")
+            old_provider = latest.get("provider_id", "opencode-go")
             if (
                 old_input == input_price
                 and old_output == output_price
                 and old_cache_read == cache_read_price
                 and old_cache_write == cache_write_price
                 and old_source == source
+                and old_provider == provider_id
             ):
                 return  # No change, skip insert
 
@@ -524,6 +568,7 @@ class CatalogService:
             cache_read_per_million_microdollars=cache_read_price,
             cache_write_per_million_microdollars=cache_write_price,
             source=source,
+            provider_id=provider_id,
         )
         logger.debug(
             "Inserted price snapshot for %s: input=%s output=%s "

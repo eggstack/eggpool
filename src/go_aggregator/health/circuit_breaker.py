@@ -50,8 +50,11 @@ class CircuitBreaker:
 
             if self._state == CircuitState.HALF_OPEN:
                 self._success_count += 1
+                # Clear the in-flight flag after each successful probe
+                # so the next probe can proceed.  If the threshold is
+                # reached, close the circuit; otherwise remain half-open.
+                self._half_open_in_flight = False
                 if self._success_count >= self.success_threshold:
-                    self._half_open_in_flight = False
                     self._state = CircuitState.CLOSED
                     self._failure_count = 0
                     self._success_count = 0

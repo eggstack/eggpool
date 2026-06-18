@@ -604,7 +604,7 @@ class PriceSnapshotRepository:
             "captured_at, input_per_million_microdollars, "
             "output_per_million_microdollars, "
             "cache_read_per_million_microdollars, "
-            "cache_write_per_million_microdollars, source "
+            "cache_write_per_million_microdollars, source, provider_id "
             "FROM model_price_snapshots "
             "WHERE model_id = ? ORDER BY captured_at DESC, id DESC LIMIT 1",
             (model_id,),
@@ -622,6 +622,7 @@ class PriceSnapshotRepository:
         cache_read_per_million_microdollars: int | None = None,
         cache_write_per_million_microdollars: int | None = None,
         source: str = "upstream",
+        provider_id: str = "opencode-go",
     ) -> None:
         """Record a new price snapshot.
 
@@ -643,8 +644,8 @@ class PriceSnapshotRepository:
             "(model_id, input_price_per_1k, output_price_per_1k, "
             "input_per_million_microdollars, output_per_million_microdollars, "
             "cache_read_per_million_microdollars, "
-            "cache_write_per_million_microdollars, source) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "cache_write_per_million_microdollars, source, provider_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 model_id,
                 input_price_per_1k,
@@ -654,6 +655,7 @@ class PriceSnapshotRepository:
                 cache_read_per_million_microdollars,
                 cache_write_per_million_microdollars,
                 source,
+                provider_id,
             ),
         )
 
@@ -743,3 +745,33 @@ class ProviderRepository:
             (provider_id,),
         )
         return dict(row) if row is not None else None
+
+    async def sync_from_config(
+        self,
+        configured_providers: dict[str, dict[str, Any]],
+    ) -> None:
+        """Upsert configured providers and disable removed ones."""
+        import json as _json
+
+        configured_ids = set(configured_providers.keys())
+        for provider_id, cfg in configured_providers.items():
+            await self._db.execute_write(
+                "INSERT INTO providers (provider_id, base_url, protocols) "
+                "VALUES (?, ?, ?) "
+                "ON CONFLICT(provider_id) DO UPDATE SET "
+                "base_url = excluded.base_url, "
+                "protocols = excluded.protocols, "
+                "enabled = 1",
+                (provider_id, cfg["base_url"], _json.dumps(cfg["protocols"])),
+            )
+
+        # Disable providers no longer in config
+        existing = await self._db.fetch_all(
+            "SELECT provider_id FROM providers WHERE enabled = 1"
+        )
+        for row in existing:
+            if row["provider_id"] not in configured_ids:
+                await self._db.execute_write(
+                    "UPDATE providers SET enabled = 0 WHERE provider_id = ?",
+                    (row["provider_id"],),
+                )

@@ -137,6 +137,27 @@ class TestCircuitBreaker:
         assert stats["state"] == "closed"
         assert stats["failure_count"] == 0
 
+    def test_half_open_allows_multiple_probes(self) -> None:
+        """After a successful probe, another allow_request must be permitted."""
+        cb = CircuitBreaker(
+            failure_threshold=2, recovery_timeout=0.1, success_threshold=3
+        )
+        cb.record_failure()
+        cb.record_failure()
+        time.sleep(0.11)
+        # First probe
+        assert cb.allow_request()
+        assert cb.state == CircuitState.HALF_OPEN
+        cb.record_success()
+        # Second probe must be allowed (in-flight flag cleared)
+        assert cb.allow_request()
+        cb.record_success()
+        # Third probe must be allowed
+        assert cb.allow_request()
+        cb.record_success()
+        # Threshold reached: circuit should close
+        assert cb.state == CircuitState.CLOSED
+
     def test_can_request_does_not_consume_half_open_slot(self) -> None:
         """can_request() must not transition OPEN→HALF_OPEN or set in-flight."""
         cb = CircuitBreaker(failure_threshold=2, recovery_timeout=0.1)

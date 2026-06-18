@@ -479,7 +479,15 @@ class RequestCoordinator:
                         f"Account {account_name!r} not found in database"
                     )
 
-                # 6. Create pending request if first attempt
+                # 6. Resolve the selected account's provider
+                resolved_provider_id = (
+                    self._catalog.cache.get_provider_for_account(account_name)
+                    or self._registry.get_provider_for_account(account_name)
+                    or context.provider_id
+                    or "opencode-go"
+                )
+
+                # 7. Create pending request if first attempt
                 if "db_request_id" not in context.client_metadata:
                     db_request_id = await self._request_repo.create_pending(
                         request_id=context.request_id,
@@ -488,7 +496,7 @@ class RequestCoordinator:
                         streamed=context.streaming,
                         account_id=account_id,
                         started_at=context.started_at,
-                        provider_id=context.provider_id or "opencode-go",
+                        provider_id=resolved_provider_id,
                     )
                     context.client_metadata["db_request_id"] = db_request_id
                 db_request_id = context.client_metadata["db_request_id"]
@@ -580,7 +588,7 @@ class RequestCoordinator:
             estimated_tokens=estimated_tokens,
             estimated_microdollars=estimated_microdollars,
             attempt_number=attempt_number,
-            provider_id=context.provider_id or "opencode-go",
+            provider_id=resolved_provider_id,
         )
 
     async def _execute_upstream(
@@ -619,11 +627,11 @@ class RequestCoordinator:
         headers = filter_request_headers(
             dict(context.incoming_headers), selected.api_key
         )
-        upstream_path = self._get_upstream_path(context.protocol, context.provider_id)
+        upstream_path = self._get_upstream_path(context.protocol, selected.provider_id)
 
         response: httpx.Response | None = None
         try:
-            client = self._get_client(context.provider_id)
+            client = self._get_client(selected.provider_id)
             upstream_request = client.build_request(
                 "POST",
                 upstream_path,
@@ -760,7 +768,7 @@ class RequestCoordinator:
         headers = filter_request_headers(
             dict(context.incoming_headers), selected.api_key
         )
-        upstream_path = self._get_upstream_path(context.protocol, context.provider_id)
+        upstream_path = self._get_upstream_path(context.protocol, selected.provider_id)
 
         # Inject stream_options.include_usage for OpenAI
         body_to_send = context.original_body
@@ -786,7 +794,7 @@ class RequestCoordinator:
                         # leave the body unchanged and let upstream reject it.
                         pass
 
-        client = self._get_client(context.provider_id)
+        client = self._get_client(selected.provider_id)
         request = client.build_request(
             "POST",
             upstream_path,
@@ -1360,7 +1368,9 @@ class RequestCoordinator:
         Raises ProtocolMismatchError (which callers render as 400) when
         the wrong endpoint is used for a known model.
         """
-        model_info = self._catalog.cache.get_model(context.model_id)
+        model_info = self._catalog.cache.get_model_for_provider(
+            context.model_id, context.provider_id
+        )
         if model_info is None:
             raise ModelNotFoundError(context.model_id)
 

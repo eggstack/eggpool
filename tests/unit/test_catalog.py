@@ -166,15 +166,29 @@ def test_parse_model_id_without_suffix() -> None:
 
 
 def test_parse_model_id_with_suffix() -> None:
-    base, provider = parse_model_id("gpt-4/opencode-go")
+    base, provider = parse_model_id("gpt-4/opencode-go", {"opencode-go"})
     assert base == "gpt-4"
     assert provider == "opencode-go"
 
 
 def test_parse_model_id_with_multiple_slashes() -> None:
-    base, provider = parse_model_id("model/with/slashes/provider")
+    base, provider = parse_model_id("model/with/slashes/provider", {"provider"})
     assert base == "model/with/slashes"
     assert provider == "provider"
+
+
+def test_parse_model_id_slash_not_matching_provider() -> None:
+    """A slash-bearing unsuffixed ID must not be misparsed."""
+    base, provider = parse_model_id("vendor/model-name", {"opencode-go"})
+    assert base == "vendor/model-name"
+    assert provider is None
+
+
+def test_parse_model_id_no_known_providers() -> None:
+    """Without known_providers, treat last segment as provider (legacy)."""
+    base, provider = parse_model_id("gpt-4/opencode-go")
+    assert base == "gpt-4"
+    assert provider == "opencode-go"
 
 
 # ===================================================================

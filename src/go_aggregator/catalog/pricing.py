@@ -7,7 +7,7 @@ import math
 import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from go_aggregator.db.connection import Database
@@ -171,6 +171,7 @@ class PriceSnapshot:
     cache_read_per_million_microdollars: int | None = None
     cache_write_per_million_microdollars: int | None = None
     source: str = "upstream"
+    provider_id: str = "opencode-go"
 
 
 class PriceRepository:
@@ -190,6 +191,7 @@ class PriceRepository:
         cache_read_per_million_microdollars: int | None = None,
         cache_write_per_million_microdollars: int | None = None,
         source: str = "config",
+        provider_id: str = "opencode-go",
     ) -> None:
         """Record a price snapshot for a model.
 
@@ -211,8 +213,8 @@ class PriceRepository:
                 (model_id, input_price_per_1k, output_price_per_1k,
                  input_per_million_microdollars, output_per_million_microdollars,
                  cache_read_per_million_microdollars,
-                 cache_write_per_million_microdollars, source)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 cache_write_per_million_microdollars, source, provider_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 model_id,
@@ -223,18 +225,47 @@ class PriceRepository:
                 cache_read_per_million_microdollars,
                 cache_write_per_million_microdollars,
                 source,
+                provider_id,
             ),
         )
 
-    async def get_latest_snapshot(self, model_id: str) -> PriceSnapshot | None:
-        """Get the most recent price snapshot for a model."""
+    async def get_latest_snapshot(
+        self, model_id: str, provider_id: str | None = None
+    ) -> PriceSnapshot | None:
+        """Get the most recent price snapshot for a model.
+
+        When ``provider_id`` is given, prefers the provider-specific
+        snapshot.  Falls back to the legacy model-only snapshot when no
+        provider-specific row exists.
+        """
+        if provider_id is not None:
+            row = await self._db.fetch_one(
+                """
+                SELECT model_id, input_price_per_1k, output_price_per_1k,
+                       captured_at, input_per_million_microdollars,
+                       output_per_million_microdollars,
+                       cache_read_per_million_microdollars,
+                       cache_write_per_million_microdollars, source,
+                       provider_id
+                FROM model_price_snapshots
+                WHERE model_id = ? AND provider_id = ?
+                ORDER BY captured_at DESC, id DESC
+                LIMIT 1
+                """,
+                (model_id, provider_id),
+            )
+            if row is not None:
+                return self._row_to_snapshot(row)
+
+        # Fallback: model-only lookup (legacy rows or provider-agnostic)
         row = await self._db.fetch_one(
             """
             SELECT model_id, input_price_per_1k, output_price_per_1k,
                    captured_at, input_per_million_microdollars,
                    output_per_million_microdollars,
                    cache_read_per_million_microdollars,
-                   cache_write_per_million_microdollars, source
+                   cache_write_per_million_microdollars, source,
+                   provider_id
             FROM model_price_snapshots
             WHERE model_id = ?
             ORDER BY captured_at DESC, id DESC
@@ -244,6 +275,15 @@ class PriceRepository:
         )
         if row is None:
             return None
+        return self._row_to_snapshot(row)
+
+    @staticmethod
+    def _row_to_snapshot(row: Any) -> PriceSnapshot:
+        """Convert a database row to a PriceSnapshot."""
+        try:
+            provider_id = row["provider_id"]
+        except (IndexError, KeyError):
+            provider_id = "opencode-go"
         return PriceSnapshot(
             model_id=row["model_id"],
             input_price_per_1k=row["input_price_per_1k"],
@@ -258,6 +298,7 @@ class PriceRepository:
                 "cache_write_per_million_microdollars"
             ],
             source=row["source"] if row["source"] is not None else "upstream",
+            provider_id=provider_id,
         )
 
     async def get_snapshots_since(
@@ -310,6 +351,7 @@ class CostCalculator:
         output_tokens: int,
         cache_read_tokens: int = 0,
         cache_write_tokens: int = 0,
+        provider_id: str | None = None,
     ) -> tuple[int, str]:
         """Calculate cost in microdollars from token usage.
 
@@ -321,7 +363,9 @@ class CostCalculator:
         cache_read_tokens = _normalize_token_count(cache_read_tokens)
         cache_write_tokens = _normalize_token_count(cache_write_tokens)
 
-        snapshot = await self._price_repo.get_latest_snapshot(model_id)
+        snapshot = await self._price_repo.get_latest_snapshot(
+            model_id, provider_id=provider_id
+        )
 
         if snapshot is None:
             return (

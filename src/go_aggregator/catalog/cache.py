@@ -9,15 +9,19 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-def parse_model_id(model_id: str) -> tuple[str, str | None]:
+def parse_model_id(
+    model_id: str, known_providers: set[str] | None = None
+) -> tuple[str, str | None]:
     """Parse a model ID that may contain a provider suffix.
 
     Returns (base_model_id, provider_id) where provider_id is None
-    when no suffix is present.
+    when no suffix is present or the suffix does not match a known
+    provider.
     """
     if "/" in model_id:
-        base, provider = model_id.rsplit("/", 1)
-        return base, provider
+        base, candidate = model_id.rsplit("/", 1)
+        if known_providers is None or candidate in known_providers:
+            return base, candidate
     return model_id, None
 
 
@@ -25,8 +29,10 @@ class ModelCatalogCache:
     """In-memory cache of the model catalog."""
 
     def __init__(self) -> None:
-        # model_id -> model info dict
+        # model_id -> model info dict (global, first-seen wins for metadata)
         self._models: dict[str, dict[str, Any]] = {}
+        # (model_id, provider_id) -> provider-specific model info
+        self._provider_models: dict[tuple[str, str], dict[str, Any]] = {}
         # model_id -> set of account names that support it
         self._account_support: dict[str, set[str]] = {}
         # account_name -> provider_id
@@ -51,6 +57,24 @@ class ModelCatalogCache:
         self.mark_account_models_unavailable(account_name)
         for model in models:
             model_id = model["model_id"]
+            provider_key = (model_id, provider_id)
+
+            # Store per-provider metadata (provider-specific protocol,
+            # display_name, capabilities, source_metadata).
+            provider_info: dict[str, Any] = {
+                "model_id": model_id,
+                "display_name": model.get("display_name"),
+                "protocol": model.get("protocol"),
+                "protocol_source": model.get("protocol_source"),
+                "capabilities": model.get("capabilities", {}),
+                "source_metadata": model.get("source_metadata", {}),
+                "first_seen_at": now,
+                "last_seen_at": now,
+            }
+            self._provider_models[provider_key] = provider_info
+
+            # Global entry: only set on first encounter; never overwrite
+            # metadata from an earlier provider for the same model_id.
             if model_id not in self._models:
                 self._models[model_id] = {
                     "model_id": model_id,
@@ -64,18 +88,6 @@ class ModelCatalogCache:
                 }
             else:
                 self._models[model_id]["last_seen_at"] = now
-                self._models[model_id]["display_name"] = model.get("display_name")
-                # Always update protocol to reflect current upstream state;
-                # an empty protocol means unresolved and should clear any
-                # previously resolved value.
-                self._models[model_id]["protocol"] = model.get("protocol")
-                # Update source if provided
-                if model.get("protocol_source"):
-                    self._models[model_id]["protocol_source"] = model["protocol_source"]
-                self._models[model_id]["capabilities"] = model.get("capabilities", {})
-                self._models[model_id]["source_metadata"] = model.get(
-                    "source_metadata", {}
-                )
 
             if model_id not in self._account_support:
                 self._account_support[model_id] = set()
@@ -102,15 +114,12 @@ class ModelCatalogCache:
         """Get models to expose based on the configured mode.
 
         Excludes models with unresolved protocol (None) since they
-        cannot be routed to any endpoint.
+        cannot be routed to any endpoint.  When multiple providers
+        advertise the same model, uses per-provider metadata.
         """
         result: list[dict[str, Any]] = []
 
         for model_id, model_info in self._models.items():
-            # Fail-closed: do not expose unresolved models
-            if not model_info.get("protocol"):
-                continue
-
             accounts_supporting = self._account_support.get(model_id, set())
             visible_accounts = accounts_supporting & eligible_account_names
 
@@ -124,10 +133,32 @@ class ModelCatalogCache:
                 or (expose_mode == "healthy_union" and visible_accounts)
             )
 
-            if should_include:
-                model_info_copy = dict(model_info)
-                model_info_copy["available_accounts"] = sorted(visible_accounts)
-                result.append(model_info_copy)
+            if not should_include:
+                continue
+
+            # Find the best provider-specific entry for this model
+            # among the visible accounts.
+            best_info: dict[str, Any] | None = None
+            for acct_name in visible_accounts:
+                pid = self._account_providers.get(acct_name)
+                if pid is None:
+                    continue
+                pinfo = self._provider_models.get((model_id, pid))
+                if pinfo is not None and pinfo.get("protocol"):
+                    best_info = pinfo
+                    break
+
+            # Fall back to global entry if no provider-specific entry
+            # has a resolved protocol.
+            if best_info is None:
+                if not model_info.get("protocol"):
+                    continue
+                best_info = model_info
+
+            model_info_copy = dict(best_info)
+            model_info_copy["model_id"] = model_id
+            model_info_copy["available_accounts"] = sorted(visible_accounts)
+            result.append(model_info_copy)
 
         return sorted(result, key=lambda m: m["model_id"])
 
@@ -140,7 +171,9 @@ class ModelCatalogCache:
 
         For each (model_id, provider_id) pair where at least one account
         from that provider supports the model, generate a client-facing
-        model ID like 'model-id/provider-id'.
+        model ID like 'model-id/provider-id'.  Uses per-provider metadata
+        so models shared across providers retain independent protocol and
+        capability information.
         """
         # Build provider -> eligible accounts mapping
         provider_accounts: dict[str, set[str]] = {}
@@ -150,10 +183,7 @@ class ModelCatalogCache:
                 provider_accounts.setdefault(pid, set()).add(account_name)
 
         result: list[dict[str, Any]] = []
-        for model_id, model_info in self._models.items():
-            if not model_info.get("protocol"):
-                continue
-
+        for model_id in self._models:
             accounts_supporting = self._account_support.get(model_id, set())
 
             # Group supporting accounts by provider
@@ -177,14 +207,25 @@ class ModelCatalogCache:
                     or (expose_mode == "healthy_union" and visible)
                 )
 
-                if should_include:
-                    suffixed_id = f"{model_id}/{pid}"
-                    model_copy = dict(model_info)
-                    model_copy["model_id"] = suffixed_id
-                    model_copy["base_model_id"] = model_id
-                    model_copy["provider_id"] = pid
-                    model_copy["available_accounts"] = sorted(visible)
-                    result.append(model_copy)
+                if not should_include:
+                    continue
+
+                # Use per-provider metadata for this (model_id, provider_id)
+                # if available; otherwise fall back to the global entry.
+                pinfo = self._provider_models.get((model_id, pid))
+                if pinfo is not None and pinfo.get("protocol"):
+                    model_copy = dict(pinfo)
+                elif self._models.get(model_id, {}).get("protocol"):
+                    model_copy = dict(self._models[model_id])
+                else:
+                    continue
+
+                suffixed_id = f"{model_id}/{pid}"
+                model_copy["model_id"] = suffixed_id
+                model_copy["base_model_id"] = model_id
+                model_copy["provider_id"] = pid
+                model_copy["available_accounts"] = sorted(visible)
+                result.append(model_copy)
 
         return sorted(result, key=lambda m: m["model_id"])
 
@@ -200,6 +241,20 @@ class ModelCatalogCache:
         """Get a specific model from the cache."""
         return self._models.get(model_id)
 
+    def get_model_for_provider(
+        self, model_id: str, provider_id: str | None
+    ) -> dict[str, Any] | None:
+        """Get model info for a specific provider.
+
+        Returns per-provider metadata when available, falling back to
+        the global entry.
+        """
+        if provider_id is not None:
+            pinfo = self._provider_models.get((model_id, provider_id))
+            if pinfo is not None:
+                return pinfo
+        return self._models.get(model_id)
+
     def get_supporting_accounts(self, model_id: str) -> set[str]:
         """Get set of account names that support a model."""
         return self._account_support.get(model_id, set()).copy()
@@ -207,10 +262,23 @@ class ModelCatalogCache:
     def is_model_available(self, model_id: str, eligible_accounts: set[str]) -> bool:
         """Check if a model is available from any eligible account."""
         model_info = self._models.get(model_id)
-        if model_info is None or not model_info.get("protocol"):
+        if model_info is None:
             return False
         supporting = self._account_support.get(model_id, set())
-        return bool(supporting & eligible_accounts)
+        visible = supporting & eligible_accounts
+        if not visible:
+            return False
+        # Check if any visible account has a provider-specific entry
+        # with a resolved protocol, or the global entry has one.
+        if model_info.get("protocol"):
+            return True
+        for acct in visible:
+            pid = self._account_providers.get(acct)
+            if pid is not None:
+                pinfo = self._provider_models.get((model_id, pid))
+                if pinfo is not None and pinfo.get("protocol"):
+                    return True
+        return False
 
     @property
     def last_refresh(self) -> float:
@@ -344,3 +412,22 @@ class ModelCatalogCache:
     def get_supporting_accounts_for_model(self, model_id: str) -> set[str]:
         """Get supporting accounts for a model."""
         return self._account_support.get(model_id, set()).copy()
+
+    def get_provider_model_entries(
+        self,
+    ) -> dict[tuple[str, str], dict[str, Any]]:
+        """Get all per-provider model entries.
+
+        Returns a dict keyed by ``(model_id, provider_id)`` with
+        provider-specific model info dicts as values.
+        """
+        return dict(self._provider_models)
+
+    def set_provider_model_entry(
+        self,
+        model_id: str,
+        provider_id: str,
+        model_info: dict[str, Any],
+    ) -> None:
+        """Set a per-provider model entry."""
+        self._provider_models[(model_id, provider_id)] = model_info
