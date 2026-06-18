@@ -42,7 +42,7 @@ from go_aggregator.db.repositories import (
     ReservationRepository,
     UsageWindowRepository,
 )
-from go_aggregator.errors import AggregatorError
+from go_aggregator.errors import AggregatorError, CatalogUnavailableError
 from go_aggregator.health.health_manager import HealthManager
 from go_aggregator.logging import configure_logging
 from go_aggregator.models.api import HealthResponse
@@ -241,6 +241,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         except Exception:
             logger.exception("Initial catalog refresh failed")
 
+    # 13. Enforce catalog staleness policy
+    if catalog.cache.is_stale(config.models.stale_after_s):
+        if not config.models.allow_stale_catalog:
+            msg = (
+                f"Catalog is stale (older than {config.models.stale_after_s}s) "
+                f"and allow_stale_catalog is false"
+            )
+            logger.error(msg)
+            raise CatalogUnavailableError(msg)
+        logger.warning(
+            "Catalog is stale (older than %ds) but allow_stale_catalog "
+            "is true — serving degraded",
+            config.models.stale_after_s,
+        )
+
     # 14. Price repository and cost calculator
     price_repo = PriceRepository(db)
     cost_calculator = CostCalculator(price_repo)
@@ -436,7 +451,10 @@ def create_app(
 ) -> FastAPI:
     """Create and configure the FastAPI application."""
     if config is None:
-        config = AppConfig()
+        if config_path is not None:
+            config = AppConfig.from_toml(config_path)
+        else:
+            config = AppConfig()
 
     app = FastAPI(
         title="OpenCode Go Aggregator",
@@ -580,7 +598,10 @@ def create_app(
         await require_auth(request)
 
         catalog: CatalogService = request.app.state.catalog
-        models = catalog.get_models_for_exposure()
+        health_mgr: HealthManager | None = getattr(
+            request.app.state, "health_manager", None
+        )
+        models = catalog.get_models_for_exposure(health_manager=health_mgr)
 
         return {
             "object": "list",

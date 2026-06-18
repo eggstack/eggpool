@@ -1184,7 +1184,9 @@ class TestProtocolFailClosed:
         self, coordinator: RequestCoordinator, two_account_db: Database
     ) -> None:
         """Unknown model is neither exposed nor routed."""
-        # Request with unknown model should fail with 404
+        from go_aggregator.errors import ModelNotFoundError
+
+        # Request with unknown model raises ModelNotFoundError (404)
         with respx.mock:
             # No route mocked - should not reach upstream
             ctx = ProxyRequestContext(
@@ -1200,11 +1202,8 @@ class TestProtocolFailClosed:
                 ).encode(),
                 incoming_headers={"content-type": "application/json"},
             )
-            resp = await coordinator.execute(ctx)
-
-        # Should return 503 (no accounts available) - not 404, which is
-        # reserved for genuine model-not-found semantics.
-        assert resp.status_code == 503
+            with pytest.raises(ModelNotFoundError):
+                await coordinator.execute(ctx)
 
         # Verify no request rows were created
         req_rows = await two_account_db.fetch_all(

@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
     from go_aggregator.accounts.registry import AccountRegistry
     from go_aggregator.db.connection import Database
+    from go_aggregator.health.health_manager import HealthManager
     from go_aggregator.models.config import AppConfig
 
 logger = logging.getLogger(__name__)
@@ -210,6 +211,7 @@ class CatalogService:
                     "Loaded %d cached models from database",
                     self._cache.model_count,
                 )
+            self._cache.hydrate_refresh_age()
         except Exception:
             logger.exception("Failed to load cached models")
             raise
@@ -465,9 +467,14 @@ class CatalogService:
 
     def get_models_for_exposure(
         self,
+        health_manager: HealthManager | None = None,
     ) -> list[dict[str, Any]]:
         """Get models to expose via /v1/models."""
         eligible = {s.name for s in self._registry.get_eligible_states()}
+        if self._config.models.expose_mode == "healthy_union" and health_manager:
+            eligible = {
+                name for name in eligible if health_manager.is_account_healthy(name)
+            }
         return self._cache.get_models_for_exposure(
             self._config.models.expose_mode,
             eligible,

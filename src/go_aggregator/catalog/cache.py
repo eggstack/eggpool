@@ -129,6 +129,19 @@ class ModelCatalogCache:
     def last_refresh(self) -> float:
         return self._last_refresh
 
+    def hydrate_refresh_age(self) -> None:
+        """Set _last_refresh to the newest last_seen_at across loaded models.
+
+        Called after loading cached models from the database so that
+        staleness checks reflect the actual age of the cached data
+        rather than always reporting fresh-on-startup.
+        """
+        if not self._models:
+            return
+        newest = max(info.get("last_seen_at", 0.0) for info in self._models.values())
+        if newest > self._last_refresh:
+            self._last_refresh = newest
+
     @property
     def model_count(self) -> int:
         return len(self._models)

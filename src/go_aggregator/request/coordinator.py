@@ -21,6 +21,7 @@ from go_aggregator.db.repositories import (
 from go_aggregator.errors import (
     AuthenticationError,
     DatabaseError,
+    ModelNotFoundError,
     ModelUnavailableError,
     QuotaExhaustedError,
     RateLimitError,
@@ -648,14 +649,17 @@ class RequestCoordinator:
                 if isinstance(payload_obj, dict):
                     payload = cast("dict[str, Any]", payload_obj)
                     stream_opts_value: Any = payload.get("stream_options")
-                    stream_opts: dict[str, Any]
                     if isinstance(stream_opts_value, dict):
-                        stream_opts = cast("dict[str, Any]", stream_opts_value)
+                        if "include_usage" not in stream_opts_value:
+                            stream_opts_value["include_usage"] = True
+                            body_to_send = json.dumps(payload).encode()
+                    elif stream_opts_value is None:
+                        payload["stream_options"] = {"include_usage": True}
+                        body_to_send = json.dumps(payload).encode()
                     else:
-                        stream_opts = {}
-                    stream_opts["include_usage"] = True
-                    payload["stream_options"] = stream_opts
-                    body_to_send = json.dumps(payload).encode()
+                        # Non-dict stream_options (list, str, bool, etc.) —
+                        # leave the body unchanged and let upstream reject it.
+                        pass
 
         request = self._client.build_request(
             "POST",
@@ -1178,8 +1182,7 @@ class RequestCoordinator:
         """
         model_info = self._catalog.cache.get_model(context.model_id)
         if model_info is None:
-            # Unknown model - handled later by _select_and_persist_attempt
-            return
+            raise ModelNotFoundError(context.model_id)
 
         model_protocol = model_info.get("protocol")
         if not model_protocol:

@@ -76,8 +76,6 @@ monthly_offset_microdollars = 0
 
 [model_overrides."claude-opus-4"]
 protocol = "anthropic"
-max_tokens = 32768
 
 [model_overrides."claude-sonnet-4"]
 protocol = "anthropic"
-max_tokens = 16384

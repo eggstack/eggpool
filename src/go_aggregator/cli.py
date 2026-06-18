@@ -11,6 +11,7 @@ import click
 import httpx
 
 from go_aggregator.accounts.registry import account_config_rows
+from go_aggregator.auth import require_auth_at_startup
 from go_aggregator.db.connection import Database
 from go_aggregator.db.migrations import MigrationRunner
 from go_aggregator.db.repositories import AccountRepository
@@ -71,6 +72,12 @@ def check_config(ctx: click.Context) -> None:
     try:
         config = AppConfig.from_toml(config_path)
     except AggregatorError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
+    try:
+        require_auth_at_startup(config.server.api_key_env)
+    except RuntimeError as exc:
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)
 

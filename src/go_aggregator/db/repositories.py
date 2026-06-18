@@ -593,7 +593,7 @@ class PriceSnapshotRepository:
             "cache_read_per_million_microdollars, "
             "cache_write_per_million_microdollars, source "
             "FROM model_price_snapshots "
-            "WHERE model_id = ? ORDER BY captured_at DESC LIMIT 1",
+            "WHERE model_id = ? ORDER BY captured_at DESC, id DESC LIMIT 1",
             (model_id,),
         )
         return dict(row) if row is not None else None

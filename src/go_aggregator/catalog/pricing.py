@@ -202,7 +202,7 @@ class PriceRepository:
                    cache_write_per_million_microdollars, source
             FROM model_price_snapshots
             WHERE model_id = ?
-            ORDER BY captured_at DESC
+            ORDER BY captured_at DESC, id DESC
             LIMIT 1
             """,
             (model_id,),
@@ -238,7 +238,7 @@ class PriceRepository:
                    cache_write_per_million_microdollars, source
             FROM model_price_snapshots
             WHERE model_id = ? AND captured_at > datetime('now', ? || ' hours')
-            ORDER BY captured_at DESC
+            ORDER BY captured_at DESC, id DESC
             """,
             (model_id, f"-{since_hours}"),
         )

@@ -6,7 +6,7 @@ import os
 import tomllib
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from go_aggregator.catalog.pricing import (
     parse_microdollars_per_million,
@@ -24,7 +24,7 @@ class ServerConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     host: str = DEFAULT_HOST
-    port: int = DEFAULT_PORT
+    port: int = Field(default=DEFAULT_PORT, ge=0, le=65535)
     api_key_env: str = "GO_AGGREGATOR_API_KEY"
     log_level: str = "INFO"
     access_log: bool = True
@@ -34,19 +34,28 @@ class UpstreamConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     base_url: str = "https://opencode.ai/zen/go/v1"
-    connect_timeout_s: float = 5
-    read_timeout_s: float = 300
-    write_timeout_s: float = 30
-    max_connections: int = 100
-    max_keepalive: int = 20
-    keepalive_timeout_s: float = 30
+    connect_timeout_s: float = Field(default=5, gt=0)
+    read_timeout_s: float = Field(default=300, gt=0)
+    write_timeout_s: float = Field(default=30, gt=0)
+    max_connections: int = Field(default=100, gt=0)
+    max_keepalive: int = Field(default=20, gt=0)
+    keepalive_timeout_s: float = Field(default=30, ge=0)
+
+    @model_validator(mode="after")
+    def validate_keepalive(self) -> UpstreamConfig:
+        if self.max_keepalive > self.max_connections:
+            raise ConfigError(
+                f"max_keepalive ({self.max_keepalive}) must not exceed "
+                f"max_connections ({self.max_connections})"
+            )
+        return self
 
 
 class DatabaseConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     path: str = DEFAULT_DATABASE_PATH
-    busy_timeout_ms: int = 5000
+    busy_timeout_ms: int = Field(default=5000, gt=0)
     wal: bool = True
     synchronous: str = "NORMAL"
 
@@ -54,10 +63,10 @@ class DatabaseConfig(BaseModel):
 class ModelsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    refresh_interval_s: int = 3600
+    refresh_interval_s: int = Field(default=3600, ge=0)
     expose_mode: Literal["union", "intersection", "healthy_union"] = "union"
     startup_refresh: bool = True
-    stale_after_s: int = 7200
+    stale_after_s: int = Field(default=7200, gt=0)
     allow_stale_catalog: bool = True
 
 
@@ -65,21 +74,21 @@ class RoutingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     strategy: Literal["quota_fair"] = "quota_fair"
-    near_tie_epsilon: float = 0.1
-    max_retries_before_stream: int = 3
-    unknown_request_reservation_microdollars: int = 1_000_000
-    inflight_penalty: int = 100_000
-    health_penalty: int = 500_000
+    near_tie_epsilon: float = Field(default=0.1, ge=0)
+    max_retries_before_stream: int = Field(default=3, ge=0)
+    unknown_request_reservation_microdollars: int = Field(default=1_000_000, ge=0)
+    inflight_penalty: int = Field(default=100_000, ge=0)
+    health_penalty: int = Field(default=500_000, ge=0)
     randomize_near_ties: bool = True
-    quota_exhausted_cooldown_seconds: float = 300.0
+    quota_exhausted_cooldown_seconds: float = Field(default=300.0, ge=0)
 
 
 class LimitsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    five_hour_microdollars: int = 12_000_000
-    weekly_microdollars: int = 30_000_000
-    monthly_microdollars: int = 60_000_000
+    five_hour_microdollars: int = Field(default=12_000_000, gt=0)
+    weekly_microdollars: int = Field(default=30_000_000, gt=0)
+    monthly_microdollars: int = Field(default=60_000_000, gt=0)
 
 
 class DashboardConfig(BaseModel):
@@ -87,10 +96,20 @@ class DashboardConfig(BaseModel):
 
     enabled: bool = True
     public: bool = False
-    retain_request_stats_days: int = 30
-    retain_event_days: int = 90
+    retain_request_stats_days: int = Field(default=30, gt=0)
+    retain_event_days: int = Field(default=90, gt=0)
     store_request_content: bool = False
-    refresh_interval_s: int = 60
+    refresh_interval_s: int = Field(default=60, ge=0)
+
+    @field_validator("store_request_content")
+    @classmethod
+    def reject_storing_content(cls, value: bool) -> bool:
+        if value:
+            raise ValueError(
+                "store_request_content must be false; "
+                "request content must not be persisted"
+            )
+        return value
 
 
 class SecurityConfig(BaseModel):
@@ -119,7 +138,6 @@ class ModelOverrideConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     protocol: Literal["openai", "anthropic"] | None = None
-    max_tokens: int | None = None
     input_price_per_1k: float | None = None
     output_price_per_1k: float | None = None
     cache_read_per_million_microdollars: int | None = None
@@ -161,11 +179,18 @@ class AppConfig(BaseModel):
             if acct.name in names:
                 raise ConfigError(f"Duplicate account name: {acct.name!r}")
             names.append(acct.name)
-            if acct.enabled and not os.environ.get(acct.api_key_env):
-                raise ConfigError(
-                    f"Account {acct.name!r} is enabled but env var "
-                    f"{acct.api_key_env!r} is not set"
-                )
+            if acct.enabled:
+                raw_key = os.environ.get(acct.api_key_env)
+                if not raw_key:
+                    raise ConfigError(
+                        f"Account {acct.name!r} is enabled but env var "
+                        f"{acct.api_key_env!r} is not set"
+                    )
+                if not raw_key.strip():
+                    raise ConfigError(
+                        f"Account {acct.name!r} has a whitespace-only API key "
+                        f"in env var {acct.api_key_env!r}"
+                    )
             if acct.weight <= 0:
                 raise ConfigError(
                     f"Account {acct.name!r} has non-positive weight: {acct.weight}"

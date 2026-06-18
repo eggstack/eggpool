@@ -801,9 +801,9 @@ async def test_model_not_available(
         headers=auth_headers,
     )
 
-    # No accounts are eligible for an unknown model, so the proxy returns 503
-    # (Service Unavailable) rather than the misleading 404.
-    assert response.status_code == 503
+    # Unknown model is not in the catalog, so the proxy returns 404
+    # (ModelNotFoundError) to distinguish from temporary unavailability.
+    assert response.status_code == 404
 
 
 # ── 15b. Unresolved protocol is a controlled server error ────────────────────
