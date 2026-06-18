@@ -68,6 +68,10 @@ def classify_failure_category(
         return FailureCategory.CONNECTION_FAILURE
     if "timeout" in ec:
         return FailureCategory.CONNECT_TIMEOUT
+    if "temporary" in ec or "transient" in ec:
+        if status_code is not None and 500 <= status_code < 600:
+            return FailureCategory.UPSTREAM_SERVER_ERROR
+        return FailureCategory.UNKNOWN
     if status_code is not None and 500 <= status_code < 600:
         return FailureCategory.UPSTREAM_SERVER_ERROR
     return FailureCategory.UNKNOWN

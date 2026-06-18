@@ -75,7 +75,11 @@ class RoutingConfig(BaseModel):
 
     strategy: Literal["quota_fair"] = "quota_fair"
     near_tie_epsilon: float = Field(default=0.1, ge=0)
-    max_retries_before_stream: int = Field(default=3, ge=0)
+    max_retries_before_stream: int = Field(
+        default=3,
+        ge=0,
+        description="Retries after first attempt. Total attempts = value + 1.",
+    )
     unknown_request_reservation_microdollars: int = Field(default=1_000_000, ge=0)
     inflight_penalty: int = Field(default=100_000, ge=0)
     health_penalty: int = Field(default=500_000, ge=0)

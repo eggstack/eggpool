@@ -28,7 +28,7 @@ def verify_api_key(request: Request, api_key: str) -> bool:
     match = _BEARER_RE.match(authorization)
     provided = match.group(1).strip() if match is not None else ""
     if not provided:
-        provided = request.headers.get("x-api-key", "")
+        provided = request.headers.get("x-api-key", "").strip()
     return hmac.compare_digest(provided, api_key)
 
 

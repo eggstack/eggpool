@@ -197,7 +197,8 @@ class Database:
         self._require_transaction_owner()
         try:
             cursor = await self.connection.execute(sql, params)  # type: ignore[union-attr]
-            return int(cursor.rowcount or 0)
+            rowcount = cursor.rowcount
+            return int(rowcount) if rowcount >= 0 else 0
         except Exception as exc:
             raise DatabaseError(f"Execute write failed: {exc}") from exc
 

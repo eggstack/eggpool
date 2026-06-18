@@ -43,7 +43,13 @@ from go_aggregator.db.repositories import (
     ReservationRepository,
     UsageWindowRepository,
 )
-from go_aggregator.errors import AggregatorError, CatalogUnavailableError
+from go_aggregator.errors import (
+    AggregatorError,
+    CatalogUnavailableError,
+    ModelNotFoundError,
+    NoEligibleAccountError,
+    RequestTooLargeError,
+)
 from go_aggregator.health.health_manager import HealthManager
 from go_aggregator.logging import configure_logging
 from go_aggregator.models.api import HealthResponse
@@ -657,8 +663,16 @@ def create_app(
         request: Request,
         exc: AggregatorError,
     ) -> JSONResponse:
+        if isinstance(exc, RequestTooLargeError):
+            status_code = 413
+        elif isinstance(exc, ModelNotFoundError):
+            status_code = 404
+        elif isinstance(exc, (NoEligibleAccountError, CatalogUnavailableError)):
+            status_code = 503
+        else:
+            status_code = 502
         return JSONResponse(
-            status_code=502,
+            status_code=status_code,
             content={"error": str(exc)},
         )
 

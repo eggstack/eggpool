@@ -26,6 +26,8 @@ from go_aggregator.errors import (
     ModelUnavailableError,
     QuotaExhaustedError,
     RateLimitError,
+    TemporaryUpstreamError,
+    TransientUpstreamError,
     UpstreamError,
 )
 from go_aggregator.health.health_manager import (
@@ -209,6 +211,7 @@ class RequestCoordinator:
         last_upstream_response: tuple[int, list[tuple[str, str]], bytes] | None = None
         attempt_num = 0
         last_selected: SelectedAttempt | None = None
+        health_applied = False
 
         for attempt_num in range(1, self._max_retry_attempts + 1):
             try:
@@ -244,7 +247,7 @@ class RequestCoordinator:
                 # updated by finalizer or selection. Retry with another
                 # account if available.
                 continue
-            except (DatabaseError, Exception) as err:
+            except Exception as err:
                 last_error = err
                 logger.warning(
                     "Selection failed on attempt %d for %s: %s",
@@ -252,6 +255,14 @@ class RequestCoordinator:
                     context.request_id,
                     err,
                 )
+                # PostCommitInterrupted means the attempt was finalized
+                # and reservation released by the compensation block, but
+                # health was never updated. Since this is a system-level
+                # interruption (not an upstream error), we mark health as
+                # already applied to prevent the finalizer from double-
+                # applying it.
+                if context.client_metadata.get("post_commit_interrupted"):
+                    health_applied = True
                 break
 
             last_selected = selected
@@ -297,6 +308,7 @@ class RequestCoordinator:
                     self._apply_health_transition(
                         selected.account_name, err, context.model_id
                     )
+                    health_applied = True
                 if attempt_num >= self._max_retry_attempts:
                     break
                 continue
@@ -321,6 +333,7 @@ class RequestCoordinator:
             last_upstream_response,
             actual_attempts,
             last_selected,
+            health_applied=health_applied,
         )
 
     async def _select_and_persist_attempt(
@@ -480,6 +493,7 @@ class RequestCoordinator:
                         ),
                     )
                 )
+                context.client_metadata["post_commit_interrupted"] = True
                 raise
 
         # Select lock released here.
@@ -693,6 +707,7 @@ class RequestCoordinator:
         )
 
         response = None
+        generator_created = False
         try:
             try:
                 response = await self._client.send(request, stream=True)
@@ -752,25 +767,28 @@ class RequestCoordinator:
                         resp_body,
                     ),
                 )
+
+            # Build the response headers
+            resp_headers = filter_response_headers(response.headers)
+            resp_headers.append(("x-proxy-request-id", context.request_id))
+            resp_headers.append(("x-proxy-attempt-count", str(attempt_num)))
+
+            # Build streaming generator
+            stream_iter = self._build_stream_generator(
+                context=context,
+                upstream_response=response,
+                selected=selected,
+                resp_headers=resp_headers,
+                request_started_at=context.started_at,
+            )
+            generator_created = True
         finally:
-            if response is not None and response.status_code >= 400:
+            if response is not None and (
+                response.status_code >= 400 or not generator_created
+            ):
                 await response.aclose()
 
         assert response is not None
-
-        # Build the response headers
-        resp_headers = filter_response_headers(response.headers)
-        resp_headers.append(("x-proxy-request-id", context.request_id))
-        resp_headers.append(("x-proxy-attempt-count", str(attempt_num)))
-
-        # Build streaming generator
-        stream_iter = self._build_stream_generator(
-            context=context,
-            upstream_response=response,
-            selected=selected,
-            resp_headers=resp_headers,
-            request_started_at=context.started_at,
-        )
 
         return PreparedProxyResponse(
             status_code=response.status_code,
@@ -1000,7 +1018,9 @@ class RequestCoordinator:
         if error.category == RetryCategory.BAD_REQUEST:
             return None
         if error.category in (RetryCategory.TEMPORARY, RetryCategory.TRANSIENT):
-            return UpstreamError(error.message, status_code=status_code)
+            if error.category == RetryCategory.TEMPORARY:
+                return TemporaryUpstreamError(error.message, status_code=status_code)
+            return TransientUpstreamError(error.message, status_code=status_code)
 
         return None
 
@@ -1080,6 +1100,7 @@ class RequestCoordinator:
         last_upstream_response: tuple[int, list[tuple[str, str]], bytes] | None,
         attempt_num: int,
         last_selected: SelectedAttempt | None = None,
+        health_applied: bool = False,
     ) -> PreparedProxyResponse:
         """Handle exhausted retries or non-retryable errors.
 
@@ -1113,7 +1134,7 @@ class RequestCoordinator:
                     outcome = FinalizationOutcome.CLIENT_ERROR
                 elif isinstance(last_error, _RetryableUpstreamError):
                     outcome = FinalizationOutcome.UPSTREAM_ERROR
-                    health_already_applied = True
+                    health_already_applied = health_applied
 
             await self._finalizer.finalize(
                 last_selected,
@@ -1159,11 +1180,13 @@ class RequestCoordinator:
         # Use last upstream response if available
         if last_upstream_response is not None:
             status, headers, body = last_upstream_response
-            headers.append(("x-proxy-request-id", context.request_id))
-            headers.append(("x-proxy-attempt-count", str(attempt_num)))
+            resp_headers = list(headers) + [
+                ("x-proxy-request-id", context.request_id),
+                ("x-proxy-attempt-count", str(attempt_num)),
+            ]
             return PreparedProxyResponse(
                 status_code=status,
-                headers=headers,
+                headers=resp_headers,
                 body=body,
                 request_id=context.request_id,
                 account_name=context.client_metadata.get("account_name", ""),

@@ -21,6 +21,14 @@ class UpstreamError(AggregatorError):
         self.status_code = status_code
 
 
+class TemporaryUpstreamError(UpstreamError):
+    """Raised for temporary upstream errors (502, 503, 504)."""
+
+
+class TransientUpstreamError(UpstreamError):
+    """Raised for transient upstream errors (retries may succeed)."""
+
+
 class AuthenticationError(UpstreamError):
     """Raised when an upstream rejects our credentials."""
 
