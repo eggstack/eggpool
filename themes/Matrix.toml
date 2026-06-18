@@ -1,0 +1,42 @@
+[general]
+background = "#000000"
+border = "#00FF00"
+horizontal_rule = "#003300"
+unread_indicator = "#00FF00"
+
+[text]
+primary = "#00FF00"
+secondary = "#00CC00"
+tertiary = "#66FF66"
+success = "#00FF00"
+error = "#FF3300"
+
+[buffer]
+action = "#00FF00"
+background = "#000000"
+background_text_input = "#003300"
+background_title_bar = "#001100"
+border = "#000000"
+border_selected = "#66FF66"
+code = "#66FF66"
+highlight = "#003300"
+nickname = "#33FF33"
+selection = "#003300"
+timestamp = "#00CC00"
+topic = "#00CC00"
+url = "#33FFCC"
+
+  [buffer.server_messages]
+  default = "#00FF00"
+
+[buttons.primary]
+background = "#000000"
+background_hover = "#001100"
+background_selected = "#003300"
+background_selected_hover = "#001100"
+
+[buttons.secondary]
+background = "#001100"
+background_hover = "#00CC00"
+background_selected = "#003300"
+background_selected_hover = "#00CC00"

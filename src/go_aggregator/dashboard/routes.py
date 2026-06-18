@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from fastapi.responses import HTMLResponse
 
 from go_aggregator.dashboard.render import (
+    get_theme,
     render_accounts,
     render_bandwidth,
     render_events,
@@ -40,6 +41,17 @@ def _get_dashboard_config(request: Request) -> Any:
     return config.dashboard
 
 
+def _get_theme_data(request: Request) -> tuple[str, list[str]]:
+    """Load theme CSS and heatmap colors from the app config."""
+    config = getattr(request.app.state, "config", None)
+    if config is None:
+        return "", ["#ebedf0", "#9be9a8", "#40c463", "#30a14e", "#216e39"]
+    theme_name = config.dashboard.theme
+    themes_dir = config.dashboard.themes_dir
+    theme = get_theme(theme_name, themes_dir)
+    return theme.to_css_variables(), theme.heatmap_colors()
+
+
 def _resolve(request: Request, period: str | None) -> TimeRange:
     """Resolve a period string into a TimeRange."""
     start, end, label = resolve_period(period)
@@ -65,12 +77,15 @@ async def handle_overview(request: Request, period: str | None = "24h") -> Respo
     )
 
     refresh_s = dashboard_config.refresh_interval_s
+    theme_css, heatmap_colors = _get_theme_data(request)
     html = render_overview(
         overview=overview,
         accounts=accounts,
         period=time_range.label,
         refresh_interval_s=refresh_s,
         bandwidth_daily=bandwidth_daily,
+        theme_css=theme_css,
+        heatmap_colors=heatmap_colors,
     )
     return HTMLResponse(
         content=html,
@@ -84,7 +99,10 @@ async def handle_accounts(request: Request, period: str | None = "24h") -> Respo
     time_range = _resolve(request, period)
     stats = request.app.state.stats
     accounts = await stats.get_account_stats(time_range)
-    return HTMLResponse(content=render_accounts(accounts, period=time_range.label))
+    theme_css, _ = _get_theme_data(request)
+    return HTMLResponse(
+        content=render_accounts(accounts, period=time_range.label, theme_css=theme_css)
+    )
 
 
 async def handle_models(
@@ -97,11 +115,13 @@ async def handle_models(
     time_range = _resolve(request, period)
     stats = request.app.state.stats
     models = await stats.get_model_stats(time_range, account_name=account or None)
+    theme_css, _ = _get_theme_data(request)
     return HTMLResponse(
         content=render_models(
             models if models is not None else [],
             account_filter=account or "",
             period=time_range.label,
+            theme_css=theme_css,
         )
     )
 
@@ -115,8 +135,14 @@ async def handle_events(
     _get_dashboard_config(request)
     stats = request.app.state.stats
     events = await stats.get_recent_events(limit=100, event_type=type_filter or None)
+    theme_css, _ = _get_theme_data(request)
     return HTMLResponse(
-        content=render_events(events, event_type=type_filter or "", period="recent")
+        content=render_events(
+            events,
+            event_type=type_filter or "",
+            period="recent",
+            theme_css=theme_css,
+        )
     )
 
 
@@ -139,11 +165,13 @@ async def handle_timeseries(
         account_name=account or None,
         model_id=model or None,
     )
+    theme_css, _ = _get_theme_data(request)
     return HTMLResponse(
         content=render_timeseries(
             series if series is not None else [],
             bucket=bucket,
             period=time_range.label,
+            theme_css=theme_css,
         )
     )
 
@@ -167,6 +195,7 @@ async def handle_bandwidth(
     timeseries = await stats.get_timeseries(
         time_range, bucket=bucket, account_name=account or None
     )
+    theme_css, heatmap_colors = _get_theme_data(request)
     return HTMLResponse(
         content=render_bandwidth(
             summary=summary,
@@ -175,6 +204,8 @@ async def handle_bandwidth(
             bucket=bucket,
             period=time_range.label,
             account_filter=account or "",
+            theme_css=theme_css,
+            heatmap_colors=heatmap_colors,
         )
     )
 

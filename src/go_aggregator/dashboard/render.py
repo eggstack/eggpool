@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from html import escape as _html_escape
+from pathlib import Path
 from typing import Any
 
 from go_aggregator.dashboard.escape import (
@@ -22,6 +23,46 @@ from go_aggregator.dashboard.escape import (
     sanitize_class_name,
     truncate,
 )
+from go_aggregator.dashboard.theme import (
+    DashboardTheme,
+    get_default_theme,
+    load_theme,
+)
+
+_DEFAULT_HEATMAP_COLORS = [
+    "#ebedf0",
+    "#9be9a8",
+    "#40c463",
+    "#30a14e",
+    "#216e39",
+]
+
+
+def get_theme_css(theme_name: str, themes_dir: str = "themes") -> str:
+    """Load a theme by name and return the CSS :root block, or empty string."""
+    if theme_name == "default":
+        return ""
+    try:
+        theme_path = Path(themes_dir) / f"{theme_name}.toml"
+        if not theme_path.is_file():
+            return ""
+        theme = load_theme(theme_path)
+        return theme.to_css_variables()
+    except Exception:
+        return ""
+
+
+def get_theme(theme_name: str, themes_dir: str = "themes") -> DashboardTheme:
+    """Load a theme by name, returning the default on failure."""
+    if theme_name == "default":
+        return get_default_theme()
+    try:
+        theme_path = Path(themes_dir) / f"{theme_name}.toml"
+        if not theme_path.is_file():
+            return get_default_theme()
+        return load_theme(theme_path)
+    except Exception:
+        return get_default_theme()
 
 
 def _render_layout(
@@ -30,15 +71,20 @@ def _render_layout(
     active_nav: str = "",
     period: str = "24h",
     refresh_interval_s: int = 15,
+    theme_css: str = "",
 ) -> str:
     """Wrap a page body in the standard layout."""
     nav = _render_nav(active_nav, period)
+    style_block = ""
+    if theme_css:
+        style_block = f"<style>\n{theme_css}\n</style>"
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <title>{_html_escape(title)}</title>
 <link rel="stylesheet" href="/static/dashboard.css">
+{style_block}
 </head>
 <body>
 <header class="topbar">
@@ -103,6 +149,7 @@ def _render_period_selector(current: str) -> str:
 def _render_bandwidth_heatmap(
     daily_data: list[dict[str, Any]],
     title: str = "Bandwidth activity (last 90 days)",
+    heatmap_colors: list[str] | None = None,
 ) -> str:
     """Render a GitHub-style contribution heatmap as inline SVG."""
     if not daily_data:
@@ -132,8 +179,8 @@ def _render_bandwidth_heatmap(
     if max_val == 0:
         max_val = 1
 
-    # Color scale (GitHub Primer green)
-    colors = ["#ebedf0", "#9be9a8", "#40c463", "#30a14e", "#216e39"]
+    # Color scale (theme-aware or default GitHub Primer green)
+    colors = heatmap_colors or _DEFAULT_HEATMAP_COLORS
 
     def _get_color(value: int) -> str:
         if value == 0:
@@ -227,6 +274,8 @@ def render_overview(
     period: str = "24h",
     refresh_interval_s: int = 60,
     bandwidth_daily: list[dict[str, Any]] | None = None,
+    theme_css: str = "",
+    heatmap_colors: list[str] | None = None,
 ) -> str:
     """Render the overview dashboard page."""
     summary = overview.get("summary", {})
@@ -339,7 +388,7 @@ def render_overview(
 
 <section class="panel">
   <h3>Bandwidth activity</h3>
-  {_render_bandwidth_heatmap(bandwidth_daily or [])}
+  {_render_bandwidth_heatmap(bandwidth_daily or [], heatmap_colors=heatmap_colors)}
 </section>
 """
     return _render_layout(
@@ -348,6 +397,7 @@ def render_overview(
         active_nav="overview",
         period=period,
         refresh_interval_s=refresh_interval_s,
+        theme_css=theme_css,
     )
 
 
@@ -420,6 +470,7 @@ def _render_account_table(accounts: list[dict[str, Any]]) -> str:
 def render_accounts(
     accounts: list[dict[str, Any]],
     period: str = "24h",
+    theme_css: str = "",
 ) -> str:
     """Render the accounts page."""
     body = f"""
@@ -434,6 +485,7 @@ def render_accounts(
         body=body,
         active_nav="accounts",
         period=period,
+        theme_css=theme_css,
     )
 
 
@@ -441,6 +493,7 @@ def render_models(
     models: list[dict[str, Any]],
     account_filter: str = "",
     period: str = "24h",
+    theme_css: str = "",
 ) -> str:
     """Render the models page."""
     if not models:
@@ -501,6 +554,7 @@ def render_models(
         body=body,
         active_nav="models",
         period=period,
+        theme_css=theme_css,
     )
 
 
@@ -508,6 +562,7 @@ def render_events(
     events: list[dict[str, Any]],
     event_type: str = "",
     period: str = "24h",
+    theme_css: str = "",
 ) -> str:
     """Render the events page."""
     if not events:
@@ -563,6 +618,7 @@ def render_events(
         body=body,
         active_nav="events",
         period=period,
+        theme_css=theme_css,
     )
 
 
@@ -570,6 +626,7 @@ def render_timeseries(
     series: list[dict[str, Any]],
     bucket: str,
     period: str = "24h",
+    theme_css: str = "",
 ) -> str:
     """Render the timeseries page."""
     if not series:
@@ -619,6 +676,7 @@ def render_timeseries(
         body=body,
         active_nav="timeseries",
         period=period,
+        theme_css=theme_css,
     )
 
 
@@ -657,6 +715,8 @@ def render_bandwidth(
     bucket: str = "hour",
     period: str = "24h",
     account_filter: str = "",
+    theme_css: str = "",
+    heatmap_colors: list[str] | None = None,
 ) -> str:
     """Render the bandwidth page."""
     bytes_in = format_bytes(summary.get("total_bytes_received", 0))
@@ -694,7 +754,7 @@ def render_bandwidth(
 
 <section class="panel">
   <h3>Bandwidth activity (last 90 days)</h3>
-  {_render_bandwidth_heatmap(daily)}
+  {_render_bandwidth_heatmap(daily, heatmap_colors=heatmap_colors)}
 </section>
 
 <section class="panel">
@@ -707,6 +767,7 @@ def render_bandwidth(
         body=body,
         active_nav="bandwidth",
         period=period,
+        theme_css=theme_css,
     )
 
 

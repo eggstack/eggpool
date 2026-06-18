@@ -5,17 +5,17 @@
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   margin: 0;
-  background: #f6f7f9;
-  color: #1f2328;
+  background: var(--page-bg);
+  color: var(--page-text);
 }
 
 header.topbar {
   display: flex;
   align-items: center;
   padding: 0.75rem 1.5rem;
-  background: #1f2328;
-  color: #f6f7f9;
-  border-bottom: 1px solid #2d333b;
+  background: var(--topbar-bg);
+  color: var(--topbar-text);
+  border-bottom: 1px solid var(--topbar-border);
 }
 
 header.topbar h1 {
@@ -36,7 +36,7 @@ nav.topnav {
 }
 
 nav.topnav a {
-  color: #c9d1d9;
+  color: var(--nav-text);
   text-decoration: none;
   padding: 0.35rem 0.7rem;
   border-radius: 4px;
@@ -44,12 +44,12 @@ nav.topnav a {
 }
 
 nav.topnav a:hover {
-  background: #2d333b;
+  background: var(--nav-hover-bg);
 }
 
 nav.topnav a.active {
-  background: #444c56;
-  color: #fff;
+  background: var(--nav-active-bg);
+  color: var(--nav-active-text);
 }
 
 main {
@@ -62,13 +62,13 @@ footer {
   max-width: 1100px;
   margin: 0 auto;
   padding: 1rem 1.5rem 2rem;
-  color: #57606a;
+  color: var(--text-muted);
   font-size: 0.85rem;
 }
 
 footer .period-label {
   font-family: ui-monospace, SFMono-Regular, monospace;
-  color: #1f2328;
+  color: var(--page-text);
 }
 
 h2 {
@@ -79,7 +79,7 @@ h2 {
 h3 {
   margin: 0 0 0.5rem;
   font-size: 0.95rem;
-  color: #57606a;
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -92,8 +92,8 @@ h3 {
 }
 
 .card {
-  background: #fff;
-  border: 1px solid #d0d7de;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
   border-radius: 6px;
   padding: 1rem;
 }
@@ -106,13 +106,13 @@ h3 {
 
 .card .sub {
   margin: 0;
-  color: #57606a;
+  color: var(--text-muted);
   font-size: 0.85rem;
 }
 
 .panel {
-  background: #fff;
-  border: 1px solid #d0d7de;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
   border-radius: 6px;
   padding: 1rem 1.25rem;
   margin-bottom: 1.5rem;
@@ -126,22 +126,22 @@ table.data {
 table.data th, table.data td {
   padding: 0.5rem 0.6rem;
   text-align: left;
-  border-bottom: 1px solid #eaeef2;
+  border-bottom: 1px solid var(--table-border);
   font-size: 0.9rem;
 }
 
 table.data th {
   font-weight: 600;
-  color: #57606a;
-  background: #f6f8fa;
+  color: var(--table-header-text);
+  background: var(--table-header-bg);
 }
 
 table.data tr:last-child td {
   border-bottom: none;
 }
 
-td.yes { color: #1a7f37; font-weight: 600; }
-td.no { color: #cf222e; font-weight: 600; }
+td.yes { color: var(--color-success); font-weight: 600; }
+td.no { color: var(--color-error); font-weight: 600; }
 
 .period-selector,
 .filter-form {
@@ -156,20 +156,21 @@ td.no { color: #cf222e; font-weight: 600; }
 .filter-form button {
   font: inherit;
   padding: 0.35rem 0.55rem;
-  border: 1px solid #d0d7de;
+  border: 1px solid var(--card-border);
   border-radius: 4px;
-  background: #fff;
+  background: var(--card-bg);
+  color: var(--page-text);
 }
 
 .filter-form button {
-  background: #1f2328;
-  color: #fff;
-  border-color: #1f2328;
+  background: var(--button-primary-bg);
+  color: var(--button-primary-text);
+  border-color: var(--button-primary-bg);
   cursor: pointer;
 }
 
 .empty {
-  color: #57606a;
+  color: var(--text-muted);
   font-style: italic;
 }
 
@@ -177,18 +178,24 @@ td.no { color: #cf222e; font-weight: 600; }
   display: inline-block;
   padding: 0.1rem 0.5rem;
   border-radius: 999px;
-  background: #ddf4ff;
-  color: #0969da;
+  background: var(--tag-default-bg);
+  color: var(--tag-default-text);
   font-size: 0.8rem;
   font-family: ui-monospace, SFMono-Regular, monospace;
 }
 
-.event-tag.cooldown_active { background: #fff8c5; color: #9a6700; }
-.event-tag.auth_failed { background: #ffebe9; color: #cf222e; }
+.event-tag.cooldown_active { background: var(--tag-warning-bg); color: var(--tag-warning-text); }
+.event-tag.auth_failed { background: var(--tag-error-bg); color: var(--tag-error-text); }
 .event-tag.model_appeared,
-.event-tag.model_discovered { background: #dafbe1; color: #1a7f37; }
-.event-tag.circuit_open { background: #ffebe9; color: #cf222e; }
+.event-tag.model_discovered { background: var(--tag-success-bg); color: var(--tag-success-text); }
+.event-tag.circuit_open { background: var(--tag-error-bg); color: var(--tag-error-text); }
 .event-tag.circuit_close,
-.event-tag.circuit_closed { background: #dafbe1; color: #1a7f37; }
-.event-tag.reservation_recovered { background: #fff8c5; color: #9a6700; }
-.event-tag.catalog_refresh_failed { background: #ffebe9; color: #cf222e; }
+.event-tag.circuit_closed { background: var(--tag-success-bg); color: var(--tag-success-text); }
+.event-tag.reservation_recovered { background: var(--tag-warning-bg); color: var(--tag-warning-text); }
+.event-tag.catalog_refresh_failed { background: var(--tag-error-bg); color: var(--tag-error-text); }
+
+.heatmap-label {
+  fill: var(--heatmap-label-text);
+  font-size: 10px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
