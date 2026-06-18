@@ -24,6 +24,7 @@ from go_aggregator.auth import require_auth, require_auth_at_startup
 from go_aggregator.background import TaskSupervisor
 from go_aggregator.background.cleanup import (
     checkpoint_database,
+    cleanup_old_events,
     cleanup_old_requests,
     reconcile_expired_reservations,
 )
@@ -361,6 +362,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         while True:
             await asyncio.sleep(3600)
             await cleanup_old_requests(db, config.dashboard.retain_request_stats_days)
+            await cleanup_old_events(db, config.dashboard.retain_event_days)
             # Reconcile expired reservations and sync in-memory state
             await reconcile_expired_reservations(
                 db,

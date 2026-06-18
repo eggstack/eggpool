@@ -88,6 +88,7 @@ class DashboardConfig(BaseModel):
     enabled: bool = True
     public: bool = False
     retain_request_stats_days: int = 30
+    retain_event_days: int = 90
     store_request_content: bool = False
     refresh_interval_s: int = 60
 

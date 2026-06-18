@@ -258,7 +258,7 @@ See `docs/deployment.md` for production deployment instructions.
 Quick start for development:
 
 ```bash
-uv run go-aggregator serve --config config.toml
+uv run go-aggregator --config config.toml serve
 ```
 
 For production (systemd):

@@ -230,3 +230,32 @@ def test_config_example_validates() -> None:
     finally:
         del os.environ["OPENCODE_GO_KEY_1"]
         del os.environ["OPENCODE_GO_KEY_2"]
+
+
+def test_dashboard_config_defaults() -> None:
+    """DashboardConfig has correct default values."""
+    from go_aggregator.models.config import DashboardConfig
+
+    dc = DashboardConfig()
+    assert dc.enabled is True
+    assert dc.public is False
+    assert dc.retain_request_stats_days == 30
+    assert dc.retain_event_days == 90
+    assert dc.store_request_content is False
+    assert dc.refresh_interval_s == 60
+
+
+def test_server_config_api_key_env_default() -> None:
+    """ServerConfig.api_key_env defaults to GO_AGGREGATOR_API_KEY."""
+    from go_aggregator.models.config import ServerConfig
+
+    sc = ServerConfig()
+    assert sc.api_key_env == "GO_AGGREGATOR_API_KEY"
+
+
+def test_server_config_empty_api_key_env_disables_auth() -> None:
+    """Setting api_key_env to empty string disables authentication."""
+    from go_aggregator.models.config import ServerConfig
+
+    sc = ServerConfig(api_key_env="")
+    assert sc.api_key_env == ""

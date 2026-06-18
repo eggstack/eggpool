@@ -1,15 +1,14 @@
 """Dashboard HTTP routes.
 
-The dashboard exposes a read-only server-rendered HTML interface
-plus a tiny JS-free JSON refresh endpoint. All free-text fields
-are HTML-escaped.
+The dashboard exposes a read-only server-rendered HTML interface.
+All free-text fields are HTML-escaped.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 
 from go_aggregator.dashboard.render import (
     render_accounts,
@@ -130,17 +129,6 @@ async def handle_timeseries(
     )
 
 
-async def handle_summary_json(
-    request: Request, period: str | None = "24h"
-) -> JSONResponse:
-    """Return a JSON summary for AJAX refreshes."""
-    _get_dashboard_config(request)
-    time_range = _resolve(request, period)
-    stats = request.app.state.stats
-    overview = await stats.get_dashboard_overview(time_range)
-    return JSONResponse(content=overview)
-
-
 def register_dashboard_routes(app: Any, require_auth: bool = False) -> None:
     """Attach the dashboard HTML routes to a FastAPI app.
 
@@ -195,7 +183,6 @@ __all__ = [
     "handle_events",
     "handle_models",
     "handle_overview",
-    "handle_summary_json",
     "handle_timeseries",
     "register_dashboard_routes",
 ]

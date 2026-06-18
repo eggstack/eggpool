@@ -61,6 +61,7 @@ def _render_nav(active_nav: str, period: str) -> str:
         ("accounts", "/accounts", "Accounts"),
         ("models", "/models", "Models"),
         ("events", "/events", "Events"),
+        ("timeseries", "/timeseries", "Timeseries"),
     ]
     parts = ['<nav class="topnav">']
     for key, href, label in items:

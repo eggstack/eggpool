@@ -22,6 +22,10 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
+from go_aggregator.background.cleanup import (
+    cleanup_old_events,
+    cleanup_old_requests,
+)
 from go_aggregator.cli import cli
 from go_aggregator.db.connection import Database
 from go_aggregator.db.migrations import MigrationRunner
@@ -398,3 +402,180 @@ class TestVacuumAudit:
             )
         # And it must call db.vacuum() in the db vacuum command.
         assert "db.vacuum()" in contents
+
+
+class TestCliOptionOrdering:
+    """Verify the CLI group option --config is accepted before subcommands."""
+
+    def test_config_before_subcommand_succeeds(self, tmp_path: Path) -> None:
+        """--config placed before subcommand is the correct invocation."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            f"""
+[server]
+api_key_env = ""
+
+[database]
+path = "{tmp_path / "test.sqlite3"}"
+wal = true
+synchronous = "NORMAL"
+
+[models]
+refresh_interval_s = 0
+startup_refresh = false
+
+[dashboard]
+enabled = false
+""",
+            encoding="utf-8",
+        )
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "check-config"],
+        )
+        assert result.exit_code == 0, (
+            f"stdout={result.stdout} stderr={getattr(result, 'stderr', '')}"
+        )
+        assert "Configuration loaded successfully" in result.stdout
+
+    def test_config_after_subcommand_fails(self, tmp_path: Path) -> None:
+        """--config placed after subcommand should fail (Click group option)."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            f"""
+[server]
+api_key_env = ""
+
+[database]
+path = "{tmp_path / "test.sqlite3"}"
+wal = true
+synchronous = "NORMAL"
+
+[models]
+refresh_interval_s = 0
+startup_refresh = false
+
+[dashboard]
+enabled = false
+""",
+            encoding="utf-8",
+        )
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["check-config", "--config", str(config_path)],
+        )
+        assert result.exit_code != 0
+
+
+class TestCleanupOldRequests:
+    """Tests for cleanup_old_requests."""
+
+    @pytest.mark.asyncio
+    async def test_deletes_old_requests(self, writable_db_path: str) -> None:
+        """Requests older than retain_days are deleted."""
+        db = Database(path=writable_db_path)
+        await db.connect()
+        try:
+            await _migrate_and_seed(db)
+            # Insert an old request (100 days ago)
+            async with db.transaction():
+                await db.execute_write(
+                    "INSERT INTO requests "
+                    "(account_id, model_id, status, started_at) "
+                    "VALUES (1, 'gpt-4', 'completed', "
+                    "datetime('now', '-100 days'))",
+                )
+            count = await cleanup_old_requests(db, retain_days=30)
+            assert count == 1
+            remaining = await db.fetch_all("SELECT id FROM requests")
+            assert len(remaining) == 0
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_keeps_recent_requests(self, writable_db_path: str) -> None:
+        """Requests within retain_days are kept."""
+        db = Database(path=writable_db_path)
+        await db.connect()
+        try:
+            await _migrate_and_seed(db)
+            async with db.transaction():
+                await db.execute_write(
+                    "INSERT INTO requests "
+                    "(account_id, model_id, status, started_at) "
+                    "VALUES (1, 'gpt-4', 'completed', "
+                    "datetime('now', '-5 days'))",
+                )
+            count = await cleanup_old_requests(db, retain_days=30)
+            assert count == 0
+            remaining = await db.fetch_all("SELECT id FROM requests")
+            assert len(remaining) == 1
+        finally:
+            await db.disconnect()
+
+
+class TestCleanupOldEvents:
+    """Tests for cleanup_old_events."""
+
+    @pytest.mark.asyncio
+    async def test_deletes_old_events(self, writable_db_path: str) -> None:
+        """Events older than retain_days are deleted."""
+        db = Database(path=writable_db_path)
+        await db.connect()
+        try:
+            await _migrate_and_seed(db)
+            async with db.transaction():
+                await db.execute_write(
+                    "INSERT INTO account_events "
+                    "(account_id, event_type, details, created_at) "
+                    "VALUES (1, 'test', '{}', "
+                    "datetime('now', '-100 days'))",
+                )
+            count = await cleanup_old_events(db, retain_days=30)
+            assert count == 1
+            remaining = await db.fetch_all("SELECT id FROM account_events")
+            assert len(remaining) == 0
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_keeps_recent_events(self, writable_db_path: str) -> None:
+        """Events within retain_days are kept."""
+        db = Database(path=writable_db_path)
+        await db.connect()
+        try:
+            await _migrate_and_seed(db)
+            async with db.transaction():
+                await db.execute_write(
+                    "INSERT INTO account_events "
+                    "(account_id, event_type, details, created_at) "
+                    "VALUES (1, 'test', '{}', "
+                    "datetime('now', '-5 days'))",
+                )
+            count = await cleanup_old_events(db, retain_days=30)
+            assert count == 0
+            remaining = await db.fetch_all("SELECT id FROM account_events")
+            assert len(remaining) == 1
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_default_retention_is_90_days(self, writable_db_path: str) -> None:
+        """Default retain_days is 90, so 80-day-old events survive."""
+        db = Database(path=writable_db_path)
+        await db.connect()
+        try:
+            await _migrate_and_seed(db)
+            async with db.transaction():
+                await db.execute_write(
+                    "INSERT INTO account_events "
+                    "(account_id, event_type, details, created_at) "
+                    "VALUES (1, 'test', '{}', "
+                    "datetime('now', '-80 days'))",
+                )
+            count = await cleanup_old_events(db)
+            assert count == 0
+        finally:
+            await db.disconnect()

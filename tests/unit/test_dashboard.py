@@ -15,6 +15,7 @@ from go_aggregator.dashboard.escape import (
     truncate,
 )
 from go_aggregator.dashboard.render import (
+    _render_nav,
     render_accounts,
     render_events,
     render_models,
@@ -382,3 +383,33 @@ class TestHtmlParseability:
         text = "".join(parser.text_parts)
         assert "10" in text
         assert "$1.500000" in text
+
+
+class TestRenderNav:
+    """Tests for the navigation bar renderer."""
+
+    def test_timeseries_link_present(self) -> None:
+        """Timeseries link appears in the navigation."""
+        html = _render_nav("overview", "24h")
+        assert "/timeseries" in html
+        assert "Timeseries" in html
+
+    def test_all_expected_links_present(self) -> None:
+        """All dashboard pages are linked from navigation."""
+        html = _render_nav("", "24h")
+        for href in ("/", "/accounts", "/models", "/events", "/timeseries"):
+            assert href in html
+
+    def test_active_nav_highlighted(self) -> None:
+        """The active nav item gets the 'active' CSS class."""
+        html = _render_nav("timeseries", "24h")
+        assert 'class="active"' in html
+        assert 'href="/timeseries' in html
+
+    def test_non_active_nav_not_highlighted(self) -> None:
+        """Non-active nav items do not get the 'active' class on their link."""
+        html = _render_nav("overview", "24h")
+        # Only one link should have class="active" (the overview link)
+        assert html.count('class="active"') == 1
+        # The timeseries link should have class="" (inactive)
+        assert 'class="" href="/timeseries' in html

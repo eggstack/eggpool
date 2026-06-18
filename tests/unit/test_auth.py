@@ -9,7 +9,7 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
-from go_aggregator.auth import require_auth, verify_api_key
+from go_aggregator.auth import require_auth, require_auth_at_startup, verify_api_key
 from go_aggregator.models.config import AppConfig
 
 
@@ -130,3 +130,36 @@ async def test_auth_fail_closed_at_runtime() -> None:
     response = client.get("/protected")
     assert response.status_code == 401
     assert "Authentication unavailable" in response.json()["detail"]
+
+
+class TestRequireAuthAtStartup:
+    """Tests for require_auth_at_startup."""
+
+    def test_returns_none_when_env_is_empty(self) -> None:
+        """Empty api_key_env disables auth and returns None."""
+        assert require_auth_at_startup("") is None
+
+    def test_returns_none_when_env_is_none(self) -> None:
+        """None api_key_env disables auth and returns None."""
+        assert require_auth_at_startup(None) is None
+
+    def test_returns_key_when_env_var_is_set(self) -> None:
+        """Returns the key value when the env var is set."""
+        os.environ["TEST_STARTUP_KEY"] = "secret-value"
+        try:
+            result = require_auth_at_startup("TEST_STARTUP_KEY")
+            assert result == "secret-value"
+        finally:
+            del os.environ["TEST_STARTUP_KEY"]
+
+    def test_raises_when_env_var_is_missing(self) -> None:
+        """Raises RuntimeError when env var is not set."""
+        os.environ.pop("MISSING_STARTUP_KEY", None)
+        with pytest.raises(RuntimeError, match="not set"):
+            require_auth_at_startup("MISSING_STARTUP_KEY")
+
+    def test_error_message_recommends_empty_string(self) -> None:
+        """Error message tells user to set api_key_env = \"\" to disable."""
+        os.environ.pop("MISSING_KEY_MSG", None)
+        with pytest.raises(RuntimeError, match=r'api_key_env = ""'):
+            require_auth_at_startup("MISSING_KEY_MSG")

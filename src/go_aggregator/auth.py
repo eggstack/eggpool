@@ -44,8 +44,8 @@ def require_auth_at_startup(api_key_env: str | None) -> str | None:
     if not expected:
         raise RuntimeError(
             f"Authentication enabled but API key env var {api_key_env!r} is not set. "
-            f"Set the environment variable or disable authentication by removing "
-            f"api_key_env from configuration."
+            f"Set the environment variable or disable authentication by setting "
+            f'api_key_env = "" in the [server] config section.'
         )
     return expected
 

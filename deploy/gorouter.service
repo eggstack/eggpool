@@ -9,7 +9,7 @@ Type=simple
 User=gorouter
 Group=gorouter
 WorkingDirectory=/var/lib/gorouter
-ExecStart=/opt/gorouter/.venv/bin/go-aggregator serve --config /etc/gorouter/config.toml
+ExecStart=/opt/gorouter/.venv/bin/go-aggregator --config /etc/gorouter/config.toml serve
 # Live configuration reload is not supported; changes require
 # `sudo systemctl restart gorouter`. SIGHUP is intentionally not
 # wired to any reload action.
