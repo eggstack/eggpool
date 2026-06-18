@@ -100,6 +100,17 @@ class CircuitBreaker:
                 return True
             return False
 
+    def release_probe(self) -> None:
+        """Release a half-open probe slot without recording success or failure.
+
+        Use this when a request that consumed a half-open probe slot
+        terminates through a path that does not warrant a circuit-breaker
+        success or failure record (e.g. client cancellation, client error,
+        rate-limit cooldown, quota-exhausted cooldown, or model-disabled).
+        """
+        with self._lock:
+            self._half_open_in_flight = False
+
     def can_request(self) -> bool:
         """Check if a request would be allowed without mutating state.
 

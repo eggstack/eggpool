@@ -304,7 +304,10 @@ class Router:
                 continue
             # Check model availability with model-level health
             all_models = self._catalog.cache.get_all_models()
-            for model_id in all_models:
+            for model_id, model_info in all_models.items():
+                # Fail-closed: skip models with unresolved protocol
+                if not model_info.get("protocol"):
+                    continue
                 if self._stale_after_s is not None:
                     supporting = self._catalog.cache.get_fresh_supporting_accounts(
                         model_id, self._stale_after_s

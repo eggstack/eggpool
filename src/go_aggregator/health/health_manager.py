@@ -243,6 +243,16 @@ class HealthManager:
             health.health_state = "healthy"
             health.is_healthy = True
             health.cooldown_until = 0
+        # Clear expired timed disable, but do not override terminal states
+        # such as authentication_failed which require explicit enable.
+        if (
+            health.disabled_until is not None
+            and now >= health.disabled_until
+            and health.health_state != "authentication_failed"
+        ):
+            health.disabled_until = None
+            health.disabled_reason = ""
+            health.is_healthy = True
 
     def is_account_healthy(self, account_name: str) -> bool:
         """Check if an account is healthy."""
@@ -281,6 +291,17 @@ class HealthManager:
         if health.is_disabled() or health.is_model_disabled(model_id):
             return False
         return health.circuit_breaker.allow_request()
+
+    def release_request(self, account_name: str) -> None:
+        """Release the circuit-breaker half-open probe slot for an account.
+
+        Call this when a request that acquired a probe slot terminates
+        through a path that does not call :meth:`record_success` or
+        :meth:`record_failure` (client cancellation, client error,
+        rate-limit/quota cooldown, model disabled).
+        """
+        health = self.get_account_health(account_name)
+        health.circuit_breaker.release_probe()
 
     def get_healthy_accounts(self, account_names: list[str]) -> list[str]:
         """Get list of healthy accounts."""

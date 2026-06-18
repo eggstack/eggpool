@@ -102,6 +102,7 @@ def render_overview(
     accounts: list[dict[str, Any]],
     account_filter: str = "",
     period: str = "24h",
+    refresh_interval_s: int = 60,
 ) -> str:
     """Render the overview dashboard page."""
     summary = overview.get("summary", {})
@@ -202,6 +203,7 @@ def render_overview(
         body=body,
         active_nav="overview",
         period=period,
+        refresh_interval_s=refresh_interval_s,
     )
 
 
@@ -223,9 +225,9 @@ def _render_account_table(accounts: list[dict[str, Any]]) -> str:
         "<th>Avg latency</th>",
         "<th>Reserved</th>",
         "<th>Resv.</th>",
-        "<th>5h util</th>",
-        "<th>7d util</th>",
-        "<th>30d util</th>",
+        "<th>5h rate</th>",
+        "<th>7d rate</th>",
+        "<th>30d rate</th>",
         "</tr></thead><tbody>",
     ]
     for row in accounts:

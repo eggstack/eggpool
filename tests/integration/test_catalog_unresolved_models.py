@@ -103,8 +103,8 @@ async def test_unresolved_model_not_exposed() -> None:
         ],
     )
 
-    # is_model_available only checks account support, not protocol
-    assert cache.is_model_available("mystery-model", {"test-acct"})
+    # is_model_available now checks both account support and protocol
+    assert not cache.is_model_available("mystery-model", {"test-acct"})
 
     # But it is NOT exposed — get_models_for_exposure filters by protocol
     exposed = cache.get_models_for_exposure("union", {"test-acct"})

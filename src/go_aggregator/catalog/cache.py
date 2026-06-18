@@ -125,6 +125,9 @@ class ModelCatalogCache:
 
     def is_model_available(self, model_id: str, eligible_accounts: set[str]) -> bool:
         """Check if a model is available from any eligible account."""
+        model_info = self._models.get(model_id)
+        if model_info is None or not model_info.get("protocol"):
+            return False
         supporting = self._account_support.get(model_id, set())
         return bool(supporting & eligible_accounts)
 

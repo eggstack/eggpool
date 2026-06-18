@@ -56,6 +56,7 @@ async def handle_overview(request: Request, period: str | None = "24h") -> Respo
         overview=overview,
         accounts=accounts,
         period=time_range.label,
+        refresh_interval_s=refresh_s,
     )
     return HTMLResponse(
         content=html,

@@ -38,7 +38,8 @@ def require_auth_at_startup(api_key_env: str | None) -> str | None:
     """Validate that the configured API key environment variable is set.
 
     Returns the API key value if set, None if auth is disabled (no env var name).
-    Raises RuntimeError if auth is enabled but the env var is not set.
+    Raises RuntimeError if auth is enabled but the env var is not set or is a
+    placeholder value.
     """
     if not api_key_env:
         return None
@@ -48,6 +49,20 @@ def require_auth_at_startup(api_key_env: str | None) -> str | None:
             f"Authentication enabled but API key env var {api_key_env!r} is not set. "
             f"Set the environment variable or disable authentication by setting "
             f'api_key_env = "" in the [server] config section.'
+        )
+    _placeholder_keys = frozenset(
+        {
+            "your-proxy-api-key",
+            "your-opencode-go-key-1",
+            "your-opencode-go-key-2",
+            "your-api-key-here",
+            "your-local-api-key-here",
+        }
+    )
+    if expected.strip().lower() in _placeholder_keys:
+        raise RuntimeError(
+            f"API key env var {api_key_env!r} contains a placeholder value. "
+            f"Set a real key before starting the service."
         )
     return expected.strip()
 

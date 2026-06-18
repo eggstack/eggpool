@@ -26,7 +26,7 @@ class ServerConfig(BaseModel):
     host: str = DEFAULT_HOST
     port: int = Field(default=DEFAULT_PORT, ge=0, le=65535)
     api_key_env: str = "GO_AGGREGATOR_API_KEY"
-    log_level: str = "INFO"
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     access_log: bool = True
 
 
@@ -57,7 +57,7 @@ class DatabaseConfig(BaseModel):
     path: str = DEFAULT_DATABASE_PATH
     busy_timeout_ms: int = Field(default=5000, gt=0)
     wal: bool = True
-    synchronous: str = "NORMAL"
+    synchronous: Literal["OFF", "NORMAL", "FULL", "EXTRA"] = "NORMAL"
 
 
 class ModelsConfig(BaseModel):
@@ -103,7 +103,7 @@ class DashboardConfig(BaseModel):
     retain_request_stats_days: int = Field(default=30, gt=0)
     retain_event_days: int = Field(default=90, gt=0)
     store_request_content: bool = False
-    refresh_interval_s: int = Field(default=60, ge=0)
+    refresh_interval_s: int = Field(default=60, gt=0)
 
     @field_validator("store_request_content")
     @classmethod
@@ -195,6 +195,15 @@ class AppConfig(BaseModel):
         do not need upstream credentials (``migrate``, ``accounts status``,
         ``db vacuum``) can skip this check.
         """
+        _placeholder_keys = frozenset(
+            {
+                "your-proxy-api-key",
+                "your-opencode-go-key-1",
+                "your-opencode-go-key-2",
+                "your-api-key-here",
+                "your-local-api-key-here",
+            }
+        )
         for acct in self.accounts:
             if acct.enabled:
                 raw_key = os.environ.get(acct.api_key_env)
@@ -207,6 +216,12 @@ class AppConfig(BaseModel):
                     raise ConfigError(
                         f"Account {acct.name!r} has a whitespace-only API key "
                         f"in env var {acct.api_key_env!r}"
+                    )
+                if raw_key.strip().lower() in _placeholder_keys:
+                    raise ConfigError(
+                        f"Account {acct.name!r} has a placeholder API key "
+                        f"in env var {acct.api_key_env!r}; "
+                        f"set a real key before starting the service"
                     )
 
     @classmethod

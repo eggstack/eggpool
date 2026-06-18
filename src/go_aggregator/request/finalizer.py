@@ -325,7 +325,14 @@ class RequestFinalizer:
                         model_id=mid,
                         reason=data.error_class,
                     )
-                # CLIENT_CANCELLED and CLIENT_ERROR don't penalize health
+                elif data.outcome in (
+                    FinalizationOutcome.CLIENT_CANCELLED,
+                    FinalizationOutcome.CLIENT_ERROR,
+                    FinalizationOutcome.MIDSTREAM_ERROR,
+                ):
+                    # These outcomes don't penalize health but must
+                    # release any consumed half-open probe slot.
+                    self._health_manager.release_request(selected.account_name)
 
             # 5. Update runtime state. Request-level success and terminal
             #    state must always update the runtime view, independent of

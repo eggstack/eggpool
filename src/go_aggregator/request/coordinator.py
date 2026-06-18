@@ -656,6 +656,8 @@ class RequestCoordinator:
                     context, selected, response.status_code, resp_headers, resp_body
                 )
                 elapsed_ms = int((time.time() - context.started_at) * 1000)
+                resp_headers.append(("x-proxy-request-id", context.request_id))
+                resp_headers.append(("x-proxy-attempt-count", str(attempt_num)))
                 return PreparedProxyResponse(
                     status_code=response.status_code,
                     headers=resp_headers,
@@ -1110,13 +1112,16 @@ class RequestCoordinator:
         elif category == FailureCategory.RATE_LIMITED:
             retry_after = err.retry_after or 60.0
             self._health_manager.record_rate_limit(account_name, retry_after)
+            self._health_manager.release_request(account_name)
         elif category == FailureCategory.QUOTA_EXHAUSTED:
             self._health_manager.record_quota_exhausted(
                 account_name,
                 self._quota_exhausted_cooldown_seconds,
             )
+            self._health_manager.release_request(account_name)
         elif category == FailureCategory.MODEL_UNAVAILABLE:
             self._health_manager.disable_model(account_name, model_id)
+            self._health_manager.release_request(account_name)
             self._catalog.cache.mark_model_unavailable(account_name, model_id)
         else:
             self._health_manager.record_failure(
