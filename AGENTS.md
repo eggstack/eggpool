@@ -6,9 +6,9 @@ Development guidelines for the opencode-go-aggregator project.
 
 Project-specific skills are in `.opencode/skills/`:
 
-- `development` — Linting, testing, pre-commit checks, code style
-- `deployment` — Production deployment, systemd, operational scripts
-- `architecture` — Design principles, request lifecycle, invariants
+- `development` — [`.opencode/skills/development/SKILL.md`](.opencode/skills/development/SKILL.md) — Linting, testing, pre-commit checks, code style
+- `deployment` — [`.opencode/skills/deployment/SKILL.md`](.opencode/skills/deployment/SKILL.md) — Production deployment, systemd, operational scripts
+- `architecture` — [`.opencode/skills/architecture/SKILL.md`](.opencode/skills/architecture/SKILL.md) — Design principles, request lifecycle, invariants, error hierarchy
 
 ## Code Style
 
@@ -42,7 +42,7 @@ All must pass with zero errors.
 
 ## Architecture Principles
 
-For detailed architecture documentation, see `architecture/` directory and the `architecture` skill.
+For detailed architecture documentation, see the `architecture` skill and the `architecture/` directory.
 
 Core principles:
 
@@ -54,20 +54,25 @@ Core principles:
 - Never log prompts, completions, or API keys
 - Use constant-time comparison for API key verification
 
+## Error Handling
+
+Use the exception hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or `raise ... from None`.
+
+- `AggregatorError` — base for all aggregator errors
+- `ConfigError` — invalid or missing configuration
+- `DatabaseError` — database-related failures
+- `UpstreamError` — base for upstream API errors
+  - `AuthenticationError`, `QuotaExhaustedError`, `RateLimitError`, `ModelUnavailableError`
+- `ProxyError` — general proxy/transport errors
+- `ModelNotFoundError`, `NoEligibleAccountError`, `CatalogUnavailableError`
+- `AuthenticationUnavailableError`, `UpstreamExhaustedError`, `AccountSuspendedError`
+- `RequestTooLargeError` — request body exceeds configured limit
+
 ## Import Organization
 
 Follow ruff TCH rules:
 - Move type-only imports into `TYPE_CHECKING` blocks
 - Use `from __future__ import annotations` to enable forward references
-
-## Error Handling
-
-- Use the exception hierarchy in `errors.py`
-- Config errors: `ConfigError`
-- Database errors: `DatabaseError`
-- Upstream errors: `UpstreamError` and subclasses
-- Protocol errors: `ModelNotFoundError`, `NoEligibleAccountError`, `CatalogUnavailableError`, `AuthenticationUnavailableError`, `UpstreamExhaustedError`, `AccountSuspendedError`
-- Chain exceptions with `raise ... from err` or `raise ... from None`
 
 ## Git Workflow
 

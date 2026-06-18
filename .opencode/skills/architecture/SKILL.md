@@ -49,6 +49,26 @@ description: Architecture principles and design decisions for the opencode-go-ag
 - Health systems use a normalized `FailureCategory` vocabulary shared by `HealthManager` and `AccountRuntimeState`
 - `models.resolution_status` is set to `'resolved'` for all persisted models with resolved protocols
 
+## Error Hierarchy
+
+- `AggregatorError` — base for all aggregator errors
+- `ConfigError` — invalid or missing configuration
+- `DatabaseError` — database-related failures
+- `UpstreamError` — base for upstream API errors (`status_code` attribute)
+  - `AuthenticationError` — upstream rejects credentials
+  - `QuotaExhaustedError` — upstream account quota exhausted
+  - `RateLimitError` — upstream rate-limited (`retry_after` attribute)
+  - `ModelUnavailableError` — model not available upstream
+- `ProxyError` — general proxy/transport errors
+- `ModelNotFoundError` — requested model does not exist (404)
+- `NoEligibleAccountError` — no account can serve the request (503)
+- `CatalogUnavailableError` — model catalog not available (503)
+- `AuthenticationUnavailableError` — upstream credentials cannot be loaded (503)
+- `UpstreamExhaustedError` — all upstream attempts exhausted (502)
+- `AccountSuspendedError` — account suspended (503)
+- `RequestTooLargeError` — request body exceeds configured limit
+- Chain exceptions with `raise ... from err` or `raise ... from None`
+
 ## Security
 
 - Local client credentials (`Authorization`, `X-Api-Key`, `Proxy-Authorization`) are stripped before upstream forwarding

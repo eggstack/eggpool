@@ -120,7 +120,8 @@ sudo -u gorouter /opt/gorouter/.venv/bin/go-aggregator check-config --config /et
 
 - Local client credentials (`Authorization`, `X-Api-Key`, `Proxy-Authorization`) are stripped before upstream forwarding
 - Only the selected account's bearer token is injected
-- Persisted `error_detail` is fail-closed by default
+- Persisted `error_detail` is fail-closed by default; enable with `security.persist_redacted_error_detail = true`
+- When enabled, persisted `error_detail` is restricted to a strict diagnostic key allowlist; arbitrary provider payload fields are dropped
 - Never store API keys in SQLite
 - Never log prompts, completions, or API keys
 - Use constant-time comparison for API key verification

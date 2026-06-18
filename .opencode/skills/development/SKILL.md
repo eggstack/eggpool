@@ -76,8 +76,10 @@ uv run coverage report
 - Chain exceptions with `raise ... from err` or `raise ... from None`
 - Config errors: `ConfigError`
 - Database errors: `DatabaseError`
-- Upstream errors: `UpstreamError` and subclasses
+- Upstream errors: `UpstreamError` and subclasses (`AuthenticationError`, `QuotaExhaustedError`, `RateLimitError`, `ModelUnavailableError`)
+- Proxy errors: `ProxyError`
 - Protocol errors: `ModelNotFoundError`, `NoEligibleAccountError`, `CatalogUnavailableError`, `AuthenticationUnavailableError`, `UpstreamExhaustedError`, `AccountSuspendedError`
+- Request errors: `RequestTooLargeError`
 
 ## Git Workflow
 

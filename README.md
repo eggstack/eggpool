@@ -176,7 +176,10 @@ src/go_aggregator/
 │       ├── 0008_proxy_request_identity.sql
 │       ├── 0009_model_protocol_source.sql
 │       ├── 0010_health_probe.sql
-│       └── 0011_model_resolution_status.sql
+│       ├── 0011_model_resolution_status.sql
+│       ├── 0012_drop_reservations_estimated_microdollars.sql
+│       ├── 0013_request_attempts_account_id_index.sql
+│       └── checksums.json
 ├── request/
 │   ├── coordinator.py       # Central request lifecycle orchestrator
 │   ├── attempt_finalizer.py # Per-attempt terminal lifecycle
@@ -222,6 +225,7 @@ tests/
 - [x] Phase 8: Statistics API and dashboard
 - [x] Phase 9: Deployment hardening
 - [x] Phase 10: Integration hardening and correct request lifecycle
+- [x] Phase 11: Quota lifecycle and failover correctness
 - [x] Phase 12: Executable correctness pass
 - [x] Phase 13: Attempt lifecycle and transaction hardening
 - [x] Phase 14: Deployment blockers and operational hardening
