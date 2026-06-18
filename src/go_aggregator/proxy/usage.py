@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, cast
 
+from go_aggregator.catalog.pricing import coerce_token_count
+
 
 def safe_dict(value: Any) -> dict[str, Any] | None:
     """Return value if it is a dict, else None."""
@@ -43,14 +45,14 @@ class OpenAIStreamUsageExtractor:
         completion_details = safe_dict(usage_data.get("completion_tokens_details"))
 
         return StreamUsageResult(
-            input_tokens=usage_data.get("prompt_tokens", 0),
-            output_tokens=usage_data.get("completion_tokens", 0),
-            cache_read_tokens=(
+            input_tokens=coerce_token_count(usage_data.get("prompt_tokens", 0)),
+            output_tokens=coerce_token_count(usage_data.get("completion_tokens", 0)),
+            cache_read_tokens=coerce_token_count(
                 prompt_details.get("cached_tokens", 0)
                 if prompt_details is not None
                 else 0
             ),
-            reasoning_tokens=(
+            reasoning_tokens=coerce_token_count(
                 completion_details.get("reasoning_tokens", 0)
                 if completion_details is not None
                 else 0
@@ -80,9 +82,13 @@ class AnthropicStreamUsageExtractor:
             if usage is None:
                 return None
             return StreamUsageResult(
-                input_tokens=usage.get("input_tokens", 0),
-                cache_read_tokens=usage.get("cache_read_input_tokens", 0),
-                cache_creation_tokens=usage.get("cache_creation_input_tokens", 0),
+                input_tokens=coerce_token_count(usage.get("input_tokens", 0)),
+                cache_read_tokens=coerce_token_count(
+                    usage.get("cache_read_input_tokens", 0)
+                ),
+                cache_creation_tokens=coerce_token_count(
+                    usage.get("cache_creation_input_tokens", 0)
+                ),
             )
 
         if event_type == "message_delta":
@@ -90,7 +96,7 @@ class AnthropicStreamUsageExtractor:
             if usage is None:
                 return None
             return StreamUsageResult(
-                output_tokens=usage.get("output_tokens", 0),
+                output_tokens=coerce_token_count(usage.get("output_tokens", 0)),
                 is_complete=True,
             )
 

@@ -30,9 +30,13 @@ cd /opt
 sudo git clone https://github.com/dbowm91/gorouter.git
 sudo chown -R root:gorouter /opt/gorouter
 
-# Install dependencies
+# Install dependencies (run as root so uv can write to the tree)
 cd /opt/gorouter
-sudo -u gorouter uv sync --no-dev
+sudo uv sync --no-dev
+
+# Ensure the gorouter user can read and execute the environment
+sudo chown -R root:gorouter /opt/gorouter
+sudo chmod -R o+rX /opt/gorouter
 ```
 
 ### 3. Configure

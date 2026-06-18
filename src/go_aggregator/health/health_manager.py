@@ -266,6 +266,22 @@ class HealthManager:
             and health.circuit_breaker.can_request()
         )
 
+    def try_acquire_request(self, account_name: str, model_id: str) -> bool:
+        """Attempt to acquire a circuit-breaker probe slot for dispatch.
+
+        Calls the mutating :meth:`CircuitBreaker.allow_request` which
+        transitions OPEN → HALF_OPEN and sets the in-flight flag when
+        appropriate.  Returns ``True`` when the request may proceed,
+        ``False`` when the circuit breaker rejects it (account should
+        be excluded from this routing round).
+        """
+        if not self.is_account_healthy(account_name):
+            return False
+        health = self.get_account_health(account_name)
+        if health.is_disabled() or health.is_model_disabled(model_id):
+            return False
+        return health.circuit_breaker.allow_request()
+
     def get_healthy_accounts(self, account_names: list[str]) -> list[str]:
         """Get list of healthy accounts."""
         return [name for name in account_names if self.is_account_healthy(name)]

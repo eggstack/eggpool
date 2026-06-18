@@ -65,6 +65,15 @@ logger = logging.getLogger(__name__)
 # Default maximum retry attempts for pre-body failures
 DEFAULT_MAX_RETRY_ATTEMPTS = 3
 
+# Ordered list of upstream request-ID header names checked during
+# finalization.  The first non-empty match wins.
+_UPSTREAM_REQUEST_ID_HEADERS: list[str] = [
+    "x-request-id",
+    "request-id",
+    "anthropic-request-id",
+    "x-amzn-requestid",
+]
+
 
 def _safe_dict(value: Any) -> dict[str, Any] | None:
     """Return value if it is a dict, else None."""
@@ -389,13 +398,38 @@ class RequestCoordinator:
                             )
                         )
 
-                # 4. Select account using projected estimates
-                selected_state = await self._router.select_account(
-                    context.model_id,
-                    context.request_id,
-                    request_estimates=request_estimates,
-                    exclude_accounts=context.attempted_accounts,
+                # 4. Select account using projected estimates, acquiring
+                #    the circuit-breaker probe slot atomically.
+                exclude: set[str] = (
+                    set(context.attempted_accounts)
+                    if context.attempted_accounts
+                    else set()
                 )
+                selected_state = None
+                for _ in range(len(eligible_account_names) + 1):
+                    selected_state = await self._router.select_account(
+                        context.model_id,
+                        context.request_id,
+                        request_estimates=request_estimates,
+                        exclude_accounts=exclude if exclude else None,
+                    )
+                    if selected_state is None:
+                        break
+                    # Acquire the circuit-breaker probe slot.  If the
+                    # breaker rejects this account (half-open slot
+                    # consumed or still open), exclude it and retry
+                    # with the next eligible account.
+                    if (
+                        self._health_manager is not None
+                        and not self._health_manager.try_acquire_request(
+                            selected_state.name, context.model_id
+                        )
+                    ):
+                        exclude.add(selected_state.name)
+                        selected_state = None
+                        continue
+                    break
+
                 if selected_state is None:
                     raise ModelUnavailableError(
                         f"No accounts available for model {context.model_id!r}"
@@ -638,7 +672,9 @@ class RequestCoordinator:
             elapsed_ms = int((time.time() - context.started_at) * 1000)
 
             usage = self._extract_non_stream_usage(context.protocol, body)
-            upstream_req_id = self._get_header_value(resp_headers, "x-request-id")
+            upstream_req_id = self._get_header_value(
+                resp_headers, _UPSTREAM_REQUEST_ID_HEADERS
+            )
 
             # Finalize via RequestFinalizer
             await self._finalizer.finalize(
@@ -869,7 +905,7 @@ class RequestCoordinator:
                         upstream_latency_ms=int((time.time() - reference) * 1000),
                         bytes_emitted=bytes_emitted,
                         upstream_request_id=self._get_header_value(
-                            resp_headers, "x-request-id"
+                            resp_headers, _UPSTREAM_REQUEST_ID_HEADERS
                         ),
                     ),
                 )
@@ -995,11 +1031,19 @@ class RequestCoordinator:
             )
 
     @staticmethod
-    def _get_header_value(headers: list[tuple[str, str]], name: str) -> str | None:
-        """Return the value for a single-valued header, or None."""
-        lower_name = name.lower()
+    def _get_header_value(
+        headers: list[tuple[str, str]],
+        name: str | list[str],
+    ) -> str | None:
+        """Return the value for a header, or None.
+
+        Accepts a single name or a list of names tried in order
+        (case-insensitive).
+        """
+        names = [name] if isinstance(name, str) else name
+        lower_names = [n.lower() for n in names]
         for key, value in headers:
-            if key.lower() == lower_name:
+            if key.lower() in lower_names:
                 return value
         return None
 
@@ -1014,7 +1058,7 @@ class RequestCoordinator:
         Returns None for non-retryable client errors (400, non-model-specific 404)
         where the response body should be passed through as-is.
         """
-        headers_dict = dict(headers)
+        headers_dict = {k.lower(): v for k, v in headers}
         error = self._classifier.classify(status_code, headers_dict, body=body)
 
         if error.category == RetryCategory.AUTH_FAILURE:
@@ -1106,7 +1150,7 @@ class RequestCoordinator:
                 upstream_latency_ms=elapsed_ms,
                 bytes_emitted=len(resp_body),
                 upstream_request_id=self._get_header_value(
-                    resp_headers, "x-request-id"
+                    resp_headers, _UPSTREAM_REQUEST_ID_HEADERS
                 ),
             ),
         )
@@ -1139,7 +1183,17 @@ class RequestCoordinator:
             if last_upstream_response is not None:
                 status_code = last_upstream_response[0]
             if last_error is not None:
-                error_class = type(last_error).__name__
+                # Prefer the classified error_class carried by the
+                # wrapper over the wrapper's own class name so that
+                # operational diagnostics report the root cause
+                # (e.g. RateLimitError) instead of _RetryableUpstreamError.
+                if (
+                    isinstance(last_error, _RetryableUpstreamError)
+                    and last_error.error_class is not None
+                ):
+                    error_class = last_error.error_class
+                else:
+                    error_class = type(last_error).__name__
                 # Default is fail-closed: do not persist arbitrary
                 # provider error detail. When explicitly enabled, the
                 # strengthened redactor is applied and bounded.

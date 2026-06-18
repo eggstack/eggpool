@@ -126,7 +126,11 @@ def migrate(ctx: click.Context) -> None:
         finally:
             await db.disconnect()
 
-    asyncio.run(_run())
+    try:
+        asyncio.run(_run())
+    except AggregatorError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
 
 
 @cli.group()
@@ -145,6 +149,12 @@ def models_refresh(ctx: click.Context) -> None:
 
     try:
         config = AppConfig.from_toml(config_path)
+    except AggregatorError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
+    try:
+        config.validate_account_credentials()
     except AggregatorError as exc:
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)
@@ -189,7 +199,11 @@ def models_refresh(ctx: click.Context) -> None:
         finally:
             await db.disconnect()
 
-    asyncio.run(_run())
+    try:
+        asyncio.run(_run())
+    except AggregatorError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
 
 
 @cli.group()
