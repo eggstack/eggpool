@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import json
 import os
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from go_aggregator.api.chat_completions import handle_chat_completions
+from go_aggregator.api.errors import anthropic_error_response, openai_error_response
+from go_aggregator.api.messages import handle_messages
 from go_aggregator.auth import require_auth
 from go_aggregator.catalog.cache import ModelCatalogCache
 from go_aggregator.dashboard.escape import escape
@@ -325,3 +328,248 @@ def test_error_message_no_html_leakage() -> None:
         assert "<b>" not in escaped
         assert "<a " not in escaped
         assert "&lt;" in escaped or "&gt;" in escaped or "&amp;" in escaped
+
+
+# ===================================================================
+# Endpoint handler input validation tests (real handlers)
+# ===================================================================
+
+
+def _make_real_chat_app() -> FastAPI:
+    """Create a minimal app mounting the real chat completions handler."""
+    app = FastAPI()
+    config = AppConfig()
+    config.server.api_key_env = ""  # disable auth
+    app.state.config = config
+    app.state.coordinator = MagicMock()
+
+    @app.post("/v1/chat/completions")
+    async def chat_completions(request: Request) -> JSONResponse:  # pyright: ignore[reportUnusedFunction]
+        return await handle_chat_completions(request)  # type: ignore[return-value]
+
+    return app
+
+
+def _make_real_messages_app() -> FastAPI:
+    """Create a minimal app mounting the real messages handler."""
+    app = FastAPI()
+    config = AppConfig()
+    config.server.api_key_env = ""  # disable auth
+    app.state.config = config
+    app.state.coordinator = MagicMock()
+
+    @app.post("/v1/messages")
+    async def messages(request: Request) -> JSONResponse:  # pyright: ignore[reportUnusedFunction]
+        return await handle_messages(request)  # type: ignore[return-value]
+
+    return app
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_invalid_utf8_returns_400() -> None:
+    """Invalid UTF-8 bytes in request body must return 400, not 500."""
+    app = _make_real_chat_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/chat/completions",
+            content=b"\x80\x81\x82\xff",
+            headers={"Content-Type": "application/json"},
+        )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert "error" in body
+    assert body["error"]["type"] == "invalid_request_error"
+
+
+@pytest.mark.asyncio
+async def test_messages_invalid_utf8_returns_400() -> None:
+    """Invalid UTF-8 bytes in request body must return 400, not 500."""
+    app = _make_real_messages_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/messages",
+            content=b"\x80\x81\x82\xff",
+            headers={"Content-Type": "application/json"},
+        )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["type"] == "error"
+    assert body["error"]["type"] == "invalid_request_error"
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_stream_string_false_returns_400() -> None:
+    """'stream: \"false\"' (string) must return 400, not silently coerce to True."""
+    app = _make_real_chat_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-4", "messages": [], "stream": "false"},
+        )
+    assert resp.status_code == 400
+    assert "Invalid stream" in resp.json()["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_stream_int_returns_400() -> None:
+    """'stream: 1' (int) must return 400, not silently coerce to True."""
+    app = _make_real_chat_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-4", "messages": [], "stream": 1},
+        )
+    assert resp.status_code == 400
+    assert "Invalid stream" in resp.json()["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_messages_stream_string_false_returns_400() -> None:
+    """'stream: \"false\"' (string) must return 400 for Anthropic endpoint."""
+    app = _make_real_messages_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/messages",
+            json={"model": "claude-3-sonnet", "messages": [], "stream": "false"},
+        )
+    assert resp.status_code == 400
+    assert "Invalid stream" in resp.json()["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_messages_stream_int_returns_400() -> None:
+    """'stream: 1' (int) must return 400 for Anthropic endpoint."""
+    app = _make_real_messages_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/messages",
+            json={"model": "claude-3-sonnet", "messages": [], "stream": 1},
+        )
+    assert resp.status_code == 400
+    assert "Invalid stream" in resp.json()["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_stream_true_proceeds() -> None:
+    """Valid boolean 'stream: true' should proceed to coordinator."""
+    app = _make_real_chat_app()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.body = b'{"ok": true}'
+    mock_response.headers = []
+    mock_response.stream_iterator = None
+    mock_response.account_name = "test"
+    mock_response.usage = None
+    app.state.coordinator.execute = AsyncMock(return_value=mock_response)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-4", "messages": [], "stream": True},
+        )
+    assert resp.status_code == 200
+    app.state.coordinator.execute.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_missing_model_returns_400() -> None:
+    """Missing 'model' field must return 400."""
+    app = _make_real_chat_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/chat/completions",
+            json={"messages": []},
+        )
+    assert resp.status_code == 400
+    assert "Missing model" in resp.json()["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_messages_missing_model_returns_400() -> None:
+    """Missing 'model' field must return 400 for Anthropic endpoint."""
+    app = _make_real_messages_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/messages",
+            json={"messages": []},
+        )
+    assert resp.status_code == 400
+    assert "Missing model" in resp.json()["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_empty_body_returns_400() -> None:
+    """Empty request body must return 400."""
+    app = _make_real_chat_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/chat/completions",
+            content=b"",
+            headers={"Content-Type": "application/json"},
+        )
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_messages_empty_body_returns_400() -> None:
+    """Empty request body must return 400 for Anthropic endpoint."""
+    app = _make_real_messages_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/messages",
+            content=b"",
+            headers={"Content-Type": "application/json"},
+        )
+    assert resp.status_code == 400
+
+
+# ===================================================================
+# Error response formatting tests
+# ===================================================================
+
+
+def test_openai_error_response_structure() -> None:
+    """openai_error_response returns correct JSON structure."""
+    resp = openai_error_response(400, "Bad request", "invalid_request_error")
+    assert resp.status_code == 400
+    body = resp.body.decode()
+    data = json.loads(body)
+    assert data["error"]["message"] == "Bad request"
+    assert data["error"]["type"] == "invalid_request_error"
+    assert data["error"]["code"] == 400
+
+
+def test_anthropic_error_response_structure() -> None:
+    """anthropic_error_response returns correct JSON structure."""
+    resp = anthropic_error_response(503, "Unavailable", "api_error")
+    assert resp.status_code == 503
+    body = resp.body.decode()
+    data = json.loads(body)
+    assert data["type"] == "error"
+    assert data["error"]["type"] == "api_error"
+    assert data["error"]["message"] == "Unavailable"
+
+
+def test_openai_error_response_default_type() -> None:
+    """openai_error_response defaults to invalid_request_error."""
+    resp = openai_error_response(400, "msg")
+    data = json.loads(resp.body.decode())
+    assert data["error"]["type"] == "invalid_request_error"
+
+
+def test_anthropic_error_response_default_type() -> None:
+    """anthropic_error_response defaults to invalid_request_error."""
+    resp = anthropic_error_response(400, "msg")
+    data = json.loads(resp.body.decode())
+    assert data["error"]["type"] == "invalid_request_error"

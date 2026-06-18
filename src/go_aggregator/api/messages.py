@@ -57,7 +57,7 @@ async def handle_messages(
     payload_obj: object
     try:
         payload_obj = json.loads(body)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, ValueError):
         return anthropic_error_response(
             status_code=400,
             message="Invalid JSON",
@@ -81,6 +81,12 @@ async def handle_messages(
     model_id = model_value
 
     stream_value = payload.get("stream", False)
+    if stream_value is not None and not isinstance(stream_value, bool):
+        return anthropic_error_response(
+            status_code=400,
+            message="Invalid stream value: must be a boolean",
+            error_type="invalid_request_error",
+        )
     is_stream = bool(stream_value)
 
     context = ProxyRequestContext(

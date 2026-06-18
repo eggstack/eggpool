@@ -3,8 +3,8 @@
 Includes a 5-tier cost estimation hierarchy:
 1. Account/model EWMA
 2. Global model EWMA
-3. Model-family moving average
-4. Configured per-model fallback
+3. Configured per-model override
+4. Model-family moving average
 5. Global unknown-request fallback
 
 Optionally uses persisted UsageWindowRepository for actual 5h/7d/30d
@@ -250,7 +250,7 @@ class QuotaEstimator:
     global_model_ewma: dict[str, EWMAEstimate] = field(
         default_factory=dict[str, EWMAEstimate]
     )
-    # Tier 4: configured per-model overrides
+    # Tier 3: configured per-model overrides
     model_overrides: dict[str, tuple[float, float]] = field(
         default_factory=dict[str, tuple[float, float]]
     )
@@ -357,7 +357,16 @@ class QuotaEstimator:
             )
             return max(cost, 1)
 
-        # Tier 3: Model-family moving average
+        # Tier 3: Configured per-model override
+        override = self.model_overrides.get(model_id)
+        if override is not None:
+            input_rate, output_rate = override
+            avg_rate = (input_rate + output_rate) / 2.0
+            cost_per_token = avg_rate
+            cost = int(estimated_tokens * cost_per_token * self.default_safety_factor)
+            return max(cost, 1)
+
+        # Tier 4: Model-family moving average
         family_cost = self._get_family_estimate(model_id)
         if family_cost is not None:
             input_rate, output_rate = family_cost
@@ -366,15 +375,6 @@ class QuotaEstimator:
             # microdollars/token ($/1M tokens = microdollars/token),
             # so we can use it directly as cost_per_token in
             # microdollars/token.
-            cost_per_token = avg_rate
-            cost = int(estimated_tokens * cost_per_token * self.default_safety_factor)
-            return max(cost, 1)
-
-        # Tier 4: Configured per-model override
-        override = self.model_overrides.get(model_id)
-        if override is not None:
-            input_rate, output_rate = override
-            avg_rate = (input_rate + output_rate) / 2.0
             cost_per_token = avg_rate
             cost = int(estimated_tokens * cost_per_token * self.default_safety_factor)
             return max(cost, 1)

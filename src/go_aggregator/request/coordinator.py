@@ -329,7 +329,9 @@ class RequestCoordinator:
         """Atomically select an account, create request/reservation/attempt.
 
         All database writes happen inside a single transaction under the
-        select lock. Nothing is committed until the transaction completes.
+        select lock. Runtime active-count and quota-reservation updates
+        are applied in a post-commit block so a rolled-back transaction
+        never leaves in-memory state out of sync.
         """
         if (
             self._request_repo is None
@@ -338,117 +340,131 @@ class RequestCoordinator:
         ):
             raise DatabaseError("Cannot persist: database repositories unavailable")
 
-        async with self._select_lock, self._db.transaction():
-            # 1. Get eligible account names excluding attempted ones
-            eligible_account_names = self._router.get_eligible_account_names(
-                context.model_id,
-                exclude_accounts=context.attempted_accounts
-                if context.attempted_accounts
-                else None,
-            )
-
-            if not eligible_account_names:
-                raise ModelUnavailableError(
-                    f"No accounts available for model {context.model_id!r}"
+        async with self._select_lock:
+            async with self._db.transaction():
+                # 1. Get eligible account names excluding attempted ones
+                eligible_account_names = self._router.get_eligible_account_names(
+                    context.model_id,
+                    exclude_accounts=context.attempted_accounts
+                    if context.attempted_accounts
+                    else None,
                 )
 
-            # 2. Calculate projected request tokens once
-            estimated_tokens = self._estimate_request_tokens(context)
-
-            # 3. Build per-account estimate map for scoring
-            request_estimates: dict[str, int] = {}
-            if self._quota_estimator is not None:
-                for acct_name in eligible_account_names:
-                    request_estimates[acct_name] = self._quota_estimator.estimate_cost(
-                        acct_name, context.model_id, estimated_tokens
+                if not eligible_account_names:
+                    raise ModelUnavailableError(
+                        f"No accounts available for model {context.model_id!r}"
                     )
 
-            # 4. Select account using projected estimates
-            selected_state = await self._router.select_account(
-                context.model_id,
-                context.request_id,
-                request_estimates=request_estimates,
-                exclude_accounts=context.attempted_accounts,
-            )
-            if selected_state is None:
-                raise ModelUnavailableError(
-                    f"No accounts available for model {context.model_id!r}"
+                # 2. Calculate projected request tokens once
+                estimated_tokens = self._estimate_request_tokens(context)
+
+                # 3. Build per-account estimate map for scoring
+                request_estimates: dict[str, int] = {}
+                if self._quota_estimator is not None:
+                    for acct_name in eligible_account_names:
+                        request_estimates[acct_name] = (
+                            self._quota_estimator.estimate_cost(
+                                acct_name, context.model_id, estimated_tokens
+                            )
+                        )
+
+                # 4. Select account using projected estimates
+                selected_state = await self._router.select_account(
+                    context.model_id,
+                    context.request_id,
+                    request_estimates=request_estimates,
+                    exclude_accounts=context.attempted_accounts,
                 )
+                if selected_state is None:
+                    raise ModelUnavailableError(
+                        f"No accounts available for model {context.model_id!r}"
+                    )
 
-            account_name = selected_state.name
-            api_key = self._registry.get_api_key(account_name)
-            if not api_key or not api_key.strip():
-                raise AuthenticationError(
-                    f"API key not available for account {account_name!r}"
-                )
+                account_name = selected_state.name
+                api_key = self._registry.get_api_key(account_name)
+                if not api_key or not api_key.strip():
+                    raise AuthenticationError(
+                        f"API key not available for account {account_name!r}"
+                    )
 
-            # 5. Resolve account ID
-            account_repo = AccountRepository(self._db)
-            account_id = await account_repo.get_id_by_name(account_name)
-            if account_id is None:
-                raise DatabaseError(f"Account {account_name!r} not found in database")
+                # 5. Resolve account ID
+                account_repo = AccountRepository(self._db)
+                account_id = await account_repo.get_id_by_name(account_name)
+                if account_id is None:
+                    raise DatabaseError(
+                        f"Account {account_name!r} not found in database"
+                    )
 
-            # 6. Create pending request if first attempt
-            if "db_request_id" not in context.client_metadata:
-                db_request_id = await self._request_repo.create_pending(
-                    request_id=context.request_id,
-                    model_id=context.model_id,
-                    protocol=context.protocol,
-                    streamed=context.streaming,
+                # 6. Create pending request if first attempt
+                if "db_request_id" not in context.client_metadata:
+                    db_request_id = await self._request_repo.create_pending(
+                        request_id=context.request_id,
+                        model_id=context.model_id,
+                        protocol=context.protocol,
+                        streamed=context.streaming,
+                        account_id=account_id,
+                        started_at=context.started_at,
+                    )
+                    context.client_metadata["db_request_id"] = db_request_id
+                db_request_id = context.client_metadata["db_request_id"]
+
+                # 7. Use the exact estimate for the selected account
+                estimated_microdollars = request_estimates.get(account_name, 0)
+                if estimated_microdollars == 0 and self._quota_estimator is not None:
+                    estimated_microdollars = self._quota_estimator.estimate_cost(
+                        account_name, context.model_id, estimated_tokens
+                    )
+
+                # 8. Create reservation
+                reservation_id = await self._reservation_repo.create(
+                    request_id=db_request_id,
                     account_id=account_id,
-                    started_at=context.started_at,
-                )
-                context.client_metadata["db_request_id"] = db_request_id
-            db_request_id = context.client_metadata["db_request_id"]
-
-            # 7. Use the exact estimate for the selected account
-            estimated_microdollars = request_estimates.get(account_name, 0)
-            if estimated_microdollars == 0 and self._quota_estimator is not None:
-                estimated_microdollars = self._quota_estimator.estimate_cost(
-                    account_name, context.model_id, estimated_tokens
+                    model_id=context.model_id,
+                    estimated_tokens=estimated_tokens,
+                    estimated_microdollars=estimated_microdollars,
                 )
 
-            # 8. Create reservation
-            reservation_id = await self._reservation_repo.create(
-                request_id=db_request_id,
-                account_id=account_id,
-                model_id=context.model_id,
-                estimated_tokens=estimated_tokens,
-                estimated_microdollars=estimated_microdollars,
-            )
+                # 9. Create attempt row
+                attempt_id = await self._attempt_repo.create(
+                    request_id=db_request_id,
+                    attempt_number=attempt_number,
+                    account_id=account_id,
+                )
 
-            # 9. Create attempt row
-            attempt_id = await self._attempt_repo.create(
-                request_id=db_request_id,
-                attempt_number=attempt_number,
-                account_id=account_id,
-            )
+                # 10. Update request with account and reserved amount
+                await self._request_repo.update_after_selection(
+                    request_id=db_request_id,
+                    account_id=account_id,
+                    reserved_microdollars=estimated_microdollars,
+                )
 
-            # 10. Update request with account and reserved amount
-            await self._request_repo.update_after_selection(
-                request_id=db_request_id,
-                account_id=account_id,
-                reserved_microdollars=estimated_microdollars,
-            )
+                # Record the account under the same select lock so a
+                # concurrent caller observing the same context cannot
+                # race on attempted_accounts before this attempt is
+                # fully persisted and committed.
+                context.attempted_accounts.add(account_name)
+                context.client_metadata["account_name"] = account_name
+
+            # Transaction committed here. All rows are durable.
+            # Apply runtime updates now so they stay consistent with
+            # the persisted state; a rollback above never reaches here.
 
             # 11. Increment runtime active count
             await self._router.increment_active_request_count(account_name)
 
             # 12. Add exact reserved amount to in-memory cache
-            if self._quota_estimator is not None:
-                await self._quota_estimator.add_reservation(
-                    account_name, estimated_microdollars
-                )
+            try:
+                if self._quota_estimator is not None:
+                    await self._quota_estimator.add_reservation(
+                        account_name, estimated_microdollars
+                    )
+            except BaseException:
+                # Compensate: undo the active count increment so
+                # runtime state stays consistent with the durable row.
+                await self._router.decrement_active_request_count(account_name)
+                raise
 
-            # Record the account under the same select lock so a
-            # concurrent caller observing the same context cannot
-            # race on attempted_accounts before this attempt is
-            # fully persisted and committed.
-            context.attempted_accounts.add(account_name)
-            context.client_metadata["account_name"] = account_name
-
-        # Transaction and select lock released here. All rows are
-        # now durable and the attempted set is consistent.
+        # Select lock released here.
 
         return SelectedAttempt(
             proxy_request_id=context.request_id,

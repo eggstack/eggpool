@@ -7,6 +7,7 @@ import time
 import pytest
 
 from go_aggregator.quota.estimation import (
+    MODEL_FAMILY_FALLBACKS,
     AccountQuota,
     ManualOffset,
     QuotaEstimator,
@@ -320,3 +321,110 @@ class TestQuotaFairScorer:
         assert ranked[0].account_name == "account1"
         assert ranked[1].account_name == "account3"
         assert ranked[2].account_name == "account2"
+
+
+class TestEstimateCostTierPriority:
+    """Tests for the 5-tier cost estimation hierarchy in QuotaEstimator."""
+
+    def test_tier3_override_beats_tier4_family_fallback(self) -> None:
+        """Configured per-model override takes precedence over family fallback."""
+        estimator = QuotaEstimator()
+        # Set an override for gpt-4o that differs from the built-in family rate
+        estimator.set_model_override("gpt-4o", input_price=1.0, output_price=2.0)
+
+        cost_override = estimator.estimate_cost("acct", "gpt-4o", 1000)
+
+        # Compute expected cost using the override's average rate
+        avg_rate = (1.0 + 2.0) / 2.0  # 1.5 dollars/1M tokens
+        expected = int(1000 * avg_rate * estimator.default_safety_factor)
+        assert cost_override == max(expected, 1)
+
+        # Verify the family fallback would produce a different (higher) cost
+        family_rate = MODEL_FAMILY_FALLBACKS["gpt-4o"]
+        family_avg = (family_rate[0] + family_rate[1]) / 2.0
+        family_cost = int(1000 * family_avg * estimator.default_safety_factor)
+        assert cost_override != family_cost
+
+    def test_tier4_family_fallback_used_when_no_override(self) -> None:
+        """Family fallback is used when no override is configured."""
+        estimator = QuotaEstimator()
+        cost = estimator.estimate_cost("acct", "gpt-4o", 1000)
+
+        family_rate = MODEL_FAMILY_FALLBACKS["gpt-4o"]
+        avg_rate = (family_rate[0] + family_rate[1]) / 2.0
+        expected = int(1000 * avg_rate * estimator.default_safety_factor)
+        assert cost == max(expected, 1)
+
+    def test_tier5_global_fallback_when_no_match(self) -> None:
+        """Global fallback is used when no override or family match exists."""
+        estimator = QuotaEstimator()
+        cost = estimator.estimate_cost("acct", "unknown-model-xyz", 1000)
+
+        from go_aggregator.quota.estimation import GLOBAL_FALLBACK
+
+        avg_rate = (GLOBAL_FALLBACK[0] + GLOBAL_FALLBACK[1]) / 2.0
+        expected = int(1000 * avg_rate * estimator.default_safety_factor)
+        assert cost == max(expected, 1)
+
+    def test_tier1_account_ewma_used_when_sufficient_samples(self) -> None:
+        """Account/model EWMA (Tier 1) is used when >= 5 samples exist."""
+        estimator = QuotaEstimator()
+        # Record 5 observations to build EWMA
+        for _ in range(5):
+            estimator.record_usage(
+                "acct", tokens=100, cost_microdollars=500, model_id="m"
+            )
+
+        cost = estimator.estimate_cost("acct", "m", 1000)
+
+        # The EWMA estimate should produce a nonzero cost
+        assert cost > 0
+        # Verify it differs from what Tier 2-5 would produce
+        # (EWMA is based on actual observed cost_per_token)
+        ewma = estimator.account_model_ewma["acct"]["m"]
+        assert ewma.sample_count == 5
+        expected_ewma = int(
+            1000 * ewma.estimate_cost_per_token * estimator.default_safety_factor
+        )
+        assert cost == max(expected_ewma, 1)
+
+    def test_tier2_global_ewma_used_when_no_account_ewma(self) -> None:
+        """Global model EWMA (Tier 2) is used when account EWMA is absent."""
+        estimator = QuotaEstimator()
+        # Record usage for a different account to build global EWMA only
+        for _ in range(5):
+            estimator.record_usage(
+                "other-acct", tokens=100, cost_microdollars=500, model_id="m"
+            )
+
+        cost = estimator.estimate_cost("acct", "m", 1000)
+
+        ewma = estimator.global_model_ewma["m"]
+        assert ewma.sample_count == 5
+        expected = int(
+            1000 * ewma.estimate_cost_per_token * estimator.default_safety_factor
+        )
+        assert cost == max(expected, 1)
+
+    def test_family_matching_prefers_longer_names(self) -> None:
+        """Longer/more specific family names match first."""
+        estimator = QuotaEstimator()
+        # "gpt-4o-mini" should match the mini family, not the generic gpt-4 family
+        cost_mini = estimator.estimate_cost("acct", "gpt-4o-mini", 1000)
+
+        mini_rate = MODEL_FAMILY_FALLBACKS["gpt-4o-mini"]
+        generic_rate = MODEL_FAMILY_FALLBACKS["gpt-4"]
+        mini_avg = (mini_rate[0] + mini_rate[1]) / 2.0
+        generic_avg = (generic_rate[0] + generic_rate[1]) / 2.0
+
+        mini_expected = int(1000 * mini_avg * estimator.default_safety_factor)
+        generic_expected = int(1000 * generic_avg * estimator.default_safety_factor)
+
+        assert cost_mini == max(mini_expected, 1)
+        assert cost_mini != max(generic_expected, 1)
+
+    def test_minimum_cost_is_one(self) -> None:
+        """Estimated cost is always at least 1 microdollar."""
+        estimator = QuotaEstimator()
+        cost = estimator.estimate_cost("acct", "unknown", 0)
+        assert cost >= 1
