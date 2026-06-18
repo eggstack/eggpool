@@ -81,7 +81,13 @@ def _parse_iso(value: str) -> datetime:
 
 
 def format_dt(dt: datetime) -> str:
-    """Format a datetime as a SQL-friendly UTC string."""
+    """Format a datetime as a SQL-friendly UTC string.
+
+    Timezone-aware datetimes are converted to UTC before formatting.
+    Naive datetimes are treated as UTC.
+    """
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(UTC)
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
@@ -195,11 +201,18 @@ class StatsService:
 
     async def get_model_stats(
         self, time_range: TimeRange, account_name: str | None = None
-    ) -> list[dict[str, Any]]:
-        """Get per-model aggregates, optionally filtered by account."""
+    ) -> list[dict[str, Any]] | None:
+        """Get per-model aggregates, optionally filtered by account.
+
+        Returns None when an account filter was provided but the account
+        was not found in the database. Callers can use this to distinguish
+        "no results" from "unknown account."
+        """
         account_id: int | None = None
         if account_name is not None and account_name != "":
             account_id = await fetch_account_id(self._db, account_name)
+            if account_id is None:
+                return None
         return await queries.fetch_model_stats(
             self._db,
             time_range.start_str(),
@@ -213,11 +226,17 @@ class StatsService:
         bucket: str = "hour",
         account_name: str | None = None,
         model_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """Get time-bucketed time series data."""
+    ) -> list[dict[str, Any]] | None:
+        """Get time-bucketed time series data.
+
+        Returns None when an account filter was provided but the account
+        was not found in the database.
+        """
         account_id: int | None = None
         if account_name is not None and account_name != "":
             account_id = await fetch_account_id(self._db, account_name)
+            if account_id is None:
+                return None
         model_filter: str | None = model_id if model_id else None
         return await fetch_timeseries(
             self._db,

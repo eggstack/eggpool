@@ -1241,3 +1241,70 @@ async def test_no_secrets_in_database(
             assert "xyz789" not in row_str, (
                 f"Secret content found in {table}: {row_str}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Bug 2: Non-streaming transport error does not mask retry/failover
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_connect_error_before_response_allows_retry(
+    coordinator: RequestCoordinator,
+    db: Database,
+) -> None:
+    """ConnectError before response should not mask _RetryableUpstreamError.
+
+    The coordinator should not crash when the upstream raises ConnectError
+    before returning a response. The attempt should be finalized, the
+    reservation released, and the request should not be stuck pending.
+    """
+    request_body = json.dumps(
+        {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hi"}],
+        }
+    ).encode()
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("Connection refused")
+
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(side_effect=_handler)
+
+        context = ProxyRequestContext(
+            request_id="test-connect-error",
+            protocol="openai",
+            model_id="gpt-4",
+            streaming=False,
+            original_body=request_body,
+            incoming_headers={"content-type": "application/json"},
+        )
+        response = await coordinator.execute(context)
+
+    # The coordinator should return a non-200 (exhausted or 502), not crash
+    assert response.status_code >= 400
+
+    # Request should have been finalized (not stuck pending)
+    req_row = await db.fetch_one(
+        "SELECT status FROM requests WHERE proxy_request_id = ?",
+        ("test-connect-error",),
+    )
+    assert req_row is not None
+    assert req_row["status"] in ("completed", "error")
+
+    # The attempt should have been finalized with an error class
+    attempt_rows = await db.fetch_all(
+        "SELECT * FROM request_attempts WHERE request_id = ?",
+        (context.client_metadata.get("db_request_id", "1"),),
+    )
+    assert len(attempt_rows) >= 1
+    assert attempt_rows[0]["error_class"] is not None
+
+    # Reservation should have been released
+    resv_rows = await db.fetch_all(
+        "SELECT * FROM reservations WHERE request_id = ?",
+        (context.client_metadata.get("db_request_id", "1"),),
+    )
+    assert len(resv_rows) == 1
+    assert resv_rows[0]["status"] == "released"

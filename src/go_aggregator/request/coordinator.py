@@ -450,11 +450,13 @@ class RequestCoordinator:
             # Apply runtime updates now so they stay consistent with
             # the persisted state; a rollback above never reaches here.
 
-            # 11. Increment runtime active count
-            await self._router.increment_active_request_count(account_name)
-
-            # 12. Add exact reserved amount to in-memory cache
+            active_count_increased = False
             try:
+                # 11. Increment runtime active count
+                await self._router.increment_active_request_count(account_name)
+                active_count_increased = True
+
+                # 12. Add exact reserved amount to in-memory cache
                 if self._quota_estimator is not None:
                     await self._quota_estimator.add_reservation(
                         account_name, estimated_microdollars
@@ -462,7 +464,21 @@ class RequestCoordinator:
             except BaseException:
                 # Compensate: undo the active count increment so
                 # runtime state stays consistent with the durable row.
-                await self._router.decrement_active_request_count(account_name)
+                if active_count_increased:
+                    await self._router.decrement_active_request_count(account_name)
+                # Finalize the just-created attempt as cancelled so
+                # normal finalization has no stale durable IDs.
+                await asyncio.shield(
+                    self._attempt_finalizer.finalize_failed_attempt(
+                        attempt_id=attempt_id,
+                        reservation_id=reservation_id,
+                        data=AttemptFinalizationData(
+                            status_code=None,
+                            error_class="PostCommitInterrupted",
+                            release_reason="post_commit_interrupted",
+                        ),
+                    )
+                )
                 raise
 
         # Select lock released here.
@@ -518,6 +534,7 @@ class RequestCoordinator:
         )
         upstream_path = self._get_upstream_path(context.protocol)
 
+        response: httpx.Response | None = None
         try:
             response = await self._client.request(
                 "POST",
@@ -623,7 +640,8 @@ class RequestCoordinator:
                 attempt_count=attempt_num,
             )
         finally:
-            await response.aclose()
+            if response is not None:  # type: ignore[unnecessary-comparison]
+                await response.aclose()
 
     async def _execute_streaming(
         self,
@@ -735,7 +753,7 @@ class RequestCoordinator:
         assert response is not None
 
         # Build the response headers
-        resp_headers = filter_response_headers(response.headers, streaming=True)
+        resp_headers = filter_response_headers(response.headers)
         resp_headers.append(("x-proxy-request-id", context.request_id))
         resp_headers.append(("x-proxy-attempt-count", str(attempt_num)))
 

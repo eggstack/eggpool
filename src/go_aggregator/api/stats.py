@@ -55,6 +55,11 @@ async def handle_model_stats(
     time_range = _resolve(request, period)
     stats = request.app.state.stats
     models = await stats.get_model_stats(time_range, account_name=account or None)
+    if models is None:
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"Account {account!r} not found"},
+        )
     return JSONResponse(
         content={
             "period": time_range.label,
@@ -82,6 +87,11 @@ async def handle_timeseries(
         account_name=account or None,
         model_id=model or None,
     )
+    if series is None:
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"Account {account!r} not found"},
+        )
     return JSONResponse(
         content={
             "period": time_range.label,

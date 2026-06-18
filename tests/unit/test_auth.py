@@ -132,6 +132,29 @@ async def test_auth_fail_closed_at_runtime() -> None:
     assert "Authentication unavailable" in response.json()["detail"]
 
 
+@pytest.mark.asyncio()
+async def test_auth_whitespace_key_rejected_at_runtime() -> None:
+    """Whitespace-only env var at runtime should return 401."""
+    os.environ["TEST_WHITESPACE_RUNTIME"] = "   "
+    config = AppConfig()
+    config.server.api_key_env = "TEST_WHITESPACE_RUNTIME"
+    app = FastAPI()
+    app.state.config = config
+
+    @app.get("/protected")
+    async def protected(request: Request) -> dict[str, str]:
+        await require_auth(request)
+        return {"status": "ok"}
+
+    client = TestClient(app)
+    response = client.get(
+        "/protected",
+        headers={"Authorization": "Bearer "},
+    )
+    assert response.status_code == 401
+    del os.environ["TEST_WHITESPACE_RUNTIME"]
+
+
 class TestRequireAuthAtStartup:
     """Tests for require_auth_at_startup."""
 
@@ -163,3 +186,21 @@ class TestRequireAuthAtStartup:
         os.environ.pop("MISSING_KEY_MSG", None)
         with pytest.raises(RuntimeError, match=r'api_key_env = ""'):
             require_auth_at_startup("MISSING_KEY_MSG")
+
+    def test_whitespace_only_key_rejected(self) -> None:
+        """Whitespace-only env var should be rejected at startup."""
+        os.environ["TEST_WHITESPACE_KEY"] = "   "
+        try:
+            with pytest.raises(RuntimeError, match="not set"):
+                require_auth_at_startup("TEST_WHITESPACE_KEY")
+        finally:
+            del os.environ["TEST_WHITESPACE_KEY"]
+
+    def test_newlines_only_key_rejected(self) -> None:
+        """Newline-only env var should be rejected at startup."""
+        os.environ["TEST_NEWLINE_KEY"] = "\n\n"
+        try:
+            with pytest.raises(RuntimeError, match="not set"):
+                require_auth_at_startup("TEST_NEWLINE_KEY")
+        finally:
+            del os.environ["TEST_NEWLINE_KEY"]

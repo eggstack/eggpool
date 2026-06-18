@@ -41,7 +41,7 @@ def require_auth_at_startup(api_key_env: str | None) -> str | None:
     if not api_key_env:
         return None
     expected = os.environ.get(api_key_env)
-    if not expected:
+    if not expected or not expected.strip():
         raise RuntimeError(
             f"Authentication enabled but API key env var {api_key_env!r} is not set. "
             f"Set the environment variable or disable authentication by setting "
@@ -69,5 +69,11 @@ async def require_auth(request: Request) -> None:
             detail="Authentication unavailable: API key not configured",
         )
 
-    if not verify_api_key(request, expected.strip()):
+    stripped = expected.strip()
+    if not stripped:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication unavailable: API key not configured",
+        )
+    if not verify_api_key(request, stripped):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")

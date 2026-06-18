@@ -181,3 +181,30 @@ def test_build_upstream_auth_headers_anthropic_protocol() -> None:
         protocol="anthropic", upstream_api_key="anthropic-key"
     )
     assert headers == {"Authorization": "Bearer anthropic-key"}
+
+
+def test_filter_response_headers_strips_content_encoding() -> None:
+    """Content-Encoding must be removed because HTTPX decodes the body."""
+
+    class MockHeaders:
+        def __init__(self, h: list[tuple[bytes, bytes]]) -> None:
+            self._raw = h
+
+        @property
+        def raw(self) -> list[tuple[bytes, bytes]]:
+            return self._raw
+
+    headers = MockHeaders(
+        [
+            (b"Content-Type", b"application/json"),
+            (b"Content-Encoding", b"gzip"),
+            (b"Content-Length", b"1234"),
+            (b"X-Custom", b"value"),
+        ]
+    )
+    result = filter_response_headers(headers)  # type: ignore[arg-type]
+    result_dict = {k.lower(): v for k, v in result}
+    assert "content-type" in result_dict
+    assert "content-encoding" not in result_dict
+    assert "content-length" not in result_dict
+    assert "x-custom" in result_dict

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import email.utils
+import time
 from dataclasses import dataclass
 from enum import Enum
 
@@ -180,10 +182,20 @@ class RetryClassifier:
         return any(signal in text for signal in model_signals)
 
     def _parse_retry_after(self, value: str | None) -> float | None:
-        """Parse Retry-After header value."""
+        """Parse Retry-After header value.
+
+        Supports both numeric seconds and HTTP-date formats per RFC 7231.
+        """
         if value is None:
             return None
+        # Try numeric seconds first
         try:
-            return float(value)
+            return max(0.0, float(value))
         except ValueError:
+            pass
+        # Try HTTP-date (e.g. "Wed, 18 Jun 2026 21:00:00 GMT")
+        try:
+            parsed = email.utils.parsedate_to_datetime(value)
+            return max(0.0, parsed.timestamp() - time.time())
+        except (ValueError, TypeError):
             return None

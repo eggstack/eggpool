@@ -84,7 +84,7 @@ async def handle_models(
     models = await stats.get_model_stats(time_range, account_name=account or None)
     return HTMLResponse(
         content=render_models(
-            models,
+            models if models is not None else [],
             account_filter=account or "",
             period=time_range.label,
         )
@@ -125,7 +125,11 @@ async def handle_timeseries(
         model_id=model or None,
     )
     return HTMLResponse(
-        content=render_timeseries(series, bucket=bucket, period=time_range.label)
+        content=render_timeseries(
+            series if series is not None else [],
+            bucket=bucket,
+            period=time_range.label,
+        )
     )
 
 

@@ -107,3 +107,54 @@ class TestOtherStatuses:
         result = classifier.classify(301)
         assert result.category == RetryCategory.NEVER
         assert not result.is_retryable
+
+
+class TestRetryAfterParsing:
+    """Retry-After header parsing for numeric and HTTP-date values."""
+
+    def test_numeric_seconds(self, classifier: RetryClassifier) -> None:
+        result = classifier.classify(429, headers={"retry-after": "30"})
+        assert result.retry_after == 30.0
+
+    def test_numeric_zero(self, classifier: RetryClassifier) -> None:
+        result = classifier.classify(429, headers={"retry-after": "0"})
+        assert result.retry_after == 0.0
+
+    def test_http_date_future(self, classifier: RetryClassifier) -> None:
+        import time
+
+        future_ts = time.time() + 120
+        import email.utils
+
+        date_str = email.utils.formatdate(future_ts, usegmt=True)
+        result = classifier.classify(429, headers={"retry-after": date_str})
+        assert result.retry_after is not None
+        assert 119.0 < result.retry_after < 121.0
+
+    def test_http_date_past(self, classifier: RetryClassifier) -> None:
+        import email.utils
+        import time
+
+        past_ts = time.time() - 60
+        date_str = email.utils.formatdate(past_ts, usegmt=True)
+        result = classifier.classify(429, headers={"retry-after": date_str})
+        assert result.retry_after is not None
+        assert result.retry_after == 0.0
+
+    def test_invalid_value_returns_none(self, classifier: RetryClassifier) -> None:
+        result = classifier.classify(429, headers={"retry-after": "not-a-date"})
+        assert result.retry_after is None
+
+    def test_none_value_returns_none(self, classifier: RetryClassifier) -> None:
+        result = classifier.classify(429)
+        assert result.retry_after is None
+
+    def test_503_with_http_date(self, classifier: RetryClassifier) -> None:
+        import email.utils
+        import time
+
+        future_ts = time.time() + 60
+        date_str = email.utils.formatdate(future_ts, usegmt=True)
+        result = classifier.classify(503, headers={"retry-after": date_str})
+        assert result.retry_after is not None
+        assert 59.0 < result.retry_after < 61.0

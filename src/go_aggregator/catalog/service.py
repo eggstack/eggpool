@@ -34,6 +34,9 @@ def _ts_to_unix(value: object) -> float:
 
     Returns 0.0 for None or unparseable values so cache loads never
     fail on a malformed timestamp.
+
+    Naive datetime strings are treated as UTC (matching SQLite's
+    CURRENT_TIMESTAMP convention).
     """
     if value is None:
         return 0.0
@@ -43,10 +46,15 @@ def _ts_to_unix(value: object) -> float:
     if not text:
         return 0.0
     try:
-        return _dt.datetime.fromisoformat(text).timestamp()
+        dt = _dt.datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_dt.UTC)
+        return dt.timestamp()
     except ValueError:
         try:
-            return _dt.datetime.strptime(text, "%Y-%m-%d %H:%M:%S").timestamp()
+            dt = _dt.datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+            dt = dt.replace(tzinfo=_dt.UTC)
+            return dt.timestamp()
         except ValueError:
             return 0.0
 

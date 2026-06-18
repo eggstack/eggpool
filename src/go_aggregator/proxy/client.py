@@ -83,7 +83,9 @@ def filter_response_headers(
     """Filter response headers for downstream.
 
     - Remove hop-by-hop headers
-    - Remove content-length for streaming (chunked transfer)
+    - Always remove content-encoding (HTTPX decodes the body)
+    - Always remove content-length (Starlette recomputes for non-streaming;
+      chunked transfer for streaming)
     - Preserve useful headers
     - Preserve duplicate headers (e.g. multiple Set-Cookie) as separate entries
     """
@@ -92,7 +94,12 @@ def filter_response_headers(
         lower_name = raw_name.decode("latin-1").lower()
         if lower_name in HOP_BY_HOP_HEADERS:
             continue
-        if streaming and lower_name == "content-length":
+        if lower_name in ("content-encoding", "content-length"):
+            # HTTPX decodes compressed bodies for .content and
+            # .aiter_bytes(); forwarding the original encoding header
+            # would mislabel the decoded bytes for downstream clients.
+            # Starlette computes Content-Length for non-streaming
+            # responses; streaming uses chunked transfer.
             continue
         filtered.append((raw_name.decode("latin-1"), raw_value.decode("latin-1")))
     return filtered
