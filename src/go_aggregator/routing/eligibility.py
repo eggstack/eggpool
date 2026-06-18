@@ -27,6 +27,7 @@ def get_eligible_accounts(
     catalog: ModelCatalogCache,
     health_manager: HealthManager | None = None,
     stale_after_s: float | None = None,
+    provider_id: str | None = None,
 ) -> list[AccountRuntimeState]:
     """Get accounts eligible for routing a specific model.
 
@@ -38,11 +39,18 @@ def get_eligible_accounts(
     - circuit breaker allows requests (if health_manager provided)
     - supports the requested model (with recent catalog refresh when
       stale_after_s is provided)
+    - belongs to the specified provider (if provider_id is given)
     """
     eligible: list[AccountRuntimeState] = []
     for state in all_states:
         if not state.is_eligible():
             continue
+
+        # Filter by provider if a specific provider was requested
+        if provider_id is not None:
+            account_provider = catalog.get_provider_for_account(state.name)
+            if account_provider != provider_id:
+                continue
 
         # Check circuit breaker via health manager
         if health_manager is not None and not health_manager.is_model_healthy(

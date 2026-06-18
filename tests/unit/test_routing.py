@@ -18,7 +18,9 @@ from go_aggregator.routing.router import Router
 
 def test_eligible_accounts_basic() -> None:
     cache = ModelCatalogCache()
-    cache.update_from_account("acct1", [{"model_id": "gpt-4", "protocol": "openai"}])
+    cache.update_from_account(
+        "acct1", "opencode-go", [{"model_id": "gpt-4", "protocol": "openai"}]
+    )
     states = [
         AccountRuntimeState(name="acct1", enabled=True),
         AccountRuntimeState(name="acct2", enabled=False),
@@ -30,7 +32,9 @@ def test_eligible_accounts_basic() -> None:
 
 def test_eligible_accounts_excludes_cooldown() -> None:
     cache = ModelCatalogCache()
-    cache.update_from_account("acct1", [{"model_id": "gpt-4", "protocol": "openai"}])
+    cache.update_from_account(
+        "acct1", "opencode-go", [{"model_id": "gpt-4", "protocol": "openai"}]
+    )
     states = [
         AccountRuntimeState(
             name="acct1",
@@ -44,7 +48,9 @@ def test_eligible_accounts_excludes_cooldown() -> None:
 
 def test_eligible_accounts_model_not_supported() -> None:
     cache = ModelCatalogCache()
-    cache.update_from_account("acct1", [{"model_id": "gpt-4", "protocol": "openai"}])
+    cache.update_from_account(
+        "acct1", "opencode-go", [{"model_id": "gpt-4", "protocol": "openai"}]
+    )
     states = [AccountRuntimeState(name="acct1", enabled=True)]
     eligible = get_eligible_accounts(states, "claude-3", cache)
     assert len(eligible) == 0
@@ -64,7 +70,7 @@ async def test_router_selects_account() -> None:
         registry = AccountRegistry(config)
         cache = ModelCatalogCache()
         cache.update_from_account(
-            "acct1", [{"model_id": "gpt-4", "protocol": "openai"}]
+            "acct1", "opencode-go", [{"model_id": "gpt-4", "protocol": "openai"}]
         )
 
         # Create a mock catalog service with the cache
@@ -122,8 +128,12 @@ async def test_router_no_eligible_account() -> None:
 def _make_mock_catalog(model_id: str = "gpt-4") -> ModelCatalogCache:
     """Create a mock catalog cache with a model."""
     cache = ModelCatalogCache()
-    cache.update_from_account("acct1", [{"model_id": model_id, "protocol": "openai"}])
-    cache.update_from_account("acct2", [{"model_id": model_id, "protocol": "openai"}])
+    cache.update_from_account(
+        "acct1", "opencode-go", [{"model_id": model_id, "protocol": "openai"}]
+    )
+    cache.update_from_account(
+        "acct2", "opencode-go", [{"model_id": model_id, "protocol": "openai"}]
+    )
     return cache
 
 
@@ -454,7 +464,7 @@ async def test_active_request_count_increments_and_returns_to_zero() -> None:
         registry = AccountRegistry(config)
         cache = ModelCatalogCache()
         cache.update_from_account(
-            "acct1", [{"model_id": "gpt-4", "protocol": "openai"}]
+            "acct1", "opencode-go", [{"model_id": "gpt-4", "protocol": "openai"}]
         )
 
         class MockCatalog:

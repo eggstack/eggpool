@@ -111,6 +111,7 @@ class TestFetchSummary:
         assert result["total_requests"] == 0
         assert result["error_rate"] == 0.0
         assert result["total_cost_microdollars"] == 0
+        assert "total_providers" in result
 
     @pytest.mark.asyncio()
     async def test_summary_aggregates(self, seeded_db: Database) -> None:
@@ -124,6 +125,7 @@ class TestFetchSummary:
         assert result["total_output_tokens"] == 3 * 200 + 2 * 75
         assert result["total_cost_microdollars"] == 3 * 1_000_000
         assert result["error_rate"] == pytest.approx(0.4)
+        assert result["total_providers"] >= 1
 
 
 class TestFetchAccountStats:
@@ -137,6 +139,22 @@ class TestFetchAccountStats:
         names = {r["account_name"] for r in rows}
         assert "acct_a" in names
         assert "acct_b" in names
+
+    @pytest.mark.asyncio()
+    async def test_returns_provider_id(self, seeded_db: Database) -> None:
+        rows = await queries.fetch_account_stats(
+            seeded_db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+        for row in rows:
+            assert "provider_id" in row
+
+    @pytest.mark.asyncio()
+    async def test_provider_id_value(self, seeded_db: Database) -> None:
+        rows = await queries.fetch_account_stats(
+            seeded_db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+        for row in rows:
+            assert row["provider_id"] == "opencode-go"
 
     @pytest.mark.asyncio()
     async def test_aggregates_per_account(self, seeded_db: Database) -> None:

@@ -14,9 +14,12 @@ async def fetch_models_for_account(
     client: httpx.AsyncClient,
     api_key: str,
     account_name: str,
+    models_method: str = "GET",
+    models_path: str = "/models",
 ) -> dict[str, Any]:
     """Fetch the model list from an upstream account.
 
+    Supports both GET and POST methods for different providers.
     Returns the raw JSON response or an empty dict on failure.
     """
     headers = {
@@ -24,7 +27,10 @@ async def fetch_models_for_account(
         "Accept": "application/json",
     }
     try:
-        response = await client.get("/models", headers=headers)
+        if models_method.upper() == "POST":
+            response = await client.post(models_path, headers=headers, json={})
+        else:
+            response = await client.get(models_path, headers=headers)
         response.raise_for_status()
         return response.json()
     except httpx.HTTPStatusError as exc:

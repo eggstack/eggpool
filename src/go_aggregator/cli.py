@@ -8,7 +8,6 @@ import sys
 from typing import NoReturn
 
 import click
-import httpx
 
 from go_aggregator.accounts.registry import account_config_rows
 from go_aggregator.auth import require_auth_at_startup
@@ -18,6 +17,7 @@ from go_aggregator.db.repositories import AccountRepository
 from go_aggregator.errors import AggregatorError
 from go_aggregator.logging import configure_logging
 from go_aggregator.models.config import AppConfig
+from go_aggregator.providers.client_pool import ProviderClientPool
 
 
 @click.group()
@@ -95,7 +95,7 @@ def check_config(ctx: click.Context) -> None:
 
     click.echo(f"Configuration loaded successfully from {config_path}")
     click.echo(f"  Server: {config.server.host}:{config.server.port}")
-    click.echo(f"  Accounts: {len(config.accounts)}")
+    click.echo(f"  Accounts: {len(config.all_accounts())}")
     click.echo(f"  Database: {config.database.path}")
 
 
@@ -175,27 +175,14 @@ def models_refresh(ctx: click.Context) -> None:
             await account_repo.sync_from_config(account_config_rows(config), db)
 
             registry = AccountRegistry(config)
-            client = httpx.AsyncClient(
-                base_url=config.upstream.base_url,
-                timeout=httpx.Timeout(
-                    connect=config.upstream.connect_timeout_s,
-                    read=config.upstream.read_timeout_s,
-                    write=config.upstream.write_timeout_s,
-                    pool=config.upstream.connect_timeout_s,
-                ),
-                limits=httpx.Limits(
-                    max_connections=config.upstream.max_connections,
-                    max_keepalive_connections=config.upstream.max_keepalive,
-                    keepalive_expiry=config.upstream.keepalive_timeout_s,
-                ),
-            )
+            client_pool = ProviderClientPool.from_config(config.providers)
             try:
-                catalog = CatalogService(config, registry, db, client)
+                catalog = CatalogService(config, registry, db, client_pool)
                 await catalog.refresh()
                 count = catalog.cache.model_count
                 click.echo(f"Refreshed catalog: {count} models found")
             finally:
-                await client.aclose()
+                await client_pool.close()
         finally:
             await db.disconnect()
 
@@ -223,19 +210,29 @@ def accounts_status(ctx: click.Context) -> None:
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)
 
-    if not config.accounts:
+    if not config.all_accounts():
         click.echo("No accounts configured.")
         return
 
-    for acct in config.accounts:
+    for acct in config.all_accounts():
+        provider_id = _get_provider_for_account(config, acct.name)
         env_set = "yes" if os.environ.get(acct.api_key_env) else "no"
         click.echo(
-            f"  {acct.name}: enabled={acct.enabled}, "
+            f"  {acct.name}: provider={provider_id}, enabled={acct.enabled}, "
             f"weight={acct.weight}, "
             f"api_key_env={acct.api_key_env} (set={env_set})"
         )
 
-    click.echo(f"\nTotal accounts: {len(config.accounts)}")
+    click.echo(f"\nTotal accounts: {len(config.all_accounts())}")
+
+
+def _get_provider_for_account(config: AppConfig, account_name: str) -> str:
+    """Return the provider ID for an account."""
+    for provider_id, provider_cfg in config.providers.items():
+        for acct in provider_cfg.accounts:
+            if acct.name == account_name:
+                return provider_id
+    return "unknown"
 
 
 @cli.group("db")

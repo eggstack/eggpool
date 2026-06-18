@@ -34,6 +34,7 @@ from go_aggregator.health.health_manager import (
     FailureCategory,
     classify_failure_category,
 )
+from go_aggregator.providers.client_pool import ProviderClientPool
 from go_aggregator.proxy.client import filter_request_headers, filter_response_headers
 from go_aggregator.proxy.sse_observer import IncrementalSSEObserver
 from go_aggregator.proxy.usage import StreamUsageResult
@@ -95,6 +96,7 @@ class ProxyRequestContext:
     started_at: float = field(default_factory=time.time)
     client_metadata: dict[str, Any] = field(default_factory=dict[str, Any])
     attempted_accounts: set[str] = field(default_factory=set[str])
+    provider_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -152,7 +154,7 @@ class RequestCoordinator:
         catalog: CatalogService,
         router: Router,
         db: Database,
-        httpx_client: httpx.AsyncClient,
+        client_pool: ProviderClientPool | httpx.AsyncClient,
         request_repo: RequestRepository | None = None,
         reservation_repo: ReservationRepository | None = None,
         attempt_repo: AttemptRepository | None = None,
@@ -168,7 +170,17 @@ class RequestCoordinator:
         self._catalog = catalog
         self._router = router
         self._db = db
-        self._client = httpx_client
+        if isinstance(client_pool, ProviderClientPool):
+            self._client_pool: ProviderClientPool | None = client_pool
+            if "opencode-go" in client_pool.providers:
+                self._client: httpx.AsyncClient | None = client_pool.get_client(
+                    "opencode-go"
+                )
+            else:
+                self._client = None
+        else:
+            self._client_pool = None
+            self._client = client_pool
         self._request_repo = request_repo
         self._reservation_repo = reservation_repo
         self._attempt_repo = attempt_repo
@@ -203,6 +215,12 @@ class RequestCoordinator:
             health_manager=health_manager,
             persist_error_detail=persist_error_detail,
         )
+
+    def _get_client(self) -> httpx.AsyncClient:
+        """Return the HTTP client, raising if unavailable."""
+        if self._client is None:
+            raise UpstreamError("No HTTP client available for upstream requests")
+        return self._client
 
     async def execute(self, context: ProxyRequestContext) -> PreparedProxyResponse:
         """Execute a request through the full lifecycle.
@@ -378,6 +396,7 @@ class RequestCoordinator:
                     exclude_accounts=context.attempted_accounts
                     if context.attempted_accounts
                     else None,
+                    provider_id=context.provider_id,
                 )
 
                 if not eligible_account_names:
@@ -412,6 +431,7 @@ class RequestCoordinator:
                         context.request_id,
                         request_estimates=request_estimates,
                         exclude_accounts=exclude if exclude else None,
+                        provider_id=context.provider_id,
                     )
                     if selected_state is None:
                         break
@@ -592,13 +612,14 @@ class RequestCoordinator:
 
         response: httpx.Response | None = None
         try:
-            upstream_request = self._client.build_request(
+            client = self._get_client()
+            upstream_request = client.build_request(
                 "POST",
                 upstream_path,
                 headers=headers,
                 content=context.original_body,
             )
-            response = await self._client.send(upstream_request, stream=True)
+            response = await client.send(upstream_request, stream=True)
             # Headers available immediately after send(); capture
             # first-byte time before reading the body.
             first_byte_ms = int((time.time() - context.started_at) * 1000)
@@ -754,7 +775,8 @@ class RequestCoordinator:
                         # leave the body unchanged and let upstream reject it.
                         pass
 
-        request = self._client.build_request(
+        client = self._get_client()
+        request = client.build_request(
             "POST",
             upstream_path,
             headers=headers,
@@ -765,7 +787,7 @@ class RequestCoordinator:
         generator_created = False
         try:
             try:
-                response = await self._client.send(request, stream=True)
+                response = await client.send(request, stream=True)
             except httpx.ConnectError as err:
                 raise _RetryableUpstreamError(
                     f"Connection failed: {err}",

@@ -39,6 +39,7 @@ class AccountRepository:
 
         for acct in config_accounts:
             name = str(acct["name"])
+            provider_id = str(acct.get("provider_id", "opencode-go"))
             configured_names.add(name)
             row = await db.fetch_one(
                 "SELECT id FROM accounts WHERE name = ?",
@@ -47,24 +48,27 @@ class AccountRepository:
             if row is not None:
                 await db.execute_write(
                     "UPDATE accounts SET api_key_env = ?, enabled = ?, "
-                    "weight = ? WHERE name = ?",
+                    "weight = ?, provider_id = ? WHERE name = ?",
                     (
                         str(acct["api_key_env"]),
                         int(acct.get("enabled", True)),
                         float(acct.get("weight", 1.0)),
+                        provider_id,
                         name,
                     ),
                 )
                 name_to_id[name] = int(row["id"])
             else:
                 last_id = await db.execute_insert(
-                    "INSERT INTO accounts (name, api_key_env, enabled, weight) "
-                    "VALUES (?, ?, ?, ?)",
+                    "INSERT INTO accounts "
+                    "(name, api_key_env, enabled, weight, provider_id) "
+                    "VALUES (?, ?, ?, ?, ?)",
                     (
                         name,
                         str(acct["api_key_env"]),
                         int(acct.get("enabled", True)),
                         float(acct.get("weight", 1.0)),
+                        provider_id,
                     ),
                 )
                 name_to_id[name] = last_id

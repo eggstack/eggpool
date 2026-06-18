@@ -9,6 +9,18 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def parse_model_id(model_id: str) -> tuple[str, str | None]:
+    """Parse a model ID that may contain a provider suffix.
+
+    Returns (base_model_id, provider_id) where provider_id is None
+    when no suffix is present.
+    """
+    if "/" in model_id:
+        base, provider = model_id.rsplit("/", 1)
+        return base, provider
+    return model_id, None
+
+
 class ModelCatalogCache:
     """In-memory cache of the model catalog."""
 
@@ -17,6 +29,8 @@ class ModelCatalogCache:
         self._models: dict[str, dict[str, Any]] = {}
         # model_id -> set of account names that support it
         self._account_support: dict[str, set[str]] = {}
+        # account_name -> provider_id
+        self._account_providers: dict[str, str] = {}
         self._last_refresh: float = 0.0
         # Per-account last successful refresh timestamp
         self._account_last_refresh: dict[str, float] = {}
@@ -24,9 +38,11 @@ class ModelCatalogCache:
     def update_from_account(
         self,
         account_name: str,
+        provider_id: str,
         models: list[dict[str, Any]],
     ) -> None:
         """Update cache with models from a specific account."""
+        self._account_providers[account_name] = provider_id
         now = time.time()
         # A refresh response is authoritative for this account. Clear
         # prior support first so models withdrawn upstream stop being
@@ -114,6 +130,71 @@ class ModelCatalogCache:
                 result.append(model_info_copy)
 
         return sorted(result, key=lambda m: m["model_id"])
+
+    def get_provider_suffixed_models(
+        self,
+        expose_mode: str,
+        eligible_account_names: set[str],
+    ) -> list[dict[str, Any]]:
+        """Get models with provider-suffixed IDs for client exposure.
+
+        For each (model_id, provider_id) pair where at least one account
+        from that provider supports the model, generate a client-facing
+        model ID like 'model-id/provider-id'.
+        """
+        # Build provider -> eligible accounts mapping
+        provider_accounts: dict[str, set[str]] = {}
+        for account_name in eligible_account_names:
+            pid = self._account_providers.get(account_name)
+            if pid:
+                provider_accounts.setdefault(pid, set()).add(account_name)
+
+        result: list[dict[str, Any]] = []
+        for model_id, model_info in self._models.items():
+            if not model_info.get("protocol"):
+                continue
+
+            accounts_supporting = self._account_support.get(model_id, set())
+
+            # Group supporting accounts by provider
+            provider_support: dict[str, set[str]] = {}
+            for acct in accounts_supporting:
+                pid = self._account_providers.get(acct)
+                if pid:
+                    provider_support.setdefault(pid, set()).add(acct)
+
+            for pid, eligible_in_provider in provider_accounts.items():
+                supporting_in_provider = provider_support.get(pid, set())
+                visible = supporting_in_provider & eligible_in_provider
+
+                should_include = (
+                    (expose_mode == "union" and visible)
+                    or (
+                        expose_mode == "intersection"
+                        and eligible_in_provider
+                        and visible == eligible_in_provider
+                    )
+                    or (expose_mode == "healthy_union" and visible)
+                )
+
+                if should_include:
+                    suffixed_id = f"{model_id}/{pid}"
+                    model_copy = dict(model_info)
+                    model_copy["model_id"] = suffixed_id
+                    model_copy["base_model_id"] = model_id
+                    model_copy["provider_id"] = pid
+                    model_copy["available_accounts"] = sorted(visible)
+                    result.append(model_copy)
+
+        return sorted(result, key=lambda m: m["model_id"])
+
+    def set_account_provider(self, account_name: str, provider_id: str) -> None:
+        """Record which provider an account belongs to."""
+        self._account_providers[account_name] = provider_id
+
+    def get_provider_for_account(self, account_name: str) -> str | None:
+        """Get the provider ID for an account."""
+        return self._account_providers.get(account_name)
 
     def get_model(self, model_id: str) -> dict[str, Any] | None:
         """Get a specific model from the cache."""

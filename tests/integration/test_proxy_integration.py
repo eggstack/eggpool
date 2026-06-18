@@ -130,7 +130,7 @@ async def app(config: AppConfig) -> AsyncGenerator[FastAPI]:
         catalog=catalog,
         router=router,
         db=db,
-        httpx_client=httpx_client,
+        client_pool=httpx_client,
         request_repo=request_repo,
         reservation_repo=reservation_repo,
         attempt_repo=attempt_repo,

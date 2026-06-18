@@ -285,15 +285,15 @@ def test_openai_extractor_handles_none_usage() -> None:
 
 def test_model_catalog_cache_empty_update() -> None:
     cache = ModelCatalogCache()
-    cache.update_from_account("account-a", [])
+    cache.update_from_account("account-a", "opencode-go", [])
     assert cache.model_count == 0
 
 
 def test_model_catalog_cache_duplicate_model_ids() -> None:
     cache = ModelCatalogCache()
     models = [{"model_id": "gpt-4", "display_name": "GPT-4"}]
-    cache.update_from_account("account-a", models)
-    cache.update_from_account("account-b", models)
+    cache.update_from_account("account-a", "opencode-go", models)
+    cache.update_from_account("account-b", "opencode-go", models)
     assert cache.model_count == 1
     accounts = cache.get_supporting_accounts("gpt-4")
     assert "account-a" in accounts

@@ -12,6 +12,7 @@ from fastapi.responses import Response, StreamingResponse
 
 from go_aggregator.api.errors import anthropic_error_response
 from go_aggregator.auth import require_auth
+from go_aggregator.catalog.cache import parse_model_id
 from go_aggregator.catalog.protocols import ProtocolMismatchError
 from go_aggregator.errors import (
     CatalogUnavailableError,
@@ -80,6 +81,9 @@ async def handle_messages(
         )
     model_id = model_value
 
+    # Parse provider-suffixed model IDs (e.g. "claude-3/anthropic-ai")
+    base_model_id, provider_id = parse_model_id(model_id)
+
     stream_value = payload.get("stream", False)
     if stream_value is not None and not isinstance(stream_value, bool):
         return anthropic_error_response(
@@ -92,11 +96,12 @@ async def handle_messages(
     context = ProxyRequestContext(
         request_id=str(uuid.uuid4()),
         protocol="anthropic",
-        model_id=model_id,
+        model_id=base_model_id,
         streaming=is_stream,
         original_body=body,
         incoming_headers=dict(request.headers),
         started_at=time.time(),
+        provider_id=provider_id,
     )
 
     logger.info(

@@ -160,6 +160,7 @@ class TestHasEligiblePairing:
             catalog_cache = ModelCatalogCache()
             catalog_cache.update_from_account(
                 "acct-a",
+                "opencode-go",
                 [{"model_id": "gpt-4", "protocol": "openai"}],
             )
 

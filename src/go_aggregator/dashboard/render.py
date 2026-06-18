@@ -359,6 +359,7 @@ def _render_account_table(accounts: list[dict[str, Any]]) -> str:
         '<table class="data">',
         "<thead><tr>",
         "<th>Account</th>",
+        "<th>Provider</th>",
         "<th>Enabled</th>",
         "<th>Health</th>",
         "<th>Requests</th>",
@@ -379,6 +380,7 @@ def _render_account_table(accounts: list[dict[str, Any]]) -> str:
     for row in accounts:
         enabled = bool(row.get("account_enabled", 0))
         name = escape(row.get("account_name", ""))
+        provider = escape(row.get("provider_id", ""))
         cost = format_microdollars(row.get("cost_microdollars", 0))
         latency = format_latency(row.get("avg_latency_ms", 0.0))
         reserved = format_microdollars(row.get("reserved_microdollars", 0))
@@ -392,6 +394,7 @@ def _render_account_table(accounts: list[dict[str, Any]]) -> str:
         parts.append(
             f"<tr>"
             f"<td>{name}</td>"
+            f"<td>{provider}</td>"
             f'<td class="{"yes" if enabled else "no"}">'
             f"{'yes' if enabled else 'no'}</td>"
             f'<td class="{sanitize_class_name(health)}">{health}</td>'

@@ -18,12 +18,22 @@ class UsageExactnessLevel(Enum):
     UNKNOWN = "unknown"
 
 
+class Provider(BaseModel):
+    id: int
+    provider_id: str
+    base_url: str
+    protocols: list[str]
+    enabled: bool = True
+    created_at: datetime
+
+
 class Account(BaseModel):
     id: int
     name: str
     enabled: bool = True
     weight: float = 1.0
     api_key_env: str
+    provider_id: str = "opencode-go"
     created_at: datetime
 
 

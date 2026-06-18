@@ -419,7 +419,7 @@ class TestModelsRefreshCachedRoutable:
         assert response.status_code == 200, response.text
         body = response.json()
         ids = {m["id"] for m in body["data"]}
-        assert "gpt-4" in ids
+        assert "gpt-4/opencode-go" in ids
 
     @pytest.mark.asyncio
     async def test_cached_accounts_loaded_at_startup(

@@ -92,7 +92,7 @@ async def test_empty_database_migration_and_account_sync() -> None:
             "enabled": acct.enabled,
             "weight": acct.weight,
         }
-        for acct in config.accounts
+        for acct in config.all_accounts()
     ]
     name_to_id = await account_repo.sync_from_config(config_accounts, db)
 

@@ -66,8 +66,9 @@ def test_load_valid_config(valid_config: Path) -> None:
         config = AppConfig.from_toml(str(valid_config))
         assert config.server.host == "127.0.0.1"
         assert config.server.port == 9000
-        assert len(config.accounts) == 2
-        assert config.accounts[0].name == "test_account"
+        all_accts = config.all_accounts()
+        assert len(all_accts) == 2
+        assert all_accts[0].name == "test_account"
     finally:
         del os.environ["TEST_KEY_1"]
         del os.environ["TEST_KEY_2"]
@@ -181,8 +182,9 @@ enabled = false
 """
     )
     config = AppConfig.from_toml(str(config_file))
-    assert config.accounts[0].name == "disabled_account"
-    assert config.accounts[0].enabled is False
+    all_accts = config.all_accounts()
+    assert all_accts[0].name == "disabled_account"
+    assert all_accts[0].enabled is False
 
 
 def test_model_override_price_strings_are_normalized(tmp_path: Path) -> None:
@@ -227,7 +229,7 @@ def test_config_example_validates() -> None:
         config = AppConfig.from_toml("config.example.toml")
         assert config.upstream.base_url == "https://opencode.ai/zen/go/v1"
         assert config.limits.five_hour_microdollars == 12_000_000
-        assert len(config.accounts) == 2
+        assert len(config.all_accounts()) == 2
     finally:
         del os.environ["OPENCODE_GO_KEY_1"]
         del os.environ["OPENCODE_GO_KEY_2"]
@@ -260,3 +262,183 @@ def test_server_config_empty_api_key_env_disables_auth() -> None:
 
     sc = ServerConfig(api_key_env="")
     assert sc.api_key_env == ""
+
+
+def test_provider_config_valid_id() -> None:
+    """ProviderConfig accepts valid IDs."""
+    from go_aggregator.models.config import ProviderConfig
+
+    p = ProviderConfig(id="opencode-go", base_url="https://example.com")
+    assert p.id == "opencode-go"
+    assert p.protocols == ["openai"]
+    assert p.connect_timeout_s == 5
+    assert p.max_connections == 100
+    assert p.accounts == []
+
+
+def test_provider_config_invalid_id_rejected() -> None:
+    """ProviderConfig rejects invalid IDs."""
+    from go_aggregator.models.config import ProviderConfig
+
+    with pytest.raises(ConfigError, match="alphanumeric"):
+        ProviderConfig(id="-invalid-", base_url="https://example.com")
+    with pytest.raises(ConfigError, match="alphanumeric"):
+        ProviderConfig(id="has spaces", base_url="https://example.com")
+    with pytest.raises(ConfigError, match="alphanumeric"):
+        ProviderConfig(id="", base_url="https://example.com")
+
+
+def test_provider_config_keepalive_validation() -> None:
+    """ProviderConfig rejects max_keepalive > max_connections."""
+    from go_aggregator.models.config import ProviderConfig
+
+    with pytest.raises(ConfigError, match="max_keepalive"):
+        ProviderConfig(
+            id="test",
+            base_url="https://example.com",
+            max_connections=10,
+            max_keepalive=20,
+        )
+
+
+def test_provider_config_with_accounts(tmp_path: Path) -> None:
+    """ProviderConfig can contain nested accounts."""
+    from go_aggregator.models.config import ProviderConfig
+
+    os.environ["PROV_KEY"] = "key"
+    try:
+        p = ProviderConfig(
+            id="my-provider",
+            base_url="https://api.example.com",
+            accounts=[
+                {
+                    "name": "acct1",
+                    "api_key_env": "PROV_KEY",
+                },
+            ],
+        )
+        assert len(p.accounts) == 1
+        assert p.accounts[0].name == "acct1"
+    finally:
+        del os.environ["PROV_KEY"]
+
+
+def test_flat_config_normalized_to_default_provider(tmp_path: Path) -> None:
+    """Flat accounts are normalized into a default provider."""
+    os.environ["NORM_KEY_1"] = "key1"
+    os.environ["NORM_KEY_2"] = "key2"
+    try:
+        config_file = tmp_path / "norm.toml"
+        config_file.write_text(
+            """
+[upstream]
+base_url = "https://api.upstream.com"
+
+[[accounts]]
+name = "alpha"
+api_key_env = "NORM_KEY_1"
+
+[[accounts]]
+name = "beta"
+api_key_env = "NORM_KEY_2"
+weight = 2.0
+"""
+        )
+        config = AppConfig.from_toml(str(config_file))
+        assert config.accounts == []
+        assert "opencode-go" in config.providers
+        provider = config.providers["opencode-go"]
+        assert provider.base_url == "https://api.upstream.com"
+        assert provider.protocols == ["openai", "anthropic"]
+        all_accts = config.all_accounts()
+        assert len(all_accts) == 2
+        assert all_accts[0].name == "alpha"
+        assert all_accts[1].name == "beta"
+        assert all_accts[1].weight == 2.0
+    finally:
+        del os.environ["NORM_KEY_1"]
+        del os.environ["NORM_KEY_2"]
+
+
+def test_provider_config_from_toml(tmp_path: Path) -> None:
+    """Providers section is parsed from TOML correctly."""
+    os.environ["PROV_TOML_KEY"] = "key"
+    try:
+        config_file = tmp_path / "providers.toml"
+        config_file.write_text(
+            """
+[upstream]
+base_url = "https://default.example.com"
+
+[providers.my-provider]
+id = "my-provider"
+base_url = "https://custom.example.com"
+protocols = ["openai", "anthropic"]
+
+[[providers.my-provider.accounts]]
+name = "acct_a"
+api_key_env = "PROV_TOML_KEY"
+
+[providers.other-provider]
+id = "other-provider"
+base_url = "https://other.example.com"
+
+[[providers.other-provider.accounts]]
+name = "acct_b"
+api_key_env = "PROV_TOML_KEY"
+"""
+        )
+        config = AppConfig.from_toml(str(config_file))
+        assert len(config.providers) == 2
+        assert config.accounts == []
+        my_prov = config.providers["my-provider"]
+        assert my_prov.base_url == "https://custom.example.com"
+        assert len(my_prov.accounts) == 1
+        assert my_prov.accounts[0].name == "acct_a"
+        other_prov = config.providers["other-provider"]
+        assert len(other_prov.accounts) == 1
+        assert other_prov.accounts[0].name == "acct_b"
+    finally:
+        del os.environ["PROV_TOML_KEY"]
+
+
+def test_duplicate_account_names_across_providers(tmp_path: Path) -> None:
+    """Duplicate account names across providers are rejected."""
+    os.environ["CROSS_DUP_KEY"] = "key"
+    try:
+        config_file = tmp_path / "cross_dup.toml"
+        config_file.write_text(
+            """
+[providers.p1]
+id = "p1"
+base_url = "https://p1.example.com"
+
+[[providers.p1.accounts]]
+name = "shared_name"
+api_key_env = "CROSS_DUP_KEY"
+
+[providers.p2]
+id = "p2"
+base_url = "https://p2.example.com"
+
+[[providers.p2.accounts]]
+name = "shared_name"
+api_key_env = "CROSS_DUP_KEY"
+"""
+        )
+        with pytest.raises(ConfigError, match="Duplicate account name"):
+            AppConfig.from_toml(str(config_file))
+    finally:
+        del os.environ["CROSS_DUP_KEY"]
+
+
+def test_backward_compatible_flat_config() -> None:
+    """Flat config without providers still works via normalization."""
+    config = AppConfig(
+        upstream={"base_url": "https://upstream.example.com"},
+        accounts=[{"name": "a", "api_key_env": "KEY"}],
+    )
+    assert config.providers["opencode-go"].base_url == "https://upstream.example.com"
+    assert config.accounts == []
+    assert len(config.all_accounts()) == 1
+    assert config.all_accounts()[0].name == "a"

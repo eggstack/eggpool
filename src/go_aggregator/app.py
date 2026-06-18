@@ -9,7 +9,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -54,6 +53,7 @@ from go_aggregator.health.health_manager import HealthManager
 from go_aggregator.logging import configure_logging
 from go_aggregator.models.api import HealthResponse
 from go_aggregator.models.config import AppConfig
+from go_aggregator.providers.client_pool import ProviderClientPool
 from go_aggregator.request.coordinator import RequestCoordinator
 from go_aggregator.routing.router import Router
 from go_aggregator.stats import StatsService
@@ -227,21 +227,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     attempt_repo = AttemptRepository(db)
     usage_window_repo = UsageWindowRepository(db)
 
-    # 7. HTTPX client
-    app.state.httpx_client = httpx.AsyncClient(
-        base_url=config.upstream.base_url,
-        timeout=httpx.Timeout(
-            connect=config.upstream.connect_timeout_s,
-            read=config.upstream.read_timeout_s,
-            write=config.upstream.write_timeout_s,
-            pool=config.upstream.connect_timeout_s,
-        ),
-        limits=httpx.Limits(
-            max_connections=config.upstream.max_connections,
-            max_keepalive_connections=config.upstream.max_keepalive,
-            keepalive_expiry=config.upstream.keepalive_timeout_s,
-        ),
-    )
+    # 7. HTTPX client pool
+    client_pool = ProviderClientPool.from_config(config.providers)
+    app.state.client_pool = client_pool
+    # Keep backward-compatible alias during transition
+    if "opencode-go" in client_pool.providers:
+        app.state.httpx_client = client_pool.get_client("opencode-go")
 
     # 8. Account registry (runtime state)
     registry = AccountRegistry(config)
@@ -252,7 +243,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     app.state.health_manager = health_manager
 
     # 10. Catalog service
-    catalog = CatalogService(config, registry, db, app.state.httpx_client)
+    catalog = CatalogService(config, registry, db, client_pool)
     app.state.catalog = catalog
 
     # 11. Load cached catalog
@@ -327,7 +318,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         usage_window_repo
     )
     config_offsets: dict[str, dict[str, int]] = {}
-    for acct_cfg in config.accounts:
+    for acct_cfg in config.all_accounts():
         config_offsets[acct_cfg.name] = {
             "five_hour": acct_cfg.five_hour_offset_microdollars,
             "weekly": acct_cfg.weekly_offset_microdollars,
@@ -337,11 +328,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         offsets=config_offsets,
     )
     # Set account weights from config
-    for acct_cfg in config.accounts:
+    for acct_cfg in config.all_accounts():
         router.set_account_weight(acct_cfg.name, acct_cfg.weight)
 
     # Configure explicit quota policies from config
-    for acct_cfg in config.accounts:
+    for acct_cfg in config.all_accounts():
         router.configure_account_policy(
             account_name=acct_cfg.name,
             weight=acct_cfg.weight,
@@ -368,7 +359,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         catalog=catalog,
         router=router,
         db=db,
-        httpx_client=app.state.httpx_client,
+        client_pool=client_pool,
         request_repo=request_repo,
         reservation_repo=reservation_repo,
         attempt_repo=attempt_repo,
@@ -442,7 +433,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     logger.info(
         "Application started (%d accounts, %d models). "
         "Note: configuration changes require service restart.",
-        len(config.accounts),
+        len(config.all_accounts()),
         catalog.cache.model_count,
     )
     yield
@@ -450,12 +441,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # Shutdown
     logger.info("Application shutting down")
     await supervisor.stop_all()
-    httpx_client = getattr(app.state, "httpx_client", None)
-    if httpx_client is not None:
+    client_pool = getattr(app.state, "client_pool", None)
+    if client_pool is not None:
         try:
-            await httpx_client.aclose()
+            await client_pool.close()
         except Exception:
-            logger.exception("Error closing httpx client during shutdown")
+            logger.exception("Error closing client pool during shutdown")
     await db.disconnect()
 
 
@@ -557,14 +548,14 @@ def create_app(
             )
 
         config: AppConfig = request.app.state.config
-        if not config.accounts:
+        if not config.all_accounts():
             return Response(
                 content='{"status":"degraded","reason":"no accounts configured"}',
                 status_code=503,
                 media_type="application/json",
             )
 
-        has_enabled = any(acct.enabled for acct in config.accounts)
+        has_enabled = any(acct.enabled for acct in config.all_accounts())
         if not has_enabled:
             return Response(
                 content='{"status":"degraded","reason":"no enabled accounts"}',

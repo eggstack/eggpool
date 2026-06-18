@@ -23,15 +23,19 @@ def account_config_rows(config: AppConfig) -> list[dict[str, Any]]:
     Keeping the shape in one place prevents the app lifespan and the
     ``models refresh`` CLI command from drifting out of sync.
     """
-    return [
-        {
-            "name": acct.name,
-            "api_key_env": acct.api_key_env,
-            "enabled": acct.enabled,
-            "weight": acct.weight,
-        }
-        for acct in config.accounts
-    ]
+    rows: list[dict[str, Any]] = []
+    for provider_id, provider in config.providers.items():
+        for acct in provider.accounts:
+            rows.append(
+                {
+                    "name": acct.name,
+                    "api_key_env": acct.api_key_env,
+                    "enabled": acct.enabled,
+                    "weight": acct.weight,
+                    "provider_id": provider_id,
+                }
+            )
+    return rows
 
 
 class AccountRegistry:
@@ -41,32 +45,36 @@ class AccountRegistry:
         self._config = config
         self._states: dict[str, AccountRuntimeState] = {}
         self._api_keys: dict[str, str] = {}
+        self._account_providers: dict[str, str] = {}
         self._initialize()
 
     def _initialize(self) -> None:
         """Load accounts from config and resolve API keys."""
-        for acct_config in self._config.accounts:
-            api_key = os.environ.get(acct_config.api_key_env, "")
-            if acct_config.enabled and not api_key:
-                raise ConfigError(
-                    f"Account {acct_config.name!r} is enabled but "
-                    f"env var {acct_config.api_key_env!r} is not set"
-                )
+        for provider_id, provider_cfg in self._config.providers.items():
+            for acct_config in provider_cfg.accounts:
+                api_key = os.environ.get(acct_config.api_key_env, "")
+                if acct_config.enabled and not api_key:
+                    raise ConfigError(
+                        f"Account {acct_config.name!r} is enabled but "
+                        f"env var {acct_config.api_key_env!r} is not set"
+                    )
 
-            state = AccountRuntimeState(
-                name=acct_config.name,
-                enabled=acct_config.enabled,
-                weight=acct_config.weight,
-            )
-            self._states[acct_config.name] = state
-            self._api_keys[acct_config.name] = api_key
-
-            if acct_config.enabled:
-                logger.info(
-                    "Loaded account %r (weight=%.2f)",
-                    acct_config.name,
-                    acct_config.weight,
+                state = AccountRuntimeState(
+                    name=acct_config.name,
+                    enabled=acct_config.enabled,
+                    weight=acct_config.weight,
                 )
+                self._states[acct_config.name] = state
+                self._api_keys[acct_config.name] = api_key
+                self._account_providers[acct_config.name] = provider_id
+
+                if acct_config.enabled:
+                    logger.info(
+                        "Loaded account %r (weight=%.2f, provider=%r)",
+                        acct_config.name,
+                        acct_config.weight,
+                        provider_id,
+                    )
 
     def get_state(self, name: str) -> AccountRuntimeState | None:
         """Get runtime state for an account by name."""
@@ -90,7 +98,7 @@ class AccountRegistry:
 
     def get_account_config(self, name: str):
         """Get the config for an account by name."""
-        for acct in self._config.accounts:
+        for acct in self._config.all_accounts():
             if acct.name == name:
                 return acct
         return None
@@ -105,3 +113,29 @@ class AccountRegistry:
             "weekly": acct.weekly_offset_microdollars,
             "monthly": acct.monthly_offset_microdollars,
         }
+
+    def get_provider_for_account(self, account_name: str) -> str | None:
+        """Get the provider ID for an account."""
+        return self._account_providers.get(account_name)
+
+    def get_accounts_for_provider(self, provider_id: str) -> list[AccountRuntimeState]:
+        """Get all account states belonging to a provider."""
+        return [
+            state
+            for name, state in self._states.items()
+            if self._account_providers.get(name) == provider_id
+        ]
+
+    def get_enabled_accounts_for_provider(
+        self, provider_id: str
+    ) -> list[AccountRuntimeState]:
+        """Get enabled account states belonging to a provider."""
+        return [
+            state
+            for name, state in self._states.items()
+            if self._account_providers.get(name) == provider_id and state.enabled
+        ]
+
+    def get_provider_ids(self) -> list[str]:
+        """Get all unique provider IDs."""
+        return list(set(self._account_providers.values()))

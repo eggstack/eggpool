@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from typing import Literal
 
@@ -137,6 +138,43 @@ class AccountConfig(BaseModel):
     monthly_offset_microdollars: int = 0
 
 
+class ProviderConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    base_url: str
+    protocols: list[str] = ["openai"]
+    openai_path: str = "/chat/completions"
+    anthropic_path: str = "/messages"
+    models_method: str = "GET"
+    models_path: str = "/models"
+    connect_timeout_s: float = Field(default=5, gt=0)
+    read_timeout_s: float = Field(default=300, gt=0)
+    write_timeout_s: float = Field(default=30, gt=0)
+    max_connections: int = Field(default=100, gt=0)
+    max_keepalive: int = Field(default=20, gt=0)
+    keepalive_timeout_s: float = Field(default=30, ge=0)
+    accounts: list[AccountConfig] = []
+
+    @model_validator(mode="after")
+    def validate_keepalive(self) -> ProviderConfig:
+        if self.max_keepalive > self.max_connections:
+            raise ConfigError(
+                f"max_keepalive ({self.max_keepalive}) must not exceed "
+                f"max_connections ({self.max_connections})"
+            )
+        return self
+
+    @field_validator("id")
+    @classmethod
+    def validate_provider_id(cls, value: str) -> str:
+        if not re.match(r"^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?$", value):
+            raise ConfigError(
+                f"Provider ID {value!r} must be alphanumeric with optional hyphens"
+            )
+        return value
+
+
 class ModelOverrideConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -173,12 +211,32 @@ class AppConfig(BaseModel):
     dashboard: DashboardConfig = DashboardConfig()
     security: SecurityConfig = SecurityConfig()
     accounts: list[AccountConfig] = []
+    providers: dict[str, ProviderConfig] = {}
     model_overrides: dict[str, ModelOverrideConfig] = {}
+
+    @model_validator(mode="after")
+    def _normalize_providers(self) -> AppConfig:
+        """Convert flat accounts to default provider if no providers defined."""
+        if not self.providers and self.accounts:
+            self.providers = {
+                "opencode-go": ProviderConfig(
+                    id="opencode-go",
+                    base_url=self.upstream.base_url,
+                    protocols=["openai", "anthropic"],
+                    openai_path="/chat/completions",
+                    anthropic_path="/messages",
+                    models_method="GET",
+                    models_path="/models",
+                    accounts=self.accounts,
+                )
+            }
+            self.accounts = []
+        return self
 
     @model_validator(mode="after")
     def validate_accounts(self) -> AppConfig:
         names: list[str] = []
-        for acct in self.accounts:
+        for acct in self.all_accounts():
             if acct.name in names:
                 raise ConfigError(f"Duplicate account name: {acct.name!r}")
             names.append(acct.name)
@@ -187,6 +245,13 @@ class AppConfig(BaseModel):
                     f"Account {acct.name!r} has non-positive weight: {acct.weight}"
                 )
         return self
+
+    def all_accounts(self) -> list[AccountConfig]:
+        """Return all accounts across all providers."""
+        result: list[AccountConfig] = []
+        for provider in self.providers.values():
+            result.extend(provider.accounts)
+        return result
 
     def validate_account_credentials(self) -> None:
         """Validate that enabled accounts have their API key env vars set.
@@ -204,7 +269,7 @@ class AppConfig(BaseModel):
                 "your-local-api-key-here",
             }
         )
-        for acct in self.accounts:
+        for acct in self.all_accounts():
             if acct.enabled:
                 raw_key = os.environ.get(acct.api_key_env)
                 if not raw_key:

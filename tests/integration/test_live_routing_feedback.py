@@ -57,10 +57,10 @@ def setup_router() -> tuple[Router, AccountRegistry]:
         estimator = QuotaEstimator()
         cache = ModelCatalogCache()
         cache.update_from_account(
-            "acct-a", [{"model_id": "gpt-4", "protocol": "openai"}]
+            "acct-a", "opencode-go", [{"model_id": "gpt-4", "protocol": "openai"}]
         )
         cache.update_from_account(
-            "acct-b", [{"model_id": "gpt-4", "protocol": "openai"}]
+            "acct-b", "opencode-go", [{"model_id": "gpt-4", "protocol": "openai"}]
         )
         router = Router(
             registry,
@@ -69,7 +69,7 @@ def setup_router() -> tuple[Router, AccountRegistry]:
             health_manager=hm,
         )
 
-        for acct in two_account_config.accounts:
+        for acct in two_account_config.all_accounts():
             estimator.configure_account_policy(
                 account_name=acct.name,
                 weight=acct.weight,

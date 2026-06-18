@@ -49,6 +49,7 @@ class Router:
         request_id: str | None = None,
         request_estimates: dict[str, int] | None = None,
         exclude_accounts: set[str] | None = None,
+        provider_id: str | None = None,
     ) -> AccountRuntimeState | None:
         """Select an account for the given model."""
         all_states = self._registry.get_enabled_states()
@@ -62,6 +63,7 @@ class Router:
             self._catalog.cache,
             self._health_manager,
             stale_after_s=self._stale_after_s,
+            provider_id=provider_id,
         )
 
         # Exclude already-attempted accounts
@@ -89,6 +91,7 @@ class Router:
         self,
         model_id: str,
         exclude_accounts: set[str] | None = None,
+        provider_id: str | None = None,
     ) -> list[str]:
         """Get eligible account names for a model.
 
@@ -102,6 +105,7 @@ class Router:
             self._catalog.cache,
             self._health_manager,
             stale_after_s=self._stale_after_s,
+            provider_id=provider_id,
         )
         if exclude_accounts:
             eligible = [s for s in eligible if s.name not in exclude_accounts]
@@ -113,6 +117,7 @@ class Router:
         max_accounts: int = 3,
         request_estimates: dict[str, int] | None = None,
         exclude_accounts: set[str] | None = None,
+        provider_id: str | None = None,
     ) -> list[tuple[AccountRuntimeState, RoutingScore]]:
         """Select multiple accounts for failover, ranked by score."""
         all_states = self._registry.get_enabled_states()
@@ -124,6 +129,7 @@ class Router:
             self._catalog.cache,
             self._health_manager,
             stale_after_s=self._stale_after_s,
+            provider_id=provider_id,
         )
 
         # Exclude already-attempted accounts

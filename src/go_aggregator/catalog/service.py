@@ -17,6 +17,7 @@ from go_aggregator.catalog.pricing import (
 )
 from go_aggregator.catalog.protocols import ModelProtocolResolver
 from go_aggregator.db.repositories import PriceSnapshotRepository
+from go_aggregator.providers.client_pool import ProviderClientPool
 
 if TYPE_CHECKING:
     import httpx
@@ -67,12 +68,22 @@ class CatalogService:
         config: AppConfig,
         registry: AccountRegistry,
         db: Database,
-        httpx_client: httpx.AsyncClient,
+        client_pool: ProviderClientPool | httpx.AsyncClient,
     ) -> None:
         self._config = config
         self._registry = registry
         self._db = db
-        self._httpx_client = httpx_client
+        if isinstance(client_pool, ProviderClientPool):
+            self._client_pool: ProviderClientPool | None = client_pool
+            if "opencode-go" in client_pool.providers:
+                self._httpx_client: httpx.AsyncClient | None = client_pool.get_client(
+                    "opencode-go"
+                )
+            else:
+                self._httpx_client = None
+        else:
+            self._client_pool = None
+            self._httpx_client = client_pool
         self._cache = ModelCatalogCache()
         self._refresh_lock = asyncio.Lock()
         self._protocol_resolver = ModelProtocolResolver(config)
@@ -100,9 +111,42 @@ class CatalogService:
                 api_key = self._registry.get_api_key(state.name)
                 if not api_key:
                     continue
+                provider_id = self._registry.get_provider_for_account(state.name)
+                if provider_id is None:
+                    continue
+
+                # Get provider-specific client
+                client: httpx.AsyncClient | None = None
+                if self._client_pool is not None:
+                    try:
+                        client = self._client_pool.get_client(provider_id)
+                    except Exception:
+                        logger.warning("No client for provider %r", provider_id)
+                        continue
+                elif self._httpx_client is not None:
+                    client = self._httpx_client
+
+                if client is None:
+                    continue
+
+                # Get provider config
+                provider_cfg = self._config.providers.get(provider_id)
+                models_method = "GET"
+                models_path = "/models"
+                if provider_cfg is not None:
+                    models_method = provider_cfg.models_method
+                    models_path = provider_cfg.models_path
+
                 tasks.append(
                     asyncio.create_task(
-                        self._fetch_and_process_account(state.name, api_key)
+                        self._fetch_and_process_account(
+                            state.name,
+                            api_key,
+                            provider_id,
+                            client,
+                            models_method,
+                            models_path,
+                        )
                     )
                 )
 
@@ -118,13 +162,23 @@ class CatalogService:
                 len(enabled_accounts),
             )
 
-    async def _fetch_and_process_account(self, account_name: str, api_key: str) -> None:
+    async def _fetch_and_process_account(
+        self,
+        account_name: str,
+        api_key: str,
+        provider_id: str,
+        client: httpx.AsyncClient,
+        models_method: str = "GET",
+        models_path: str = "/models",
+    ) -> None:
         """Fetch models for one account and update the cache."""
         try:
             raw_response = await fetch_models_for_account(
-                self._httpx_client,
+                client,
                 api_key,
                 account_name,
+                models_method=models_method,
+                models_path=models_path,
             )
             if not raw_response:
                 return
@@ -163,7 +217,7 @@ class CatalogService:
                             model["protocol"] = resolution.protocol
                             model["protocol_source"] = resolution.source
 
-            self._cache.update_from_account(account_name, models)
+            self._cache.update_from_account(account_name, provider_id, models)
             logger.debug(
                 "Account %r: found %d models",
                 account_name,
@@ -200,19 +254,27 @@ class CatalogService:
                     last_seen_at=_ts_to_unix(row["last_seen_at"]),
                 )
 
-            # Load account-model relationships
+            # Load account-model relationships with provider info
             am_rows = await self._db.fetch_all(
                 "SELECT account_id, model_id FROM account_models WHERE enabled = 1"
             )
             # Build account name lookup
-            acct_rows = await self._db.fetch_all("SELECT id, name FROM accounts")
+            acct_rows = await self._db.fetch_all(
+                "SELECT id, name, provider_id FROM accounts"
+            )
             id_to_name = {row["id"]: row["name"] for row in acct_rows}
+            id_to_provider: dict[int, str] = {
+                row["id"]: row["provider_id"] for row in acct_rows
+            }
 
             for row in am_rows:
                 model_id = row["model_id"]
                 account_name = id_to_name.get(row["account_id"])
-                if account_name and self._cache.has_model(model_id):
-                    self._cache.add_account_support(model_id, account_name)
+                provider_id = id_to_provider.get(row["account_id"], "opencode-go")
+                if account_name:
+                    self._cache.set_account_provider(account_name, provider_id)
+                    if self._cache.has_model(model_id):
+                        self._cache.add_account_support(model_id, account_name)
 
             if self._cache.model_count > 0:
                 logger.info(
@@ -478,13 +540,13 @@ class CatalogService:
         self,
         health_manager: HealthManager | None = None,
     ) -> list[dict[str, Any]]:
-        """Get models to expose via /v1/models."""
+        """Get models to expose via /v1/models with provider-suffixed IDs."""
         eligible = {s.name for s in self._registry.get_eligible_states()}
         if self._config.models.expose_mode == "healthy_union" and health_manager:
             eligible = {
                 name for name in eligible if health_manager.is_account_healthy(name)
             }
-        return self._cache.get_models_for_exposure(
+        return self._cache.get_provider_suffixed_models(
             self._config.models.expose_mode,
             eligible,
         )

@@ -55,7 +55,8 @@ async def fetch_summary(
         COALESCE(SUM(CASE WHEN exactness = 'unknown' THEN 1 ELSE 0 END), 0)
             as unknown_count,
         COALESCE(SUM(bytes_received), 0) as total_bytes_received,
-        COALESCE(SUM(bytes_emitted), 0) as total_bytes_emitted
+        COALESCE(SUM(bytes_emitted), 0) as total_bytes_emitted,
+        (SELECT COUNT(DISTINCT provider_id) FROM accounts) as total_providers
     FROM requests
     WHERE started_at >= ? AND started_at < ?
     """
@@ -77,6 +78,7 @@ async def fetch_account_stats(
         a.name as account_name,
         a.enabled as account_enabled,
         a.weight as account_weight,
+        a.provider_id as provider_id,
         COUNT(r.id) as request_count,
         COALESCE(SUM(r.input_tokens), 0) as input_tokens,
         COALESCE(SUM(r.output_tokens), 0) as output_tokens,
@@ -108,7 +110,7 @@ async def fetch_account_stats(
     LEFT JOIN requests r
         ON r.account_id = a.id
         AND r.started_at >= ? AND r.started_at < ?
-    GROUP BY a.id, a.name, a.enabled, a.weight
+    GROUP BY a.id, a.name, a.enabled, a.weight, a.provider_id
     ORDER BY a.name
     """
     rows = await db.fetch_all(sql, (_format_dt(start), _format_dt(end)))
@@ -337,6 +339,7 @@ def _build_summary(row: dict[str, Any]) -> dict[str, Any]:
         "unknown_count": int(row.get("unknown_count", 0)),
         "total_bytes_received": int(row.get("total_bytes_received", 0)),
         "total_bytes_emitted": int(row.get("total_bytes_emitted", 0)),
+        "total_providers": int(row.get("total_providers", 0)),
     }
 
 
@@ -362,4 +365,5 @@ def _empty_summary() -> dict[str, Any]:
         "unknown_count": 0,
         "total_bytes_received": 0,
         "total_bytes_emitted": 0,
+        "total_providers": 0,
     }

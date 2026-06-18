@@ -47,6 +47,7 @@ def test_update_from_account_preserves_source() -> None:
 
     cache.update_from_account(
         "acct-a",
+        "opencode-go",
         [
             {
                 "model_id": "claude-3",
@@ -81,6 +82,7 @@ def test_refresh_fallback_preserves_persisted_source() -> None:
     # Simulate a refresh that provides no resolution metadata
     cache.update_from_account(
         "acct-a",
+        "opencode-go",
         [
             {
                 "model_id": "custom-model",

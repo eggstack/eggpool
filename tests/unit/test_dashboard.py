@@ -179,6 +179,7 @@ class TestRenderOverview:
             {
                 "account_name": "acct_a",
                 "account_enabled": 1,
+                "provider_id": "opencode-go",
                 "request_count": 5,
                 "error_count": 1,
                 "input_tokens": 100,
@@ -214,6 +215,48 @@ class TestRenderOverview:
         )
         assert "acct_a" in html
         assert "$1.000000" in html
+
+    def test_overview_renders_provider_column(self) -> None:
+        accounts = [
+            {
+                "account_name": "acct_a",
+                "account_enabled": 1,
+                "provider_id": "anthropic-proxy",
+                "request_count": 5,
+                "error_count": 1,
+                "input_tokens": 100,
+                "output_tokens": 200,
+                "cost_microdollars": 1_000_000,
+                "avg_latency_ms": 100.0,
+                "reserved_microdollars": 500_000,
+            }
+        ]
+        html = render_overview(
+            overview={
+                "summary": {
+                    "total_requests": 5,
+                    "successful_requests": 4,
+                    "error_requests": 1,
+                    "error_rate": 0.2,
+                    "total_input_tokens": 100,
+                    "total_output_tokens": 200,
+                    "total_cost_microdollars": 1_000_000,
+                    "avg_latency_ms": 100.0,
+                },
+                "imbalance": {
+                    "imbalance_ratio": 0.0,
+                    "active_accounts": 1,
+                    "most_used": None,
+                    "least_used": None,
+                },
+                "period_label": "24h",
+                "start": "2024-01-01 00:00:00",
+                "end": "2024-01-02 00:00:00",
+            },
+            accounts=accounts,
+        )
+        assert "anthropic-proxy" in html
+        assert "Provider" in html
 
     def test_renders_no_accounts_message(self) -> None:
         html = render_overview(
@@ -256,6 +299,7 @@ class TestRenderAccounts:
             {
                 "account_name": "alpha",
                 "account_enabled": 1,
+                "provider_id": "opencode-go",
                 "request_count": 3,
                 "error_count": 0,
                 "input_tokens": 100,
@@ -267,6 +311,25 @@ class TestRenderAccounts:
         ]
         html = render_accounts(accounts=accounts, period="24h")
         assert "alpha" in html
+
+    def test_renders_provider_column(self) -> None:
+        accounts = [
+            {
+                "account_name": "alpha",
+                "account_enabled": 1,
+                "provider_id": "acme-ai",
+                "request_count": 3,
+                "error_count": 0,
+                "input_tokens": 100,
+                "output_tokens": 200,
+                "cost_microdollars": 500_000,
+                "avg_latency_ms": 75.5,
+                "reserved_microdollars": 0,
+            }
+        ]
+        html = render_accounts(accounts=accounts, period="24h")
+        assert "acme-ai" in html
+        assert "Provider" in html
 
     def test_html_injection_blocked(self) -> None:
         accounts = [

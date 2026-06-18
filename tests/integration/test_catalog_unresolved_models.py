@@ -35,6 +35,7 @@ async def test_unresolved_model_does_not_block_resolved() -> None:
     # One account refresh containing both resolved and unresolved models.
     cache.update_from_account(
         "test-acct",
+        "opencode-go",
         [
             {
                 "model_id": "gpt-4o",
@@ -91,6 +92,7 @@ async def test_unresolved_model_not_exposed() -> None:
     # Unresolved model with no protocol
     cache.update_from_account(
         "test-acct",
+        "opencode-go",
         [
             {
                 "model_id": "mystery-model",
@@ -114,6 +116,7 @@ async def test_unresolved_model_not_exposed() -> None:
     # Resolved model is exposed
     cache.update_from_account(
         "test-acct",
+        "opencode-go",
         [
             {
                 "model_id": "gpt-4o",
