@@ -69,6 +69,25 @@ def serve(ctx: click.Context) -> None:
     )
 
 
+@cli.command()
+@click.option(
+    "--providers",
+    "providers_path",
+    default="providers.toml",
+    help="Path to the providers template file.",
+    type=click.Path(),
+)
+@click.pass_context
+def connect(ctx: click.Context, providers_path: str) -> None:
+    """Connect to a new provider interactively."""
+    from go_aggregator.providers.connect import connect as do_connect
+
+    config_path: str = ctx.obj["config_path"]
+    ok = do_connect(config_path, providers_path)
+    if not ok:
+        sys.exit(1)
+
+
 @cli.command("check-config")
 @click.pass_context
 def check_config(ctx: click.Context) -> None:

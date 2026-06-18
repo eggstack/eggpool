@@ -1,0 +1,69 @@
+# providers.toml — Provider templates for `gorouter connect`
+#
+# Each [providers.<id>] block defines a provider that can be added
+# to your config via the interactive `gorouter connect` command.
+#
+# The api_key_env value is a placeholder. When you connect, the
+# actual environment variable name is derived from the provider id
+# (e.g. MINIMAX_API_KEY for minimax).
+
+[providers.opencode-go]
+# OpenCode Go — primary provider
+id = "opencode-go"
+base_url = "https://opencode.ai/zen/go/v1"
+protocols = ["openai", "anthropic"]
+api_key_env = "API_KEY"
+
+[providers.minimax]
+# MiniMax — OpenAI + Anthropic compatible
+id = "minimax"
+base_url = "https://api.minimaxi.com"
+protocols = ["openai", "anthropic"]
+openai_path = "/v1/chat/completions"
+anthropic_path = "/anthropic/v1/messages"
+models_path = "/v1/models"
+api_key_env = "API_KEY"
+
+[providers.generalcompute]
+# GeneralCompute — OpenAI compatible (POST /v1/models/list)
+id = "generalcompute"
+base_url = "https://api.generalcompute.com/v1"
+protocols = ["openai"]
+models_method = "POST"
+models_path = "/v1/models/list"
+api_key_env = "API_KEY"
+
+[providers.zai]
+# Z.AI (ZhipuAI GLM) — OpenAI compatible
+id = "zai"
+base_url = "https://api.z.ai/api/paas/v4"
+protocols = ["openai"]
+api_key_env = "API_KEY"
+
+[providers.neuralwatt]
+# NeuralWatt — OpenAI compatible, energy-based pricing
+id = "neuralwatt"
+base_url = "https://api.neuralwatt.com/v1"
+protocols = ["openai"]
+api_key_env = "API_KEY"
+
+[providers.openrouter]
+# OpenRouter — OpenAI compatible, 400+ models
+id = "openrouter"
+base_url = "https://openrouter.ai/api/v1"
+protocols = ["openai"]
+api_key_env = "API_KEY"
+
+[providers.ollama-local]
+# Ollama (local) — OpenAI compatible, no auth required
+id = "ollama-local"
+base_url = "http://localhost:11434/v1"
+protocols = ["openai"]
+api_key_env = "API_KEY"
+
+[providers.ollama-cloud]
+# Ollama (cloud) — OpenAI compatible via /v1 endpoints
+id = "ollama-cloud"
+base_url = "https://ollama.com/v1"
+protocols = ["openai"]
+api_key_env = "API_KEY"

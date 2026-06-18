@@ -79,6 +79,81 @@ api_key_env = "OPENCODE_GO_KEY_1"
 name = "team"
 api_key_env = "OPENCODE_GO_KEY_2"
 
+# MiniMax — OpenAI + Anthropic compatible
+# [providers.minimax]
+# id = "minimax"
+# base_url = "https://api.minimaxi.com"
+# protocols = ["openai", "anthropic"]
+# openai_path = "/v1/chat/completions"
+# anthropic_path = "/anthropic/v1/messages"
+# models_path = "/v1/models"
+#
+# [[providers.minimax.accounts]]
+# name = "default"
+# api_key_env = "MINIMAX_API_KEY"
+
+# GeneralCompute — OpenAI compatible (uses POST for model listing)
+# [providers.generalcompute]
+# id = "generalcompute"
+# base_url = "https://api.generalcompute.com/v1"
+# protocols = ["openai"]
+# models_method = "POST"
+# models_path = "/v1/models/list"
+#
+# [[providers.generalcompute.accounts]]
+# name = "default"
+# api_key_env = "GENERALCOMPUTE_API_KEY"
+
+# Z.AI (ZhipuAI GLM) — OpenAI compatible
+# [providers.zai]
+# id = "zai"
+# base_url = "https://api.z.ai/api/paas/v4"
+# protocols = ["openai"]
+#
+# [[providers.zai.accounts]]
+# name = "default"
+# api_key_env = "ZAI_API_KEY"
+
+# NeuralWatt — OpenAI compatible, energy-based pricing
+# [providers.neuralwatt]
+# id = "neuralwatt"
+# base_url = "https://api.neuralwatt.com/v1"
+# protocols = ["openai"]
+#
+# [[providers.neuralwatt.accounts]]
+# name = "default"
+# api_key_env = "NEURALWATT_API_KEY"
+
+# OpenRouter — OpenAI compatible, 400+ models
+# [providers.openrouter]
+# id = "openrouter"
+# base_url = "https://openrouter.ai/api/v1"
+# protocols = ["openai"]
+#
+# [[providers.openrouter.accounts]]
+# name = "default"
+# api_key_env = "OPENROUTER_API_KEY"
+
+# Ollama (local) — OpenAI compatible, no auth required
+# [providers.ollama-local]
+# id = "ollama-local"
+# base_url = "http://localhost:11434/v1"
+# protocols = ["openai"]
+#
+# [[providers.ollama-local.accounts]]
+# name = "default"
+# api_key_env = "OLLAMA_API_KEY"
+
+# Ollama (cloud) — OpenAI compatible via /v1 endpoints
+# [providers.ollama-cloud]
+# id = "ollama-cloud"
+# base_url = "https://ollama.com/v1"
+# protocols = ["openai"]
+#
+# [[providers.ollama-cloud.accounts]]
+# name = "default"
+# api_key_env = "OLLAMA_API_KEY"
+
 # Backward-compatible flat config (auto-normalizes to opencode-go provider)
 # [[accounts]]
 # name = "personal"

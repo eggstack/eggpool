@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
+import os
+import signal
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -447,10 +450,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # 22. Startup complete
     logger.info(
         "Application started (%d accounts, %d models). "
-        "Note: configuration changes require service restart.",
+        "Send SIGHUP to reload configuration.",
         len(config.all_accounts()),
         catalog.cache.model_count,
     )
+
+    # 23. Write PID file and register SIGHUP handler for config reload
+    config_path_str: str | None = getattr(app.state, "config_path", None)
+    if config_path_str is not None:
+        _write_pid_file(config_path_str)
+
+        def _handle_sighup(signum: int, frame: Any) -> None:
+            """Schedule config reload on SIGHUP."""
+            loop = asyncio.get_event_loop()
+            loop.call_soon_threadsafe(asyncio.ensure_future, _reload_config(app))
+
+        signal.signal(signal.SIGHUP, _handle_sighup)
+
     yield
 
     # Shutdown
@@ -463,6 +479,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         except Exception:
             logger.exception("Error closing client pool during shutdown")
     await db.disconnect()
+
+    # Remove PID file
+    config_path_str = getattr(app.state, "config_path", None)
+    if config_path_str is not None:
+        _remove_pid_file(config_path_str)
 
 
 async def _catalog_refresh_loop(
@@ -478,6 +499,82 @@ async def _catalog_refresh_loop(
             break
         except Exception:
             logger.exception("Catalog refresh failed")
+
+
+def _write_pid_file(config_path: str) -> None:
+    """Write the current PID to a file next to the config for reload signaling."""
+    pid_file = Path(config_path).parent / ".gorouter.pid"
+    try:
+        pid_file.write_text(str(os.getpid()))
+    except OSError:
+        logger.debug("Could not write PID file")
+
+
+def _remove_pid_file(config_path: str) -> None:
+    """Remove the PID file on shutdown."""
+    pid_file = Path(config_path).parent / ".gorouter.pid"
+    with contextlib.suppress(OSError):
+        pid_file.unlink(missing_ok=True)
+
+
+async def _reload_config(app: FastAPI) -> None:
+    """Reload configuration from disk and update running state.
+
+    Triggered by SIGHUP. Re-reads the TOML config, re-syncs providers
+    and accounts to the database, and rebuilds the HTTP client pool.
+    """
+    config_path: str | None = getattr(app.state, "config_path", None)
+    if config_path is None:
+        logger.warning("Reload requested but no config_path set")
+        return
+
+    logger.info("Reloading configuration from %s", config_path)
+
+    try:
+        new_config = AppConfig.from_toml(config_path)
+    except Exception:
+        logger.exception("Failed to reload configuration from %s", config_path)
+        return
+
+    app.state.config = new_config
+
+    db: Database | None = getattr(app.state, "db", None)
+    if db is not None:
+        # Re-sync providers
+        provider_repo = ProviderRepository(db)
+        configured_providers = {
+            pid: {"base_url": pcfg.base_url, "protocols": pcfg.protocols}
+            for pid, pcfg in new_config.providers.items()
+        }
+        await provider_repo.sync_from_config(configured_providers)
+
+        # Re-sync accounts
+        account_repo = AccountRepository(db)
+        await account_repo.sync_from_config(account_config_rows(new_config), db)
+
+    # Rebuild client pool
+    old_pool: ProviderClientPool | None = getattr(app.state, "client_pool", None)
+    new_pool = ProviderClientPool.from_config(new_config.providers)
+    app.state.client_pool = new_pool
+    if "opencode-go" in new_pool.providers:
+        app.state.httpx_client = new_pool.get_client("opencode-go")
+
+    # Close old pool
+    if old_pool is not None:
+        try:
+            await old_pool.close()
+        except Exception:
+            logger.debug("Error closing old client pool during reload")
+
+    # Rebuild account registry
+    registry = AccountRegistry(new_config)
+    app.state.registry = registry
+
+    logger.info(
+        "Configuration reloaded: %d providers, %d accounts",
+        len(new_config.providers),
+        len(new_config.all_accounts()),
+    )
 
 
 def create_app(
