@@ -101,7 +101,7 @@ class DashboardConfig(BaseModel):
 
     enabled: bool = True
     public: bool = False
-    theme: str = "default"
+    theme: str = "Cyber Red"
     themes_dir: str = "themes"
     retain_request_stats_days: int = Field(default=30, gt=0)
     retain_event_days: int = Field(default=90, gt=0)

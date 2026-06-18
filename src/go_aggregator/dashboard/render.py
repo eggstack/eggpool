@@ -72,9 +72,11 @@ def _render_layout(
     period: str = "24h",
     refresh_interval_s: int = 15,
     theme_css: str = "",
+    available_themes: list[str] | None = None,
+    current_theme: str = "",
 ) -> str:
     """Wrap a page body in the standard layout."""
-    nav = _render_nav(active_nav, period)
+    nav = _render_nav(active_nav, period, available_themes, current_theme)
     style_block = ""
     if theme_css:
         style_block = f"<style>\n{theme_css}\n</style>"
@@ -88,7 +90,9 @@ def _render_layout(
 </head>
 <body>
 <header class="topbar">
-  <h1><a href="/?period={_html_escape(period)}">Go Aggregator</a></h1>
+  <h1><a href="/?period={_html_escape(period)}&amp;theme={
+        _html_escape(current_theme)
+    }">Go Aggregator</a></h1>
   {nav}
 </header>
 <main>
@@ -102,8 +106,13 @@ def _render_layout(
 </html>"""
 
 
-def _render_nav(active_nav: str, period: str) -> str:
-    """Render the top navigation bar."""
+def _render_nav(
+    active_nav: str,
+    period: str,
+    available_themes: list[str] | None = None,
+    current_theme: str = "",
+) -> str:
+    """Render the top navigation bar with theme selector."""
     items = [
         ("overview", "/", "Overview"),
         ("accounts", "/accounts", "Accounts"),
@@ -116,14 +125,36 @@ def _render_nav(active_nav: str, period: str) -> str:
     for key, href, label in items:
         cls = "active" if key == active_nav else ""
         parts.append(
-            f'<a class="{cls}" href="{href}?period={_html_escape(period)}">'
+            f'<a class="{cls}" href="{href}?period={_html_escape(period)}'
+            f'&amp;theme={_html_escape(current_theme)}">'
             f"{_html_escape(label)}</a>"
         )
+
+    # Theme selector dropdown
+    themes: list[str] = available_themes or []
+    if themes:
+        theme_options: list[str] = []
+        for name in themes:
+            sel = " selected" if name == current_theme else ""
+            theme_options.append(
+                f'<option value="{_html_escape(name)}"{sel}>'
+                f"{_html_escape(name)}</option>"
+            )
+        options_html = "".join(theme_options)
+        parts.append(
+            '<form method="get" class="theme-selector">'
+            '<select name="theme" onchange="this.form.submit()">'
+            f"{options_html}"
+            "</select>"
+            f'<input type="hidden" name="period" value="{_html_escape(period)}">'
+            "</form>"
+        )
+
     parts.append("</nav>")
     return "".join(parts)
 
 
-def _render_period_selector(current: str) -> str:
+def _render_period_selector(current: str, current_theme: str = "") -> str:
     """Render a period selector form."""
     options = [
         ("1h", "Last hour"),
@@ -142,6 +173,10 @@ def _render_period_selector(current: str) -> str:
             f"{_html_escape(label)}</option>"
         )
     parts.append("</select></label>")
+    if current_theme:
+        parts.append(
+            f'<input type="hidden" name="theme" value="{_html_escape(current_theme)}">'
+        )
     parts.append("</form>")
     return "".join(parts)
 
@@ -276,6 +311,8 @@ def render_overview(
     bandwidth_daily: list[dict[str, Any]] | None = None,
     theme_css: str = "",
     heatmap_colors: list[str] | None = None,
+    available_themes: list[str] | None = None,
+    current_theme: str = "",
 ) -> str:
     """Render the overview dashboard page."""
     summary = overview.get("summary", {})
@@ -308,7 +345,7 @@ def render_overview(
 
     body = f"""
 <h2>Overview</h2>
-{_render_period_selector(period)}
+{_render_period_selector(period, current_theme)}
 
 <section class="cards">
   <div class="card">
@@ -398,6 +435,8 @@ def render_overview(
         period=period,
         refresh_interval_s=refresh_interval_s,
         theme_css=theme_css,
+        available_themes=available_themes,
+        current_theme=current_theme,
     )
 
 
@@ -471,11 +510,13 @@ def render_accounts(
     accounts: list[dict[str, Any]],
     period: str = "24h",
     theme_css: str = "",
+    available_themes: list[str] | None = None,
+    current_theme: str = "",
 ) -> str:
     """Render the accounts page."""
     body = f"""
 <h2>Accounts</h2>
-{_render_period_selector(period)}
+{_render_period_selector(period, current_theme)}
 <section class="panel">
   {_render_account_table(accounts)}
 </section>
@@ -486,6 +527,8 @@ def render_accounts(
         active_nav="accounts",
         period=period,
         theme_css=theme_css,
+        available_themes=available_themes,
+        current_theme=current_theme,
     )
 
 
@@ -494,6 +537,8 @@ def render_models(
     account_filter: str = "",
     period: str = "24h",
     theme_css: str = "",
+    available_themes: list[str] | None = None,
+    current_theme: str = "",
 ) -> str:
     """Render the models page."""
     if not models:
@@ -537,6 +582,7 @@ def render_models(
            placeholder="(all)">
   </label>
   <input type="hidden" name="period" value="{escape_attr(period)}">
+  <input type="hidden" name="theme" value="{escape_attr(current_theme)}">
   <button type="submit">Apply</button>
 </form>
 """
@@ -544,7 +590,7 @@ def render_models(
     body = f"""
 <h2>Models</h2>
 {filter_form}
-{_render_period_selector(period)}
+{_render_period_selector(period, current_theme)}
 <section class="panel">
   {rows_html}
 </section>
@@ -555,6 +601,8 @@ def render_models(
         active_nav="models",
         period=period,
         theme_css=theme_css,
+        available_themes=available_themes,
+        current_theme=current_theme,
     )
 
 
@@ -563,6 +611,8 @@ def render_events(
     event_type: str = "",
     period: str = "24h",
     theme_css: str = "",
+    available_themes: list[str] | None = None,
+    current_theme: str = "",
 ) -> str:
     """Render the events page."""
     if not events:
@@ -601,6 +651,7 @@ def render_events(
            placeholder="(all)">
   </label>
   <input type="hidden" name="period" value="{escape_attr(period)}">
+  <input type="hidden" name="theme" value="{escape_attr(current_theme)}">
   <button type="submit">Apply</button>
 </form>
 """
@@ -608,7 +659,7 @@ def render_events(
     body = f"""
 <h2>Events</h2>
 {filter_form}
-{_render_period_selector(period)}
+{_render_period_selector(period, current_theme)}
 <section class="panel">
   {rows_html}
 </section>
@@ -619,6 +670,8 @@ def render_events(
         active_nav="events",
         period=period,
         theme_css=theme_css,
+        available_themes=available_themes,
+        current_theme=current_theme,
     )
 
 
@@ -627,6 +680,8 @@ def render_timeseries(
     bucket: str,
     period: str = "24h",
     theme_css: str = "",
+    available_themes: list[str] | None = None,
+    current_theme: str = "",
 ) -> str:
     """Render the timeseries page."""
     if not series:
@@ -666,7 +721,7 @@ def render_timeseries(
 
     body = f"""
 <h2>Timeseries ({escape(bucket)} buckets)</h2>
-{_render_period_selector(period)}
+{_render_period_selector(period, current_theme)}
 <section class="panel">
   {rows_html}
 </section>
@@ -677,6 +732,8 @@ def render_timeseries(
         active_nav="timeseries",
         period=period,
         theme_css=theme_css,
+        available_themes=available_themes,
+        current_theme=current_theme,
     )
 
 
@@ -717,6 +774,8 @@ def render_bandwidth(
     account_filter: str = "",
     theme_css: str = "",
     heatmap_colors: list[str] | None = None,
+    available_themes: list[str] | None = None,
+    current_theme: str = "",
 ) -> str:
     """Render the bandwidth page."""
     bytes_in = format_bytes(summary.get("total_bytes_received", 0))
@@ -730,6 +789,7 @@ def render_bandwidth(
   </label>
   <input type="hidden" name="period" value="{escape_attr(period)}">
   <input type="hidden" name="bucket" value="{escape_attr(bucket)}">
+  <input type="hidden" name="theme" value="{escape_attr(current_theme)}">
   <button type="submit">Apply</button>
 </form>
 """
@@ -737,7 +797,7 @@ def render_bandwidth(
     body = f"""
 <h2>Bandwidth</h2>
 {filter_form}
-{_render_period_selector(period)}
+{_render_period_selector(period, current_theme)}
 
 <section class="cards">
   <div class="card">
@@ -768,6 +828,8 @@ def render_bandwidth(
         active_nav="bandwidth",
         period=period,
         theme_css=theme_css,
+        available_themes=available_themes,
+        current_theme=current_theme,
     )
 
 

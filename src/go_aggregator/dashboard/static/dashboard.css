@@ -33,6 +33,7 @@ nav.topnav {
   margin-left: auto;
   display: flex;
   gap: 0.5rem;
+  align-items: center;
 }
 
 nav.topnav a {
@@ -198,4 +199,21 @@ td.no { color: var(--color-error); font-weight: 600; }
   fill: var(--heatmap-label-text);
   font-size: 10px;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.theme-selector {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.75rem;
+}
+
+.theme-selector select {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--topbar-border);
+  border-radius: 4px;
+  background: var(--topbar-bg);
+  color: var(--topbar-text);
+  cursor: pointer;
 }
