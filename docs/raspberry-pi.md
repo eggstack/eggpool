@@ -175,11 +175,10 @@ df -h /var/lib/gorouter
 # The service handles this automatically via dashboard.retain_request_stats_days
 ```
 
-## Phase 17 deployment validation
+## Deployment Validation
 
 Run these checks on the target Pi before exposing it to LAN
-traffic. Each one is a release-gate for the deployment-readiness
-work in `plans/phase-17-deployment-readiness-corrections.md`.
+traffic:
 
 ### 1. Systemd unit hardening
 

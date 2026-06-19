@@ -1,9 +1,11 @@
 ---
 name: architecture
-description: Architecture principles and design decisions for the opencode-go-aggregator project. Use when understanding the codebase structure, making design decisions, or reviewing architectural changes. Covers package boundaries, request lifecycle, and core invariants.
+description: Architecture principles and design decisions for the GoRouter project. Use when understanding the codebase structure, making design decisions, or reviewing architectural changes. Covers package boundaries, request lifecycle, and core invariants.
 ---
 
 # Architecture Principles
+
+See `architecture/README.md` for the full design overview.
 
 ## Core Principles
 
@@ -18,7 +20,7 @@ description: Architecture principles and design decisions for the opencode-go-ag
 - Requests must be persisted before upstream dispatch
 - Pre-body failures can retry; no retry after first downstream byte emitted
 - Every retryable failed attempt must reach terminal state before the next attempt
-- Each attempt reservation is released exactly once via AttemptFinalizer
+- Each attempt reservation is released exactly once via `AttemptFinalizer`
 
 ## Database Invariants
 
@@ -44,6 +46,14 @@ description: Architecture principles and design decisions for the opencode-go-ag
 - Cancelled nonzero-cost requests remain in usage windows
 - Cache-only rate changes create snapshots; cache-only token usage invokes cost calculation
 
+## Multi-Provider
+
+- Provider-suffixed model IDs: `model-id/provider-id` format
+- `ProviderClientPool` manages per-provider `httpx.AsyncClient` instances
+- Per-provider upstream paths: `openai_path`, `anthropic_path`, `models_path`
+- Legacy flat `[[accounts]]` auto-normalizes to default `opencode-go` provider
+- `parse_model_id()` in `catalog/cache.py` handles suffix parsing
+
 ## Health and Failure Classification
 
 - Health systems use a normalized `FailureCategory` vocabulary shared by `HealthManager` and `AccountRuntimeState`
@@ -55,12 +65,14 @@ description: Architecture principles and design decisions for the opencode-go-ag
 - `ConfigError` — invalid or missing configuration
 - `DatabaseError` — database-related failures
 - `UpstreamError` — base for upstream API errors (`status_code` attribute)
+  - `TemporaryUpstreamError` — temporary upstream errors (502, 503, 504)
+  - `TransientUpstreamError` — transient upstream errors (retries may succeed)
   - `AuthenticationError` — upstream rejects credentials
   - `QuotaExhaustedError` — upstream account quota exhausted
   - `RateLimitError` — upstream rate-limited (`retry_after` attribute)
   - `ModelUnavailableError` — model not available upstream
 - `ProxyError` — general proxy/transport errors
-- `ModelNotFoundError` — requested model does not exist (404)
+- `ModelNotFoundError` — requested model does not exist (`model_id` attribute)
 - `NoEligibleAccountError` — no account can serve the request (503)
 - `CatalogUnavailableError` — model catalog not available (503)
 - `AuthenticationUnavailableError` — upstream credentials cannot be loaded (503)
@@ -87,12 +99,6 @@ description: Architecture principles and design decisions for the opencode-go-ag
 - The `scripts/smoke_test.py` stream diagnostics use a rolling tail buffer to recognize SSE markers split across arbitrary transport chunks
 - `scripts/verify_upstream_auth.py` is operator-only: it bypasses GoRouter to confirm the configured key works directly upstream
 - Pyright in CI covers `src/` AND `scripts/`; narrow type annotations with `cast` or `Any` rather than excluding a file
-
-## Testing
-
-- `tests/integration/test_phase17_deployment_readiness_matrix.py` is the cross-cutting release-gate for the matrix in the Phase 17 plan
-- `tests/integration/test_phase18_cleanup.py` is the cross-cutting release-gate for the Phase 18 final-cleanup matrix
-- The historical schema fixture at `tests/fixtures/schema/pre_phase17_v11.sql` is the authoritative upgrade-compatibility baseline; its SHA-256 is recorded in `tests/fixtures/schema/checksums.json` and any edit fails the checksum test
 
 ## CLI Commands
 

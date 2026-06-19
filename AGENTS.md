@@ -1,14 +1,18 @@
 # AGENTS.md
 
-Development guidelines for the opencode-go-aggregator project.
+Development guidelines for the GoRouter project.
 
 ## Skills
 
 Project-specific skills are in `.opencode/skills/`:
 
-- `development` — [`.opencode/skills/development/SKILL.md`](.opencode/skills/development/SKILL.md) — Linting, testing, pre-commit checks, code style
-- `deployment` — [`.opencode/skills/deployment/SKILL.md`](.opencode/skills/deployment/SKILL.md) — Production deployment, systemd, operational scripts
 - `architecture` — [`.opencode/skills/architecture/SKILL.md`](.opencode/skills/architecture/SKILL.md) — Design principles, request lifecycle, invariants, error hierarchy
+- `deployment` — [`.opencode/skills/deployment/SKILL.md`](.opencode/skills/deployment/SKILL.md) — Production deployment, systemd, operational scripts
+- `development` — [`.opencode/skills/development/SKILL.md`](.opencode/skills/development/SKILL.md) — Linting, testing, pre-commit checks, code style
+
+## Architecture
+
+See `architecture/README.md` for a high-level design overview covering request lifecycle, multi-provider architecture, database invariants, quota/routing, and error hierarchy.
 
 ## Code Style
 
@@ -40,19 +44,17 @@ uv run pytest
 
 All must pass with zero errors.
 
-## Architecture Principles
+## Multi-Provider Architecture
 
-For detailed architecture documentation, see the `architecture` skill and the `architecture/` directory.
+GoRouter supports multiple upstream providers. Key components:
 
-Core principles:
+- **`ProviderConfig`** — per-provider base URL, protocols, account pool, upstream paths
+- **`ProviderClientPool`** — per-provider `httpx.AsyncClient` with independent connection pools
+- **Provider-suffixed model IDs** — `model-id/provider-id` format (e.g., `claude-sonnet-4/opencode-go`)
+- **`routing/provider.py`** — `parse_model_provider()` and `format_model_provider()` utilities
+- **Flat config auto-normalization** — legacy `[[accounts]]` configs become a default `opencode-go` provider
 
-- Package boundaries must remain explicit
-- Request proxying, routing, accounting, and dashboard concerns must not be combined in endpoint handlers
-- Use Pydantic v2 for all data validation
-- Use aiosqlite for all database operations
-- Never store API keys in SQLite
-- Never log prompts, completions, or API keys
-- Use constant-time comparison for API key verification
+See `architecture/README.md` for details.
 
 ## Error Handling
 
@@ -61,12 +63,37 @@ Use the exception hierarchy in `errors.py`. Chain exceptions with `raise ... fro
 - `AggregatorError` — base for all aggregator errors
 - `ConfigError` — invalid or missing configuration
 - `DatabaseError` — database-related failures
-- `UpstreamError` — base for upstream API errors
-  - `AuthenticationError`, `QuotaExhaustedError`, `RateLimitError`, `ModelUnavailableError`
+- `UpstreamError` — base for upstream API errors (`status_code` attribute)
+  - `TemporaryUpstreamError` — temporary upstream errors (502, 503, 504)
+  - `TransientUpstreamError` — transient upstream errors (retries may succeed)
+  - `AuthenticationError` — upstream rejects credentials
+  - `QuotaExhaustedError` — upstream account quota exhausted
+  - `RateLimitError` — upstream rate-limited (`retry_after` attribute)
+  - `ModelUnavailableError` — model not available upstream
 - `ProxyError` — general proxy/transport errors
-- `ModelNotFoundError`, `NoEligibleAccountError`, `CatalogUnavailableError`
-- `AuthenticationUnavailableError`, `UpstreamExhaustedError`, `AccountSuspendedError`
+- `ModelNotFoundError` — requested model does not exist (`model_id` attribute)
+- `NoEligibleAccountError` — no account can serve the request (503)
+- `CatalogUnavailableError` — model catalog not available (503)
+- `AuthenticationUnavailableError` — upstream credentials cannot be loaded (503)
+- `UpstreamExhaustedError` — all upstream attempts exhausted (502)
+- `AccountSuspendedError` — account suspended (503)
 - `RequestTooLargeError` — request body exceeds configured limit
+
+## CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `go-aggregator serve` | Start the aggregation proxy server (default command) |
+| `go-aggregator check-config` | Validate the configuration file |
+| `go-aggregator migrate` | Run database migrations |
+| `go-aggregator models refresh` | Refresh the model catalog from upstream (syncs accounts first) |
+| `go-aggregator accounts status` | Show configured account status and key environment variables |
+| `go-aggregator db vacuum` | Reclaim SQLite space via the lock-owned `Database.vacuum()` helper |
+| `go-aggregator connect` | Interactive provider connection setup |
+| `go-aggregator connect list` | List available providers for connection |
+| `go-aggregator logout` | Remove a configured provider account |
+
+All commands accept `--config /path/to/config.toml` (defaults to `config.toml`).
 
 ## Import Organization
 
@@ -90,26 +117,4 @@ Follow ruff TCH rules:
 - Operational scripts: `scripts/`
 - Deployment files: `deploy/`
 - Documentation: `docs/`
-
-## Architecture Documentation
-
-For detailed architecture documentation, see `architecture/` directory:
-
-- `phase-0.md`: Repository and tooling foundation
-- `phase-1.md`: Configuration, database, and application lifecycle
-- `phase-2.md`: Account registry and model discovery
-- `phase-3.md`: Non-streaming transparent proxy
-- `phase-4.md`: Streaming proxy
-- `phase-5.md`: Usage extraction and price accounting
-- `phase-6.md`: Quota-aware routing and reservations
-- `phase-7.md`: Retry, failover, and health management
-- `phase-8.md`: Statistics API and dashboard
-- `phase-9.md`: Deployment hardening
-- `phase-10-integration-hardening.md`: Integration hardening and correct request lifecycle
-- `phase-11-quota-lifecycle-correctness.md`: Quota lifecycle and failover correctness
-- `phase-12-executable-correctness-pass.md`: Executable correctness pass
-- `phase-13-attempt-transaction-hardening.md`: Attempt lifecycle and transaction hardening
-- `phase-14-deployment-blockers-and-operational-hardening.md`: Deployment blockers and operational hardening
-- `phase-15-concurrency-accounting-correctness.md`: Concurrency and accounting correctness
-- `phase-17-deployment-readiness-corrections.md`: Deployment readiness corrections
-- `phase-18-final-cleanup-before-live-testing.md`: Final cleanup before live testing
+- Architecture: `architecture/`

@@ -71,9 +71,12 @@ configured SQLite path.
 | `go-aggregator serve` | Start the aggregation proxy server (default command) |
 | `go-aggregator check-config` | Validate the configuration file |
 | `go-aggregator migrate` | Run database migrations |
-| `go-aggregator models refresh` | Refresh the model catalog from upstream (also syncs configured accounts) |
+| `go-aggregator models refresh` | Refresh the model catalog from upstream (syncs accounts first) |
 | `go-aggregator accounts status` | Show configured account status and key environment variables |
 | `go-aggregator db vacuum` | Reclaim SQLite space via the lock-owned `Database.vacuum()` helper |
+| `go-aggregator connect` | Interactive provider connection setup |
+| `go-aggregator connect list` | List available providers for connection |
+| `go-aggregator logout` | Remove a configured provider account |
 
 All commands accept `--config /path/to/config.toml` (defaults to `config.toml`).
 Configuration changes require a process restart; live reload is intentionally
@@ -183,7 +186,7 @@ src/go_aggregator/
 ├── db/
 │   ├── connection.py    # SQLite connection manager
 │   ├── migrations.py    # Schema migration runner
-│   ├── repositories.py  # Data access layer (Account, Request, Reservation, Attempt, Usage, Price repos)
+│   ├── repositories.py  # Data access layer
 │   └── schema/          # Ordered SQLite migrations + checksums
 ├── request/
 │   ├── coordinator.py       # Central request lifecycle orchestrator
@@ -192,7 +195,8 @@ src/go_aggregator/
 │   └── body.py              # Bounded request body reading
 ├── accounts/            # Account registry and state
 ├── catalog/             # Model catalog, pricing, estimation, and protocols
-├── routing/             # Quota-aware routing and eligibility
+├── routing/             # Quota-aware routing, eligibility, provider parsing
+├── providers/           # ProviderClientPool, pproxy transport, connect CLI
 ├── proxy/               # Transparent proxy, streaming, and SSE observer
 ├── retry/               # Error classification and failover
 ├── health/              # Circuit breaker and health tracking
@@ -213,7 +217,7 @@ tests/
 ├── unit/                # Unit tests
 ├── integration/         # Integration tests (mocked upstreams)
 ├── contract/            # Contract tests (response format)
-└── fixtures/            # Test data
+└── fixtures/            # Test data and schema baselines
 ```
 
 ## Implementation Status

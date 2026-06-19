@@ -1,6 +1,6 @@
 ---
 name: deployment
-description: Deployment and operations for the opencode-go-aggregator project. Use when deploying, configuring, or troubleshooting the service. Covers systemd, configuration changes, operational scripts, and production hardening.
+description: Deployment and operations for the GoRouter project. Use when deploying, configuring, or troubleshooting the service. Covers systemd, configuration changes, operational scripts, and production hardening.
 ---
 
 # Deployment and Operations

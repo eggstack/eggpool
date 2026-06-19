@@ -1,6 +1,6 @@
 ---
 name: development
-description: Development workflow for the opencode-go-aggregator project. Use when running linters, type checkers, tests, or pre-commit validation. Covers ruff, pyright, pytest, and the full pre-commit check sequence.
+description: Development workflow for the GoRouter project. Use when running linters, type checkers, tests, or pre-commit validation. Covers ruff, pyright, pytest, and the full pre-commit check sequence.
 ---
 
 # Development Workflow
