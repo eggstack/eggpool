@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from eggpool.dashboard.render import (
     get_theme,
@@ -104,6 +104,7 @@ async def handle_overview(
         request, theme
     )
     ping_summary = await stats.get_ping_summary(time_range)
+    ip_stats = await stats.get_ip_stats(time_range)
     html = render_overview(
         overview=overview,
         accounts=accounts,
@@ -117,6 +118,7 @@ async def handle_overview(
         heatmap_colors=heatmap_colors,
         available_themes=available,
         current_theme=current_theme,
+        ip_stats=ip_stats,
     )
     return HTMLResponse(content=html)
 
@@ -304,6 +306,28 @@ async def handle_bandwidth(
     )
 
 
+async def handle_timeseries_json(
+    request: Request,
+    period: str | None = "24h",
+    bucket: str = "hour",
+    account: str | None = None,
+    model: str | None = None,
+) -> Response:
+    """Return timeseries data as JSON for Chart.js."""
+    _get_dashboard_config(request)
+    time_range = _resolve(request, period)
+    if bucket not in ("hour", "day"):
+        bucket = "hour"
+    stats = request.app.state.stats
+    series = await stats.get_timeseries(
+        time_range,
+        bucket=bucket,
+        account_name=account or None,
+        model_id=model or None,
+    )
+    return JSONResponse(content=series or [])
+
+
 def register_dashboard_routes(app: Any, require_auth: bool = False) -> None:
     """Attach the dashboard HTML routes to a FastAPI app.
 
@@ -372,6 +396,13 @@ def register_dashboard_routes(app: Any, require_auth: bool = False) -> None:
         response_class=HTMLResponse,
         dependencies=dependencies,
     )
+    app.add_api_route(
+        path="/api/timeseries",
+        endpoint=handle_timeseries_json,
+        methods=["GET"],
+        response_class=JSONResponse,
+        dependencies=dependencies,
+    )
 
 
 __all__ = [
@@ -383,5 +414,6 @@ __all__ = [
     "handle_overview",
     "handle_pings",
     "handle_timeseries",
+    "handle_timeseries_json",
     "register_dashboard_routes",
 ]

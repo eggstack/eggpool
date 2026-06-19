@@ -90,6 +90,7 @@ def _render_layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{_html_escape(title)}</title>
 <link rel="stylesheet" href="/static/dashboard.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 {style_block}
 </head>
 <body>
@@ -263,6 +264,133 @@ def _render_provider_health(ping_summary: list[dict[str, Any]]) -> str:
         "</tbody></table>"
         "</section>"
     )
+
+
+def _render_ip_stats(ip_stats: list[dict[str, Any]]) -> str:
+    """Render the per-IP statistics section for the overview page."""
+    if not ip_stats:
+        return ""
+    rows: list[str] = []
+    for row in ip_stats[:10]:  # Show top 10 IPs
+        ip = escape(str(row.get("client_ip", "unknown")))
+        req_count = int(row.get("request_count", 0))
+        in_tok = format_tokens(row.get("input_tokens", 0))
+        out_tok = format_tokens(row.get("output_tokens", 0))
+        cost = format_microdollars(row.get("cost_microdollars", 0))
+        avg_lat = format_latency(row.get("avg_latency_ms", 0.0))
+        error_count = int(row.get("error_count", 0))
+        unique_models = int(row.get("unique_models", 0))
+        rows.append(
+            f"<tr>"
+            f"<td>{ip}</td>"
+            f"<td>{req_count:,}</td>"
+            f"<td>{in_tok}</td>"
+            f"<td>{out_tok}</td>"
+            f"<td>{cost}</td>"
+            f"<td>{avg_lat}</td>"
+            f"<td>{error_count:,}</td>"
+            f"<td>{unique_models}</td>"
+            f"</tr>"
+        )
+    return (
+        '<section class="panel">'
+        "<h3>Request breakdown by IP</h3>"
+        '<table class="data compact">'
+        "<thead><tr>"
+        "<th>IP Address</th>"
+        "<th>Requests</th>"
+        "<th>Input tokens</th>"
+        "<th>Output tokens</th>"
+        "<th>Cost</th>"
+        "<th>Avg latency</th>"
+        "<th>Errors</th>"
+        "<th>Models</th>"
+        "</tr></thead><tbody>"
+        f"{''.join(rows)}"
+        "</tbody></table>"
+        "</section>"
+    )
+
+
+def _render_timeseries_chart(period: str = "24h") -> str:
+    """Render an interactive timeseries chart using Chart.js."""
+    return f"""
+<section class="panel">
+  <h3>Request timeseries</h3>
+  <div style="height: 300px; position: relative;">
+    <canvas id="timeseries-chart"></canvas>
+  </div>
+</section>
+<script>
+(() => {{
+  const period = '{period}';
+  const ctx = document.getElementById('timeseries-chart');
+  if (!ctx) return;
+
+  const chart = new Chart(ctx, {{
+    type: 'line',
+    data: {{
+      labels: [],
+      datasets: [
+        {{
+          label: 'Requests',
+          data: [],
+          borderColor: 'rgb(75, 192, 192)',
+          tension: 0.1
+        }},
+        {{
+          label: 'Errors',
+          data: [],
+          borderColor: 'rgb(255, 99, 132)',
+          tension: 0.1
+        }}
+      ]
+    }},
+    options: {{
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {{
+        x: {{
+          title: {{
+            display: true,
+            text: 'Time'
+          }}
+        }},
+        y: {{
+          title: {{
+            display: true,
+            text: 'Count'
+          }},
+          beginAtZero: true
+        }}
+      }}
+    }}
+  }});
+
+  async function loadData() {{
+    try {{
+      const response = await fetch('/api/timeseries?period=' + period);
+      if (!response.ok) return;
+      const data = await response.json();
+
+      const labels = data.map(d => d.bucket);
+      const requests = data.map(d => d.request_count || 0);
+      const errors = data.map(d => d.error_count || 0);
+
+      chart.data.labels = labels;
+      chart.data.datasets[0].data = requests;
+      chart.data.datasets[1].data = errors;
+      chart.update();
+    }} catch (err) {{
+      console.error('Failed to load timeseries data:', err);
+    }}
+  }}
+
+  loadData();
+  window.setInterval(loadData, 60000);
+}})();
+</script>
+"""
 
 
 def _render_model_glance(models: list[dict[str, Any]]) -> str:
@@ -460,6 +588,7 @@ def render_overview(
     heatmap_colors: list[str] | None = None,
     available_themes: list[str] | None = None,
     current_theme: str = "",
+    ip_stats: list[dict[str, Any]] | None = None,
 ) -> str:
     """Render the overview dashboard page."""
     summary = overview.get("summary", {})
@@ -568,6 +697,8 @@ def render_overview(
   {_render_account_table(accounts)}
 </section>
 
+{_render_timeseries_chart(period)}
+
 <section class="overview-grid">
   <div class="panel">
     <h3>Top models</h3>
@@ -589,6 +720,8 @@ def render_overview(
     ({format_microdollars(least.get("cost_microdollars", 0))})
   </p>
 </section>
+
+{_render_ip_stats(ip_stats or [])}
 
 <section class="panel">
   <h3>Bandwidth activity</h3>
