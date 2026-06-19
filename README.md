@@ -1,16 +1,17 @@
 # EggPool
 
-A lightweight, LAN-hosted proxy that aggregates OpenCode Go and compatible
-provider accounts behind one OpenAI/Anthropic-compatible endpoint.
+A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts
+behind one OpenAI/Anthropic-compatible endpoint.
 
 ## Features
 
-- Transparently proxies OpenCode Go model requests
+- Transparently proxies model requests across multiple providers
 - Supports OpenAI-compatible and Anthropic-compatible upstream request paths
-- Dynamically discovers currently available models
-- Routes requests across subscriptions based on estimated quota utilization
+- Dynamically discovers currently available models from each provider
+- Routes requests across accounts based on estimated quota utilization
 - Tracks request, token, model, latency, error, and estimated-cost statistics in SQLite
 - Exposes a self-updating single-page dashboard for current usage at a glance
+- 50+ built-in themes with customizable styling
 - Runs on a Raspberry Pi with Ubuntu using a single-process ASGI deployment
 
 ## Requirements
@@ -62,9 +63,16 @@ uv run eggpool --config config.toml migrate
 uv run eggpool --config config.toml serve
 ```
 
-The validated baseline sequence is: `uv run eggpool --help`,
-`check-config` with exported environment variables, and `migrate` against the
-configured SQLite path.
+### Option 3: Interactive setup
+
+```bash
+# Run the interactive onboarding wizard
+uv run eggpool onboard
+
+# Or connect to a specific provider
+uv run eggpool connect
+uv run eggpool connect list
+```
 
 ## CLI Commands
 
@@ -73,17 +81,27 @@ configured SQLite path.
 | `eggpool serve` | Start the aggregation proxy server (default command) |
 | `eggpool check-config` | Validate the configuration file |
 | `eggpool migrate` | Run database migrations |
-| `eggpool models refresh` | Refresh the model catalog from upstream (syncs accounts first) |
-| `eggpool accounts status` | Show configured account status and key environment variables |
-| `eggpool accounts list` | List configured provider accounts and API key backends |
-| `eggpool db vacuum` | Reclaim SQLite space via the lock-owned `Database.vacuum()` helper |
-| `eggpool connect` | Interactive provider connection setup |
+| `eggpool onboard` | Run the interactive onboarding setup |
+| `eggpool connect` | Connect to a new provider interactively |
 | `eggpool connect list` | List available providers for connection |
 | `eggpool logout` | Remove a configured provider account |
 | `eggpool rehash` | Reload configuration in the running server |
+| `eggpool restart` | Fully restart the server (stop then start) |
+| `eggpool stop` | Stop the running server |
+| `eggpool set` | Set a server configuration value and restart |
+| `eggpool getkey` | Print the current server API key |
+| `eggpool newkey` | Generate a new server API key |
+| `eggpool edit` | Open the configuration file in the default editor |
+| `eggpool configsetup` | Print configuration snippets for code editors |
+| `eggpool update` | Check for updates and reinstall if newer |
+| `eggpool models refresh` | Refresh the model catalog from upstream |
+| `eggpool accounts status` | Show configured account status |
+| `eggpool accounts list` | List configured provider accounts |
+| `eggpool dashboard public` | Toggle dashboard public access |
+| `eggpool db vacuum` | Vacuum the database to reclaim space |
 
 All commands accept `--config /path/to/config.toml` (defaults to `config.toml`).
-Configuration changes require a process restart; live reload is intentionally
+Configuration changes require a service restart; live reload is intentionally
 not supported.
 
 ## Operational Scripts
@@ -91,6 +109,7 @@ not supported.
 Scripts under `scripts/`:
 
 - `scripts/install.sh` — quick install script for local development setup
+- `scripts/install_prompt.py` — installation prompt helper
 - `scripts/check_database.py` — read-only database invariant checker. See
   `docs/deployment.md` for the documented exit-code contract.
 - `scripts/smoke_test.py` — deployment smoke test for the running
@@ -123,6 +142,18 @@ When `[dashboard].enabled = true`, the dashboard is served at `/`. It defaults
 to the bundled `Cyber Red` theme and refreshes visible data in place using the
 configured `[dashboard].refresh_interval_s`.
 
+The dashboard includes:
+- Overview with request counts, error rates, costs, and token usage
+- Account and model breakdowns with filtering
+- Latency metrics including time-to-first-token (TTFT)
+- Provider health monitoring with ping statistics
+- Bandwidth heatmap (GitHub-style contribution graph)
+- Timeseries charts with auto-refresh
+- Interactive theme selector with 50+ themes
+
+Static assets (CSS, JavaScript, favicon) are served from `/static/` with
+appropriate cache headers.
+
 JSON stats endpoints are available under `/api/stats/*`, including summary,
 accounts, models, timeseries, errors, latency, pings, bandwidth, and `/api/events`.
 
@@ -137,12 +168,30 @@ See `config.example.toml` for all available options.
 - `[server]` — Bind address, port, API key environment variable, logging
 - `[upstream]` — Upstream API base URL, timeouts, connection pool
 - `[database]` — SQLite path, WAL mode, synchronous mode
-- `[models]` — Catalog refresh interval, exposure mode
+- `[models]` — Catalog refresh interval, exposure mode, staleness settings
 - `[routing]` — Routing strategy, retry limits, penalties
 - `[limits]` — Quota windows (5-hour, weekly, monthly)
 - `[dashboard]` — Dashboard toggle, theme, retention, refresh interval
 - `[security]` — Allowed hosts, CORS, header redaction
-- `[[accounts]]` — One entry per OpenCode Go subscription
+- `[providers.*]` — Provider configurations with accounts
+- `[model_overrides.*]` — Per-model protocol or path overrides
+
+### Provider Configuration
+
+Providers are configured under `[providers.<id>]` with nested `[[providers.<id>.accounts]]` entries:
+
+```toml
+[providers.opencode-go]
+id = "opencode-go"
+base_url = "https://opencode.ai/zen/go/v1"
+protocols = ["openai", "anthropic"]
+
+[[providers.opencode-go.accounts]]
+name = "personal"
+api_key = "sk-your-opencode-go-key"
+```
+
+Use `eggpool connect` for interactive provider setup instead of manual configuration.
 
 ## Development
 
@@ -182,6 +231,7 @@ src/eggpool/
 ├── constants.py         # Project-wide constants
 ├── errors.py            # Exception hierarchy
 ├── logging.py           # Structured logging setup
+├── onboard.py           # Interactive onboarding setup
 ├── models/
 │   ├── config.py        # Pydantic config models
 │   ├── domain.py        # Internal domain objects
@@ -209,47 +259,46 @@ src/eggpool/
 ├── api/                 # API endpoint handlers and error shaping
 ├── background/          # Background task supervisor and cleanup
 ├── dashboard/           # Self-updating server-rendered HTML dashboard
+│   ├── render.py        # HTML rendering functions
+│   ├── routes.py        # Dashboard HTTP routes
+│   ├── theme.py         # TOML theme to CSS variable translation
+│   ├── escape.py        # HTML escaping utilities
+│   └── static/          # CSS, JavaScript, and favicon
 └── security/            # Header redaction and security utilities
 
 scripts/                 # Operational scripts
-├── install.sh           # Quick install script for local development
+├── install.sh           # Quick install script
+├── install_prompt.py    # Installation prompt helper
 ├── check_database.py    # Read-only database invariant checker
-├── smoke_test.py        # Deployment smoke test for a running proxy
-└── verify_upstream_auth.py  # Direct-upstream auth verifier (operator-only)
+├── smoke_test.py        # Deployment smoke test
+└── verify_upstream_auth.py  # Direct-upstream auth verifier
+
+themes/                  # 50+ Halloy-format .toml theme files
 
 tests/
 ├── unit/                # Unit tests
 ├── integration/         # Integration tests (mocked upstreams)
 ├── contract/            # Contract tests (response format)
 └── fixtures/            # Test data and schema baselines
+
+docs/                    # Documentation
+├── deployment.md        # Production deployment guide
+├── raspberry-pi.md      # Raspberry Pi setup guide
+├── backup-restore.md    # Backup and restore procedures
+├── firewall.md          # Firewall configuration
+└── filesystem-layout.md # Filesystem layout reference
+
+deploy/                  # Deployment files
+├── eggpool.service      # systemd unit file
+├── eggpool-logrotate.conf  # Logrotate configuration
+└── env.example          # Example environment file
 ```
-
-## Implementation Status
-
-- [x] Phase 0: Repository and tooling foundation
-- [x] Phase 1: Configuration, database, and application lifecycle
-- [x] Phase 2: Account registry and model discovery
-- [x] Phase 3: Non-streaming transparent proxy
-- [x] Phase 4: Streaming proxy
-- [x] Phase 5: Usage extraction and price accounting
-- [x] Phase 6: Quota-aware routing and reservations
-- [x] Phase 7: Retry, failover, and health management
-- [x] Phase 8: Statistics API and dashboard
-- [x] Phase 9: Deployment hardening
-- [x] Phase 10: Integration hardening and correct request lifecycle
-- [x] Phase 11: Quota lifecycle and failover correctness
-- [x] Phase 12: Executable correctness pass
-- [x] Phase 13: Attempt lifecycle and transaction hardening
-- [x] Phase 14: Deployment blockers and operational hardening
-- [x] Phase 15: Concurrency and accounting correctness
-- [x] Phase 17: Deployment readiness corrections
-- [x] Phase 18: Final cleanup before live testing
 
 ## Known Limitations
 
 - Usage is proxy-observed; only traffic routed through the proxy is tracked.
-- Weekly and monthly quota windows are rolling approximations unless OpenCode exposes authoritative subscription resets.
-- Interrupted streams may not contain terminal usage.
+- Weekly and monthly quota windows are rolling approximations unless providers expose authoritative subscription resets.
+- Interrupted streams may not contain terminal usage data.
 - Published prices may not perfectly match upstream subscription accounting.
 - Context-tiered prices are conservatively estimated until pricing-rule support is added.
 - Accounts used outside the proxy require manual offsets for accurate balancing.
