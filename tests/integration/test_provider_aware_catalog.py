@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
+from eggpool.accounts.registry import AccountRegistry
 from eggpool.catalog.cache import ModelCatalogCache
+from eggpool.catalog.service import CatalogService
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
+from eggpool.models.config import AppConfig, ProviderConfig
 
 
 @pytest.mark.asyncio
@@ -130,3 +134,50 @@ async def test_persist_catalog_stores_provider_id() -> None:
     assert rows[0]["provider_id"] == "custom-provider"
 
     await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_catalog_persists_only_provider_specific_pricing() -> None:
+    """Catalog refreshes neither create phantom nor duplicate price rows."""
+    db = Database(path=":memory:")
+    await db.connect()
+    runner = MigrationRunner(db)
+    await runner.run()
+    config = AppConfig(
+        providers={
+            "provider-a": ProviderConfig(
+                id="provider-a",
+                base_url="https://provider-a.example",
+            )
+        }
+    )
+    registry = AccountRegistry(config)
+    client = httpx.AsyncClient()
+    try:
+        service = CatalogService(config, registry, db, client)
+        service.cache.update_from_account(
+            "account-a",
+            "provider-a",
+            [
+                {
+                    "model_id": "shared-model",
+                    "protocol": "openai",
+                    "source_metadata": {
+                        "input_price_per_1k": 0.001,
+                        "output_price_per_1k": 0.002,
+                    },
+                }
+            ],
+        )
+
+        await service._persist_catalog()  # pyright: ignore[reportPrivateUsage]
+        await service._persist_catalog()  # pyright: ignore[reportPrivateUsage]
+
+        rows = await db.fetch_all(
+            "SELECT provider_id FROM model_price_snapshots WHERE model_id = ?",
+            ("shared-model",),
+        )
+        assert [row["provider_id"] for row in rows] == ["provider-a"]
+    finally:
+        await client.aclose()
+        await db.disconnect()

@@ -604,17 +604,21 @@ class PriceSnapshotRepository:
     def __init__(self, db: Database) -> None:
         self._db = db
 
-    async def get_latest(self, model_id: str) -> dict[str, Any] | None:
-        """Get the most recent price snapshot for a model."""
+    async def get_latest(
+        self, model_id: str, provider_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """Get the latest snapshot, optionally scoped to one provider."""
+        provider_clause = "" if provider_id is None else " AND provider_id = ?"
+        params = (model_id,) if provider_id is None else (model_id, provider_id)
         row = await self._db.fetch_one(
             "SELECT model_id, input_price_per_1k, output_price_per_1k, "
             "captured_at, input_per_million_microdollars, "
             "output_per_million_microdollars, "
             "cache_read_per_million_microdollars, "
             "cache_write_per_million_microdollars, source, provider_id "
-            "FROM model_price_snapshots "
-            "WHERE model_id = ? ORDER BY captured_at DESC, id DESC LIMIT 1",
-            (model_id,),
+            "FROM model_price_snapshots WHERE model_id = ?"
+            f"{provider_clause} ORDER BY captured_at DESC, id DESC LIMIT 1",
+            params,
         )
         return dict(row) if row is not None else None
 
@@ -670,6 +674,8 @@ class PriceSnapshotRepository:
         self,
         model_id: str,
         prices_dict: dict[str, float | int | str | None],
+        *,
+        provider_id: str = "opencode-go",
     ) -> None:
         """Record prices from a dictionary with input/output keys."""
         input_micro = prices_dict.get("input_per_million_microdollars")
@@ -694,6 +700,7 @@ class PriceSnapshotRepository:
                 cache_write
             ),
             source=source_value if isinstance(source_value, str) else "upstream",
+            provider_id=provider_id,
         )
 
 

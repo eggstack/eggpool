@@ -403,10 +403,9 @@ class CatalogService:
                         (account_id, model_id, is_available),
                     )
 
-                # 7.5: Insert price snapshot if pricing data is available
-                await self._maybe_insert_price_snapshot(model_id, model_info)
-
-            # 7.6: Insert per-provider price snapshots
+            # Persist provider-specific pricing only. A global snapshot would
+            # create phantom default-provider pricing when a model is offered
+            # exclusively by another provider.
             for (
                 pid_model_id,
                 pid,
@@ -559,7 +558,7 @@ class CatalogService:
 
         # Skip insert when every field already matches the latest snapshot.
         snapshot_repo = PriceSnapshotRepository(self._db)
-        latest = await snapshot_repo.get_latest(model_id)
+        latest = await snapshot_repo.get_latest(model_id, provider_id)
         if latest is not None:
             old_input = latest.get("input_price_per_1k")
             old_output = latest.get("output_price_per_1k")

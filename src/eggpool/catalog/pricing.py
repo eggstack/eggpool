@@ -14,6 +14,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_PRICE_SNAPSHOT_COLUMNS = """
+    model_id, input_price_per_1k, output_price_per_1k, captured_at,
+    input_per_million_microdollars, output_per_million_microdollars,
+    cache_read_per_million_microdollars,
+    cache_write_per_million_microdollars, source, provider_id
+"""
+
 _PRICE_NUMBER_RE = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[-+]?\d+)?")
 _PER_TOKEN_UNITS = ("per token", "/token", "/tok")
 _PER_1K_UNITS = ("per 1k", "/1k", "per k", "/k", "per thousand")
@@ -234,45 +241,25 @@ class PriceRepository:
     ) -> PriceSnapshot | None:
         """Get the most recent price snapshot for a model.
 
-        When ``provider_id`` is given, prefers the provider-specific
-        snapshot.  Falls back to the legacy model-only snapshot when no
-        provider-specific row exists.
+        When ``provider_id`` is given, only that provider's pricing is
+        considered. Falling back to another provider can silently charge a
+        request using an unrelated upstream's rates.
         """
         if provider_id is not None:
             row = await self._db.fetch_one(
-                """
-                SELECT model_id, input_price_per_1k, output_price_per_1k,
-                       captured_at, input_per_million_microdollars,
-                       output_per_million_microdollars,
-                       cache_read_per_million_microdollars,
-                       cache_write_per_million_microdollars, source,
-                       provider_id
-                FROM model_price_snapshots
-                WHERE model_id = ? AND provider_id = ?
-                ORDER BY captured_at DESC, id DESC
-                LIMIT 1
-                """,
+                f"SELECT {_PRICE_SNAPSHOT_COLUMNS} "
+                "FROM model_price_snapshots "
+                "WHERE model_id = ? AND provider_id = ? "
+                "ORDER BY captured_at DESC, id DESC LIMIT 1",
                 (model_id, provider_id),
             )
-            if row is not None:
-                return self._row_to_snapshot(row)
-
-        # Fallback: model-only lookup (legacy rows or provider-agnostic)
-        row = await self._db.fetch_one(
-            """
-            SELECT model_id, input_price_per_1k, output_price_per_1k,
-                   captured_at, input_per_million_microdollars,
-                   output_per_million_microdollars,
-                   cache_read_per_million_microdollars,
-                   cache_write_per_million_microdollars, source,
-                   provider_id
-            FROM model_price_snapshots
-            WHERE model_id = ?
-            ORDER BY captured_at DESC, id DESC
-            LIMIT 1
-            """,
-            (model_id,),
-        )
+        else:
+            row = await self._db.fetch_one(
+                f"SELECT {_PRICE_SNAPSHOT_COLUMNS} "
+                "FROM model_price_snapshots WHERE model_id = ? "
+                "ORDER BY captured_at DESC, id DESC LIMIT 1",
+                (model_id,),
+            )
         if row is None:
             return None
         return self._row_to_snapshot(row)
@@ -302,40 +289,31 @@ class PriceRepository:
         )
 
     async def get_snapshots_since(
-        self, model_id: str, since_hours: int = 24
+        self,
+        model_id: str,
+        since_hours: int = 24,
+        provider_id: str | None = None,
     ) -> list[PriceSnapshot]:
-        """Get price snapshots for a model since the given time."""
-        rows = await self._db.fetch_all(
-            """
-            SELECT model_id, input_price_per_1k, output_price_per_1k,
-                   captured_at, input_per_million_microdollars,
-                   output_per_million_microdollars,
-                   cache_read_per_million_microdollars,
-                   cache_write_per_million_microdollars, source
-            FROM model_price_snapshots
-            WHERE model_id = ? AND captured_at > datetime('now', ? || ' hours')
-            ORDER BY captured_at DESC, id DESC
-            """,
-            (model_id, f"-{since_hours}"),
-        )
-        return [
-            PriceSnapshot(
-                model_id=row["model_id"],
-                input_price_per_1k=row["input_price_per_1k"],
-                output_price_per_1k=row["output_price_per_1k"],
-                captured_at=row["captured_at"],
-                input_per_million_microdollars=row["input_per_million_microdollars"],
-                output_per_million_microdollars=row["output_per_million_microdollars"],
-                cache_read_per_million_microdollars=row[
-                    "cache_read_per_million_microdollars"
-                ],
-                cache_write_per_million_microdollars=row[
-                    "cache_write_per_million_microdollars"
-                ],
-                source=row["source"] if row["source"] is not None else "upstream",
+        """Get recent snapshots, optionally scoped to one provider."""
+        if provider_id is None:
+            rows = await self._db.fetch_all(
+                f"SELECT {_PRICE_SNAPSHOT_COLUMNS} "
+                "FROM model_price_snapshots "
+                "WHERE model_id = ? "
+                "AND captured_at > datetime('now', ? || ' hours') "
+                "ORDER BY captured_at DESC, id DESC",
+                (model_id, f"-{since_hours}"),
             )
-            for row in rows
-        ]
+        else:
+            rows = await self._db.fetch_all(
+                f"SELECT {_PRICE_SNAPSHOT_COLUMNS} "
+                "FROM model_price_snapshots "
+                "WHERE model_id = ? AND provider_id = ? "
+                "AND captured_at > datetime('now', ? || ' hours') "
+                "ORDER BY captured_at DESC, id DESC",
+                (model_id, provider_id, f"-{since_hours}"),
+            )
+        return [self._row_to_snapshot(row) for row in rows]
 
 
 class CostCalculator:

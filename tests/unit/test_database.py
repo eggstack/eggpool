@@ -8,6 +8,7 @@ from contextvars import ContextVar
 import aiosqlite
 import pytest
 
+from eggpool.catalog.pricing import PriceRepository
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
 from eggpool.db.repositories import PriceSnapshotRepository
@@ -392,6 +393,82 @@ async def test_price_snapshots_since_filtering() -> None:
         )
         assert len(rows) == 1
         assert rows[0]["input_price_per_1k"] == 12.0
+    finally:
+        await database.disconnect()
+
+
+@pytest.mark.asyncio()
+async def test_price_repository_isolates_provider_snapshots() -> None:
+    database = Database(path=":memory:")
+    await database.connect()
+    try:
+        await _run_migrations(database)
+        await _seed_model(database, "shared-model")
+        repo = PriceRepository(database)
+
+        async with database.transaction():
+            await repo.record_snapshot(
+                "shared-model", 0.001, 0.002, provider_id="provider-a"
+            )
+            await repo.record_snapshot(
+                "shared-model", 0.009, 0.018, provider_id="provider-b"
+            )
+
+        provider_a = await repo.get_latest_snapshot(
+            "shared-model", provider_id="provider-a"
+        )
+        provider_b = await repo.get_latest_snapshot(
+            "shared-model", provider_id="provider-b"
+        )
+
+        assert provider_a is not None
+        assert provider_a.input_price_per_1k == 0.001
+        assert provider_b is not None
+        assert provider_b.input_price_per_1k == 0.009
+        assert (
+            await repo.get_latest_snapshot(
+                "shared-model", provider_id="provider-without-pricing"
+            )
+            is None
+        )
+    finally:
+        await database.disconnect()
+
+
+@pytest.mark.asyncio()
+async def test_price_history_preserves_and_filters_provider() -> None:
+    database = Database(path=":memory:")
+    await database.connect()
+    try:
+        await _run_migrations(database)
+        await _seed_model(database, "shared-model")
+        repo = PriceRepository(database)
+
+        async with database.transaction():
+            await repo.record_snapshot(
+                "shared-model", 0.001, 0.002, provider_id="provider-a"
+            )
+            await repo.record_snapshot(
+                "shared-model", 0.009, 0.018, provider_id="provider-b"
+            )
+
+        all_snapshots = await repo.get_snapshots_since("shared-model")
+        provider_a = await repo.get_snapshots_since(
+            "shared-model", provider_id="provider-a"
+        )
+        snapshot_repo = PriceSnapshotRepository(database)
+        latest_a = await snapshot_repo.get_latest("shared-model", "provider-a")
+        latest_missing = await snapshot_repo.get_latest("shared-model", "missing")
+
+        assert {snapshot.provider_id for snapshot in all_snapshots} == {
+            "provider-a",
+            "provider-b",
+        }
+        assert len(provider_a) == 1
+        assert provider_a[0].provider_id == "provider-a"
+        assert latest_a is not None
+        assert latest_a["input_price_per_1k"] == 0.001
+        assert latest_missing is None
     finally:
         await database.disconnect()
 

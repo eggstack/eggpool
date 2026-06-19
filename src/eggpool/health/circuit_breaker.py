@@ -28,7 +28,7 @@ class CircuitBreaker:
     _failure_count: int = 0
     _success_count: int = 0
     _last_failure_time: float | None = None
-    _last_state_change: float = time.time()
+    _last_state_change: float = field(default_factory=lambda: time.time())
     _half_open_in_flight: bool = False
     _lock: threading.Lock = field(
         default_factory=threading.Lock, init=False, repr=False

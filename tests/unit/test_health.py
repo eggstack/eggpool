@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import time
+from typing import TYPE_CHECKING
 
 from eggpool.health.circuit_breaker import CircuitBreaker, CircuitState
 from eggpool.health.health_manager import HealthManager
 from eggpool.retry.classification import RetryCategory, RetryClassifier
+
+if TYPE_CHECKING:
+    import pytest
 
 
 class TestRetryClassifier:
@@ -76,6 +80,22 @@ class TestCircuitBreaker:
         cb = CircuitBreaker()
         assert cb.state == CircuitState.CLOSED
         assert cb.allow_request()
+
+    def test_initial_state_change_time_is_per_instance(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Each breaker records its own construction time."""
+        timestamps = iter((100.0, 200.0))
+        monkeypatch.setattr(
+            "eggpool.health.circuit_breaker.time.time",
+            lambda: next(timestamps),
+        )
+
+        first = CircuitBreaker()
+        second = CircuitBreaker()
+
+        assert first.get_stats()["last_state_change"] == 100.0
+        assert second.get_stats()["last_state_change"] == 200.0
 
     def test_opens_after_threshold(self) -> None:
         """Test circuit opens after failure threshold."""
