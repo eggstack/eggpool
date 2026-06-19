@@ -79,8 +79,17 @@ fi
 echo ""
 echo "Installation complete."
 echo ""
+echo "Other useful commands:"
+echo "  uv run eggpool accounts status   — show configured accounts"
+echo "  uv run eggpool newkey             — regenerate server API key"
+echo "  uv run eggpool rehash             — reload config in running server"
+echo "  uv run eggpool stop               — stop the server"
+echo "  uv run eggpool restart            — restart the server"
+echo ""
+echo "For production deployment, see docs/deployment.md"
+echo ""
 
-# Ask if user wants to run onboarding
+# Ask if user wants to run onboarding (last, so script waits for input)
 echo -n "Would you like to set up a provider now? (y/n): "
 read -r ONBOARD_CHOICE
 
@@ -93,13 +102,3 @@ else
     echo "Skipping onboarding. You can run it later with:"
     echo "  uv run eggpool onboard"
 fi
-
-echo ""
-echo "Other useful commands:"
-echo "  uv run eggpool accounts status   — show configured accounts"
-echo "  uv run eggpool newkey             — regenerate server API key"
-echo "  uv run eggpool rehash             — reload config in running server"
-echo "  uv run eggpool stop               — stop the server"
-echo "  uv run eggpool restart            — restart the server"
-echo ""
-echo "For production deployment, see docs/deployment.md"
