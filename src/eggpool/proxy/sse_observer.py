@@ -59,6 +59,7 @@ class IncrementalSSEObserver:
     """
 
     def __init__(self, protocol: str) -> None:
+        self._protocol = protocol
         self._buffer = ""
         self._bytes_emitted = 0
         self._first_byte_ms: float = 0.0
@@ -88,12 +89,12 @@ class IncrementalSSEObserver:
         text = self._decoder.decode(chunk).replace("\r\n", "\n")
         # Also normalize lone CR to LF
         text = text.replace("\r", "\n")
-        self._buffer += text
+        lines = (self._buffer + text).split("\n")
+        self._buffer = lines.pop()
 
-        # Process complete lines
-        while "\n" in self._buffer:
-            line, self._buffer = self._buffer.split("\n", 1)
-
+        # Process complete lines in one linear pass. Repeatedly splitting the
+        # remaining buffer copied the tail once per SSE line.
+        for line in lines:
             if not line:
                 # Blank line: terminate the current SSE event
                 self._flush_event()
@@ -168,6 +169,12 @@ class IncrementalSSEObserver:
         if data.strip() == "[DONE]":
             return
 
+        # OpenAI emits usage only in the final usage chunk. Ordinary content
+        # chunks always carry choices, so avoid decoding their JSON solely for
+        # telemetry. Malformed and unusual frames still take the validating path.
+        if self._protocol == "openai" and '"usage"' not in data and '"choices"' in data:
+            return
+
         try:
             parsed_raw = json.loads(data)
             parsed = safe_dict(parsed_raw)
@@ -229,8 +236,9 @@ class IncrementalSSEObserver:
             self._buffer += remainder.replace("\r\n", "\n").replace("\r", "\n")
 
         # Process any remaining complete lines
-        while "\n" in self._buffer:
-            line, self._buffer = self._buffer.split("\n", 1)
+        lines = self._buffer.split("\n")
+        self._buffer = lines.pop()
+        for line in lines:
             if not line:
                 self._flush_event()
                 continue

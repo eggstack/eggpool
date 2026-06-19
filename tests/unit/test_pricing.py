@@ -93,6 +93,44 @@ class TestCostCalculator:
         assert cost > 0
 
     @pytest.mark.asyncio
+    async def test_latest_snapshot_is_cached_until_invalidated(self) -> None:
+        first = PriceSnapshot(
+            model_id="gpt-4",
+            input_price_per_1k=None,
+            output_price_per_1k=None,
+            captured_at="2024-01-01T00:00:00",
+            input_per_million_microdollars=3_000_000,
+            output_per_million_microdollars=15_000_000,
+            provider_id="provider-a",
+        )
+        second = PriceSnapshot(
+            model_id="gpt-4",
+            input_price_per_1k=None,
+            output_price_per_1k=None,
+            captured_at="2024-01-02T00:00:00",
+            input_per_million_microdollars=4_000_000,
+            output_per_million_microdollars=16_000_000,
+            provider_id="provider-a",
+        )
+        mock_repo = AsyncMock()
+        mock_repo.get_latest_snapshot = AsyncMock(side_effect=[first, second])
+        calculator = CostCalculator(price_repo=mock_repo)
+
+        initial, _ = await calculator.calculate_cost(
+            "gpt-4", 1000, 0, provider_id="provider-a"
+        )
+        cached, _ = await calculator.calculate_cost(
+            "gpt-4", 1000, 0, provider_id="provider-a"
+        )
+        calculator.invalidate_price("gpt-4", "provider-a")
+        refreshed, _ = await calculator.calculate_cost(
+            "gpt-4", 1000, 0, provider_id="provider-a"
+        )
+
+        assert (initial, cached, refreshed) == (3000, 3000, 4000)
+        assert mock_repo.get_latest_snapshot.await_count == 2
+
+    @pytest.mark.asyncio
     async def test_calculate_cost_input_only(self) -> None:
         snapshot = PriceSnapshot(
             model_id="gpt-4",

@@ -20,6 +20,8 @@ from eggpool.db.repositories import PingRepository, PriceSnapshotRepository
 from eggpool.providers.client_pool import ProviderClientPool
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import httpx
 
     from eggpool.accounts.registry import AccountRegistry
@@ -87,8 +89,16 @@ class CatalogService:
             self._client_pool = None
             self._httpx_client = client_pool
         self._cache = ModelCatalogCache()
+        self._cache_loaded = False
         self._refresh_lock = asyncio.Lock()
         self._protocol_resolver = ModelProtocolResolver(config)
+        self._price_change_callback: Callable[[str, str | None], None] | None = None
+
+    def set_price_change_callback(
+        self, callback: Callable[[str, str | None], None]
+    ) -> None:
+        """Register a callback used to invalidate derived pricing caches."""
+        self._price_change_callback = callback
 
     @property
     def cache(self) -> ModelCatalogCache:
@@ -99,8 +109,11 @@ class CatalogService:
         async with self._refresh_lock:
             logger.info("Starting catalog refresh")
 
-            # Load cached models from database first
-            await self._load_cached_models()
+            # Fresh service instances (for example ``models refresh``) need
+            # durable fallback state. Long-running services load once at
+            # startup and avoid rereading the full catalog every cycle.
+            if not self._cache_loaded:
+                await self._load_cached_models()
 
             enabled_accounts = self._registry.get_enabled_states()
             if not enabled_accounts:
@@ -331,6 +344,7 @@ class CatalogService:
                 )
             self._cache.hydrate_account_refresh_ages()
             self._cache.hydrate_refresh_age()
+            self._cache_loaded = True
         except Exception:
             logger.exception("Failed to load cached models")
             raise
@@ -339,24 +353,49 @@ class CatalogService:
         """Persist the in-memory catalog to the database."""
         now_sql = "datetime('now')"
 
+        acct_rows = await self._db.fetch_all("SELECT id, name FROM accounts")
+        latest_prices = await PriceSnapshotRepository(self._db).get_all_latest()
+        model_rows: list[tuple[Any, ...]] = []
+        account_model_rows: list[tuple[Any, ...]] = []
+
+        for model_id, model_info in self._cache.get_all_models().items():
+            protocol = model_info.get("protocol")
+            if protocol not in ("openai", "anthropic"):
+                logger.warning(
+                    "Skipping unresolved model during catalog persistence: %s",
+                    model_id,
+                )
+                continue
+
+            protocol_source = model_info.get("protocol_source")
+            if protocol_source == "unresolved":
+                protocol_source = None
+            model_rows.append(
+                (
+                    model_id,
+                    model_info.get("display_name"),
+                    model_info["protocol"],
+                    json.dumps(model_info.get("capabilities", {})),
+                    json.dumps(model_info.get("source_metadata", {})),
+                    protocol_source,
+                )
+            )
+
+            supporting_accounts = self._cache.get_supporting_accounts_for_model(
+                model_id
+            )
+            account_model_rows.extend(
+                (
+                    acct_row["id"],
+                    model_id,
+                    1 if acct_row["name"] in supporting_accounts else 0,
+                )
+                for acct_row in acct_rows
+            )
+
         async with self._db.transaction():
-            for model_id, model_info in self._cache.get_all_models().items():
-                protocol = model_info.get("protocol")
-                if protocol not in ("openai", "anthropic"):
-                    logger.warning(
-                        "Skipping unresolved model during catalog persistence: %s",
-                        model_id,
-                    )
-                    continue
-
-                # Use preserved protocol source from resolution
-                protocol_source = model_info.get("protocol_source")
-                if protocol_source == "unresolved":
-                    protocol_source = None
-
-                # Upsert model
-                await self._db.execute_write(
-                    f"""
+            await self._db.execute_many(
+                f"""
                     INSERT INTO models (
                         model_id, display_name, protocol,
                         capabilities, source_metadata,
@@ -371,37 +410,20 @@ class CatalogService:
                         last_seen_at = {now_sql},
                         protocol_source = excluded.protocol_source,
                         resolution_status = 'resolved'
-                    """,
-                    (
-                        model_id,
-                        model_info.get("display_name"),
-                        model_info["protocol"],
-                        json.dumps(model_info.get("capabilities", {})),
-                        json.dumps(model_info.get("source_metadata", {})),
-                        protocol_source,
-                    ),
-                )
-
-                # Upsert account-model relationships
-                supporting_accounts = self._cache.get_supporting_accounts_for_model(
-                    model_id
-                )
-                acct_rows = await self._db.fetch_all("SELECT id, name FROM accounts")
-                for acct_row in acct_rows:
-                    account_id = acct_row["id"]
-                    account_name = acct_row["name"]
-                    is_available = 1 if account_name in supporting_accounts else 0
-
-                    await self._db.execute_write(
-                        f"""
+                """,
+                model_rows,
+            )
+            await self._db.execute_many(
+                f"""
                         INSERT INTO account_models (
                             account_id, model_id, enabled, created_at
                         ) VALUES (?, ?, ?, {now_sql})
                         ON CONFLICT(account_id, model_id) DO UPDATE SET
                             enabled = excluded.enabled
-                        """,
-                        (account_id, model_id, is_available),
-                    )
+                        WHERE account_models.enabled IS NOT excluded.enabled
+                """,
+                account_model_rows,
+            )
 
             # Persist provider-specific pricing only. A global snapshot would
             # create phantom default-provider pricing when a model is offered
@@ -412,7 +434,10 @@ class CatalogService:
             ), pinfo in self._cache.get_provider_model_entries().items():
                 if self._cache.has_model(pid_model_id):
                     await self._maybe_insert_price_snapshot(
-                        pid_model_id, pinfo, provider_id=pid
+                        pid_model_id,
+                        pinfo,
+                        provider_id=pid,
+                        latest=latest_prices.get((pid_model_id, pid)),
                     )
 
     async def _maybe_insert_price_snapshot(
@@ -420,6 +445,7 @@ class CatalogService:
         model_id: str,
         model_info: dict[str, Any],
         provider_id: str = "opencode-go",
+        latest: dict[str, Any] | None = None,
     ) -> None:
         """Insert a price snapshot if pricing data is available.
 
@@ -558,7 +584,6 @@ class CatalogService:
 
         # Skip insert when every field already matches the latest snapshot.
         snapshot_repo = PriceSnapshotRepository(self._db)
-        latest = await snapshot_repo.get_latest(model_id, provider_id)
         if latest is not None:
             old_input = latest.get("input_price_per_1k")
             old_output = latest.get("output_price_per_1k")
@@ -588,6 +613,8 @@ class CatalogService:
             source=source,
             provider_id=provider_id,
         )
+        if self._price_change_callback is not None:
+            self._price_change_callback(model_id, provider_id)
         logger.debug(
             "Inserted price snapshot for %s: input=%s output=%s "
             "cache_read=%s cache_write=%s source=%s",

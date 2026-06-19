@@ -321,6 +321,13 @@ class CostCalculator:
 
     def __init__(self, price_repo: PriceRepository) -> None:
         self._price_repo = price_repo
+        self._latest_cache: dict[tuple[str, str | None], PriceSnapshot | None] = {}
+
+    def invalidate_price(self, model_id: str, provider_id: str | None = None) -> None:
+        """Invalidate cached pricing after catalog persistence changes it."""
+        self._latest_cache.pop((model_id, provider_id), None)
+        # Provider-agnostic callers may observe any provider's newest row.
+        self._latest_cache.pop((model_id, None), None)
 
     async def calculate_cost(
         self,
@@ -341,9 +348,12 @@ class CostCalculator:
         cache_read_tokens = _normalize_token_count(cache_read_tokens)
         cache_write_tokens = _normalize_token_count(cache_write_tokens)
 
-        snapshot = await self._price_repo.get_latest_snapshot(
-            model_id, provider_id=provider_id
-        )
+        cache_key = (model_id, provider_id)
+        if cache_key not in self._latest_cache:
+            self._latest_cache[cache_key] = await self._price_repo.get_latest_snapshot(
+                model_id, provider_id=provider_id
+            )
+        snapshot = self._latest_cache[cache_key]
 
         if snapshot is None:
             return (

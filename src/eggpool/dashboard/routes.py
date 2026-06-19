@@ -84,9 +84,11 @@ async def handle_overview(
     dashboard_config = _get_dashboard_config(request)
     time_range = _resolve(request, period)
     stats = request.app.state.stats
-    overview = await stats.get_dashboard_overview(time_range)
-    accounts = await stats.get_account_stats(time_range)
-    models = await stats.get_model_stats(time_range)
+    accounts = await stats.get_account_stats(time_range, use_cache=True)
+    overview = await stats.get_dashboard_overview(
+        time_range, account_stats=accounts, use_cache=True
+    )
+    models = await stats.get_model_stats(time_range, use_cache=True)
     events = await stats.get_recent_events(limit=10)
 
     heatmap_start_dt = datetime.now(UTC) - timedelta(days=90)
@@ -130,7 +132,7 @@ async def handle_accounts(
     _get_dashboard_config(request)
     time_range = _resolve(request, period)
     stats = request.app.state.stats
-    accounts = await stats.get_account_stats(time_range)
+    accounts = await stats.get_account_stats(time_range, use_cache=True)
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
     return HTMLResponse(
         content=render_accounts(
@@ -153,7 +155,9 @@ async def handle_models(
     _get_dashboard_config(request)
     time_range = _resolve(request, period)
     stats = request.app.state.stats
-    models = await stats.get_model_stats(time_range, account_name=account or None)
+    models = await stats.get_model_stats(
+        time_range, account_name=account or None, use_cache=True
+    )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
     return HTMLResponse(
         content=render_models(
@@ -280,7 +284,7 @@ async def handle_bandwidth(
     if bucket not in ("hour", "day"):
         bucket = "hour"
     stats = request.app.state.stats
-    summary = await stats.get_summary(time_range)
+    summary = await stats.get_summary(time_range, use_cache=True)
     daily = await stats.get_bandwidth_timeseries(
         time_range, account_name=account or None
     )

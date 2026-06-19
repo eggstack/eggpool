@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
@@ -1028,6 +1029,54 @@ class TestTTFTProviderModelQueries:
             db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
         )
         assert rows == []
+
+    @pytest.mark.asyncio()
+    async def test_provider_model_percentiles_use_one_query(self) -> None:
+        """Grouped percentile enrichment must not issue N+1 queries."""
+        db = AsyncMock(spec=Database)
+        db.fetch_all.return_value = [
+            {
+                "provider_id": "provider-a",
+                "model_id": "model-a",
+                "request_count": 10,
+                "avg_ttft_ms": 20.0,
+                "p50_ttft_ms": 15.0,
+                "p99_ttft_ms": 40.0,
+            }
+        ]
+
+        rows = await queries.fetch_provider_model_ttft(
+            db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+
+        assert rows[0]["p99_ttft_ms"] == 40.0
+        db.fetch_all.assert_awaited_once()
+
+
+class TestDashboardStatsCache:
+    @pytest.mark.asyncio()
+    async def test_summary_cache_is_bounded_and_returns_a_copy(
+        self, db: Database
+    ) -> None:
+        service = StatsService(db)
+        time_range = TimeRange(
+            start=datetime(2025, 1, 1, tzinfo=UTC),
+            end=datetime(2025, 1, 2, tzinfo=UTC),
+            label="24h",
+        )
+        expected = {"total_requests": 10}
+
+        with patch(
+            "eggpool.stats.service.fetch_summary",
+            new=AsyncMock(return_value=expected),
+        ) as fetch:
+            first = await service.get_summary(time_range, use_cache=True)
+            first["total_requests"] = 99
+            second = await service.get_summary(time_range, use_cache=True)
+
+        assert second["total_requests"] == 10
+        fetch.assert_awaited_once()
+        assert len(service._dashboard_cache) <= 32
 
 
 class TestTTFTStatsService:

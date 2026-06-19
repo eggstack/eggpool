@@ -551,14 +551,13 @@ class QuotaEstimator:
         )
         enabled = await acct_repo.list_enabled()
         now_iso = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+        all_windows = await self._usage_window_repo.get_all_usage_windows(now_iso)
         for acct in enabled:
             name = acct["name"]
             if name not in self.accounts:
                 self.accounts[name] = AccountQuota(account_name=name)
             self.accounts[name].weight = acct.get("weight", 1.0)
-            windows = await self._usage_window_repo.get_usage_windows(
-                acct["id"], now_iso
-            )
+            windows = all_windows.get(acct["id"], {"5h": 0, "7d": 0, "30d": 0})
             self.accounts[name].persisted_snapshot = PersistedWindowSnapshot(
                 account_id=acct["id"],
                 cost_5h=windows["5h"],

@@ -82,46 +82,60 @@ async def fetch_account_stats(
 ) -> list[dict[str, Any]]:
     """Get per-account statistics for a time window."""
     sql = """
+    WITH period_stats AS (
+        SELECT
+            r.account_id,
+            COUNT(*) as request_count,
+            COALESCE(SUM(r.input_tokens), 0) as input_tokens,
+            COALESCE(SUM(r.output_tokens), 0) as output_tokens,
+            COALESCE(SUM(r.cost_microdollars), 0) as cost_microdollars,
+            COALESCE(AVG(r.upstream_latency_ms), 0) as avg_latency_ms,
+            COALESCE(SUM(CASE WHEN r.status = 'error' THEN 1 ELSE 0 END), 0)
+                as error_count,
+            COALESCE(SUM(r.bytes_received), 0) as bytes_received,
+            COALESCE(SUM(r.bytes_emitted), 0) as bytes_emitted,
+            COALESCE(AVG(CASE WHEN r.streamed = 1 THEN r.first_byte_ms END), 0)
+                as avg_ttft_ms
+        FROM requests r
+        WHERE r.started_at >= ? AND r.started_at < ?
+        GROUP BY r.account_id
+    ),
+    rolling_stats AS (
+        SELECT
+            r.account_id,
+            COALESCE(SUM(CASE
+                WHEN r.started_at >= datetime('now', '-5 hours')
+                THEN r.cost_microdollars ELSE 0 END), 0) as cost_5h,
+            COALESCE(SUM(CASE
+                WHEN r.started_at >= datetime('now', '-7 days')
+                THEN r.cost_microdollars ELSE 0 END), 0) as cost_7d,
+            COALESCE(SUM(r.cost_microdollars), 0) as cost_30d
+        FROM requests r
+        WHERE r.started_at >= datetime('now', '-30 days')
+          AND r.status != 'pending'
+        GROUP BY r.account_id
+    )
     SELECT
         a.id as account_id,
         a.name as account_name,
         a.enabled as account_enabled,
         a.weight as account_weight,
         a.provider_id as provider_id,
-        COUNT(r.id) as request_count,
-        COALESCE(SUM(r.input_tokens), 0) as input_tokens,
-        COALESCE(SUM(r.output_tokens), 0) as output_tokens,
-        COALESCE(SUM(r.cost_microdollars), 0) as cost_microdollars,
-        COALESCE(AVG(r.upstream_latency_ms), 0) as avg_latency_ms,
-        COALESCE(SUM(CASE WHEN r.status = 'error' THEN 1 ELSE 0 END), 0)
-            as error_count,
-        COALESCE((
-            SELECT SUM(r2.cost_microdollars) FROM requests r2
-            WHERE r2.account_id = a.id
-            AND r2.started_at >= datetime('now', '-5 hours')
-            AND r2.status != 'pending'
-        ), 0) as cost_5h,
-        COALESCE((
-            SELECT SUM(r2.cost_microdollars) FROM requests r2
-            WHERE r2.account_id = a.id
-            AND r2.started_at >= datetime('now', '-7 days')
-            AND r2.status != 'pending'
-        ), 0) as cost_7d,
-        COALESCE((
-            SELECT SUM(r2.cost_microdollars) FROM requests r2
-            WHERE r2.account_id = a.id
-            AND r2.started_at >= datetime('now', '-30 days')
-            AND r2.status != 'pending'
-        ), 0) as cost_30d,
-        COALESCE(SUM(r.bytes_received), 0) as bytes_received,
-        COALESCE(SUM(r.bytes_emitted), 0) as bytes_emitted,
-        COALESCE(AVG(CASE WHEN r.streamed = 1 THEN r.first_byte_ms END), 0)
-            as avg_ttft_ms
+        COALESCE(ps.request_count, 0) as request_count,
+        COALESCE(ps.input_tokens, 0) as input_tokens,
+        COALESCE(ps.output_tokens, 0) as output_tokens,
+        COALESCE(ps.cost_microdollars, 0) as cost_microdollars,
+        COALESCE(ps.avg_latency_ms, 0) as avg_latency_ms,
+        COALESCE(ps.error_count, 0) as error_count,
+        COALESCE(rs.cost_5h, 0) as cost_5h,
+        COALESCE(rs.cost_7d, 0) as cost_7d,
+        COALESCE(rs.cost_30d, 0) as cost_30d,
+        COALESCE(ps.bytes_received, 0) as bytes_received,
+        COALESCE(ps.bytes_emitted, 0) as bytes_emitted,
+        COALESCE(ps.avg_ttft_ms, 0) as avg_ttft_ms
     FROM accounts a
-    LEFT JOIN requests r
-        ON r.account_id = a.id
-        AND r.started_at >= ? AND r.started_at < ?
-    GROUP BY a.id, a.name, a.enabled, a.weight, a.provider_id
+    LEFT JOIN period_stats ps ON ps.account_id = a.id
+    LEFT JOIN rolling_stats rs ON rs.account_id = a.id
     ORDER BY a.name
     """
     rows = await db.fetch_all(sql, (_format_dt(start), _format_dt(end)))
@@ -420,6 +434,7 @@ async def _fetch_ttft_percentiles(
         SELECT
             first_byte_ms,
             ROW_NUMBER() OVER (ORDER BY first_byte_ms) as rn,
+            COUNT(*) OVER () as total_count,
             CAST(CEIL(0.99 * COUNT(*) OVER ()) AS INTEGER) as p99_idx
         FROM requests
         WHERE streamed = 1
@@ -427,7 +442,7 @@ async def _fetch_ttft_percentiles(
           AND started_at >= ? AND started_at < ?
           {extra_filters}
     ) sub
-    WHERE sub.rn IN ((sub.p99_idx + 1) / 2, (sub.p99_idx + 2) / 2)
+    WHERE sub.rn IN ((sub.total_count + 1) / 2, (sub.total_count + 2) / 2)
        OR sub.rn = sub.p99_idx
     """
     row = await db.fetch_one(sql, tuple(params))
@@ -447,32 +462,40 @@ async def fetch_provider_model_ttft(
 ) -> list[dict[str, Any]]:
     """Per-provider, per-model TTFT breakdown (streamed requests only)."""
     sql = """
+    WITH ranked AS (
+        SELECT
+            r.provider_id,
+            r.model_id,
+            r.first_byte_ms,
+            ROW_NUMBER() OVER (
+                PARTITION BY r.provider_id, r.model_id
+                ORDER BY r.first_byte_ms
+            ) as rn,
+            COUNT(*) OVER (
+                PARTITION BY r.provider_id, r.model_id
+            ) as group_count
+        FROM requests r
+        WHERE r.streamed = 1
+          AND r.first_byte_ms IS NOT NULL
+          AND r.started_at >= ? AND r.started_at < ?
+    )
     SELECT
-        r.provider_id,
-        r.model_id,
+        provider_id,
+        model_id,
         COUNT(*) as request_count,
-        COALESCE(AVG(r.first_byte_ms), 0) as avg_ttft_ms
-    FROM requests r
-    WHERE r.streamed = 1
-      AND r.first_byte_ms IS NOT NULL
-      AND r.started_at >= ? AND r.started_at < ?
-    GROUP BY r.provider_id, r.model_id
-    ORDER BY r.provider_id, request_count DESC
+        COALESCE(AVG(first_byte_ms), 0) as avg_ttft_ms,
+        COALESCE(AVG(CASE
+            WHEN rn IN ((group_count + 1) / 2, (group_count + 2) / 2)
+            THEN first_byte_ms END), 0) as p50_ttft_ms,
+        COALESCE(MAX(CASE
+            WHEN rn = CAST(CEIL(0.99 * group_count) AS INTEGER)
+            THEN first_byte_ms END), 0) as p99_ttft_ms
+    FROM ranked
+    GROUP BY provider_id, model_id
+    ORDER BY provider_id, request_count DESC
     """
     rows = await db.fetch_all(sql, (_format_dt(start), _format_dt(end)))
-    result = [dict(row) for row in rows]
-
-    # Enrich with P50/P99 per provider+model
-    for row in result:
-        pid = row.get("provider_id")
-        mid = row.get("model_id")
-        if pid is not None and mid is not None:
-            percentiles = await _fetch_ttft_percentiles(
-                db, start, end, provider_id=pid, model_id=mid
-            )
-            row.update(percentiles)
-
-    return result
+    return [dict(row) for row in rows]
 
 
 async def fetch_provider_ttft_summary(
@@ -482,28 +505,35 @@ async def fetch_provider_ttft_summary(
 ) -> list[dict[str, Any]]:
     """Per-provider TTFT aggregate (streamed requests only)."""
     sql = """
+    WITH ranked AS (
+        SELECT
+            r.provider_id,
+            r.first_byte_ms,
+            ROW_NUMBER() OVER (
+                PARTITION BY r.provider_id ORDER BY r.first_byte_ms
+            ) as rn,
+            COUNT(*) OVER (PARTITION BY r.provider_id) as group_count
+        FROM requests r
+        WHERE r.streamed = 1
+          AND r.first_byte_ms IS NOT NULL
+          AND r.started_at >= ? AND r.started_at < ?
+    )
     SELECT
-        r.provider_id,
+        provider_id,
         COUNT(*) as request_count,
-        COALESCE(AVG(r.first_byte_ms), 0) as avg_ttft_ms
-    FROM requests r
-    WHERE r.streamed = 1
-      AND r.first_byte_ms IS NOT NULL
-      AND r.started_at >= ? AND r.started_at < ?
-    GROUP BY r.provider_id
-    ORDER BY r.provider_id
+        COALESCE(AVG(first_byte_ms), 0) as avg_ttft_ms,
+        COALESCE(AVG(CASE
+            WHEN rn IN ((group_count + 1) / 2, (group_count + 2) / 2)
+            THEN first_byte_ms END), 0) as p50_ttft_ms,
+        COALESCE(MAX(CASE
+            WHEN rn = CAST(CEIL(0.99 * group_count) AS INTEGER)
+            THEN first_byte_ms END), 0) as p99_ttft_ms
+    FROM ranked
+    GROUP BY provider_id
+    ORDER BY provider_id
     """
     rows = await db.fetch_all(sql, (_format_dt(start), _format_dt(end)))
-    result = [dict(row) for row in rows]
-
-    # Enrich with P50/P99 per provider
-    for row in result:
-        pid = row.get("provider_id")
-        if pid is not None:
-            percentiles = await _fetch_ttft_percentiles(db, start, end, provider_id=pid)
-            row.update(percentiles)
-
-    return result
+    return [dict(row) for row in rows]
 
 
 async def fetch_ip_stats(

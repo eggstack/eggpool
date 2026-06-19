@@ -196,6 +196,7 @@ class RequestCoordinator:
         self._quota_estimator = quota_estimator
         self._classifier = RetryClassifier()
         self._select_lock = asyncio.Lock()
+        self._account_id_cache: dict[str, int] = {}
         self._max_retry_attempts = max_retry_attempts
         self._quota_exhausted_cooldown_seconds = quota_exhausted_cooldown_seconds
         self._persist_error_detail = persist_error_detail
@@ -527,9 +528,13 @@ class RequestCoordinator:
                             f"API key not available for account {account_name!r}"
                         )
 
-                    # 5. Resolve account ID
-                    account_repo = AccountRepository(self._db)
-                    account_id = await account_repo.get_id_by_name(account_name)
+                    # 5. Resolve the immutable account ID once per process.
+                    account_id = self._account_id_cache.get(account_name)
+                    if account_id is None:
+                        account_repo = AccountRepository(self._db)
+                        account_id = await account_repo.get_id_by_name(account_name)
+                        if account_id is not None:
+                            self._account_id_cache[account_name] = account_id
                     if account_id is None:
                         raise DatabaseError(
                             f"Account {account_name!r} not found in database"
@@ -543,22 +548,7 @@ class RequestCoordinator:
                         or "opencode-go"
                     )
 
-                    # 7. Create pending request if first attempt
-                    if "db_request_id" not in context.client_metadata:
-                        db_request_id = await self._request_repo.create_pending(
-                            request_id=context.request_id,
-                            model_id=context.model_id,
-                            protocol=context.protocol,
-                            streamed=context.streaming,
-                            account_id=account_id,
-                            started_at=context.started_at,
-                            provider_id=resolved_provider_id,
-                            client_ip=context.client_ip,
-                        )
-                        context.client_metadata["db_request_id"] = db_request_id
-                    db_request_id = context.client_metadata["db_request_id"]
-
-                    # 7. Use the exact estimate for the selected account
+                    # 7. Use the exact estimate for the selected account.
                     estimated_microdollars = request_estimates.get(account_name, 0)
                     if (
                         estimated_microdollars == 0
@@ -568,7 +558,26 @@ class RequestCoordinator:
                             account_name, context.model_id, estimated_tokens
                         )
 
-                    # 8. Create reservation
+                    # 8. Create pending request if first attempt. Store the
+                    # reservation estimate in the INSERT so the common path
+                    # does not immediately UPDATE the same row.
+                    created_request = "db_request_id" not in context.client_metadata
+                    if created_request:
+                        db_request_id = await self._request_repo.create_pending(
+                            request_id=context.request_id,
+                            model_id=context.model_id,
+                            protocol=context.protocol,
+                            streamed=context.streaming,
+                            account_id=account_id,
+                            reserved_microdollars=estimated_microdollars,
+                            started_at=context.started_at,
+                            provider_id=resolved_provider_id,
+                            client_ip=context.client_ip,
+                        )
+                        context.client_metadata["db_request_id"] = db_request_id
+                    db_request_id = context.client_metadata["db_request_id"]
+
+                    # 9. Create reservation
                     reservation_id = await self._reservation_repo.create(
                         request_id=db_request_id,
                         account_id=account_id,
@@ -577,19 +586,20 @@ class RequestCoordinator:
                         estimated_microdollars=estimated_microdollars,
                     )
 
-                    # 9. Create attempt row
+                    # 10. Create attempt row
                     attempt_id = await self._attempt_repo.create(
                         request_id=db_request_id,
                         attempt_number=attempt_number,
                         account_id=account_id,
                     )
 
-                    # 10. Update request with account and reserved amount
-                    await self._request_repo.update_after_selection(
-                        request_id=db_request_id,
-                        account_id=account_id,
-                        reserved_microdollars=estimated_microdollars,
-                    )
+                    # Retries select a new account and reservation estimate.
+                    if not created_request:
+                        await self._request_repo.update_after_selection(
+                            request_id=db_request_id,
+                            account_id=account_id,
+                            reserved_microdollars=estimated_microdollars,
+                        )
                 except BaseException:
                     if self._health_manager is not None:
                         self._health_manager.release_request(account_name)

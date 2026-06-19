@@ -365,6 +365,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # 14. Price repository and cost calculator
     price_repo = PriceRepository(db)
     cost_calculator = CostCalculator(price_repo)
+    catalog.set_price_change_callback(cost_calculator.invalidate_price)
     app.state.cost_calculator = cost_calculator
 
     # 15. Router (with health manager for circuit breaker integration)

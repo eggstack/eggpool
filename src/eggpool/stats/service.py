@@ -6,10 +6,12 @@ Used by both the JSON API and the server-rendered dashboard.
 
 from __future__ import annotations
 
+import copy
 import math
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from eggpool.stats import queries
 from eggpool.stats.queries import (
@@ -42,6 +44,8 @@ PERIOD_PRESETS: dict[str, int] = {
 _UTILIZATION_5H = 5 * 3600
 _UTILIZATION_7D = 7 * 86400
 _UTILIZATION_30D = 30 * 86400
+_DASHBOARD_CACHE_TTL_S = 5.0
+_DASHBOARD_CACHE_MAX_ENTRIES = 32
 
 
 def resolve_period(period: str | None) -> tuple[datetime, datetime, str]:
@@ -132,15 +136,60 @@ class StatsService:
         self._db = db
         self._health_manager = health_manager
         self._ping_repo = ping_repo
+        self._dashboard_cache: dict[tuple[str, ...], tuple[float, object]] = {}
 
-    async def get_summary(self, time_range: TimeRange) -> dict[str, Any]:
+    def _dashboard_cache_key(
+        self, namespace: str, time_range: TimeRange, *parts: str
+    ) -> tuple[str, ...]:
+        if time_range.label in PERIOD_PRESETS:
+            period_key = str(int(time_range.end.timestamp() // _DASHBOARD_CACHE_TTL_S))
+        else:
+            period_key = f"{time_range.start_str()}:{time_range.end_str()}"
+        return (namespace, time_range.label, period_key, *parts)
+
+    def _get_dashboard_cache(self, key: tuple[str, ...]) -> object | None:
+        cached = self._dashboard_cache.get(key)
+        if cached is None:
+            return None
+        stored_at, value = cached
+        if time.monotonic() - stored_at >= _DASHBOARD_CACHE_TTL_S:
+            self._dashboard_cache.pop(key, None)
+            return None
+        return copy.deepcopy(value)
+
+    def _set_dashboard_cache(self, key: tuple[str, ...], value: object) -> None:
+        if (
+            key not in self._dashboard_cache
+            and len(self._dashboard_cache) >= _DASHBOARD_CACHE_MAX_ENTRIES
+        ):
+            oldest = min(
+                self._dashboard_cache,
+                key=lambda item: self._dashboard_cache[item][0],
+            )
+            self._dashboard_cache.pop(oldest, None)
+        self._dashboard_cache[key] = (time.monotonic(), copy.deepcopy(value))
+
+    async def get_summary(
+        self, time_range: TimeRange, *, use_cache: bool = False
+    ) -> dict[str, Any]:
         """Get a top-line summary for the given time range."""
-        return await fetch_summary(
+        key = self._dashboard_cache_key("summary", time_range)
+        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
+            return cast("dict[str, Any]", cached)
+        result = await fetch_summary(
             self._db, time_range.start_str(), time_range.end_str()
         )
+        if use_cache:
+            self._set_dashboard_cache(key, result)
+        return result
 
-    async def get_account_stats(self, time_range: TimeRange) -> list[dict[str, Any]]:
+    async def get_account_stats(
+        self, time_range: TimeRange, *, use_cache: bool = False
+    ) -> list[dict[str, Any]]:
         """Get per-account aggregates including reservations and utilization."""
+        key = self._dashboard_cache_key("accounts", time_range)
+        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
+            return cast("list[dict[str, Any]]", cached)
         rows = await queries.fetch_account_stats(
             self._db, time_range.start_str(), time_range.end_str()
         )
@@ -184,6 +233,8 @@ class StatsService:
             else:
                 row["health_state"] = "healthy"
 
+        if use_cache:
+            self._set_dashboard_cache(key, rows)
         return rows
 
     @staticmethod
@@ -227,7 +278,11 @@ class StatsService:
         return cost / hours
 
     async def get_model_stats(
-        self, time_range: TimeRange, account_name: str | None = None
+        self,
+        time_range: TimeRange,
+        account_name: str | None = None,
+        *,
+        use_cache: bool = False,
     ) -> list[dict[str, Any]] | None:
         """Get per-model aggregates, optionally filtered by account.
 
@@ -235,17 +290,23 @@ class StatsService:
         was not found in the database. Callers can use this to distinguish
         "no results" from "unknown account."
         """
+        key = self._dashboard_cache_key("models", time_range, account_name or "")
+        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
+            return cast("list[dict[str, Any]]", cached)
         account_id: int | None = None
         if account_name is not None and account_name != "":
             account_id = await fetch_account_id(self._db, account_name)
             if account_id is None:
                 return None
-        return await queries.fetch_model_stats(
+        result = await queries.fetch_model_stats(
             self._db,
             time_range.start_str(),
             time_range.end_str(),
             account_id=account_id,
         )
+        if use_cache:
+            self._set_dashboard_cache(key, result)
+        return result
 
     async def get_timeseries(
         self,
@@ -309,14 +370,19 @@ class StatsService:
         """Get recent account events."""
         return await fetch_recent_events(self._db, limit, event_type)
 
-    async def get_utilization_imbalance(self, time_range: TimeRange) -> dict[str, Any]:
+    async def get_utilization_imbalance(
+        self,
+        time_range: TimeRange,
+        account_stats: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         """Compute a utilization imbalance metric across accounts.
 
         The metric is the coefficient of variation of normalized account
         utilization (cost / capacity_weight). Lower is better; 0 means
         perfect balance.
         """
-        account_stats = await self.get_account_stats(time_range)
+        if account_stats is None:
+            account_stats = await self.get_account_stats(time_range)
         active = [a for a in account_stats if int(a.get("request_count", 0)) > 0]
         if len(active) < 2:
             return {
@@ -363,10 +429,18 @@ class StatsService:
             },
         }
 
-    async def get_dashboard_overview(self, time_range: TimeRange) -> dict[str, Any]:
+    async def get_dashboard_overview(
+        self,
+        time_range: TimeRange,
+        account_stats: list[dict[str, Any]] | None = None,
+        *,
+        use_cache: bool = False,
+    ) -> dict[str, Any]:
         """Get the data set used to render the overview page."""
-        summary = await self.get_summary(time_range)
-        imbalance = await self.get_utilization_imbalance(time_range)
+        summary = await self.get_summary(time_range, use_cache=use_cache)
+        imbalance = await self.get_utilization_imbalance(
+            time_range, account_stats=account_stats
+        )
         return {
             "summary": summary,
             "imbalance": imbalance,

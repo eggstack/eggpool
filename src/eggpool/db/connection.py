@@ -202,6 +202,27 @@ class Database:
         except Exception as exc:
             raise DatabaseError(f"Execute write failed: {exc}") from exc
 
+    async def execute_many(
+        self,
+        sql: str,
+        params: Sequence[Sequence[Any]],
+    ) -> int:
+        """Execute one write statement for multiple parameter rows.
+
+        Must be called inside an owned transaction. Batching avoids one
+        aiosqlite worker-thread round trip per row while preserving the
+        caller's transaction boundary.
+        """
+        self._require_transaction_owner()
+        if not params:
+            return 0
+        try:
+            cursor = await self.connection.executemany(sql, params)  # type: ignore[union-attr]
+            rowcount = cursor.rowcount
+            return int(rowcount) if rowcount >= 0 else 0
+        except Exception as exc:
+            raise DatabaseError(f"Execute many failed: {exc}") from exc
+
     async def execute_insert(
         self,
         sql: str,

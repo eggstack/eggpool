@@ -586,8 +586,9 @@ class UsageWindowRepository:
             "COALESCE(SUM(CASE WHEN started_at >= datetime(?, '-30 days') "
             "THEN cost_microdollars ELSE 0 END), 0) "
             "FROM requests "
-            "WHERE account_id = ? AND status != 'pending'",
-            (now_iso, now_iso, now_iso, account_id),
+            "WHERE account_id = ? AND status != 'pending' "
+            "AND started_at >= datetime(?, '-30 days')",
+            (now_iso, now_iso, now_iso, account_id, now_iso),
         )
         if row is None:
             return {"5h": 0, "7d": 0, "30d": 0}
@@ -595,6 +596,30 @@ class UsageWindowRepository:
             "5h": int(row[0]),
             "7d": int(row[1]),
             "30d": int(row[2]),
+        }
+
+    async def get_all_usage_windows(self, now_iso: str) -> dict[int, dict[str, int]]:
+        """Return 5h/7d/30d costs for every active account in one scan."""
+        rows = await self._db.fetch_all(
+            "SELECT account_id, "
+            "COALESCE(SUM(CASE WHEN started_at >= datetime(?, '-5 hours') "
+            "THEN cost_microdollars ELSE 0 END), 0) AS cost_5h, "
+            "COALESCE(SUM(CASE WHEN started_at >= datetime(?, '-7 days') "
+            "THEN cost_microdollars ELSE 0 END), 0) AS cost_7d, "
+            "COALESCE(SUM(cost_microdollars), 0) AS cost_30d "
+            "FROM requests "
+            "WHERE status != 'pending' "
+            "AND started_at >= datetime(?, '-30 days') "
+            "GROUP BY account_id",
+            (now_iso, now_iso, now_iso),
+        )
+        return {
+            int(row["account_id"]): {
+                "5h": int(row["cost_5h"]),
+                "7d": int(row["cost_7d"]),
+                "30d": int(row["cost_30d"]),
+            }
+            for row in rows
         }
 
 
@@ -621,6 +646,27 @@ class PriceSnapshotRepository:
             params,
         )
         return dict(row) if row is not None else None
+
+    async def get_all_latest(self) -> dict[tuple[str, str], dict[str, Any]]:
+        """Return the latest price snapshot for every model/provider pair."""
+        rows = await self._db.fetch_all(
+            "SELECT model_id, input_price_per_1k, output_price_per_1k, "
+            "captured_at, input_per_million_microdollars, "
+            "output_per_million_microdollars, "
+            "cache_read_per_million_microdollars, "
+            "cache_write_per_million_microdollars, source, provider_id "
+            "FROM ("
+            "  SELECT model_price_snapshots.*, "
+            "  ROW_NUMBER() OVER ("
+            "    PARTITION BY model_id, provider_id "
+            "    ORDER BY captured_at DESC, id DESC"
+            "  ) AS snapshot_rank "
+            "  FROM model_price_snapshots"
+            ") WHERE snapshot_rank = 1"
+        )
+        return {
+            (str(row["model_id"]), str(row["provider_id"])): dict(row) for row in rows
+        }
 
     async def record(
         self,

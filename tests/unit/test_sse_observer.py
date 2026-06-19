@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import patch
 
 from eggpool.proxy.sse_observer import IncrementalSSEObserver, SSEFrame
 
@@ -235,6 +236,19 @@ class TestSSEEventAssembly:
         observer.flush()
 
         assert observer.error_count == 1
+
+    def test_openai_content_chunks_skip_json_decoding(self) -> None:
+        """Only the final usage chunk is decoded for OpenAI telemetry."""
+        observer = IncrementalSSEObserver(protocol="openai")
+        content = _sse_data({"choices": [{"delta": {"content": "token"}}]})
+        usage = _sse_data({"choices": [], "usage": {"prompt_tokens": 10}})
+
+        with patch("eggpool.proxy.sse_observer.json.loads", wraps=json.loads) as loads:
+            observer.observe(content * 100 + usage)
+            observer.flush()
+
+        assert observer.usage.input_tokens == 10
+        assert loads.call_count == 1
 
 
 # ---------------------------------------------------------------------------
