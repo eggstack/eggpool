@@ -70,8 +70,13 @@ class ConfiguredAccount:
     @property
     def label(self) -> str:
         """Human-readable label for terminal selection."""
-        masked = _mask_secret(self.api_key) if self.api_key else "unset"
-        return f"{self.provider_id}/{self.name}  {self.api_key_env}={masked}"
+        if self.api_key:
+            masked = _mask_secret(self.api_key)
+        elif self.api_key_env:
+            masked = f"env:{self.api_key_env}"
+        else:
+            masked = "unset"
+        return f"{self.provider_id}/{self.name}  {masked}"
 
 
 _OPENCODE_GO_FALLBACK: dict[str, dict[str, Any]] = {
@@ -175,7 +180,7 @@ def configured_accounts(config_path: str) -> list[ConfiguredAccount]:
     accounts: list[ConfiguredAccount] = []
     for provider_id, provider in config.providers.items():
         for account in provider.accounts:
-            api_key = os.environ.get(account.api_key_env)
+            api_key = account.api_key or os.environ.get(account.api_key_env)
             accounts.append(
                 ConfiguredAccount(
                     provider_id=provider_id,
@@ -185,6 +190,34 @@ def configured_accounts(config_path: str) -> list[ConfiguredAccount]:
                 )
             )
     return accounts
+
+
+def list_config_accounts(config_path: str) -> list[ConfiguredAccount]:
+    """Return all configured accounts for display."""
+    return configured_accounts(config_path)
+
+
+def select_config_account(
+    config_path: str,
+    title: str = "Select a provider account:",
+) -> ConfiguredAccount | None:
+    """Show an interactive menu of configured accounts.
+
+    Returns the selected account, or None if the user quit.
+    """
+    accounts = configured_accounts(config_path)
+    if not accounts:
+        sys.stdout.write("  No configured accounts found.\n")
+        return None
+
+    options = [acct.label for acct in accounts]
+    menu = TerminalMenu(title, options)
+    result = menu.run()
+
+    if result is None:
+        return None
+
+    return accounts[options.index(result)]
 
 
 def matching_logout_accounts(
@@ -589,10 +622,12 @@ def _remove_account_block(
             block_end += 1
 
         block = lines[block_start:block_end]
-        if (
-            _block_value(block, "name") == account_name
-            and _block_value(block, "api_key_env") == api_key_env
-        ):
+        name_match = _block_value(block, "name") == account_name
+        key_match = (
+            _block_value(block, "api_key_env") == api_key_env
+            or _block_value(block, "api_key") is not None
+        )
+        if name_match and (not api_key_env or key_match):
             removed = True
             if output and output[-1] == "":
                 output.pop()

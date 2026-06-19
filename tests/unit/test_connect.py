@@ -1143,3 +1143,323 @@ class TestUpdateCommand:
 
         assert result.exit_code == 1
         assert "Error checking for updates" in result.output
+
+
+class TestConfigAccountLabel:
+    """Tests for ConfiguredAccount.label format."""
+
+    def test_label_with_api_key(self) -> None:
+        """Shows masked key when api_key is set."""
+        acct = ConfiguredAccount(
+            provider_id="opencode-go",
+            name="default",
+            api_key_env="OPENCODE_GO_API_KEY",
+            api_key="sk-live-key-1234",
+        )
+        assert acct.label == "opencode-go/default  sk-l...1234"
+
+    def test_label_with_env_only(self) -> None:
+        """Shows env var name when only api_key_env is set."""
+        acct = ConfiguredAccount(
+            provider_id="opencode-go",
+            name="default",
+            api_key_env="OPENCODE_GO_API_KEY",
+            api_key=None,
+        )
+        assert acct.label == "opencode-go/default  env:OPENCODE_GO_API_KEY"
+
+    def test_label_unset(self) -> None:
+        """Shows 'unset' when neither key nor env is available."""
+        acct = ConfiguredAccount(
+            provider_id="opencode-go",
+            name="default",
+            api_key_env="",
+            api_key=None,
+        )
+        assert acct.label == "opencode-go/default  unset"
+
+
+class TestListConfigAccounts:
+    """Tests for list_config_accounts and select_config_account."""
+
+    def test_list_config_accounts_returns_all(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Returns all accounts from the config file."""
+        from eggpool.providers.connect import list_config_accounts
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            textwrap.dedent("""\
+                [providers.opencode-go]
+                id = "opencode-go"
+                base_url = "https://api.example.com"
+
+                [[providers.opencode-go.accounts]]
+                name = "default"
+                api_key = "sk-key-1"
+
+                [[providers.opencode-go.accounts]]
+                name = "second"
+                api_key = "sk-key-2"
+
+                [providers.minimax]
+                id = "minimax"
+                base_url = "https://minimax.example.com"
+
+                [[providers.minimax.accounts]]
+                name = "minimax-default"
+                api_key_env = "MINIMAX_KEY"
+            """),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("MINIMAX_KEY", "sk-minimax")
+
+        accts = list_config_accounts(str(config_path))
+        assert len(accts) == 3
+        assert accts[0].provider_id == "opencode-go"
+        assert accts[0].name == "default"
+        assert accts[0].api_key == "sk-key-1"
+        assert accts[1].name == "second"
+        assert accts[2].provider_id == "minimax"
+        assert accts[2].name == "minimax-default"
+        assert accts[2].api_key == "sk-minimax"
+
+    def test_list_config_accounts_empty(self, tmp_path: Path) -> None:
+        """Returns empty list when no providers configured."""
+        from eggpool.providers.connect import list_config_accounts
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("[server]\nport = 8080\n")
+
+        assert list_config_accounts(str(config_path)) == []
+
+    def test_select_config_account_returns_selected(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Returns the account matching the menu selection."""
+        from eggpool.providers import connect as connect_module
+        from eggpool.providers.connect import select_config_account
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            textwrap.dedent("""\
+                [providers.opencode-go]
+                id = "opencode-go"
+                base_url = "https://api.example.com"
+
+                [[providers.opencode-go.accounts]]
+                name = "default"
+                api_key = "sk-key-1"
+
+                [[providers.opencode-go.accounts]]
+                name = "second"
+                api_key = "sk-key-2"
+            """),
+            encoding="utf-8",
+        )
+
+        class FakeMenu:
+            def __init__(self, title: str, options: list[str]) -> None:
+                self.options = options
+
+            def run(self) -> str:
+                return self.options[1]
+
+        monkeypatch.setattr(connect_module, "TerminalMenu", FakeMenu)
+
+        acct = select_config_account(str(config_path))
+        assert acct is not None
+        assert acct.name == "second"
+
+    def test_select_config_account_returns_none_on_quit(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Returns None when user quits the menu."""
+        from eggpool.providers import connect as connect_module
+        from eggpool.providers.connect import select_config_account
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            textwrap.dedent("""\
+                [providers.opencode-go]
+                id = "opencode-go"
+                base_url = "https://api.example.com"
+
+                [[providers.opencode-go.accounts]]
+                name = "default"
+                api_key = "sk-key-1"
+            """),
+            encoding="utf-8",
+        )
+
+        class FakeMenu:
+            def __init__(self, title: str, options: list[str]) -> None:
+                pass
+
+            def run(self) -> None:
+                return None
+
+        monkeypatch.setattr(connect_module, "TerminalMenu", FakeMenu)
+
+        acct = select_config_account(str(config_path))
+        assert acct is None
+
+    def test_select_config_account_empty_config(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Returns None and prints message when no accounts exist."""
+        from eggpool.providers.connect import select_config_account
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("[server]\nport = 8080\n")
+
+        acct = select_config_account(str(config_path))
+        assert acct is None
+
+
+class TestAccountsListCli:
+    """Tests for ``eggpool accounts list`` CLI command."""
+
+    def test_accounts_list_shows_configured(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Lists all configured accounts with labels."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            textwrap.dedent("""\
+                [providers.opencode-go]
+                id = "opencode-go"
+                base_url = "https://api.example.com"
+
+                [[providers.opencode-go.accounts]]
+                name = "default"
+                api_key = "sk-key-1"
+            """),
+            encoding="utf-8",
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "accounts", "list"],
+        )
+
+        assert result.exit_code == 0
+        assert "opencode-go/default" in result.output
+        assert "Total: 1 accounts" in result.output
+
+    def test_accounts_list_empty(self, tmp_path: Path) -> None:
+        """Shows helpful message when no accounts configured."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("[server]\nport = 8080\n")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "accounts", "list"],
+        )
+
+        assert result.exit_code == 0
+        assert "No configured accounts" in result.output
+
+
+class TestLogoutWithoutTarget:
+    """Tests for ``logout`` without a target argument (interactive selection)."""
+
+    def test_logout_no_target_shows_menu(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Without a target, shows selection menu and removes selected account."""
+        from eggpool.providers import connect as connect_module
+        from eggpool.providers.connect import (
+            remove_account_from_config,
+            select_config_account,
+        )
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            textwrap.dedent("""\
+                [providers.opencode-go]
+                id = "opencode-go"
+                base_url = "https://api.example.com"
+
+                [[providers.opencode-go.accounts]]
+                name = "default"
+                api_key = "sk-key-1"
+
+                [[providers.opencode-go.accounts]]
+                name = "second"
+                api_key = "sk-key-2"
+            """),
+            encoding="utf-8",
+        )
+
+        class FakeMenu:
+            def __init__(self, title: str, options: list[str]) -> None:
+                self.options = options
+
+            def run(self) -> str:
+                return self.options[0]
+
+        monkeypatch.setattr(connect_module, "TerminalMenu", FakeMenu)
+
+        account = select_config_account(str(config_path))
+        assert account is not None
+        assert account.name == "default"
+
+        ok = remove_account_from_config(str(config_path), account)
+        assert ok is True
+        content = config_path.read_text(encoding="utf-8")
+        assert 'name = "default"' not in content
+        assert 'name = "second"' in content
+
+    def test_logout_no_target_quit(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Quitting the menu removes nothing."""
+        from eggpool.providers import connect as connect_module
+        from eggpool.providers.connect import select_config_account
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            textwrap.dedent("""\
+                [providers.opencode-go]
+                id = "opencode-go"
+                base_url = "https://api.example.com"
+
+                [[providers.opencode-go.accounts]]
+                name = "default"
+                api_key = "sk-key-1"
+            """),
+            encoding="utf-8",
+        )
+
+        class FakeMenu:
+            def __init__(self, title: str, options: list[str]) -> None:
+                pass
+
+            def run(self) -> None:
+                return None
+
+        monkeypatch.setattr(connect_module, "TerminalMenu", FakeMenu)
+
+        account = select_config_account(str(config_path))
+        assert account is None
+
+        content = config_path.read_text(encoding="utf-8")
+        assert 'name = "default"' in content

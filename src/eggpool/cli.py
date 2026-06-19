@@ -85,7 +85,6 @@ def connect(ctx: click.Context, providers_path: str) -> None:
         return
 
     from eggpool.providers.connect import connect as do_connect
-    from eggpool.providers.connect import signal_reload
 
     config_path: str = ctx.obj["config_path"]
     try:
@@ -94,11 +93,6 @@ def connect(ctx: click.Context, providers_path: str) -> None:
         return
     if not ok:
         sys.exit(1)
-
-    if signal_reload():
-        click.echo("  Configuration reloaded.")
-    else:
-        click.echo("  Server is not running.")
 
 
 @connect.command("list")
@@ -119,43 +113,55 @@ def connect_list(ctx: click.Context) -> None:
 
 
 @cli.command()
-@click.argument("target")
+@click.argument("target", required=False)
 @click.pass_context
-def logout(ctx: click.Context, target: str) -> None:
-    """Remove a configured provider account by provider, env var, or API key."""
+def logout(ctx: click.Context, target: str | None) -> None:
+    """Remove a configured provider account.
+
+    If TARGET is given, matches by provider id, account name, env var,
+    or API key.  If omitted, shows an interactive selection menu.
+    """
     from eggpool.providers.connect import (
         TerminalMenu,
         matching_logout_accounts,
         remove_account_from_config,
+        select_config_account,
         signal_reload,
     )
 
     config_path: str = ctx.obj["config_path"]
 
-    try:
-        matches = matching_logout_accounts(config_path, target)
-    except AggregatorError as exc:
-        click.echo(f"Error: {exc}", err=True)
-        sys.exit(1)
-
-    if not matches:
-        click.echo(f"No configured provider or API key found for {target!r}.")
-        return
-
-    account = matches[0]
-    if len(matches) > 1:
-        menu = TerminalMenu(
-            f"Select provider account to remove for {target}:",
-            [match.label for match in matches],
-        )
+    if target:
         try:
-            selected = menu.run()
-        except KeyboardInterrupt:
+            matches = matching_logout_accounts(config_path, target)
+        except AggregatorError as exc:
+            click.echo(f"Error: {exc}", err=True)
+            sys.exit(1)
+
+        if not matches:
+            click.echo(f"No configured provider or API key found for {target!r}.")
             return
-        if selected is None:
+
+        account = matches[0]
+        if len(matches) > 1:
+            menu = TerminalMenu(
+                f"Select provider account to remove for {target}:",
+                [match.label for match in matches],
+            )
+            try:
+                selected = menu.run()
+            except KeyboardInterrupt:
+                return
+            if selected is None:
+                return
+            selected_index = [match.label for match in matches].index(selected)
+            account = matches[selected_index]
+    else:
+        account = select_config_account(
+            config_path, "Select provider account to remove:"
+        )
+        if account is None:
             return
-        selected_index = [match.label for match in matches].index(selected)
-        account = matches[selected_index]
 
     if not remove_account_from_config(config_path, account):
         click.echo(
@@ -382,6 +388,26 @@ def accounts() -> None:
     """Account management commands."""
 
 
+@accounts.command("list")
+@click.pass_context
+def accounts_list(ctx: click.Context) -> None:
+    """List configured provider accounts."""
+    from eggpool.providers.connect import list_config_accounts
+
+    config_path: str = ctx.obj["config_path"]
+    accts = list_config_accounts(config_path)
+
+    if not accts:
+        click.echo("No configured accounts. Run `eggpool connect` to add one.")
+        return
+
+    click.echo("Configured accounts:")
+    for acct in accts:
+        click.echo(f"  {acct.label}")
+
+    click.echo(f"\nTotal: {len(accts)} accounts")
+
+
 @accounts.command("status")
 @click.pass_context
 def accounts_status(ctx: click.Context) -> None:
@@ -408,38 +434,6 @@ def accounts_status(ctx: click.Context) -> None:
         )
 
     click.echo(f"\nTotal accounts: {len(config.all_accounts())}")
-
-
-@accounts.command("list")
-@click.pass_context
-def accounts_list(ctx: click.Context) -> None:
-    """List configured provider accounts and their API key backends."""
-    config_path: str = ctx.obj["config_path"]
-
-    try:
-        config = AppConfig.from_toml(config_path)
-    except AggregatorError as exc:
-        click.echo(f"Error: {exc}", err=True)
-        sys.exit(1)
-
-    if not config.providers:
-        click.echo("No providers configured.")
-        return
-
-    for provider_id, provider_cfg in config.providers.items():
-        if not provider_cfg.accounts:
-            click.echo(f"  {provider_id}: {provider_cfg.base_url} (no accounts)")
-            continue
-        for acct in provider_cfg.accounts:
-            env_set = "yes" if os.environ.get(acct.api_key_env) else "no"
-            click.echo(
-                f"  {provider_id}/{acct.name}: "
-                f"{provider_cfg.base_url}  "
-                f"{acct.api_key_env} (set={env_set})"
-            )
-
-    total = sum(len(p.accounts) for p in config.providers.values())
-    click.echo(f"\nTotal: {len(config.providers)} providers, {total} accounts")
 
 
 def _get_provider_for_account(config: AppConfig, account_name: str) -> str:
