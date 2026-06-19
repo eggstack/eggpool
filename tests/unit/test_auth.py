@@ -9,8 +9,8 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
-from go_aggregator.auth import require_auth, require_auth_at_startup, verify_api_key
-from go_aggregator.models.config import AppConfig
+from eggpool.auth import require_auth, require_auth_at_startup, verify_api_key
+from eggpool.models.config import AppConfig
 
 
 @pytest.fixture()

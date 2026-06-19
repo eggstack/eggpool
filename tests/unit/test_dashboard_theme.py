@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from go_aggregator.dashboard.render import get_theme, get_theme_css
-from go_aggregator.dashboard.theme import (
+from eggpool.dashboard.render import get_theme, get_theme_css
+from eggpool.dashboard.theme import (
     DashboardTheme,
     HalloyGeneral,
     HalloyText,
@@ -298,7 +298,7 @@ class TestRenderThemeIntegration:
         assert css == ""
 
     def test_render_overview_with_theme_css(self) -> None:
-        from go_aggregator.dashboard.render import render_overview
+        from eggpool.dashboard.render import render_overview
 
         html = render_overview(
             overview={"summary": {}, "imbalance": {}},
@@ -309,7 +309,7 @@ class TestRenderThemeIntegration:
         assert "<style>" in html
 
     def test_render_overview_without_theme(self) -> None:
-        from go_aggregator.dashboard.render import render_overview
+        from eggpool.dashboard.render import render_overview
 
         html = render_overview(
             overview={"summary": {}, "imbalance": {}},
@@ -319,7 +319,7 @@ class TestRenderThemeIntegration:
         assert "--page-bg" in html
 
     def test_heatmap_with_theme_colors(self) -> None:
-        from go_aggregator.dashboard.render import _render_bandwidth_heatmap
+        from eggpool.dashboard.render import _render_bandwidth_heatmap
 
         daily = [
             {"day": "2025-01-01", "bytes_emitted": 100, "bytes_received": 50},

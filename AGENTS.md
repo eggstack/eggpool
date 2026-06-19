@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Development guidelines for the GoRouter project.
+Development guidelines for the EggPool project.
 
 ## Skills
 
@@ -46,7 +46,7 @@ All must pass with zero errors.
 
 ## Multi-Provider Architecture
 
-GoRouter supports multiple upstream providers. Key components:
+EggPool supports multiple upstream providers. Key components:
 
 - **`ProviderConfig`** — per-provider base URL, protocols, account pool, upstream paths
 - **`ProviderClientPool`** — per-provider `httpx.AsyncClient` with independent connection pools
@@ -83,15 +83,16 @@ Use the exception hierarchy in `errors.py`. Chain exceptions with `raise ... fro
 
 | Command | Description |
 |---------|-------------|
-| `go-aggregator serve` | Start the aggregation proxy server (default command) |
-| `go-aggregator check-config` | Validate the configuration file |
-| `go-aggregator migrate` | Run database migrations |
-| `go-aggregator models refresh` | Refresh the model catalog from upstream (syncs accounts first) |
-| `go-aggregator accounts status` | Show configured account status and key environment variables |
-| `go-aggregator db vacuum` | Reclaim SQLite space via the lock-owned `Database.vacuum()` helper |
-| `go-aggregator connect` | Interactive provider connection setup |
-| `go-aggregator connect list` | List available providers for connection |
-| `go-aggregator logout` | Remove a configured provider account |
+| `eggpool serve` | Start the aggregation proxy server (default command) |
+| `eggpool check-config` | Validate the configuration file |
+| `eggpool migrate` | Run database migrations |
+| `eggpool models refresh` | Refresh the model catalog from upstream (syncs accounts first) |
+| `eggpool accounts status` | Show configured account status and key environment variables |
+| `eggpool accounts list` | List configured provider accounts and API key backends |
+| `eggpool db vacuum` | Reclaim SQLite space via the lock-owned `Database.vacuum()` helper |
+| `eggpool connect` | Interactive provider connection setup |
+| `eggpool connect list` | List available providers for connection |
+| `eggpool logout` | Remove a configured provider account |
 
 All commands accept `--config /path/to/config.toml` (defaults to `config.toml`).
 
@@ -110,10 +111,10 @@ Follow ruff TCH rules:
 
 ## File Organization
 
-- Source code: `src/go_aggregator/`
+- Source code: `src/eggpool/`
 - Tests: `tests/` (mirrors src structure)
 - Configuration: `config.example.toml`, `.env.example`
-- Database schema: `src/go_aggregator/db/schema/`
+- Database schema: `src/eggpool/db/schema/`
 - Operational scripts: `scripts/`
 - Deployment files: `deploy/`
 - Documentation: `docs/`

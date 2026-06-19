@@ -1,4 +1,4 @@
-"""Database invariant checker for GoRouter.
+"""Database invariant checker for EggPool.
 
 A read-only diagnostic script that verifies a SQLite database is
 in a healthy state. Returns non-zero exit code on any invariant
@@ -37,8 +37,8 @@ import sys
 import tomllib
 from typing import TYPE_CHECKING, Any
 
-from go_aggregator.db.connection import Database
-from go_aggregator.errors import DatabaseError
+from eggpool.db.connection import Database
+from eggpool.errors import DatabaseError
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -63,7 +63,7 @@ class InvariantQueryError(CheckerError):
 #: returns exit code 2 with a clear message.
 EXPECTED_SCHEMA_VERSION = 18
 
-#: Required tables for the production GoRouter schema.
+#: Required tables for the production EggPool schema.
 REQUIRED_TABLES: frozenset[str] = frozenset(
     {
         "accounts",
@@ -81,7 +81,7 @@ REQUIRED_TABLES: frozenset[str] = frozenset(
     }
 )
 
-#: Required columns for the production GoRouter schema, grouped by table.
+#: Required columns for the production EggPool schema, grouped by table.
 REQUIRED_COLUMNS: dict[str, frozenset[str]] = {
     "requests": frozenset(
         {
@@ -198,7 +198,7 @@ async def _validate_required_schema(db: Database) -> None:
         missing = ", ".join(sorted(missing_tables))
         raise SchemaCompatibilityError(
             f"Database is missing required tables: {missing}. "
-            "Run `go-aggregator migrate` before checking invariants."
+            "Run `eggpool migrate` before checking invariants."
         )
 
     for table, required_cols in REQUIRED_COLUMNS.items():
@@ -208,7 +208,7 @@ async def _validate_required_schema(db: Database) -> None:
             missing = ", ".join(sorted(missing_cols))
             raise SchemaCompatibilityError(
                 f"Table {table!r} is missing required columns: {missing}. "
-                "Run `go-aggregator migrate` before checking invariants."
+                "Run `eggpool migrate` before checking invariants."
             )
 
 
@@ -225,8 +225,8 @@ async def _check_schema_version(db: Database) -> None:
     tables = await _table_names(db)
     if "_migrations" not in tables:
         raise SchemaCompatibilityError(
-            "Database is not initialized with the expected GoRouter schema. "
-            "Run `go-aggregator migrate` before checking invariants."
+            "Database is not initialized with the expected EggPool schema. "
+            "Run `eggpool migrate` before checking invariants."
         )
 
     row = await _fetch_one_checked(
@@ -237,7 +237,7 @@ async def _check_schema_version(db: Database) -> None:
     if row is None or row["v"] is None:
         raise SchemaCompatibilityError(
             "Database `_migrations` table is empty. "
-            "Run `go-aggregator migrate` before checking invariants."
+            "Run `eggpool migrate` before checking invariants."
         )
 
     version = int(row["v"])
@@ -245,13 +245,13 @@ async def _check_schema_version(db: Database) -> None:
         raise SchemaCompatibilityError(
             f"Database schema is older than this checker expects: "
             f"have v{version}, need v{EXPECTED_SCHEMA_VERSION}. "
-            "Run `go-aggregator migrate` to upgrade."
+            "Run `eggpool migrate` to upgrade."
         )
     if version > EXPECTED_SCHEMA_VERSION:
         raise SchemaCompatibilityError(
             f"Database schema is newer than this checker expects: "
             f"have v{version}, this checker supports v{EXPECTED_SCHEMA_VERSION}. "
-            "Update go-aggregator to a version that knows about the new schema."
+            "Update eggpool to a version that knows about the new schema."
         )
 
 
@@ -479,7 +479,7 @@ def main_sync() -> int:
     """
     parser = argparse.ArgumentParser(
         prog="check_database.py",
-        description="Read-only database invariant checker for GoRouter.",
+        description="Read-only database invariant checker for EggPool.",
     )
     parser.add_argument(
         "--config",

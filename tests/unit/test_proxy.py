@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from go_aggregator.proxy.client import (
+from eggpool.proxy.client import (
     HOP_BY_HOP_HEADERS,
     filter_request_headers,
     filter_response_headers,

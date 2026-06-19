@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import pytest
 
-from go_aggregator.db.connection import Database
-from go_aggregator.db.migrations import MigrationRunner
-from go_aggregator.db.repositories import (
+from eggpool.db.connection import Database
+from eggpool.db.migrations import MigrationRunner
+from eggpool.db.repositories import (
     AttemptRepository,
     RequestRepository,
     ReservationRepository,
 )
-from go_aggregator.health.health_manager import HealthManager
-from go_aggregator.request.finalizer import (
+from eggpool.health.health_manager import HealthManager
+from eggpool.request.finalizer import (
     FinalizationData,
     FinalizationOutcome,
     RequestFinalizer,

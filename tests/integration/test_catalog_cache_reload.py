@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from go_aggregator.catalog.cache import ModelCatalogCache
+from eggpool.catalog.cache import ModelCatalogCache
 
 
 def test_load_model_preserves_protocol_source() -> None:

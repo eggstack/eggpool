@@ -7,9 +7,9 @@ from typing import TYPE_CHECKING
 import pytest
 import pytest_asyncio
 
-from go_aggregator.db.connection import Database
-from go_aggregator.db.migrations import MigrationRunner
-from go_aggregator.db.repositories import PingRepository
+from eggpool.db.connection import Database
+from eggpool.db.migrations import MigrationRunner
+from eggpool.db.repositories import PingRepository
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator

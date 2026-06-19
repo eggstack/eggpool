@@ -1,6 +1,6 @@
 # Raspberry Pi Installation Guide
 
-Deploy the OpenCode Go Aggregator on a Raspberry Pi for always-on LAN access.
+Deploy the EggPool on a Raspberry Pi for always-on LAN access.
 
 ## Requirements
 
@@ -43,36 +43,36 @@ source ~/.bashrc
 ### 1. Clone and install
 
 ```bash
-sudo mkdir -p /opt/gorouter
-sudo chown $USER /opt/gorouter
-git clone https://github.com/eggstack/gorouter.git /opt/gorouter
+sudo mkdir -p /opt/eggpool
+sudo chown $USER /opt/eggpool
+git clone https://github.com/eggstack/eggpool.git /opt/eggpool
 
-cd /opt/gorouter
+cd /opt/eggpool
 uv sync --no-dev
 ```
 
 ### 2. Create system user
 
 ```bash
-sudo useradd -r -s /usr/sbin/nologin -d /var/lib/gorouter gorouter
-sudo mkdir -p /var/lib/gorouter /var/log/gorouter /etc/gorouter
-sudo chown gorouter:gorouter /var/lib/gorouter /var/log/gorouter
-sudo chown root:gorouter /etc/gorouter
-sudo chmod 750 /var/lib/gorouter /var/log/gorouter
-sudo chmod 755 /etc/gorouter
+sudo useradd -r -s /usr/sbin/nologin -d /var/lib/eggpool eggpool
+sudo mkdir -p /var/lib/eggpool /var/log/eggpool /etc/eggpool
+sudo chown eggpool:eggpool /var/lib/eggpool /var/log/eggpool
+sudo chown root:eggpool /etc/eggpool
+sudo chmod 750 /var/lib/eggpool /var/log/eggpool
+sudo chmod 755 /etc/eggpool
 ```
 
 ### 3. Configure
 
 ```bash
-sudo cp /opt/gorouter/config.example.toml /etc/gorouter/config.toml
-sudo cp /opt/gorouter/deploy/env.example /etc/gorouter/env
-sudo chown root:gorouter /etc/gorouter/config.toml /etc/gorouter/env
-sudo chmod 640 /etc/gorouter/config.toml /etc/gorouter/env
+sudo cp /opt/eggpool/config.example.toml /etc/eggpool/config.toml
+sudo cp /opt/eggpool/deploy/env.example /etc/eggpool/env
+sudo chown root:eggpool /etc/eggpool/config.toml /etc/eggpool/env
+sudo chmod 640 /etc/eggpool/config.toml /etc/eggpool/env
 
 # Edit with your settings
-sudo nano /etc/gorouter/config.toml
-sudo nano /etc/gorouter/env
+sudo nano /etc/eggpool/config.toml
+sudo nano /etc/eggpool/env
 ```
 
 Key config for Pi:
@@ -83,7 +83,7 @@ host = "0.0.0.0"
 port = 8080
 
 [database]
-path = "/var/lib/gorouter/usage.sqlite3"
+path = "/var/lib/eggpool/usage.sqlite3"
 # Pi has slower storage; increase timeouts
 busy_timeout_ms = 10000
 
@@ -100,22 +100,22 @@ refresh_interval_s = 7200
 ### 4. Install systemd unit
 
 ```bash
-sudo cp /opt/gorouter/deploy/gorouter.service /etc/systemd/system/
+sudo cp /opt/eggpool/deploy/eggpool.service /etc/systemd/system/
 sudo systemctl daemon-reload
 ```
 
 ### 5. Install logrotate
 
 ```bash
-sudo cp /opt/gorouter/deploy/logrotate.conf /etc/logrotate.d/gorouter
+sudo cp /opt/eggpool/deploy/logrotate.conf /etc/logrotate.d/eggpool
 ```
 
 ### 6. Run migrations and start
 
 ```bash
-sudo -u gorouter /opt/gorouter/.venv/bin/go-aggregator --config /etc/gorouter/config.toml migrate
-sudo systemctl enable gorouter
-sudo systemctl start gorouter
+sudo -u eggpool /opt/eggpool/.venv/bin/eggpool --config /etc/eggpool/config.toml migrate
+sudo systemctl enable eggpool
+sudo systemctl start eggpool
 ```
 
 ## Pi-Specific Optimizations
@@ -124,7 +124,7 @@ sudo systemctl start gorouter
 
 ```bash
 # Add to /etc/fstab:
-# tmpfs /var/log/gorouter tmpfs defaults,noatime,nosuid,mode=0750,size=50M,uid=gorouter,gid=gorouter 0 0
+# tmpfs /var/log/eggpool tmpfs defaults,noatime,nosuid,mode=0750,size=50M,uid=eggpool,gid=eggpool 0 0
 ```
 
 ### Monitor temperature
@@ -139,7 +139,7 @@ watch -n 5 vcgencmd measure_temp
 
 ### Limit logging
 
-The systemd unit already includes `ProtectSystem=strict` and `ReadWritePaths=/var/lib/gorouter`. Logs go to the systemd journal by default, which is stored in RAM until rotated.
+The systemd unit already includes `ProtectSystem=strict` and `ReadWritePaths=/var/lib/eggpool`. Logs go to the systemd journal by default, which is stored in RAM until rotated.
 
 ## Verifying from OpenCode
 
@@ -154,8 +154,8 @@ The systemd unit already includes `ProtectSystem=strict` and `ReadWritePaths=/va
 ### Service won't start
 
 ```bash
-sudo journalctl -u gorouter --since "5 minutes ago"
-sudo -u gorouter /opt/gorouter/.venv/bin/go-aggregator --config /etc/gorouter/config.toml check-config
+sudo journalctl -u eggpool --since "5 minutes ago"
+sudo -u eggpool /opt/eggpool/.venv/bin/eggpool --config /etc/eggpool/config.toml check-config
 ```
 
 ### Slow performance
@@ -169,7 +169,7 @@ sudo -u gorouter /opt/gorouter/.venv/bin/go-aggregator --config /etc/gorouter/co
 
 ```bash
 # Check disk usage
-df -h /var/lib/gorouter
+df -h /var/lib/eggpool
 
 # Trim old data (if retention is configured)
 # The service handles this automatically via dashboard.retain_request_stats_days
@@ -184,18 +184,18 @@ traffic:
 
 ```bash
 # Unit must parse without errors.
-sudo systemd-analyze verify /etc/systemd/system/gorouter.service
+sudo systemd-analyze verify /etc/systemd/system/eggpool.service
 
 # Confirm ExecReload is intentionally absent: any reload attempt
 # must fail with "Job type reload is not applicable".
-sudo systemctl reload gorouter || true
+sudo systemctl reload eggpool || true
 ```
 
 ### 2. Read-only database checker
 
 ```bash
-sudo -u gorouter GOROUTER_DB_PATH=/var/lib/gorouter/usage.sqlite3 \
-  /opt/gorouter/.venv/bin/python /opt/gorouter/scripts/check_database.py
+sudo -u eggpool GOROUTER_DB_PATH=/var/lib/eggpool/usage.sqlite3 \
+  /opt/eggpool/.venv/bin/python /opt/eggpool/scripts/check_database.py
 
 # Exit 0 = all invariants pass.
 # Exit 1 = invariant violation (read the message).
@@ -207,19 +207,19 @@ echo "checker exit: $?"
 
 ```bash
 # Confirm a no-op restart is fast and clean.
-sudo systemctl restart gorouter
-sudo systemctl status gorouter --no-pager
-sudo journalctl -u gorouter -n 20 --no-pager
+sudo systemctl restart eggpool
+sudo systemctl status eggpool --no-pager
+sudo journalctl -u eggpool -n 20 --no-pager
 ```
 
 ### 4. Streaming smoke test
 
 ```bash
 GOROUTER_BASE_URL=http://127.0.0.1:8080 \
-GOROUTER_API_KEY=$(sudo grep ^GO_AGGREGATOR_API_KEY /etc/gorouter/env | cut -d= -f2-) \
+GOROUTER_API_KEY=$(sudo grep ^GO_AGGREGATOR_API_KEY /etc/eggpool/env | cut -d= -f2-) \
 GOROUTER_OPENAI_MODEL="<your openai model>" \
 GOROUTER_ANTHROPIC_MODEL="<your anthropic model>" \
-  /opt/gorouter/.venv/bin/python /opt/gorouter/scripts/smoke_test.py
+  /opt/eggpool/.venv/bin/python /opt/eggpool/scripts/smoke_test.py
 ```
 
 `GOROUTER_OPENAI_MODEL` and `GOROUTER_ANTHROPIC_MODEL` must be
@@ -234,9 +234,9 @@ workflow:
 
 ```bash
 # Change a non-load-bearing setting, e.g. log level.
-sudo sed -i 's/^log_level = "INFO"/log_level = "DEBUG"/' /etc/gorouter/config.toml
-sudo systemctl restart gorouter
-sudo journalctl -u gorouter -n 50 --no-pager | grep -i "log level\|debug\|info"
+sudo sed -i 's/^log_level = "INFO"/log_level = "DEBUG"/' /etc/eggpool/config.toml
+sudo systemctl restart eggpool
+sudo journalctl -u eggpool -n 50 --no-pager | grep -i "log level\|debug\|info"
 ```
 
 The change should be visible in the logs after the restart,
@@ -261,7 +261,7 @@ or credential exposure:
 #   - No 'quota exhausted' storms from a single account
 #     (which would indicate cooldown regression).
 #   - No secrets in the systemd journal.
-sudo journalctl -u gorouter --since "30 minutes ago" | \
+sudo journalctl -u eggpool --since "30 minutes ago" | \
   grep -E "sk-[A-Za-z0-9]+|Bearer [A-Za-z0-9._-]+|api_key=" \
   && echo "FAIL: secrets in logs" || echo "OK: no secrets in logs"
 ```
@@ -269,8 +269,8 @@ sudo journalctl -u gorouter --since "30 minutes ago" | \
 ### 7. Database invariant checker post-soak
 
 ```bash
-sudo -u gorouter GOROUTER_DB_PATH=/var/lib/gorouter/usage.sqlite3 \
-  /opt/gorouter/.venv/bin/python /opt/gorouter/scripts/check_database.py
+sudo -u eggpool GOROUTER_DB_PATH=/var/lib/eggpool/usage.sqlite3 \
+  /opt/eggpool/.venv/bin/python /opt/eggpool/scripts/check_database.py
 echo "post-soak checker exit: $?"
 ```
 
@@ -279,11 +279,11 @@ violating state.
 
 ### 8. Direct upstream authentication verification
 
-Before diagnosing GoRouter behavior, confirm that the
+Before diagnosing EggPool behavior, confirm that the
 configured key actually authenticates against each upstream
 endpoint family. The bundled verifier bypasses the proxy and
 calls the upstream endpoints directly with the same
-`Authorization: Bearer` header that GoRouter emits. The
+`Authorization: Bearer` header that EggPool emits. The
 verifier is **not** part of automated CI execution.
 
 ```bash
@@ -293,7 +293,7 @@ GOROUTER_UPSTREAM_BASE_URL="https://api.openai.com" \
 GOROUTER_TEST_UPSTREAM_KEY="$GO_AGGREGATOR_OPENCODE_KEY" \
 GOROUTER_OPENAI_MODEL="<your openai model>" \
 GOROUTER_ANTHROPIC_MODEL="<your anthropic model>" \
-  /opt/gorouter/.venv/bin/python /opt/gorouter/scripts/verify_upstream_auth.py
+  /opt/eggpool/.venv/bin/python /opt/eggpool/scripts/verify_upstream_auth.py
 ```
 
 `GOROUTER_TEST_UPSTREAM_KEY` is read from the environment; do
@@ -311,7 +311,7 @@ Operational sequence:
 
 1. Run the verifier against each endpoint family first. A
    non-zero exit means the upstream rejects the key or the
-   model id; GoRouter cannot fix that.
+   model id; EggPool cannot fix that.
 2. Run `scripts/smoke_test.py` using the same model ids.
 3. If direct succeeds but the proxy fails, inspect
    header transformation and routing.
@@ -326,12 +326,12 @@ IDs known to be advertised by the upstream catalog.
 
 Before declaring the Pi deployment ready:
 
-- [ ] `systemctl status gorouter` shows the service as
+- [ ] `systemctl status eggpool` shows the service as
       `active (running)`.
 - [ ] `systemd-analyze verify` returns 0.
 - [ ] `check_database.py` returns exit code 0.
 - [ ] The smoke test reports `OK` for every check.
 - [ ] The 30-minute soak leaves no secrets in the journal
       and the database invariant checker still returns 0.
-- [ ] A no-op `systemctl restart gorouter` completes in
+- [ ] A no-op `systemctl restart eggpool` completes in
       under five seconds and the service comes back healthy.

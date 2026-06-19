@@ -384,7 +384,7 @@ wheels = [
 ]
 
 [[package]]
-name = "opencode-go-aggregator"
+name = "eggpool"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

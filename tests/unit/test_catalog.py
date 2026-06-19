@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from go_aggregator.catalog.cache import ModelCatalogCache, parse_model_id
-from go_aggregator.catalog.normalizer import (
+from eggpool.catalog.cache import ModelCatalogCache, parse_model_id
+from eggpool.catalog.normalizer import (
     normalize_anthropic_models,
     normalize_models,
     normalize_openai_models,

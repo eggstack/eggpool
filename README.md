@@ -1,4 +1,4 @@
-# GoRouter
+# EggPool
 
 A lightweight, LAN-hosted proxy that aggregates OpenCode Go and compatible
 provider accounts behind one OpenAI/Anthropic-compatible endpoint.
@@ -23,7 +23,7 @@ provider accounts behind one OpenAI/Anthropic-compatible endpoint.
 ### Option 1: Automated install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/eggstack/gorouter/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/eggstack/eggpool/main/scripts/install.sh | bash
 ```
 
 The script:
@@ -53,16 +53,16 @@ cp .env.example .env
 
 # Validate configuration
 set -a; source .env; set +a
-uv run go-aggregator --config config.toml check-config
+uv run eggpool --config config.toml check-config
 
 # Run database migrations
-uv run go-aggregator --config config.toml migrate
+uv run eggpool --config config.toml migrate
 
 # Start the server
-uv run go-aggregator --config config.toml serve
+uv run eggpool --config config.toml serve
 ```
 
-The validated baseline sequence is: `uv run go-aggregator --help`,
+The validated baseline sequence is: `uv run eggpool --help`,
 `check-config` with exported environment variables, and `migrate` against the
 configured SQLite path.
 
@@ -70,15 +70,16 @@ configured SQLite path.
 
 | Command | Description |
 |---------|-------------|
-| `go-aggregator serve` | Start the aggregation proxy server (default command) |
-| `go-aggregator check-config` | Validate the configuration file |
-| `go-aggregator migrate` | Run database migrations |
-| `go-aggregator models refresh` | Refresh the model catalog from upstream (syncs accounts first) |
-| `go-aggregator accounts status` | Show configured account status and key environment variables |
-| `go-aggregator db vacuum` | Reclaim SQLite space via the lock-owned `Database.vacuum()` helper |
-| `go-aggregator connect` | Interactive provider connection setup |
-| `go-aggregator connect list` | List available providers for connection |
-| `go-aggregator logout` | Remove a configured provider account |
+| `eggpool serve` | Start the aggregation proxy server (default command) |
+| `eggpool check-config` | Validate the configuration file |
+| `eggpool migrate` | Run database migrations |
+| `eggpool models refresh` | Refresh the model catalog from upstream (syncs accounts first) |
+| `eggpool accounts status` | Show configured account status and key environment variables |
+| `eggpool accounts list` | List configured provider accounts and API key backends |
+| `eggpool db vacuum` | Reclaim SQLite space via the lock-owned `Database.vacuum()` helper |
+| `eggpool connect` | Interactive provider connection setup |
+| `eggpool connect list` | List available providers for connection |
+| `eggpool logout` | Remove a configured provider account |
 
 All commands accept `--config /path/to/config.toml` (defaults to `config.toml`).
 Configuration changes require a process restart; live reload is intentionally
@@ -95,7 +96,7 @@ Scripts under `scripts/`:
   proxy. Exercises health, models, stats, non-streaming, and
   streaming endpoints for both protocol families.
 - `scripts/verify_upstream_auth.py` — direct-upstream authentication
-  verifier. Bypasses GoRouter to confirm the configured key works
+  verifier. Bypasses EggPool to confirm the configured key works
   against each upstream endpoint family. Operator-only; not run in CI.
 
 ## API Endpoints
@@ -171,9 +172,9 @@ uv run coverage report
 ## Project Structure
 
 ```
-src/go_aggregator/
+src/eggpool/
 ├── __init__.py          # Package version
-├── __main__.py          # python -m go_aggregator
+├── __main__.py          # python -m eggpool
 ├── app.py               # FastAPI application factory
 ├── cli.py               # Click CLI commands
 ├── auth.py              # Local API key authentication
@@ -268,14 +269,14 @@ See `docs/deployment.md` for production deployment instructions.
 For production (systemd):
 
 ```bash
-sudo systemctl enable --now gorouter
+sudo systemctl enable --now eggpool
 ```
 
 Configuration changes require a service restart; the unit
 intentionally does not advertise any reload action:
 
 ```bash
-sudo systemctl restart gorouter
-sudo systemctl status gorouter
-sudo journalctl -u gorouter -n 100 --no-pager
+sudo systemctl restart eggpool
+sudo systemctl status eggpool
+sudo journalctl -u eggpool -n 100 --no-pager
 ```

@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from go_aggregator.cli import cli
-from go_aggregator.providers.connect import (
+from eggpool.cli import cli
+from eggpool.providers.connect import (
     ConfiguredAccount,
     _extract_raw_block,
     _format_provider_block,
@@ -237,15 +237,43 @@ class TestFormatProviderBlock:
         assert 'openai_path = "/v1/chat/completions"' in block
         assert 'anthropic_path = "/anthropic/v1/messages"' in block
 
-    def test_excludes_id_and_accounts(self) -> None:
-        """Does not include id or accounts in the output."""
+    def test_excludes_accounts_and_api_key_env(self) -> None:
+        """Does not include accounts or api_key_env in provider-level output."""
         data = {
-            "id": "should-be-excluded",
+            "id": "my-provider",
             "base_url": "https://example.com",
             "accounts": [],
+            "api_key_env": "SHOULD_BE_EXCLUDED",
         }
-        block = _format_provider_block("test", data, "KEY")
-        assert "should-be-excluded" not in block.split("\n")[0]
+        block = _format_provider_block("my-provider", data, "MY_KEY")
+        assert 'id = "my-provider"' in block
+        assert "SHOULD_BE_EXCLUDED" not in block
+        assert 'api_key_env = "SHOULD_BE_EXCLUDED"' not in block
+        assert 'api_key_env = "MY_KEY"' in block
+
+    def test_round_trip_with_app_config(self, tmp_path: Path) -> None:
+        """Generated TOML can be parsed back by AppConfig.from_toml()."""
+        from eggpool.models.config import AppConfig
+
+        data = {
+            "id": "minimax",
+            "base_url": "https://api.minimaxi.com",
+            "protocols": ["openai", "anthropic"],
+            "openai_path": "/v1/chat/completions",
+            "anthropic_path": "/anthropic/v1/messages",
+            "models_path": "/v1/models",
+            "api_key_env": "API_KEY",
+        }
+        block = _format_provider_block("minimax", data, "MINIMAX_API_KEY")
+
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(block)
+        config = AppConfig.from_toml(str(config_file))
+        assert "minimax" in config.providers
+        assert config.providers["minimax"].base_url == "https://api.minimaxi.com"
+        assert config.providers["minimax"].id == "minimax"
+        assert len(config.providers["minimax"].accounts) == 1
+        assert config.providers["minimax"].accounts[0].api_key_env == "MINIMAX_API_KEY"
 
 
 class TestMergeProviderIntoConfig:
@@ -604,7 +632,7 @@ class TestCliLogout:
         monkeypatch.setenv("OPENCODE_GO_API_KEY", "sk-first-key")
         monkeypatch.setenv("OPENCODE_GO_API_KEY_2", "sk-second-key")
 
-        from go_aggregator.providers import connect as connect_module
+        from eggpool.providers import connect as connect_module
 
         class FakeMenu:
             """Deterministic stand-in for the terminal menu."""

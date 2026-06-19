@@ -1,6 +1,6 @@
 -- Historical schema fixture: state immediately after applying migrations 1-11.
 --
--- This fixture represents the production GoRouter schema as it would look
+-- This fixture represents the production EggPool schema as it would look
 -- after the v1 through v11 migrations have all been applied. The SQL
 -- reproduces the v11 state without depending on the migration runner
 -- itself, so upgrade-compatibility tests can apply it directly to a

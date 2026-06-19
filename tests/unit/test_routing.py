@@ -6,14 +6,14 @@ import os
 
 import pytest
 
-from go_aggregator.accounts.registry import AccountRegistry
-from go_aggregator.accounts.state import AccountRuntimeState
-from go_aggregator.catalog.cache import ModelCatalogCache
-from go_aggregator.models.config import AppConfig
-from go_aggregator.quota.estimation import AccountQuota, QuotaEstimator
-from go_aggregator.quota.scorer import QuotaFairScorer, RoutingScore
-from go_aggregator.routing.eligibility import get_eligible_accounts
-from go_aggregator.routing.router import Router
+from eggpool.accounts.registry import AccountRegistry
+from eggpool.accounts.state import AccountRuntimeState
+from eggpool.catalog.cache import ModelCatalogCache
+from eggpool.models.config import AppConfig
+from eggpool.quota.estimation import AccountQuota, QuotaEstimator
+from eggpool.quota.scorer import QuotaFairScorer, RoutingScore
+from eggpool.routing.eligibility import get_eligible_accounts
+from eggpool.routing.router import Router
 
 
 def test_eligible_accounts_basic() -> None:
@@ -392,7 +392,7 @@ async def test_5h_usage_changes_selection() -> None:
 async def test_7d_usage_changes_selection() -> None:
     """Seven-day usage on one account should route to the other."""
     estimator = QuotaEstimator()
-    from go_aggregator.quota.estimation import PersistedWindowSnapshot
+    from eggpool.quota.estimation import PersistedWindowSnapshot
 
     estimator.accounts["acct1"] = AccountQuota(
         account_name="acct1",
@@ -419,7 +419,7 @@ async def test_7d_usage_changes_selection() -> None:
 async def test_30d_usage_changes_selection() -> None:
     """Thirty-day usage on one account should route to the other."""
     estimator = QuotaEstimator()
-    from go_aggregator.quota.estimation import PersistedWindowSnapshot
+    from eggpool.quota.estimation import PersistedWindowSnapshot
 
     estimator.accounts["acct1"] = AccountQuota(
         account_name="acct1",
@@ -446,7 +446,7 @@ async def test_30d_usage_changes_selection() -> None:
 async def test_offsets_apply_to_correct_windows() -> None:
     """Manual offset on 5h should not affect 7d routing."""
     estimator = QuotaEstimator()
-    from go_aggregator.quota.estimation import PersistedWindowSnapshot
+    from eggpool.quota.estimation import PersistedWindowSnapshot
 
     estimator.accounts["acct1"] = AccountQuota(
         account_name="acct1",
@@ -540,7 +540,7 @@ def test_near_ties_randomize() -> None:
 @pytest.mark.asyncio()
 async def test_restart_hydration_preserves_behavior() -> None:
     """Persisted windows should produce same routing after reload."""
-    from go_aggregator.quota.estimation import PersistedWindowSnapshot
+    from eggpool.quota.estimation import PersistedWindowSnapshot
 
     estimator = QuotaEstimator()
     estimator.accounts["acct1"] = AccountQuota(
@@ -590,7 +590,7 @@ async def test_restart_hydration_preserves_behavior() -> None:
 @pytest.mark.asyncio()
 async def test_offset_does_not_affect_wrong_window() -> None:
     """5h offset should not affect 7d or 30d scores."""
-    from go_aggregator.quota.estimation import PersistedWindowSnapshot
+    from eggpool.quota.estimation import PersistedWindowSnapshot
 
     estimator = QuotaEstimator()
     estimator.accounts["acct1"] = AccountQuota(

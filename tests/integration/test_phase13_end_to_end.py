@@ -20,26 +20,26 @@ import pytest
 import pytest_asyncio
 import respx
 
-from go_aggregator.accounts.registry import AccountRegistry
-from go_aggregator.catalog.pricing import CostCalculator, PriceRepository
-from go_aggregator.catalog.protocols import ProtocolMismatchError
-from go_aggregator.catalog.service import CatalogService
-from go_aggregator.db.connection import Database
-from go_aggregator.db.migrations import MigrationRunner
-from go_aggregator.db.repositories import (
+from eggpool.accounts.registry import AccountRegistry
+from eggpool.catalog.pricing import CostCalculator, PriceRepository
+from eggpool.catalog.protocols import ProtocolMismatchError
+from eggpool.catalog.service import CatalogService
+from eggpool.db.connection import Database
+from eggpool.db.migrations import MigrationRunner
+from eggpool.db.repositories import (
     AccountRepository,
     AttemptRepository,
     RequestRepository,
     ReservationRepository,
     UsageWindowRepository,
 )
-from go_aggregator.health.health_manager import HealthManager
-from go_aggregator.models.config import AppConfig
-from go_aggregator.request.coordinator import (
+from eggpool.health.health_manager import HealthManager
+from eggpool.models.config import AppConfig
+from eggpool.request.coordinator import (
     ProxyRequestContext,
     RequestCoordinator,
 )
-from go_aggregator.routing.router import Router
+from eggpool.routing.router import Router
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -1184,7 +1184,7 @@ class TestProtocolFailClosed:
         self, coordinator: RequestCoordinator, two_account_db: Database
     ) -> None:
         """Unknown model is neither exposed nor routed."""
-        from go_aggregator.errors import ModelNotFoundError
+        from eggpool.errors import ModelNotFoundError
 
         # Request with unknown model raises ModelNotFoundError (404)
         with respx.mock:
@@ -1367,7 +1367,7 @@ class TestDuplicateFinalization:
         self, coordinator: RequestCoordinator, two_account_db: Database
     ) -> None:
         """Second finalization call cannot overwrite terminal fields."""
-        from go_aggregator.request.finalizer import (
+        from eggpool.request.finalizer import (
             FinalizationData,
             FinalizationOutcome,
         )
@@ -1417,7 +1417,7 @@ class TestDuplicateFinalization:
 
         # Now attempt a second finalization with DIFFERENT data
         # (500 status, 0 bytes) - this should NOT overwrite the original
-        from go_aggregator.request.coordinator import SelectedAttempt
+        from eggpool.request.coordinator import SelectedAttempt
 
         selected = SelectedAttempt(
             proxy_request_id="test-j-double-finalize",
@@ -1666,7 +1666,7 @@ class TestRestartRecovery:
             )
 
         # Step 3: Run crash recovery
-        from go_aggregator.app import _crash_recovery
+        from eggpool.app import _crash_recovery
 
         await _crash_recovery(two_account_db)
 
@@ -1717,7 +1717,7 @@ class TestProtocolFamilyMappings:
     @pytest.mark.asyncio
     async def test_glm_family_resolves_to_openai(self) -> None:
         """GLM models should resolve to openai protocol."""
-        from go_aggregator.catalog.protocols import ModelProtocolResolver
+        from eggpool.catalog.protocols import ModelProtocolResolver
 
         resolver = ModelProtocolResolver()
         resolution = resolver.resolve_from_catalog("glm-4-plus")
@@ -1727,7 +1727,7 @@ class TestProtocolFamilyMappings:
     @pytest.mark.asyncio
     async def test_kimi_family_resolves_to_openai(self) -> None:
         """Kimi models should resolve to openai protocol."""
-        from go_aggregator.catalog.protocols import ModelProtocolResolver
+        from eggpool.catalog.protocols import ModelProtocolResolver
 
         resolver = ModelProtocolResolver()
         resolution = resolver.resolve_from_catalog("kimi-k2")
@@ -1737,7 +1737,7 @@ class TestProtocolFamilyMappings:
     @pytest.mark.asyncio
     async def test_mimo_family_resolves_to_openai(self) -> None:
         """MiMo models should resolve to openai protocol."""
-        from go_aggregator.catalog.protocols import ModelProtocolResolver
+        from eggpool.catalog.protocols import ModelProtocolResolver
 
         resolver = ModelProtocolResolver()
         resolution = resolver.resolve_from_catalog("mimo-7b")
@@ -1747,7 +1747,7 @@ class TestProtocolFamilyMappings:
     @pytest.mark.asyncio
     async def test_deepseek_family_resolves_to_openai(self) -> None:
         """DeepSeek models should resolve to openai protocol."""
-        from go_aggregator.catalog.protocols import ModelProtocolResolver
+        from eggpool.catalog.protocols import ModelProtocolResolver
 
         resolver = ModelProtocolResolver()
         resolution = resolver.resolve_from_catalog("deepseek-v3")
@@ -1757,7 +1757,7 @@ class TestProtocolFamilyMappings:
     @pytest.mark.asyncio
     async def test_minimax_family_resolves_to_anthropic(self) -> None:
         """MiniMax models should resolve to anthropic protocol."""
-        from go_aggregator.catalog.protocols import ModelProtocolResolver
+        from eggpool.catalog.protocols import ModelProtocolResolver
 
         resolver = ModelProtocolResolver()
         resolution = resolver.resolve_from_catalog("minimax-m3")
@@ -1767,7 +1767,7 @@ class TestProtocolFamilyMappings:
     @pytest.mark.asyncio
     async def test_qwen3_family_resolves_to_anthropic(self) -> None:
         """Qwen3 models should resolve to anthropic protocol."""
-        from go_aggregator.catalog.protocols import ModelProtocolResolver
+        from eggpool.catalog.protocols import ModelProtocolResolver
 
         resolver = ModelProtocolResolver()
         resolution = resolver.resolve_from_catalog("qwen3.7-max")
@@ -1777,7 +1777,7 @@ class TestProtocolFamilyMappings:
     @pytest.mark.asyncio
     async def test_unknown_model_remains_unresolved(self) -> None:
         """Unknown model should remain unresolved."""
-        from go_aggregator.catalog.protocols import ModelProtocolResolver
+        from eggpool.catalog.protocols import ModelProtocolResolver
 
         resolver = ModelProtocolResolver()
         resolution = resolver.resolve_from_catalog("totally-unknown-model-xyz")

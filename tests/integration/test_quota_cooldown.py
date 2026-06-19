@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from go_aggregator.health.health_manager import HealthManager
+from eggpool.health.health_manager import HealthManager
 
 
 def test_record_quota_exhausted_sets_cooldown() -> None:

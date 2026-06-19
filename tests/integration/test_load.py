@@ -15,21 +15,21 @@ import pytest
 import pytest_asyncio
 import respx
 
-from go_aggregator.accounts.registry import AccountRegistry
-from go_aggregator.app import create_app
-from go_aggregator.catalog.service import CatalogService
-from go_aggregator.db.connection import Database
-from go_aggregator.db.migrations import MigrationRunner
-from go_aggregator.db.repositories import (
+from eggpool.accounts.registry import AccountRegistry
+from eggpool.app import create_app
+from eggpool.catalog.service import CatalogService
+from eggpool.db.connection import Database
+from eggpool.db.migrations import MigrationRunner
+from eggpool.db.repositories import (
     AttemptRepository,
     RequestRepository,
     ReservationRepository,
 )
-from go_aggregator.health.health_manager import HealthManager
-from go_aggregator.models.config import AppConfig
-from go_aggregator.request.coordinator import RequestCoordinator
-from go_aggregator.routing.router import Router
-from go_aggregator.stats import StatsService
+from eggpool.health.health_manager import HealthManager
+from eggpool.models.config import AppConfig
+from eggpool.request.coordinator import RequestCoordinator
+from eggpool.routing.router import Router
+from eggpool.stats import StatsService
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -618,7 +618,7 @@ async def test_one_week_synthetic_request_history(
     assert row["cnt"] == 700
 
     # Verify stats queries work — use a wide range to capture all inserted data
-    from go_aggregator.stats.service import StatsService, TimeRange
+    from eggpool.stats.service import StatsService, TimeRange
 
     stats = StatsService(db)
     time_range = TimeRange(

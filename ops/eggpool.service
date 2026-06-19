@@ -1,0 +1,51 @@
+[Unit]
+Description=EggPool
+Documentation=https://github.com/eggstack/eggpool
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=eggpool
+Group=eggpool
+WorkingDirectory=/var/lib/eggpool
+ExecStart=/opt/eggpool/.venv/bin/eggpool --config /etc/eggpool/config.toml serve
+# Live configuration reload is not supported; changes require
+# `sudo systemctl restart eggpool`. SIGHUP is intentionally not
+# wired to any reload action.
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Graceful shutdown
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+# Security hardening (note: MemoryDenyWriteExecute removed; PyTorch-style
+# runtimes in newer Python builds may legitimately need W^X relaxations).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/eggpool
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+
+# Network
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# System call filtering
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+
+# Environment
+EnvironmentFile=/etc/eggpool/env
+
+[Install]
+WantedBy=multi-user.target

@@ -6,10 +6,10 @@ import os
 
 import pytest
 
-from go_aggregator.accounts.registry import AccountRegistry
-from go_aggregator.accounts.state import AccountRuntimeState
-from go_aggregator.errors import ConfigError
-from go_aggregator.models.config import AppConfig
+from eggpool.accounts.registry import AccountRegistry
+from eggpool.accounts.state import AccountRuntimeState
+from eggpool.errors import ConfigError
+from eggpool.models.config import AppConfig
 
 
 def test_account_runtime_state_eligible() -> None:

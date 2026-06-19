@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from go_aggregator.catalog.cache import ModelCatalogCache
-from go_aggregator.db.connection import Database
-from go_aggregator.db.migrations import MigrationRunner
+from eggpool.catalog.cache import ModelCatalogCache
+from eggpool.db.connection import Database
+from eggpool.db.migrations import MigrationRunner
 
 
 @pytest.mark.asyncio

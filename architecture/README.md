@@ -1,11 +1,11 @@
 # Architecture
 
-High-level design overview for the GoRouter aggregator.
+High-level design overview for the EggPool aggregator.
 
 ## Package Structure
 
 ```
-src/go_aggregator/
+src/eggpool/
 ├── accounts/          # Account registry and runtime state
 ├── api/               # API endpoint handlers (chat completions, messages, stats)
 ├── background/        # TaskSupervisor, retention cleanup, periodic tasks
@@ -48,7 +48,7 @@ Key invariants:
 
 ## Multi-Provider Architecture
 
-GoRouter supports multiple upstream providers (OpenCode Go, MiniMax, GeneralCompute, etc.), each with its own base URL, account pool, supported protocols, and model catalog.
+EggPool supports multiple upstream providers (OpenCode Go, MiniMax, GeneralCompute, etc.), each with its own base URL, account pool, supported protocols, and model catalog.
 
 ### Provider Configuration
 

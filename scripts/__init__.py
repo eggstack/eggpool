@@ -1,4 +1,4 @@
-"""Helper entrypoint for GoRouter operational scripts.
+"""Helper entrypoint for EggPool operational scripts.
 
 The scripts under ``scripts/`` are designed to be runnable directly with
 ``uv run scripts/smoke_test.py`` etc.; this package marker keeps the

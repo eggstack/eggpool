@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from go_aggregator.proxy.sse_observer import IncrementalSSEObserver, SSEFrame
+from eggpool.proxy.sse_observer import IncrementalSSEObserver, SSEFrame
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -247,7 +247,7 @@ class TestMemoryBounds:
 
     def test_incomplete_event_exceeding_limit(self) -> None:
         """An incomplete event exceeding MAX_INCOMPLETE_FRAME_BYTES is discarded."""
-        from go_aggregator.proxy.sse_observer import MAX_INCOMPLETE_FRAME_BYTES
+        from eggpool.proxy.sse_observer import MAX_INCOMPLETE_FRAME_BYTES
 
         observer = IncrementalSSEObserver(protocol="openai")
         # Send a huge data line without a blank line terminator

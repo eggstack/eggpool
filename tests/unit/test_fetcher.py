@@ -5,7 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from go_aggregator.catalog.fetcher import FetchResult, fetch_models_for_account
+from eggpool.catalog.fetcher import FetchResult, fetch_models_for_account
 
 
 @pytest.mark.asyncio

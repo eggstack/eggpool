@@ -11,7 +11,7 @@ latency and record health data, eliminating the need for separate probe infrastr
 
 ## Phase 1: TTFT Statistics (query-time aggregation)
 
-### 1.1 Stats Queries — `src/go_aggregator/stats/queries.py`
+### 1.1 Stats Queries — `src/eggpool/stats/queries.py`
 
 Add AVG/P50/P99 of `first_byte_ms` to existing aggregation queries. Filter by
 `streamed=1` for true TTFT (non-streaming `first_byte_ms` measures time-to-headers).
@@ -68,7 +68,7 @@ async def fetch_provider_model_ttft(
     """
 ```
 
-### 1.2 Stats Service — `src/go_aggregator/stats/service.py`
+### 1.2 Stats Service — `src/eggpool/stats/service.py`
 
 Add methods:
 
@@ -82,7 +82,7 @@ async def get_provider_model_ttft(self, time_range: TimeRange) -> list[dict[str,
 
 Wire into existing `get_dashboard_overview()` to include TTFT summary cards.
 
-### 1.3 Dashboard Rendering — `src/go_aggregator/dashboard/render.py`
+### 1.3 Dashboard Rendering — `src/eggpool/dashboard/render.py`
 
 **Overview page** — add TTFT cards alongside existing latency card:
 
@@ -108,13 +108,13 @@ New columns: Provider, Avg TTFT.
 - Per-provider aggregate TTFT summary cards at top
 - Period selector and theme support
 
-### 1.4 Dashboard Routes — `src/go_aggregator/dashboard/routes.py`
+### 1.4 Dashboard Routes — `src/eggpool/dashboard/routes.py`
 
 - Add `/latency` route handler
 - Wire TTFT data into overview, models, accounts pages
 - Add "Latency" to nav items in `_render_nav()`
 
-### 1.5 API Endpoint — `src/go_aggregator/api/stats.py`
+### 1.5 API Endpoint — `src/eggpool/api/stats.py`
 
 Add `/api/stats/latency` endpoint:
 
@@ -156,7 +156,7 @@ ping data (to validate each API key) but also aggregate per-provider.
 
 **Default interval:** Change from 3600s (1 hour) to 300s (5 minutes).
 
-### 2.1 Migration — `src/go_aggregator/db/schema/0018_provider_pings.sql`
+### 2.1 Migration — `src/eggpool/db/schema/0018_provider_pings.sql`
 
 ```sql
 CREATE TABLE provider_pings (
@@ -184,7 +184,7 @@ CREATE INDEX idx_provider_pings_provider_probed
 - `error` — error message if request failed (timeout, connection error, etc.)
 - `model_count` — number of models discovered (0 on failure)
 
-### 2.2 Ping Repository — `src/go_aggregator/db/repositories.py`
+### 2.2 Ping Repository — `src/eggpool/db/repositories.py`
 
 Add `PingRepository` class:
 
@@ -231,7 +231,7 @@ class PingRepository:
         """Delete pings older than retention period."""
 ```
 
-### 2.3 Enhanced Fetcher — `src/go_aggregator/catalog/fetcher.py`
+### 2.3 Enhanced Fetcher — `src/eggpool/catalog/fetcher.py`
 
 Modify `fetch_models_for_account()` to return timing data:
 
@@ -309,7 +309,7 @@ async def fetch_models_for_account(
 and check `if not raw_response:` must be updated. The `FetchResult.response` field
 replaces the old return value. Update callers to check `result.response` instead.
 
-### 2.4 Catalog Service Integration — `src/go_aggregator/catalog/service.py`
+### 2.4 Catalog Service Integration — `src/eggpool/catalog/service.py`
 
 Modify `CatalogService` to accept a `PingRepository` and record pings:
 
@@ -349,7 +349,7 @@ async def _fetch_and_process_account(self, ...):
     # ... rest of processing
 ```
 
-### 2.5 Refresh Interval Config — `src/go_aggregator/models/config.py`
+### 2.5 Refresh Interval Config — `src/eggpool/models/config.py`
 
 Change default and add ping-specific config:
 
@@ -363,7 +363,7 @@ class ModelsConfig(BaseModel):
     ping_retain_days: int = Field(default=7, ge=1)     # NEW: ping data retention
 ```
 
-### 2.6 App Wiring — `src/go_aggregator/app.py`
+### 2.6 App Wiring — `src/eggpool/app.py`
 
 In the `lifespan()` function:
 
@@ -394,7 +394,7 @@ async def _retention_cleanup() -> None:
         await reconcile_expired_reservations(...)
 ```
 
-### 2.7 Retention Cleanup — `src/go_aggregator/background/cleanup.py`
+### 2.7 Retention Cleanup — `src/eggpool/background/cleanup.py`
 
 Add `cleanup_old_pings()`:
 
@@ -440,7 +440,7 @@ REQUIRED_COLUMNS: dict[str, frozenset[str]] = {
 
 ## Phase 3: Ping Dashboard
 
-### 3.1 Ping Stats Queries — `src/go_aggregator/stats/queries.py`
+### 3.1 Ping Stats Queries — `src/eggpool/stats/queries.py`
 
 ```python
 async def fetch_ping_summary(
@@ -536,7 +536,7 @@ async def fetch_ping_recent(
     return [dict(row) for row in rows]
 ```
 
-### 3.2 Ping Stats Service — `src/go_aggregator/stats/service.py`
+### 3.2 Ping Stats Service — `src/eggpool/stats/service.py`
 
 ```python
 async def get_ping_summary(self, time_range: TimeRange) -> list[dict[str, Any]]:
@@ -586,7 +586,7 @@ the bandwidth heatmap:
 </section>
 ```
 
-### 3.4 Ping Page — `src/go_aggregator/dashboard/render.py`
+### 3.4 Ping Page — `src/eggpool/dashboard/render.py`
 
 New `render_pings()` function:
 
@@ -595,7 +595,7 @@ New `render_pings()` function:
 - Recent pings table: Provider, Account, Time, Latency, Status, Models, Error
 - Period selector and theme support
 
-### 3.5 Ping Routes — `src/go_aggregator/dashboard/routes.py`
+### 3.5 Ping Routes — `src/eggpool/dashboard/routes.py`
 
 Add `/pings` route:
 
@@ -611,7 +611,7 @@ async def pings(request: Request) -> Response:
     # ... render
 ```
 
-### 3.6 Ping API — `src/go_aggregator/api/stats.py`
+### 3.6 Ping API — `src/eggpool/api/stats.py`
 
 ```python
 @router.get("/api/stats/pings")
@@ -690,18 +690,18 @@ items = [
 
 | File | Action | Phase |
 |------|--------|-------|
-| `src/go_aggregator/stats/queries.py` | Add TTFT aggregation + ping stats queries | 1, 3 |
-| `src/go_aggregator/stats/service.py` | Add `get_ttft_stats()`, `get_ping_*()` methods | 1, 3 |
-| `src/go_aggregator/dashboard/render.py` | Add TTFT cards, latency page, ping page, provider health section | 1, 3 |
-| `src/go_aggregator/dashboard/routes.py` | Add `/latency`, `/pings` routes, wire TTFT/ping data | 1, 3 |
-| `src/go_aggregator/api/stats.py` | Add `/api/stats/latency`, `/api/stats/pings` endpoints | 1, 3 |
-| `src/go_aggregator/catalog/fetcher.py` | Add `FetchResult` dataclass, timing measurement | 2 |
-| `src/go_aggregator/catalog/service.py` | Accept `PingRepository`, record pings during refresh | 2 |
-| `src/go_aggregator/db/schema/0018_provider_pings.sql` | New migration | 2 |
-| `src/go_aggregator/db/repositories.py` | Add `PingRepository` | 2 |
-| `src/go_aggregator/background/cleanup.py` | Add `cleanup_old_pings()` | 2 |
-| `src/go_aggregator/models/config.py` | Change default `refresh_interval_s` to 300, add `ping_retain_days` | 2 |
-| `src/go_aggregator/app.py` | Wire `PingRepository`, pass to catalog, update retention task | 2 |
+| `src/eggpool/stats/queries.py` | Add TTFT aggregation + ping stats queries | 1, 3 |
+| `src/eggpool/stats/service.py` | Add `get_ttft_stats()`, `get_ping_*()` methods | 1, 3 |
+| `src/eggpool/dashboard/render.py` | Add TTFT cards, latency page, ping page, provider health section | 1, 3 |
+| `src/eggpool/dashboard/routes.py` | Add `/latency`, `/pings` routes, wire TTFT/ping data | 1, 3 |
+| `src/eggpool/api/stats.py` | Add `/api/stats/latency`, `/api/stats/pings` endpoints | 1, 3 |
+| `src/eggpool/catalog/fetcher.py` | Add `FetchResult` dataclass, timing measurement | 2 |
+| `src/eggpool/catalog/service.py` | Accept `PingRepository`, record pings during refresh | 2 |
+| `src/eggpool/db/schema/0018_provider_pings.sql` | New migration | 2 |
+| `src/eggpool/db/repositories.py` | Add `PingRepository` | 2 |
+| `src/eggpool/background/cleanup.py` | Add `cleanup_old_pings()` | 2 |
+| `src/eggpool/models/config.py` | Change default `refresh_interval_s` to 300, add `ping_retain_days` | 2 |
+| `src/eggpool/app.py` | Wire `PingRepository`, pass to catalog, update retention task | 2 |
 | `config.example.toml` | Update refresh interval docs, add ping config | 2 |
 | `scripts/check_database.py` | Bump schema to 18, add `provider_pings` table | 2 |
 | `tests/unit/test_stats_queries.py` | TTFT query tests | 4 |

@@ -13,7 +13,7 @@ Checks run during review:
 
 Affected code:
 
-- `src/go_aggregator/request/coordinator.py`
+- `src/eggpool/request/coordinator.py`
 - `SelectedAttempt.provider_id` exists, but `_select_and_persist_attempt()` sets it
   from `context.provider_id or "opencode-go"` instead of from the selected
   account.
@@ -48,8 +48,8 @@ Intended fix:
 
 Affected code:
 
-- `src/go_aggregator/request/coordinator.py`
-- `src/go_aggregator/app.py`
+- `src/eggpool/request/coordinator.py`
+- `src/eggpool/app.py`
 
 Why this is a bug:
 
@@ -74,11 +74,11 @@ Intended fix:
 
 Affected code:
 
-- `src/go_aggregator/catalog/cache.py`
-- `src/go_aggregator/catalog/service.py`
-- `src/go_aggregator/catalog/pricing.py`
-- `src/go_aggregator/db/schema/0001_initial.sql`
-- `src/go_aggregator/db/schema/0015_multi_provider.sql`
+- `src/eggpool/catalog/cache.py`
+- `src/eggpool/catalog/service.py`
+- `src/eggpool/catalog/pricing.py`
+- `src/eggpool/db/schema/0001_initial.sql`
+- `src/eggpool/db/schema/0015_multi_provider.sql`
 
 Why this is a bug:
 
@@ -109,7 +109,7 @@ Intended fix:
 
 Affected code:
 
-- `src/go_aggregator/health/circuit_breaker.py`
+- `src/eggpool/health/circuit_breaker.py`
 - `tests/unit/test_health.py`
 
 Why this is a bug:
@@ -138,10 +138,10 @@ Intended fix:
 
 Affected code:
 
-- `src/go_aggregator/app.py`
-- `src/go_aggregator/cli.py`
-- `src/go_aggregator/db/repositories.py`
-- `src/go_aggregator/db/schema/0015_multi_provider.sql`
+- `src/eggpool/app.py`
+- `src/eggpool/cli.py`
+- `src/eggpool/db/repositories.py`
+- `src/eggpool/db/schema/0015_multi_provider.sql`
 
 Why this is a bug:
 
@@ -169,11 +169,11 @@ Intended fix:
 
 Affected code:
 
-- `src/go_aggregator/models/config.py`
-- `src/go_aggregator/catalog/service.py`
-- `src/go_aggregator/catalog/normalizer.py`
-- `src/go_aggregator/routing/eligibility.py`
-- `src/go_aggregator/request/coordinator.py`
+- `src/eggpool/models/config.py`
+- `src/eggpool/catalog/service.py`
+- `src/eggpool/catalog/normalizer.py`
+- `src/eggpool/routing/eligibility.py`
+- `src/eggpool/request/coordinator.py`
 
 Why this is a bug:
 
@@ -200,9 +200,9 @@ Intended fix:
 
 Affected code:
 
-- `src/go_aggregator/catalog/cache.py`
-- `src/go_aggregator/api/chat_completions.py`
-- `src/go_aggregator/api/messages.py`
+- `src/eggpool/catalog/cache.py`
+- `src/eggpool/api/chat_completions.py`
+- `src/eggpool/api/messages.py`
 - `tests/unit/test_catalog.py`
 
 Why this is a bug:

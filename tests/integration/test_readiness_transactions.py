@@ -6,9 +6,9 @@ import asyncio
 
 import pytest
 
-from go_aggregator.db.connection import Database
-from go_aggregator.db.migrations import MigrationRunner
-from go_aggregator.db.repositories import RequestRepository
+from eggpool.db.connection import Database
+from eggpool.db.migrations import MigrationRunner
+from eggpool.db.repositories import RequestRepository
 
 
 async def _seed_db(db: Database) -> None:

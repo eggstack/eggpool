@@ -19,18 +19,18 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
-from go_aggregator.db.connection import Database
-from go_aggregator.db.migrations import MigrationRunner
-from go_aggregator.db.repositories import (
+from eggpool.db.connection import Database
+from eggpool.db.migrations import MigrationRunner
+from eggpool.db.repositories import (
     AttemptRepository,
     RequestRepository,
     ReservationRepository,
 )
-from go_aggregator.request.attempt_finalizer import (
+from eggpool.request.attempt_finalizer import (
     AttemptFinalizationData,
     AttemptFinalizer,
 )
-from go_aggregator.request.finalizer import (
+from eggpool.request.finalizer import (
     FinalizationData,
     FinalizationOutcome,
     RequestFinalizer,

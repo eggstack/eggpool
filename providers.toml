@@ -1,7 +1,7 @@
-# providers.toml — Provider templates for `gorouter connect`
+# providers.toml — Provider templates for `eggpool connect`
 #
 # Each [providers.<id>] block defines a provider that can be added
-# to your config via the interactive `gorouter connect` command.
+# to your config via the interactive `eggpool connect` command.
 #
 # The api_key_env value is a placeholder. When you connect, the
 # actual environment variable name is derived from the provider id

@@ -7,7 +7,7 @@ import asyncio
 import httpx
 import pytest
 
-from go_aggregator.providers.pproxy_transport import AsyncPProxyTransport
+from eggpool.providers.pproxy_transport import AsyncPProxyTransport
 
 
 @pytest.mark.asyncio

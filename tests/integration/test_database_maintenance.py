@@ -22,14 +22,14 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from go_aggregator.background.cleanup import (
+from eggpool.background.cleanup import (
     cleanup_old_events,
     cleanup_old_requests,
 )
-from go_aggregator.cli import cli
-from go_aggregator.db.connection import Database
-from go_aggregator.db.migrations import MigrationRunner
-from go_aggregator.errors import DatabaseError
+from eggpool.cli import cli
+from eggpool.db.connection import Database
+from eggpool.db.migrations import MigrationRunner
+from eggpool.errors import DatabaseError
 
 
 @pytest.fixture
@@ -382,9 +382,7 @@ class TestVacuumAudit:
         tmp_path: Path,
     ) -> None:
         """The CLI must call ``db.vacuum()`` rather than direct connection use."""
-        cli_path = (
-            Path(__file__).parent.parent.parent / "src" / "go_aggregator" / "cli.py"
-        )
+        cli_path = Path(__file__).parent.parent.parent / "src" / "eggpool" / "cli.py"
         contents = cli_path.read_text(encoding="utf-8")
         # No raw VACUUM SQL string in cli.py - it must go through the
         # helper. We allow the bare keyword in docstrings/comments but

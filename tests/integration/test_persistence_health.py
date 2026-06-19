@@ -6,11 +6,11 @@ import uuid
 
 import pytest
 
-from go_aggregator.app import _crash_recovery
-from go_aggregator.db.connection import Database
-from go_aggregator.db.migrations import MigrationRunner
-from go_aggregator.db.repositories import RequestRepository, ReservationRepository
-from go_aggregator.health.health_manager import HealthManager
+from eggpool.app import _crash_recovery
+from eggpool.db.connection import Database
+from eggpool.db.migrations import MigrationRunner
+from eggpool.db.repositories import RequestRepository, ReservationRepository
+from eggpool.health.health_manager import HealthManager
 
 EXPECTED_TABLES = frozenset(
     {

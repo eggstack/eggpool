@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from go_aggregator.proxy.usage import (
+from eggpool.proxy.usage import (
     AnthropicStreamUsageExtractor,
     OpenAIStreamUsageExtractor,
     StreamUsageResult,

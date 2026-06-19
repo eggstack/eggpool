@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from go_aggregator.catalog.protocols import (
+from eggpool.catalog.protocols import (
     ModelProtocolResolver,
     ProtocolMismatchError,
 )
-from go_aggregator.models.config import AppConfig
+from eggpool.models.config import AppConfig
 
 
 @pytest.fixture()

@@ -1,6 +1,6 @@
 ---
 name: architecture
-description: Architecture principles and design decisions for the GoRouter project. Use when understanding the codebase structure, making design decisions, or reviewing architectural changes. Covers package boundaries, request lifecycle, and core invariants.
+description: Architecture principles and design decisions for the EggPool project. Use when understanding the codebase structure, making design decisions, or reviewing architectural changes. Covers package boundaries, request lifecycle, and core invariants.
 ---
 
 # Architecture Principles
@@ -93,11 +93,11 @@ See `architecture/README.md` for the full design overview.
 
 ## Deployment
 
-- The systemd unit intentionally omits `ExecReload`; all configuration changes require `sudo systemctl restart gorouter`
+- The systemd unit intentionally omits `ExecReload`; all configuration changes require `sudo systemctl restart eggpool`
 - The `scripts/check_database.py` checker opens the database read-only via `file:...?mode=ro` and refuses to mutate anything
 - The `scripts/check_database.py` checker is fail-closed: it treats missing `_migrations`, empty `_migrations`, missing required tables/columns, and query errors as exit code 2 (configuration/schema error), not zero violations
 - The `scripts/smoke_test.py` stream diagnostics use a rolling tail buffer to recognize SSE markers split across arbitrary transport chunks
-- `scripts/verify_upstream_auth.py` is operator-only: it bypasses GoRouter to confirm the configured key works directly upstream
+- `scripts/verify_upstream_auth.py` is operator-only: it bypasses EggPool to confirm the configured key works directly upstream
 - Pyright in CI covers `src/` AND `scripts/`; narrow type annotations with `cast` or `Any` rather than excluding a file
 
 ## CLI Commands

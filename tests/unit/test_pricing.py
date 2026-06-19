@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from go_aggregator.catalog.pricing import (
+from eggpool.catalog.pricing import (
     CostCalculator,
     PriceSnapshot,
     parse_microdollars_per_million,
@@ -370,7 +370,7 @@ class TestCacheAccounting:
     @pytest.mark.asyncio
     async def test_cache_creation_as_cache_write_tokens(self) -> None:
         """Cache creation tokens should be passed as cache_write_tokens."""
-        from go_aggregator.proxy.usage import StreamUsageResult
+        from eggpool.proxy.usage import StreamUsageResult
 
         usage = StreamUsageResult(
             input_tokens=100,

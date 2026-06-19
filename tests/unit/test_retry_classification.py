@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from go_aggregator.retry.classification import RetryCategory, RetryClassifier
+from eggpool.retry.classification import RetryCategory, RetryClassifier
 
 
 @pytest.fixture()

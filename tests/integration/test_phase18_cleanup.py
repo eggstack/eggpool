@@ -16,9 +16,9 @@ import re
 import sqlite3
 from pathlib import Path
 
-from go_aggregator.db.connection import Database
-from go_aggregator.db.migrations import SCHEMA_DIR, MigrationRunner
-from go_aggregator.db.repositories import (
+from eggpool.db.connection import Database
+from eggpool.db.migrations import SCHEMA_DIR, MigrationRunner
+from eggpool.db.repositories import (
     AccountRepository,
     AttemptRepository,
     RequestRepository,
@@ -208,12 +208,12 @@ class TestCCatalogRefresh:
         import httpx
         import respx
 
-        from go_aggregator.accounts.registry import (
+        from eggpool.accounts.registry import (
             AccountRegistry,
             account_config_rows,
         )
-        from go_aggregator.catalog.service import CatalogService
-        from go_aggregator.models.config import AppConfig
+        from eggpool.catalog.service import CatalogService
+        from eggpool.models.config import AppConfig
 
         db_path = tmp_path / "refresh.sqlite3"
         config_path = tmp_path / "config.toml"
@@ -341,7 +341,7 @@ class TestEPrivacyAllowlist:
         such as ``payload`` are dropped from the persisted detail."""
         import asyncio
 
-        from go_aggregator.request.finalizer import (
+        from eggpool.request.finalizer import (
             FinalizationData,
             FinalizationOutcome,
             RequestFinalizer,

@@ -12,8 +12,8 @@ import respx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from go_aggregator.auth import require_auth
-from go_aggregator.proxy.client import filter_request_headers
+from eggpool.auth import require_auth
+from eggpool.proxy.client import filter_request_headers
 
 UPSTREAM_BASE = "https://test-upstream.example.com"
 
@@ -25,7 +25,7 @@ UPSTREAM_BASE = "https://test-upstream.example.com"
 
 def _make_proxy_app(api_key_env: str = "SEC_ADV_KEY") -> FastAPI:
     """Create a minimal FastAPI app that proxies to upstream via respx mock."""
-    from go_aggregator.models.config import AppConfig
+    from eggpool.models.config import AppConfig
 
     config = AppConfig.from_dict(
         {"server": {"api_key_env": api_key_env}, "accounts": []}
@@ -230,7 +230,7 @@ async def test_oversized_sse_frame_handled() -> None:
             )
         )
 
-        from go_aggregator.models.config import AppConfig
+        from eggpool.models.config import AppConfig
 
         config = AppConfig.from_dict(
             {"server": {"api_key_env": "SEC_ADV_KEY"}, "accounts": []}
@@ -304,7 +304,7 @@ async def test_malformed_sse_data_passthrough() -> None:
             )
         )
 
-        from go_aggregator.models.config import AppConfig
+        from eggpool.models.config import AppConfig
 
         config = AppConfig.from_dict(
             {"server": {"api_key_env": "SEC_ADV_KEY"}, "accounts": []}
@@ -379,7 +379,7 @@ async def test_sql_injection_in_model_id() -> None:
     """SQL injection in model_id is rejected, not reaching the database."""
     os.environ["SEC_ADV_KEY"] = "local-secret"
 
-    from go_aggregator.models.config import AppConfig
+    from eggpool.models.config import AppConfig
 
     config = AppConfig.from_dict(
         {"server": {"api_key_env": "SEC_ADV_KEY"}, "accounts": []}
@@ -439,7 +439,7 @@ async def test_sql_injection_in_query_params() -> None:
     """SQL injection via query params on /v1/models returns a valid response."""
     os.environ["SEC_ADV_KEY"] = "local-secret"
 
-    from go_aggregator.models.config import AppConfig
+    from eggpool.models.config import AppConfig
 
     config = AppConfig.from_dict(
         {"server": {"api_key_env": "SEC_ADV_KEY"}, "accounts": []}
@@ -491,7 +491,7 @@ async def test_xss_in_model_id_in_models_endpoint() -> None:
 
     xss_model_id = "<script>alert('xss')</script>"
 
-    from go_aggregator.models.config import AppConfig
+    from eggpool.models.config import AppConfig
 
     config = AppConfig.from_dict(
         {"server": {"api_key_env": "SEC_ADV_KEY"}, "accounts": []}
@@ -560,7 +560,7 @@ async def test_secret_not_in_error_messages() -> None:
     api_key_value = "sk-super-secret-12345"
     os.environ["SEC_ADV_KEY"] = api_key_value
 
-    from go_aggregator.models.config import AppConfig
+    from eggpool.models.config import AppConfig
 
     config = AppConfig.from_dict(
         {"server": {"api_key_env": "SEC_ADV_KEY"}, "accounts": []}

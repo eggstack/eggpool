@@ -17,25 +17,25 @@ import pytest
 import pytest_asyncio
 import respx
 
-from go_aggregator.accounts.registry import AccountRegistry
-from go_aggregator.catalog.pricing import CostCalculator, PriceRepository
-from go_aggregator.catalog.protocols import ModelProtocolResolver
-from go_aggregator.catalog.service import CatalogService
-from go_aggregator.db.connection import Database
-from go_aggregator.db.migrations import MigrationRunner
-from go_aggregator.db.repositories import (
+from eggpool.accounts.registry import AccountRegistry
+from eggpool.catalog.pricing import CostCalculator, PriceRepository
+from eggpool.catalog.protocols import ModelProtocolResolver
+from eggpool.catalog.service import CatalogService
+from eggpool.db.connection import Database
+from eggpool.db.migrations import MigrationRunner
+from eggpool.db.repositories import (
     AttemptRepository,
     RequestRepository,
     ReservationRepository,
     UsageWindowRepository,
 )
-from go_aggregator.health.health_manager import HealthManager
-from go_aggregator.models.config import AppConfig
-from go_aggregator.request.coordinator import (
+from eggpool.health.health_manager import HealthManager
+from eggpool.models.config import AppConfig
+from eggpool.request.coordinator import (
     ProxyRequestContext,
     RequestCoordinator,
 )
-from go_aggregator.routing.router import Router
+from eggpool.routing.router import Router
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -327,7 +327,7 @@ class TestUnresolvedQuarantine:
     """C. Mixed refresh with resolved and unresolved models commits resolved rows."""
 
     def test_unresolved_not_exposed(self) -> None:
-        from go_aggregator.catalog.cache import ModelCatalogCache
+        from eggpool.catalog.cache import ModelCatalogCache
 
         cache = ModelCatalogCache()
         cache.update_from_account(
@@ -359,7 +359,7 @@ class TestUnresolvedQuarantine:
         assert "unknown-model" not in model_ids
 
     def test_unresolved_not_in_union_exposure(self) -> None:
-        from go_aggregator.catalog.cache import ModelCatalogCache
+        from eggpool.catalog.cache import ModelCatalogCache
 
         cache = ModelCatalogCache()
         cache.update_from_account(
@@ -497,7 +497,7 @@ class TestCacheAccounting:
     """F. Cache creation tokens reach cache_write_tokens in finalization."""
 
     def test_cache_creation_mapped_to_write(self) -> None:
-        from go_aggregator.proxy.usage import StreamUsageResult
+        from eggpool.proxy.usage import StreamUsageResult
 
         usage = StreamUsageResult(
             input_tokens=100,
@@ -521,7 +521,7 @@ class TestExpiryRace:
     async def test_expiry_cleanup_no_double_decrement(
         self, two_account_db: Database
     ) -> None:
-        from go_aggregator.background.cleanup import reconcile_expired_reservations
+        from eggpool.background.cleanup import reconcile_expired_reservations
 
         request_repo = RequestRepository(two_account_db)
         reservation_repo = ReservationRepository(two_account_db)
@@ -570,7 +570,7 @@ class TestHealthIdempotency:
     async def test_duplicate_finalize_no_duplicate_event(
         self, two_account_db: Database
     ) -> None:
-        from go_aggregator.request.finalizer import (
+        from eggpool.request.finalizer import (
             FinalizationData,
             FinalizationOutcome,
             RequestFinalizer,

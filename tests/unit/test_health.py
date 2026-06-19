@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import time
 
-from go_aggregator.health.circuit_breaker import CircuitBreaker, CircuitState
-from go_aggregator.health.health_manager import HealthManager
-from go_aggregator.retry.classification import RetryCategory, RetryClassifier
+from eggpool.health.circuit_breaker import CircuitBreaker, CircuitState
+from eggpool.health.health_manager import HealthManager
+from eggpool.retry.classification import RetryCategory, RetryClassifier
 
 
 class TestRetryClassifier:

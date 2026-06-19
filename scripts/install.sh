@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# GoRouter quick install script
-# Usage: curl -fsSL https://raw.githubusercontent.com/eggstack/gorouter/main/scripts/install.sh | bash
+# EggPool quick install script
+# Usage: curl -fsSL https://raw.githubusercontent.com/eggstack/eggpool/main/scripts/install.sh | bash
 # Or:    ./scripts/install.sh  (from a cloned repo)
 
-REPO_URL="https://github.com/eggstack/gorouter.git"
-INSTALL_DIR="${INSTALL_DIR:-$HOME/gorouter}"
+REPO_URL="https://github.com/eggstack/eggpool.git"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/eggpool}"
 
-echo "=== GoRouter quick install ==="
+echo "=== EggPool quick install ==="
 echo ""
 
 # If not inside a cloned repo, download one
 if [ ! -f "$(dirname "${BASH_SOURCE[0]}")/../../pyproject.toml" ] || \
-   ! grep -q 'name = "opencode-go-aggregator"' "$(dirname "${BASH_SOURCE[0]}")/../../pyproject.toml" 2>/dev/null; then
+   ! grep -q 'name = "eggpool"' "$(dirname "${BASH_SOURCE[0]}")/../../pyproject.toml" 2>/dev/null; then
     if [ -d "$INSTALL_DIR" ]; then
         echo "Using existing installation at $INSTALL_DIR"
         cd "$INSTALL_DIR"
@@ -90,7 +90,7 @@ fi
 # Validate configuration
 echo ""
 echo "Validating configuration..."
-if set -a && source .env 2>/dev/null && set +a && uv run go-aggregator --config config.toml check-config 2>&1; then
+if set -a && source .env 2>/dev/null && set +a && uv run eggpool --config config.toml check-config 2>&1; then
     echo "  Configuration is valid"
 else
     echo "  Warning: Configuration validation failed"
@@ -103,7 +103,7 @@ echo ""
 echo "Next steps:"
 echo "  1. Edit config.toml with your settings (accounts, upstream URL, etc.)"
 echo "  2. Edit .env with your API keys"
-echo "  3. Run database migrations: uv run go-aggregator --config config.toml migrate"
-echo "  4. Start the server: uv run go-aggregator --config config.toml serve"
+echo "  3. Run database migrations: uv run eggpool --config config.toml migrate"
+echo "  4. Start the server: uv run eggpool --config config.toml serve"
 echo ""
 echo "For production deployment, see docs/deployment.md"

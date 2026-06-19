@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 
-from go_aggregator.security.redaction import (
+from eggpool.security.redaction import (
     MAX_REDACTED_ERROR_DETAIL_CHARS,
     REDACTED,
     SAFE_JSON_KEYS,

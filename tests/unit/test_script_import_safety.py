@@ -30,7 +30,7 @@ SCRIPTS = ("scripts.check_database", "scripts.smoke_test")
 def clean_import_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[None]:
-    """Strip every GoRouter environment variable before reloading.
+    """Strip every EggPool environment variable before reloading.
 
     Ensures that import-time code paths cannot observe a populated
     environment from a prior test.

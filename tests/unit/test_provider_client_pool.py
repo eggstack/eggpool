@@ -5,10 +5,10 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from go_aggregator.errors import UpstreamError
-from go_aggregator.models.config import AppConfig, ProviderConfig
-from go_aggregator.providers.client_pool import ProviderClientPool
-from go_aggregator.providers.pproxy_transport import AsyncPProxyTransport
+from eggpool.errors import UpstreamError
+from eggpool.models.config import AppConfig, ProviderConfig
+from eggpool.providers.client_pool import ProviderClientPool
+from eggpool.providers.pproxy_transport import AsyncPProxyTransport
 
 
 class TestProviderClientPool:

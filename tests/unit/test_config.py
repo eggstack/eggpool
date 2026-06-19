@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from go_aggregator.errors import ConfigError
-from go_aggregator.models.config import AppConfig
+from eggpool.errors import ConfigError
+from eggpool.models.config import AppConfig
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -237,7 +237,7 @@ def test_config_example_validates() -> None:
 
 def test_dashboard_config_defaults() -> None:
     """DashboardConfig has correct default values."""
-    from go_aggregator.models.config import DashboardConfig
+    from eggpool.models.config import DashboardConfig
 
     dc = DashboardConfig()
     assert dc.enabled is True
@@ -250,7 +250,7 @@ def test_dashboard_config_defaults() -> None:
 
 def test_server_config_api_key_env_default() -> None:
     """ServerConfig.api_key_env defaults to GO_AGGREGATOR_API_KEY."""
-    from go_aggregator.models.config import ServerConfig
+    from eggpool.models.config import ServerConfig
 
     sc = ServerConfig()
     assert sc.api_key_env == "GO_AGGREGATOR_API_KEY"
@@ -258,7 +258,7 @@ def test_server_config_api_key_env_default() -> None:
 
 def test_server_config_empty_api_key_env_disables_auth() -> None:
     """Setting api_key_env to empty string disables authentication."""
-    from go_aggregator.models.config import ServerConfig
+    from eggpool.models.config import ServerConfig
 
     sc = ServerConfig(api_key_env="")
     assert sc.api_key_env == ""
@@ -266,7 +266,7 @@ def test_server_config_empty_api_key_env_disables_auth() -> None:
 
 def test_provider_config_valid_id() -> None:
     """ProviderConfig accepts valid IDs."""
-    from go_aggregator.models.config import ProviderConfig
+    from eggpool.models.config import ProviderConfig
 
     p = ProviderConfig(id="opencode-go", base_url="https://example.com")
     assert p.id == "opencode-go"
@@ -278,7 +278,7 @@ def test_provider_config_valid_id() -> None:
 
 def test_provider_config_invalid_id_rejected() -> None:
     """ProviderConfig rejects invalid IDs."""
-    from go_aggregator.models.config import ProviderConfig
+    from eggpool.models.config import ProviderConfig
 
     with pytest.raises(ConfigError, match="alphanumeric"):
         ProviderConfig(id="-invalid-", base_url="https://example.com")
@@ -290,7 +290,7 @@ def test_provider_config_invalid_id_rejected() -> None:
 
 def test_provider_config_keepalive_validation() -> None:
     """ProviderConfig rejects max_keepalive > max_connections."""
-    from go_aggregator.models.config import ProviderConfig
+    from eggpool.models.config import ProviderConfig
 
     with pytest.raises(ConfigError, match="max_keepalive"):
         ProviderConfig(
@@ -303,7 +303,7 @@ def test_provider_config_keepalive_validation() -> None:
 
 def test_provider_config_with_accounts(tmp_path: Path) -> None:
     """ProviderConfig can contain nested accounts."""
-    from go_aggregator.models.config import ProviderConfig
+    from eggpool.models.config import ProviderConfig
 
     os.environ["PROV_KEY"] = "key"
     try:

@@ -16,9 +16,9 @@ import asyncio
 
 import pytest
 
-from go_aggregator.db.connection import Database
-from go_aggregator.db.migrations import MigrationRunner
-from go_aggregator.errors import DatabaseError
+from eggpool.db.connection import Database
+from eggpool.db.migrations import MigrationRunner
+from eggpool.errors import DatabaseError
 
 
 async def _run_migrations(db: Database) -> None:
@@ -391,7 +391,7 @@ class TestAccountRepositorySync:
         await db.connect()
         await _run_migrations(db)
         try:
-            from go_aggregator.db.repositories import AccountRepository
+            from eggpool.db.repositories import AccountRepository
 
             repo = AccountRepository(db)
             # Pass an empty list of dicts (no name key) to force a
@@ -426,7 +426,7 @@ class TestAccountRepositorySync:
         await db.connect()
         await _run_migrations(db)
         try:
-            from go_aggregator.db.repositories import AccountRepository
+            from eggpool.db.repositories import AccountRepository
 
             repo = AccountRepository(db)
             ids = await repo.sync_from_config(
@@ -479,7 +479,7 @@ class TestStandaloneExhaustedUpdate:
 
     @pytest.mark.asyncio
     async def test_exhausted_update_in_transaction(self) -> None:
-        from go_aggregator.db.repositories import RequestRepository
+        from eggpool.db.repositories import RequestRepository
 
         db = Database(path=":memory:")
         await db.connect()

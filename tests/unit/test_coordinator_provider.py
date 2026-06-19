@@ -9,12 +9,12 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
-from go_aggregator.catalog.cache import ModelCatalogCache
-from go_aggregator.catalog.protocols import ProtocolMismatchError
-from go_aggregator.errors import ModelUnavailableError, UpstreamError
-from go_aggregator.models.config import AppConfig, ProviderConfig
-from go_aggregator.providers.client_pool import ProviderClientPool
-from go_aggregator.request.coordinator import (
+from eggpool.catalog.cache import ModelCatalogCache
+from eggpool.catalog.protocols import ProtocolMismatchError
+from eggpool.errors import ModelUnavailableError, UpstreamError
+from eggpool.models.config import AppConfig, ProviderConfig
+from eggpool.providers.client_pool import ProviderClientPool
+from eggpool.request.coordinator import (
     ProxyRequestContext,
     RequestCoordinator,
     SelectedAttempt,

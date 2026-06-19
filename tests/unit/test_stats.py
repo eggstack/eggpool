@@ -8,11 +8,11 @@ from typing import TYPE_CHECKING
 import pytest
 import pytest_asyncio
 
-from go_aggregator.db.connection import Database
-from go_aggregator.db.migrations import MigrationRunner
-from go_aggregator.db.repositories import RequestRepository, ReservationRepository
-from go_aggregator.stats import queries
-from go_aggregator.stats.service import (
+from eggpool.db.connection import Database
+from eggpool.db.migrations import MigrationRunner
+from eggpool.db.repositories import RequestRepository, ReservationRepository
+from eggpool.stats import queries
+from eggpool.stats.service import (
     PERIOD_PRESETS,
     StatsService,
     TimeRange,

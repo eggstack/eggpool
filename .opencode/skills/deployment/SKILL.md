@@ -1,6 +1,6 @@
 ---
 name: deployment
-description: Deployment and operations for the GoRouter project. Use when deploying, configuring, or troubleshooting the service. Covers systemd, configuration changes, operational scripts, and production hardening.
+description: Deployment and operations for the EggPool project. Use when deploying, configuring, or troubleshooting the service. Covers systemd, configuration changes, operational scripts, and production hardening.
 ---
 
 # Deployment and Operations
@@ -11,27 +11,27 @@ See `docs/deployment.md` for full instructions. Quick reference:
 
 ```bash
 # Validate configuration
-sudo -u gorouter /opt/gorouter/.venv/bin/go-aggregator check-config --config /etc/gorouter/config.toml
+sudo -u eggpool /opt/eggpool/.venv/bin/eggpool check-config --config /etc/eggpool/config.toml
 
 # Run database migrations
-sudo -u gorouter /opt/gorouter/.venv/bin/go-aggregator migrate --config /etc/gorouter/config.toml
+sudo -u eggpool /opt/eggpool/.venv/bin/eggpool migrate --config /etc/eggpool/config.toml
 
 # Enable and start
-sudo systemctl enable gorouter
-sudo systemctl start gorouter
+sudo systemctl enable eggpool
+sudo systemctl start eggpool
 
 # Check status
-sudo systemctl status gorouter
+sudo systemctl status eggpool
 ```
 
 ## Configuration Changes
 
-**All configuration changes require a full restart.** The systemd unit intentionally omits `ExecReload` so `systemctl reload gorouter` fails cleanly.
+**All configuration changes require a full restart.** The systemd unit intentionally omits `ExecReload` so `systemctl reload eggpool` fails cleanly.
 
 ```bash
-sudo systemctl restart gorouter
-sudo systemctl status gorouter
-sudo journalctl -u gorouter -n 100 --no-pager
+sudo systemctl restart eggpool
+sudo systemctl status eggpool
+sudo journalctl -u eggpool -n 100 --no-pager
 ```
 
 ## Operational Scripts
@@ -39,7 +39,7 @@ sudo journalctl -u gorouter -n 100 --no-pager
 ### Database Invariant Checker
 
 ```bash
-GOROUTER_DB_PATH=/var/lib/gorouter/usage.sqlite3 \
+GOROUTER_DB_PATH=/var/lib/eggpool/usage.sqlite3 \
   uv run python scripts/check_database.py
 ```
 
@@ -70,27 +70,27 @@ GOROUTER_ANTHROPIC_MODEL="claude-3-5-sonnet" \
   uv run python scripts/verify_upstream_auth.py
 ```
 
-Operator-only; not run in CI. Bypasses GoRouter to confirm the configured key works directly upstream.
+Operator-only; not run in CI. Bypasses EggPool to confirm the configured key works directly upstream.
 
 ## Systemd Unit
 
-- Intentionally omits `ExecReload`; all config changes require `sudo systemctl restart gorouter`
-- Uses `ProtectSystem=strict` and `ReadWritePaths=/var/lib/gorouter`
+- Intentionally omits `ExecReload`; all config changes require `sudo systemctl restart eggpool`
+- Uses `ProtectSystem=strict` and `ReadWritePaths=/var/lib/eggpool`
 - Graceful shutdown: stops accepting new connections, waits for in-flight requests (up to 30s), closes connections, exits cleanly
 
 ## Filesystem Layout
 
 ```
-/etc/gorouter/
+/etc/eggpool/
 ├── config.toml          # Main configuration file
 └── env                  # Environment variables (API keys)
 
-/var/lib/gorouter/
+/var/lib/eggpool/
 ├── usage.sqlite3        # SQLite database
 ├── usage.sqlite3-wal    # WAL journal
 └── usage.sqlite3-shm    # Shared memory file
 
-/opt/gorouter/
+/opt/eggpool/
 ├── .venv/               # Python virtual environment
 └── src/                 # Application source code
 ```
@@ -100,13 +100,13 @@ Operator-only; not run in CI. Bypasses GoRouter to confirm the configured key wo
 ### Service fails to start
 
 ```bash
-sudo journalctl -u gorouter --since "5 minutes ago"
-sudo -u gorouter /opt/gorouter/.venv/bin/go-aggregator check-config --config /etc/gorouter/config.toml
+sudo journalctl -u eggpool --since "5 minutes ago"
+sudo -u eggpool /opt/eggpool/.venv/bin/eggpool check-config --config /etc/eggpool/config.toml
 ```
 
 ### Database locked errors
 
-1. Check that only one instance is running: `pgrep -f go-aggregator`
+1. Check that only one instance is running: `pgrep -f eggpool`
 2. Ensure WAL mode is enabled in config
 3. Increase `busy_timeout_ms` in config
 

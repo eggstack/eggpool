@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from html.parser import HTMLParser
 
-from go_aggregator.dashboard.escape import (
+from eggpool.dashboard.escape import (
     escape,
     escape_attr,
     format_bytes,
@@ -15,7 +15,7 @@ from go_aggregator.dashboard.escape import (
     sanitize_class_name,
     truncate,
 )
-from go_aggregator.dashboard.render import (
+from eggpool.dashboard.render import (
     _render_bandwidth_heatmap,
     _render_nav,
     render_accounts,

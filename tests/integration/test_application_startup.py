@@ -14,10 +14,10 @@ import httpx
 import pytest
 import respx
 
-from go_aggregator.app import create_app
-from go_aggregator.db.connection import Database
-from go_aggregator.errors import DatabaseError
-from go_aggregator.models.config import AppConfig
+from eggpool.app import create_app
+from eggpool.db.connection import Database
+from eggpool.errors import DatabaseError
+from eggpool.models.config import AppConfig
 
 UPSTREAM_BASE = "https://test-upstream.example.com"
 TEST_KEY = "test-startup-key-value"
@@ -238,7 +238,7 @@ class TestApplicationStartupRequiresAuth:
 
     @pytest.mark.asyncio
     async def test_missing_api_key_env_raises(self, tmp_path) -> None:
-        from go_aggregator.errors import AggregatorError
+        from eggpool.errors import AggregatorError
 
         config = AppConfig.from_dict(
             {

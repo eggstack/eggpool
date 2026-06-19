@@ -7,9 +7,9 @@ import os
 import pytest
 from starlette.responses import Response as StarletteResponse
 
-from go_aggregator.app import _BodyLimitMiddleware
-from go_aggregator.errors import RequestTooLargeError
-from go_aggregator.request.body import read_body_limited
+from eggpool.app import _BodyLimitMiddleware
+from eggpool.errors import RequestTooLargeError
+from eggpool.request.body import read_body_limited
 
 
 class FakeStream:
@@ -109,12 +109,12 @@ class TestHasEligiblePairing:
     """Tests for Router.has_eligible_pairing()."""
 
     def test_no_accounts_returns_false(self) -> None:
-        from go_aggregator.accounts.registry import AccountRegistry
-        from go_aggregator.catalog.cache import ModelCatalogCache
-        from go_aggregator.health.health_manager import HealthManager
-        from go_aggregator.models.config import AppConfig
-        from go_aggregator.quota.estimation import QuotaEstimator
-        from go_aggregator.routing.router import Router
+        from eggpool.accounts.registry import AccountRegistry
+        from eggpool.catalog.cache import ModelCatalogCache
+        from eggpool.health.health_manager import HealthManager
+        from eggpool.models.config import AppConfig
+        from eggpool.quota.estimation import QuotaEstimator
+        from eggpool.routing.router import Router
 
         config = AppConfig.from_dict({"accounts": []})
         registry = AccountRegistry(config)
@@ -134,12 +134,12 @@ class TestHasEligiblePairing:
         assert router.has_eligible_pairing() is False
 
     def test_enabled_account_with_model_returns_true(self) -> None:
-        from go_aggregator.accounts.registry import AccountRegistry
-        from go_aggregator.catalog.cache import ModelCatalogCache
-        from go_aggregator.health.health_manager import HealthManager
-        from go_aggregator.models.config import AppConfig
-        from go_aggregator.quota.estimation import QuotaEstimator
-        from go_aggregator.routing.router import Router
+        from eggpool.accounts.registry import AccountRegistry
+        from eggpool.catalog.cache import ModelCatalogCache
+        from eggpool.health.health_manager import HealthManager
+        from eggpool.models.config import AppConfig
+        from eggpool.quota.estimation import QuotaEstimator
+        from eggpool.routing.router import Router
 
         os.environ["TEST_KEY_A"] = "test-key-value"
         try:
@@ -178,12 +178,12 @@ class TestHasEligiblePairing:
             os.environ.pop("TEST_KEY_A", None)
 
     def test_no_model_support_returns_false(self) -> None:
-        from go_aggregator.accounts.registry import AccountRegistry
-        from go_aggregator.catalog.cache import ModelCatalogCache
-        from go_aggregator.health.health_manager import HealthManager
-        from go_aggregator.models.config import AppConfig
-        from go_aggregator.quota.estimation import QuotaEstimator
-        from go_aggregator.routing.router import Router
+        from eggpool.accounts.registry import AccountRegistry
+        from eggpool.catalog.cache import ModelCatalogCache
+        from eggpool.health.health_manager import HealthManager
+        from eggpool.models.config import AppConfig
+        from eggpool.quota.estimation import QuotaEstimator
+        from eggpool.routing.router import Router
 
         os.environ["TEST_KEY_A"] = "test-key-value"
         try:
@@ -223,8 +223,8 @@ class TestReadinessProbe:
     @pytest.mark.asyncio
     async def test_health_probe_table_exists(self, tmp_path: object) -> None:
         """The health_probe table should exist after migration."""
-        from go_aggregator.db.connection import Database
-        from go_aggregator.db.migrations import MigrationRunner
+        from eggpool.db.connection import Database
+        from eggpool.db.migrations import MigrationRunner
 
         db = Database(path=str(tmp_path / "test.sqlite3"))  # type: ignore[arg-type]
         await db.connect()

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from go_aggregator.request.finalizer import MAX_ERROR_DETAIL_CHARS
+from eggpool.request.finalizer import MAX_ERROR_DETAIL_CHARS
 
 
 def test_error_detail_truncation() -> None:

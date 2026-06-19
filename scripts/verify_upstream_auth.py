@@ -1,14 +1,14 @@
-"""Direct upstream authentication verifier for GoRouter deployment.
+"""Direct upstream authentication verifier for EggPool deployment.
 
 This script bypasses the proxy and calls the upstream
 OpenAI-compatible and Anthropic-compatible endpoints directly
-using the same ``Authorization: Bearer`` header that GoRouter
+using the same ``Authorization: Bearer`` header that EggPool
 emits. It is intended for two operational purposes:
 
 1. Confirm that a configured key actually authenticates against
    each upstream endpoint family.
 2. Distinguish upstream authentication / model compatibility
-   failures from GoRouter-side proxy defects during live testing.
+   failures from EggPool-side proxy defects during live testing.
 
 The script is **not** part of automated CI execution. It must
 only be run by an operator who has explicitly set the

@@ -11,21 +11,21 @@ import pytest
 import pytest_asyncio
 import respx
 
-from go_aggregator.accounts.registry import AccountRegistry
-from go_aggregator.app import create_app
-from go_aggregator.catalog.service import CatalogService
-from go_aggregator.db.connection import Database
-from go_aggregator.db.migrations import MigrationRunner
-from go_aggregator.db.repositories import (
+from eggpool.accounts.registry import AccountRegistry
+from eggpool.app import create_app
+from eggpool.catalog.service import CatalogService
+from eggpool.db.connection import Database
+from eggpool.db.migrations import MigrationRunner
+from eggpool.db.repositories import (
     AttemptRepository,
     RequestRepository,
     ReservationRepository,
 )
-from go_aggregator.health.health_manager import HealthManager
-from go_aggregator.models.config import AppConfig
-from go_aggregator.request.coordinator import RequestCoordinator
-from go_aggregator.routing.router import Router
-from go_aggregator.stats import StatsService
+from eggpool.health.health_manager import HealthManager
+from eggpool.models.config import AppConfig
+from eggpool.request.coordinator import RequestCoordinator
+from eggpool.routing.router import Router
+from eggpool.stats import StatsService
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -665,7 +665,7 @@ async def test_oversized_content_length_openai_envelope(
     app: FastAPI,
 ) -> None:
     """Oversized Content-Length on /v1/chat/completions returns OpenAI envelope."""
-    from go_aggregator.constants import MAX_REQUEST_BODY_BYTES
+    from eggpool.constants import MAX_REQUEST_BODY_BYTES
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://testserver"
@@ -691,7 +691,7 @@ async def test_oversized_content_length_anthropic_envelope(
     app: FastAPI,
 ) -> None:
     """Oversized Content-Length on /v1/messages returns Anthropic envelope."""
-    from go_aggregator.constants import MAX_REQUEST_BODY_BYTES
+    from eggpool.constants import MAX_REQUEST_BODY_BYTES
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://testserver"

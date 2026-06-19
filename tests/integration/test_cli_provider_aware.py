@@ -13,8 +13,8 @@ import pytest
 import respx
 from click.testing import CliRunner
 
-from go_aggregator.cli import cli
-from go_aggregator.db.connection import Database
+from eggpool.cli import cli
+from eggpool.db.connection import Database
 
 UPSTREAM_BASE_OPENCODE = "https://opencode-upstream.example.com"
 UPSTREAM_BASE_ANTHROPIC = "https://anthropic-upstream.example.com"

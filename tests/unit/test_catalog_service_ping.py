@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
-from go_aggregator.catalog.service import CatalogService
+from eggpool.catalog.service import CatalogService
 
 
 def _make_config() -> MagicMock:

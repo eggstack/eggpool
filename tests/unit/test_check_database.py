@@ -23,8 +23,8 @@ def fresh_db(tmp_path: Path) -> Path:
     Uses the same migration runner as the application so the
     schema is real, not a hand-rolled subset.
     """
-    from go_aggregator.db.connection import Database
-    from go_aggregator.db.migrations import MigrationRunner
+    from eggpool.db.connection import Database
+    from eggpool.db.migrations import MigrationRunner
 
     async def _setup() -> None:
         db = Database(path=str(tmp_path / "usage.sqlite3"))
@@ -139,8 +139,8 @@ class TestReadOnly:
         assert before_hash == after_hash, "Checker modified the database file contents"
 
     def test_checker_refuses_writes_on_read_only(self, fresh_db: Path) -> None:
-        from go_aggregator.db.connection import Database
-        from go_aggregator.errors import DatabaseError
+        from eggpool.db.connection import Database
+        from eggpool.errors import DatabaseError
 
         async def _exercise() -> None:
             db = Database(path=str(fresh_db), read_only=True)
@@ -305,7 +305,7 @@ class TestFailClosed:
         """A pending request older than the threshold is a real
         invariant violation: exit code 1.
         """
-        from go_aggregator.db.connection import Database
+        from eggpool.db.connection import Database
 
         async def _seed() -> None:
             db = Database(path=str(fresh_db))
@@ -345,7 +345,7 @@ class TestFailClosed:
         The checker must not silently report zero violations; it must
         surface the error and exit 2.
         """
-        from go_aggregator.errors import DatabaseError
+        from eggpool.errors import DatabaseError
 
         async def _boom(
             db: Any,

@@ -1,6 +1,6 @@
 # Deployment Guide
 
-Production deployment instructions for the OpenCode Go Aggregator.
+Production deployment instructions for the EggPool.
 
 ## Prerequisites
 
@@ -14,12 +14,12 @@ Production deployment instructions for the OpenCode Go Aggregator.
 ### 1. Create system user
 
 ```bash
-sudo useradd -r -s /usr/sbin/nologin -d /var/lib/gorouter gorouter
-sudo mkdir -p /var/lib/gorouter /var/log/gorouter /etc/gorouter
-sudo chown gorouter:gorouter /var/lib/gorouter /var/log/gorouter
-sudo chown root:gorouter /etc/gorouter
-sudo chmod 750 /var/lib/gorouter /var/log/gorouter
-sudo chmod 755 /etc/gorouter
+sudo useradd -r -s /usr/sbin/nologin -d /var/lib/eggpool eggpool
+sudo mkdir -p /var/lib/eggpool /var/log/eggpool /etc/eggpool
+sudo chown eggpool:eggpool /var/lib/eggpool /var/log/eggpool
+sudo chown root:eggpool /etc/eggpool
+sudo chmod 750 /var/lib/eggpool /var/log/eggpool
+sudo chmod 755 /etc/eggpool
 ```
 
 ### 2. Install application
@@ -27,35 +27,35 @@ sudo chmod 755 /etc/gorouter
 ```bash
 # Clone repository
 cd /opt
-sudo git clone https://github.com/eggstack/gorouter.git
-sudo chown -R root:gorouter /opt/gorouter
+sudo git clone https://github.com/eggstack/eggpool.git
+sudo chown -R root:eggpool /opt/eggpool
 
 # Install dependencies (run as root so uv can write to the tree)
-cd /opt/gorouter
+cd /opt/eggpool
 sudo uv sync --no-dev
 
-# Ensure the gorouter user can read and execute the environment
-sudo chown -R root:gorouter /opt/gorouter
-sudo chmod -R o+rX /opt/gorouter
+# Ensure the eggpool user can read and execute the environment
+sudo chown -R root:eggpool /opt/eggpool
+sudo chmod -R o+rX /opt/eggpool
 ```
 
 ### 3. Configure
 
 ```bash
 # Copy example configuration
-sudo cp config.example.toml /etc/gorouter/config.toml
-sudo cp deploy/env.example /etc/gorouter/env
-sudo chown root:gorouter /etc/gorouter/config.toml /etc/gorouter/env
-sudo chmod 640 /etc/gorouter/config.toml /etc/gorouter/env
+sudo cp config.example.toml /etc/eggpool/config.toml
+sudo cp deploy/env.example /etc/eggpool/env
+sudo chown root:eggpool /etc/eggpool/config.toml /etc/eggpool/env
+sudo chmod 640 /etc/eggpool/config.toml /etc/eggpool/env
 
 # Edit configuration
-sudo nano /etc/gorouter/config.toml
+sudo nano /etc/eggpool/config.toml
 
 # Set API keys
-sudo nano /etc/gorouter/env
+sudo nano /etc/eggpool/env
 ```
 
-Update `/etc/gorouter/config.toml`:
+Update `/etc/eggpool/config.toml`:
 
 ```toml
 [server]
@@ -63,7 +63,7 @@ host = "0.0.0.0"  # Listen on all interfaces for LAN access
 port = 8080
 
 [database]
-path = "/var/lib/gorouter/usage.sqlite3"
+path = "/var/lib/eggpool/usage.sqlite3"
 
 [dashboard]
 enabled = true
@@ -72,52 +72,52 @@ enabled = true
 ### 4. Install systemd unit
 
 ```bash
-sudo cp deploy/gorouter.service /etc/systemd/system/
+sudo cp deploy/eggpool.service /etc/systemd/system/
 sudo systemctl daemon-reload
 ```
 
 ### 5. Install logrotate
 
 ```bash
-sudo cp deploy/logrotate.conf /etc/logrotate.d/gorouter
+sudo cp deploy/logrotate.conf /etc/logrotate.d/eggpool
 ```
 
 ### 6. Start service
 
 ```bash
 # Validate configuration (env vars must be exported first)
-sudo -u gorouter bash -c 'set -a; source /etc/gorouter/env; set +a; /opt/gorouter/.venv/bin/go-aggregator --config /etc/gorouter/config.toml check-config'
+sudo -u eggpool bash -c 'set -a; source /etc/eggpool/env; set +a; /opt/eggpool/.venv/bin/eggpool --config /etc/eggpool/config.toml check-config'
 
 # Run initial migrations
-sudo -u gorouter /opt/gorouter/.venv/bin/go-aggregator --config /etc/gorouter/config.toml migrate
+sudo -u eggpool /opt/eggpool/.venv/bin/eggpool --config /etc/eggpool/config.toml migrate
 
 # Enable and start
-sudo systemctl enable gorouter
-sudo systemctl start gorouter
+sudo systemctl enable eggpool
+sudo systemctl start eggpool
 
 # Check status
-sudo systemctl status gorouter
+sudo systemctl status eggpool
 ```
 
 ## Configuration Changes
 
-GoRouter does not support live configuration reload. **All
+EggPool does not support live configuration reload. **All
 configuration changes require a full restart.** The systemd unit
-intentionally omits `ExecReload` so `systemctl reload gorouter`
+intentionally omits `ExecReload` so `systemctl reload eggpool`
 fails cleanly instead of silently doing nothing.
 
-To apply any change to `/etc/gorouter/config.toml` or
-`/etc/gorouter/env`:
+To apply any change to `/etc/eggpool/config.toml` or
+`/etc/eggpool/env`:
 
 ```bash
 # Apply changes
-sudo systemctl restart gorouter
+sudo systemctl restart eggpool
 
 # Verify the service is up
-sudo systemctl status gorouter
+sudo systemctl status eggpool
 
 # Inspect the most recent logs
-sudo journalctl -u gorouter -n 100 --no-pager
+sudo journalctl -u eggpool -n 100 --no-pager
 ```
 
 The `restart` workflow applies to every config change, including:
@@ -144,13 +144,13 @@ The service handles SIGTERM gracefully:
 View service logs:
 
 ```bash
-sudo journalctl -u gorouter -f
+sudo journalctl -u eggpool -f
 ```
 
 View recent logs:
 
 ```bash
-sudo journalctl -u gorouter --since "1 hour ago"
+sudo journalctl -u eggpool --since "1 hour ago"
 ```
 
 ## Troubleshooting
@@ -159,21 +159,21 @@ sudo journalctl -u gorouter --since "1 hour ago"
 
 ```bash
 # Check logs
-sudo journalctl -u gorouter --since "5 minutes ago"
+sudo journalctl -u eggpool --since "5 minutes ago"
 
 # Validate config
-sudo -u gorouter bash -c 'set -a; source /etc/gorouter/env; set +a; /opt/gorouter/.venv/bin/go-aggregator --config /etc/gorouter/config.toml check-config'
+sudo -u eggpool bash -c 'set -a; source /etc/eggpool/env; set +a; /opt/eggpool/.venv/bin/eggpool --config /etc/eggpool/config.toml check-config'
 
 # Check file permissions
-ls -la /etc/gorouter/
-ls -la /var/lib/gorouter/
+ls -la /etc/eggpool/
+ls -la /var/lib/eggpool/
 ```
 
 ### Database locked errors
 
 If you see `database is locked` errors:
 
-1. Check that only one instance is running: `pgrep -f go-aggregator`
+1. Check that only one instance is running: `pgrep -f eggpool`
 2. Ensure WAL mode is enabled in config
 3. Increase `busy_timeout_ms` in config
 
@@ -188,7 +188,7 @@ If you see `database is locked` errors:
 ### Database invariant checker
 
 ```bash
-GOROUTER_DB_PATH=/var/lib/gorouter/usage.sqlite3 \
+GOROUTER_DB_PATH=/var/lib/eggpool/usage.sqlite3 \
   uv run python scripts/check_database.py
 ```
 
@@ -235,7 +235,7 @@ Anthropic-compatible endpoints directly using
 `Authorization: Bearer`. It is used to confirm that a
 configured key authenticates against each endpoint family and
 to distinguish upstream authentication / model compatibility
-failures from GoRouter-side proxy defects during live testing.
+failures from EggPool-side proxy defects during live testing.
 The script is **not** part of automated CI execution.
 
 ```bash
@@ -260,8 +260,8 @@ Operational sequence:
 
 1. Verify the key directly against each endpoint family
    (this script).
-2. Run the GoRouter smoke test using the same model ids.
-3. If direct succeeds but the proxy fails, inspect GoRouter
+2. Run the EggPool smoke test using the same model ids.
+3. If direct succeeds but the proxy fails, inspect EggPool
    header transformation and routing.
 4. If both fail, treat it as upstream model or key
    compatibility rather than a proxy defect.
@@ -281,7 +281,7 @@ Error-detail persistence is disabled by default
 (`security.persist_redacted_error_detail = false`). When
 disabled, `error_detail` columns remain `NULL` and arbitrary
 provider payloads never reach the database. When explicitly
-enabled, GoRouter stores only a bounded allowlist of sanitized
+enabled, EggPool stores only a bounded allowlist of sanitized
 diagnostic fields. The persisted JSON is restricted to a small
 diagnostic key set: `type`, `code`, `status`, `status_code`,
 `error_type`, `kind`, `param`, `message`, `request_id`,

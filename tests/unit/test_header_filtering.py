@@ -8,7 +8,7 @@ selected account's credential.
 
 from __future__ import annotations
 
-from go_aggregator.proxy.client import (
+from eggpool.proxy.client import (
     HOP_BY_HOP_HEADERS,
     LOCAL_CREDENTIAL_HEADERS,
     build_upstream_auth_headers,

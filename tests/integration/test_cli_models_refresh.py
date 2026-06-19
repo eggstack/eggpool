@@ -25,9 +25,9 @@ import pytest_asyncio
 import respx
 from click.testing import CliRunner
 
-from go_aggregator.app import create_app
-from go_aggregator.cli import cli
-from go_aggregator.db.connection import Database
+from eggpool.app import create_app
+from eggpool.cli import cli
+from eggpool.db.connection import Database
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -324,14 +324,14 @@ class TestModelsRefreshCachedRoutable:
         # an event loop we cannot use ``asyncio.run``. The CLI command
         # body is just a thin wrapper, so we replicate the steps in
         # the same event loop.
-        from go_aggregator.accounts.registry import (
+        from eggpool.accounts.registry import (
             AccountRegistry,
             account_config_rows,
         )
-        from go_aggregator.catalog.service import CatalogService
-        from go_aggregator.db.migrations import MigrationRunner
-        from go_aggregator.db.repositories import AccountRepository
-        from go_aggregator.models.config import AppConfig
+        from eggpool.catalog.service import CatalogService
+        from eggpool.db.migrations import MigrationRunner
+        from eggpool.db.repositories import AccountRepository
+        from eggpool.models.config import AppConfig
 
         async def _populate() -> None:
             config = AppConfig.from_toml(str(config_path))
@@ -382,7 +382,7 @@ class TestModelsRefreshCachedRoutable:
             encoding="utf-8",
         )
 
-        from go_aggregator.models.config import AppConfig as _AppConfig
+        from eggpool.models.config import AppConfig as _AppConfig
 
         cached_config = _AppConfig.from_toml(str(cached_config_path))
         application = create_app(cached_config)

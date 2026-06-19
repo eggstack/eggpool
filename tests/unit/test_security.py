@@ -11,15 +11,15 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from go_aggregator.api.chat_completions import handle_chat_completions
-from go_aggregator.api.errors import anthropic_error_response, openai_error_response
-from go_aggregator.api.messages import handle_messages
-from go_aggregator.auth import require_auth
-from go_aggregator.catalog.cache import ModelCatalogCache
-from go_aggregator.dashboard.escape import escape
-from go_aggregator.models.config import AppConfig
-from go_aggregator.proxy.client import filter_request_headers
-from go_aggregator.proxy.usage import (
+from eggpool.api.chat_completions import handle_chat_completions
+from eggpool.api.errors import anthropic_error_response, openai_error_response
+from eggpool.api.messages import handle_messages
+from eggpool.auth import require_auth
+from eggpool.catalog.cache import ModelCatalogCache
+from eggpool.dashboard.escape import escape
+from eggpool.models.config import AppConfig
+from eggpool.proxy.client import filter_request_headers
+from eggpool.proxy.usage import (
     AnthropicStreamUsageExtractor,
     OpenAIStreamUsageExtractor,
 )

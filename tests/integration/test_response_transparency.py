@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from go_aggregator.request.coordinator import PreparedProxyResponse
+from eggpool.request.coordinator import PreparedProxyResponse
 
 
 class TestRawResponseRendering:

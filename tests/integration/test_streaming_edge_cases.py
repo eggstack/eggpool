@@ -13,24 +13,24 @@ import pytest
 import pytest_asyncio
 import respx
 
-from go_aggregator.accounts.registry import AccountRegistry
-from go_aggregator.catalog.service import CatalogService
-from go_aggregator.db.connection import Database
-from go_aggregator.db.migrations import MigrationRunner
-from go_aggregator.db.repositories import (
+from eggpool.accounts.registry import AccountRegistry
+from eggpool.catalog.service import CatalogService
+from eggpool.db.connection import Database
+from eggpool.db.migrations import MigrationRunner
+from eggpool.db.repositories import (
     AttemptRepository,
     RequestRepository,
     ReservationRepository,
     UsageWindowRepository,
 )
-from go_aggregator.health.health_manager import HealthManager
-from go_aggregator.models.config import AppConfig
-from go_aggregator.proxy.sse_observer import IncrementalSSEObserver
-from go_aggregator.request.coordinator import (
+from eggpool.health.health_manager import HealthManager
+from eggpool.models.config import AppConfig
+from eggpool.proxy.sse_observer import IncrementalSSEObserver
+from eggpool.request.coordinator import (
     ProxyRequestContext,
     RequestCoordinator,
 )
-from go_aggregator.routing.router import Router
+from eggpool.routing.router import Router
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator

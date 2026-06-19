@@ -8,13 +8,13 @@ from typing import Any
 
 import pytest
 
-from go_aggregator.accounts.registry import account_config_rows
-from go_aggregator.db.connection import Database
-from go_aggregator.db.migrations import MigrationRunner
-from go_aggregator.db.repositories import AccountRepository, RequestRepository
-from go_aggregator.models.config import AccountConfig, AppConfig, ProviderConfig
-from go_aggregator.models.database import AccountRow, ModelRow
-from go_aggregator.models.domain import Account, Provider
+from eggpool.accounts.registry import account_config_rows
+from eggpool.db.connection import Database
+from eggpool.db.migrations import MigrationRunner
+from eggpool.db.repositories import AccountRepository, RequestRepository
+from eggpool.models.config import AccountConfig, AppConfig, ProviderConfig
+from eggpool.models.database import AccountRow, ModelRow
+from eggpool.models.domain import Account, Provider
 
 
 async def _run_migrations(db: Database) -> None:
@@ -378,7 +378,7 @@ def test_registry_get_provider_for_account() -> None:
                 ),
             }
         )
-        from go_aggregator.accounts.registry import AccountRegistry
+        from eggpool.accounts.registry import AccountRegistry
 
         registry = AccountRegistry(config)
         assert registry.get_provider_for_account("a1") == "p1"
@@ -413,7 +413,7 @@ def test_registry_get_accounts_for_provider() -> None:
                 ),
             }
         )
-        from go_aggregator.accounts.registry import AccountRegistry
+        from eggpool.accounts.registry import AccountRegistry
 
         registry = AccountRegistry(config)
         p1_accounts = registry.get_accounts_for_provider("p1")
@@ -451,7 +451,7 @@ def test_registry_get_enabled_accounts_for_provider() -> None:
                 ),
             }
         )
-        from go_aggregator.accounts.registry import AccountRegistry
+        from eggpool.accounts.registry import AccountRegistry
 
         registry = AccountRegistry(config)
         enabled = registry.get_enabled_accounts_for_provider("p1")
@@ -484,7 +484,7 @@ def test_registry_get_provider_ids() -> None:
                 ),
             }
         )
-        from go_aggregator.accounts.registry import AccountRegistry
+        from eggpool.accounts.registry import AccountRegistry
 
         registry = AccountRegistry(config)
         ids = registry.get_provider_ids()
@@ -506,7 +506,7 @@ def test_registry_reports_provider_protocols() -> None:
                 )
             }
         )
-        from go_aggregator.accounts.registry import AccountRegistry
+        from eggpool.accounts.registry import AccountRegistry
 
         registry = AccountRegistry(config)
 
@@ -602,7 +602,7 @@ def test_registry_multiple_providers_default_normalize() -> None:
                 AccountConfig(name="flat", api_key_env="REG_DEF_KEY"),
             ]
         )
-        from go_aggregator.accounts.registry import AccountRegistry
+        from eggpool.accounts.registry import AccountRegistry
 
         registry = AccountRegistry(config)
         assert registry.get_provider_for_account("flat") == "opencode-go"

@@ -17,14 +17,14 @@ from typing import TYPE_CHECKING, Any
 import aiosqlite
 import pytest
 
-from go_aggregator.db.connection import Database
-from go_aggregator.db.migrations import SCHEMA_DIR, MigrationRunner
+from eggpool.db.connection import Database
+from eggpool.db.migrations import SCHEMA_DIR, MigrationRunner
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 
-# SCHEMA_DIR = src/go_aggregator/db/schema. Walk up to the project
+# SCHEMA_DIR = src/eggpool/db/schema. Walk up to the project
 # root and into tests/fixtures/schema.
 _PROJECT_ROOT = SCHEMA_DIR.parent.parent.parent.parent
 FIXTURE_DIR = _PROJECT_ROOT / "tests" / "fixtures" / "schema"
@@ -283,7 +283,7 @@ class TestMigrationCompatibility:
     @pytest.mark.asyncio
     async def test_migration_versions_match_files_on_disk(self) -> None:
         """The number and identity of applied migrations must exactly
-        match the .sql files in src/go_aggregator/db/schema.
+        match the .sql files in src/eggpool/db/schema.
 
         Replaces the prior `assert len(versions) == len(versions)` tautology.
         """
@@ -436,7 +436,7 @@ class TestHistoricalFixture:
         operations must succeed on both the fresh and the upgraded
         databases with identical observable outcomes.
         """
-        from go_aggregator.db.repositories import (
+        from eggpool.db.repositories import (
             AccountRepository,
             PriceSnapshotRepository,
             RequestRepository,

@@ -14,12 +14,12 @@ import pytest
 import pytest_asyncio
 import respx
 
-from go_aggregator.catalog.service import CatalogService
-from go_aggregator.dashboard.render import render_overview, render_pings
-from go_aggregator.db.connection import Database
-from go_aggregator.db.migrations import MigrationRunner
-from go_aggregator.db.repositories import PingRepository
-from go_aggregator.stats.service import StatsService, TimeRange
+from eggpool.catalog.service import CatalogService
+from eggpool.dashboard.render import render_overview, render_pings
+from eggpool.db.connection import Database
+from eggpool.db.migrations import MigrationRunner
+from eggpool.db.repositories import PingRepository
+from eggpool.stats.service import StatsService, TimeRange
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator

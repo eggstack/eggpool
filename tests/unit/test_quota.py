@@ -6,15 +6,15 @@ import time
 
 import pytest
 
-from go_aggregator.quota.estimation import (
+from eggpool.quota.estimation import (
     MODEL_FAMILY_FALLBACKS,
     AccountQuota,
     ManualOffset,
     QuotaEstimator,
     QuotaWindow,
 )
-from go_aggregator.quota.reservation import Reservation, ReservationManager
-from go_aggregator.quota.scorer import QuotaFairScorer, RoutingScore
+from eggpool.quota.reservation import Reservation, ReservationManager
+from eggpool.quota.scorer import QuotaFairScorer, RoutingScore
 
 
 class TestQuotaWindow:
@@ -360,7 +360,7 @@ class TestEstimateCostTierPriority:
         estimator = QuotaEstimator()
         cost = estimator.estimate_cost("acct", "unknown-model-xyz", 1000)
 
-        from go_aggregator.quota.estimation import GLOBAL_FALLBACK
+        from eggpool.quota.estimation import GLOBAL_FALLBACK
 
         avg_rate = (GLOBAL_FALLBACK[0] + GLOBAL_FALLBACK[1]) / 2.0
         expected = int(1000 * avg_rate * estimator.default_safety_factor)

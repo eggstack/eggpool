@@ -1,4 +1,4 @@
-"""Deployment smoke test for GoRouter on a Raspberry Pi.
+"""Deployment smoke test for EggPool on a Raspberry Pi.
 
 This script validates that a freshly deployed aggregator answers the
 core data-plane and dashboard endpoints, and that one non-streaming

@@ -6,15 +6,15 @@ import os
 
 import pytest
 
-from go_aggregator.accounts.registry import AccountRegistry
-from go_aggregator.catalog.cache import ModelCatalogCache
-from go_aggregator.health.health_manager import HealthManager
-from go_aggregator.models.config import AppConfig
-from go_aggregator.quota.estimation import (
+from eggpool.accounts.registry import AccountRegistry
+from eggpool.catalog.cache import ModelCatalogCache
+from eggpool.health.health_manager import HealthManager
+from eggpool.models.config import AppConfig
+from eggpool.quota.estimation import (
     PersistedWindowSnapshot,
     QuotaEstimator,
 )
-from go_aggregator.routing.router import Router
+from eggpool.routing.router import Router
 
 
 class _FakeCatalog:

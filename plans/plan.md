@@ -32,7 +32,7 @@ All providers use `Authorization: Bearer <key>`. No auth variation needed for MV
 
 ### 1a. New `ProviderConfig` model
 
-**File:** `src/go_aggregator/models/config.py`
+**File:** `src/eggpool/models/config.py`
 
 ```python
 class ProviderConfig(BaseModel):
@@ -172,7 +172,7 @@ VALUES ('opencode-go', 'https://opencode.ai/zen/go/v1', '["openai", "anthropic"]
 
 ### 2d. New domain models
 
-**File:** `src/go_aggregator/models/domain.py`
+**File:** `src/eggpool/models/domain.py`
 
 ```python
 class Provider(BaseModel):
@@ -186,7 +186,7 @@ class Provider(BaseModel):
 
 ### 2e. Updated database models
 
-**File:** `src/go_aggregator/models/database.py`
+**File:** `src/eggpool/models/database.py`
 
 ```python
 class AccountRow(BaseModel):
@@ -200,7 +200,7 @@ class ModelRow(BaseModel):
 
 ### 2f. Repository updates
 
-**File:** `src/go_aggregator/db/repositories.py`
+**File:** `src/eggpool/db/repositories.py`
 
 - `AccountRepository.sync_from_config()` accepts `provider_id` per account
 - New `ProviderRepository` class for CRUD on providers table
@@ -208,7 +208,7 @@ class ModelRow(BaseModel):
 
 ### 2g. Checksums
 
-Update `src/go_aggregator/db/schema/checksums.json` with new migration hash.
+Update `src/eggpool/db/schema/checksums.json` with new migration hash.
 
 **Files changed:** New migration, `checksums.json`, `models/database.py`, `models/domain.py`, `db/repositories.py`
 
@@ -218,7 +218,7 @@ Update `src/go_aggregator/db/schema/checksums.json` with new migration hash.
 
 ### 3a. New `ProviderClientPool` class
 
-**New file:** `src/go_aggregator/providers/client_pool.py`
+**New file:** `src/eggpool/providers/client_pool.py`
 
 ```python
 class ProviderClientPool:
@@ -271,7 +271,7 @@ Replace single `httpx.AsyncClient` with `ProviderClientPool`:
 app.state.httpx_client = httpx.AsyncClient(base_url=config.upstream.base_url, ...)
 
 # New:
-from go_aggregator.providers.client_pool import ProviderClientPool
+from eggpool.providers.client_pool import ProviderClientPool
 app.state.client_pool = ProviderClientPool.from_config(config.providers)
 ```
 
@@ -290,7 +290,7 @@ They look up the correct client via `pool.get_client(provider_id)`.
 
 ### 4a. Update `AccountRegistry`
 
-**File:** `src/go_aggregator/accounts/registry.py`
+**File:** `src/eggpool/accounts/registry.py`
 
 ```python
 class AccountRegistry:
@@ -338,7 +338,7 @@ This is the most complex phase. The catalog must track which providers support w
 
 ### 5a. Update `ModelCatalogCache`
 
-**File:** `src/go_aggregator/catalog/cache.py`
+**File:** `src/eggpool/catalog/cache.py`
 
 Add provider-aware support tracking:
 
@@ -393,7 +393,7 @@ Rename to `_get_models_for_exposure_internal()` and have the public method call 
 
 ### 5c. Generalize `fetch_models_for_account()`
 
-**File:** `src/go_aggregator/catalog/fetcher.py`
+**File:** `src/eggpool/catalog/fetcher.py`
 
 ```python
 async def fetch_models_for_account(
@@ -420,7 +420,7 @@ async def fetch_models_for_account(
 
 ### 5d. Update `CatalogService.refresh()`
 
-**File:** `src/go_aggregator/catalog/service.py`
+**File:** `src/eggpool/catalog/service.py`
 
 ```python
 async def refresh(self) -> None:
@@ -478,7 +478,7 @@ When upserting `account_models`, include `provider_id` from the cache's `_accoun
 
 ### 6a. Parse provider suffix from model ID
 
-**New utility in `src/go_aggregator/routing/provider.py`:**
+**New utility in `src/eggpool/routing/provider.py`:**
 
 ```python
 def parse_model_provider(model_id: str) -> tuple[str, str | None]:
@@ -498,7 +498,7 @@ def format_model_provider(model_id: str, provider_id: str) -> str:
 
 ### 6b. Update `get_eligible_accounts()`
 
-**File:** `src/go_aggregator/routing/eligibility.py`
+**File:** `src/eggpool/routing/eligibility.py`
 
 Add `provider_id` parameter:
 
@@ -517,13 +517,13 @@ When `provider_id` is specified, filter to only accounts belonging to that provi
 
 ### 6c. Update `Router`
 
-**File:** `src/go_aggregator/routing/router.py`
+**File:** `src/eggpool/routing/router.py`
 
 `select_account()` and `get_eligible_account_names()` accept `provider_id` parameter and pass it through to `get_eligible_accounts()`.
 
 ### 6d. Update `ProxyRequestContext`
 
-**File:** `src/go_aggregator/request/coordinator.py`
+**File:** `src/eggpool/request/coordinator.py`
 
 Add `provider_id: str | None = None` to `ProxyRequestContext`. This is set after parsing the client's model ID.
 
@@ -544,7 +544,7 @@ Add `provider_id: str` field.
 After extracting `model_id` from the request body, parse the provider suffix:
 
 ```python
-from go_aggregator.routing.provider import parse_model_provider
+from eggpool.routing.provider import parse_model_provider
 
 base_model_id, provider_id = parse_model_provider(model_id)
 context = ProxyRequestContext(
@@ -599,7 +599,7 @@ Update to use `get_provider_suffixed_models()` from the catalog cache. Return mo
 
 ### 8b. Dashboard render updates
 
-**File:** `src/go_aggregator/dashboard/render.py`
+**File:** `src/eggpool/dashboard/render.py`
 
 - `render_overview()`: Add provider dimension to account table (show provider name column)
 - `render_models()`: Show provider-suffixed model IDs
@@ -608,14 +608,14 @@ Update to use `get_provider_suffixed_models()` from the catalog cache. Return mo
 
 ### 8c. Dashboard route updates
 
-**File:** `src/go_aggregator/dashboard/routes.py`
+**File:** `src/eggpool/dashboard/routes.py`
 
 - Account queries scoped to provider when filtering
 - Stats queries include provider dimension
 
 ### 8d. JSON API updates
 
-**File:** `src/go_aggregator/api/stats.py`
+**File:** `src/eggpool/api/stats.py`
 
 - `fetch_summary` includes `total_providers` count
 - `fetch_account_stats` includes `provider_id` per account
@@ -623,7 +623,7 @@ Update to use `get_provider_suffixed_models()` from the catalog cache. Return mo
 
 ### 8e. Stats queries
 
-**File:** `src/go_aggregator/stats/queries.py`
+**File:** `src/eggpool/stats/queries.py`
 
 - Add `provider_id` to group-by clauses where appropriate
 - `fetch_account_stats()` returns `provider_id` per row
@@ -637,7 +637,7 @@ Update to use `get_provider_suffixed_models()` from the catalog cache. Return mo
 
 ### 9a. `models refresh` command
 
-**File:** `src/go_aggregator/cli.py`
+**File:** `src/eggpool/cli.py`
 
 Update to create per-provider clients and iterate providers.
 
@@ -702,36 +702,36 @@ Show provider for each account.
 ## Estimated File Changes
 
 **New files (3):**
-- `src/go_aggregator/providers/__init__.py`
-- `src/go_aggregator/providers/client_pool.py`
-- `src/go_aggregator/routing/provider.py`
+- `src/eggpool/providers/__init__.py`
+- `src/eggpool/providers/client_pool.py`
+- `src/eggpool/routing/provider.py`
 
 **New migration (1):**
-- `src/go_aggregator/db/schema/0015_multi_provider.sql`
+- `src/eggpool/db/schema/0015_multi_provider.sql`
 
 **Modified files (~20):**
-- `src/go_aggregator/models/config.py`
-- `src/go_aggregator/models/database.py`
-- `src/go_aggregator/models/domain.py`
-- `src/go_aggregator/db/repositories.py`
-- `src/go_aggregator/db/schema/checksums.json`
-- `src/go_aggregator/accounts/registry.py`
-- `src/go_aggregator/catalog/cache.py`
-- `src/go_aggregator/catalog/fetcher.py`
-- `src/go_aggregator/catalog/service.py`
-- `src/go_aggregator/routing/eligibility.py`
-- `src/go_aggregator/routing/router.py`
-- `src/go_aggregator/request/coordinator.py`
-- `src/go_aggregator/api/chat_completions.py`
-- `src/go_aggregator/api/messages.py`
-- `src/go_aggregator/api/models.py`
-- `src/go_aggregator/api/stats.py`
-- `src/go_aggregator/dashboard/render.py`
-- `src/go_aggregator/dashboard/routes.py`
-- `src/go_aggregator/stats/queries.py`
-- `src/go_aggregator/stats/__init__.py`
-- `src/go_aggregator/app.py`
-- `src/go_aggregator/cli.py`
+- `src/eggpool/models/config.py`
+- `src/eggpool/models/database.py`
+- `src/eggpool/models/domain.py`
+- `src/eggpool/db/repositories.py`
+- `src/eggpool/db/schema/checksums.json`
+- `src/eggpool/accounts/registry.py`
+- `src/eggpool/catalog/cache.py`
+- `src/eggpool/catalog/fetcher.py`
+- `src/eggpool/catalog/service.py`
+- `src/eggpool/routing/eligibility.py`
+- `src/eggpool/routing/router.py`
+- `src/eggpool/request/coordinator.py`
+- `src/eggpool/api/chat_completions.py`
+- `src/eggpool/api/messages.py`
+- `src/eggpool/api/models.py`
+- `src/eggpool/api/stats.py`
+- `src/eggpool/dashboard/render.py`
+- `src/eggpool/dashboard/routes.py`
+- `src/eggpool/stats/queries.py`
+- `src/eggpool/stats/__init__.py`
+- `src/eggpool/app.py`
+- `src/eggpool/cli.py`
 
 ## Key Design Decisions
 

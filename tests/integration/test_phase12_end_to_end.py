@@ -22,25 +22,25 @@ import pytest
 import pytest_asyncio
 import respx
 
-from go_aggregator.accounts.registry import AccountRegistry
-from go_aggregator.catalog.pricing import CostCalculator, PriceRepository
-from go_aggregator.catalog.service import CatalogService
-from go_aggregator.db.connection import Database
-from go_aggregator.db.migrations import MigrationRunner
-from go_aggregator.db.repositories import (
+from eggpool.accounts.registry import AccountRegistry
+from eggpool.catalog.pricing import CostCalculator, PriceRepository
+from eggpool.catalog.service import CatalogService
+from eggpool.db.connection import Database
+from eggpool.db.migrations import MigrationRunner
+from eggpool.db.repositories import (
     AccountRepository,
     AttemptRepository,
     RequestRepository,
     ReservationRepository,
     UsageWindowRepository,
 )
-from go_aggregator.health.health_manager import HealthManager
-from go_aggregator.models.config import AppConfig
-from go_aggregator.request.coordinator import (
+from eggpool.health.health_manager import HealthManager
+from eggpool.models.config import AppConfig
+from eggpool.request.coordinator import (
     ProxyRequestContext,
     RequestCoordinator,
 )
-from go_aggregator.routing.router import Router
+from eggpool.routing.router import Router
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -1076,7 +1076,7 @@ async def test_j_restart_recovery(
     assert req_row["status"] == "pending"
 
     # Step 2: Simulate process death - run crash recovery
-    from go_aggregator.app import _crash_recovery
+    from eggpool.app import _crash_recovery
 
     # We need to make the request look old enough for recovery to pick it up
     # The recovery checks started_at < datetime('now', '-10 minutes')

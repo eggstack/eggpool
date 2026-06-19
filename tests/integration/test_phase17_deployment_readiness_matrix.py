@@ -35,10 +35,10 @@ from pathlib import Path
 
 import pytest
 
-from go_aggregator.db.connection import Database
-from go_aggregator.db.migrations import MigrationRunner
-from go_aggregator.errors import DatabaseError
-from go_aggregator.proxy.client import (
+from eggpool.db.connection import Database
+from eggpool.db.migrations import MigrationRunner
+from eggpool.errors import DatabaseError
+from eggpool.proxy.client import (
     LOCAL_CREDENTIAL_HEADERS,
     build_upstream_auth_headers,
     filter_request_headers,
@@ -229,7 +229,7 @@ class TestMigrationCompatibility:
         This is a high-level smoke covering the same property
         exercised in detail by test_migration_compatibility.py.
         """
-        from go_aggregator.db.repositories import (
+        from eggpool.db.repositories import (
             PriceSnapshotRepository,
         )
 
@@ -285,7 +285,7 @@ class TestMigrationCompatibility:
         manifest_path = (
             Path(__file__).resolve().parent.parent.parent
             / "src"
-            / "go_aggregator"
+            / "eggpool"
             / "db"
             / "schema"
             / "checksums.json"
@@ -349,7 +349,7 @@ class TestPrivacyDefault:
         This protects operators who upgrade without reading the
         release notes: error_detail is NULL by default.
         """
-        from go_aggregator.models.config import SecurityConfig
+        from eggpool.models.config import SecurityConfig
 
         cfg = SecurityConfig()
         assert cfg.persist_redacted_error_detail is False
