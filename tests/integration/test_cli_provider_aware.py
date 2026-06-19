@@ -371,4 +371,4 @@ persist_redacted_error_detail = false
         )
 
         assert result.exit_code == 0
-        assert "No accounts configured." in result.stdout
+        assert "No provider accounts configured" in result.stdout

@@ -223,16 +223,11 @@ input_price_per_1k = "-$3 / 1M"
 
 def test_config_example_validates() -> None:
     """Verify config.example.toml validates against the schema."""
-    os.environ["OPENCODE_GO_KEY_1"] = "test_key_1"
-    os.environ["OPENCODE_GO_KEY_2"] = "test_key_2"
-    try:
-        config = AppConfig.from_toml("config.example.toml")
-        assert config.upstream.base_url == "https://opencode.ai/zen/go/v1"
-        assert config.limits.five_hour_microdollars == 12_000_000
-        assert len(config.all_accounts()) == 2
-    finally:
-        del os.environ["OPENCODE_GO_KEY_1"]
-        del os.environ["OPENCODE_GO_KEY_2"]
+    config = AppConfig.from_toml("config.example.toml")
+    assert config.upstream.base_url == "https://opencode.ai/zen/go/v1"
+    assert config.limits.five_hour_microdollars == 12_000_000
+    # All accounts are commented out — users add them via `connect`
+    assert len(config.all_accounts()) == 0
 
 
 def test_dashboard_config_defaults() -> None:

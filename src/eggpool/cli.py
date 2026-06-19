@@ -49,6 +49,13 @@ def serve(ctx: click.Context) -> None:
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)
 
+    if not config.all_accounts():
+        click.echo(
+            "Warning: No provider accounts configured.\n"
+            "  Use `eggpool connect` to add a provider, then restart.",
+            err=True,
+        )
+
     try:
         config.validate_account_credentials()
     except AggregatorError as exc:
@@ -668,7 +675,11 @@ def accounts_status(ctx: click.Context) -> None:
         sys.exit(1)
 
     if not config.all_accounts():
-        click.echo("No accounts configured.")
+        click.echo(
+            "No provider accounts configured.\n\n"
+            "  Use `eggpool connect` to add a provider interactively,\n"
+            "  or edit config.toml to add accounts manually."
+        )
         return
 
     for acct in config.all_accounts():

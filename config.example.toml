@@ -1,7 +1,7 @@
 [server]
 host = "0.0.0.0"
 port = 11300
-# api_key = "ep_..." # Auto-generated on first run; use `eggpool newkey` to regenerate
+# api_key = "ep_..." # Auto-generated on first `configsetup`; use `eggpool newkey` to regenerate
 log_level = "INFO"
 access_log = true
 
@@ -75,28 +75,31 @@ persist_redacted_error_detail = false
 # [proxies.datacenter-eu]
 # url_env = "GOROUTER_DATACENTER_EU_PROXY_URL"
 
-# ─── Provider-based Configuration (recommended) ─────────────────────────────
+# ─── Provider Accounts ─────────────────────────────────────────────────
+# Use `eggpool connect` to add providers interactively. This is the
+# recommended way to configure accounts — it handles API key storage,
+# config file updates, and server reload automatically.
+#
+# Manual configuration is possible but not recommended. If you prefer
+# editing this file directly, uncomment and customize the examples below.
+# Each account needs an `api_key` (inline) or `api_key_env` (env var name).
 
-[providers.opencode-go]
-id = "opencode-go"
-base_url = "https://opencode.ai/zen/go/v1"
-protocols = ["openai", "anthropic"]
+# [providers.opencode-go]
+# id = "opencode-go"
+# base_url = "https://opencode.ai/zen/go/v1"
+# protocols = ["openai", "anthropic"]
+#
+# [[providers.opencode-go.accounts]]
+# name = "personal"
+# api_key = "sk-your-opencode-go-key"
+# # Optional per-key proxy. Omit this field for the default direct connection.
+# # proxy = "residential-us"
+# # proxy_url = "ss://chacha20:password@proxy.example.com:8388"
+# # proxy_url_env = "GOROUTER_PERSONAL_PROXY_URL"
 
-[[providers.opencode-go.accounts]]
-name = "personal"
-api_key_env = "OPENCODE_GO_KEY_1"
-# Optional per-key proxy. Omit this field for the default direct connection.
-# proxy = "residential-us"
-# proxy_url = "ss://chacha20:password@proxy.example.com:8388"
-# proxy_url_env = "GOROUTER_PERSONAL_PROXY_URL"
-
-[[providers.opencode-go.accounts]]
-name = "team"
-api_key_env = "OPENCODE_GO_KEY_2"
-
-# ─── Popular Provider Defaults ───────────────────────────────────────────────
+# ─── Popular Provider Defaults ─────────────────────────────────────────
 # Uncomment providers you want to use. Each requires an API key from the
-# provider's dashboard.
+# provider's dashboard. Or use `eggpool connect` for interactive setup.
 
 # DeepSeek — OpenAI compatible, very cost-effective
 # [providers.deepseek]
@@ -106,7 +109,7 @@ api_key_env = "OPENCODE_GO_KEY_2"
 #
 # [[providers.deepseek.accounts]]
 # name = "default"
-# api_key_env = "DEEPSEEK_API_KEY"
+# api_key = "sk-your-deepseek-key"
 
 # OpenRouter — 400+ models through one API key
 # [providers.openrouter]
@@ -116,7 +119,7 @@ api_key_env = "OPENCODE_GO_KEY_2"
 #
 # [[providers.openrouter.accounts]]
 # name = "default"
-# api_key_env = "OPENROUTER_API_KEY"
+# api_key = "sk-your-openrouter-key"
 
 # Together AI — popular inference provider
 # [providers.together]
@@ -126,7 +129,7 @@ api_key_env = "OPENCODE_GO_KEY_2"
 #
 # [[providers.together.accounts]]
 # name = "default"
-# api_key_env = "TOGETHER_API_KEY"
+# api_key = "sk-your-together-key"
 
 # Fireworks AI — fast inference for open-source models
 # [providers.fireworks]
@@ -136,7 +139,7 @@ api_key_env = "OPENCODE_GO_KEY_2"
 #
 # [[providers.fireworks.accounts]]
 # name = "default"
-# api_key_env = "FIREWORKS_API_KEY"
+# api_key = "sk-your-fireworks-key"
 
 # Z.AI (ZhipuAI GLM) — OpenAI compatible
 # [providers.zai]
@@ -146,7 +149,7 @@ api_key_env = "OPENCODE_GO_KEY_2"
 #
 # [[providers.zai.accounts]]
 # name = "default"
-# api_key_env = "ZAI_API_KEY"
+# api_key = "sk-your-zai-key"
 
 # Alibaba Qwen — popular Chinese provider
 # [providers.alibaba]
@@ -156,7 +159,7 @@ api_key_env = "OPENCODE_GO_KEY_2"
 #
 # [[providers.alibaba.accounts]]
 # name = "default"
-# api_key_env = "ALIBABA_API_KEY"
+# api_key = "sk-your-alibaba-key"
 
 # Novita AI — various open-source models
 # [providers.novita]
@@ -166,7 +169,7 @@ api_key_env = "OPENCODE_GO_KEY_2"
 #
 # [[providers.novita.accounts]]
 # name = "default"
-# api_key_env = "NOVITA_API_KEY"
+# api_key = "sk-your-novita-key"
 
 # MiniMax — OpenAI + Anthropic compatible
 # [providers.minimax]
@@ -179,7 +182,7 @@ api_key_env = "OPENCODE_GO_KEY_2"
 #
 # [[providers.minimax.accounts]]
 # name = "default"
-# api_key_env = "MINIMAX_API_KEY"
+# api_key = "sk-your-minimax-key"
 
 # GeneralCompute — OpenAI compatible (uses POST for model listing)
 # [providers.generalcompute]
@@ -191,7 +194,7 @@ api_key_env = "OPENCODE_GO_KEY_2"
 #
 # [[providers.generalcompute.accounts]]
 # name = "default"
-# api_key_env = "GENERALCOMPUTE_API_KEY"
+# api_key = "sk-your-generalcompute-key"
 
 # NeuralWatt — OpenAI compatible, energy-based pricing
 # [providers.neuralwatt]
@@ -201,7 +204,7 @@ api_key_env = "OPENCODE_GO_KEY_2"
 #
 # [[providers.neuralwatt.accounts]]
 # name = "default"
-# api_key_env = "NEURALWATT_API_KEY"
+# api_key = "sk-your-neuralwatt-key"
 
 # Ollama (local) — OpenAI compatible, no auth required
 # [providers.ollama-local]
@@ -211,7 +214,7 @@ api_key_env = "OPENCODE_GO_KEY_2"
 #
 # [[providers.ollama-local.accounts]]
 # name = "default"
-# api_key_env = "OLLAMA_API_KEY"
+# api_key = "ollama"
 
 # Ollama (cloud) — OpenAI compatible via /v1 endpoints
 # [providers.ollama-cloud]
@@ -221,12 +224,7 @@ api_key_env = "OPENCODE_GO_KEY_2"
 #
 # [[providers.ollama-cloud.accounts]]
 # name = "default"
-# api_key_env = "OLLAMA_API_KEY"
-
-# Backward-compatible flat config (auto-normalizes to opencode-go provider)
-# [[accounts]]
-# name = "personal"
-# api_key_env = "OPENCODE_GO_KEY_1"
+# api_key = "sk-your-ollama-key"
 
 [model_overrides."claude-opus-4"]
 protocol = "anthropic"

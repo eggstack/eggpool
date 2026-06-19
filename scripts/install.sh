@@ -66,7 +66,7 @@ echo ""
 echo "Installing dependencies..."
 uv sync --extra dev
 
-# Copy example configuration files if they don't exist
+# Copy example configuration if it doesn't exist
 echo ""
 echo "Setting up configuration..."
 if [ ! -f config.toml ]; then
@@ -76,37 +76,24 @@ else
     echo "  config.toml already exists, skipping"
 fi
 
-if [ ! -f .env ]; then
-    cp .env.example .env
-    echo "  Created .env from .env.example"
-    echo ""
-    echo "  IMPORTANT: Edit .env and set your API keys:"
-    echo "    - GO_AGGREGATOR_API_KEY: Your local proxy API key"
-    echo "    - OPENCODE_GO_KEY_1: Your OpenCode Go subscription key"
-else
-    echo "  .env already exists, skipping"
-fi
-
-# Validate configuration
-echo ""
-echo "Validating configuration..."
-if set -a && source .env 2>/dev/null && set +a && uv run eggpool --config config.toml check-config 2>&1; then
-    echo "  Configuration is valid"
-else
-    echo "  Warning: Configuration validation failed"
-    echo "  Please edit config.toml and .env with your settings"
-fi
-
 echo ""
 echo "Installation complete."
 echo ""
-echo "Quick start (interactive provider setup):"
-echo "  uv run eggpool connect"
+echo "Next steps:"
 echo ""
-echo "Manual setup:"
-echo "  1. Edit config.toml with your settings (accounts, upstream URL, etc.)"
-echo "  2. Edit .env with your API keys"
-echo "  3. Run database migrations: uv run eggpool --config config.toml migrate"
-echo "  4. Start the server: uv run eggpool --config config.toml serve"
+echo "  1. Add a provider (interactive, prompts for API key):"
+echo "     uv run eggpool connect"
+echo ""
+echo "  2. Get client config (generates server key, prints snippet):"
+echo "     uv run eggpool configsetup opencode"
+echo "     uv run eggpool configsetup claude-code"
+echo ""
+echo "  3. Start the server:"
+echo "     uv run eggpool serve"
+echo ""
+echo "Other useful commands:"
+echo "  uv run eggpool accounts status   — show configured accounts"
+echo "  uv run eggpool newkey             — regenerate server API key"
+echo "  uv run eggpool rehash             — reload config in running server"
 echo ""
 echo "For production deployment, see docs/deployment.md"

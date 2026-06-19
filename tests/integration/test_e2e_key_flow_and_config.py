@@ -720,3 +720,107 @@ class TestConfigSetup:
         assert all(0 <= int(p) <= 255 for p in parts)
         # Should not be localhost
         assert lan_ip != "127.0.0.1"
+
+
+# ─── No-accounts warnings ──────────────────────────────────────────────
+
+
+class TestNoAccountsWarning:
+    """Verify CLI commands warn appropriately when no accounts exist."""
+
+    def test_serve_warns_no_accounts(self, tmp_path, monkeypatch):
+        """serve command warns when no accounts are configured."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text('[server]\napi_key = "ep_test"\nport = 8080\n')
+
+        from click.testing import CliRunner
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "accounts", "status"],
+        )
+
+        assert result.exit_code == 0
+        assert "No provider accounts configured" in result.output
+        assert "eggpool connect" in result.output
+
+    def test_accounts_status_shows_each_account(self, tmp_path):
+        """accounts status lists all configured accounts."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            textwrap.dedent("""\
+                [server]
+                api_key = "ep_test"
+                port = 8080
+
+                [providers.p1]
+                id = "p1"
+                base_url = "https://example.com"
+                protocols = ["openai"]
+
+                [[providers.p1.accounts]]
+                name = "acct1"
+                api_key = "key1"
+
+                [[providers.p1.accounts]]
+                name = "acct2"
+                api_key = "key2"
+            """)
+        )
+
+        from click.testing import CliRunner
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "accounts", "status"],
+        )
+
+        assert result.exit_code == 0
+        assert "acct1" in result.output
+        assert "acct2" in result.output
+        assert "Total accounts: 2" in result.output
+
+
+# ─── Config example validation ──────────────────────────────────────────
+
+
+class TestConfigExample:
+    """Verify config.example.toml is valid and has no active accounts."""
+
+    def test_config_example_has_no_active_accounts(self):
+        """config.example.toml should have all accounts commented out."""
+        import tomllib
+        from pathlib import Path
+
+        config_path = Path(__file__).parent.parent.parent / "config.example.toml"
+        with open(config_path, "rb") as f:
+            raw = tomllib.load(f)
+
+        # No providers section should exist (all commented out)
+        assert "providers" not in raw
+
+    def test_config_example_valid_toml(self):
+        """config.example.toml should parse as valid TOML."""
+        import tomllib
+        from pathlib import Path
+
+        config_path = Path(__file__).parent.parent.parent / "config.example.toml"
+        with open(config_path, "rb") as f:
+            raw = tomllib.load(f)
+
+        assert "server" in raw
+        assert "upstream" in raw
+        assert raw["server"]["port"] == 11300
+
+    def test_config_example_loads_with_app_config(self):
+        """config.example.toml should be valid AppConfig."""
+        from pathlib import Path
+
+        from eggpool.models.config import AppConfig
+
+        config_path = Path(__file__).parent.parent.parent / "config.example.toml"
+        config = AppConfig.from_toml(str(config_path))
+        assert config.server.port == 11300
+        assert len(config.all_accounts()) == 0
