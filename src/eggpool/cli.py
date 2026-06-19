@@ -237,11 +237,47 @@ def _generate_api_key() -> str:
 
 
 def _read_server_api_key(config_path: str) -> str:
-    """Read the current server API key from config."""
-    from eggpool.models.config import AppConfig
+    """Read the current server API key from config without full validation."""
+    import tomllib
+    from pathlib import Path
 
-    config = AppConfig.from_toml(config_path)
-    return config.server.api_key or ""
+    path = Path(config_path)
+    if not path.exists():
+        return ""
+    with open(path, "rb") as f:
+        raw = tomllib.load(f)
+    server = raw.get("server", {})
+    return server.get("api_key", "") or ""
+
+
+def _read_server_port(config_path: str) -> int:
+    """Read the server port from config without full validation."""
+    import tomllib
+    from pathlib import Path
+
+    from eggpool.constants import DEFAULT_PORT
+
+    path = Path(config_path)
+    if not path.exists():
+        return DEFAULT_PORT
+    with open(path, "rb") as f:
+        raw = tomllib.load(f)
+    server = raw.get("server", {})
+    return server.get("port", DEFAULT_PORT)
+
+
+def _detect_lan_ip() -> str:
+    """Detect the LAN IP address of this machine."""
+    import socket
+
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("10.255.255.255", 1))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
 
 
 def _write_server_api_key(config_path: str, new_key: str) -> None:
@@ -346,23 +382,26 @@ def _copy_to_clipboard(text: str) -> bool:
 def configsetup_opencode(ctx: click.Context) -> None:
     """Print OpenCode config snippet for connecting to this router."""
     config_path: str = ctx.obj["config_path"]
+
+    # Auto-generate API key if not present
     key = _read_server_api_key(config_path)
     if not key:
-        click.echo("No API key configured. Run `eggpool newkey` first.", err=True)
-        sys.exit(1)
+        key = _generate_api_key()
+        _write_server_api_key(config_path, key)
+        click.echo("Generated new server API key.", err=True)
 
-    config = AppConfig.from_toml(config_path)
-    port = config.server.port
+    port = _read_server_port(config_path)
+    lan_ip = _detect_lan_ip()
 
     snippet = (
-        f"{{\n"
-        f'  "providers": {{\n'
-        f'    "eggpool": {{\n'
+        "{\n"
+        '  "providers": {\n'
+        '    "eggpool": {\n'
         f'      "api_key": "{key}",\n'
-        f'      "base_url": "http://localhost:{port}/v1"\n'
-        f"    }}\n"
-        f"  }}\n"
-        f"}}"
+        f'      "base_url": "http://{lan_ip}:{port}/v1"\n'
+        "    }\n"
+        "  }\n"
+        "}"
     )
 
     click.echo("Add to ~/.config/opencode/opencode.json:")
@@ -379,23 +418,32 @@ def configsetup_opencode(ctx: click.Context) -> None:
 def configsetup_claude_code(ctx: click.Context) -> None:
     """Print Claude Code config snippet for connecting to this router."""
     config_path: str = ctx.obj["config_path"]
+
+    # Auto-generate API key if not present
     key = _read_server_api_key(config_path)
     if not key:
-        click.echo("No API key configured. Run `eggpool newkey` first.", err=True)
-        sys.exit(1)
+        key = _generate_api_key()
+        _write_server_api_key(config_path, key)
+        click.echo("Generated new server API key.", err=True)
 
-    config = AppConfig.from_toml(config_path)
-    port = config.server.port
+    port = _read_server_port(config_path)
+    lan_ip = _detect_lan_ip()
 
     snippet = (
-        f'{{\n  "api_key": "{key}",\n  "base_url": "http://localhost:{port}/v1"\n}}'
+        '{\n  "api_key": "'
+        + key
+        + '",\n  "base_url": "http://'
+        + lan_ip
+        + ":"
+        + str(port)
+        + '/v1"\n}'
     )
 
     click.echo("Add to ~/.claude/settings.json or pass via --api-key and --base-url:")
     click.echo("")
     click.echo(snippet)
     click.echo("")
-    click.echo(f"Or run: claude --api-key {key} --base-url http://localhost:{port}/v1")
+    click.echo(f"Or run: claude --api-key {key} --base-url http://{lan_ip}:{port}/v1")
 
     if _copy_to_clipboard(snippet):
         click.echo("Copied to clipboard.")

@@ -8,6 +8,7 @@ Verifies:
 
 from __future__ import annotations
 
+import textwrap
 from typing import TYPE_CHECKING
 
 import httpx
@@ -17,7 +18,7 @@ import respx
 
 from eggpool.accounts.registry import AccountRegistry
 from eggpool.catalog.service import CatalogService
-from eggpool.cli import _update_server_config, cli
+from eggpool.cli import _read_server_api_key, _update_server_config, cli
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
 from eggpool.db.repositories import (
@@ -494,3 +495,228 @@ class TestNewkeySignalsReload:
 
         assert result.exit_code == 0
         assert "Server is not running" in result.output
+
+
+# ─── configsetup ────────────────────────────────────────────────────────
+
+
+class TestConfigSetup:
+    """Verify configsetup commands produce valid configs and auto-generate keys."""
+
+    def test_configsetup_opencode_with_existing_key(self, tmp_path):
+        """configsetup opencode uses existing key and LAN IP."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            '[server]\napi_key = "ep_existing_key_123"\nport = 8080\n'
+        )
+
+        from click.testing import CliRunner
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "configsetup", "opencode"],
+        )
+
+        assert result.exit_code == 0
+        assert "ep_existing_key_123" in result.output
+        assert "8080" in result.output
+        # Should use LAN IP, not localhost
+        assert "localhost" not in result.output
+
+    def test_configsetup_opencode_auto_generates_key(self, tmp_path):
+        """configsetup opencode auto-generates key if not present."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("[server]\nport = 9090\n")
+
+        from click.testing import CliRunner
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "configsetup", "opencode"],
+        )
+
+        assert result.exit_code == 0
+        # Key was auto-generated
+        assert "Generated new server API key" in result.output
+        # Key is in the snippet
+        assert "ep_" in result.output
+        assert "9090" in result.output
+
+        # Verify key was written to config
+        key = _read_server_api_key(str(config_path))
+        assert key.startswith("ep_")
+
+    def test_configsetup_opencode_valid_json(self, tmp_path):
+        """configsetup opencode produces valid JSON."""
+        import json
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text('[server]\napi_key = "ep_test_key"\nport = 11300\n')
+
+        from click.testing import CliRunner
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "configsetup", "opencode"],
+        )
+
+        assert result.exit_code == 0
+
+        # Extract JSON snippet
+        output = result.output
+        start = output.index("{")
+        end = output.rindex("}") + 1
+        snippet = json.loads(output[start:end])
+
+        assert snippet["providers"]["eggpool"]["api_key"] == "ep_test_key"
+        assert "11300" in snippet["providers"]["eggpool"]["base_url"]
+
+    def test_configsetup_claude_code_with_existing_key(self, tmp_path):
+        """configsetup claude-code uses existing key and LAN IP."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            '[server]\napi_key = "ep_existing_key_456"\nport = 8080\n'
+        )
+
+        from click.testing import CliRunner
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "configsetup", "claude-code"],
+        )
+
+        assert result.exit_code == 0
+        assert "ep_existing_key_456" in result.output
+        assert "8080" in result.output
+        assert "localhost" not in result.output
+
+    def test_configsetup_claude_code_auto_generates_key(self, tmp_path):
+        """configsetup claude-code auto-generates key if not present."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("[server]\nport = 7777\n")
+
+        from click.testing import CliRunner
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "configsetup", "claude-code"],
+        )
+
+        assert result.exit_code == 0
+        assert "Generated new server API key" in result.output
+        assert "ep_" in result.output
+        assert "7777" in result.output
+
+    def test_configsetup_claude_code_valid_json(self, tmp_path):
+        """configsetup claude-code produces valid JSON."""
+        import json
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text('[server]\napi_key = "ep_claude_key"\nport = 11300\n')
+
+        from click.testing import CliRunner
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "configsetup", "claude-code"],
+        )
+
+        assert result.exit_code == 0
+
+        output = result.output
+        start = output.index("{")
+        end = output.rindex("}") + 1
+        snippet = json.loads(output[start:end])
+
+        assert snippet["api_key"] == "ep_claude_key"
+        assert "11300" in snippet["base_url"]
+
+    def test_configsetup_works_with_duplicate_accounts(self, tmp_path):
+        """configsetup works even if config has duplicate account names."""
+        config_path = tmp_path / "config.toml"
+        # Write config with duplicate names (would fail AppConfig validation)
+        config_path.write_text(
+            textwrap.dedent("""\
+                [server]
+                api_key = "ep_server_key"
+                port = 8080
+
+                [providers.p1]
+                id = "p1"
+                base_url = "https://example.com"
+                protocols = ["openai"]
+
+                [[providers.p1.accounts]]
+                name = "default"
+                api_key = "key1"
+
+                [providers.p2]
+                id = "p2"
+                base_url = "https://other.com"
+                protocols = ["openai"]
+
+                [[providers.p2.accounts]]
+                name = "default"
+                api_key = "key2"
+            """)
+        )
+
+        from click.testing import CliRunner
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "configsetup", "opencode"],
+        )
+
+        # Should succeed despite duplicate account names
+        assert result.exit_code == 0
+        assert "ep_server_key" in result.output
+
+    def test_configsetup_does_not_overwrite_full_config(self, tmp_path):
+        """configsetup only adds api_key, does not rewrite the entire file."""
+        config_path = tmp_path / "config.toml"
+        original_content = textwrap.dedent("""\
+            [server]
+            port = 8080
+            log_level = "DEBUG"
+
+            [upstream]
+            base_url = "https://custom.example.com/v1"
+        """)
+        config_path.write_text(original_content)
+
+        from click.testing import CliRunner
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "configsetup", "opencode"],
+        )
+
+        assert result.exit_code == 0
+
+        # Verify the config file still has the original content plus api_key
+        content = config_path.read_text()
+        assert "port = 8080" in content
+        assert 'log_level = "DEBUG"' in content
+        assert "custom.example.com" in content
+        assert "api_key" in content
+
+    def test_configsetup_lan_ip_detection(self, tmp_path):
+        """configsetup detects LAN IP address."""
+        from eggpool.cli import _detect_lan_ip
+
+        lan_ip = _detect_lan_ip()
+        # Should be a valid IP address
+        parts = lan_ip.split(".")
+        assert len(parts) == 4
+        assert all(0 <= int(p) <= 255 for p in parts)
+        # Should not be localhost
+        assert lan_ip != "127.0.0.1"
