@@ -75,7 +75,8 @@ persist_redacted_error_detail = false
 # [proxies.datacenter-eu]
 # url_env = "GOROUTER_DATACENTER_EU_PROXY_URL"
 
-# Provider-based configuration (recommended)
+# ─── Provider-based Configuration (recommended) ─────────────────────────────
+
 [providers.opencode-go]
 id = "opencode-go"
 base_url = "https://opencode.ai/zen/go/v1"
@@ -92,6 +93,80 @@ api_key_env = "OPENCODE_GO_KEY_1"
 [[providers.opencode-go.accounts]]
 name = "team"
 api_key_env = "OPENCODE_GO_KEY_2"
+
+# ─── Popular Provider Defaults ───────────────────────────────────────────────
+# Uncomment providers you want to use. Each requires an API key from the
+# provider's dashboard.
+
+# DeepSeek — OpenAI compatible, very cost-effective
+# [providers.deepseek]
+# id = "deepseek"
+# base_url = "https://api.deepseek.com"
+# protocols = ["openai"]
+#
+# [[providers.deepseek.accounts]]
+# name = "default"
+# api_key_env = "DEEPSEEK_API_KEY"
+
+# OpenRouter — 400+ models through one API key
+# [providers.openrouter]
+# id = "openrouter"
+# base_url = "https://openrouter.ai/api/v1"
+# protocols = ["openai"]
+#
+# [[providers.openrouter.accounts]]
+# name = "default"
+# api_key_env = "OPENROUTER_API_KEY"
+
+# Together AI — popular inference provider
+# [providers.together]
+# id = "together"
+# base_url = "https://api.together.ai/v1"
+# protocols = ["openai"]
+#
+# [[providers.together.accounts]]
+# name = "default"
+# api_key_env = "TOGETHER_API_KEY"
+
+# Fireworks AI — fast inference for open-source models
+# [providers.fireworks]
+# id = "fireworks"
+# base_url = "https://api.fireworks.ai/inference/v1"
+# protocols = ["openai"]
+#
+# [[providers.fireworks.accounts]]
+# name = "default"
+# api_key_env = "FIREWORKS_API_KEY"
+
+# Z.AI (ZhipuAI GLM) — OpenAI compatible
+# [providers.zai]
+# id = "zai"
+# base_url = "https://api.z.ai/api/paas/v4"
+# protocols = ["openai"]
+#
+# [[providers.zai.accounts]]
+# name = "default"
+# api_key_env = "ZAI_API_KEY"
+
+# Alibaba Qwen — popular Chinese provider
+# [providers.alibaba]
+# id = "alibaba"
+# base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+# protocols = ["openai"]
+#
+# [[providers.alibaba.accounts]]
+# name = "default"
+# api_key_env = "ALIBABA_API_KEY"
+
+# Novita AI — various open-source models
+# [providers.novita]
+# id = "novita"
+# base_url = "https://api.novita.ai/openai"
+# protocols = ["openai"]
+#
+# [[providers.novita.accounts]]
+# name = "default"
+# api_key_env = "NOVITA_API_KEY"
 
 # MiniMax — OpenAI + Anthropic compatible
 # [providers.minimax]
@@ -118,16 +193,6 @@ api_key_env = "OPENCODE_GO_KEY_2"
 # name = "default"
 # api_key_env = "GENERALCOMPUTE_API_KEY"
 
-# Z.AI (ZhipuAI GLM) — OpenAI compatible
-# [providers.zai]
-# id = "zai"
-# base_url = "https://api.z.ai/api/paas/v4"
-# protocols = ["openai"]
-#
-# [[providers.zai.accounts]]
-# name = "default"
-# api_key_env = "ZAI_API_KEY"
-
 # NeuralWatt — OpenAI compatible, energy-based pricing
 # [providers.neuralwatt]
 # id = "neuralwatt"
@@ -137,16 +202,6 @@ api_key_env = "OPENCODE_GO_KEY_2"
 # [[providers.neuralwatt.accounts]]
 # name = "default"
 # api_key_env = "NEURALWATT_API_KEY"
-
-# OpenRouter — OpenAI compatible, 400+ models
-# [providers.openrouter]
-# id = "openrouter"
-# base_url = "https://openrouter.ai/api/v1"
-# protocols = ["openai"]
-#
-# [[providers.openrouter.accounts]]
-# name = "default"
-# api_key_env = "OPENROUTER_API_KEY"
 
 # Ollama (local) — OpenAI compatible, no auth required
 # [providers.ollama-local]

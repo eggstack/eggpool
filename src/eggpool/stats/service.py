@@ -17,6 +17,7 @@ from eggpool.stats.queries import (
     fetch_active_reservations,
     fetch_bandwidth_timeseries,
     fetch_error_breakdown,
+    fetch_ip_stats,
     fetch_provider_model_ttft,
     fetch_provider_ttft_summary,
     fetch_recent_events,
@@ -423,3 +424,9 @@ class StatsService:
         if self._ping_repo is None:
             return []
         return await self._ping_repo.get_ping_recent(provider_id, limit)
+
+    async def get_ip_stats(self, time_range: TimeRange) -> list[dict[str, Any]]:
+        """Get per-IP statistics for a time window."""
+        return await fetch_ip_stats(
+            self._db, time_range.start_str(), time_range.end_str()
+        )

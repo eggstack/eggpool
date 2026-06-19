@@ -8,6 +8,7 @@ Endpoints:
 - GET /api/stats/errors
 - GET /api/stats/latency
 - GET /api/stats/pings
+- GET /api/stats/ips
 - GET /api/events
 """
 
@@ -186,6 +187,14 @@ async def handle_pings(
     )
 
 
+async def handle_ip_stats(request: Request, period: str | None = "24h") -> Response:
+    """GET /api/stats/ips."""
+    time_range = _resolve(request, period)
+    stats = request.app.state.stats
+    ip_stats = await stats.get_ip_stats(time_range)
+    return JSONResponse(content={"period": time_range.label, "ips": ip_stats})
+
+
 def register_stats_routes(app: Any, require_auth: bool = False) -> None:
     """Attach the JSON statistics routes to a FastAPI app.
 
@@ -252,6 +261,12 @@ def register_stats_routes(app: Any, require_auth: bool = False) -> None:
         methods=["GET"],
         dependencies=dependencies,
     )
+    app.add_api_route(
+        path="/api/stats/ips",
+        endpoint=handle_ip_stats,
+        methods=["GET"],
+        dependencies=dependencies,
+    )
 
 
 __all__ = [
@@ -259,6 +274,7 @@ __all__ = [
     "handle_bandwidth",
     "handle_errors",
     "handle_events",
+    "handle_ip_stats",
     "handle_latency",
     "handle_model_stats",
     "handle_pings",

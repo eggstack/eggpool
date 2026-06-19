@@ -35,6 +35,23 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _get_client_ip(request: Request) -> str:
+    """Extract client IP from request, respecting X-Forwarded-For."""
+    # Check X-Forwarded-For first (for reverse proxies)
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        # Take the first IP in the chain (original client)
+        return forwarded_for.split(",")[0].strip()
+    # Check X-Real-IP
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip.strip()
+    # Fall back to direct client IP
+    if request.client and request.client.host:
+        return request.client.host
+    return ""
+
+
 async def handle_messages(
     request: Request,
 ) -> Response:
@@ -105,6 +122,7 @@ async def handle_messages(
         incoming_headers=dict(request.headers),
         started_at=time.time(),
         provider_id=provider_id,
+        client_ip=_get_client_ip(request),
     )
 
     logger.info(

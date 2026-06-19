@@ -504,3 +504,31 @@ async def fetch_provider_ttft_summary(
             row.update(percentiles)
 
     return result
+
+
+async def fetch_ip_stats(
+    db: Database,
+    start: str,
+    end: str,
+) -> list[dict[str, Any]]:
+    """Get per-IP statistics for a time window."""
+    sql = """
+    SELECT
+        COALESCE(client_ip, 'unknown') as client_ip,
+        COUNT(*) as request_count,
+        COALESCE(SUM(input_tokens), 0) as input_tokens,
+        COALESCE(SUM(output_tokens), 0) as output_tokens,
+        COALESCE(SUM(cost_microdollars), 0) as cost_microdollars,
+        COALESCE(AVG(upstream_latency_ms), 0) as avg_latency_ms,
+        COALESCE(SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END), 0)
+            as error_count,
+        COUNT(DISTINCT model_id) as unique_models,
+        MIN(started_at) as first_request_at,
+        MAX(started_at) as last_request_at
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+    GROUP BY client_ip
+    ORDER BY request_count DESC
+    """
+    rows = await db.fetch_all(sql, (_format_dt(start), _format_dt(end)))
+    return [dict(row) for row in rows]

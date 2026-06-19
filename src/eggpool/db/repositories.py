@@ -124,6 +124,7 @@ class RequestRepository:
         reserved_microdollars: int = 0,
         started_at: float | None = None,
         provider_id: str = "opencode-go",
+        client_ip: str = "",
     ) -> str:
         """Insert a new pending request, return the id as string.
 
@@ -148,8 +149,8 @@ class RequestRepository:
                 "INSERT INTO requests "
                 "(account_id, model_id, started_at, status, protocol, "
                 "streamed, reserved_microdollars, proxy_request_id, "
-                "provider_id) "
-                "VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?)",
+                "provider_id, client_ip) "
+                "VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)",
                 (
                     account_id,
                     model_id,
@@ -159,14 +160,16 @@ class RequestRepository:
                     reserved_microdollars,
                     request_id,
                     provider_id,
+                    client_ip,
                 ),
             )
         else:
             last_id = await self._db.execute_insert(
                 "INSERT INTO requests "
                 "(account_id, model_id, status, protocol, streamed, "
-                "reserved_microdollars, proxy_request_id, provider_id) "
-                "VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)",
+                "reserved_microdollars, proxy_request_id, provider_id, "
+                "client_ip) "
+                "VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?)",
                 (
                     account_id,
                     model_id,
@@ -175,6 +178,7 @@ class RequestRepository:
                     reserved_microdollars,
                     request_id,
                     provider_id,
+                    client_ip,
                 ),
             )
         return str(last_id)

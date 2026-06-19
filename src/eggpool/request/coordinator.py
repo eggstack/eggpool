@@ -99,6 +99,7 @@ class ProxyRequestContext:
     client_metadata: dict[str, Any] = field(default_factory=dict[str, Any])
     attempted_accounts: set[str] = field(default_factory=set[str])
     provider_id: str | None = None
+    client_ip: str = ""
 
 
 @dataclass(frozen=True)
@@ -556,6 +557,7 @@ class RequestCoordinator:
                             account_id=account_id,
                             started_at=context.started_at,
                             provider_id=resolved_provider_id,
+                            client_ip=context.client_ip,
                         )
                         context.client_metadata["db_request_id"] = db_request_id
                     db_request_id = context.client_metadata["db_request_id"]
