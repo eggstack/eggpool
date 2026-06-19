@@ -51,7 +51,7 @@ def main() -> None:
     if answer in ("y", "yes"):
         print("\nStarting onboarding setup...")
         result = subprocess.run(  # noqa: S603
-            [sys.executable, "-m", "eggpool", "onboard"],
+            ["uv", "run", "eggpool", "onboard"],  # noqa: S607
             cwd=eggpool_dir,
         )
         sys.exit(result.returncode)

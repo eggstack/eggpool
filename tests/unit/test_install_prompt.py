@@ -6,6 +6,8 @@ import ast
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 
 class TestFindEggpoolDir:
     """Tests for _find_eggpool_dir helper."""
@@ -148,6 +150,30 @@ class TestInstallPromptAST:
 
 class TestInstallPromptBehavior:
     """Tests for install_prompt.py behavior."""
+
+    def test_yes_runs_onboarding_in_uv_environment(self) -> None:
+        """Answering 'y' runs EggPool from the uv-managed environment."""
+        from scripts.install_prompt import main
+
+        eggpool_dir = "/tmp/eggpool"
+        with (
+            patch(
+                "scripts.install_prompt._find_eggpool_dir",
+                return_value=eggpool_dir,
+            ),
+            patch("scripts.install_prompt.os.chdir"),
+            patch("builtins.input", return_value="y"),
+            patch("scripts.install_prompt.subprocess.run") as mock_run,
+            pytest.raises(SystemExit) as exit_info,
+        ):
+            mock_run.return_value.returncode = 0
+            main()
+
+        mock_run.assert_called_once_with(
+            ["uv", "run", "eggpool", "onboard"],
+            cwd=eggpool_dir,
+        )
+        assert exit_info.value.code == 0
 
     def test_eof_on_input_shows_skip_message(self, tmp_path: Path) -> None:
         """EOF on input gracefully shows skip message instead of crashing."""
