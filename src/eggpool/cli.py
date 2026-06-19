@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import sys
 from typing import NoReturn
@@ -934,6 +935,154 @@ def update(ctx: click.Context, check_only: bool) -> None:
         click.echo("Configuration reloaded.")
     else:
         click.echo("Server is not running.")
+
+
+@cli.command()
+@click.option(
+    "--providers",
+    "providers_path",
+    default="providers.toml",
+    help="Path to the providers template file.",
+    type=click.Path(),
+)
+@click.pass_context
+def onboard(ctx: click.Context, providers_path: str) -> None:
+    """Run the interactive onboarding setup.
+
+    Guides you through connecting providers, validates configuration,
+    and starts the server.
+    """
+    from eggpool.onboard import run_onboarding
+
+    config_path: str = ctx.obj["config_path"]
+    run_onboarding(config_path, providers_path)
+
+
+def _read_pid() -> int | None:
+    """Read the PID from the PID file. Returns None if not found or invalid."""
+    from eggpool.constants import PID_FILE
+
+    if not PID_FILE.exists():
+        return None
+
+    try:
+        return int(PID_FILE.read_text(encoding="utf-8").strip())
+    except (ValueError, OSError):
+        return None
+
+
+def _is_process_running(pid: int) -> bool:
+    """Check if a process with the given PID is running."""
+    import os
+
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError, OSError):
+        return False
+
+
+def _wait_for_exit(pid: int, timeout: float = 10.0) -> bool:
+    """Wait for a process to exit. Returns True if exited, False on timeout."""
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _is_process_running(pid):
+            return True
+        time.sleep(0.1)
+    return False
+
+
+@cli.command()
+@click.option("--timeout", default=10.0, help="Seconds to wait for shutdown.")
+@click.pass_context
+def stop(ctx: click.Context, timeout: float) -> None:
+    """Stop the running server."""
+    import os
+    import signal
+
+    from eggpool.constants import PID_FILE
+
+    pid = _read_pid()
+    if pid is None:
+        click.echo("Server is not running (no PID file found).")
+        return
+
+    if not _is_process_running(pid):
+        click.echo("Server is not running (stale PID file).")
+        with contextlib.suppress(OSError):
+            PID_FILE.unlink(missing_ok=True)
+        return
+
+    click.echo(f"Stopping server (PID {pid})...")
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError) as exc:
+        click.echo(f"Error sending signal: {exc}", err=True)
+        with contextlib.suppress(OSError):
+            PID_FILE.unlink(missing_ok=True)
+        return
+
+    if _wait_for_exit(pid, timeout):
+        click.echo("Server stopped.")
+    else:
+        click.echo(
+            f"Server did not stop within {timeout}s. Try 'kill -9' or check process.",
+            err=True,
+        )
+
+
+@cli.command()
+@click.option("--timeout", default=10.0, help="Seconds to wait for shutdown.")
+@click.pass_context
+def restart(ctx: click.Context, timeout: float) -> None:
+    """Fully restart the server (stop then start).
+
+    This stops the current process and starts a fresh one.
+    For config-only reloads, use 'eggpool rehash' instead.
+    """
+    import contextlib
+    import os
+    import signal
+    import subprocess
+    import sys as _sys
+
+    from eggpool.constants import PID_FILE
+
+    config_path: str = ctx.obj["config_path"]
+
+    pid = _read_pid()
+    if pid is not None and _is_process_running(pid):
+        click.echo(f"Stopping server (PID {pid})...")
+        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+            os.kill(pid, signal.SIGTERM)
+
+        if not _wait_for_exit(pid, timeout):
+            click.echo(
+                f"Server did not stop within {timeout}s. "
+                "Try 'kill -9' or check process.",
+                err=True,
+            )
+            return
+
+        click.echo("Server stopped.")
+
+    # Clean up stale PID file
+    with contextlib.suppress(OSError):
+        PID_FILE.unlink(missing_ok=True)
+
+    click.echo("Starting server...")
+
+    # Start the server as a subprocess
+    subprocess.Popen(  # noqa: S603
+        [_sys.executable, "-m", "eggpool", "--config", config_path, "serve"],
+        cwd=os.getcwd(),
+        start_new_session=True,
+    )
+
+    click.echo("Server started.")
 
 
 def main() -> NoReturn:
