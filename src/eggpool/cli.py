@@ -91,7 +91,6 @@ def connect(ctx: click.Context, providers_path: str) -> None:
     try:
         ok = do_connect(config_path, providers_path)
     except KeyboardInterrupt:
-        click.echo("\n  Cancelled.")
         return
     if not ok:
         sys.exit(1)
@@ -152,10 +151,8 @@ def logout(ctx: click.Context, target: str) -> None:
         try:
             selected = menu.run()
         except KeyboardInterrupt:
-            click.echo("\n  Cancelled.")
             return
         if selected is None:
-            click.echo("  Cancelled.")
             return
         selected_index = [match.label for match in matches].index(selected)
         account = matches[selected_index]
@@ -490,6 +487,82 @@ def db_vacuum(ctx: click.Context) -> None:
     except AggregatorError as exc:
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)
+
+
+@cli.command()
+@click.option("--check", "check_only", is_flag=True, help="Only check, do not install.")
+@click.pass_context
+def update(ctx: click.Context, check_only: bool) -> None:
+    """Check for updates and reinstall if a newer version is available.
+
+    Config and database files are never overwritten. If the server is
+    running it is restarted automatically after a successful update.
+    """
+    import importlib.metadata
+    import subprocess
+
+    import httpx
+
+    from eggpool.providers.connect import signal_reload, signal_restart
+
+    current_version = importlib.metadata.version("eggpool")
+    click.echo(f"Current version: {current_version}")
+
+    # Query GitHub for the latest release tag
+    repo = "eggstack/eggpool"
+    api_url = f"https://api.github.com/repos/{repo}/releases/latest"
+    try:
+        resp = httpx.get(api_url, timeout=15, follow_redirects=True)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        click.echo(f"Error checking for updates: {exc}", err=True)
+        sys.exit(1)
+
+    latest_tag: str = data.get("tag_name", "")
+    if not latest_tag:
+        click.echo("Could not determine latest version from GitHub.", err=True)
+        sys.exit(1)
+
+    latest_version = latest_tag.lstrip("v")
+    click.echo(f"Latest version:  {latest_version}")
+
+    if current_version == latest_version:
+        click.echo("Already up to date.")
+        return
+
+    if check_only:
+        click.echo("An update is available.")
+        return
+
+    click.echo(f"Updating from {current_version} to {latest_version}...")
+
+    # Prefer pip install from the GitHub repo
+    pip_target = f"git+https://github.com/{repo}.git@{latest_tag}"
+    cmd = [sys.executable, "-m", "pip", "install", pip_target]
+
+    click.echo(f"Running: {' '.join(cmd)}")
+    result = subprocess.run(cmd, capture_output=True, text=True)  # noqa: S603
+
+    if result.returncode != 0:
+        click.echo("Update failed:", err=True)
+        click.echo(result.stderr, err=True)
+        sys.exit(1)
+
+    # Verify the installed version
+    try:
+        new_version = importlib.metadata.version("eggpool")
+    except Exception:
+        new_version = "unknown"
+
+    click.echo(f"Installed version: {new_version}")
+
+    if signal_restart():
+        click.echo("Server restarted.")
+    elif signal_reload():
+        click.echo("Configuration reloaded.")
+    else:
+        click.echo("Server is not running.")
 
 
 def main() -> NoReturn:

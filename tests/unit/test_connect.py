@@ -21,6 +21,7 @@ from eggpool.providers.connect import (
     _toml_value,
     _unique_account_name,
     _unique_env_name,
+    collect_api_key,
     export_env_var,
     load_provider_templates,
     merge_provider_into_config,
@@ -52,9 +53,10 @@ class TestLoadProviderTemplates:
         )
 
         templates = load_provider_templates(str(providers_toml))
-        assert len(templates) == 2
+        assert len(templates) == 3  # alpha + beta + fallback opencode-go
         assert "alpha" in templates
         assert "beta" in templates
+        assert "opencode-go" in templates
 
     @pytest.mark.asyncio()
     async def test_template_data_fields(self, tmp_path: Path) -> None:
@@ -79,18 +81,20 @@ class TestLoadProviderTemplates:
         assert tmpl["data"]["id"] == "my-provider"
 
     @pytest.mark.asyncio()
-    async def test_empty_when_file_missing(self, tmp_path: Path) -> None:
-        """Returns empty dict when file doesn't exist."""
+    async def test_fallback_when_file_missing(self, tmp_path: Path) -> None:
+        """Falls back to opencode-go when file doesn't exist."""
         templates = load_provider_templates(str(tmp_path / "nonexistent.toml"))
-        assert templates == {}
+        assert "opencode-go" in templates
+        assert templates["opencode-go"]["url"] == "https://opencode.ai/zen/go/v1"
 
     @pytest.mark.asyncio()
-    async def test_empty_when_no_providers(self, tmp_path: Path) -> None:
-        """Returns empty dict when file has no [providers.*] sections."""
+    async def test_fallback_when_no_providers(self, tmp_path: Path) -> None:
+        """Falls back to opencode-go when file has no [providers.*] sections."""
         providers_toml = tmp_path / "providers.toml"
         providers_toml.write_text('[server]\nhost = "localhost"\n')
         templates = load_provider_templates(str(providers_toml))
-        assert templates == {}
+        assert "opencode-go" in templates
+        assert templates["opencode-go"]["display"] == "OpenCode Go"
 
 
 class TestExtractRawBlock:
@@ -833,3 +837,344 @@ def test_config_refresh_command_removed() -> None:
 
     assert result.exit_code != 0
     assert "No such command" in result.stderr
+
+
+class TestProviderFallback:
+    """Tests for the hardcoded opencode-go fallback."""
+
+    def test_fallback_always_present(self, tmp_path: Path) -> None:
+        """opencode-go appears even when the file has other providers."""
+        providers_toml = tmp_path / "providers.toml"
+        providers_toml.write_text(
+            textwrap.dedent("""\
+                [providers.other]
+                id = "other"
+                base_url = "https://other.example.com"
+                protocols = ["openai"]
+                api_key_env = "API_KEY"
+            """)
+        )
+        templates = load_provider_templates(str(providers_toml))
+        assert "other" in templates
+        assert "opencode-go" in templates
+
+    def test_fallback_not_duplicated_when_in_file(self, tmp_path: Path) -> None:
+        """opencode-go from file is used, not the hardcoded fallback."""
+        providers_toml = tmp_path / "providers.toml"
+        providers_toml.write_text(
+            textwrap.dedent("""\
+                [providers.opencode-go]
+                id = "opencode-go"
+                base_url = "https://custom.example.com"
+                protocols = ["openai"]
+                api_key_env = "API_KEY"
+            """)
+        )
+        templates = load_provider_templates(str(providers_toml))
+        assert templates["opencode-go"]["url"] == "https://custom.example.com"
+
+    def test_fallback_has_required_keys(self) -> None:
+        """Fallback template has all required keys."""
+        from eggpool.providers.connect import _OPENCODE_GO_FALLBACK
+
+        for _id, tmpl in _OPENCODE_GO_FALLBACK.items():
+            assert "display" in tmpl
+            assert "url" in tmpl
+            assert "raw" in tmpl
+            assert "data" in tmpl
+            assert "id" in tmpl["data"]
+
+
+class TestCollectApiKey:
+    """Tests for collect_api_key with mocked stdin."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_terminal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No-op the real terminal setup so tests run without a TTY."""
+        monkeypatch.setattr(
+            "eggpool.providers.connect.termios.tcgetattr", lambda _fd: None
+        )
+        monkeypatch.setattr(
+            "eggpool.providers.connect.termios.tcsetattr", lambda *_a: None
+        )
+        monkeypatch.setattr("eggpool.providers.connect.tty.setraw", lambda _fd: None)
+
+    @staticmethod
+    def _pipe_stdin(input_bytes: bytes) -> io.TextIOWrapper:
+        """Create a pipe-backed stdin from *input_bytes*."""
+        read_fd, write_fd = os.pipe()
+        os.write(write_fd, input_bytes)
+        os.close(write_fd)
+        return io.TextIOWrapper(os.fdopen(read_fd, "rb", buffering=0))
+
+    def test_enter_with_empty_input(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Pressing Enter immediately returns empty string."""
+        monkeypatch.setattr("sys.stdin", self._pipe_stdin(b"\r"))
+        assert collect_api_key("Test") == ""
+
+    def test_typing_key_and_enter(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Typed characters are captured and returned."""
+        monkeypatch.setattr("sys.stdin", self._pipe_stdin(b"sk-test-123\r"))
+        assert collect_api_key("Test") == "sk-test-123"
+
+    def test_esc_cancels(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Pressing Esc returns empty string."""
+        monkeypatch.setattr("sys.stdin", self._pipe_stdin(b"\x1b"))
+        assert collect_api_key("Test") == ""
+
+    def test_eof_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Empty stdin (EOF) returns empty string."""
+        monkeypatch.setattr("sys.stdin", self._pipe_stdin(b""))
+        assert collect_api_key("Test") == ""
+
+    def test_backspace_removes_char(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Backspace removes the last typed character."""
+        monkeypatch.setattr("sys.stdin", self._pipe_stdin(b"ab\x7fc\r"))
+        assert collect_api_key("Test") == "ac"
+
+    def test_arrow_key_does_not_add_char(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Arrow key escape sequences are discarded, not added to input."""
+        monkeypatch.setattr("sys.stdin", self._pipe_stdin(b"\x1b[Ax\r"))
+        assert collect_api_key("Test") == "x"
+
+    def test_ctrl_c_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Ctrl+C raises KeyboardInterrupt."""
+        monkeypatch.setattr("sys.stdin", self._pipe_stdin(b"\x03"))
+        with pytest.raises(KeyboardInterrupt):
+            collect_api_key("Test")
+
+
+class TestNoCancelledOutput:
+    """Tests that Esc/q menu exits produce no output."""
+
+    def test_connect_silent_on_esc(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Connect prints nothing when the user presses Esc in the menu."""
+        from eggpool.providers import connect as connect_module
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            textwrap.dedent("""\
+                [server]
+                port = 8080
+            """),
+            encoding="utf-8",
+        )
+        providers_path = tmp_path / "providers.toml"
+        providers_path.write_text(
+            textwrap.dedent("""\
+                [providers.alpha]
+                id = "alpha"
+                base_url = "https://alpha.example.com"
+                protocols = ["openai"]
+                api_key_env = "API_KEY"
+            """),
+            encoding="utf-8",
+        )
+
+        class EscMenu:
+            """Menu that simulates pressing Esc."""
+
+            def __init__(self, _title: str, _options: list[str]) -> None:
+                pass
+
+            def run(self) -> None:
+                return None
+
+        monkeypatch.setattr(connect_module, "TerminalMenu", EscMenu)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--config",
+                str(config_path),
+                "connect",
+                "--providers",
+                str(providers_path),
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "Cancelled" not in result.output
+
+    def test_logout_silent_on_esc(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Logout prints nothing when the user presses Esc in the menu."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            textwrap.dedent("""\
+                [providers.alpha]
+                id = "alpha"
+                base_url = "https://alpha.example.com"
+
+                [[providers.alpha.accounts]]
+                name = "default"
+                api_key_env = "ALPHA_KEY"
+
+                [[providers.alpha.accounts]]
+                name = "second"
+                api_key_env = "ALPHA_KEY_2"
+            """),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("ALPHA_KEY", "key1")
+        monkeypatch.setenv("ALPHA_KEY_2", "key2")
+
+        from eggpool.providers import connect as connect_module
+
+        class EscMenu:
+            """Menu that simulates pressing Esc."""
+
+            def __init__(self, _title: str, _options: list[str]) -> None:
+                pass
+
+            def run(self) -> None:
+                return None
+
+        monkeypatch.setattr(connect_module, "TerminalMenu", EscMenu)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "logout", "alpha"],
+        )
+
+        assert result.exit_code == 0
+        assert "Cancelled" not in result.output
+
+
+class TestUpdateCommand:
+    """Tests for the ``update`` CLI command."""
+
+    def test_check_only_up_to_date(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """--check reports up to date when versions match."""
+        import importlib.metadata
+
+        monkeypatch.setattr(
+            importlib.metadata,
+            "version",
+            lambda _name: "1.2.3",
+        )
+
+        import httpx
+
+        class FakeResponse:
+            def __init__(self) -> None:
+                self.status_code = 200
+
+            def raise_for_status(self) -> None:
+                pass
+
+            def json(self) -> dict[str, str]:
+                return {"tag_name": "v1.2.3"}
+
+        monkeypatch.setattr(httpx, "get", lambda _url, **_kw: FakeResponse())
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["update", "--check"])
+
+        assert result.exit_code == 0
+        assert "Already up to date" in result.output
+
+    def test_check_only_update_available(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """--check reports available when versions differ."""
+        import importlib.metadata
+
+        monkeypatch.setattr(
+            importlib.metadata,
+            "version",
+            lambda _name: "1.2.3",
+        )
+
+        import httpx
+
+        class FakeResponse:
+            def __init__(self) -> None:
+                self.status_code = 200
+
+            def raise_for_status(self) -> None:
+                pass
+
+            def json(self) -> dict[str, str]:
+                return {"tag_name": "v1.2.4"}
+
+        monkeypatch.setattr(httpx, "get", lambda _url, **_kw: FakeResponse())
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["update", "--check"])
+
+        assert result.exit_code == 0
+        assert "An update is available" in result.output
+
+    def test_update_installs_and_restarts(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Full update path installs and restarts the server."""
+        import importlib.metadata
+        import subprocess
+
+        call_log: list[list[str]] = []
+
+        def fake_version(_name: str) -> str:
+            return "1.2.3"
+
+        monkeypatch.setattr(importlib.metadata, "version", fake_version)
+
+        import httpx
+
+        class FakeResponse:
+            def __init__(self) -> None:
+                self.status_code = 200
+
+            def raise_for_status(self) -> None:
+                pass
+
+            def json(self) -> dict[str, str]:
+                return {"tag_name": "v1.2.4"}
+
+        monkeypatch.setattr(httpx, "get", lambda _url, **_kw: FakeResponse())
+
+        def fake_run(cmd: list[str], **_kw: object) -> subprocess.CompletedProcess[str]:
+            call_log.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        from eggpool.providers import connect as connect_module
+
+        monkeypatch.setattr(connect_module, "signal_restart", lambda: True)
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["update"])
+
+        assert result.exit_code == 0
+        assert "Updating from 1.2.3 to 1.2.4" in result.output
+        assert "Server restarted." in result.output
+        assert len(call_log) == 1
+        assert "pip" in call_log[0][0] or "-m" in call_log[0][1]
+
+    def test_update_github_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Exits with error when GitHub API fails."""
+        import importlib.metadata
+
+        monkeypatch.setattr(
+            importlib.metadata,
+            "version",
+            lambda _name: "1.2.3",
+        )
+
+        import httpx
+
+        def fake_get(_url: str, **_kw: object) -> None:
+            raise httpx.HTTPError("network error")
+
+        monkeypatch.setattr(httpx, "get", fake_get)
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["update"])
+
+        assert result.exit_code == 1
+        assert "Error checking for updates" in result.output

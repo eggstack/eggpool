@@ -74,6 +74,27 @@ class ConfiguredAccount:
         return f"{self.provider_id}/{self.name}  {self.api_key_env}={masked}"
 
 
+_OPENCODE_GO_FALLBACK: dict[str, dict[str, Any]] = {
+    "opencode-go": {
+        "display": "OpenCode Go",
+        "url": "https://opencode.ai/zen/go/v1",
+        "raw": (
+            "[providers.opencode-go]\n"
+            'id = "opencode-go"\n'
+            'base_url = "https://opencode.ai/zen/go/v1"\n'
+            'protocols = ["openai", "anthropic"]\n'
+            'api_key_env = "API_KEY"'
+        ),
+        "data": {
+            "id": "opencode-go",
+            "base_url": "https://opencode.ai/zen/go/v1",
+            "protocols": ["openai", "anthropic"],
+            "api_key_env": "API_KEY",
+        },
+    },
+}
+
+
 def load_provider_templates(providers_path: str) -> dict[str, dict[str, Any]]:
     """Load provider templates from a TOML file.
 
@@ -82,10 +103,13 @@ def load_provider_templates(providers_path: str) -> dict[str, dict[str, Any]]:
     - url: base URL
     - raw: raw TOML text of the [providers.<id>] block
     - data: parsed dict of the provider config (excluding display metadata)
+
+    Always includes ``opencode-go`` even if the file is missing or empty,
+    so the connect flow is never stuck with zero options.
     """
     path = Path(providers_path)
     if not path.exists():
-        return {}
+        return dict(_OPENCODE_GO_FALLBACK)
 
     text = path.read_text(encoding="utf-8")
     parsed: dict[str, Any] = tomllib.loads(text)
@@ -114,6 +138,10 @@ def load_provider_templates(providers_path: str) -> dict[str, dict[str, Any]]:
             "raw": raw_block,
             "data": provider_data,
         }
+
+    # Ensure the primary provider is always available
+    if "opencode-go" not in templates:
+        templates["opencode-go"] = _OPENCODE_GO_FALLBACK["opencode-go"]
 
     return templates
 
@@ -283,7 +311,11 @@ class TerminalMenu:
 
 
 def collect_api_key(provider_name: str) -> str:
-    """Prompt user for an API key."""
+    """Prompt user for an API key.
+
+    Returns the entered key, or an empty string if the user cancelled
+    via Esc, EOF, or Enter with no input.
+    """
     sys.stdout.write(f"\n  Enter API key for {provider_name}: ")
     sys.stdout.flush()
 
@@ -295,12 +327,16 @@ def collect_api_key(provider_name: str) -> str:
         tty.setraw(fd)
 
         while True:
-            ch = sys.stdin.read(1)
-            if ch == "\r" or ch == "\n":
-                sys.stdout.write("\n")
+            raw = os.read(fd, 1)
+            if not raw:
+                break
+            ch = raw.decode("ascii", errors="replace")
+
+            if ch in ("\r", "\n"):
+                sys.stdout.write("\r\n")
                 sys.stdout.flush()
                 break
-            if ch == "\x7f" or ch == "\x08":
+            if ch in ("\x7f", "\x08"):
                 if key_chars:
                     key_chars.pop()
                     sys.stdout.write("\b \b")
@@ -309,7 +345,11 @@ def collect_api_key(provider_name: str) -> str:
                 raise KeyboardInterrupt
             elif ch == "\x1b":
                 if select.select([sys.stdin], [], [], 0.15)[0]:
-                    sys.stdin.read(2)
+                    next_raw = os.read(fd, 1)
+                    if next_raw:
+                        os.read(fd, 1)  # discard final byte of escape seq
+                else:
+                    break
             else:
                 key_chars.append(ch)
                 sys.stdout.write("*")
@@ -717,7 +757,6 @@ def connect(
     result = menu.run()
 
     if result is None:
-        sys.stdout.write("  Cancelled.\n")
         return False
 
     idx = options.index(result)
