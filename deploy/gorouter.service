@@ -1,6 +1,6 @@
 [Unit]
 Description=OpenCode Go Aggregator
-Documentation=https://github.com/dbowm91/gorouter
+Documentation=https://github.com/eggstack/gorouter
 After=network-online.target
 Wants=network-online.target
 

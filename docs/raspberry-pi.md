@@ -45,7 +45,7 @@ source ~/.bashrc
 ```bash
 sudo mkdir -p /opt/gorouter
 sudo chown $USER /opt/gorouter
-git clone https://github.com/dbowm91/gorouter.git /opt/gorouter
+git clone https://github.com/eggstack/gorouter.git /opt/gorouter
 
 cd /opt/gorouter
 uv sync --no-dev

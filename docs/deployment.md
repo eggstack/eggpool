@@ -27,7 +27,7 @@ sudo chmod 755 /etc/gorouter
 ```bash
 # Clone repository
 cd /opt
-sudo git clone https://github.com/dbowm91/gorouter.git
+sudo git clone https://github.com/eggstack/gorouter.git
 sudo chown -R root:gorouter /opt/gorouter
 
 # Install dependencies (run as root so uv can write to the tree)
