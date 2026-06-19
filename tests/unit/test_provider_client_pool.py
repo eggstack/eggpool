@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from go_aggregator.errors import UpstreamError
-from go_aggregator.models.config import ProviderConfig
+from go_aggregator.models.config import AppConfig, ProviderConfig
 from go_aggregator.providers.client_pool import ProviderClientPool
 
 
@@ -87,3 +87,28 @@ class TestProviderClientPool:
     def test_from_config_empty(self) -> None:
         pool = ProviderClientPool.from_config({})
         assert pool.providers == []
+
+    def test_from_app_config_uses_account_proxy_clients(self) -> None:
+        config = AppConfig(
+            proxies={"local": {"url": "http://127.0.0.1:8081"}},
+            providers={
+                "alpha": {
+                    "id": "alpha",
+                    "base_url": "https://alpha.example.com",
+                    "accounts": [
+                        {"name": "direct", "api_key_env": "DIRECT_KEY"},
+                        {
+                            "name": "proxied",
+                            "api_key_env": "PROXIED_KEY",
+                            "proxy": "local",
+                        },
+                    ],
+                }
+            },
+        )
+
+        pool = ProviderClientPool.from_app_config(config)
+        provider_client = pool.get_client("alpha")
+
+        assert pool.get_client("alpha", "direct") is provider_client
+        assert pool.get_client("alpha", "proxied") is not provider_client

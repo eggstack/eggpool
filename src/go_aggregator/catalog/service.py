@@ -121,9 +121,13 @@ class CatalogService:
                 client: httpx.AsyncClient | None = None
                 if self._client_pool is not None:
                     try:
-                        client = self._client_pool.get_client(provider_id)
+                        client = self._client_pool.get_client(provider_id, state.name)
                     except Exception:
-                        logger.warning("No client for provider %r", provider_id)
+                        logger.warning(
+                            "No client for provider %r account %r",
+                            provider_id,
+                            state.name,
+                        )
                         continue
                 elif self._httpx_client is not None:
                     client = self._httpx_client

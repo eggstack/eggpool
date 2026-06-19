@@ -323,6 +323,101 @@ def test_provider_config_with_accounts(tmp_path: Path) -> None:
         del os.environ["PROV_KEY"]
 
 
+def test_account_named_proxy_resolves_from_proxy_config(tmp_path: Path) -> None:
+    """Accounts can reference reusable named proxy configurations."""
+    os.environ["PROXY_KEY"] = "key"
+    try:
+        config_file = tmp_path / "proxy.toml"
+        config_file.write_text(
+            """
+[proxies.local-pproxy]
+url = "http://127.0.0.1:8081"
+
+[providers.my-provider]
+id = "my-provider"
+base_url = "https://api.example.com"
+
+[[providers.my-provider.accounts]]
+name = "acct1"
+api_key_env = "PROXY_KEY"
+proxy = "local-pproxy"
+"""
+        )
+        config = AppConfig.from_toml(str(config_file))
+        account = config.providers["my-provider"].accounts[0]
+        assert config.resolve_account_proxy_url(account) == "http://127.0.0.1:8081"
+    finally:
+        del os.environ["PROXY_KEY"]
+
+
+def test_account_inline_proxy_url_env_resolves(tmp_path: Path) -> None:
+    """Accounts can keep proxy URLs in environment variables."""
+    os.environ["PROXY_KEY"] = "key"
+    os.environ["ACCOUNT_PROXY_URL"] = "http://127.0.0.1:8082"
+    try:
+        config_file = tmp_path / "proxy_env.toml"
+        config_file.write_text(
+            """
+[providers.my-provider]
+id = "my-provider"
+base_url = "https://api.example.com"
+
+[[providers.my-provider.accounts]]
+name = "acct1"
+api_key_env = "PROXY_KEY"
+proxy_url_env = "ACCOUNT_PROXY_URL"
+"""
+        )
+        config = AppConfig.from_toml(str(config_file))
+        account = config.providers["my-provider"].accounts[0]
+        assert config.resolve_account_proxy_url(account) == "http://127.0.0.1:8082"
+    finally:
+        del os.environ["PROXY_KEY"]
+        del os.environ["ACCOUNT_PROXY_URL"]
+
+
+def test_account_unknown_proxy_rejected(tmp_path: Path) -> None:
+    """Account proxy references must point at a configured proxy."""
+    config_file = tmp_path / "unknown_proxy.toml"
+    config_file.write_text(
+        """
+[providers.my-provider]
+id = "my-provider"
+base_url = "https://api.example.com"
+
+[[providers.my-provider.accounts]]
+name = "acct1"
+api_key_env = "PROXY_KEY"
+proxy = "missing"
+"""
+    )
+    with pytest.raises(ConfigError, match="unknown proxy"):
+        AppConfig.from_toml(str(config_file))
+
+
+def test_account_multiple_proxy_sources_rejected(tmp_path: Path) -> None:
+    """Account proxy config must not be ambiguous."""
+    config_file = tmp_path / "bad_proxy.toml"
+    config_file.write_text(
+        """
+[proxies.local]
+url = "http://127.0.0.1:8081"
+
+[providers.my-provider]
+id = "my-provider"
+base_url = "https://api.example.com"
+
+[[providers.my-provider.accounts]]
+name = "acct1"
+api_key_env = "PROXY_KEY"
+proxy = "local"
+proxy_url = "http://127.0.0.1:8082"
+"""
+    )
+    with pytest.raises(ConfigError, match="at most one"):
+        AppConfig.from_toml(str(config_file))
+
+
 def test_flat_config_normalized_to_default_provider(tmp_path: Path) -> None:
     """Flat accounts are normalized into a default provider."""
     os.environ["NORM_KEY_1"] = "key1"

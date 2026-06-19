@@ -65,6 +65,15 @@ cors_origins = []
 redact_headers = ["authorization", "x-api-key"]
 persist_redacted_error_detail = false
 
+# Optional outbound proxies. These are intended for local pproxy endpoints or
+# any HTTP(S) proxy URL supported by HTTPX.
+# Use url_env instead of url when the proxy URL contains credentials.
+# [proxies.residential-us]
+# url = "http://127.0.0.1:8081"
+#
+# [proxies.datacenter-eu]
+# url_env = "GOROUTER_DATACENTER_EU_PROXY_URL"
+
 # Provider-based configuration (recommended)
 [providers.opencode-go]
 id = "opencode-go"
@@ -74,6 +83,10 @@ protocols = ["openai", "anthropic"]
 [[providers.opencode-go.accounts]]
 name = "personal"
 api_key_env = "OPENCODE_GO_KEY_1"
+# Optional per-key proxy. Omit this field for the default direct connection.
+# proxy = "residential-us"
+# proxy_url = "http://127.0.0.1:8082"
+# proxy_url_env = "GOROUTER_PERSONAL_PROXY_URL"
 
 [[providers.opencode-go.accounts]]
 name = "team"

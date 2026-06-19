@@ -274,7 +274,7 @@ def models_refresh(ctx: click.Context) -> None:
             await account_repo.sync_from_config(account_config_rows(config), db)
 
             registry = AccountRegistry(config)
-            client_pool = ProviderClientPool.from_config(config.providers)
+            client_pool = ProviderClientPool.from_app_config(config)
             try:
                 catalog = CatalogService(config, registry, db, client_pool)
                 await catalog.refresh()
@@ -289,6 +289,32 @@ def models_refresh(ctx: click.Context) -> None:
         asyncio.run(_run())
     except AggregatorError as exc:
         click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
+
+@cli.group("config")
+def config_group() -> None:
+    """Configuration management commands."""
+
+
+@config_group.command("refresh")
+@click.pass_context
+def config_refresh(ctx: click.Context) -> None:
+    """Ask a running router process to reload the configuration file."""
+    from go_aggregator.providers.connect import send_reload_signal
+
+    config_path: str = ctx.obj["config_path"]
+
+    try:
+        AppConfig.from_toml(config_path)
+    except AggregatorError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
+    if send_reload_signal(config_path):
+        click.echo("Sent reload signal to running server.")
+    else:
+        click.echo("No running server detected.", err=True)
         sys.exit(1)
 
 

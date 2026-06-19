@@ -220,11 +220,15 @@ class RequestCoordinator:
             persist_error_detail=persist_error_detail,
         )
 
-    def _get_client(self, provider_id: str | None = None) -> httpx.AsyncClient:
+    def _get_client(
+        self,
+        provider_id: str | None = None,
+        account_name: str | None = None,
+    ) -> httpx.AsyncClient:
         """Return the HTTP client for a provider, falling back to default."""
         if provider_id and self._client_pool is not None:
             try:
-                return self._client_pool.get_client(provider_id)
+                return self._client_pool.get_client(provider_id, account_name)
             except Exception:
                 pass
         if self._client is None:
@@ -631,7 +635,7 @@ class RequestCoordinator:
 
         response: httpx.Response | None = None
         try:
-            client = self._get_client(selected.provider_id)
+            client = self._get_client(selected.provider_id, selected.account_name)
             upstream_request = client.build_request(
                 "POST",
                 upstream_path,
@@ -794,7 +798,7 @@ class RequestCoordinator:
                         # leave the body unchanged and let upstream reject it.
                         pass
 
-        client = self._get_client(selected.provider_id)
+        client = self._get_client(selected.provider_id, selected.account_name)
         request = client.build_request(
             "POST",
             upstream_path,

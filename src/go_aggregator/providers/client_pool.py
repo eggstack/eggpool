@@ -10,7 +10,7 @@ import httpx
 from go_aggregator.errors import UpstreamError
 
 if TYPE_CHECKING:
-    from go_aggregator.models.config import ProviderConfig
+    from go_aggregator.models.config import AppConfig, ProviderConfig
 
 
 class ProviderClientPool:
@@ -18,13 +18,32 @@ class ProviderClientPool:
 
     def __init__(self) -> None:
         self._clients: dict[str, httpx.AsyncClient] = {}
+        self._account_clients: dict[tuple[str, str], httpx.AsyncClient] = {}
 
     def register(self, provider_id: str, client: httpx.AsyncClient) -> None:
         """Register a client for a provider."""
         self._clients[provider_id] = client
 
-    def get_client(self, provider_id: str) -> httpx.AsyncClient:
-        """Get the HTTP client for a provider."""
+    def register_account(
+        self,
+        provider_id: str,
+        account_name: str,
+        client: httpx.AsyncClient,
+    ) -> None:
+        """Register a client for a specific provider account."""
+        self._account_clients[(provider_id, account_name)] = client
+
+    def get_client(
+        self,
+        provider_id: str,
+        account_name: str | None = None,
+    ) -> httpx.AsyncClient:
+        """Get the HTTP client for a provider or a specific provider account."""
+        if account_name is not None:
+            account_client = self._account_clients.get((provider_id, account_name))
+            if account_client is not None:
+                return account_client
+
         client = self._clients.get(provider_id)
         if client is None:
             raise UpstreamError(f"No client for provider {provider_id!r}")
@@ -40,25 +59,54 @@ class ProviderClientPool:
         for client in self._clients.values():
             with contextlib.suppress(Exception):
                 await client.aclose()
+        for client in self._account_clients.values():
+            with contextlib.suppress(Exception):
+                await client.aclose()
 
     @classmethod
     def from_config(cls, providers: dict[str, ProviderConfig]) -> ProviderClientPool:
         """Create a client pool from provider configurations."""
         pool = cls()
         for provider_id, cfg in providers.items():
-            client = httpx.AsyncClient(
-                base_url=cfg.base_url,
-                timeout=httpx.Timeout(
-                    connect=cfg.connect_timeout_s,
-                    read=cfg.read_timeout_s,
-                    write=cfg.write_timeout_s,
-                    pool=cfg.connect_timeout_s,
-                ),
-                limits=httpx.Limits(
-                    max_connections=cfg.max_connections,
-                    max_keepalive_connections=cfg.max_keepalive,
-                    keepalive_expiry=cfg.keepalive_timeout_s,
-                ),
-            )
+            client = _build_client(cfg)
             pool.register(provider_id, client)
         return pool
+
+    @classmethod
+    def from_app_config(cls, config: AppConfig) -> ProviderClientPool:
+        """Create a client pool from full app config, including account proxies."""
+        pool = cls.from_config(config.providers)
+        for provider_id, cfg in config.providers.items():
+            for account in cfg.accounts:
+                proxy_url = config.resolve_account_proxy_url(account)
+                if proxy_url is None:
+                    continue
+                pool.register_account(
+                    provider_id,
+                    account.name,
+                    _build_client(cfg, proxy_url=proxy_url),
+                )
+        return pool
+
+
+def _build_client(
+    cfg: ProviderConfig,
+    proxy_url: str | None = None,
+) -> httpx.AsyncClient:
+    """Build an HTTPX client with provider timeouts and optional proxy."""
+    proxy = httpx.Proxy(proxy_url) if proxy_url is not None else None
+    return httpx.AsyncClient(
+        base_url=cfg.base_url,
+        timeout=httpx.Timeout(
+            connect=cfg.connect_timeout_s,
+            read=cfg.read_timeout_s,
+            write=cfg.write_timeout_s,
+            pool=cfg.connect_timeout_s,
+        ),
+        limits=httpx.Limits(
+            max_connections=cfg.max_connections,
+            max_keepalive_connections=cfg.max_keepalive,
+            keepalive_expiry=cfg.keepalive_timeout_s,
+        ),
+        proxy=proxy,
+    )

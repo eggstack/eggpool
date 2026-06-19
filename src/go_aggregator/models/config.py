@@ -129,6 +129,19 @@ class SecurityConfig(BaseModel):
     persist_redacted_error_detail: bool = False
 
 
+class ProxyConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    url: str | None = None
+    url_env: str | None = None
+
+    @model_validator(mode="after")
+    def validate_source(self) -> ProxyConfig:
+        if bool(self.url) == bool(self.url_env):
+            raise ConfigError("Proxy config must set exactly one of url or url_env")
+        return self
+
+
 class AccountConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -139,6 +152,23 @@ class AccountConfig(BaseModel):
     five_hour_offset_microdollars: int = 0
     weekly_offset_microdollars: int = 0
     monthly_offset_microdollars: int = 0
+    proxy: str | None = None
+    proxy_url: str | None = None
+    proxy_url_env: str | None = None
+
+    @model_validator(mode="after")
+    def validate_proxy_source(self) -> AccountConfig:
+        configured = [
+            value
+            for value in (self.proxy, self.proxy_url, self.proxy_url_env)
+            if value is not None
+        ]
+        if len(configured) > 1:
+            raise ConfigError(
+                f"Account {self.name!r} must set at most one of proxy, "
+                "proxy_url, or proxy_url_env"
+            )
+        return self
 
 
 class ProviderConfig(BaseModel):
@@ -213,6 +243,7 @@ class AppConfig(BaseModel):
     limits: LimitsConfig = LimitsConfig()
     dashboard: DashboardConfig = DashboardConfig()
     security: SecurityConfig = SecurityConfig()
+    proxies: dict[str, ProxyConfig] = {}
     accounts: list[AccountConfig] = []
     providers: dict[str, ProviderConfig] = {}
     model_overrides: dict[str, ModelOverrideConfig] = {}
@@ -246,6 +277,10 @@ class AppConfig(BaseModel):
             if acct.weight <= 0:
                 raise ConfigError(
                     f"Account {acct.name!r} has non-positive weight: {acct.weight}"
+                )
+            if acct.proxy is not None and acct.proxy not in self.proxies:
+                raise ConfigError(
+                    f"Account {acct.name!r} references unknown proxy {acct.proxy!r}"
                 )
         return self
 
@@ -291,6 +326,36 @@ class AppConfig(BaseModel):
                         f"in env var {acct.api_key_env!r}; "
                         f"set a real key before starting the service"
                     )
+
+    def resolve_account_proxy_url(self, account: AccountConfig) -> str | None:
+        """Resolve the outbound proxy URL for an account, if configured."""
+        if account.proxy_url is not None:
+            return account.proxy_url
+        if account.proxy_url_env is not None:
+            return self._resolve_proxy_url_env(account.proxy_url_env, account.name)
+        if account.proxy is None:
+            return None
+
+        proxy = self.proxies[account.proxy]
+        if proxy.url is not None:
+            return proxy.url
+        assert proxy.url_env is not None
+        return self._resolve_proxy_url_env(proxy.url_env, account.name)
+
+    @staticmethod
+    def _resolve_proxy_url_env(env_name: str, account_name: str) -> str:
+        value = os.environ.get(env_name)
+        if not value:
+            raise ConfigError(
+                f"Account {account_name!r} references proxy env var "
+                f"{env_name!r}, but it is not set"
+            )
+        if not value.strip():
+            raise ConfigError(
+                f"Account {account_name!r} references proxy env var "
+                f"{env_name!r}, but it is whitespace-only"
+            )
+        return value
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> AppConfig:
