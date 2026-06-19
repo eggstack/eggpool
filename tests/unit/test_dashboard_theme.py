@@ -304,9 +304,10 @@ class TestRenderThemeIntegration:
             overview={"summary": {}, "imbalance": {}},
             accounts=[],
             theme_css=":root { --page-bg: #000; }",
+            current_theme="test-theme",
         )
-        assert ":root { --page-bg: #000; }" in html
-        assert "<style>" in html
+        assert "/static/theme.css?theme=test-theme" in html
+        assert "<link" in html
 
     def test_render_overview_without_theme(self) -> None:
         from eggpool.dashboard.render import render_overview
@@ -315,8 +316,8 @@ class TestRenderThemeIntegration:
             overview={"summary": {}, "imbalance": {}},
             accounts=[],
         )
-        assert "<style>" in html
-        assert "--page-bg" in html
+        assert "/static/dashboard.css" in html
+        assert "/static/theme.css" not in html
 
     def test_heatmap_with_theme_colors(self) -> None:
         from eggpool.dashboard.render import _render_bandwidth_heatmap

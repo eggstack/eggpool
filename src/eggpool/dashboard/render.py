@@ -78,8 +78,8 @@ def _render_layout(
 ) -> str:
     """Wrap a page body in the standard layout."""
     nav = _render_nav(active_nav, period, available_themes, current_theme)
-    css = theme_css or get_default_theme().to_css_variables()
-    style_block = f"<style>\n{css}\n</style>"
+    theme_href = f"/static/theme.css?theme={_html_escape(current_theme)}"
+    theme_link = f'<link rel="stylesheet" href="{theme_href}">' if current_theme else ""
     script_block = (
         _render_auto_refresh_script(refresh_interval_s) if auto_refresh else ""
     )
@@ -90,14 +90,14 @@ def _render_layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{_html_escape(title)}</title>
 <link rel="stylesheet" href="/static/dashboard.css">
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-{style_block}
+<script src="/static/chart.js"></script>
+{theme_link}
 </head>
 <body>
 <header class="topbar">
   <h1><a href="/?period={_html_escape(period)}&amp;theme={
         _html_escape(current_theme)
-    }">Go Aggregator</a></h1>
+    }">EggPool</a></h1>
   {nav}
 </header>
 <main id="dashboard-content">

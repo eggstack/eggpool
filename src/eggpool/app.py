@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import signal
+import time
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -619,6 +620,79 @@ def create_app(
             return FileResponse(
                 path=str(css_path),
                 media_type="text/css",
+            )
+
+        @app.get("/static/chart.js")
+        async def chart_js() -> FileResponse:  # pyright: ignore[reportUnusedFunction]
+            js_path: Path = (
+                Path(__file__).parent / "dashboard" / "static" / "chart.umd.min.js"
+            )
+            return FileResponse(
+                path=str(js_path),
+                media_type="application/javascript",
+            )
+
+        # LRU cache for theme CSS: keeps last 3 used themes, TTL 300s for non-active
+        class _ThemeCssCache:
+            def __init__(self, max_size: int = 3, ttl_s: int = 300) -> None:
+                self._max_size = max_size
+                self._ttl_s = ttl_s
+                self._cache: dict[str, tuple[str, float]] = {}
+                self._last_used: str = ""
+
+            def get(self, theme_name: str) -> str | None:
+                if theme_name in self._cache:
+                    css, ts = self._cache[theme_name]
+                    if (
+                        time.monotonic() - ts < self._ttl_s
+                        or theme_name == self._last_used
+                    ):
+                        self._last_used = theme_name
+                        return css
+                    del self._cache[theme_name]
+                return None
+
+            def put(self, theme_name: str, css: str) -> None:
+                if len(self._cache) >= self._max_size and theme_name not in self._cache:
+                    now = time.monotonic()
+                    to_evict = [
+                        k
+                        for k, (_, ts) in self._cache.items()
+                        if k != self._last_used
+                        and (
+                            now - ts >= self._ttl_s
+                            or len(self._cache) >= self._max_size
+                        )
+                    ]
+                    if to_evict:
+                        del self._cache[to_evict[0]]
+                    elif self._cache:
+                        oldest = min(self._cache, key=lambda k: self._cache[k][1])
+                        if oldest != self._last_used:
+                            del self._cache[oldest]
+                self._cache[theme_name] = (css, time.monotonic())
+                self._last_used = theme_name
+
+        _theme_css_cache = _ThemeCssCache()
+
+        @app.get("/static/theme.css")
+        async def theme_css(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            theme_name = request.query_params.get("theme", "default")
+            cached = _theme_css_cache.get(theme_name)
+            if cached is not None:
+                return Response(
+                    content=cached,
+                    media_type="text/css",
+                    headers={"Cache-Control": "public, max-age=300"},
+                )
+            from eggpool.dashboard.render import get_theme_css
+
+            css = get_theme_css(theme_name)
+            _theme_css_cache.put(theme_name, css)
+            return Response(
+                content=css,
+                media_type="text/css",
+                headers={"Cache-Control": "public, max-age=300"},
             )
 
     @app.get(f"{API_V1_PREFIX}/healthz")

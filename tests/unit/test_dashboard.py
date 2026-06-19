@@ -149,7 +149,7 @@ class TestRenderOverview:
         assert "20.00%" in html
         assert 'id="dashboard-content"' in html
         assert "setInterval" in html
-        assert "--page-bg" in html
+        assert "/static/dashboard.css" in html
 
     def test_escapes_account_name_in_overview(self) -> None:
         html = render_overview(
