@@ -784,6 +784,50 @@ def export_env_var(env_name: str, value: str) -> Path | None:
     return profile
 
 
+def _check_duplicate_api_key(
+    config_path: str, provider_id: str, api_key: str
+) -> str | None:
+    """Check if an API key already exists for a provider.
+
+    Returns the provider_id if a duplicate is found, None otherwise.
+    """
+    from pathlib import Path
+
+    path = Path(config_path)
+    if not path.exists():
+        return None
+
+    content = path.read_text(encoding="utf-8")
+
+    # Check all providers, not just the target one
+    in_section = False
+    current_provider = None
+    for line in content.split("\n"):
+        stripped = line.strip()
+        # Detect provider sections
+        if stripped.startswith("[providers.") and stripped.endswith("]"):
+            current_provider = stripped[len("[providers.") : -1]
+            in_section = False
+            continue
+        # Detect account sections
+        if stripped.startswith("[[providers.") and stripped.endswith(".accounts]]"):
+            in_section = True
+            continue
+        # Exit account section on new section
+        if in_section and stripped.startswith("["):
+            in_section = False
+            continue
+        # Check api_key in account sections
+        if in_section and stripped.startswith("api_key"):
+            parts = stripped.split("=", 1)
+            if len(parts) == 2:
+                key_value = parts[1].strip().strip('"').strip("'")
+                if key_value == api_key and current_provider:
+                    return current_provider
+
+    return None
+
+
 def connect(
     config_path: str,
     providers_path: str = "providers.toml",
@@ -842,6 +886,14 @@ def connect(
 
     if not api_key:
         sys.stdout.write("  No API key provided. Aborted.\n")
+        return False
+
+    # Check for duplicate API key
+    existing_provider = _check_duplicate_api_key(config_path, provider_id, api_key)
+    if existing_provider:
+        sys.stdout.write(
+            f"  Account with this API key exists for {existing_provider}.\n"
+        )
         return False
 
     # Merge into config (writes api_key directly, no env var needed)

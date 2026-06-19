@@ -14,6 +14,7 @@ from eggpool.cli import cli
 from eggpool.providers.connect import (
     ConfiguredAccount,
     TerminalMenu,
+    _check_duplicate_api_key,
     _extract_raw_block,
     _format_provider_block,
     _provider_account_count,
@@ -349,6 +350,108 @@ class TestMergeProviderIntoConfig:
             "KEY",
         )
         assert ok is False
+
+
+class TestCheckDuplicateApiKey:
+    """Tests for checking duplicate API keys."""
+
+    def test_returns_none_when_no_duplicate(self, tmp_path: Path) -> None:
+        """Returns None when API key doesn't exist."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(
+            textwrap.dedent("""\
+                [providers.opencode-go]
+                id = "opencode-go"
+                base_url = "https://api.example.com"
+
+                [[providers.opencode-go.accounts]]
+                name = "opencode-go-0001"
+                api_key = "sk-existing-key"
+            """)
+        )
+
+        result = _check_duplicate_api_key(
+            str(config_file), "opencode-go", "sk-different-key"
+        )
+        assert result is None
+
+    def test_returns_provider_id_when_duplicate(self, tmp_path: Path) -> None:
+        """Returns provider_id when API key already exists."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(
+            textwrap.dedent("""\
+                [providers.opencode-go]
+                id = "opencode-go"
+                base_url = "https://api.example.com"
+
+                [[providers.opencode-go.accounts]]
+                name = "opencode-go-0001"
+                api_key = "sk-existing-key"
+            """)
+        )
+
+        result = _check_duplicate_api_key(
+            str(config_file), "opencode-go", "sk-existing-key"
+        )
+        assert result == "opencode-go"
+
+    def test_returns_provider_id_across_providers(self, tmp_path: Path) -> None:
+        """Returns the provider_id where the key exists, even across providers."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(
+            textwrap.dedent("""\
+                [providers.opencode-go]
+                id = "opencode-go"
+                base_url = "https://api.example.com"
+
+                [[providers.opencode-go.accounts]]
+                name = "opencode-go-0001"
+                api_key = "sk-shared-key"
+
+                [providers.deepseek]
+                id = "deepseek"
+                base_url = "https://api.deepseek.com"
+
+                [[providers.deepseek.accounts]]
+                name = "deepseek-0001"
+                api_key = "sk-other-key"
+            """)
+        )
+
+        # Same provider duplicate
+        result = _check_duplicate_api_key(
+            str(config_file), "opencode-go", "sk-shared-key"
+        )
+        assert result == "opencode-go"
+
+        # Different provider but same key
+        result = _check_duplicate_api_key(str(config_file), "deepseek", "sk-shared-key")
+        assert result == "opencode-go"
+
+    def test_returns_none_when_file_missing(self, tmp_path: Path) -> None:
+        """Returns None when config file doesn't exist."""
+        result = _check_duplicate_api_key(
+            str(tmp_path / "nonexistent.toml"), "opencode-go", "sk-key"
+        )
+        assert result is None
+
+    def test_ignores_env_var_accounts(self, tmp_path: Path) -> None:
+        """Ignores accounts that use env vars instead of inline keys."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(
+            textwrap.dedent("""\
+                [providers.opencode-go]
+                id = "opencode-go"
+                base_url = "https://api.example.com"
+
+                [[providers.opencode-go.accounts]]
+                name = "opencode-go-0001"
+                api_key_env = "OPENCODE_GO_API_KEY"
+            """)
+        )
+
+        result = _check_duplicate_api_key(str(config_file), "opencode-go", "sk-key")
+        assert result is None
 
 
 class TestRemoveAccountFromConfig:
