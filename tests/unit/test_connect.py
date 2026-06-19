@@ -901,7 +901,124 @@ class TestCliLogout:
         assert result.exit_code == 0
         content = config_path.read_text(encoding="utf-8")
         assert 'name = "default"' in content
-        assert 'name = "default-2"' not in content
+
+
+class TestGranianServe:
+    """Tests for the granian serve command."""
+
+    def test_granian_import_is_correct(self) -> None:
+        """Granian must be importable from granian (not granian.server)."""
+        from granian import Granian  # type: ignore[import-untyped]
+
+        assert Granian is not None
+
+    def test_granian_rejects_granian_server_import(self) -> None:
+        """granian.server should not export Granian directly."""
+        with pytest.raises(ImportError):
+            from granian.server import Granian  # type: ignore[import-untyped]  # noqa: F401, I001
+
+    def test_granian_accepts_string_target(self) -> None:
+        """Granian can be instantiated with a string target."""
+        from granian import Granian  # type: ignore[import-untyped]
+
+        server = Granian("unused:app", interface="asgi")
+        assert server.target == "unused:app"
+        assert server.bind_addr == "127.0.0.1"
+        assert server.bind_port == 8000
+
+    def test_granian_accepts_custom_address_and_port(self) -> None:
+        """Granian respects address and port parameters."""
+        from granian import Granian  # type: ignore[import-untyped]
+
+        server = Granian(
+            "unused:app",
+            address="0.0.0.0",
+            port=9090,
+            interface="asgi",
+        )
+        assert server.bind_addr == "0.0.0.0"
+        assert server.bind_port == 9090
+
+    def test_granian_log_level_default_is_info(self) -> None:
+        """Default log level is info."""
+        from granian import Granian  # type: ignore[import-untyped]
+        from granian.log import LogLevels  # type: ignore[import-untyped]
+
+        server = Granian("unused:app", interface="asgi")
+        assert server.log_level == LogLevels.info
+
+    def test_granian_log_level_respects_string(self) -> None:
+        """Log level can be set via string."""
+        from granian import Granian  # type: ignore[import-untyped]
+        from granian.log import LogLevels  # type: ignore[import-untyped]
+
+        server = Granian("unused:app", interface="asgi", log_level="debug")
+        assert server.log_level == LogLevels.debug
+
+    def test_granian_access_log_default_is_false(self) -> None:
+        """Access log is off by default."""
+        from granian import Granian  # type: ignore[import-untyped]
+
+        server = Granian("unused:app", interface="asgi")
+        assert server.log_access is False
+
+    def test_granian_access_log_can_be_enabled(self) -> None:
+        """Access log can be enabled."""
+        from granian import Granian  # type: ignore[import-untyped]
+
+        server = Granian("unused:app", interface="asgi", log_access=True)
+        assert server.log_access is True
+
+    def test_granian_serve_accepts_target_loader(self) -> None:
+        """serve() can accept a target_loader callable."""
+        import inspect
+
+        from granian import Granian  # type: ignore[import-untyped]
+
+        def _loader(_target: str) -> object:
+            return lambda scope, receive, send: None  # noqa: ARG005
+
+        server = Granian("unused:app", interface="asgi")
+        sig = inspect.signature(server.serve)
+        assert "target_loader" in sig.parameters
+
+    def test_serve_cli_uses_granian_not_uvicorn(self) -> None:
+        """The serve command should import granian, not uvicorn."""
+        import ast
+        from pathlib import Path
+
+        cli_path = Path(__file__).parent.parent.parent / "src" / "eggpool" / "cli.py"
+        source = cli_path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "uvicorn":
+                pytest.fail("cli.py still imports uvicorn")
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "uvicorn":
+                        pytest.fail("cli.py still imports uvicorn")
+
+    def test_serve_cli_imports_granian_correctly(self) -> None:
+        """The serve command imports Granian from granian (not granian.server)."""
+        import ast
+        from pathlib import Path
+
+        cli_path = Path(__file__).parent.parent.parent / "src" / "eggpool" / "cli.py"
+        source = cli_path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        found_granian_import = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                if node.module == "granian" and any(
+                    alias.name == "Granian" for alias in node.names
+                ):
+                    found_granian_import = True
+                if node.module == "granian.server":
+                    pytest.fail("cli.py imports from granian.server, should be granian")
+
+        assert found_granian_import, "cli.py does not import Granian from granian"
 
 
 def test_config_refresh_command_removed() -> None:

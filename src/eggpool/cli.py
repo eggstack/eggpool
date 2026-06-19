@@ -39,7 +39,7 @@ def cli(ctx: click.Context, config_path: str) -> None:
 @click.pass_context
 def serve(ctx: click.Context) -> None:
     """Start the aggregation proxy server."""
-    from granian.server import Granian  # type: ignore[import-untyped]
+    from granian import Granian  # type: ignore[import-untyped]
 
     config_path: str = ctx.obj["config_path"]
 
@@ -64,21 +64,27 @@ def serve(ctx: click.Context) -> None:
 
     configure_logging(level=config.server.log_level)
 
+    from functools import partial
+
     from eggpool.app import create_app
 
     app = create_app(config, config_path=config_path)
 
+    # Granian requires a string target but we need the pre-built app.
+    # Use target_loader to inject our app, bypassing string resolution.
+    def _app_loader(_target: str) -> object:  # noqa: ARG001
+        return app
+
     log_level = config.server.log_level.lower()
-    Granian(  # type: ignore[reportUnknownMemberType]
-        app,
+    Granian(
+        "unused",  # ignored when target_loader is provided
         address=config.server.host,
         port=config.server.port,
-        interface="asgi",
+        interface="asgi",  # type: ignore[reportArgumentType]
         workers=1,
-        threads=1,
-        log_level=log_level,
-        access_log=config.server.access_log,
-    ).serve()
+        log_level=log_level,  # type: ignore[reportArgumentType]
+        log_access=config.server.access_log,
+    ).serve(target_loader=partial(_app_loader))  # type: ignore[reportArgumentType]
 
 
 @cli.group(invoke_without_command=True)
