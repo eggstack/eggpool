@@ -364,7 +364,7 @@ def collect_api_key(provider_name: str) -> str:
 def merge_provider_into_config(
     config_path: str,
     provider_data: dict[str, Any],
-    api_key_env: str,
+    api_key: str,
 ) -> bool:
     """Add a provider and account to the config TOML file.
 
@@ -385,13 +385,10 @@ def merge_provider_into_config(
     if existing_accounts is not None and len(existing_accounts) > 0:
         # Append new account to existing provider
         account_name = _unique_account_name(provider_id, existing_accounts)
-        env_name = _unique_env_name(provider_id, existing_accounts)
-        content = _append_account(content, provider_id, account_name, env_name)
-        # Update the api_key_env reference
-        api_key_env = env_name
+        content = _append_account(content, provider_id, account_name, api_key)
     else:
         # Insert new provider block
-        block = _format_provider_block(provider_id, provider_data, api_key_env)
+        block = _format_provider_block(provider_id, provider_data, api_key)
         content = _insert_provider_block(content, block)
 
     path.write_text(content, encoding="utf-8")
@@ -437,26 +434,10 @@ def _unique_account_name(provider_id: str, existing: list[str]) -> str:
     return f"{base}-{counter}"
 
 
-def _unique_env_name(provider_id: str, existing_accounts: list[str]) -> str:
-    """Generate a unique environment variable name based on provider id."""
-    env_name = _provider_id_to_env_name(provider_id)
-    if not existing_accounts:
-        return env_name
-    # Check if base env name is used by existing accounts
-    # Since we can't easily check which env names are in use,
-    # we always append a number for the second+ account
-    return f"{env_name}_{len(existing_accounts) + 1}"
-
-
-def _provider_id_to_env_name(provider_id: str) -> str:
-    """Convert a provider ID to an environment variable name."""
-    return provider_id.upper().replace("-", "_") + "_API_KEY"
-
-
 def _format_provider_block(
     provider_id: str,
     data: dict[str, Any],
-    api_key_env: str,
+    api_key: str,
 ) -> str:
     """Format a provider config block as TOML text."""
     lines = [f"[providers.{provider_id}]"]
@@ -465,11 +446,11 @@ def _format_provider_block(
             continue
         lines.append(f"{key} = {_toml_value(value)}")
 
-    # Add account
+    # Add account with inline API key
     lines.append("")
     lines.append(f"[[providers.{provider_id}.accounts]]")
     lines.append('name = "default"')
-    lines.append(f'api_key_env = "{api_key_env}"')
+    lines.append(f'api_key = "{api_key}"')
 
     return "\n".join(lines)
 
@@ -515,7 +496,7 @@ def _append_account(
     content: str,
     provider_id: str,
     account_name: str,
-    env_name: str,
+    api_key: str,
 ) -> str:
     """Append an account entry to an existing provider section."""
     lines = content.split("\n")
@@ -543,7 +524,7 @@ def _append_account(
         "",
         f"[[providers.{provider_id}.accounts]]",
         f'name = "{account_name}"',
-        f'api_key_env = "{env_name}"',
+        f'api_key = "{api_key}"',
     ]
 
     new_lines = lines[:insert_idx] + account_lines + lines[insert_idx:]
@@ -773,9 +754,9 @@ def connect(
 
     existing_accounts: list[str] = []
     if config is not None and provider_id in config.providers:
-        existing_accounts = [a.name for a in config.providers[provider_id].accounts]
+        provider_accounts = config.providers[provider_id].accounts
+        existing_accounts = [a.name for a in provider_accounts]
 
-    env_name = _unique_env_name(provider_id, existing_accounts)
     account_name = _unique_account_name(provider_id, existing_accounts)
 
     # Prompt for API key
@@ -786,29 +767,23 @@ def connect(
         sys.stdout.write("  No API key provided. Aborted.\n")
         return False
 
-    # Export to shell profile
-    profile = export_env_var(env_name, api_key)
-    if profile:
-        sys.stdout.write(f"  Exported {env_name} to {profile}\n")
-    else:
-        sys.stdout.write(
-            f"  Could not detect shell profile. Set manually: export {env_name}=<key>\n"
-        )
-
-    # Merge into config
+    # Merge into config (writes api_key directly, no env var needed)
     provider_data = tmpl["data"].copy()
     provider_data["id"] = provider_id
-    ok = merge_provider_into_config(config_path, provider_data, env_name)
+    ok = merge_provider_into_config(config_path, provider_data, api_key)
 
     if not ok:
         sys.stdout.write(f"  Failed to update config at {config_path}\n")
         return False
 
-    sys.stdout.write(f"  Added {account_name} to {provider_id} in {config_path}\n")
+    sys.stdout.write(f"  Added {account_name} to {provider_id}.\n")
 
-    sys.stdout.write(
-        f"\n  Run `source {profile or '~/.profile'}` to load the env var, "
-        f"then restart the server.\n"
-    )
+    # Auto-reload the running server
+    if signal_reload():
+        sys.stdout.write("  Configuration reloaded.\n")
+    elif signal_restart():
+        sys.stdout.write("  Server restarted.\n")
+    else:
+        sys.stdout.write("  Start the server to apply changes.\n")
 
     return True

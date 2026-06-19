@@ -52,11 +52,13 @@ class AccountRegistry:
         """Load accounts from config and resolve API keys."""
         for provider_id, provider_cfg in self._config.providers.items():
             for acct_config in provider_cfg.accounts:
-                api_key = os.environ.get(acct_config.api_key_env, "")
+                api_key = acct_config.api_key or os.environ.get(
+                    acct_config.api_key_env, ""
+                )
                 if acct_config.enabled and not api_key:
                     raise ConfigError(
                         f"Account {acct_config.name!r} is enabled but "
-                        f"env var {acct_config.api_key_env!r} is not set"
+                        f"no API key available"
                     )
 
                 state = AccountRuntimeState(

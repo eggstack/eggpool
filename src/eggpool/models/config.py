@@ -146,7 +146,8 @@ class AccountConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
-    api_key_env: str
+    api_key: str | None = None
+    api_key_env: str = ""
     enabled: bool = True
     weight: float = Field(default=1.0, gt=0)
     five_hour_offset_microdollars: int = 0
@@ -155,6 +156,12 @@ class AccountConfig(BaseModel):
     proxy: str | None = None
     proxy_url: str | None = None
     proxy_url_env: str | None = None
+
+    @model_validator(mode="after")
+    def validate_key_source(self) -> AccountConfig:
+        if not self.api_key and not self.api_key_env:
+            raise ConfigError(f"Account {self.name!r} must set api_key or api_key_env")
+        return self
 
     @model_validator(mode="after")
     def validate_proxy_source(self) -> AccountConfig:
@@ -309,21 +316,29 @@ class AppConfig(BaseModel):
         )
         for acct in self.all_accounts():
             if acct.enabled:
-                raw_key = os.environ.get(acct.api_key_env)
+                raw_key = acct.api_key or os.environ.get(acct.api_key_env)
                 if not raw_key:
+                    source = (
+                        "api_key" if acct.api_key else f"env var {acct.api_key_env!r}"
+                    )
                     raise ConfigError(
-                        f"Account {acct.name!r} is enabled but env var "
-                        f"{acct.api_key_env!r} is not set"
+                        f"Account {acct.name!r} is enabled but {source} is not set"
                     )
                 if not raw_key.strip():
+                    source = (
+                        "api_key" if acct.api_key else f"env var {acct.api_key_env!r}"
+                    )
                     raise ConfigError(
                         f"Account {acct.name!r} has a whitespace-only API key "
-                        f"in env var {acct.api_key_env!r}"
+                        f"in {source}"
                     )
                 if raw_key.strip().lower() in _placeholder_keys:
+                    source = (
+                        "api_key" if acct.api_key else f"env var {acct.api_key_env!r}"
+                    )
                     raise ConfigError(
                         f"Account {acct.name!r} has a placeholder API key "
-                        f"in env var {acct.api_key_env!r}; "
+                        f"in {source}; "
                         f"set a real key before starting the service"
                     )
 

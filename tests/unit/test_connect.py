@@ -17,10 +17,8 @@ from eggpool.providers.connect import (
     _extract_raw_block,
     _format_provider_block,
     _provider_account_count,
-    _provider_id_to_env_name,
     _toml_value,
     _unique_account_name,
-    _unique_env_name,
     collect_api_key,
     export_env_var,
     load_provider_templates,
@@ -135,22 +133,6 @@ class TestExtractRawBlock:
         assert block == ""
 
 
-class TestProviderIdToEnvName:
-    """Tests for converting provider IDs to env var names."""
-
-    def test_simple_id(self) -> None:
-        """Simple ID becomes uppercase with _API_KEY suffix."""
-        assert _provider_id_to_env_name("openai") == "OPENAI_API_KEY"
-
-    def test_hyphenated_id(self) -> None:
-        """Hyphens become underscores."""
-        assert _provider_id_to_env_name("opencode-go") == "OPENCODE_GO_API_KEY"
-
-    def test_ollama_local(self) -> None:
-        """Ollama local becomes OLLAMA_LOCAL_API_KEY."""
-        assert _provider_id_to_env_name("ollama-local") == "OLLAMA_LOCAL_API_KEY"
-
-
 class TestUniqueAccountName:
     """Tests for generating unique account names."""
 
@@ -171,23 +153,6 @@ class TestUniqueAccountName:
         """Skips existing numbered names."""
         names = ["default", "default-2", "default-4"]
         assert _unique_account_name("minimax", names) == "default-3"
-
-
-class TestUniqueEnvName:
-    """Tests for generating unique environment variable names."""
-
-    def test_first_account(self) -> None:
-        """First account uses base env name."""
-        assert _unique_env_name("minimax", []) == "MINIMAX_API_KEY"
-
-    def test_second_account(self) -> None:
-        """Second account appends _2."""
-        assert _unique_env_name("minimax", ["default"]) == "MINIMAX_API_KEY_2"
-
-    def test_third_account(self) -> None:
-        """Third account appends _3."""
-        names = ["default", "default-2"]
-        assert _unique_env_name("minimax", names) == "MINIMAX_API_KEY_3"
 
 
 class TestTomlValue:
@@ -230,7 +195,7 @@ class TestFormatProviderBlock:
         assert 'base_url = "https://example.com"' in block
         assert 'protocols = ["openai"]' in block
         assert "[[providers.my-provider.accounts]]" in block
-        assert 'api_key_env = "MY_API_KEY"' in block
+        assert 'api_key = "MY_API_KEY"' in block
 
     def test_non_default_fields(self) -> None:
         """Includes non-default fields like openai_path."""
@@ -255,8 +220,8 @@ class TestFormatProviderBlock:
         block = _format_provider_block("my-provider", data, "MY_KEY")
         assert 'id = "my-provider"' in block
         assert "SHOULD_BE_EXCLUDED" not in block
-        assert 'api_key_env = "SHOULD_BE_EXCLUDED"' not in block
-        assert 'api_key_env = "MY_KEY"' in block
+        assert 'api_key = "SHOULD_BE_EXCLUDED"' not in block
+        assert 'api_key = "MY_KEY"' in block
 
     def test_round_trip_with_app_config(self, tmp_path: Path) -> None:
         """Generated TOML can be parsed back by AppConfig.from_toml()."""
@@ -280,7 +245,7 @@ class TestFormatProviderBlock:
         assert config.providers["minimax"].base_url == "https://api.minimaxi.com"
         assert config.providers["minimax"].id == "minimax"
         assert len(config.providers["minimax"].accounts) == 1
-        assert config.providers["minimax"].accounts[0].api_key_env == "MINIMAX_API_KEY"
+        assert config.providers["minimax"].accounts[0].api_key == "MINIMAX_API_KEY"
 
 
 class TestMergeProviderIntoConfig:
@@ -312,7 +277,7 @@ class TestMergeProviderIntoConfig:
         content = config_file.read_text()
         assert "[providers.new-provider]" in content
         assert "new.example.com" in content
-        assert 'api_key_env = "NEW_API_KEY"' in content
+        assert 'api_key = "NEW_API_KEY"' in content
 
     def test_appends_account_to_existing_provider(self, tmp_path: Path) -> None:
         """Appends a new account to an existing provider."""
@@ -344,7 +309,7 @@ class TestMergeProviderIntoConfig:
         # Should have two account blocks
         assert content.count("[[providers.minimax.accounts]]") == 2
         assert 'name = "default-2"' in content
-        assert 'api_key_env = "MINIMAX_API_KEY_2"' in content
+        assert 'api_key = "MINIMAX_API_KEY_2"' in content
 
     def test_preserves_existing_config(self, tmp_path: Path) -> None:
         """Preserves existing config sections when adding a provider."""
