@@ -137,22 +137,22 @@ class TestUniqueAccountName:
     """Tests for generating unique account names."""
 
     def test_first_account(self) -> None:
-        """First account gets 'default'."""
-        assert _unique_account_name("minimax", []) == "default"
+        """First account gets '{provider_id}-0001'."""
+        assert _unique_account_name("minimax", [], 0) == "minimax-0001"
 
     def test_second_account(self) -> None:
-        """Second account gets 'default-2'."""
-        assert _unique_account_name("minimax", ["default"]) == "default-2"
+        """Second account gets '{provider_id}-0002'."""
+        assert _unique_account_name("minimax", ["minimax-0001"], 1) == "minimax-0002"
 
     def test_third_account(self) -> None:
-        """Third account gets 'default-3'."""
-        names = ["default", "default-2"]
-        assert _unique_account_name("minimax", names) == "default-3"
+        """Third account gets '{provider_id}-0003'."""
+        names = ["minimax-0001", "minimax-0002"]
+        assert _unique_account_name("minimax", names, 2) == "minimax-0003"
 
     def test_preserves_existing_names(self) -> None:
         """Skips existing numbered names."""
-        names = ["default", "default-2", "default-4"]
-        assert _unique_account_name("minimax", names) == "default-3"
+        names = ["minimax-0001", "minimax-0002", "minimax-0004"]
+        assert _unique_account_name("minimax", names, 3) == "minimax-0005"
 
 
 class TestTomlValue:
@@ -190,7 +190,9 @@ class TestFormatProviderBlock:
             "base_url": "https://example.com",
             "protocols": ["openai"],
         }
-        block = _format_provider_block("my-provider", data, "MY_API_KEY")
+        block = _format_provider_block(
+            "my-provider", data, "MY_API_KEY", "my-provider-0001"
+        )
         assert "[providers.my-provider]" in block
         assert 'base_url = "https://example.com"' in block
         assert 'protocols = ["openai"]' in block
@@ -205,7 +207,7 @@ class TestFormatProviderBlock:
             "openai_path": "/v1/chat/completions",
             "anthropic_path": "/anthropic/v1/messages",
         }
-        block = _format_provider_block("test", data, "KEY")
+        block = _format_provider_block("test", data, "KEY", "test-0001")
         assert 'openai_path = "/v1/chat/completions"' in block
         assert 'anthropic_path = "/anthropic/v1/messages"' in block
 
@@ -217,7 +219,9 @@ class TestFormatProviderBlock:
             "accounts": [],
             "api_key_env": "SHOULD_BE_EXCLUDED",
         }
-        block = _format_provider_block("my-provider", data, "MY_KEY")
+        block = _format_provider_block(
+            "my-provider", data, "MY_KEY", "my-provider-0001"
+        )
         assert 'id = "my-provider"' in block
         assert "SHOULD_BE_EXCLUDED" not in block
         assert 'api_key = "SHOULD_BE_EXCLUDED"' not in block
@@ -236,7 +240,9 @@ class TestFormatProviderBlock:
             "models_path": "/v1/models",
             "api_key_env": "API_KEY",
         }
-        block = _format_provider_block("minimax", data, "MINIMAX_API_KEY")
+        block = _format_provider_block(
+            "minimax", data, "MINIMAX_API_KEY", "minimax-0001"
+        )
 
         config_file = tmp_path / "config.toml"
         config_file.write_text(block)
@@ -289,7 +295,7 @@ class TestMergeProviderIntoConfig:
                 base_url = "https://api.minimaxi.com"
 
                 [[providers.minimax.accounts]]
-                name = "default"
+                name = "minimax-0001"
                 api_key_env = "MINIMAX_API_KEY"
             """)
         )
@@ -308,7 +314,7 @@ class TestMergeProviderIntoConfig:
         content = config_file.read_text()
         # Should have two account blocks
         assert content.count("[[providers.minimax.accounts]]") == 2
-        assert 'name = "default-2"' in content
+        assert 'name = "minimax-0002"' in content
         assert 'api_key = "MINIMAX_API_KEY_2"' in content
 
     def test_preserves_existing_config(self, tmp_path: Path) -> None:
@@ -361,11 +367,11 @@ class TestRemoveAccountFromConfig:
                 base_url = "https://api.example.com"
 
                 [[providers.opencode-go.accounts]]
-                name = "default"
+                name = "opencode-go-0001"
                 api_key_env = "OPENCODE_GO_API_KEY"
 
                 [[providers.opencode-go.accounts]]
-                name = "default-2"
+                name = "opencode-go-0002"
                 api_key_env = "OPENCODE_GO_API_KEY_2"
             """),
             encoding="utf-8",
@@ -375,7 +381,7 @@ class TestRemoveAccountFromConfig:
             str(config_file),
             ConfiguredAccount(
                 provider_id="opencode-go",
-                name="default",
+                name="opencode-go-0001",
                 api_key_env="OPENCODE_GO_API_KEY",
                 api_key=None,
             ),
@@ -384,8 +390,8 @@ class TestRemoveAccountFromConfig:
         assert ok is True
         content = config_file.read_text(encoding="utf-8")
         assert "[providers.opencode-go]" in content
-        assert 'name = "default"' not in content
-        assert 'name = "default-2"' in content
+        assert 'name = "opencode-go-0001"' not in content
+        assert 'name = "opencode-go-0002"' in content
         assert _provider_account_count(content, "opencode-go") == 1
 
     def test_removes_provider_when_final_account_removed(

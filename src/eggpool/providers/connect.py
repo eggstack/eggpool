@@ -413,15 +413,22 @@ def merge_provider_into_config(
     content = path.read_text(encoding="utf-8")
     provider_id = provider_data.get("id", "unknown")
 
+    # Gather ALL existing account names across all providers
+    all_names = _get_all_account_names(content)
+    total_count = len(all_names)
+
     # Check if provider already exists
     existing_accounts = _get_existing_accounts(content, provider_id)
     if existing_accounts is not None and len(existing_accounts) > 0:
         # Append new account to existing provider
-        account_name = _unique_account_name(provider_id, existing_accounts)
+        account_name = _unique_account_name(provider_id, all_names, total_count)
         content = _append_account(content, provider_id, account_name, api_key)
     else:
-        # Insert new provider block
-        block = _format_provider_block(provider_id, provider_data, api_key)
+        # Insert new provider block with generated account name
+        account_name = _unique_account_name(provider_id, all_names, total_count)
+        block = _format_provider_block(
+            provider_id, provider_data, api_key, account_name
+        )
         content = _insert_provider_block(content, block)
 
     path.write_text(content, encoding="utf-8")
@@ -456,21 +463,50 @@ def _get_existing_accounts(content: str, provider_id: str) -> list[str] | None:
     return accounts
 
 
-def _unique_account_name(provider_id: str, existing: list[str]) -> str:
-    """Generate a unique account name for a provider."""
-    base = "default"
-    if base not in existing:
-        return base
-    counter = 2
-    while f"{base}-{counter}" in existing:
+def _get_all_account_names(content: str) -> list[str]:
+    """Get all account names across all providers from config content."""
+    names: list[str] = []
+    in_section = False
+    for line in content.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("[[providers.") and stripped.endswith(".accounts]]"):
+            in_section = True
+            continue
+        if in_section and stripped.startswith("[") and stripped.endswith("]"):
+            in_section = False
+            continue
+        if in_section and stripped.startswith("name"):
+            parts = stripped.split("=", 1)
+            if len(parts) == 2:
+                name = parts[1].strip().strip('"').strip("'")
+                names.append(name)
+    return names
+
+
+def _unique_account_name(
+    provider_id: str,
+    all_existing_names: list[str],
+    total_account_count: int,
+) -> str:
+    """Generate a unique account name for a provider.
+
+    Names follow the pattern ``{provider_id}-{NNNN}`` where NNNN is a
+    4-digit zero-padded number starting from total_account_count + 1.
+    If the generated name already exists, increment until unique.
+    """
+    counter = total_account_count + 1
+    while True:
+        name = f"{provider_id}-{counter:04d}"
+        if name not in all_existing_names:
+            return name
         counter += 1
-    return f"{base}-{counter}"
 
 
 def _format_provider_block(
     provider_id: str,
     data: dict[str, Any],
     api_key: str,
+    account_name: str,
 ) -> str:
     """Format a provider config block as TOML text."""
     lines = [f"[providers.{provider_id}]"]
@@ -482,7 +518,7 @@ def _format_provider_block(
     # Add account with inline API key
     lines.append("")
     lines.append(f"[[providers.{provider_id}.accounts]]")
-    lines.append('name = "default"')
+    lines.append(f'name = "{account_name}"')
     lines.append(f'api_key = "{api_key}"')
 
     return "\n".join(lines)
@@ -787,12 +823,18 @@ def connect(
     except Exception:
         config = None
 
-    existing_accounts: list[str] = []
-    if config is not None and provider_id in config.providers:
-        provider_accounts = config.providers[provider_id].accounts
-        existing_accounts = [a.name for a in provider_accounts]
+    # Gather all existing account names across all providers
+    all_existing_names: list[str] = []
+    total_account_count = 0
+    if config is not None:
+        for provider_cfg in config.providers.values():
+            for acct in provider_cfg.accounts:
+                all_existing_names.append(acct.name)
+                total_account_count += 1
 
-    account_name = _unique_account_name(provider_id, existing_accounts)
+    account_name = _unique_account_name(
+        provider_id, all_existing_names, total_account_count
+    )
 
     # Prompt for API key
     sys.stdout.write(f"\n  Provider: {tmpl['display']}\n")
