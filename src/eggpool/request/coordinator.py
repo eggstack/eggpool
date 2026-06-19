@@ -360,6 +360,18 @@ class RequestCoordinator:
                         selected.account_name, err, context.model_id
                     )
                     health_applied = True
+                # If no other accounts are eligible, don't retry — pass
+                # the error directly to the client.
+                remaining = self._router.get_eligible_account_names(
+                    context.model_id,
+                    exclude_accounts=context.attempted_accounts
+                    if context.attempted_accounts
+                    else None,
+                    provider_id=context.provider_id,
+                    protocol=context.protocol,
+                )
+                if not remaining:
+                    break
                 if attempt_num >= self._max_retry_attempts:
                     break
                 continue

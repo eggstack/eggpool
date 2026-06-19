@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import os
+import time
 
 import pytest
 
 from eggpool.accounts.registry import AccountRegistry
-from eggpool.accounts.state import AccountRuntimeState
+from eggpool.accounts.state import (
+    DEFAULT_BACKOFF_MAX_SECONDS,
+    AccountRuntimeState,
+)
 from eggpool.errors import ConfigError
 from eggpool.models.config import AppConfig
 
@@ -133,3 +137,84 @@ def test_account_registry_eligible_states() -> None:
         assert eligible[0].name == "enabled"
     finally:
         del os.environ["TEST_ELIGIBLE_KEY"]
+
+
+def test_backoff_max_is_one_hour() -> None:
+    """Backoff cap should be 3600 seconds (1 hour)."""
+    assert DEFAULT_BACKOFF_MAX_SECONDS == 3600.0
+
+
+def test_backoff_exponential_with_cap() -> None:
+    """Backoff should double each failure, capped at 1 hour."""
+    state = AccountRuntimeState(name="test")
+    before = time.time()
+
+    # 1st failure: 30s
+    state.record_failure("rate_limited")
+    assert state.cooldown_until > before + 25.0
+    assert state.cooldown_until <= before + 35.0
+
+    # 2nd failure: 60s
+    state.record_failure("rate_limited")
+    assert state.cooldown_until > before + 55.0
+    assert state.cooldown_until <= before + 65.0
+
+    # 3rd failure: 120s
+    state.record_failure("rate_limited")
+    assert state.cooldown_until > before + 115.0
+    assert state.cooldown_until <= before + 125.0
+
+    # 4th failure: 240s
+    state.record_failure("rate_limited")
+    assert state.cooldown_until > before + 235.0
+    assert state.cooldown_until <= before + 245.0
+
+    # 5th failure: 480s
+    state.record_failure("rate_limited")
+    assert state.cooldown_until > before + 475.0
+    assert state.cooldown_until <= before + 485.0
+
+    # 6th failure: 960s
+    state.record_failure("rate_limited")
+    assert state.cooldown_until > before + 955.0
+    assert state.cooldown_until <= before + 965.0
+
+    # 7th failure: 1920s
+    state.record_failure("rate_limited")
+    assert state.cooldown_until > before + 1915.0
+    assert state.cooldown_until <= before + 1925.0
+
+    # 8th failure: 3600s (capped)
+    state.record_failure("rate_limited")
+    assert state.cooldown_until > before + 3595.0
+    assert state.cooldown_until <= before + 3605.0
+
+    # 9th failure: still 3600s (capped)
+    state.record_failure("rate_limited")
+    assert state.cooldown_until > before + 3595.0
+    assert state.cooldown_until <= before + 3605.0
+
+
+def test_backoff_resets_on_different_error_class() -> None:
+    """Backoff counter should reset when error class changes."""
+    state = AccountRuntimeState(name="test")
+    before = time.time()
+
+    state.record_failure("rate_limited")
+    assert state.cooldown_until > before + 25.0
+    assert state.cooldown_until <= before + 35.0
+
+    # Different error class resets counter
+    state.record_failure("connect_timeout")
+    assert state.cooldown_until > before + 25.0
+    assert state.cooldown_until <= before + 35.0
+
+
+def test_retry_after_overrides_backoff() -> None:
+    """Retry-After header should take precedence over exponential backoff."""
+    state = AccountRuntimeState(name="test")
+    before = time.time()
+
+    state.record_failure("rate_limited", rate_limit_retry_after=120.0)
+    assert state.cooldown_until > before + 115.0
+    assert state.cooldown_until <= before + 125.0

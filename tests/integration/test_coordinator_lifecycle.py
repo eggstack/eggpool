@@ -1434,3 +1434,88 @@ async def test_malformed_usage_null_values_do_not_500(
     )
     assert req_row is not None
     assert req_row["status"] == "completed"
+
+
+# ---------------------------------------------------------------------------
+# Single-account failover bypass
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_single_account_failover_bypass(
+    coordinator: RequestCoordinator,
+    db: Database,
+) -> None:
+    """When only 1 account is available, retryable errors pass through directly.
+
+    If there's only 1 account for a provider and it fails with a retryable
+    error, the coordinator should not attempt to retry on the same account.
+    Instead, it should pass the error directly to the client.
+    """
+    request_body = json.dumps(
+        {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hi"}],
+        }
+    ).encode()
+
+    call_count = 0
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        # Return 429 (retryable) on first call
+        if call_count == 1:
+            return httpx.Response(
+                429,
+                json={
+                    "error": {"message": "Rate limit exceeded", "type": "rate_limit"}
+                },
+            )
+        # Should not be called a second time since there's only 1 account
+        return httpx.Response(
+            200,
+            json={
+                "id": "cmpl-1",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hello"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15,
+                },
+            },
+        )
+
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(side_effect=_handler)
+
+        context = ProxyRequestContext(
+            request_id="test-single-acct-failover",
+            protocol="openai",
+            model_id="gpt-4",
+            streaming=False,
+            original_body=request_body,
+            incoming_headers={"content-type": "application/json"},
+        )
+        response = await coordinator.execute(context)
+
+    # Should have made exactly 1 call (no retry)
+    assert call_count == 1
+
+    # Should return the upstream 429 response directly to the client
+    assert response.status_code == 429
+
+    # Request should have been finalized
+    req_row = await db.fetch_one(
+        "SELECT status FROM requests WHERE proxy_request_id = ?",
+        ("test-single-acct-failover",),
+    )
+    assert req_row is not None
+    assert req_row["status"] in ("completed", "error")

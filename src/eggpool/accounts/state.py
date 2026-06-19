@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 # authoritative ``HealthManager``.
 DEFAULT_QUOTA_EXHAUSTED_COOLDOWN_SECONDS = 300.0
 DEFAULT_BACKOFF_BASE_SECONDS = 30.0
-DEFAULT_BACKOFF_MAX_SECONDS = 600.0
+DEFAULT_BACKOFF_MAX_SECONDS = 3600.0  # 1 hour max backoff for rate limits
 
 
 @dataclass
@@ -132,7 +132,7 @@ class AccountRuntimeState:
                 # Honor the upstream-suggested retry interval.
                 self.cooldown_until = time.time() + rate_limit_retry_after
             else:
-                # Exponential backoff: 30s, 60s, 120s, ... max 10 min
+                # Exponential backoff: 30s, 60s, 120s, ... max 1 hour
                 backoff = min(
                     DEFAULT_BACKOFF_BASE_SECONDS
                     * (2 ** (self.consecutive_failures - 1)),
