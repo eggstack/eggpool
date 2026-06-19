@@ -804,6 +804,39 @@ def test_config_refresh_command_removed() -> None:
     assert "No such command" in result.stderr
 
 
+class TestEditCommand:
+    """Tests for ``eggpool edit`` command."""
+
+    def test_edit_opens_config_in_editor(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Invokes click.edit with the config path."""
+        import click as click_mod
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("[server]\nport = 8080\n")
+
+        edited_files: list[str] = []
+
+        def fake_edit(filename: str | None = None, **kw: object) -> str | None:
+            if filename:
+                edited_files.append(filename)
+            return ""
+
+        monkeypatch.setattr(click_mod, "edit", fake_edit)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "edit"],
+        )
+
+        assert result.exit_code == 0
+        assert edited_files == [str(config_path)]
+
+
 class TestProviderFallback:
     """Tests for the hardcoded opencode-go fallback."""
 

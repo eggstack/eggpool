@@ -211,6 +211,14 @@ def check_config(ctx: click.Context) -> None:
 
 @cli.command()
 @click.pass_context
+def edit(ctx: click.Context) -> None:
+    """Open the configuration file in the default editor."""
+    config_path: str = ctx.obj["config_path"]
+    click.edit(filename=config_path)
+
+
+@cli.command()
+@click.pass_context
 def rehash(ctx: click.Context) -> None:
     """Reload configuration in the running server."""
     from eggpool.providers.connect import signal_reload
