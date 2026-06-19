@@ -51,8 +51,9 @@ monthly_microdollars = 60000000
 enabled = true
 public = true
 # Theme name (without .toml extension). "default" uses GitHub Primer colors.
-# Available themes in the themes/ directory: catppuccin-mocha, catppuccin-latte,
-# dracula, nord, gruvbox, one-dark, rose-pine, solarized-dark, kanagawa, etc.
+# Themes are from Halloy: https://themes.halloy.chat/
+# Available in themes/: catppuccin-mocha, catppuccin-latte, dracula, nord,
+# gruvbox, one-dark, rose-pine, solarized-dark, kanagawa, etc.
 theme = "Cyber Red"
 themes_dir = "themes"
 retain_request_stats_days = 30

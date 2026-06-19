@@ -11,7 +11,7 @@ behind one OpenAI/Anthropic-compatible endpoint.
 - Routes requests across accounts based on estimated quota utilization
 - Tracks request, token, model, latency, error, and estimated-cost statistics in SQLite
 - Multi-page dashboard with overview, accounts, models, latency, pings, events, timeseries, and bandwidth views
-- 50+ built-in themes with customizable styling
+- 50+ themes from [Halloy](https://github.com/squidowl/halloy) with customizable styling
 - Designed for lightweight deployments such as Raspberry Pis
 
 ## Requirements
@@ -149,7 +149,7 @@ The dashboard includes:
 - Provider health monitoring with ping statistics
 - Bandwidth heatmap (GitHub-style contribution graph)
 - Timeseries charts with auto-refresh
-- Interactive theme selector with 50+ themes
+- Interactive theme selector with 50+ [Halloy](https://themes.halloy.chat/) themes
 
 Static assets (CSS, JavaScript, favicon) are served from `/static/` with
 appropriate cache headers.
