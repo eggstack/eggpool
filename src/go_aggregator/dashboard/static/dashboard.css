@@ -3,19 +3,39 @@
 * { box-sizing: border-box; }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   margin: 0;
   background: var(--page-bg);
   color: var(--page-text);
+  line-height: 1.45;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgb(255 255 255 / 0.025),
+    rgb(255 255 255 / 0.025) 1px,
+    transparent 1px,
+    transparent 4px
+  );
+  mix-blend-mode: screen;
+  opacity: 0.35;
 }
 
 header.topbar {
   display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
   align-items: center;
   padding: 0.75rem 1.5rem;
   background: var(--topbar-bg);
   color: var(--topbar-text);
   border-bottom: 1px solid var(--topbar-border);
+  box-shadow: 0 1px 0 var(--page-border);
 }
 
 header.topbar h1 {
@@ -32,6 +52,7 @@ header.topbar h1 a {
 nav.topnav {
   margin-left: auto;
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   align-items: center;
 }
@@ -40,27 +61,31 @@ nav.topnav a {
   color: var(--nav-text);
   text-decoration: none;
   padding: 0.35rem 0.7rem;
-  border-radius: 4px;
+  border: 1px solid transparent;
+  border-radius: 3px;
   font-size: 0.9rem;
+  text-transform: uppercase;
 }
 
 nav.topnav a:hover {
   background: var(--nav-hover-bg);
+  border-color: var(--topbar-border);
 }
 
 nav.topnav a.active {
   background: var(--nav-active-bg);
   color: var(--nav-active-text);
+  border-color: var(--nav-active-text);
 }
 
 main {
-  max-width: 1100px;
+  max-width: 1440px;
   margin: 0 auto;
   padding: 1.5rem;
 }
 
 footer {
-  max-width: 1100px;
+  max-width: 1440px;
   margin: 0 auto;
   padding: 1rem 1.5rem 2rem;
   color: var(--text-muted);
@@ -75,6 +100,7 @@ footer .period-label {
 h2 {
   margin: 0 0 1rem;
   font-size: 1.4rem;
+  text-transform: uppercase;
 }
 
 h3 {
@@ -87,7 +113,7 @@ h3 {
 
 .cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: 0.75rem;
   margin-bottom: 1.5rem;
 }
@@ -95,8 +121,9 @@ h3 {
 .card {
   background: var(--card-bg);
   border: 1px solid var(--card-border);
-  border-radius: 6px;
+  border-radius: 2px;
   padding: 1rem;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.03);
 }
 
 .card .metric {
@@ -114,14 +141,23 @@ h3 {
 .panel {
   background: var(--card-bg);
   border: 1px solid var(--card-border);
-  border-radius: 6px;
+  border-radius: 2px;
   padding: 1rem 1.25rem;
   margin-bottom: 1.5rem;
+  overflow-x: auto;
+}
+
+.overview-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
 }
 
 table.data {
   width: 100%;
   border-collapse: collapse;
+  min-width: max-content;
 }
 
 table.data th, table.data td {
@@ -135,6 +171,7 @@ table.data th {
   font-weight: 600;
   color: var(--table-header-text);
   background: var(--table-header-bg);
+  text-transform: uppercase;
 }
 
 table.data tr:last-child td {
@@ -147,6 +184,7 @@ td.no { color: var(--color-error); font-weight: 600; }
 .period-selector,
 .filter-form {
   display: inline-flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   align-items: center;
   margin: 0 0 1rem;
@@ -158,7 +196,7 @@ td.no { color: var(--color-error); font-weight: 600; }
   font: inherit;
   padding: 0.35rem 0.55rem;
   border: 1px solid var(--card-border);
-  border-radius: 4px;
+  border-radius: 2px;
   background: var(--card-bg);
   color: var(--page-text);
 }
@@ -178,7 +216,8 @@ td.no { color: var(--color-error); font-weight: 600; }
 .event-tag {
   display: inline-block;
   padding: 0.1rem 0.5rem;
-  border-radius: 999px;
+  border: 1px solid currentcolor;
+  border-radius: 2px;
   background: var(--tag-default-bg);
   color: var(--tag-default-text);
   font-size: 0.8rem;
@@ -198,7 +237,7 @@ td.no { color: var(--color-error); font-weight: 600; }
 .heatmap-label {
   fill: var(--heatmap-label-text);
   font-size: 10px;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 .theme-selector {
@@ -212,8 +251,27 @@ td.no { color: var(--color-error); font-weight: 600; }
   font-size: 0.85rem;
   padding: 0.25rem 0.5rem;
   border: 1px solid var(--topbar-border);
-  border-radius: 4px;
+  border-radius: 2px;
   background: var(--topbar-bg);
   color: var(--topbar-text);
   cursor: pointer;
+}
+
+@media (max-width: 760px) {
+  header.topbar {
+    align-items: flex-start;
+  }
+
+  nav.topnav {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .overview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  main {
+    padding: 1rem;
+  }
 }

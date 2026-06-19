@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import signal
 import sys
 import termios
 import tomllib
@@ -626,23 +625,6 @@ def export_env_var(env_name: str, value: str) -> Path | None:
     return profile
 
 
-def send_reload_signal(config_path: str) -> bool:
-    """Send SIGHUP to the running gorouter process to trigger config reload.
-
-    Returns True if signal was sent successfully.
-    """
-    pid_file = Path(config_path).parent / ".gorouter.pid"
-    if not pid_file.exists():
-        return False
-
-    try:
-        pid = int(pid_file.read_text().strip())
-        os.kill(pid, signal.SIGHUP)
-        return True
-    except (ValueError, ProcessLookupError, PermissionError):
-        return False
-
-
 def connect(
     config_path: str,
     providers_path: str = "providers.toml",
@@ -718,17 +700,9 @@ def connect(
 
     sys.stdout.write(f"  Added {account_name} to {provider_id} in {config_path}\n")
 
-    # Attempt to signal running server for reload
-    if send_reload_signal(config_path):
-        sys.stdout.write("  Sent reload signal to running server.\n")
-    else:
-        sys.stdout.write(
-            "  No running server detected. Changes take effect on next start.\n"
-        )
-
     sys.stdout.write(
         f"\n  Run `source {profile or '~/.profile'}` to load the env var, "
-        f"then restart or let the server reload.\n"
+        f"then restart the server.\n"
     )
 
     return True

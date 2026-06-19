@@ -315,7 +315,8 @@ class TestRenderThemeIntegration:
             overview={"summary": {}, "imbalance": {}},
             accounts=[],
         )
-        assert "<style>" not in html
+        assert "<style>" in html
+        assert "--page-bg" in html
 
     def test_heatmap_with_theme_colors(self) -> None:
         from go_aggregator.dashboard.render import _render_bandwidth_heatmap

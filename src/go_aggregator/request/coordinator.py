@@ -456,38 +456,54 @@ class RequestCoordinator:
                             )
                         )
 
-                # 4. Select account using projected estimates, acquiring
-                #    the circuit-breaker probe slot atomically.
+                # 4. Rank accounts once using projected estimates, then
+                #    acquire the circuit-breaker probe slot atomically.
                 exclude: set[str] = (
                     set(context.attempted_accounts)
                     if context.attempted_accounts
                     else set()
                 )
                 selected_state = None
-                for _ in range(len(eligible_account_names) + 1):
+                ranked_candidates = await self._router.select_accounts_for_failover(
+                    context.model_id,
+                    max_accounts=len(eligible_account_names),
+                    request_estimates=request_estimates,
+                    exclude_accounts=exclude if exclude else None,
+                    provider_id=context.provider_id,
+                    protocol=context.protocol,
+                )
+                for candidate_state, _score in ranked_candidates:
+                    # Acquire the circuit-breaker probe slot. If the
+                    # breaker rejects this account (half-open slot
+                    # consumed or still open), try the next ranked
+                    # account without rebuilding and rescoring the
+                    # whole candidate list.
+                    if (
+                        self._health_manager is not None
+                        and not self._health_manager.try_acquire_request(
+                            candidate_state.name, context.model_id
+                        )
+                    ):
+                        continue
+                    selected_state = candidate_state
+                    break
+
+                if selected_state is None and not ranked_candidates:
                     selected_state = await self._router.select_account(
-                        context.model_id,
+                        model_id=context.model_id,
                         request_estimates=request_estimates,
                         exclude_accounts=exclude if exclude else None,
                         provider_id=context.provider_id,
                         protocol=context.protocol,
                     )
-                    if selected_state is None:
-                        break
-                    # Acquire the circuit-breaker probe slot.  If the
-                    # breaker rejects this account (half-open slot
-                    # consumed or still open), exclude it and retry
-                    # with the next eligible account.
                     if (
-                        self._health_manager is not None
+                        selected_state is not None
+                        and self._health_manager is not None
                         and not self._health_manager.try_acquire_request(
                             selected_state.name, context.model_id
                         )
                     ):
-                        exclude.add(selected_state.name)
                         selected_state = None
-                        continue
-                    break
 
                 if selected_state is None:
                     raise ModelUnavailableError(
@@ -495,71 +511,79 @@ class RequestCoordinator:
                     )
 
                 account_name = selected_state.name
-                api_key = self._registry.get_api_key(account_name)
-                if not api_key or not api_key.strip():
-                    raise AuthenticationError(
-                        f"API key not available for account {account_name!r}"
+                try:
+                    api_key = self._registry.get_api_key(account_name)
+                    if not api_key or not api_key.strip():
+                        raise AuthenticationError(
+                            f"API key not available for account {account_name!r}"
+                        )
+
+                    # 5. Resolve account ID
+                    account_repo = AccountRepository(self._db)
+                    account_id = await account_repo.get_id_by_name(account_name)
+                    if account_id is None:
+                        raise DatabaseError(
+                            f"Account {account_name!r} not found in database"
+                        )
+
+                    # 6. Resolve the selected account's provider
+                    resolved_provider_id = (
+                        self._catalog.cache.get_provider_for_account(account_name)
+                        or self._registry.get_provider_for_account(account_name)
+                        or context.provider_id
+                        or "opencode-go"
                     )
 
-                # 5. Resolve account ID
-                account_repo = AccountRepository(self._db)
-                account_id = await account_repo.get_id_by_name(account_name)
-                if account_id is None:
-                    raise DatabaseError(
-                        f"Account {account_name!r} not found in database"
-                    )
+                    # 7. Create pending request if first attempt
+                    if "db_request_id" not in context.client_metadata:
+                        db_request_id = await self._request_repo.create_pending(
+                            request_id=context.request_id,
+                            model_id=context.model_id,
+                            protocol=context.protocol,
+                            streamed=context.streaming,
+                            account_id=account_id,
+                            started_at=context.started_at,
+                            provider_id=resolved_provider_id,
+                        )
+                        context.client_metadata["db_request_id"] = db_request_id
+                    db_request_id = context.client_metadata["db_request_id"]
 
-                # 6. Resolve the selected account's provider
-                resolved_provider_id = (
-                    self._catalog.cache.get_provider_for_account(account_name)
-                    or self._registry.get_provider_for_account(account_name)
-                    or context.provider_id
-                    or "opencode-go"
-                )
+                    # 7. Use the exact estimate for the selected account
+                    estimated_microdollars = request_estimates.get(account_name, 0)
+                    if (
+                        estimated_microdollars == 0
+                        and self._quota_estimator is not None
+                    ):
+                        estimated_microdollars = self._quota_estimator.estimate_cost(
+                            account_name, context.model_id, estimated_tokens
+                        )
 
-                # 7. Create pending request if first attempt
-                if "db_request_id" not in context.client_metadata:
-                    db_request_id = await self._request_repo.create_pending(
-                        request_id=context.request_id,
-                        model_id=context.model_id,
-                        protocol=context.protocol,
-                        streamed=context.streaming,
+                    # 8. Create reservation
+                    reservation_id = await self._reservation_repo.create(
+                        request_id=db_request_id,
                         account_id=account_id,
-                        started_at=context.started_at,
-                        provider_id=resolved_provider_id,
-                    )
-                    context.client_metadata["db_request_id"] = db_request_id
-                db_request_id = context.client_metadata["db_request_id"]
-
-                # 7. Use the exact estimate for the selected account
-                estimated_microdollars = request_estimates.get(account_name, 0)
-                if estimated_microdollars == 0 and self._quota_estimator is not None:
-                    estimated_microdollars = self._quota_estimator.estimate_cost(
-                        account_name, context.model_id, estimated_tokens
+                        model_id=context.model_id,
+                        estimated_tokens=estimated_tokens,
+                        estimated_microdollars=estimated_microdollars,
                     )
 
-                # 8. Create reservation
-                reservation_id = await self._reservation_repo.create(
-                    request_id=db_request_id,
-                    account_id=account_id,
-                    model_id=context.model_id,
-                    estimated_tokens=estimated_tokens,
-                    estimated_microdollars=estimated_microdollars,
-                )
+                    # 9. Create attempt row
+                    attempt_id = await self._attempt_repo.create(
+                        request_id=db_request_id,
+                        attempt_number=attempt_number,
+                        account_id=account_id,
+                    )
 
-                # 9. Create attempt row
-                attempt_id = await self._attempt_repo.create(
-                    request_id=db_request_id,
-                    attempt_number=attempt_number,
-                    account_id=account_id,
-                )
-
-                # 10. Update request with account and reserved amount
-                await self._request_repo.update_after_selection(
-                    request_id=db_request_id,
-                    account_id=account_id,
-                    reserved_microdollars=estimated_microdollars,
-                )
+                    # 10. Update request with account and reserved amount
+                    await self._request_repo.update_after_selection(
+                        request_id=db_request_id,
+                        account_id=account_id,
+                        reserved_microdollars=estimated_microdollars,
+                    )
+                except BaseException:
+                    if self._health_manager is not None:
+                        self._health_manager.release_request(account_name)
+                    raise
 
                 # Record the account under the same select lock so a
                 # concurrent caller observing the same context cannot
@@ -601,6 +625,8 @@ class RequestCoordinator:
                         ),
                     )
                 )
+                if self._health_manager is not None:
+                    self._health_manager.release_request(account_name)
                 context.client_metadata["post_commit_interrupted"] = True
                 raise
 

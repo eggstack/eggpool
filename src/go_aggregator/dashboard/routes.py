@@ -63,6 +63,10 @@ def _get_theme_data(
     # Always include "default" in the list
     if "default" not in available:
         available.insert(0, "default")
+    if theme_name not in available:
+        theme_name = config.dashboard.theme
+    if theme_name not in available:
+        theme_name = "default"
     theme = get_theme(theme_name, themes_dir)
     return theme.to_css_variables(), theme.heatmap_colors(), theme_name, available
 
@@ -82,6 +86,8 @@ async def handle_overview(
     stats = request.app.state.stats
     overview = await stats.get_dashboard_overview(time_range)
     accounts = await stats.get_account_stats(time_range)
+    models = await stats.get_model_stats(time_range)
+    events = await stats.get_recent_events(limit=10)
 
     heatmap_start_dt = datetime.now(UTC) - timedelta(days=90)
     heatmap_end_dt = datetime.now(UTC)
@@ -105,15 +111,14 @@ async def handle_overview(
         refresh_interval_s=refresh_s,
         bandwidth_daily=bandwidth_daily,
         ping_summary=ping_summary,
+        models=models if models is not None else [],
+        events=events,
         theme_css=theme_css,
         heatmap_colors=heatmap_colors,
         available_themes=available,
         current_theme=current_theme,
     )
-    return HTMLResponse(
-        content=html,
-        headers={"refresh": str(refresh_s)},
-    )
+    return HTMLResponse(content=html)
 
 
 async def handle_accounts(

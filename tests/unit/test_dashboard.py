@@ -147,6 +147,9 @@ class TestRenderOverview:
         assert "10" in html
         assert "$1.500000" in html
         assert "20.00%" in html
+        assert 'id="dashboard-content"' in html
+        assert "setInterval" in html
+        assert "--page-bg" in html
 
     def test_escapes_account_name_in_overview(self) -> None:
         html = render_overview(
@@ -286,6 +289,53 @@ class TestRenderOverview:
             accounts=[],
         )
         assert "No accounts configured" in html
+
+    def test_renders_overview_glance_sections(self) -> None:
+        html = render_overview(
+            overview={
+                "summary": {
+                    "total_requests": 1,
+                    "successful_requests": 1,
+                    "error_requests": 0,
+                    "error_rate": 0.0,
+                    "total_input_tokens": 10,
+                    "total_output_tokens": 20,
+                    "total_cost_microdollars": 100,
+                    "avg_latency_ms": 50.0,
+                },
+                "imbalance": {
+                    "imbalance_ratio": 0.0,
+                    "active_accounts": 1,
+                    "most_used": None,
+                    "least_used": None,
+                },
+            },
+            accounts=[],
+            models=[
+                {
+                    "model_id": "<model>",
+                    "provider_id": "opencode-go",
+                    "request_count": 1,
+                    "error_count": 0,
+                    "cost_microdollars": 100,
+                    "avg_latency_ms": 50.0,
+                }
+            ],
+            events=[
+                {
+                    "created_at": "2024-01-01 12:00:00",
+                    "account_name": "acct_a",
+                    "event_type": "catalog_refresh_failed",
+                    "details": "<detail>",
+                }
+            ],
+        )
+        assert "Top models" in html
+        assert "Recent events" in html
+        assert "<model>" not in html
+        assert "&lt;model&gt;" in html
+        assert "<detail>" not in html
+        assert "&lt;detail&gt;" in html
 
 
 class TestRenderAccounts:

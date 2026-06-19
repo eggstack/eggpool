@@ -3,11 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
-import os
-import signal
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -450,22 +447,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # 22. Startup complete
     logger.info(
         "Application started (%d accounts, %d models). "
-        "Send SIGHUP to reload configuration.",
+        "Restart the process to apply configuration changes.",
         len(config.all_accounts()),
         catalog.cache.model_count,
     )
-
-    # 23. Write PID file and register SIGHUP handler for config reload
-    config_path_str: str | None = getattr(app.state, "config_path", None)
-    if config_path_str is not None:
-        _write_pid_file(config_path_str)
-
-        def _handle_sighup(signum: int, frame: Any) -> None:
-            """Schedule config reload on SIGHUP."""
-            loop = asyncio.get_event_loop()
-            loop.call_soon_threadsafe(asyncio.ensure_future, _reload_config(app))
-
-        signal.signal(signal.SIGHUP, _handle_sighup)
 
     yield
 
@@ -479,11 +464,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         except Exception:
             logger.exception("Error closing client pool during shutdown")
     await db.disconnect()
-
-    # Remove PID file
-    config_path_str = getattr(app.state, "config_path", None)
-    if config_path_str is not None:
-        _remove_pid_file(config_path_str)
 
 
 async def _catalog_refresh_loop(
@@ -499,191 +479,6 @@ async def _catalog_refresh_loop(
             break
         except Exception:
             logger.exception("Catalog refresh failed")
-
-
-def _write_pid_file(config_path: str) -> None:
-    """Write the current PID to a file next to the config for reload signaling."""
-    pid_file = Path(config_path).parent / ".gorouter.pid"
-    try:
-        pid_file.write_text(str(os.getpid()))
-    except OSError:
-        logger.debug("Could not write PID file")
-
-
-def _remove_pid_file(config_path: str) -> None:
-    """Remove the PID file on shutdown."""
-    pid_file = Path(config_path).parent / ".gorouter.pid"
-    with contextlib.suppress(OSError):
-        pid_file.unlink(missing_ok=True)
-
-
-async def _reload_config(app: FastAPI) -> None:
-    """Reload configuration from disk and update running state.
-
-    Triggered by SIGHUP. Re-reads the TOML config, re-syncs providers
-    and accounts to the database, and rebuilds the HTTP client pool.
-    """
-    config_path: str | None = getattr(app.state, "config_path", None)
-    if config_path is None:
-        logger.warning("Reload requested but no config_path set")
-        return
-
-    logger.info("Reloading configuration from %s", config_path)
-
-    try:
-        new_config = AppConfig.from_toml(config_path)
-    except Exception:
-        logger.exception("Failed to reload configuration from %s", config_path)
-        return
-
-    app.state.config = new_config
-
-    db: Database | None = getattr(app.state, "db", None)
-    if db is not None:
-        # Re-sync providers
-        provider_repo = ProviderRepository(db)
-        configured_providers = {
-            pid: {"base_url": pcfg.base_url, "protocols": pcfg.protocols}
-            for pid, pcfg in new_config.providers.items()
-        }
-        await provider_repo.sync_from_config(configured_providers)
-
-        # Re-sync accounts
-        account_repo = AccountRepository(db)
-        await account_repo.sync_from_config(account_config_rows(new_config))
-
-    # Rebuild client pool
-    old_pool: ProviderClientPool | None = getattr(app.state, "client_pool", None)
-    new_pool = ProviderClientPool.from_app_config(new_config)
-    app.state.client_pool = new_pool
-    if "opencode-go" in new_pool.providers:
-        app.state.httpx_client = new_pool.get_client("opencode-go")
-
-    # Rebuild account registry
-    registry = AccountRegistry(new_config)
-    app.state.registry = registry
-
-    if db is not None:
-        request_repo = RequestRepository(db)
-        reservation_repo = ReservationRepository(db)
-        attempt_repo = AttemptRepository(db)
-        usage_window_repo = UsageWindowRepository(db)
-        ping_repo = PingRepository(db)
-        health_manager: HealthManager | None = getattr(
-            app.state, "health_manager", None
-        )
-        catalog = CatalogService(
-            new_config,
-            registry,
-            db,
-            new_pool,
-            ping_repo=ping_repo,
-        )
-        await catalog._load_cached_models()  # pyright: ignore[reportPrivateUsage]
-        if new_config.models.startup_refresh:
-            try:
-                await catalog.refresh()
-            except Exception:
-                logger.exception("Catalog refresh during config reload failed")
-        app.state.catalog = catalog
-
-        router = Router(
-            registry,
-            catalog,
-            health_manager=health_manager,
-            stale_after_s=float(new_config.models.stale_after_s),
-        )
-        five_hour_capacity = float(new_config.limits.five_hour_microdollars)
-        router._scorer.tiebreaker_range = new_config.routing.near_tie_epsilon  # pyright: ignore[reportPrivateUsage]
-        if not new_config.routing.randomize_near_ties:
-            router._scorer.tiebreaker_range = 0.0  # pyright: ignore[reportPrivateUsage]
-        if five_hour_capacity > 0:
-            router._scorer.inflight_penalty_per_request = (  # pyright: ignore[reportPrivateUsage]
-                new_config.routing.inflight_penalty / five_hour_capacity
-            )
-            router._scorer.health_penalty_value = (  # pyright: ignore[reportPrivateUsage]
-                new_config.routing.health_penalty / five_hour_capacity
-            )
-        router._quota_estimator.default_unknown_reservation_microdollars = (  # pyright: ignore[reportPrivateUsage]
-            new_config.routing.unknown_request_reservation_microdollars
-        )
-        for model_id, override in new_config.model_overrides.items():
-            input_price = override.input_price_per_1k
-            output_price = override.output_price_per_1k
-            if input_price is not None and output_price is not None:
-                router._quota_estimator.set_model_override(  # pyright: ignore[reportPrivateUsage]
-                    model_id,
-                    input_price * 1000,
-                    output_price * 1000,
-                )
-        router._quota_estimator.set_usage_window_repo(  # pyright: ignore[reportPrivateUsage]
-            usage_window_repo
-        )
-        config_offsets: dict[str, dict[str, int]] = {}
-        for acct_cfg in new_config.all_accounts():
-            config_offsets[acct_cfg.name] = {
-                "five_hour": acct_cfg.five_hour_offset_microdollars,
-                "weekly": acct_cfg.weekly_offset_microdollars,
-                "monthly": acct_cfg.monthly_offset_microdollars,
-            }
-        await router._quota_estimator.load_persisted_windows(  # pyright: ignore[reportPrivateUsage]
-            offsets=config_offsets,
-        )
-        for acct_cfg in new_config.all_accounts():
-            router.configure_account_policy(
-                account_name=acct_cfg.name,
-                weight=acct_cfg.weight,
-                capacity_5h_microdollars=int(
-                    new_config.limits.five_hour_microdollars * acct_cfg.weight
-                ),
-                capacity_7d_microdollars=int(
-                    new_config.limits.weekly_microdollars * acct_cfg.weight
-                ),
-                capacity_30d_microdollars=int(
-                    new_config.limits.monthly_microdollars * acct_cfg.weight
-                ),
-                offset_5h_microdollars=acct_cfg.five_hour_offset_microdollars,
-                offset_7d_microdollars=acct_cfg.weekly_offset_microdollars,
-                offset_30d_microdollars=acct_cfg.monthly_offset_microdollars,
-            )
-        app.state.router = router
-
-        cost_calculator: CostCalculator | None = getattr(
-            app.state, "cost_calculator", None
-        )
-        app.state.coordinator = RequestCoordinator(
-            registry=registry,
-            catalog=catalog,
-            router=router,
-            db=db,
-            client_pool=new_pool,
-            request_repo=request_repo,
-            reservation_repo=reservation_repo,
-            attempt_repo=attempt_repo,
-            usage_window_repo=usage_window_repo,
-            health_manager=health_manager,
-            cost_calculator=cost_calculator,
-            quota_estimator=router._quota_estimator,  # pyright: ignore[reportPrivateUsage]
-            max_retry_attempts=1 + new_config.routing.max_retries_before_stream,
-            quota_exhausted_cooldown_seconds=(
-                new_config.routing.quota_exhausted_cooldown_seconds
-            ),
-            persist_error_detail=new_config.security.persist_redacted_error_detail,
-            config=new_config,
-        )
-
-    # Close old pool after the new coordinator is ready.
-    if old_pool is not None:
-        try:
-            await old_pool.close()
-        except Exception:
-            logger.debug("Error closing old client pool during reload")
-
-    logger.info(
-        "Configuration reloaded: %d providers, %d accounts",
-        len(new_config.providers),
-        len(new_config.all_accounts()),
-    )
 
 
 def create_app(

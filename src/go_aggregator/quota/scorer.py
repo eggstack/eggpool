@@ -188,4 +188,22 @@ class QuotaFairScorer:
 
     def rank_accounts(self, scores: list[RoutingScore]) -> list[RoutingScore]:
         """Rank accounts by score for fallback selection (lower is better)."""
-        return sorted(scores, key=lambda s: s.final_score)
+        ranked = sorted(scores, key=lambda s: s.final_score)
+        if self.tiebreaker_range <= 0 or len(ranked) < 2:
+            return ranked
+
+        result: list[RoutingScore] = []
+        index = 0
+        while index < len(ranked):
+            base_score = ranked[index].final_score
+            group: list[RoutingScore] = []
+            while (
+                index < len(ranked)
+                and abs(ranked[index].final_score - base_score) < self.tiebreaker_range
+            ):
+                group.append(ranked[index])
+                index += 1
+            if len(group) > 1:
+                random.shuffle(group)
+            result.extend(group)
+        return result

@@ -1,6 +1,7 @@
-# opencode-go-aggregator
+# GoRouter
 
-A lightweight, LAN-hosted proxy that aggregates multiple OpenCode Go subscriptions behind a single endpoint.
+A lightweight, LAN-hosted proxy that aggregates OpenCode Go and compatible
+provider accounts behind one OpenAI/Anthropic-compatible endpoint.
 
 ## Features
 
@@ -9,7 +10,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple OpenCode Go subscriptio
 - Dynamically discovers currently available models
 - Routes requests across subscriptions based on estimated quota utilization
 - Tracks request, token, model, latency, error, and estimated-cost statistics in SQLite
-- Exposes a read-only dashboard for historical and current usage
+- Exposes a self-updating single-page dashboard for current usage at a glance
 - Runs on a Raspberry Pi with Ubuntu using a single-process ASGI deployment
 
 ## Requirements
@@ -19,34 +20,36 @@ A lightweight, LAN-hosted proxy that aggregates multiple OpenCode Go subscriptio
 
 ## Quick Start
 
-### Option 1: Automated install (recommended)
+### Option 1: Automated install
 
 ```bash
 ./scripts/install.sh
 ```
 
-This script will:
+The script:
+
 - Verify Python 3.12+ and uv are installed
 - Install dependencies
 - Copy example configuration files
-- Validate the configuration
+- Attempt configuration validation
 
-Then edit `config.toml` and `.env` with your settings.
+Validation fails until `.env` contains real, non-placeholder keys. Edit
+`config.toml` and `.env`, then run the validation and migration commands below.
 
 ### Option 2: Manual install
 
 ```bash
-# Install dependencies
+# Install dependencies, including local development tools
 uv sync --extra dev
 
 # Copy and edit configuration
 cp config.example.toml config.toml
 cp .env.example .env
 
-# Edit config.toml with your settings (accounts, upstream URL, etc.)
-# Edit .env with your API keys
+# Edit config.toml for providers/accounts and .env for keys.
+# check-config rejects placeholder values such as "your-api-key".
 
-# Validate configuration (env vars must be exported first)
+# Validate configuration
 set -a; source .env; set +a
 uv run go-aggregator --config config.toml check-config
 
@@ -56,6 +59,10 @@ uv run go-aggregator --config config.toml migrate
 # Start the server
 uv run go-aggregator --config config.toml serve
 ```
+
+The validated baseline sequence is: `uv run go-aggregator --help`,
+`check-config` with exported environment variables, and `migrate` against the
+configured SQLite path.
 
 ## CLI Commands
 
@@ -69,6 +76,8 @@ uv run go-aggregator --config config.toml serve
 | `go-aggregator db vacuum` | Reclaim SQLite space via the lock-owned `Database.vacuum()` helper |
 
 All commands accept `--config /path/to/config.toml` (defaults to `config.toml`).
+Configuration changes require a process restart; live reload is intentionally
+not supported.
 
 ## Operational Scripts
 
@@ -101,6 +110,15 @@ Scripts under `scripts/`:
 | `GET` | `/v1/healthz` | Liveness check |
 | `GET` | `/v1/readyz` | Readiness check (database, accounts, catalog) |
 
+### Dashboard and Stats
+
+When `[dashboard].enabled = true`, the dashboard is served at `/`. It defaults
+to the bundled `Cyber Red` theme and refreshes visible data in place using the
+configured `[dashboard].refresh_interval_s`.
+
+JSON stats endpoints are available under `/api/stats/*`, including summary,
+accounts, models, timeseries, errors, latency, pings, bandwidth, and `/api/events`.
+
 ## Configuration
 
 Configuration uses a single TOML file. API keys are loaded from environment variables.
@@ -115,7 +133,7 @@ See `config.example.toml` for all available options.
 - `[models]` — Catalog refresh interval, exposure mode
 - `[routing]` — Routing strategy, retry limits, penalties
 - `[limits]` — Quota windows (5-hour, weekly, monthly)
-- `[dashboard]` — Dashboard toggle, retention, refresh interval
+- `[dashboard]` — Dashboard toggle, theme, retention, refresh interval
 - `[security]` — Allowed hosts, CORS, header redaction
 - `[[accounts]]` — One entry per OpenCode Go subscription
 
@@ -166,21 +184,7 @@ src/go_aggregator/
 │   ├── connection.py    # SQLite connection manager
 │   ├── migrations.py    # Schema migration runner
 │   ├── repositories.py  # Data access layer (Account, Request, Reservation, Attempt, Usage, Price repos)
-│   └── schema/
-│       ├── 0001_initial.sql
-│       ├── 0002_indexes.sql
-│       ├── 0003_request_attempts.sql
-│       ├── 0004_integration_hardening.sql
-│       ├── 0005_price_microdollars.sql
-│       ├── 0006_correct_price_microdollars.sql
-│       ├── 0007_price_cache_rates.sql
-│       ├── 0008_proxy_request_identity.sql
-│       ├── 0009_model_protocol_source.sql
-│       ├── 0010_health_probe.sql
-│       ├── 0011_model_resolution_status.sql
-│       ├── 0012_drop_reservations_estimated_microdollars.sql
-│       ├── 0013_request_attempts_account_id_index.sql
-│       └── checksums.json
+│   └── schema/          # Ordered SQLite migrations + checksums
 ├── request/
 │   ├── coordinator.py       # Central request lifecycle orchestrator
 │   ├── attempt_finalizer.py # Per-attempt terminal lifecycle
@@ -196,7 +200,7 @@ src/go_aggregator/
 ├── stats/               # Statistics queries and service
 ├── api/                 # API endpoint handlers and error shaping
 ├── background/          # Background task supervisor and cleanup
-├── dashboard/           # Server-rendered HTML dashboard
+├── dashboard/           # Self-updating server-rendered HTML dashboard
 └── security/            # Header redaction and security utilities
 
 scripts/                 # Operational scripts
@@ -209,8 +213,7 @@ tests/
 ├── unit/                # Unit tests
 ├── integration/         # Integration tests (mocked upstreams)
 ├── contract/            # Contract tests (response format)
-└── fixtures/            # Test data, including the historical schema fixture
-    └── schema/          # pre_phase17_v11.sql + checksums.json
+└── fixtures/            # Test data
 ```
 
 ## Implementation Status
@@ -255,12 +258,6 @@ MIT
 ## Deployment
 
 See `docs/deployment.md` for production deployment instructions.
-
-Quick start for development:
-
-```bash
-uv run go-aggregator --config config.toml serve
-```
 
 For production (systemd):
 

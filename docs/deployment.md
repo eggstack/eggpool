@@ -162,7 +162,7 @@ sudo journalctl -u gorouter --since "1 hour ago"
 sudo journalctl -u gorouter --since "5 minutes ago"
 
 # Validate config
-sudo -u gorouter /opt/gorouter/.venv/bin/go-aggregator --config /etc/gorouter/config.toml check-config
+sudo -u gorouter bash -c 'set -a; source /etc/gorouter/env; set +a; /opt/gorouter/.venv/bin/go-aggregator --config /etc/gorouter/config.toml check-config'
 
 # Check file permissions
 ls -la /etc/gorouter/

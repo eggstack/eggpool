@@ -74,16 +74,20 @@ def _render_layout(
     theme_css: str = "",
     available_themes: list[str] | None = None,
     current_theme: str = "",
+    auto_refresh: bool = False,
 ) -> str:
     """Wrap a page body in the standard layout."""
     nav = _render_nav(active_nav, period, available_themes, current_theme)
-    style_block = ""
-    if theme_css:
-        style_block = f"<style>\n{theme_css}\n</style>"
+    css = theme_css or get_default_theme().to_css_variables()
+    style_block = f"<style>\n{css}\n</style>"
+    script_block = (
+        _render_auto_refresh_script(refresh_interval_s) if auto_refresh else ""
+    )
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{_html_escape(title)}</title>
 <link rel="stylesheet" href="/static/dashboard.css">
 {style_block}
@@ -95,15 +99,53 @@ def _render_layout(
     }">Go Aggregator</a></h1>
   {nav}
 </header>
-<main>
+<main id="dashboard-content">
 {body}
 </main>
 <footer>
   <small>Period: <span class="period-label">{_html_escape(period)}</span>
-    &middot; auto-refresh {refresh_interval_s}s</small>
+    &middot; auto-refresh {refresh_interval_s}s
+    &middot; <span id="dashboard-updated">ready</span></small>
 </footer>
+{script_block}
 </body>
 </html>"""
+
+
+def _render_auto_refresh_script(refresh_interval_s: int) -> str:
+    """Render the small client-side refresher used by dashboard pages."""
+    interval_ms = max(1, refresh_interval_s) * 1000
+    return f"""<script>
+(() => {{
+  const intervalMs = {interval_ms};
+  const content = document.getElementById("dashboard-content");
+  const updated = document.getElementById("dashboard-updated");
+  if (!content || !updated || !window.DOMParser) {{
+    return;
+  }}
+  const refresh = async () => {{
+    try {{
+      const response = await fetch(window.location.href, {{
+        cache: "no-store",
+        headers: {{"x-dashboard-refresh": "1"}},
+      }});
+      if (!response.ok) {{
+        return;
+      }}
+      const html = await response.text();
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const next = doc.getElementById("dashboard-content");
+      if (next) {{
+        content.innerHTML = next.innerHTML;
+        updated.textContent = new Date().toLocaleTimeString();
+      }}
+    }} catch (_err) {{
+      updated.textContent = "stale";
+    }}
+  }};
+  window.setInterval(refresh, intervalMs);
+}})();
+</script>"""
 
 
 def _render_nav(
@@ -220,6 +262,66 @@ def _render_provider_health(ping_summary: list[dict[str, Any]]) -> str:
         f"{''.join(rows)}"
         "</tbody></table>"
         "</section>"
+    )
+
+
+def _render_model_glance(models: list[dict[str, Any]]) -> str:
+    """Render a compact top-model table for the overview page."""
+    if not models:
+        return '<p class="empty">No model activity in this period.</p>'
+    rows: list[str] = []
+    for row in models[:10]:
+        rows.append(
+            f"<tr>"
+            f"<td>{escape(row.get('model_id', ''))}</td>"
+            f"<td>{escape(row.get('provider_id', ''))}</td>"
+            f"<td>{int(row.get('request_count', 0)):,}</td>"
+            f"<td>{int(row.get('error_count', 0)):,}</td>"
+            f"<td>{format_microdollars(row.get('cost_microdollars', 0))}</td>"
+            f"<td>{format_latency(row.get('avg_latency_ms', 0.0))}</td>"
+            f"</tr>"
+        )
+    return (
+        '<table class="data compact">'
+        "<thead><tr>"
+        "<th>Model</th>"
+        "<th>Provider</th>"
+        "<th>Reqs</th>"
+        "<th>Errs</th>"
+        "<th>Cost</th>"
+        "<th>Latency</th>"
+        "</tr></thead><tbody>"
+        f"{''.join(rows)}"
+        "</tbody></table>"
+    )
+
+
+def _render_event_glance(events: list[dict[str, Any]]) -> str:
+    """Render recent events for the overview page."""
+    if not events:
+        return '<p class="empty">No recent events.</p>'
+    rows: list[str] = []
+    for row in events[:10]:
+        event_type = str(row.get("event_type", ""))
+        rows.append(
+            f"<tr>"
+            f"<td>{format_timestamp(row.get('created_at', ''))}</td>"
+            f"<td>{escape(row.get('account_name', ''))}</td>"
+            f'<td><span class="event-tag {sanitize_class_name(event_type)}">'
+            f"{escape(event_type)}</span></td>"
+            f"<td>{truncate(row.get('details', ''), 120)}</td>"
+            f"</tr>"
+        )
+    return (
+        '<table class="data compact">'
+        "<thead><tr>"
+        "<th>When</th>"
+        "<th>Account</th>"
+        "<th>Type</th>"
+        "<th>Details</th>"
+        "</tr></thead><tbody>"
+        f"{''.join(rows)}"
+        "</tbody></table>"
     )
 
 
@@ -352,6 +454,8 @@ def render_overview(
     refresh_interval_s: int = 60,
     bandwidth_daily: list[dict[str, Any]] | None = None,
     ping_summary: list[dict[str, Any]] | None = None,
+    models: list[dict[str, Any]] | None = None,
+    events: list[dict[str, Any]] | None = None,
     theme_css: str = "",
     heatmap_colors: list[str] | None = None,
     available_themes: list[str] | None = None,
@@ -464,6 +568,17 @@ def render_overview(
   {_render_account_table(accounts)}
 </section>
 
+<section class="overview-grid">
+  <div class="panel">
+    <h3>Top models</h3>
+    {_render_model_glance(models or [])}
+  </div>
+  <div class="panel">
+    <h3>Recent events</h3>
+    {_render_event_glance(events or [])}
+  </div>
+</section>
+
 <section class="panel">
   <h3>Utilization range</h3>
   <p>
@@ -491,6 +606,7 @@ def render_overview(
         theme_css=theme_css,
         available_themes=available_themes,
         current_theme=current_theme,
+        auto_refresh=True,
     )
 
 

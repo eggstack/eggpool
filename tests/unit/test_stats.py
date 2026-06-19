@@ -406,6 +406,8 @@ class TestStatsService:
         )
         by_name = {r["account_name"]: r for r in rows}
         assert by_name["acct_a"]["reserved_microdollars"] == 500_000
+        assert by_name["acct_a"]["utilization_5h"] == pytest.approx(600_000)
+        assert by_name["acct_a"]["utilization_7d"] == pytest.approx(3_000_000 / 168)
 
     @pytest.mark.asyncio()
     async def test_get_account_stats_includes_live_reservation_path(

@@ -155,21 +155,22 @@ class StatsService:
                 reservation_count_by_account.get(name, 0) + 1
             )
 
-        now = datetime.now(UTC)
         for row in rows:
             name = str(row.get("account_name", ""))
             row["reserved_microdollars"] = reserved_by_account.get(name, 0)
             row["active_reservations"] = reservation_count_by_account.get(name, 0)
 
-            # Compute utilization across three windows
-            row["utilization_5h"] = await self._compute_utilization(
-                name, now - timedelta(seconds=_UTILIZATION_5H), now
+            # fetch_account_stats already returns rolling window costs.
+            # Convert them to cost/hour rates without issuing three extra
+            # queries per account.
+            row["utilization_5h"] = self._cost_per_hour(
+                row.get("cost_5h", 0), _UTILIZATION_5H
             )
-            row["utilization_7d"] = await self._compute_utilization(
-                name, now - timedelta(seconds=_UTILIZATION_7D), now
+            row["utilization_7d"] = self._cost_per_hour(
+                row.get("cost_7d", 0), _UTILIZATION_7D
             )
-            row["utilization_30d"] = await self._compute_utilization(
-                name, now - timedelta(seconds=_UTILIZATION_30D), now
+            row["utilization_30d"] = self._cost_per_hour(
+                row.get("cost_30d", 0), _UTILIZATION_30D
             )
 
             # Health state from HealthManager
@@ -183,6 +184,23 @@ class StatsService:
                 row["health_state"] = "healthy"
 
         return rows
+
+    @staticmethod
+    def _cost_per_hour(value: object, window_seconds: int) -> float:
+        """Convert a rolling-window cost to a microdollars/hour rate."""
+        hours = window_seconds / 3600.0
+        if hours <= 0:
+            return 0.0
+        if isinstance(value, int | float):
+            cost = int(value)
+        elif isinstance(value, str):
+            try:
+                cost = int(value)
+            except ValueError:
+                cost = 0
+        else:
+            cost = 0
+        return cost / hours
 
     async def _compute_utilization(
         self, account_name: str, start: datetime, end: datetime

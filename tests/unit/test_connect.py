@@ -630,72 +630,10 @@ class TestCliLogout:
         assert 'name = "default-2"' not in content
 
 
-class TestConfigRefresh:
-    """Tests for manual config reload signaling."""
+def test_config_refresh_command_removed() -> None:
+    """Live config reload is unsupported; the CLI must not expose it."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["config", "refresh"])
 
-    def test_config_refresh_sends_reload_signal(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        config_path = tmp_path / "config.toml"
-        config_path.write_text(
-            textwrap.dedent("""\
-                [providers.opencode-go]
-                id = "opencode-go"
-                base_url = "https://api.example.com"
-            """),
-            encoding="utf-8",
-        )
-
-        from go_aggregator.providers import connect as connect_module
-
-        called: list[str] = []
-
-        def fake_send_reload_signal(path: str) -> bool:
-            called.append(path)
-            return True
-
-        monkeypatch.setattr(
-            connect_module,
-            "send_reload_signal",
-            fake_send_reload_signal,
-        )
-
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "config", "refresh"],
-        )
-
-        assert result.exit_code == 0
-        assert called == [str(config_path)]
-        assert "Sent reload signal" in result.stdout
-
-    def test_config_refresh_fails_when_no_router_running(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        config_path = tmp_path / "config.toml"
-        config_path.write_text(
-            textwrap.dedent("""\
-                [providers.opencode-go]
-                id = "opencode-go"
-                base_url = "https://api.example.com"
-            """),
-            encoding="utf-8",
-        )
-
-        from go_aggregator.providers import connect as connect_module
-
-        monkeypatch.setattr(connect_module, "send_reload_signal", lambda path: False)
-
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "config", "refresh"],
-        )
-
-        assert result.exit_code == 1
-        assert "No running server detected" in result.stderr
+    assert result.exit_code != 0
+    assert "No such command" in result.stderr

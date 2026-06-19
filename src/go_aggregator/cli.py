@@ -118,7 +118,6 @@ def logout(ctx: click.Context, target: str) -> None:
         TerminalMenu,
         matching_logout_accounts,
         remove_account_from_config,
-        send_reload_signal,
     )
 
     config_path: str = ctx.obj["config_path"]
@@ -155,10 +154,7 @@ def logout(ctx: click.Context, target: str) -> None:
         sys.exit(1)
 
     click.echo(f"Removed {account.provider_id}/{account.name} from {config_path}.")
-    if send_reload_signal(config_path):
-        click.echo("Sent reload signal to running server.")
-    else:
-        click.echo("No running server detected. Changes take effect on next start.")
+    click.echo("Restart the running server for changes to take effect.")
 
 
 @cli.command("check-config")
@@ -289,32 +285,6 @@ def models_refresh(ctx: click.Context) -> None:
         asyncio.run(_run())
     except AggregatorError as exc:
         click.echo(f"Error: {exc}", err=True)
-        sys.exit(1)
-
-
-@cli.group("config")
-def config_group() -> None:
-    """Configuration management commands."""
-
-
-@config_group.command("refresh")
-@click.pass_context
-def config_refresh(ctx: click.Context) -> None:
-    """Ask a running router process to reload the configuration file."""
-    from go_aggregator.providers.connect import send_reload_signal
-
-    config_path: str = ctx.obj["config_path"]
-
-    try:
-        AppConfig.from_toml(config_path)
-    except AggregatorError as exc:
-        click.echo(f"Error: {exc}", err=True)
-        sys.exit(1)
-
-    if send_reload_signal(config_path):
-        click.echo("Sent reload signal to running server.")
-    else:
-        click.echo("No running server detected.", err=True)
         sys.exit(1)
 
 
