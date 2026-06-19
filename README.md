@@ -23,15 +23,17 @@ provider accounts behind one OpenAI/Anthropic-compatible endpoint.
 ### Option 1: Automated install
 
 ```bash
-./scripts/install.sh
+curl -fsSL https://raw.githubusercontent.com/eggstack/gorouter/main/scripts/install.sh | bash
 ```
 
 The script:
 
-- Verify Python 3.12+ and uv are installed
-- Install dependencies
-- Copy example configuration files
-- Attempt configuration validation
+- Downloads the repository if not running from a clone
+- Installs `uv` if missing
+- Verifies Python 3.12+
+- Installs dependencies
+- Copies example configuration files
+- Attempts configuration validation
 
 Validation fails until `.env` contains real, non-placeholder keys. Edit
 `config.toml` and `.env`, then run the validation and migration commands below.

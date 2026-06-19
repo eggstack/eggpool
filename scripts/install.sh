@@ -1,14 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Quick install script for opencode-go-aggregator
-# This script sets up a local development environment
+# GoRouter quick install script
+# Usage: curl -fsSL https://raw.githubusercontent.com/eggstack/gorouter/main/scripts/install.sh | bash
+# Or:    ./scripts/install.sh  (from a cloned repo)
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+REPO_URL="https://github.com/eggstack/gorouter.git"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/gorouter}"
 
-echo "=== opencode-go-aggregator quick install ==="
+echo "=== GoRouter quick install ==="
 echo ""
+
+# If not inside a cloned repo, download one
+if [ ! -f "$(dirname "${BASH_SOURCE[0]}")/../../pyproject.toml" ] || \
+   ! grep -q 'name = "opencode-go-aggregator"' "$(dirname "${BASH_SOURCE[0]}")/../../pyproject.toml" 2>/dev/null; then
+    if [ -d "$INSTALL_DIR" ]; then
+        echo "Using existing installation at $INSTALL_DIR"
+        cd "$INSTALL_DIR"
+        git pull --ff-only || true
+    else
+        echo "Cloning repository to $INSTALL_DIR..."
+        git clone "$REPO_URL" "$INSTALL_DIR"
+        cd "$INSTALL_DIR"
+    fi
+else
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+    cd "$PROJECT_DIR"
+fi
 
 # Check for Python 3.12+
 echo "Checking Python version..."
@@ -30,16 +49,21 @@ echo "  Python $PYTHON_VERSION found"
 # Check for uv
 echo "Checking uv package manager..."
 if ! command -v uv &> /dev/null; then
-    echo "Error: uv not found. Install it with:"
-    echo "  curl -LsSf https://astral.sh/uv/install.sh | sh"
-    exit 1
+    echo "Installing uv..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    # Ensure uv is on PATH for the rest of this script
+    export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+    if ! command -v uv &> /dev/null; then
+        echo "Error: uv installation failed. Install manually:"
+        echo "  curl -LsSf https://astral.sh/uv/install.sh | sh"
+        exit 1
+    fi
 fi
 echo "  uv found"
 
 # Install dependencies
 echo ""
 echo "Installing dependencies..."
-cd "$PROJECT_DIR"
 uv sync --extra dev
 
 # Copy example configuration files if they don't exist
