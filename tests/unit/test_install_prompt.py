@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import termios
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -72,6 +73,46 @@ class TestPromptYn:
         from scripts.install_prompt import _prompt_yn
 
         assert callable(_prompt_yn)
+
+    def test_prompt_yn_fallback_on_non_terminal(self, tmp_path: Path) -> None:
+        """_prompt_yn falls back to readline when termios fails."""
+        from io import StringIO
+        from unittest.mock import patch
+
+        from scripts.install_prompt import _prompt_yn
+
+        # Mock stdin with a StringIO (non-terminal)
+        fake_stdin = StringIO("y\n")
+
+        with (
+            patch("scripts.install_prompt.sys.stdin", fake_stdin),
+            patch(
+                "scripts.install_prompt.termios.tcgetattr", side_effect=termios.error
+            ),
+        ):
+            result = _prompt_yn("Test?")
+
+        assert result is True
+
+    def test_prompt_yn_returns_false_on_empty_input(self, tmp_path: Path) -> None:
+        """_prompt_yn returns False when input is empty."""
+        from io import StringIO
+        from unittest.mock import patch
+
+        from scripts.install_prompt import _prompt_yn
+
+        # Mock stdin with empty input
+        fake_stdin = StringIO("\n")
+
+        with (
+            patch("scripts.install_prompt.sys.stdin", fake_stdin),
+            patch(
+                "scripts.install_prompt.termios.tcgetattr", side_effect=termios.error
+            ),
+        ):
+            result = _prompt_yn("Test?")
+
+        assert result is False
 
 
 class TestInstallPromptAST:

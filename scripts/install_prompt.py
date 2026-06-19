@@ -7,6 +7,7 @@ a provider. This avoids bash stdin issues with 'read' after echo output.
 
 from __future__ import annotations
 
+import io
 import os
 import subprocess
 import sys
@@ -54,20 +55,20 @@ def _prompt_yn(message: str) -> bool:
     sys.stdout.write(f"{message} (y/n): ")
     sys.stdout.flush()
 
-    # Check if stdin is a terminal
-    if not sys.stdin.isatty():
+    # Try raw terminal input first (works in real terminals)
+    try:
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        tty.setraw(fd)
+    except (termios.error, ValueError, OSError, io.UnsupportedOperation):
+        # Not a terminal - fall back to simple input
         try:
             line = sys.stdin.readline().strip().lower()
             return line in ("y", "yes")
-        except EOFError:
+        except (EOFError, ValueError):
             return False
 
-    fd = sys.stdin.fileno()
-    old_settings = None
     try:
-        old_settings = termios.tcgetattr(fd)
-        tty.setraw(fd)
-
         while True:
             raw = os.read(fd, 1)
             if not raw:
@@ -87,8 +88,7 @@ def _prompt_yn(message: str) -> bool:
                 sys.stdout.flush()
                 return False
     finally:
-        if old_settings is not None:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
 def main() -> None:
