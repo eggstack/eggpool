@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import io
+import os
 import textwrap
 from pathlib import Path
 
@@ -11,6 +13,7 @@ from click.testing import CliRunner
 from eggpool.cli import cli
 from eggpool.providers.connect import (
     ConfiguredAccount,
+    TerminalMenu,
     _extract_raw_block,
     _format_provider_block,
     _provider_account_count,
@@ -542,6 +545,171 @@ class TestCliConnectList:
         assert result.exit_code == 0
         assert "Available providers:" in result.stdout
         assert "opencode-go: OpenCode Go" in result.stdout
+
+
+class TestTerminalMenu:
+    """Deterministic tests for TerminalMenu display and interactive navigation."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_terminal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No-op the real terminal setup so tests run without a TTY."""
+        monkeypatch.setattr(
+            "eggpool.providers.connect.termios.tcgetattr", lambda _fd: None
+        )
+        monkeypatch.setattr(
+            "eggpool.providers.connect.termios.tcsetattr", lambda *_a: None
+        )
+        monkeypatch.setattr("eggpool.providers.connect.tty.setraw", lambda _fd: None)
+
+    @staticmethod
+    def _pipe_stdin(input_bytes: bytes) -> io.TextIOWrapper:
+        """Create a pipe-backed stdin from *input_bytes*.
+
+        All bytes are written before the read end is exposed, so ``os.read``
+        and ``select.select`` see them immediately.  This mirrors real TTY
+        behaviour where escape sequences arrive as a single burst.
+        """
+        read_fd, write_fd = os.pipe()
+        os.write(write_fd, input_bytes)
+        os.close(write_fd)
+        return io.TextIOWrapper(os.fdopen(read_fd, "rb", buffering=0))
+
+    # -- navigation via os.read (the fixed code path) -----------------------
+
+    def test_enter_selects_current(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Pressing Enter returns the currently highlighted option."""
+        monkeypatch.setattr("sys.stdin", self._pipe_stdin(b"\r"))
+        assert TerminalMenu("T", ["A", "B"]).run() == "A"
+
+    def test_quit_with_q(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Pressing q returns None."""
+        monkeypatch.setattr("sys.stdin", self._pipe_stdin(b"q"))
+        assert TerminalMenu("T", ["A", "B"]).run() is None
+
+    def test_quit_with_escape(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A bare ESC (no following bytes) returns None."""
+        monkeypatch.setattr("sys.stdin", self._pipe_stdin(b"\x1b"))
+        assert TerminalMenu("T", ["A", "B"]).run() is None
+
+    def test_arrow_down_then_enter(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Down-arrow followed by Enter selects the second option."""
+        monkeypatch.setattr("sys.stdin", self._pipe_stdin(b"\x1b[B\r"))
+        assert TerminalMenu("T", ["A", "B", "C"]).run() == "B"
+
+    def test_arrow_up_from_second(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Down then Up returns to the first option."""
+        monkeypatch.setattr("sys.stdin", self._pipe_stdin(b"\x1b[B\x1b[A\r"))
+        assert TerminalMenu("T", ["A", "B", "C"]).run() == "A"
+
+    def test_multiple_down_arrows(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Three down-arrows from the top select the last of four options."""
+        inp = b"\x1b[B\x1b[B\x1b[B\r"
+        monkeypatch.setattr("sys.stdin", self._pipe_stdin(inp))
+        assert TerminalMenu("T", ["A", "B", "C", "D"]).run() == "D"
+
+    def test_arrow_down_stops_at_bottom(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Extra down-arrows are clamped to the last option."""
+        inp = b"\x1b[B\x1b[B\x1b[B\r"  # three downs on a two-item menu
+        monkeypatch.setattr("sys.stdin", self._pipe_stdin(inp))
+        assert TerminalMenu("T", ["A", "B"]).run() == "B"
+
+    def test_arrow_up_stops_at_top(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Up-arrow at the first position stays on the first option."""
+        monkeypatch.setattr("sys.stdin", self._pipe_stdin(b"\x1b[A\r"))
+        assert TerminalMenu("T", ["A", "B"]).run() == "A"
+
+    def test_j_k_navigation(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """j/k keys navigate identically to arrow keys."""
+        monkeypatch.setattr("sys.stdin", self._pipe_stdin(b"jjk\r"))
+        assert TerminalMenu("T", ["A", "B", "C"]).run() == "B"
+
+    def test_k_at_top_stays(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """k at the first position stays on the first option."""
+        monkeypatch.setattr("sys.stdin", self._pipe_stdin(b"k\r"))
+        assert TerminalMenu("T", ["A", "B"]).run() == "A"
+
+    def test_j_at_bottom_stays(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """j at the last position stays on the last option."""
+        monkeypatch.setattr("sys.stdin", self._pipe_stdin(b"jj\r"))
+        assert TerminalMenu("T", ["A", "B"]).run() == "B"
+
+    def test_eof_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Empty stdin (EOF) returns None immediately."""
+        monkeypatch.setattr("sys.stdin", self._pipe_stdin(b""))
+        assert TerminalMenu("T", ["A"]).run() is None
+
+    # -- display output format -----------------------------------------------
+
+    def test_display_uses_crnl(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """All line breaks in display output are \\r\\n (not bare \\n).
+
+        In raw mode the kernel does not translate LF → CRLF, so the menu
+        must emit explicit \\r\\n to avoid a cascading display.
+        """
+        menu = TerminalMenu("Pick:", ["Alpha", "Beta"])
+        menu.display()
+        output = capsys.readouterr().out
+
+        # Every newline must be preceded by a carriage return
+        for i, ch in enumerate(output):
+            if ch == "\n":
+                assert i > 0 and output[i - 1] == "\r", (
+                    f"bare \\n at offset {i}; display must use \\r\\n in raw mode"
+                )
+
+    def test_display_lists_all_options(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Every option string appears in the rendered output."""
+        menu = TerminalMenu("Pick:", ["Alpha", "Beta", "Gamma"])
+        menu.display()
+        output = capsys.readouterr().out
+
+        assert "Alpha" in output
+        assert "Beta" in output
+        assert "Gamma" in output
+
+    def test_display_selection_marker(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """The selected option gets a green ``>`` marker; others do not."""
+        menu = TerminalMenu("Pick:", ["Alpha", "Beta", "Gamma"])
+        menu.selected = 1
+        menu.display()
+        output = capsys.readouterr().out
+
+        # Each option line is separated by \r\n
+        lines = output.split("\r\n")
+        alpha_lines = [line for line in lines if "Alpha" in line]
+        beta_lines = [line for line in lines if "Beta" in line]
+
+        assert alpha_lines, "Alpha option missing from display"
+        assert beta_lines, "Beta option missing from display"
+
+        # Beta (selected) has "> " and green color
+        assert "> " in beta_lines[0]
+        assert "\033[1;32m" in beta_lines[0]
+
+        # Alpha (not selected) has neither "> " nor green color
+        assert "> " not in alpha_lines[0]
+        assert "\033[1;32m" not in alpha_lines[0]
+
+    def test_display_title_and_help(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """The title and navigation help appear in the output."""
+        menu = TerminalMenu("Pick a provider:", ["A"])
+        menu.display()
+        output = capsys.readouterr().out
+
+        assert "Pick a provider:" in output
+        assert "j/k" in output
+        assert "Enter" in output
+        assert "q/Esc" in output
+
+    def test_display_clears_screen(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Output starts with the clear-screen + cursor-home sequence."""
+        menu = TerminalMenu("T", ["A"])
+        menu.display()
+        output = capsys.readouterr().out
+
+        assert output.startswith("\033[2J\033[H")
 
 
 class TestCliLogout:

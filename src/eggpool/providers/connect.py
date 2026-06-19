@@ -210,21 +210,27 @@ class TerminalMenu:
         self.selected = 0
 
     def display(self) -> None:
-        """Render the menu."""
+        """Render the menu.
+
+        Uses explicit \\r\\n because the terminal is in raw mode where the
+        kernel does not translate LF → CRLF.  Without the leading CR the
+        cursor stays in the same column, producing a cascading display.
+        """
+        NL = "\r\n"  # noqa: N806
         sys.stdout.write("\033[2J\033[H")
-        sys.stdout.write(f"\033[1m{self.title}\033[0m\n\n")
+        sys.stdout.write(f"\033[1m{self.title}\033[0m{NL}{NL}")
         sys.stdout.write(
             "  Use \033[1mj/k\033[0m or \033[1m\u2191/\u2193\033[0m to navigate, "
-            "\033[1mEnter\033[0m to select, \033[1mq/Esc\033[0m to quit\n\n"
+            f"\033[1mEnter\033[0m to select, \033[1mq/Esc\033[0m to quit{NL}{NL}"
         )
 
         for i, option in enumerate(self.options):
             prefix = "  > " if i == self.selected else "    "
             color = "\033[1;32m" if i == self.selected else ""
             reset = "\033[0m" if i == self.selected else ""
-            sys.stdout.write(f"{prefix}{color}{option}{reset}\n")
+            sys.stdout.write(f"{prefix}{color}{option}{reset}{NL}")
 
-        sys.stdout.write("\n")
+        sys.stdout.write(NL)
         sys.stdout.flush()
 
     def run(self) -> str | None:
@@ -237,19 +243,28 @@ class TerminalMenu:
 
             while True:
                 self.display()
-                ch = sys.stdin.read(1)
-
-                if ch == "q" or ch == "Q":
+                raw = os.read(fd, 1)
+                if not raw:
                     return None
-                if ch == "\r" or ch == "\n":
+                ch = raw.decode("ascii", errors="replace")
+
+                if ch in ("q", "Q"):
+                    return None
+                if ch in ("\r", "\n"):
                     return self.options[self.selected]
                 if ch == "\x03":
                     raise KeyboardInterrupt
                 if ch == "\x1b":
                     if select.select([sys.stdin], [], [], 0.15)[0]:
-                        next_ch = sys.stdin.read(1)
+                        next_raw = os.read(fd, 1)
+                        if not next_raw:
+                            return None
+                        next_ch = next_raw.decode("ascii", errors="replace")
                         if next_ch == "[":
-                            arrow = sys.stdin.read(1)
+                            arrow_raw = os.read(fd, 1)
+                            if not arrow_raw:
+                                return None
+                            arrow = arrow_raw.decode("ascii", errors="replace")
                             if arrow == "A":
                                 self.selected = max(0, self.selected - 1)
                             elif arrow == "B":
