@@ -1,15 +1,23 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
   <defs>
     <linearGradient id="egg" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" style="stop-color:#ff2d2d;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#cc0000;stop-opacity:1" />
+      <stop offset="0%" stop-color="#FF4D7E" />
+      <stop offset="55%" stop-color="#E41951" />
+      <stop offset="100%" stop-color="#8F1134" />
     </linearGradient>
-    <linearGradient id="glow" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" style="stop-color:#ff6b6b;stop-opacity:0.6" />
-      <stop offset="100%" style="stop-color:#ff2d2d;stop-opacity:0" />
-    </linearGradient>
+    <radialGradient id="highlight" cx="32%" cy="22%" r="38%">
+      <stop offset="0%" stop-color="#FFADAD" stop-opacity="0.7" />
+      <stop offset="100%" stop-color="#FFADAD" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="cyberglow" cx="50%" cy="50%" r="50%">
+      <stop offset="60%" stop-color="#5BA4DB" stop-opacity="0" />
+      <stop offset="100%" stop-color="#5BA4DB" stop-opacity="0.35" />
+    </radialGradient>
   </defs>
-  <ellipse cx="16" cy="17" rx="12" ry="14" fill="url(#egg)" stroke="#ff4444" stroke-width="1"/>
-  <ellipse cx="16" cy="13" rx="8" ry="6" fill="url(#glow)" opacity="0.5"/>
-  <ellipse cx="14" cy="11" rx="2" ry="1.5" fill="#ffffff" opacity="0.3"/>
+  <path d="M 16 3 C 12 3, 7 12, 7 19 C 7 26, 11 30, 16 30 C 21 30, 25 26, 25 19 C 25 12, 20 3, 16 3 Z"
+        fill="url(#egg)" stroke="#FFADAD" stroke-width="0.7"/>
+  <ellipse cx="11" cy="9" rx="3" ry="2" fill="url(#highlight)"/>
+  <ellipse cx="10.5" cy="8.5" rx="1" ry="0.7" fill="#FFFFFF" opacity="0.45"/>
+  <path d="M 16 3 C 12 3, 7 12, 7 19 C 7 26, 11 30, 16 30 C 21 30, 25 26, 25 19 C 25 12, 20 3, 16 3 Z"
+        fill="url(#cyberglow)"/>
 </svg>
