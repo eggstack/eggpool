@@ -16,12 +16,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from fastapi import Request  # noqa: TCH002 — FastAPI needs runtime access
 from fastapi.responses import JSONResponse
 
 from eggpool.stats import TimeRange, resolve_period
 
 if TYPE_CHECKING:
-    from fastapi import Request
     from fastapi.responses import Response
 
 

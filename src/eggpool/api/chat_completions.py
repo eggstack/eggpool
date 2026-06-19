@@ -6,8 +6,9 @@ import json
 import logging
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
+from fastapi import Request  # noqa: TCH002 — FastAPI needs runtime access
 from fastapi.responses import Response, StreamingResponse
 
 from eggpool.api.errors import openai_error_response
@@ -28,9 +29,6 @@ from eggpool.request.coordinator import (
     ProxyRequestContext,
     RequestCoordinator,
 )
-
-if TYPE_CHECKING:
-    from fastapi import Request
 
 logger = logging.getLogger(__name__)
 
