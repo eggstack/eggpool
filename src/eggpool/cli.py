@@ -491,6 +491,130 @@ def configsetup_claude_code(ctx: click.Context) -> None:
         click.echo("Copied to clipboard.")
 
 
+@cli.group()
+@click.pass_context
+def deploy(ctx: click.Context) -> None:
+    """Print deployment snippets (systemd, logrotate, cron, ...)."""
+
+
+def _print_deploy_snippet(
+    title: str,
+    target_path: str,
+    snippet: str,
+    extra_steps: list[str],
+) -> None:
+    """Print a deployment snippet with installation instructions."""
+    click.echo(title)
+    click.echo("")
+    click.echo(f"Install to {target_path}:")
+    click.echo("")
+    click.echo(f"  sudo tee {target_path} > /dev/null << 'EGGPOOL_EOF'")
+    for line in snippet.splitlines():
+        click.echo(f"{line}")
+    click.echo("EGGPOOL_EOF")
+    click.echo("")
+    click.echo("Then run:")
+    click.echo("")
+    for step in extra_steps:
+        click.echo(f"  {step}")
+    click.echo("")
+    click.echo("Snippet:")
+    click.echo("")
+    click.echo(snippet)
+
+    if _copy_to_clipboard(snippet):
+        click.echo("")
+        click.echo("Copied to clipboard.")
+
+
+@deploy.command("systemd")
+@click.pass_context
+def deploy_systemd(ctx: click.Context) -> None:
+    """Print the systemd unit and install instructions."""
+    from eggpool.deploy import SYSTEMD_UNIT
+
+    _print_deploy_snippet(
+        title="EggPool systemd unit",
+        target_path="/etc/systemd/system/eggpool.service",
+        snippet=SYSTEMD_UNIT,
+        extra_steps=[
+            "sudo systemctl daemon-reload",
+            "sudo systemctl enable eggpool",
+            "sudo systemctl start eggpool",
+            "sudo systemctl status eggpool",
+        ],
+    )
+
+
+@deploy.command("logrotate")
+@click.pass_context
+def deploy_logrotate(ctx: click.Context) -> None:
+    """Print the logrotate config and install instructions."""
+    from eggpool.deploy import LOGROTATE_CONF
+
+    _print_deploy_snippet(
+        title="EggPool logrotate configuration",
+        target_path="/etc/logrotate.d/eggpool",
+        snippet=LOGROTATE_CONF,
+        extra_steps=[
+            "sudo logrotate -d /etc/logrotate.d/eggpool",
+        ],
+    )
+
+
+@deploy.command("cron")
+@click.pass_context
+def deploy_cron(ctx: click.Context) -> None:
+    """Print a daily backup cron entry and install instructions."""
+    from eggpool.deploy import CRON_BACKUP_FILE, CRON_BACKUP_SCRIPT
+
+    click.echo("EggPool automated backup via cron")
+    click.echo("")
+    click.echo(
+        "This sets up a daily 02:00 backup of the configuration, environment, "
+        "and SQLite database under /var/backups/eggpool."
+    )
+    click.echo("")
+    click.echo("Install the backup script:")
+    click.echo("")
+    click.echo("  sudo tee /usr/local/bin/eggpool-backup > /dev/null << 'EGGPOOL_EOF'")
+    for line in CRON_BACKUP_SCRIPT.splitlines():
+        click.echo(f"{line}")
+    click.echo("EGGPOOL_EOF")
+    click.echo("  sudo chmod +x /usr/local/bin/eggpool-backup")
+    click.echo("")
+    click.echo("Install the cron entry:")
+    click.echo("")
+    click.echo("  sudo tee /etc/cron.d/eggpool-backup > /dev/null << 'EGGPOOL_EOF'")
+    for line in CRON_BACKUP_FILE.splitlines():
+        click.echo(f"{line}")
+    click.echo("EGGPOOL_EOF")
+    click.echo("")
+    click.echo("Snippet for /etc/cron.d/eggpool-backup:")
+    click.echo("")
+    click.echo(CRON_BACKUP_FILE)
+
+    backup_blob = CRON_BACKUP_SCRIPT + CRON_BACKUP_FILE
+    if _copy_to_clipboard(backup_blob):
+        click.echo("")
+        click.echo("Copied script + cron entry to clipboard.")
+
+
+@deploy.command("all")
+@click.pass_context
+def deploy_all(ctx: click.Context) -> None:
+    """Print every deployment snippet in sequence."""
+    ctx.invoke(deploy_systemd)
+    click.echo("")
+    click.echo("=" * 72)
+    click.echo("")
+    ctx.invoke(deploy_logrotate)
+    click.echo("")
+    click.echo("=" * 72)
+    click.echo("")
+    ctx.invoke(deploy_cron)
+
+
 @cli.command()
 @click.pass_context
 def rehash(ctx: click.Context) -> None:

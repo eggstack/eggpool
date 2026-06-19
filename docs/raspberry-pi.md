@@ -107,7 +107,7 @@ sudo systemctl daemon-reload
 ### 5. Install logrotate
 
 ```bash
-sudo cp /opt/eggpool/deploy/logrotate.conf /etc/logrotate.d/eggpool
+sudo cp /opt/eggpool/deploy/eggpool-logrotate.conf /etc/logrotate.d/eggpool
 ```
 
 ### 6. Run migrations and start

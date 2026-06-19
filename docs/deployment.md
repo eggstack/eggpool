@@ -79,7 +79,7 @@ sudo systemctl daemon-reload
 ### 5. Install logrotate
 
 ```bash
-sudo cp deploy/logrotate.conf /etc/logrotate.d/eggpool
+sudo cp deploy/eggpool-logrotate.conf /etc/logrotate.d/eggpool
 ```
 
 ### 6. Start service

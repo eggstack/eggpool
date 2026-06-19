@@ -104,6 +104,10 @@ Use the exception hierarchy in `errors.py`. Chain exceptions with `raise ... fro
 | `eggpool accounts list` | List configured provider accounts and API key backends |
 | `eggpool dashboard public` | Toggle dashboard public access |
 | `eggpool db vacuum` | Reclaim SQLite space via the lock-owned `Database.vacuum()` helper |
+| `eggpool deploy systemd` | Print the systemd unit + install instructions |
+| `eggpool deploy logrotate` | Print the logrotate config + install instructions |
+| `eggpool deploy cron` | Print the daily-backup cron entry + install instructions |
+| `eggpool deploy all` | Print every deployment snippet in sequence |
 
 All commands accept `--config /path/to/config.toml` (defaults to `config.toml`).
 Configuration changes require a service restart; live reload is intentionally
