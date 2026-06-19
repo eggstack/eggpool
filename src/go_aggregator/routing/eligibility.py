@@ -16,6 +16,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from go_aggregator.accounts.state import AccountRuntimeState
     from go_aggregator.catalog.cache import ModelCatalogCache
     from go_aggregator.health.health_manager import HealthManager
@@ -29,6 +31,7 @@ def get_eligible_accounts(
     stale_after_s: float | None = None,
     provider_id: str | None = None,
     protocol: str | None = None,
+    account_supports_protocol: Callable[[str, str], bool] | None = None,
 ) -> list[AccountRuntimeState]:
     """Get accounts eligible for routing a specific model.
 
@@ -41,6 +44,7 @@ def get_eligible_accounts(
     - supports the requested model (with recent catalog refresh when
       stale_after_s is provided)
     - supports the requested protocol (if protocol is given)
+    - belongs to a provider configured for that protocol (if available)
     - belongs to the specified provider (if provider_id is given)
     """
     eligible: list[AccountRuntimeState] = []
@@ -53,6 +57,13 @@ def get_eligible_accounts(
             account_provider = catalog.get_provider_for_account(state.name)
             if account_provider != provider_id:
                 continue
+
+        if (
+            protocol is not None
+            and account_supports_protocol is not None
+            and not account_supports_protocol(state.name, protocol)
+        ):
+            continue
 
         # Check circuit breaker via health manager
         if health_manager is not None and not health_manager.is_model_healthy(

@@ -493,6 +493,32 @@ def test_registry_get_provider_ids() -> None:
         del os.environ["REG_PID_KEY"]
 
 
+def test_registry_reports_provider_protocols() -> None:
+    os.environ["REG_PROTO_KEY"] = "key"
+    try:
+        config = AppConfig(
+            providers={
+                "p1": ProviderConfig(
+                    id="p1",
+                    base_url="https://p1.example.com/v1",
+                    protocols=["openai"],
+                    accounts=[AccountConfig(name="a1", api_key_env="REG_PROTO_KEY")],
+                )
+            }
+        )
+        from go_aggregator.accounts.registry import AccountRegistry
+
+        registry = AccountRegistry(config)
+
+        assert registry.get_provider_protocols("p1") == {"openai"}
+        assert registry.get_provider_protocols("missing") == set()
+        assert registry.account_supports_protocol("a1", "openai") is True
+        assert registry.account_supports_protocol("a1", "anthropic") is False
+        assert registry.account_supports_protocol("missing", "openai") is False
+    finally:
+        del os.environ["REG_PROTO_KEY"]
+
+
 @pytest.mark.asyncio()
 async def test_create_pending_persists_provider_id() -> None:
     database = Database(path=":memory:")

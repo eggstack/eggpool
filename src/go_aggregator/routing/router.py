@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from go_aggregator.quota.estimation import QuotaEstimator
@@ -17,6 +18,19 @@ if TYPE_CHECKING:
     from go_aggregator.health.health_manager import HealthManager
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class RoutingCandidates:
+    """Eligible account states and their lookup index for one routing decision."""
+
+    states: list[AccountRuntimeState]
+    by_name: dict[str, AccountRuntimeState]
+
+    @property
+    def names(self) -> list[str]:
+        """Return candidate account names in eligibility order."""
+        return [state.name for state in self.states]
 
 
 class Router:
@@ -52,20 +66,20 @@ class Router:
         protocol: str | None = None,
     ) -> AccountRuntimeState | None:
         """Select an account for the given model."""
-        eligible = self._eligible_states(
+        candidates = self._selection_candidates(
             model_id, exclude_accounts, provider_id, protocol
         )
-        if not eligible:
+        if not candidates.states:
             return None
 
         scores = await self._score_eligible_accounts(
-            eligible, model_id, request_estimates
+            candidates, model_id, request_estimates
         )
         best = self._scorer.select_account(scores)
         if best is None:
             return None
 
-        return self._states_by_name(eligible).get(best.account_name)
+        return candidates.by_name.get(best.account_name)
 
     def get_eligible_account_names(
         self,
@@ -79,10 +93,10 @@ class Router:
         Uses the same eligibility logic as select_account() so estimate
         generation and selection cannot disagree.
         """
-        eligible = self._eligible_states(
+        candidates = self._selection_candidates(
             model_id, exclude_accounts, provider_id, protocol
         )
-        return [s.name for s in eligible]
+        return candidates.names
 
     async def select_accounts_for_failover(
         self,
@@ -94,34 +108,33 @@ class Router:
         protocol: str | None = None,
     ) -> list[tuple[AccountRuntimeState, RoutingScore]]:
         """Select multiple accounts for failover, ranked by score."""
-        eligible = self._eligible_states(
+        candidates = self._selection_candidates(
             model_id, exclude_accounts, provider_id, protocol
         )
-        if not eligible:
+        if not candidates.states:
             return []
 
         scores = await self._score_eligible_accounts(
-            eligible, model_id, request_estimates
+            candidates, model_id, request_estimates
         )
         ranked = self._scorer.rank_accounts(scores)
-        states_by_name = self._states_by_name(eligible)
 
         result: list[tuple[AccountRuntimeState, RoutingScore]] = []
         for score in ranked[:max_accounts]:
-            state = states_by_name.get(score.account_name)
+            state = candidates.by_name.get(score.account_name)
             if state is not None:
                 result.append((state, score))
 
         return result
 
-    def _eligible_states(
+    def _selection_candidates(
         self,
         model_id: str,
         exclude_accounts: set[str] | None,
         provider_id: str | None,
         protocol: str | None,
-    ) -> list[AccountRuntimeState]:
-        """Return eligible runtime states after applying failover exclusions."""
+    ) -> RoutingCandidates:
+        """Return eligible runtime states and indexes for a routing decision."""
         eligible = get_eligible_accounts(
             self._registry.get_enabled_states(),
             model_id,
@@ -130,32 +143,33 @@ class Router:
             stale_after_s=self._stale_after_s,
             provider_id=provider_id,
             protocol=protocol,
+            account_supports_protocol=self._registry.account_supports_protocol,
         )
         if exclude_accounts:
-            return [state for state in eligible if state.name not in exclude_accounts]
-        return eligible
+            eligible = [
+                state for state in eligible if state.name not in exclude_accounts
+            ]
+        return RoutingCandidates(
+            states=eligible,
+            by_name={state.name: state for state in eligible},
+        )
 
     async def _score_eligible_accounts(
         self,
-        eligible: list[AccountRuntimeState],
+        candidates: RoutingCandidates,
         model_id: str,
         request_estimates: dict[str, int] | None,
     ) -> list[RoutingScore]:
         """Score eligible states with their current active request counts."""
-        active_requests = {state.name: state.active_request_count for state in eligible}
+        active_requests = {
+            state.name: state.active_request_count for state in candidates.states
+        }
         return await self._scorer.score_accounts(
-            [state.name for state in eligible],
+            candidates.names,
             model_id,
             active_requests,
             request_estimates,
         )
-
-    @staticmethod
-    def _states_by_name(
-        states: list[AccountRuntimeState],
-    ) -> dict[str, AccountRuntimeState]:
-        """Index account runtime states by account name."""
-        return {state.name: state for state in states}
 
     def create_reservation(
         self,

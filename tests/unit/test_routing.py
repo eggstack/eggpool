@@ -99,6 +99,26 @@ def test_eligible_accounts_can_filter_by_requested_protocol() -> None:
     assert [state.name for state in eligible] == ["acct1"]
 
 
+def test_eligible_accounts_can_filter_by_provider_protocol_policy() -> None:
+    cache = ModelCatalogCache()
+    cache.update_from_account(
+        "acct1",
+        "provider-a",
+        [{"model_id": "shared-model", "protocol": "anthropic"}],
+    )
+    states = [AccountRuntimeState(name="acct1", enabled=True)]
+
+    eligible = get_eligible_accounts(
+        states,
+        "shared-model",
+        cache,
+        protocol="anthropic",
+        account_supports_protocol=lambda _name, requested: requested == "openai",
+    )
+
+    assert eligible == []
+
+
 @pytest.mark.asyncio()
 async def test_router_selects_account() -> None:
     os.environ["TEST_ROUTER_KEY"] = "key"
@@ -231,6 +251,56 @@ async def test_router_filters_selection_by_requested_protocol() -> None:
     finally:
         del os.environ["TEST_ROUTER_KEY_A"]
         del os.environ["TEST_ROUTER_KEY_B"]
+
+
+@pytest.mark.asyncio()
+async def test_router_filters_selection_by_provider_protocol_policy() -> None:
+    os.environ["TEST_ROUTER_POLICY_KEY"] = "key"
+    try:
+        config = AppConfig.from_dict(
+            {
+                "providers": {
+                    "provider-a": {
+                        "id": "provider-a",
+                        "base_url": "https://provider-a.example/v1",
+                        "protocols": ["openai"],
+                        "accounts": [
+                            {
+                                "name": "acct1",
+                                "api_key_env": "TEST_ROUTER_POLICY_KEY",
+                            }
+                        ],
+                    }
+                }
+            }
+        )
+        registry = AccountRegistry(config)
+        cache = ModelCatalogCache()
+        cache.update_from_account(
+            "acct1",
+            "provider-a",
+            [{"model_id": "shared-model", "protocol": "anthropic"}],
+        )
+
+        class MockCatalog:
+            def __init__(self, c: ModelCatalogCache) -> None:
+                self._cache = c
+
+            @property
+            def cache(self) -> ModelCatalogCache:
+                return self._cache
+
+        router = Router(registry, MockCatalog(cache))  # type: ignore[arg-type]
+
+        selected = await router.select_account("shared-model", protocol="anthropic")
+
+        assert selected is None
+        assert (
+            router.get_eligible_account_names("shared-model", protocol="anthropic")
+            == []
+        )
+    finally:
+        del os.environ["TEST_ROUTER_POLICY_KEY"]
 
 
 def test_has_eligible_pairing_uses_provider_specific_protocol() -> None:

@@ -118,6 +118,20 @@ class AccountRegistry:
         """Get the provider ID for an account."""
         return self._account_providers.get(account_name)
 
+    def get_provider_protocols(self, provider_id: str) -> set[str]:
+        """Get protocols configured for a provider."""
+        provider = self._config.providers.get(provider_id)
+        if provider is None:
+            return set()
+        return set(provider.protocols)
+
+    def account_supports_protocol(self, account_name: str, protocol: str) -> bool:
+        """Return whether an account's configured provider supports a protocol."""
+        provider_id = self.get_provider_for_account(account_name)
+        if provider_id is None:
+            return False
+        return protocol in self.get_provider_protocols(provider_id)
+
     def get_accounts_for_provider(self, provider_id: str) -> list[AccountRuntimeState]:
         """Get all account states belonging to a provider."""
         return [
