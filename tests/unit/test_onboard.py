@@ -129,16 +129,22 @@ class TestOnboardCommand:
         assert result.exit_code == 0
         assert "onboarding" in result.output.lower()
 
-    def test_onboard_rejects_when_user_says_no(self, tmp_path: Path) -> None:
-        """Onboard exits early when user declines."""
-        from eggpool.onboard import run_onboarding
+    def test_onboard_exits_after_single_connect(self, tmp_path: Path) -> None:
+        """Onboard exits after a single connect when user declines to add another."""
+        from unittest.mock import MagicMock, patch
+
+        import eggpool.onboard as onboard_mod
 
         config_path = tmp_path / "config.toml"
         config_path.write_text("[server]\n")
 
-        with patch("eggpool.onboard._prompt_yn", return_value=False):
-            # Should not raise, just return
-            run_onboarding(str(config_path), "providers.toml")
+        with (
+            patch("eggpool.providers.connect.connect", return_value=True),
+            patch.object(onboard_mod, "_prompt_add_another", return_value=False),
+            patch("subprocess.run", return_value=MagicMock(returncode=0)),
+            patch("os.execvp"),
+        ):
+            onboard_mod.run_onboarding(str(config_path), "providers.toml")
 
 
 class TestOnboardPromptFunctions:

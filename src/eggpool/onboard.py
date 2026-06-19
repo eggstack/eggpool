@@ -57,15 +57,10 @@ def _prompt_add_another() -> bool:
 def run_onboarding(config_path: str, providers_path: str) -> None:
     """Run the interactive onboarding flow.
 
-    1. Ask if user wants to run onboarding
-    2. Loop: connect a provider, ask if they want another
-    3. Run check-config
-    4. Start the server
+    1. Loop: connect a provider, ask if they want another
+    2. Run check-config
+    3. Start the server
     """
-    if not _prompt_yn("Would you like to run the onboarding setup?"):
-        sys.stdout.write("Skipping onboarding. Run 'eggpool connect' later.\n")
-        return
-
     sys.stdout.write("\n=== EggPool Onboarding ===\n\n")
 
     from eggpool.providers.connect import connect as do_connect

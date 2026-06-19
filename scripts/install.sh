@@ -79,21 +79,27 @@ fi
 echo ""
 echo "Installation complete."
 echo ""
-echo "Next steps:"
-echo ""
-echo "  1. Add a provider (interactive, prompts for API key):"
-echo "     uv run eggpool connect"
-echo ""
-echo "  2. Get client config (generates server key, prints snippet):"
-echo "     uv run eggpool configsetup opencode"
-echo "     uv run eggpool configsetup claude-code"
-echo ""
-echo "  3. Start the server:"
-echo "     uv run eggpool serve"
+
+# Ask if user wants to run onboarding
+echo -n "Would you like to set up a provider now? (y/n): "
+read -r ONBOARD_CHOICE
+
+if [ "$ONBOARD_CHOICE" = "y" ] || [ "$ONBOARD_CHOICE" = "Y" ]; then
+    echo ""
+    echo "Starting onboarding setup..."
+    uv run eggpool onboard
+else
+    echo ""
+    echo "Skipping onboarding. You can run it later with:"
+    echo "  uv run eggpool onboard"
+fi
+
 echo ""
 echo "Other useful commands:"
 echo "  uv run eggpool accounts status   — show configured accounts"
 echo "  uv run eggpool newkey             — regenerate server API key"
 echo "  uv run eggpool rehash             — reload config in running server"
+echo "  uv run eggpool stop               — stop the server"
+echo "  uv run eggpool restart            — restart the server"
 echo ""
 echo "For production deployment, see docs/deployment.md"
