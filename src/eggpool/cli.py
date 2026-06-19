@@ -39,7 +39,7 @@ def cli(ctx: click.Context, config_path: str) -> None:
 @click.pass_context
 def serve(ctx: click.Context) -> None:
     """Start the aggregation proxy server."""
-    import uvicorn
+    from granian.server import Granian  # type: ignore[import-untyped]
 
     config_path: str = ctx.obj["config_path"]
 
@@ -67,13 +67,18 @@ def serve(ctx: click.Context) -> None:
     from eggpool.app import create_app
 
     app = create_app(config, config_path=config_path)
-    uvicorn.run(
+
+    log_level = config.server.log_level.lower()
+    Granian(  # type: ignore[reportUnknownMemberType]
         app,
-        host=config.server.host,
+        address=config.server.host,
         port=config.server.port,
+        interface="asgi",
+        workers=1,
+        threads=1,
+        log_level=log_level,
         access_log=config.server.access_log,
-        timeout_graceful_shutdown=30,
-    )
+    ).serve()
 
 
 @cli.group(invoke_without_command=True)
@@ -531,6 +536,114 @@ def set_config(ctx: click.Context, key: str, value: str) -> None:
     if signal_restart():
         click.echo("Server restarted.")
     elif signal_reload():
+        click.echo("Configuration reloaded.")
+    else:
+        click.echo("Server is not running.")
+
+
+@cli.group()
+def dashboard() -> None:
+    """Dashboard configuration commands."""
+
+
+def _read_dashboard_public(config_path: str) -> bool:
+    """Read the current dashboard.public value from config."""
+    from pathlib import Path
+
+    path = Path(config_path)
+    if not path.exists():
+        return True  # default
+
+    in_dashboard = False
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped == "[dashboard]":
+            in_dashboard = True
+            continue
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_dashboard = False
+            continue
+        if in_dashboard and stripped.startswith("public ="):
+            parts = stripped.split("=", 1)
+            if len(parts) == 2:
+                return parts[1].strip().lower() == "true"
+    return True  # default
+
+
+def _write_dashboard_public(config_path: str, public: bool) -> None:
+    """Write the dashboard.public value to config."""
+    from pathlib import Path
+
+    path = Path(config_path)
+    if not path.exists():
+        click.echo(f"Config file not found: {config_path}", err=True)
+        sys.exit(1)
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    updated = False
+    in_dashboard = False
+    new_lines: list[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped == "[dashboard]":
+            in_dashboard = True
+            new_lines.append(line)
+            continue
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_dashboard = False
+        if in_dashboard and stripped.startswith("public ="):
+            new_lines.append(f"public = {'true' if public else 'false'}")
+            updated = True
+            continue
+        new_lines.append(line)
+
+    if not updated:
+        # Insert public = ... after [dashboard] section
+        result: list[str] = []
+        inserted = False
+        for line in new_lines:
+            result.append(line)
+            if line.strip() == "[dashboard]" and not inserted:
+                result.append(f"public = {'true' if public else 'false'}")
+                inserted = True
+        new_lines = result
+
+    path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+
+
+@dashboard.command("public")
+@click.option(
+    "--on", "set_public", flag_value="true", help="Require API key for dashboard."
+)
+@click.option(
+    "--off",
+    "set_public",
+    flag_value="false",
+    help="Allow public dashboard access (default).",
+)
+@click.pass_context
+def dashboard_public(ctx: click.Context, set_public: str | None) -> None:
+    """Toggle dashboard public access.
+
+    Without options, shows the current setting and toggles it.
+    With --on/--off, sets the value explicitly.
+    """
+    from eggpool.providers.connect import signal_reload
+
+    config_path: str = ctx.obj["config_path"]
+    current = _read_dashboard_public(config_path)
+
+    new_value = not current if set_public is None else set_public == "true"
+
+    _write_dashboard_public(config_path, new_value)
+
+    if new_value:
+        click.echo("Dashboard is now public (no API key required).")
+    else:
+        click.echo("Dashboard now requires API key authentication.")
+
+    if signal_reload():
         click.echo("Configuration reloaded.")
     else:
         click.echo("Server is not running.")

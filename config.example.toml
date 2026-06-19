@@ -49,7 +49,7 @@ monthly_microdollars = 60000000
 
 [dashboard]
 enabled = true
-public = false
+public = true
 # Theme name (without .toml extension). "default" uses GitHub Primer colors.
 # Available themes in the themes/ directory: catppuccin-mocha, catppuccin-latte,
 # dracula, nord, gruvbox, one-dark, rose-pine, solarized-dark, kanagawa, etc.

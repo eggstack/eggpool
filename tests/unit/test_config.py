@@ -236,7 +236,7 @@ def test_dashboard_config_defaults() -> None:
 
     dc = DashboardConfig()
     assert dc.enabled is True
-    assert dc.public is False
+    assert dc.public is True
     assert dc.retain_request_stats_days == 30
     assert dc.retain_event_days == 90
     assert dc.store_request_content is False

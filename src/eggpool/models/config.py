@@ -109,7 +109,7 @@ class DashboardConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
-    public: bool = False
+    public: bool = True
     theme: str = "Cyber Red"
     themes_dir: str = "themes"
     retain_request_stats_days: int = Field(default=30, gt=0)
