@@ -214,7 +214,7 @@ class TerminalMenu:
         sys.stdout.write("\033[2J\033[H")
         sys.stdout.write(f"\033[1m{self.title}\033[0m\n\n")
         sys.stdout.write(
-            "  Use \033[1mj/k\033[0m or \033[1m\x1b[A/\x1b[B\033[0m to navigate, "
+            "  Use \033[1mj/k\033[0m or \033[1m\u2191/\u2193\033[0m to navigate, "
             "\033[1mEnter\033[0m to select, \033[1mq/Esc\033[0m to quit\n\n"
         )
 
