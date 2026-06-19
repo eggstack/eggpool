@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from contextlib import asynccontextmanager
+import os
+import signal
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -30,7 +32,7 @@ from eggpool.background.cleanup import (
 )
 from eggpool.catalog.pricing import CostCalculator, PriceRepository
 from eggpool.catalog.service import CatalogService
-from eggpool.constants import API_V1_PREFIX, MAX_REQUEST_BODY_BYTES
+from eggpool.constants import API_V1_PREFIX, MAX_REQUEST_BODY_BYTES, PID_FILE
 from eggpool.dashboard.routes import register_dashboard_routes
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
@@ -188,6 +190,69 @@ async def _crash_recovery(db: Database) -> None:
         logger.info("Crash recovery: no stale requests found")
 
 
+async def reload_config(app: FastAPI) -> None:
+    """Reload configuration from disk and re-sync providers/accounts.
+
+    This re-reads the TOML config file, re-syncs providers and accounts
+    to SQLite, and updates in-memory state. Called on SIGHUP.
+    """
+    config_path: str | None = getattr(app.state, "config_path", None)
+    if config_path is None:
+        logger.warning("reload: no config_path set, cannot reload")
+        return
+
+    try:
+        new_config = AppConfig.from_toml(config_path)
+    except Exception:
+        logger.exception("reload: failed to parse %s", config_path)
+        return
+
+    app.state.config = new_config
+    logger.info("reload: config re-read from %s", config_path)
+
+    db: Database | None = getattr(app.state, "db", None)
+    if db is None:
+        logger.warning("reload: database not connected, skipping sync")
+        return
+
+    # Re-sync providers
+    provider_repo = ProviderRepository(db)
+    configured_providers = {
+        pid: {"base_url": pcfg.base_url, "protocols": pcfg.protocols}
+        for pid, pcfg in new_config.providers.items()
+    }
+    await provider_repo.sync_from_config(configured_providers)
+
+    # Re-sync accounts
+    account_repo = AccountRepository(db)
+    await account_repo.sync_from_config(account_config_rows(new_config))
+
+    # Update account registry
+    registry: AccountRegistry | None = getattr(app.state, "registry", None)
+    if registry is not None:
+        registry.reload(new_config)
+
+    logger.info(
+        "reload: synced %d providers, %d accounts",
+        len(new_config.providers),
+        len(new_config.all_accounts()),
+    )
+
+
+def _write_pid_file() -> None:
+    """Write the current PID to the PID file."""
+    try:
+        PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
+    except OSError:
+        logger.warning("Could not write PID file %s", PID_FILE)
+
+
+def _remove_pid_file() -> None:
+    """Remove the PID file."""
+    with suppress(OSError):
+        PID_FILE.unlink(missing_ok=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     """Manage application startup and shutdown."""
@@ -200,6 +265,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     # 1b. Validate account credentials
     config.validate_account_credentials()
+
+    # 1c. Write PID file and install SIGHUP handler for config reload
+    _write_pid_file()
+    loop = asyncio.get_running_loop()
+
+    def _handle_sighup() -> None:
+        logger.info("Received SIGHUP, reloading configuration")
+        asyncio.ensure_future(reload_config(app))
+
+    try:
+        loop.add_signal_handler(signal.SIGHUP, _handle_sighup)
+    except (NotImplementedError, OSError):
+        # add_signal_handler not supported on Windows
+        logger.debug("SIGHUP handler not installed (unsupported platform)")
 
     # 2. Database
     db = Database(
@@ -456,6 +535,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     # Shutdown
     logger.info("Application shutting down")
+    _remove_pid_file()
     await supervisor.stop_all()
     client_pool = getattr(app.state, "client_pool", None)
     if client_pool is not None:

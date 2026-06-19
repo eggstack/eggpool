@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import select
+import signal
 import sys
 import termios
 import tomllib
@@ -11,6 +12,50 @@ import tty
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+
+def signal_reload() -> bool:
+    """Send SIGHUP to the running server process to reload config.
+
+    Returns True if the signal was sent successfully.
+    """
+    from eggpool.constants import PID_FILE
+
+    if not PID_FILE.exists():
+        return False
+
+    try:
+        pid = int(PID_FILE.read_text(encoding="utf-8").strip())
+    except (ValueError, OSError):
+        return False
+
+    try:
+        os.kill(pid, signal.SIGHUP)
+        return True
+    except (ProcessLookupError, PermissionError, OSError):
+        return False
+
+
+def signal_restart() -> bool:
+    """Send SIGTERM to the running server process to trigger a restart.
+
+    Returns True if the signal was sent successfully.
+    """
+    from eggpool.constants import PID_FILE
+
+    if not PID_FILE.exists():
+        return False
+
+    try:
+        pid = int(PID_FILE.read_text(encoding="utf-8").strip())
+    except (ValueError, OSError):
+        return False
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+        return True
+    except (ProcessLookupError, PermissionError, OSError):
+        return False
 
 
 @dataclass(frozen=True)

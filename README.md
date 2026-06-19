@@ -80,6 +80,7 @@ configured SQLite path.
 | `eggpool connect` | Interactive provider connection setup |
 | `eggpool connect list` | List available providers for connection |
 | `eggpool logout` | Remove a configured provider account |
+| `eggpool rehash` | Reload configuration in the running server |
 
 All commands accept `--config /path/to/config.toml` (defaults to `config.toml`).
 Configuration changes require a process restart; live reload is intentionally

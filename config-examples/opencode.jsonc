@@ -1,0 +1,27 @@
+{
+  // EggPool drop-in config for OpenCode
+  // Copy this to ~/.config/opencode/opencode.jsonc or merge with your existing config.
+  // Requires EggPool server running on localhost:11300.
+  "provider": {
+    "openai": {
+      "apiKey": "your-api-key-here",
+      "models": {
+        "gpt-4o": true,
+        "gpt-4o-mini": true
+      },
+      "options": {
+        "baseUrl": "http://localhost:11300/v1"
+      }
+    },
+    "anthropic": {
+      "apiKey": "your-api-key-here",
+      "models": {
+        "claude-sonnet-4": true,
+        "claude-opus-4": true
+      },
+      "options": {
+        "baseUrl": "http://localhost:11300/v1"
+      }
+    }
+  }
+}

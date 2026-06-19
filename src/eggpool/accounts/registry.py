@@ -76,6 +76,14 @@ class AccountRegistry:
                         provider_id,
                     )
 
+    def reload(self, config: AppConfig) -> None:
+        """Reload account configurations from a new config."""
+        self._config = config
+        self._states.clear()
+        self._api_keys.clear()
+        self._account_providers.clear()
+        self._initialize()
+
     def get_state(self, name: str) -> AccountRuntimeState | None:
         """Get runtime state for an account by name."""
         return self._states.get(name)

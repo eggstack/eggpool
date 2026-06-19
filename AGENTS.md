@@ -93,6 +93,7 @@ Use the exception hierarchy in `errors.py`. Chain exceptions with `raise ... fro
 | `eggpool connect` | Interactive provider connection setup |
 | `eggpool connect list` | List available providers for connection |
 | `eggpool logout` | Remove a configured provider account |
+| `eggpool rehash` | Reload configuration in the running server |
 
 All commands accept `--config /path/to/config.toml` (defaults to `config.toml`).
 

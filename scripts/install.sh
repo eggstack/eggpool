@@ -8,7 +8,7 @@ set -euo pipefail
 REPO_URL="https://github.com/eggstack/eggpool.git"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/eggpool}"
 
-echo "=== EggPool quick install ==="
+echo "EggPool quick install"
 echo ""
 
 # If not inside a cloned repo, download one
@@ -98,9 +98,12 @@ else
 fi
 
 echo ""
-echo "=== Installation complete ==="
+echo "Installation complete."
 echo ""
-echo "Next steps:"
+echo "Quick start (interactive provider setup):"
+echo "  uv run eggpool connect"
+echo ""
+echo "Manual setup:"
 echo "  1. Edit config.toml with your settings (accounts, upstream URL, etc.)"
 echo "  2. Edit .env with your API keys"
 echo "  3. Run database migrations: uv run eggpool --config config.toml migrate"

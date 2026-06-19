@@ -85,6 +85,7 @@ def connect(ctx: click.Context, providers_path: str) -> None:
         return
 
     from eggpool.providers.connect import connect as do_connect
+    from eggpool.providers.connect import signal_reload
 
     config_path: str = ctx.obj["config_path"]
     try:
@@ -94,6 +95,11 @@ def connect(ctx: click.Context, providers_path: str) -> None:
         return
     if not ok:
         sys.exit(1)
+
+    if signal_reload():
+        click.echo("  Configuration reloaded.")
+    else:
+        click.echo("  Server is not running.")
 
 
 @connect.command("list")
@@ -122,6 +128,7 @@ def logout(ctx: click.Context, target: str) -> None:
         TerminalMenu,
         matching_logout_accounts,
         remove_account_from_config,
+        signal_reload,
     )
 
     config_path: str = ctx.obj["config_path"]
@@ -162,7 +169,11 @@ def logout(ctx: click.Context, target: str) -> None:
         sys.exit(1)
 
     click.echo(f"Removed {account.provider_id}/{account.name} from {config_path}.")
-    click.echo("Restart the running server for changes to take effect.")
+
+    if signal_reload():
+        click.echo("  Configuration reloaded.")
+    else:
+        click.echo("  Server is not running.")
 
 
 @cli.command("check-config")
@@ -193,6 +204,79 @@ def check_config(ctx: click.Context) -> None:
     click.echo(f"  Server: {config.server.host}:{config.server.port}")
     click.echo(f"  Accounts: {len(config.all_accounts())}")
     click.echo(f"  Database: {config.database.path}")
+
+
+@cli.command()
+@click.pass_context
+def rehash(ctx: click.Context) -> None:
+    """Reload configuration in the running server."""
+    from eggpool.providers.connect import signal_reload
+
+    if signal_reload():
+        click.echo("Configuration reloaded.")
+    else:
+        click.echo("Server is not running.", err=True)
+        sys.exit(1)
+
+
+def _update_server_config(config_path: str, key: str, value: str) -> None:
+    """Update a [server] key in the TOML config file."""
+    from pathlib import Path
+
+    path = Path(config_path)
+    if not path.exists():
+        click.echo(f"Config file not found: {config_path}", err=True)
+        sys.exit(1)
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    updated = False
+    in_server = False
+    new_lines: list[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped == "[server]":
+            in_server = True
+            new_lines.append(line)
+            continue
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_server = False
+        if in_server and stripped.startswith(f"{key} ="):
+            new_lines.append(f'{key} = "{value}"')
+            updated = True
+            continue
+        new_lines.append(line)
+
+    if not updated:
+        click.echo(f"Key '{key}' not found in [server] section.", err=True)
+        sys.exit(1)
+
+    path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+
+
+@cli.command("set")
+@click.argument("key", type=click.Choice(["port", "host"]))
+@click.argument("value")
+@click.pass_context
+def set_config(ctx: click.Context, key: str, value: str) -> None:
+    """Set a server configuration value and restart the server.
+
+    Supported keys: port, host. The server must be restarted for
+    port/host changes to take effect; this command restarts it
+    automatically if a PID file is found.
+    """
+    from eggpool.providers.connect import signal_reload, signal_restart
+
+    config_path: str = ctx.obj["config_path"]
+    _update_server_config(config_path, key, value)
+    click.echo(f"Set {key} = {value} in {config_path}.")
+
+    if signal_restart():
+        click.echo("Server restarted.")
+    elif signal_reload():
+        click.echo("Configuration reloaded.")
+    else:
+        click.echo("Server is not running.")
 
 
 @cli.command()
