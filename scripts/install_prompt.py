@@ -49,9 +49,18 @@ def _prompt_yn(message: str) -> bool:
     """Prompt user with a y/n question using raw terminal input.
 
     Returns True for y/Y, False for everything else.
+    Falls back to simple input() if stdin is not a terminal.
     """
     sys.stdout.write(f"{message} (y/n): ")
     sys.stdout.flush()
+
+    # Check if stdin is a terminal
+    if not sys.stdin.isatty():
+        try:
+            line = sys.stdin.readline().strip().lower()
+            return line in ("y", "yes")
+        except EOFError:
+            return False
 
     fd = sys.stdin.fileno()
     old_settings = None
