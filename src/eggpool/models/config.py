@@ -26,9 +26,17 @@ class ServerConfig(BaseModel):
 
     host: str = DEFAULT_HOST
     port: int = Field(default=DEFAULT_PORT, ge=0, le=65535)
-    api_key_env: str = "GO_AGGREGATOR_API_KEY"
+    api_key: str | None = None
+    api_key_env: str = "SERVER_API_KEY"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     access_log: bool = True
+
+    @property
+    def resolved_api_key(self) -> str | None:
+        """Return the API key, checking inline first then env var."""
+        if self.api_key:
+            return self.api_key
+        return os.environ.get(self.api_key_env)
 
 
 class UpstreamConfig(BaseModel):

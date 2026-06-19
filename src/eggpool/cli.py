@@ -192,7 +192,7 @@ def check_config(ctx: click.Context) -> None:
         sys.exit(1)
 
     try:
-        require_auth_at_startup(config.server.api_key_env)
+        require_auth_at_startup(config.server.resolved_api_key)
     except RuntimeError as exc:
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)
@@ -213,8 +213,192 @@ def check_config(ctx: click.Context) -> None:
 @click.pass_context
 def edit(ctx: click.Context) -> None:
     """Open the configuration file in the default editor."""
+    import shutil
+
     config_path: str = ctx.obj["config_path"]
-    click.edit(filename=config_path)
+    editor = os.environ.get("EDITOR") or os.environ.get("VISUAL")
+    if not editor:
+        for name in ("hx", "vim", "vi", "nano"):
+            if shutil.which(name):
+                editor = name
+                break
+    if editor:
+        os.execvp(editor, [editor, config_path])
+    else:
+        click.echo("No editor found. Set $EDITOR or install vim/helix.", err=True)
+        sys.exit(1)
+
+
+def _generate_api_key() -> str:
+    """Generate a cryptographically secure API key."""
+    import secrets
+
+    return f"ep_{secrets.token_hex(32)}"
+
+
+def _read_server_api_key(config_path: str) -> str:
+    """Read the current server API key from config."""
+    from eggpool.models.config import AppConfig
+
+    config = AppConfig.from_toml(config_path)
+    return config.server.api_key or ""
+
+
+def _write_server_api_key(config_path: str, new_key: str) -> None:
+    """Write a server API key to the [server] section of the config."""
+    from pathlib import Path
+
+    path = Path(config_path)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    new_lines: list[str] = []
+    in_server = False
+    found = False
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped == "[server]":
+            in_server = True
+            new_lines.append(line)
+            continue
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_server = False
+        if in_server and stripped.startswith("api_key"):
+            new_lines.append(f'api_key = "{new_key}"')
+            found = True
+            continue
+        new_lines.append(line)
+
+    if not found:
+        # Insert after [server] header
+        for i, line in enumerate(new_lines):
+            if line.strip() == "[server]":
+                new_lines.insert(i + 1, f'api_key = "{new_key}"')
+                break
+
+    path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+
+
+@cli.command()
+@click.pass_context
+def getkey(ctx: click.Context) -> None:
+    """Print the current server API key."""
+    config_path: str = ctx.obj["config_path"]
+    key = _read_server_api_key(config_path)
+    if key:
+        click.echo(key, nl=False)
+    else:
+        click.echo(
+            "No API key configured. Run `eggpool newkey` to generate one.", err=True
+        )
+        sys.exit(1)
+
+
+@cli.command()
+@click.pass_context
+def newkey(ctx: click.Context) -> None:
+    """Generate a new server API key, overwriting the old one."""
+    from eggpool.providers.connect import signal_reload, signal_restart
+
+    config_path: str = ctx.obj["config_path"]
+    old_key = _read_server_api_key(config_path)
+    new_key = _generate_api_key()
+    _write_server_api_key(config_path, new_key)
+
+    if old_key:
+        click.echo(f"Old key (expired): {old_key}")
+    click.echo(f"New key (use this): {new_key}")
+
+    if signal_reload():
+        click.echo("Configuration reloaded.")
+    elif signal_restart():
+        click.echo("Server restarted.")
+    else:
+        click.echo("Server is not running. Start it to apply the new key.")
+
+
+@cli.group()
+@click.pass_context
+def configsetup(ctx: click.Context) -> None:
+    """Print configuration snippets for code editors."""
+
+
+def _copy_to_clipboard(text: str) -> bool:
+    """Try to copy text to the system clipboard. Returns True on success."""
+    import shutil
+    import subprocess
+
+    for cmd in (
+        ["pbcopy"],
+        ["xclip", "-selection", "clipboard"],
+        ["xsel", "--clipboard", "--input"],
+    ):
+        if shutil.which(cmd[0]):
+            try:
+                subprocess.run(cmd, input=text.encode(), check=True, timeout=5)  # noqa: S603
+                return True
+            except (subprocess.SubprocessError, OSError):
+                continue
+    return False
+
+
+@configsetup.command("opencode")
+@click.pass_context
+def configsetup_opencode(ctx: click.Context) -> None:
+    """Print OpenCode config snippet for connecting to this router."""
+    config_path: str = ctx.obj["config_path"]
+    key = _read_server_api_key(config_path)
+    if not key:
+        click.echo("No API key configured. Run `eggpool newkey` first.", err=True)
+        sys.exit(1)
+
+    config = AppConfig.from_toml(config_path)
+    port = config.server.port
+
+    snippet = (
+        f"{{\n"
+        f'  "providers": {{\n'
+        f'    "eggpool": {{\n'
+        f'      "api_key": "{key}",\n'
+        f'      "base_url": "http://localhost:{port}/v1"\n'
+        f"    }}\n"
+        f"  }}\n"
+        f"}}"
+    )
+
+    click.echo("Add to ~/.config/opencode/opencode.json:")
+    click.echo("")
+    click.echo(snippet)
+    click.echo("")
+
+    if _copy_to_clipboard(snippet):
+        click.echo("Copied to clipboard.")
+
+
+@configsetup.command("claude-code")
+@click.pass_context
+def configsetup_claude_code(ctx: click.Context) -> None:
+    """Print Claude Code config snippet for connecting to this router."""
+    config_path: str = ctx.obj["config_path"]
+    key = _read_server_api_key(config_path)
+    if not key:
+        click.echo("No API key configured. Run `eggpool newkey` first.", err=True)
+        sys.exit(1)
+
+    config = AppConfig.from_toml(config_path)
+    port = config.server.port
+
+    snippet = (
+        f'{{\n  "api_key": "{key}",\n  "base_url": "http://localhost:{port}/v1"\n}}'
+    )
+
+    click.echo("Add to ~/.claude/settings.json or pass via --api-key and --base-url:")
+    click.echo("")
+    click.echo(snippet)
+    click.echo("")
+    click.echo(f"Or run: claude --api-key {key} --base-url http://localhost:{port}/v1")
+
+    if _copy_to_clipboard(snippet):
+        click.echo("Copied to clipboard.")
 
 
 @cli.command()
@@ -239,6 +423,13 @@ def _update_server_config(config_path: str, key: str, value: str) -> None:
         click.echo(f"Config file not found: {config_path}", err=True)
         sys.exit(1)
 
+    # Write numeric values unquoted, strings quoted
+    try:
+        int(value)
+        toml_value = value
+    except ValueError:
+        toml_value = f'"{value}"'
+
     lines = path.read_text(encoding="utf-8").splitlines()
     updated = False
     in_server = False
@@ -253,7 +444,7 @@ def _update_server_config(config_path: str, key: str, value: str) -> None:
         if stripped.startswith("[") and stripped.endswith("]"):
             in_server = False
         if in_server and stripped.startswith(f"{key} ="):
-            new_lines.append(f'{key} = "{value}"')
+            new_lines.append(f"{key} = {toml_value}")
             updated = True
             continue
         new_lines.append(line)

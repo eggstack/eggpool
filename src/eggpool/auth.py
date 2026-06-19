@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import hmac
 import logging
-import os
 import re
+from typing import TYPE_CHECKING
 
 from fastapi import HTTPException, Request
+
+if TYPE_CHECKING:
+    from eggpool.models.config import AppConfig
 
 logger = logging.getLogger(__name__)
 
@@ -34,21 +37,21 @@ def verify_api_key(request: Request, api_key: str) -> bool:
     return hmac.compare_digest(provided, api_key)
 
 
-def require_auth_at_startup(api_key_env: str | None) -> str | None:
-    """Validate that the configured API key environment variable is set.
+def require_auth_at_startup(api_key: str | None) -> str | None:
+    """Validate that the configured API key is set.
 
-    Returns the API key value if set, None if auth is disabled (no env var name).
-    Raises RuntimeError if auth is enabled but the env var is not set or is a
+    Returns the API key value if set, None if auth is disabled (no key).
+    Raises RuntimeError if auth is enabled but the key is not set or is a
     placeholder value.
     """
-    if not api_key_env:
+    if not api_key:
         return None
-    expected = os.environ.get(api_key_env)
-    if not expected or not expected.strip():
+    expected = api_key.strip()
+    if not expected:
         raise RuntimeError(
-            f"Authentication enabled but API key env var {api_key_env!r} is not set. "
-            f"Set the environment variable or disable authentication by setting "
-            f'api_key_env = "" in the [server] config section.'
+            "Authentication enabled but API key is not set. "
+            "Set api_key in the [server] config section or disable "
+            "authentication by removing it."
         )
     _placeholder_keys = frozenset(
         {
@@ -59,12 +62,12 @@ def require_auth_at_startup(api_key_env: str | None) -> str | None:
             "your-local-api-key-here",
         }
     )
-    if expected.strip().lower() in _placeholder_keys:
+    if expected.lower() in _placeholder_keys:
         raise RuntimeError(
-            f"API key env var {api_key_env!r} contains a placeholder value. "
-            f"Set a real key before starting the service."
+            "API key contains a placeholder value. "
+            "Set a real key before starting the service."
         )
-    return expected.strip()
+    return expected
 
 
 async def require_auth(request: Request) -> None:
@@ -73,18 +76,10 @@ async def require_auth(request: Request) -> None:
     Raises:
         HTTPException: If the API key is missing or invalid.
     """
-    api_key_env: str | None = request.app.state.config.server.api_key_env
-    if not api_key_env:
-        return
-
-    expected = os.environ.get(api_key_env)
+    config: AppConfig = request.app.state.config
+    expected = config.server.resolved_api_key
     if not expected:
-        # Startup check should have caught this, but if env var
-        # disappears at runtime, fail closed
-        raise HTTPException(
-            status_code=401,
-            detail="Authentication unavailable: API key not configured",
-        )
+        return
 
     stripped = expected.strip()
     if not stripped:

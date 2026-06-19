@@ -1,7 +1,7 @@
 [server]
 host = "0.0.0.0"
 port = 11300
-api_key_env = "GO_AGGREGATOR_API_KEY"
+# api_key = "ep_..." # Auto-generated on first run; use `eggpool newkey` to regenerate
 log_level = "INFO"
 access_log = true
 

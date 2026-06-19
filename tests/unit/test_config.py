@@ -249,11 +249,27 @@ def test_dashboard_config_defaults() -> None:
 
 
 def test_server_config_api_key_env_default() -> None:
-    """ServerConfig.api_key_env defaults to GO_AGGREGATOR_API_KEY."""
+    """ServerConfig.api_key_env defaults to SERVER_API_KEY."""
     from eggpool.models.config import ServerConfig
 
     sc = ServerConfig()
-    assert sc.api_key_env == "GO_AGGREGATOR_API_KEY"
+    assert sc.api_key_env == "SERVER_API_KEY"
+
+
+def test_server_config_resolved_api_key_inline() -> None:
+    """Inline api_key takes precedence over env var."""
+    from eggpool.models.config import ServerConfig
+
+    sc = ServerConfig(api_key="ep_test123")
+    assert sc.resolved_api_key == "ep_test123"
+
+
+def test_server_config_resolved_api_key_env() -> None:
+    """Falls back to env var when no inline key."""
+    from eggpool.models.config import ServerConfig
+
+    sc = ServerConfig(api_key_env="MY_KEY")
+    assert sc.resolved_api_key is None  # env var not set in test
 
 
 def test_server_config_empty_api_key_env_disables_auth() -> None:

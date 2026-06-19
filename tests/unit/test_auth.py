@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from unittest.mock import MagicMock
 
 import pytest
@@ -52,9 +51,9 @@ def test_verify_api_key_missing(mock_request: MagicMock) -> None:
     assert verify_api_key(mock_request, "secret123") is False
 
 
-def test_require_auth_no_env_var() -> None:
+def test_require_auth_no_key() -> None:
+    """When no api_key is set and no env var exists, auth is disabled."""
     config = AppConfig()
-    config.server.api_key_env = "NONEXISTENT_AUTH_ENV"
     app = FastAPI()
     app.state.config = config
 
@@ -65,14 +64,33 @@ def test_require_auth_no_env_var() -> None:
 
     client = TestClient(app)
     response = client.get("/protected")
-    # Auth is now fail-closed: missing env var at runtime returns 401
+    # No key configured at all → auth disabled → 200
+    assert response.status_code == 200
+
+
+def test_require_auth_wrong_key() -> None:
+    """When api_key is set but request has wrong key, returns 401."""
+    config = AppConfig()
+    config.server.api_key = "correct-secret"
+    app = FastAPI()
+    app.state.config = config
+
+    @app.get("/protected")
+    async def protected(request: Request) -> dict[str, str]:
+        await require_auth(request)
+        return {"status": "ok"}
+
+    client = TestClient(app)
+    response = client.get(
+        "/protected",
+        headers={"Authorization": "Bearer wrong-key"},
+    )
     assert response.status_code == 401
 
 
 def test_require_auth_valid_key() -> None:
-    os.environ["TEST_AUTH_VALID"] = "valid-key-abc"
     config = AppConfig()
-    config.server.api_key_env = "TEST_AUTH_VALID"
+    config.server.api_key = "valid-key-abc"
     app = FastAPI()
     app.state.config = config
 
@@ -87,13 +105,11 @@ def test_require_auth_valid_key() -> None:
         headers={"Authorization": "Bearer valid-key-abc"},
     )
     assert response.status_code == 200
-    del os.environ["TEST_AUTH_VALID"]
 
 
 def test_require_auth_invalid_key() -> None:
-    os.environ["TEST_AUTH_INVALID"] = "valid-key-def"
     config = AppConfig()
-    config.server.api_key_env = "TEST_AUTH_INVALID"
+    config.server.api_key = "valid-key-def"
     app = FastAPI()
     app.state.config = config
 
@@ -105,14 +121,13 @@ def test_require_auth_invalid_key() -> None:
     client = TestClient(app)
     response = client.get("/protected", headers={"Authorization": "Bearer wrong-key"})
     assert response.status_code == 401
-    del os.environ["TEST_AUTH_INVALID"]
 
 
 @pytest.mark.asyncio()
 async def test_auth_fail_closed_at_runtime() -> None:
-    """Missing env var at runtime should return 401, not disable auth."""
+    """Missing api_key at runtime should return 401, not disable auth."""
     config = AppConfig()
-    config.server.api_key_env = "RUNTIME_MISSING_KEY"
+    config.server.api_key = "expected-key"
     app = FastAPI()
     app.state.config = config
 
@@ -121,23 +136,19 @@ async def test_auth_fail_closed_at_runtime() -> None:
         await require_auth(request)
         return {"status": "ok"}
 
-    # Ensure the env var is NOT set
-    os.environ.pop("RUNTIME_MISSING_KEY", None)
-
     from fastapi.testclient import TestClient as AsyncClient
 
     client = AsyncClient(app)
     response = client.get("/protected")
     assert response.status_code == 401
-    assert "Authentication unavailable" in response.json()["detail"]
+    assert "Invalid or missing API key" in response.json()["detail"]
 
 
 @pytest.mark.asyncio()
 async def test_auth_whitespace_key_rejected_at_runtime() -> None:
-    """Whitespace-only env var at runtime should return 401."""
-    os.environ["TEST_WHITESPACE_RUNTIME"] = "   "
+    """Whitespace-only api_key at runtime should return 401."""
     config = AppConfig()
-    config.server.api_key_env = "TEST_WHITESPACE_RUNTIME"
+    config.server.api_key = "   "
     app = FastAPI()
     app.state.config = config
 
@@ -152,55 +163,40 @@ async def test_auth_whitespace_key_rejected_at_runtime() -> None:
         headers={"Authorization": "Bearer "},
     )
     assert response.status_code == 401
-    del os.environ["TEST_WHITESPACE_RUNTIME"]
 
 
 class TestRequireAuthAtStartup:
     """Tests for require_auth_at_startup."""
 
-    def test_returns_none_when_env_is_empty(self) -> None:
-        """Empty api_key_env disables auth and returns None."""
+    def test_returns_none_when_key_is_empty(self) -> None:
+        """Empty api_key disables auth and returns None."""
         assert require_auth_at_startup("") is None
 
-    def test_returns_none_when_env_is_none(self) -> None:
-        """None api_key_env disables auth and returns None."""
+    def test_returns_none_when_key_is_none(self) -> None:
+        """None api_key disables auth and returns None."""
         assert require_auth_at_startup(None) is None
 
-    def test_returns_key_when_env_var_is_set(self) -> None:
-        """Returns the key value when the env var is set."""
-        os.environ["TEST_STARTUP_KEY"] = "secret-value"
-        try:
-            result = require_auth_at_startup("TEST_STARTUP_KEY")
-            assert result == "secret-value"
-        finally:
-            del os.environ["TEST_STARTUP_KEY"]
+    def test_returns_key_when_set(self) -> None:
+        """Returns the key value when provided."""
+        result = require_auth_at_startup("secret-value")
+        assert result == "secret-value"
 
-    def test_raises_when_env_var_is_missing(self) -> None:
-        """Raises RuntimeError when env var is not set."""
-        os.environ.pop("MISSING_STARTUP_KEY", None)
+    def test_raises_when_key_is_whitespace(self) -> None:
+        """Raises RuntimeError when key is whitespace-only."""
         with pytest.raises(RuntimeError, match="not set"):
-            require_auth_at_startup("MISSING_STARTUP_KEY")
+            require_auth_at_startup("   ")
 
-    def test_error_message_recommends_empty_string(self) -> None:
-        """Error message tells user to set api_key_env = \"\" to disable."""
-        os.environ.pop("MISSING_KEY_MSG", None)
-        with pytest.raises(RuntimeError, match=r'api_key_env = ""'):
-            require_auth_at_startup("MISSING_KEY_MSG")
+    def test_error_message_mentions_api_key(self) -> None:
+        """Error message tells user to set api_key."""
+        with pytest.raises(RuntimeError, match="API key"):
+            require_auth_at_startup("your-api-key-here")
 
     def test_whitespace_only_key_rejected(self) -> None:
-        """Whitespace-only env var should be rejected at startup."""
-        os.environ["TEST_WHITESPACE_KEY"] = "   "
-        try:
-            with pytest.raises(RuntimeError, match="not set"):
-                require_auth_at_startup("TEST_WHITESPACE_KEY")
-        finally:
-            del os.environ["TEST_WHITESPACE_KEY"]
+        """Whitespace-only key should be rejected at startup."""
+        with pytest.raises(RuntimeError, match="not set"):
+            require_auth_at_startup("   ")
 
     def test_newlines_only_key_rejected(self) -> None:
-        """Newline-only env var should be rejected at startup."""
-        os.environ["TEST_NEWLINE_KEY"] = "\n\n"
-        try:
-            with pytest.raises(RuntimeError, match="not set"):
-                require_auth_at_startup("TEST_NEWLINE_KEY")
-        finally:
-            del os.environ["TEST_NEWLINE_KEY"]
+        """Newline-only key should be rejected at startup."""
+        with pytest.raises(RuntimeError, match="not set"):
+            require_auth_at_startup("\n\n")

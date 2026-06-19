@@ -261,7 +261,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     configure_logging(level=config.server.log_level)
 
     # 1. Validate auth at startup
-    require_auth_at_startup(config.server.api_key_env)
+    require_auth_at_startup(config.server.resolved_api_key)
 
     # 1b. Validate account credentials
     config.validate_account_credentials()

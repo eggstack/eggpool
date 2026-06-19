@@ -234,16 +234,17 @@ class TestApplicationStartupNoAuth:
 
 
 class TestApplicationStartupRequiresAuth:
-    """Startup fails fast if auth is enabled but the env var is unset."""
+    """Startup fails fast if auth is enabled but the API key is invalid."""
 
     @pytest.mark.asyncio
-    async def test_missing_api_key_env_raises(self, tmp_path) -> None:
+    async def test_placeholder_api_key_raises(self, tmp_path) -> None:
+        """Startup rejects placeholder API key values."""
         from eggpool.errors import AggregatorError
 
         config = AppConfig.from_dict(
             {
                 "server": {
-                    "api_key_env": "UNSET_VAR_12345",
+                    "api_key": "your-api-key-here",
                     "host": "127.0.0.1",
                     "port": 0,
                 },
@@ -258,15 +259,10 @@ class TestApplicationStartupRequiresAuth:
             }
         )
 
-        old_value = os.environ.pop("UNSET_VAR_12345", None)
-        try:
-            app = create_app(config)
-            with pytest.raises(Exception) as excinfo:
-                async with app.router.lifespan_context(app):
-                    pass
-            assert "UNSET_VAR_12345" in str(excinfo.value) or isinstance(
-                excinfo.value, AggregatorError
-            )
-        finally:
-            if old_value is not None:
-                os.environ["UNSET_VAR_12345"] = old_value
+        app = create_app(config)
+        with pytest.raises(Exception) as excinfo:
+            async with app.router.lifespan_context(app):
+                pass
+        assert "placeholder" in str(excinfo.value).lower() or isinstance(
+            excinfo.value, AggregatorError
+        )

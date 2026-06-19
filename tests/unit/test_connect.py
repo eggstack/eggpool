@@ -812,20 +812,19 @@ class TestEditCommand:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Invokes click.edit with the config path."""
-        import click as click_mod
+        """Calls os.execvp with the editor and config path."""
+        import os as os_mod
 
         config_path = tmp_path / "config.toml"
         config_path.write_text("[server]\nport = 8080\n")
 
-        edited_files: list[str] = []
+        exec_args: list[list[str]] = []
 
-        def fake_edit(filename: str | None = None, **kw: object) -> str | None:
-            if filename:
-                edited_files.append(filename)
-            return ""
+        def fake_execvp(cmd: str, args: list[str]) -> None:
+            exec_args.append(args)
 
-        monkeypatch.setattr(click_mod, "edit", fake_edit)
+        monkeypatch.setattr(os_mod, "execvp", fake_execvp)
+        monkeypatch.setenv("EDITOR", "vim")
 
         runner = CliRunner()
         result = runner.invoke(
@@ -834,7 +833,40 @@ class TestEditCommand:
         )
 
         assert result.exit_code == 0
-        assert edited_files == [str(config_path)]
+        assert len(exec_args) == 1
+        assert exec_args[0] == ["vim", str(config_path)]
+
+    def test_edit_falls_back_to_available_editor(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Falls back to an available editor when no EDITOR/VISUAL is set."""
+        import os as os_mod
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("[server]\nport = 8080\n")
+
+        exec_args: list[list[str]] = []
+
+        def fake_execvp(cmd: str, args: list[str]) -> None:
+            exec_args.append(args)
+
+        monkeypatch.setattr(os_mod, "execvp", fake_execvp)
+        monkeypatch.delenv("EDITOR", raising=False)
+        monkeypatch.delenv("VISUAL", raising=False)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "edit"],
+        )
+
+        assert result.exit_code == 0
+        assert len(exec_args) == 1
+        assert exec_args[0][1] == str(config_path)
+        # Should be one of the known fallback editors
+        assert exec_args[0][0] in ("hx", "vim", "vi", "nano")
 
 
 class TestProviderFallback:
