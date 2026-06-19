@@ -435,6 +435,7 @@ class RequestCoordinator:
                     if context.attempted_accounts
                     else None,
                     provider_id=context.provider_id,
+                    protocol=context.protocol,
                 )
 
                 if not eligible_account_names:
@@ -466,10 +467,10 @@ class RequestCoordinator:
                 for _ in range(len(eligible_account_names) + 1):
                     selected_state = await self._router.select_account(
                         context.model_id,
-                        context.request_id,
                         request_estimates=request_estimates,
                         exclude_accounts=exclude if exclude else None,
                         provider_id=context.provider_id,
+                        protocol=context.protocol,
                     )
                     if selected_state is None:
                         break
@@ -1401,14 +1402,14 @@ class RequestCoordinator:
         Raises ProtocolMismatchError (which callers render as 400) when
         the wrong endpoint is used for a known model.
         """
-        model_info = self._catalog.cache.get_model_for_provider(
-            context.model_id, context.provider_id
-        )
-        if model_info is None:
+        if not self._catalog.cache.has_model(context.model_id):
             raise ModelNotFoundError(context.model_id)
 
-        model_protocol = model_info.get("protocol")
-        if not model_protocol:
+        model_protocols = self._catalog.cache.get_model_protocols(
+            context.model_id,
+            provider_id=context.provider_id,
+        )
+        if not model_protocols:
             # Unresolved protocol - fail closed
             raise ModelUnavailableError(
                 f"Model {context.model_id!r} has unresolved protocol"
@@ -1416,7 +1417,11 @@ class RequestCoordinator:
 
         from go_aggregator.catalog.protocols import ModelProtocolResolver
 
+        if context.protocol in model_protocols:
+            return
+
         resolver = ModelProtocolResolver()
+        model_protocol = sorted(model_protocols)[0]
         resolver.validate_endpoint(model_protocol, context.protocol, context.model_id)
 
     @staticmethod

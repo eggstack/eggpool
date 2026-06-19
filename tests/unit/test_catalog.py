@@ -191,6 +191,18 @@ def test_parse_model_id_no_known_providers() -> None:
     assert provider == "opencode-go"
 
 
+def test_parse_model_id_rejects_empty_provider_suffix() -> None:
+    base, provider = parse_model_id("gpt-4/")
+    assert base == "gpt-4/"
+    assert provider is None
+
+
+def test_parse_model_id_rejects_empty_model_prefix() -> None:
+    base, provider = parse_model_id("/opencode-go")
+    assert base == "/opencode-go"
+    assert provider is None
+
+
 # ===================================================================
 # Provider tracking tests
 # ===================================================================

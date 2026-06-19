@@ -20,7 +20,11 @@ def parse_model_id(
     """
     if "/" in model_id:
         base, candidate = model_id.rsplit("/", 1)
-        if known_providers is None or candidate in known_providers:
+        if (
+            base
+            and candidate
+            and (known_providers is None or candidate in known_providers)
+        ):
             return base, candidate
     return model_id, None
 
@@ -255,30 +259,81 @@ class ModelCatalogCache:
                 return pinfo
         return self._models.get(model_id)
 
+    def get_model_for_account(
+        self, model_id: str, account_name: str
+    ) -> dict[str, Any] | None:
+        """Get model info using the account's provider-specific metadata."""
+        return self.get_model_for_provider(
+            model_id,
+            self._account_providers.get(account_name),
+        )
+
+    def is_account_model_available(
+        self,
+        account_name: str,
+        model_id: str,
+        *,
+        max_age_s: float | None = None,
+        protocol: str | None = None,
+    ) -> bool:
+        """Return whether an account can route a model.
+
+        Availability requires account support and a resolved protocol in
+        that account's provider-specific model metadata.  When
+        ``protocol`` is supplied, the resolved protocol must match the
+        requested endpoint protocol.
+        """
+        supporting = (
+            self.get_fresh_supporting_accounts(model_id, max_age_s)
+            if max_age_s is not None
+            else self.get_supporting_accounts(model_id)
+        )
+        if account_name not in supporting:
+            return False
+
+        model_info = self.get_model_for_account(model_id, account_name)
+        resolved_protocol = model_info.get("protocol") if model_info else None
+        if not resolved_protocol:
+            return False
+        return protocol is None or resolved_protocol == protocol
+
+    def get_model_protocols(
+        self,
+        model_id: str,
+        *,
+        account_names: set[str] | None = None,
+        provider_id: str | None = None,
+    ) -> set[str]:
+        """Get resolved protocols available for a model across accounts."""
+        supporting = self.get_supporting_accounts(model_id)
+        if account_names is not None:
+            supporting &= account_names
+
+        protocols: set[str] = set()
+        for account_name in supporting:
+            account_provider = self._account_providers.get(account_name)
+            if provider_id is not None and account_provider != provider_id:
+                continue
+            model_info = self.get_model_for_provider(model_id, account_provider)
+            resolved_protocol = model_info.get("protocol") if model_info else None
+            if resolved_protocol:
+                protocols.add(str(resolved_protocol))
+        return protocols
+
     def get_supporting_accounts(self, model_id: str) -> set[str]:
         """Get set of account names that support a model."""
         return self._account_support.get(model_id, set()).copy()
 
     def is_model_available(self, model_id: str, eligible_accounts: set[str]) -> bool:
         """Check if a model is available from any eligible account."""
-        model_info = self._models.get(model_id)
-        if model_info is None:
+        if model_id not in self._models:
             return False
         supporting = self._account_support.get(model_id, set())
         visible = supporting & eligible_accounts
-        if not visible:
-            return False
-        # Check if any visible account has a provider-specific entry
-        # with a resolved protocol, or the global entry has one.
-        if model_info.get("protocol"):
-            return True
-        for acct in visible:
-            pid = self._account_providers.get(acct)
-            if pid is not None:
-                pinfo = self._provider_models.get((model_id, pid))
-                if pinfo is not None and pinfo.get("protocol"):
-                    return True
-        return False
+        return any(
+            self.is_account_model_available(account_name, model_id)
+            for account_name in visible
+        )
 
     @property
     def last_refresh(self) -> float:

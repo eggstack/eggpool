@@ -23,13 +23,18 @@ class TestParseModelProvider:
 
     def test_only_slash(self) -> None:
         model_id, provider_id = parse_model_provider("/")
-        assert model_id == ""
-        assert provider_id == ""
+        assert model_id == "/"
+        assert provider_id is None
 
     def test_multiple_slashes(self) -> None:
         model_id, provider_id = parse_model_provider("a/b/c")
         assert model_id == "a/b"
         assert provider_id == "c"
+
+    def test_trailing_slash(self) -> None:
+        model_id, provider_id = parse_model_provider("gpt-4/")
+        assert model_id == "gpt-4/"
+        assert provider_id is None
 
 
 class TestFormatModelProvider:

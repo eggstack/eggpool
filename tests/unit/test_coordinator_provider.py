@@ -9,7 +9,9 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
-from go_aggregator.errors import UpstreamError
+from go_aggregator.catalog.cache import ModelCatalogCache
+from go_aggregator.catalog.protocols import ProtocolMismatchError
+from go_aggregator.errors import ModelUnavailableError, UpstreamError
 from go_aggregator.models.config import AppConfig, ProviderConfig
 from go_aggregator.providers.client_pool import ProviderClientPool
 from go_aggregator.request.coordinator import (
@@ -246,3 +248,65 @@ class TestCoordinatorInitConfig:
             client_pool=client,
         )
         assert coordinator._config is None
+
+
+class TestValidateEndpointProviderAware:
+    def _make_coordinator(self, cache: ModelCatalogCache) -> RequestCoordinator:
+        catalog = MagicMock()
+        catalog.cache = cache
+        return RequestCoordinator(
+            registry=MagicMock(),
+            catalog=catalog,
+            router=MagicMock(),
+            db=MagicMock(),
+            client_pool=httpx.AsyncClient(),
+        )
+
+    def test_accepts_unsuffixed_provider_specific_protocol(self) -> None:
+        cache = ModelCatalogCache()
+        cache.load_model(
+            model_id="shared-model",
+            display_name="Shared Model",
+            protocol="",
+            capabilities={},
+            source_metadata={},
+        )
+        cache.set_account_provider("acct1", "provider-a")
+        cache.set_provider_model_entry(
+            "shared-model",
+            "provider-a",
+            {
+                "model_id": "shared-model",
+                "protocol": "openai",
+                "capabilities": {},
+                "source_metadata": {},
+            },
+        )
+        cache.add_account_support("shared-model", "acct1")
+        coordinator = self._make_coordinator(cache)
+
+        coordinator._validate_endpoint(_make_context(model_id="shared-model"))
+
+    def test_rejects_when_only_other_protocol_is_available(self) -> None:
+        cache = ModelCatalogCache()
+        cache.update_from_account(
+            "acct1",
+            "provider-a",
+            [{"model_id": "shared-model", "protocol": "anthropic"}],
+        )
+        coordinator = self._make_coordinator(cache)
+
+        with pytest.raises(ProtocolMismatchError):
+            coordinator._validate_endpoint(_make_context(model_id="shared-model"))
+
+    def test_rejects_unresolved_provider_specific_protocol(self) -> None:
+        cache = ModelCatalogCache()
+        cache.update_from_account(
+            "acct1",
+            "provider-a",
+            [{"model_id": "shared-model", "protocol": None}],
+        )
+        coordinator = self._make_coordinator(cache)
+
+        with pytest.raises(ModelUnavailableError):
+            coordinator._validate_endpoint(_make_context(model_id="shared-model"))

@@ -28,6 +28,7 @@ def get_eligible_accounts(
     health_manager: HealthManager | None = None,
     stale_after_s: float | None = None,
     provider_id: str | None = None,
+    protocol: str | None = None,
 ) -> list[AccountRuntimeState]:
     """Get accounts eligible for routing a specific model.
 
@@ -39,6 +40,7 @@ def get_eligible_accounts(
     - circuit breaker allows requests (if health_manager provided)
     - supports the requested model (with recent catalog refresh when
       stale_after_s is provided)
+    - supports the requested protocol (if protocol is given)
     - belongs to the specified provider (if provider_id is given)
     """
     eligible: list[AccountRuntimeState] = []
@@ -58,10 +60,11 @@ def get_eligible_accounts(
         ):
             continue
 
-        if stale_after_s is not None:
-            supporting = catalog.get_fresh_supporting_accounts(model_id, stale_after_s)
-        else:
-            supporting = catalog.get_supporting_accounts(model_id)
-        if state.name in supporting:
+        if catalog.is_account_model_available(
+            state.name,
+            model_id,
+            max_age_s=stale_after_s,
+            protocol=protocol,
+        ):
             eligible.append(state)
     return eligible
