@@ -27,6 +27,7 @@ dev = [
     "respx",
     "coverage[toml]",
     "pre-commit",
+    "httpx2>=2.4.0",
 ]
 
 [project.scripts]
