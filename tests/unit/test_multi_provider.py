@@ -152,7 +152,7 @@ async def test_sync_from_config_persists_provider_id() -> None:
             },
         ]
 
-        name_to_id = await repo.sync_from_config(config_accounts, database)
+        name_to_id = await repo.sync_from_config(config_accounts)
         assert "acct1" in name_to_id
         assert "acct2" in name_to_id
 
@@ -182,7 +182,7 @@ async def test_sync_from_config_updates_provider_id() -> None:
         repo = AccountRepository(database)
 
         initial = [{"name": "acct1", "api_key_env": "KEY1"}]
-        await repo.sync_from_config(initial, database)
+        await repo.sync_from_config(initial)
 
         updated = [
             {
@@ -191,7 +191,7 @@ async def test_sync_from_config_updates_provider_id() -> None:
                 "provider_id": "new-provider",
             }
         ]
-        await repo.sync_from_config(updated, database)
+        await repo.sync_from_config(updated)
 
         row = await database.fetch_one(
             "SELECT provider_id FROM accounts WHERE name = ?",

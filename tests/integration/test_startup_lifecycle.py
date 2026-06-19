@@ -94,7 +94,7 @@ async def test_empty_database_migration_and_account_sync() -> None:
         }
         for acct in config.all_accounts()
     ]
-    name_to_id = await account_repo.sync_from_config(config_accounts, db)
+    name_to_id = await account_repo.sync_from_config(config_accounts)
 
     assert "acct-alpha" in name_to_id
     assert "acct-beta" in name_to_id

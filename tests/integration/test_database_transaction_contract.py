@@ -412,7 +412,6 @@ class TestAccountRepositorySync:
                             "weight": 1.0,
                         },
                     ],
-                    db,
                 )
 
             rows = await db.fetch_all("SELECT name FROM accounts")
@@ -445,7 +444,6 @@ class TestAccountRepositorySync:
                         "weight": 2.0,
                     },
                 ],
-                db,
             )
             assert set(ids.keys()) == {"a", "b"}
             assert ids["a"] != ids["b"]
@@ -460,7 +458,6 @@ class TestAccountRepositorySync:
                         "weight": 1.0,
                     },
                 ],
-                db,
             )
             assert set(ids2.keys()) == {"a"}
 

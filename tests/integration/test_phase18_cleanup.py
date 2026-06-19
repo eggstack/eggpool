@@ -49,6 +49,7 @@ def _make_selected(db_id: str, attempt_id: int, reservation_id: str) -> object:
     sel.reservation_id = reservation_id
     sel.estimated_microdollars = 10_000
     sel.attempt_number = 1
+    sel.provider_id = "opencode-go"
     return sel
 
 
@@ -252,7 +253,7 @@ weight = 1.0
                 runner = MigrationRunner(db)
                 await runner.run()
                 account_repo = AccountRepository(db)
-                await account_repo.sync_from_config(account_config_rows(config), db)
+                await account_repo.sync_from_config(account_config_rows(config))
                 registry = AccountRegistry(config)
                 with respx.mock:
                     respx.get("https://test-upstream.example.com/models").mock(

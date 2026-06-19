@@ -303,7 +303,12 @@ class RequestFinalizer:
             #    reservation, the request-level cost must still be recorded
             #    so that routing decisions observe it immediately.
             if self._quota_estimator is not None and cost_microdollars > 0:
-                total_tokens = data.input_tokens + data.output_tokens
+                total_tokens = (
+                    data.input_tokens
+                    + data.output_tokens
+                    + data.cache_read_tokens
+                    + data.cache_write_tokens
+                )
                 # record_usage + persisted snapshot increment must be
                 # atomic so concurrent finalizers cannot interleave.
                 await self._quota_estimator.record_usage_and_snapshot(

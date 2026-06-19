@@ -458,7 +458,6 @@ class TestHistoricalFixture:
                         "weight": 2.5,
                     }
                 ],
-                db,
             )
             account_id_value = int(account_id["compat-account"])
 

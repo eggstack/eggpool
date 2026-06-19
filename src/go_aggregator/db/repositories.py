@@ -25,16 +25,14 @@ class AccountRepository:
     async def sync_from_config(
         self,
         config_accounts: list[dict[str, Any]],
-        db: Database,
     ) -> dict[str, int]:
         """Upsert configured accounts, disable removed ones, return name->id map."""
-        async with db.transaction():
-            return await self._sync_from_config_locked(config_accounts, db)
+        async with self._db.transaction():
+            return await self._sync_from_config_locked(config_accounts)
 
     async def _sync_from_config_locked(
         self,
         config_accounts: list[dict[str, Any]],
-        db: Database,
     ) -> dict[str, int]:
         """Upsert configured accounts inside the caller's transaction."""
         name_to_id: dict[str, int] = {}
@@ -44,12 +42,12 @@ class AccountRepository:
             name = str(acct["name"])
             provider_id = str(acct.get("provider_id", "opencode-go"))
             configured_names.add(name)
-            row = await db.fetch_one(
+            row = await self._db.fetch_one(
                 "SELECT id FROM accounts WHERE name = ?",
                 (name,),
             )
             if row is not None:
-                await db.execute_write(
+                await self._db.execute_write(
                     "UPDATE accounts SET api_key_env = ?, enabled = ?, "
                     "weight = ?, provider_id = ? WHERE name = ?",
                     (
@@ -62,7 +60,7 @@ class AccountRepository:
                 )
                 name_to_id[name] = int(row["id"])
             else:
-                last_id = await db.execute_insert(
+                last_id = await self._db.execute_insert(
                     "INSERT INTO accounts "
                     "(name, api_key_env, enabled, weight, provider_id) "
                     "VALUES (?, ?, ?, ?, ?)",
@@ -76,10 +74,12 @@ class AccountRepository:
                 )
                 name_to_id[name] = last_id
 
-        existing = await db.fetch_all("SELECT id, name FROM accounts WHERE enabled = 1")
+        existing = await self._db.fetch_all(
+            "SELECT id, name FROM accounts WHERE enabled = 1"
+        )
         for row in existing:
             if row["name"] not in configured_names:
-                await db.execute_write(
+                await self._db.execute_write(
                     "UPDATE accounts SET enabled = 0 WHERE id = ?",
                     (row["id"],),
                 )
@@ -754,6 +754,14 @@ class ProviderRepository:
         configured_providers: dict[str, dict[str, Any]],
     ) -> None:
         """Upsert configured providers and disable removed ones."""
+        async with self._db.transaction():
+            await self._sync_from_config_locked(configured_providers)
+
+    async def _sync_from_config_locked(
+        self,
+        configured_providers: dict[str, dict[str, Any]],
+    ) -> None:
+        """Upsert configured providers inside the caller's transaction."""
         import json as _json
 
         configured_ids = set(configured_providers.keys())

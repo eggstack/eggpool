@@ -95,6 +95,7 @@ def _make_selected(
     s.reservation_id = reservation_id
     s.estimated_microdollars = estimated_microdollars
     s.attempt_number = attempt_number
+    s.provider_id = "opencode-go"
     return s
 
 

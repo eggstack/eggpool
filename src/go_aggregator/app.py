@@ -229,7 +229,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # 5. Sync accounts from config to SQLite
     account_repo = AccountRepository(db)
     config_accounts = account_config_rows(config)
-    await account_repo.sync_from_config(config_accounts, db)
+    await account_repo.sync_from_config(config_accounts)
 
     # 6. Crash recovery
     await _crash_recovery(db)
@@ -550,7 +550,7 @@ async def _reload_config(app: FastAPI) -> None:
 
         # Re-sync accounts
         account_repo = AccountRepository(db)
-        await account_repo.sync_from_config(account_config_rows(new_config), db)
+        await account_repo.sync_from_config(account_config_rows(new_config))
 
     # Rebuild client pool
     old_pool: ProviderClientPool | None = getattr(app.state, "client_pool", None)

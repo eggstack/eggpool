@@ -346,7 +346,7 @@ class TestModelsRefreshCachedRoutable:
                 runner = MigrationRunner(db)
                 await runner.run()
                 account_repo = AccountRepository(db)
-                await account_repo.sync_from_config(account_config_rows(config), db)
+                await account_repo.sync_from_config(account_config_rows(config))
                 registry = AccountRegistry(config)
                 async with httpx.AsyncClient(
                     base_url=config.upstream.base_url

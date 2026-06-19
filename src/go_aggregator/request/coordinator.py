@@ -20,6 +20,7 @@ from go_aggregator.db.repositories import (
     UsageWindowRepository,
 )
 from go_aggregator.errors import (
+    AggregatorError,
     AuthenticationError,
     DatabaseError,
     ModelNotFoundError,
@@ -230,7 +231,13 @@ class RequestCoordinator:
             try:
                 return self._client_pool.get_client(provider_id, account_name)
             except Exception:
-                pass
+                logger.warning(
+                    "Client pool lookup failed for provider=%s account=%s, "
+                    "falling back to default client",
+                    provider_id,
+                    account_name,
+                    exc_info=True,
+                )
         if self._client is None:
             raise UpstreamError("No HTTP client available for upstream requests")
         return self._client
@@ -367,6 +374,24 @@ class RequestCoordinator:
                     context.request_id,
                     err,
                 )
+                # Apply health transition for non-retryable errors that
+                # indicate account-level problems (e.g., 401/403 auth
+                # failures) so the circuit breaker can open.
+                if self._health_manager is not None:
+                    category = classify_failure_category(None, err.status_code)
+                    if category == FailureCategory.AUTHENTICATION_FAILED:
+                        self._health_manager.record_failure(
+                            selected.account_name,
+                            model_id=context.model_id,
+                            reason="authentication_failed",
+                        )
+                        health_applied = True
+                    elif category == FailureCategory.QUOTA_EXHAUSTED:
+                        self._health_manager.record_quota_exhausted(
+                            selected.account_name,
+                            self._quota_exhausted_cooldown_seconds,
+                        )
+                        health_applied = True
                 break
 
         # All retries exhausted or non-retryable error
@@ -663,6 +688,10 @@ class RequestCoordinator:
                 status_code=504,
                 error_class="TimeoutException",
             ) from err
+        except AggregatorError:
+            if response is not None:
+                await response.aclose()
+            raise
         except Exception as err:
             if response is not None:
                 await response.aclose()

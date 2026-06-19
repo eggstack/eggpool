@@ -271,7 +271,7 @@ def models_refresh(ctx: click.Context) -> None:
             await provider_repo.sync_from_config(configured_providers)
 
             account_repo = AccountRepository(db)
-            await account_repo.sync_from_config(account_config_rows(config), db)
+            await account_repo.sync_from_config(account_config_rows(config))
 
             registry = AccountRegistry(config)
             client_pool = ProviderClientPool.from_app_config(config)

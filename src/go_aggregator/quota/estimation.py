@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -32,8 +33,8 @@ class QuotaWindow:
     window_seconds: float
     used_tokens: int = 0
     used_cost_microdollars: int = 0
-    observations: list[tuple[float, int, int]] = field(
-        default_factory=list[tuple[float, int, int]]
+    observations: deque[tuple[float, int, int]] = field(
+        default_factory=deque[tuple[float, int, int]]
     )
 
     def add_observation(self, timestamp: float, tokens: int, cost: int) -> None:
@@ -47,7 +48,7 @@ class QuotaWindow:
         """Remove observations older than the window."""
         cutoff = current_time - self.window_seconds
         while self.observations and self.observations[0][0] < cutoff:
-            _, tokens, cost = self.observations.pop(0)
+            _, tokens, cost = self.observations.popleft()
             self.used_tokens -= tokens
             self.used_cost_microdollars -= cost
 
@@ -165,10 +166,8 @@ class AccountQuota:
         cost_5h = (
             self.get_persisted_cost_5h() + self.five_hour_offset + self.reserved_cost
         )
-        cost_7d = self.get_persisted_cost_7d() + self.weekly_offset + self.reserved_cost
-        cost_30d = (
-            self.get_persisted_cost_30d() + self.monthly_offset + self.reserved_cost
-        )
+        cost_7d = self.get_persisted_cost_7d() + self.weekly_offset
+        cost_30d = self.get_persisted_cost_30d() + self.monthly_offset
 
         # Consider exhausted if any configured capacity is exceeded
         if (
@@ -187,13 +186,37 @@ class AccountQuota:
         )
 
     def get_remaining_capacity(self) -> float:
-        """Get remaining capacity as a normalized score (0.0 to 1.0)."""
-        if not self.capacity_7d_microdollars:
+        """Get remaining capacity as a normalized score (0.0 to 1.0).
+
+        Returns the minimum remaining capacity across all configured
+        windows so that a tight short-term capacity limits routing
+        even when long-term capacity is ample.
+        """
+        capacities: list[float] = []
+
+        if self.capacity_5h_microdollars:
+            cost_5h = (
+                self.get_persisted_cost_5h()
+                + self.five_hour_offset
+                + self.reserved_cost
+            )
+            used_ratio = cost_5h / self.capacity_5h_microdollars
+            capacities.append(max(0.0, 1.0 - used_ratio))
+
+        if self.capacity_7d_microdollars:
+            cost_7d = self.get_persisted_cost_7d() + self.weekly_offset
+            used_ratio = cost_7d / self.capacity_7d_microdollars
+            capacities.append(max(0.0, 1.0 - used_ratio))
+
+        if self.capacity_30d_microdollars:
+            cost_30d = self.get_persisted_cost_30d() + self.monthly_offset
+            used_ratio = cost_30d / self.capacity_30d_microdollars
+            capacities.append(max(0.0, 1.0 - used_ratio))
+
+        if not capacities:
             return 1.0
 
-        cost_7d = self.get_persisted_cost_7d()
-        used_ratio = cost_7d / self.capacity_7d_microdollars
-        return max(0.0, 1.0 - used_ratio)
+        return min(capacities)
 
     def get_persisted_cost_5h(self) -> int:
         """Get 5h cost from persisted snapshot, or fall back to hourly window."""
@@ -322,9 +345,10 @@ class QuotaEstimator:
             )
             quota = self.get_account_quota(account_name)
             if quota is not None and quota.persisted_snapshot is not None:
-                quota.persisted_snapshot.cost_5h += cost_microdollars
-                quota.persisted_snapshot.cost_7d += cost_microdollars
-                quota.persisted_snapshot.cost_30d += cost_microdollars
+                safe_cost = max(0, cost_microdollars)
+                quota.persisted_snapshot.cost_5h += safe_cost
+                quota.persisted_snapshot.cost_7d += safe_cost
+                quota.persisted_snapshot.cost_30d += safe_cost
 
     def estimate_cost(
         self,
