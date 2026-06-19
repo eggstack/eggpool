@@ -86,16 +86,28 @@ Use the exception hierarchy in `errors.py`. Chain exceptions with `raise ... fro
 | `eggpool serve` | Start the aggregation proxy server (default command) |
 | `eggpool check-config` | Validate the configuration file |
 | `eggpool migrate` | Run database migrations |
-| `eggpool models refresh` | Refresh the model catalog from upstream (syncs accounts first) |
-| `eggpool accounts status` | Show configured account status and key environment variables |
-| `eggpool accounts list` | List configured provider accounts and API key backends |
-| `eggpool db vacuum` | Reclaim SQLite space via the lock-owned `Database.vacuum()` helper |
-| `eggpool connect` | Interactive provider connection setup |
+| `eggpool onboard` | Run the interactive onboarding setup |
+| `eggpool connect` | Connect to a new provider interactively |
 | `eggpool connect list` | List available providers for connection |
 | `eggpool logout` | Remove a configured provider account |
 | `eggpool rehash` | Reload configuration in the running server |
+| `eggpool restart` | Fully restart the server (stop then start) |
+| `eggpool stop` | Stop the running server |
+| `eggpool set` | Set a server configuration value and restart |
+| `eggpool getkey` | Print the current server API key |
+| `eggpool newkey` | Generate a new server API key |
+| `eggpool edit` | Open the configuration file in the default editor |
+| `eggpool configsetup` | Print configuration snippets for code editors |
+| `eggpool update` | Check for updates and reinstall if newer |
+| `eggpool models refresh` | Refresh the model catalog from upstream (syncs accounts first) |
+| `eggpool accounts status` | Show configured account status and key environment variables |
+| `eggpool accounts list` | List configured provider accounts and API key backends |
+| `eggpool dashboard public` | Toggle dashboard public access |
+| `eggpool db vacuum` | Reclaim SQLite space via the lock-owned `Database.vacuum()` helper |
 
 All commands accept `--config /path/to/config.toml` (defaults to `config.toml`).
+Configuration changes require a service restart; live reload is intentionally
+not supported.
 
 ## Import Organization
 

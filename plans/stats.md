@@ -1,5 +1,9 @@
 # Plan: TTFT Stats + Provider Ping Probes
 
+> **Status: Completed.** All phases implemented. TTFT analytics, provider ping
+> probes, dashboard pages, and retention cleanup are live. See `architecture/README.md`
+> for current design documentation.
+
 ## Overview
 
 Add per-provider/model time-to-first-token (TTFT) statistics and active provider health

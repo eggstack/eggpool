@@ -304,7 +304,7 @@ deploy/                  # Deployment files
 - Accounts used outside the proxy require manual offsets for accurate balancing.
 - Model metadata and protocol behavior can change without notice.
 - Both `/v1/chat/completions` (OpenAI) and `/v1/messages` (Anthropic) endpoints are required because mixed protocol catalogs resolve per-model.
-- The dashboard and stats routes require the local API key by default; set `dashboard.public = true` for unauthenticated access.
+- The dashboard and stats routes are public by default; set `dashboard.public = false` for authenticated access.
 - LAN-only deployment reduces but does not eliminate security obligations.
 - Configuration changes require service restart (live reload disabled for correctness).
 
