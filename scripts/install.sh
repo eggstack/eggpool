@@ -29,6 +29,9 @@ else
     cd "$PROJECT_DIR"
 fi
 
+# Save the scripts directory for install_prompt.py
+SCRIPTS_DIR="${SCRIPTS_DIR:-$(pwd)/scripts}"
+
 # Check for Python 3.12+
 echo "Checking Python version..."
 if ! command -v python3 &> /dev/null; then
@@ -89,16 +92,5 @@ echo ""
 echo "For production deployment, see docs/deployment.md"
 echo ""
 
-# Ask if user wants to run onboarding (last, so script waits for input)
-echo -n "Would you like to set up a provider now? (y/n): "
-read -r ONBOARD_CHOICE
-
-if [ "$ONBOARD_CHOICE" = "y" ] || [ "$ONBOARD_CHOICE" = "Y" ]; then
-    echo ""
-    echo "Starting onboarding setup..."
-    uv run eggpool onboard
-else
-    echo ""
-    echo "Skipping onboarding. You can run it later with:"
-    echo "  uv run eggpool onboard"
-fi
+# Run the Python onboarding prompt (handles stdin properly)
+python3 "${SCRIPTS_DIR}/install_prompt.py"
