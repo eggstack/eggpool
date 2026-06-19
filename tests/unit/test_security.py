@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -23,6 +24,10 @@ from eggpool.proxy.usage import (
     AnthropicStreamUsageExtractor,
     OpenAIStreamUsageExtractor,
 )
+from eggpool.request.coordinator import PreparedProxyResponse
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -363,6 +368,54 @@ def _make_real_messages_app() -> FastAPI:
         return await handle_messages(request)  # type: ignore[return-value]
 
     return app
+
+
+@pytest.mark.parametrize(
+    ("app_factory", "path", "protocol", "base_model"),
+    [
+        (_make_real_chat_app, "/v1/chat/completions", "openai", "gpt-4"),
+        (_make_real_messages_app, "/v1/messages", "anthropic", "claude-3"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_proxy_endpoints_build_protocol_specific_context(
+    app_factory: Callable[[], FastAPI],
+    path: str,
+    protocol: str,
+    base_model: str,
+) -> None:
+    """Both adapters must preserve shared parsing and attribution behavior."""
+    app = app_factory()
+    app.state.config = AppConfig(
+        providers={
+            "opencode-go": {
+                "id": "opencode-go",
+                "base_url": "https://provider.example.com",
+            }
+        }
+    )
+    app.state.coordinator.execute = AsyncMock(
+        return_value=PreparedProxyResponse(
+            status_code=200,
+            headers=[("content-type", "application/json")],
+            body=b'{"ok":true}',
+        )
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            path,
+            json={"model": f"{base_model}/opencode-go", "messages": []},
+            headers={"x-forwarded-for": "203.0.113.7, 10.0.0.1"},
+        )
+
+    assert response.status_code == 200
+    context = app.state.coordinator.execute.await_args.args[0]
+    assert context.protocol == protocol
+    assert context.model_id == base_model
+    assert context.provider_id == "opencode-go"
+    assert context.client_ip == "203.0.113.7"
 
 
 @pytest.mark.asyncio

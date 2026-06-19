@@ -227,18 +227,14 @@ class RequestCoordinator:
         provider_id: str | None = None,
         account_name: str | None = None,
     ) -> httpx.AsyncClient:
-        """Return the HTTP client for a provider, falling back to default."""
+        """Return the exact provider client selected for this request.
+
+        A provider-aware pool must fail closed when the selected provider is
+        missing. Falling back to another provider can send credentials and
+        payloads to the wrong upstream.
+        """
         if provider_id and self._client_pool is not None:
-            try:
-                return self._client_pool.get_client(provider_id, account_name)
-            except Exception:
-                logger.warning(
-                    "Client pool lookup failed for provider=%s account=%s, "
-                    "falling back to default client",
-                    provider_id,
-                    account_name,
-                    exc_info=True,
-                )
+            return self._client_pool.get_client(provider_id, account_name)
         if self._client is None:
             raise UpstreamError("No HTTP client available for upstream requests")
         return self._client

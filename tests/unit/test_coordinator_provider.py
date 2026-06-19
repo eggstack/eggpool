@@ -125,10 +125,16 @@ class TestGetClientProviderAware:
         default_client = httpx.AsyncClient()
         pool.register("other-provider", default_client)
         coordinator = self._make_coordinator(client_pool=pool)
-        # The coordinator will have _client=None when opencode-go not in pool
-        # so _get_client with unknown provider falls through to _client check
         with pytest.raises(UpstreamError):
             coordinator._get_client("unknown-provider")
+
+    def test_missing_provider_never_uses_opencode_default(self) -> None:
+        pool = ProviderClientPool()
+        pool.register("opencode-go", httpx.AsyncClient())
+        coordinator = self._make_coordinator(client_pool=pool)
+
+        with pytest.raises(UpstreamError, match="missing-provider"):
+            coordinator._get_client("missing-provider", "selected-account")
 
     def test_returns_default_when_no_provider_id(self) -> None:
         client = httpx.AsyncClient()
