@@ -21,7 +21,7 @@ from eggpool.models.config import AppConfig
 from eggpool.providers.client_pool import ProviderClientPool
 
 
-@click.group()
+@click.group(invoke_without_command=True)
 @click.option(
     "--config",
     "config_path",
@@ -33,7 +33,30 @@ from eggpool.providers.client_pool import ProviderClientPool
 def cli(ctx: click.Context, config_path: str) -> None:
     """EggPool - aggregate OpenCode Go subscriptions."""
     ctx.ensure_object(dict)
-    ctx.obj["config_path"] = config_path
+    ctx.obj["config_path"] = os.path.abspath(config_path)
+
+
+class _ConfigPathGroup(click.Group):
+    """Click group that shows the resolved config path in help output."""
+
+    def format_help(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
+        super().format_help(ctx, formatter)
+        # Parse --config from the original command line args
+        config_path = "config.toml"
+        args = sys.argv[1:] if hasattr(sys, "argv") else []
+        for i, arg in enumerate(args):
+            if arg == "--config" and i + 1 < len(args):
+                config_path = args[i + 1]
+                break
+            elif arg.startswith("--config="):
+                config_path = arg.split("=", 1)[1]
+                break
+        resolved = os.path.abspath(config_path)
+        formatter.write(f"\nConfig file: {resolved}\n")
+
+
+# Re-apply the group class after the decorator
+cli.__class__ = _ConfigPathGroup
 
 
 @cli.command()
