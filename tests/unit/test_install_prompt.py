@@ -147,8 +147,55 @@ class TestInstallPromptAST:
         assert "import termios" not in source
 
 
-class TestInstallScriptCallsPython:
-    """Tests for install.sh calling the Python prompt script."""
+class TestInstallPromptBehavior:
+    """Tests for install_prompt.py behavior."""
+
+    def test_eof_on_input_shows_skip_message(self, tmp_path: Path) -> None:
+        """EOF on input gracefully shows skip message instead of crashing."""
+        import subprocess
+
+        script_path = (
+            Path(__file__).parent.parent.parent / "scripts" / "install_prompt.py"
+        )
+        repo_dir = tmp_path / "eggpool"
+        repo_dir.mkdir()
+        (repo_dir / "pyproject.toml").write_text('name = "eggpool"\n')
+
+        # Run with empty stdin to trigger EOFError
+        result = subprocess.run(  # noqa: S603
+            ["python3", str(script_path)],
+            cwd=str(repo_dir),
+            input="",
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+
+        assert result.returncode == 0
+        assert "Skipping onboarding" in result.stdout
+
+    def test_no_shows_skip_message(self, tmp_path: Path) -> None:
+        """Answering 'n' shows skip message."""
+        import subprocess
+
+        script_path = (
+            Path(__file__).parent.parent.parent / "scripts" / "install_prompt.py"
+        )
+        repo_dir = tmp_path / "eggpool"
+        repo_dir.mkdir()
+        (repo_dir / "pyproject.toml").write_text('name = "eggpool"\n')
+
+        result = subprocess.run(  # noqa: S603
+            ["python3", str(script_path)],
+            cwd=str(repo_dir),
+            input="n\n",
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+
+        assert result.returncode == 0
+        assert "Skipping onboarding" in result.stdout
 
     def test_install_script_references_prompt_script(self) -> None:
         """install.sh calls install_prompt.py."""

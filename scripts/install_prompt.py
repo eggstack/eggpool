@@ -41,7 +41,10 @@ def main() -> None:
     eggpool_dir = _find_eggpool_dir()
     os.chdir(eggpool_dir)
 
-    answer = input("Would you like to set up a provider now? (y/n): ").strip().lower()
+    try:
+        answer = input("Would you like to set up a provider now? (y/n): ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        answer = ""
 
     if answer in ("y", "yes"):
         print("\nStarting onboarding setup...")
