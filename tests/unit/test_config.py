@@ -331,7 +331,7 @@ def test_account_named_proxy_resolves_from_proxy_config(tmp_path: Path) -> None:
         config_file.write_text(
             """
 [proxies.local-pproxy]
-url = "http://127.0.0.1:8081"
+url = "socks5://127.0.0.1:1080"
 
 [providers.my-provider]
 id = "my-provider"
@@ -345,7 +345,7 @@ proxy = "local-pproxy"
         )
         config = AppConfig.from_toml(str(config_file))
         account = config.providers["my-provider"].accounts[0]
-        assert config.resolve_account_proxy_url(account) == "http://127.0.0.1:8081"
+        assert config.resolve_account_proxy_url(account) == "socks5://127.0.0.1:1080"
     finally:
         del os.environ["PROXY_KEY"]
 
@@ -353,7 +353,7 @@ proxy = "local-pproxy"
 def test_account_inline_proxy_url_env_resolves(tmp_path: Path) -> None:
     """Accounts can keep proxy URLs in environment variables."""
     os.environ["PROXY_KEY"] = "key"
-    os.environ["ACCOUNT_PROXY_URL"] = "http://127.0.0.1:8082"
+    os.environ["ACCOUNT_PROXY_URL"] = "ss://chacha20:secret@proxy.example.com:8388"
     try:
         config_file = tmp_path / "proxy_env.toml"
         config_file.write_text(
@@ -370,7 +370,10 @@ proxy_url_env = "ACCOUNT_PROXY_URL"
         )
         config = AppConfig.from_toml(str(config_file))
         account = config.providers["my-provider"].accounts[0]
-        assert config.resolve_account_proxy_url(account) == "http://127.0.0.1:8082"
+        assert (
+            config.resolve_account_proxy_url(account)
+            == "ss://chacha20:secret@proxy.example.com:8388"
+        )
     finally:
         del os.environ["PROXY_KEY"]
         del os.environ["ACCOUNT_PROXY_URL"]

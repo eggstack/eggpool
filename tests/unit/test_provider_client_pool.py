@@ -8,6 +8,7 @@ import pytest
 from go_aggregator.errors import UpstreamError
 from go_aggregator.models.config import AppConfig, ProviderConfig
 from go_aggregator.providers.client_pool import ProviderClientPool
+from go_aggregator.providers.pproxy_transport import AsyncPProxyTransport
 
 
 class TestProviderClientPool:
@@ -109,6 +110,8 @@ class TestProviderClientPool:
 
         pool = ProviderClientPool.from_app_config(config)
         provider_client = pool.get_client("alpha")
+        proxied_client = pool.get_client("alpha", "proxied")
 
         assert pool.get_client("alpha", "direct") is provider_client
-        assert pool.get_client("alpha", "proxied") is not provider_client
+        assert proxied_client is not provider_client
+        assert isinstance(proxied_client._transport, AsyncPProxyTransport)

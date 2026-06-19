@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import httpx
 
 from go_aggregator.errors import UpstreamError
+from go_aggregator.providers.pproxy_transport import AsyncPProxyTransport
 
 if TYPE_CHECKING:
     from go_aggregator.models.config import AppConfig, ProviderConfig
@@ -94,7 +95,16 @@ def _build_client(
     proxy_url: str | None = None,
 ) -> httpx.AsyncClient:
     """Build an HTTPX client with provider timeouts and optional proxy."""
-    proxy = httpx.Proxy(proxy_url) if proxy_url is not None else None
+    limits = httpx.Limits(
+        max_connections=cfg.max_connections,
+        max_keepalive_connections=cfg.max_keepalive,
+        keepalive_expiry=cfg.keepalive_timeout_s,
+    )
+    transport = (
+        AsyncPProxyTransport(proxy_url, limits=limits)
+        if proxy_url is not None
+        else None
+    )
     return httpx.AsyncClient(
         base_url=cfg.base_url,
         timeout=httpx.Timeout(
@@ -103,10 +113,6 @@ def _build_client(
             write=cfg.write_timeout_s,
             pool=cfg.connect_timeout_s,
         ),
-        limits=httpx.Limits(
-            max_connections=cfg.max_connections,
-            max_keepalive_connections=cfg.max_keepalive,
-            keepalive_expiry=cfg.keepalive_timeout_s,
-        ),
-        proxy=proxy,
+        limits=limits,
+        transport=transport,
     )
