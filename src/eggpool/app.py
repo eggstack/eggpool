@@ -622,6 +622,16 @@ def create_app(
                 media_type="text/css",
             )
 
+        @app.get("/static/favicon.svg")
+        async def favicon_svg() -> FileResponse:  # pyright: ignore[reportUnusedFunction]
+            svg_path: Path = (
+                Path(__file__).parent / "dashboard" / "static" / "favicon.svg"
+            )
+            return FileResponse(
+                path=str(svg_path),
+                media_type="image/svg+xml",
+            )
+
         @app.get("/static/chart.js")
         async def chart_js() -> FileResponse:  # pyright: ignore[reportUnusedFunction]
             js_path: Path = (

@@ -89,6 +89,7 @@ def _render_layout(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{_html_escape(title)}</title>
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
 <link rel="stylesheet" href="/static/dashboard.css">
 <script src="/static/chart.js"></script>
 {theme_link}
