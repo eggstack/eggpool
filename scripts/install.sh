@@ -92,5 +92,15 @@ echo ""
 echo "For production deployment, see docs/deployment.md"
 echo ""
 
-# Run the Python onboarding prompt (handles stdin properly)
-python3 "${SCRIPTS_DIR}/install_prompt.py"
+# A curl-piped installer leaves stdin attached to the exhausted curl pipe.
+# Prefer stdin when it is already interactive; otherwise reconnect the prompt
+# to the controlling terminal. Keep the existing EOF/skip behavior when no
+# controlling terminal is available (for example, in unattended installs).
+if [ -t 0 ]; then
+    python3 "${SCRIPTS_DIR}/install_prompt.py"
+elif { exec 3</dev/tty; } 2>/dev/null; then
+    python3 "${SCRIPTS_DIR}/install_prompt.py" <&3
+    exec 3<&-
+else
+    python3 "${SCRIPTS_DIR}/install_prompt.py"
+fi

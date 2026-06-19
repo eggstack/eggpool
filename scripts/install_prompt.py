@@ -42,7 +42,9 @@ def main() -> None:
     os.chdir(eggpool_dir)
 
     try:
-        answer = input("Would you like to set up a provider now? (y/n): ").strip().lower()
+        answer = (
+            input("Would you like to set up a provider now? (y/n): ").strip().lower()
+        )
     except (EOFError, KeyboardInterrupt):
         answer = ""
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-import termios
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -210,3 +209,11 @@ class TestInstallPromptBehavior:
         source = install_path.read_text(encoding="utf-8")
 
         assert "read -r ONBOARD_CHOICE" not in source
+
+    def test_install_script_reconnects_prompt_to_terminal(self) -> None:
+        """A curl-piped install reads the prompt from its controlling terminal."""
+        install_path = Path(__file__).parent.parent.parent / "scripts" / "install.sh"
+        source = install_path.read_text(encoding="utf-8")
+
+        assert "exec 3</dev/tty" in source
+        assert 'install_prompt.py" <&3' in source
