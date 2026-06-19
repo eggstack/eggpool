@@ -10,9 +10,9 @@ behind one OpenAI/Anthropic-compatible endpoint.
 - Dynamically discovers currently available models from each provider
 - Routes requests across accounts based on estimated quota utilization
 - Tracks request, token, model, latency, error, and estimated-cost statistics in SQLite
-- Exposes a self-updating single-page dashboard for current usage at a glance
+- Multi-page dashboard with overview, accounts, models, latency, pings, events, timeseries, and bandwidth views
 - 50+ built-in themes with customizable styling
-- Runs on a Raspberry Pi with Ubuntu using a single-process ASGI deployment
+- Designed for lightweight deployments such as Raspberry Pis
 
 ## Requirements
 

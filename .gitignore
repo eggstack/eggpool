@@ -64,3 +64,4 @@ Thumbs.db
 # Project specific
 /var/
 *.log
+bugs.md
