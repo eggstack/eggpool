@@ -2,6 +2,25 @@
 
 Deploy the EggPool on a Raspberry Pi for always-on LAN access.
 
+## Quick install (pipx)
+
+The fastest way to install EggPool on a Raspberry Pi is via `pipx`:
+
+```bash
+# Install pipx if not available
+sudo apt install pipx || pip install pipx
+pipx ensurepath
+
+# Install eggpool
+pipx install eggpool
+
+# Verify installation
+eggpool --version
+```
+
+Then proceed to the Configuration section below. The bundled themes and
+provider templates ship inside the package — no extra files required.
+
 ## Requirements
 
 - Raspberry Pi 4 (4GB+ RAM recommended) or Pi 5

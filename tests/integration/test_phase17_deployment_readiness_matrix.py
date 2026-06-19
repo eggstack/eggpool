@@ -1,9 +1,8 @@
 """Phase 17 deployment-readiness regression matrix.
 
-This file exercises the cross-cutting scenarios called out in
-Section 11 of plans/phase-17-deployment-readiness-corrections.md.
-Each test class is named after a matrix letter so the matrix
-itself is auditable from a single file.
+This file exercises the cross-cutting scenarios called out in the
+Phase 17 deployment-readiness audit. Each test class is named after
+a matrix letter so the matrix itself is auditable from a single file.
 
 The matrix:
 

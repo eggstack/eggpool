@@ -100,8 +100,12 @@ _OPENCODE_GO_FALLBACK: dict[str, dict[str, Any]] = {
 }
 
 
-def load_provider_templates(providers_path: str) -> dict[str, dict[str, Any]]:
+def load_provider_templates(
+    providers_path: str | None = None,
+) -> dict[str, dict[str, Any]]:
     """Load provider templates from a TOML file.
+
+    If providers_path is None, uses the bundled _templates.toml file.
 
     Returns a dict mapping provider_id to a dict with keys:
     - display: human-readable display name (from TOML comment or id)
@@ -112,7 +116,15 @@ def load_provider_templates(providers_path: str) -> dict[str, dict[str, Any]]:
     Always includes ``opencode-go`` even if the file is missing or empty,
     so the connect flow is never stuck with zero options.
     """
-    path = Path(providers_path)
+    if providers_path is None:
+        from importlib.resources import as_file, files
+
+        ref = files("eggpool.providers").joinpath("_templates.toml")
+        with as_file(ref) as path:
+            pass
+    else:
+        path = Path(providers_path)
+
     if not path.exists():
         return dict(_OPENCODE_GO_FALLBACK)
 
@@ -830,7 +842,7 @@ def _check_duplicate_api_key(
 
 def connect(
     config_path: str,
-    providers_path: str = "providers.toml",
+    providers_path: str | None = None,
 ) -> bool:
     """Run the interactive provider connection flow.
 
@@ -838,7 +850,7 @@ def connect(
     """
     templates = load_provider_templates(providers_path)
     if not templates:
-        sys.stdout.write(f"  No provider templates found in {providers_path}\n")
+        sys.stdout.write("No provider templates found\n")
         return False
 
     # Build display options

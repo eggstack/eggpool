@@ -48,7 +48,7 @@ jobs:
       - name: Run tests with coverage
         run: >-
           uv run pytest
-          --cov=go_aggregator
+          --cov=eggpool
           --cov-report=term-missing
           --cov-report=xml
       - name: Upload coverage artifact

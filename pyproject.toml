@@ -5,17 +5,46 @@ description = "A lightweight proxy that aggregates multiple LLM provider account
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
-authors = [{ name = "David Bowman" }]
+authors = [{ name = "David Bowman", email = "dbowman91@proton.me" }]
+keywords = [
+    "llm",
+    "proxy",
+    "openai",
+    "anthropic",
+    "aggregation",
+    "router",
+    "multi-account",
+    "opencode",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: AsyncIO",
+    "Framework :: FastAPI",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: System :: Monitoring",
+    "Typing :: Typed",
+]
 dependencies = [
     "fastapi",
     "granian",
     "httpx",
     "aiosqlite",
     "pydantic>=2.0",
-    "jinja2",
     "click",
     "pproxy>=2.7.9",
 ]
+
+[project.urls]
+Homepage = "https://github.com/eggstack/eggpool"
+Repository = "https://github.com/eggstack/eggpool"
+Issues = "https://github.com/eggstack/eggpool/issues"
+Documentation = "https://github.com/eggstack/eggpool/tree/main/docs"
+Changelog = "https://github.com/eggstack/eggpool/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [
@@ -27,7 +56,6 @@ dev = [
     "respx",
     "coverage[toml]",
     "pre-commit",
-    "httpx2>=2.4.0",
 ]
 
 [project.scripts]
@@ -39,6 +67,34 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/eggpool"]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    ".opencode",
+    ".venv",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".pyright",
+    "dist",
+    "build",
+    "*.egg-info",
+    "*.sqlite3",
+    "*.sqlite3-wal",
+    "*.sqlite3-shm",
+    "coverage.xml",
+    ".coverage",
+    ".coverage.*",
+    "htmlcov",
+    "*.log",
+    "bugs.md",
+    "/var",
+    "plans",
+    "tests",
+]
+exclude-globs = [
+    "**/__pycache__",
+    "**/.DS_Store",
+]
 
 [tool.ruff]
 target-version = "py312"

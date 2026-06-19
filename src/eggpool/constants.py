@@ -12,3 +12,13 @@ MAX_SSE_FRAME_SIZE = 64 * 1024  # 64 KB
 
 RUNTIME_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp"))
 PID_FILE = RUNTIME_DIR / "eggpool.pid"
+
+PLACEHOLDER_API_KEYS: frozenset[str] = frozenset(
+    {
+        "your-proxy-api-key",
+        "your-opencode-go-key-1",
+        "your-opencode-go-key-2",
+        "your-api-key-here",
+        "your-local-api-key-here",
+    }
+)

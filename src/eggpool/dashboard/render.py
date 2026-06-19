@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from html import escape as _html_escape
-from pathlib import Path
 from typing import Any
 
 from eggpool.dashboard.escape import (
@@ -27,6 +26,7 @@ from eggpool.dashboard.theme import (
     DashboardTheme,
     get_default_theme,
     load_theme,
+    resolve_theme_path,
 )
 
 _DEFAULT_HEATMAP_COLORS = [
@@ -38,13 +38,17 @@ _DEFAULT_HEATMAP_COLORS = [
 ]
 
 
-def get_theme_css(theme_name: str, themes_dir: str = "themes") -> str:
-    """Load a theme by name and return the CSS :root block, or empty string."""
+def get_theme_css(theme_name: str, themes_dir: str | None = None) -> str:
+    """Load a theme by name and return the CSS :root block, or empty string.
+
+    When themes_dir is set, user-provided themes take precedence over
+    bundled themes with the same name.
+    """
     if theme_name == "default":
         return ""
     try:
-        theme_path = Path(themes_dir) / f"{theme_name}.toml"
-        if not theme_path.is_file():
+        theme_path = resolve_theme_path(theme_name, themes_dir)
+        if theme_path is None:
             return ""
         theme = load_theme(theme_path)
         return theme.to_css_variables()
@@ -52,13 +56,17 @@ def get_theme_css(theme_name: str, themes_dir: str = "themes") -> str:
         return ""
 
 
-def get_theme(theme_name: str, themes_dir: str = "themes") -> DashboardTheme:
-    """Load a theme by name, returning the default on failure."""
+def get_theme(theme_name: str, themes_dir: str | None = None) -> DashboardTheme:
+    """Load a theme by name, returning the default on failure.
+
+    When themes_dir is set, user-provided themes take precedence over
+    bundled themes with the same name.
+    """
     if theme_name == "default":
         return get_default_theme()
     try:
-        theme_path = Path(themes_dir) / f"{theme_name}.toml"
-        if not theme_path.is_file():
+        theme_path = resolve_theme_path(theme_name, themes_dir)
+        if theme_path is None:
             return get_default_theme()
         return load_theme(theme_path)
     except Exception:

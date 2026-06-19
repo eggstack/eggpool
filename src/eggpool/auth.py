@@ -53,16 +53,9 @@ def require_auth_at_startup(api_key: str | None) -> str | None:
             "Set api_key in the [server] config section or disable "
             "authentication by removing it."
         )
-    _placeholder_keys = frozenset(
-        {
-            "your-proxy-api-key",
-            "your-opencode-go-key-1",
-            "your-opencode-go-key-2",
-            "your-api-key-here",
-            "your-local-api-key-here",
-        }
-    )
-    if expected.lower() in _placeholder_keys:
+    from eggpool.constants import PLACEHOLDER_API_KEYS
+
+    if expected.lower() in PLACEHOLDER_API_KEYS:
         raise RuntimeError(
             "API key contains a placeholder value. "
             "Set a real key before starting the service."

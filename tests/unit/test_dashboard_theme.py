@@ -23,6 +23,7 @@ from eggpool.dashboard.theme import (
     get_default_theme,
     list_themes,
     load_theme,
+    resolve_theme_path,
     translate_theme,
 )
 
@@ -269,10 +270,16 @@ class TestThemeLoading:
         (tmp_path / "beta.toml").write_text("[text]\nprimary = '#000'")
         (tmp_path / "not-a-theme.txt").write_text("ignored")
         themes = list_themes(tmp_path)
-        assert themes == ["alpha", "beta"]
+        assert "alpha" in themes
+        assert "beta" in themes
+        # Bundled themes are also present
+        assert "Cyber Red" in themes
 
     def test_list_themes_nonexistent_dir(self) -> None:
-        assert list_themes("/nonexistent/path") == []
+        themes = list_themes("/nonexistent/path")
+        # Nonexistent user dir: bundled themes still returned
+        assert "Cyber Red" in themes
+        assert len(themes) >= 50
 
 
 # ---------------------------------------------------------------------------
@@ -333,3 +340,87 @@ class TestRenderThemeIntegration:
         assert "#aaa" in html
         # Zero value also maps to first color
         assert "fill=" in html
+
+
+# ---------------------------------------------------------------------------
+# Bundled theme tests
+# ---------------------------------------------------------------------------
+
+
+class TestBundledThemes:
+    def test_list_themes_with_none_uses_bundled(self) -> None:
+        """list_themes(None) returns bundled themes."""
+        themes = list_themes(None)
+        assert len(themes) >= 50
+        assert "Cyber Red" in themes
+        assert "Dracula" in themes
+        assert "Catppuccin Mocha" in themes
+
+    def test_list_themes_nonexistent_dir_returns_bundled(self) -> None:
+        """list_themes('/nonexistent') returns bundled themes."""
+        themes = list_themes("/nonexistent/path")
+        assert len(themes) >= 50
+        assert "Cyber Red" in themes
+
+    def test_get_theme_with_none_uses_bundled(self) -> None:
+        """get_theme('Cyber Red', None) loads from bundled themes."""
+        theme = get_theme("Cyber Red", None)
+        assert isinstance(theme, DashboardTheme)
+
+    def test_get_theme_css_with_none_uses_bundled(self) -> None:
+        """get_theme_css('Cyber Red', None) loads from bundled themes."""
+        css = get_theme_css("Cyber Red", None)
+        assert ":root {" in css
+        assert "--page-bg:" in css
+
+    def test_list_themes_merges_user_and_bundled(self, tmp_path: Path) -> None:
+        """list_themes with a user dir merges bundled + user themes."""
+        (tmp_path / "My Custom.toml").write_text("[text]\nprimary = '#fff'\n")
+        themes = list_themes(tmp_path)
+        assert "My Custom" in themes
+        assert "Cyber Red" in themes
+        assert "Dracula" in themes
+
+    def test_list_themes_user_overrides_bundled(self, tmp_path: Path) -> None:
+        """A user theme with the same name as a bundled theme wins."""
+        (tmp_path / "Cyber Red.toml").write_text("[text]\nprimary = '#000000'\n")
+        themes = list_themes(tmp_path)
+        assert "Cyber Red" in themes
+
+    def test_resolve_theme_path_user_dir_first(self, tmp_path: Path) -> None:
+        """resolve_theme_path checks user dir before bundled."""
+        user_theme = tmp_path / "Cyber Red.toml"
+        user_theme.write_text("[text]\nprimary = '#000000'\n")
+        path = resolve_theme_path("Cyber Red", tmp_path)
+        assert path is not None
+        assert path == user_theme
+
+    def test_resolve_theme_path_falls_back_to_bundled(self, tmp_path: Path) -> None:
+        """resolve_theme_path falls back to bundled when user dir lacks the theme."""
+        path = resolve_theme_path("Cyber Red", tmp_path)
+        assert path is not None
+        assert "themes" in str(path)
+
+    def test_resolve_theme_path_nonexistent(self) -> None:
+        """resolve_theme_path returns None for unknown theme."""
+        path = resolve_theme_path("Nonexistent Theme XYZ")
+        assert path is None
+
+    def test_get_theme_user_dir_override(self, tmp_path: Path) -> None:
+        """get_theme loads user theme when themes_dir is set."""
+        (tmp_path / "Test Override.toml").write_text(
+            "[general]\nbackground = '#ff0000'\n"
+            "[text]\nprimary = '#ffffff'\nsuccess = '#00ff00'\nerror = '#ff0000'\n"
+        )
+        theme = get_theme("Test Override", str(tmp_path))
+        assert isinstance(theme, DashboardTheme)
+
+    def test_get_theme_css_user_dir_override(self, tmp_path: Path) -> None:
+        """get_theme_css loads user theme CSS when themes_dir is set."""
+        (tmp_path / "Test CSS.toml").write_text(
+            "[general]\nbackground = '#111111'\n"
+            "[text]\nprimary = '#eeeeee'\nsuccess = '#00ff00'\nerror = '#ff0000'\n"
+        )
+        css = get_theme_css("Test CSS", str(tmp_path))
+        assert ":root {" in css
+        assert "--page-bg:" in css

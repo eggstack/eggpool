@@ -1325,7 +1325,7 @@ class TestUpdateCommand:
                 pass
 
             def json(self) -> dict[str, str]:
-                return {"tag_name": "v1.2.3"}
+                return {"info": {"version": "1.2.3"}}
 
         monkeypatch.setattr(httpx, "get", lambda _url, **_kw: FakeResponse())
 
@@ -1355,7 +1355,7 @@ class TestUpdateCommand:
                 pass
 
             def json(self) -> dict[str, str]:
-                return {"tag_name": "v1.2.4"}
+                return {"info": {"version": "1.2.4"}}
 
         monkeypatch.setattr(httpx, "get", lambda _url, **_kw: FakeResponse())
 
@@ -1389,7 +1389,7 @@ class TestUpdateCommand:
                 pass
 
             def json(self) -> dict[str, str]:
-                return {"tag_name": "v1.2.4"}
+                return {"info": {"version": "1.2.4"}}
 
         monkeypatch.setattr(httpx, "get", lambda _url, **_kw: FakeResponse())
 
@@ -1754,3 +1754,35 @@ class TestLogoutWithoutTarget:
 
         content = config_path.read_text(encoding="utf-8")
         assert 'name = "default"' in content
+
+
+# ---------------------------------------------------------------------------
+# Bundled provider template tests
+# ---------------------------------------------------------------------------
+
+
+class TestBundledProviderTemplates:
+    def test_loads_bundled_providers(self) -> None:
+        """load_provider_templates(None) loads all bundled providers."""
+        templates = load_provider_templates(None)
+        assert len(templates) >= 8
+        assert "opencode-go" in templates
+        assert "openrouter" in templates
+        assert "zai" in templates
+        assert "minimax" in templates
+
+    def test_bundled_providers_have_required_fields(self) -> None:
+        """Each bundled provider has display, url, raw, and data keys."""
+        templates = load_provider_templates(None)
+        for provider_id, tmpl in templates.items():
+            assert "display" in tmpl, f"{provider_id} missing display"
+            assert "url" in tmpl, f"{provider_id} missing url"
+            assert "raw" in tmpl, f"{provider_id} missing raw"
+            assert "data" in tmpl, f"{provider_id} missing data"
+            assert tmpl["data"]["id"] == provider_id
+
+    def test_bundled_opencode_go_is_default(self) -> None:
+        """opencode-go is always available as the default provider."""
+        templates = load_provider_templates(None)
+        assert "opencode-go" in templates
+        assert templates["opencode-go"]["url"] == "https://opencode.ai/zen/go/v1"

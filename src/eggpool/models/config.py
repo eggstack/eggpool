@@ -111,7 +111,7 @@ class DashboardConfig(BaseModel):
     enabled: bool = True
     public: bool = True
     theme: str = "Cyber Red"
-    themes_dir: str = "themes"
+    themes_dir: str | None = None
     retain_request_stats_days: int = Field(default=30, gt=0)
     retain_event_days: int = Field(default=90, gt=0)
     store_request_content: bool = False
@@ -313,15 +313,8 @@ class AppConfig(BaseModel):
         do not need upstream credentials (``migrate``, ``accounts status``,
         ``db vacuum``) can skip this check.
         """
-        _placeholder_keys = frozenset(
-            {
-                "your-proxy-api-key",
-                "your-opencode-go-key-1",
-                "your-opencode-go-key-2",
-                "your-api-key-here",
-                "your-local-api-key-here",
-            }
-        )
+        from eggpool.constants import PLACEHOLDER_API_KEYS
+
         for acct in self.all_accounts():
             if acct.enabled:
                 raw_key = acct.api_key or os.environ.get(acct.api_key_env)
@@ -340,7 +333,7 @@ class AppConfig(BaseModel):
                         f"Account {acct.name!r} has a whitespace-only API key "
                         f"in {source}"
                     )
-                if raw_key.strip().lower() in _placeholder_keys:
+                if raw_key.strip().lower() in PLACEHOLDER_API_KEYS:
                     source = (
                         "api_key" if acct.api_key else f"env var {acct.api_key_env!r}"
                     )

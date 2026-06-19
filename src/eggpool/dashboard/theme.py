@@ -430,9 +430,47 @@ def get_default_theme() -> DashboardTheme:
     return DashboardTheme()
 
 
-def list_themes(themes_dir: str | Path) -> list[str]:
-    """List available theme names from a directory of .toml files."""
-    p = Path(themes_dir)
-    if not p.is_dir():
-        return []
-    return sorted(f.stem for f in p.iterdir() if f.suffix == ".toml" and f.is_file())
+def list_themes(themes_dir: str | Path | None = None) -> list[str]:
+    """List available theme names, merging bundled and user themes.
+
+    When themes_dir is set, user-provided themes take precedence over
+    bundled themes with the same name.  If themes_dir is None, only
+    bundled themes are returned.
+    """
+    from eggpool.dashboard._resources import bundled_themes_dir
+
+    bundled = bundled_themes_dir()
+    bundled_names: set[str] = {
+        f.stem for f in bundled.iterdir() if f.suffix == ".toml" and f.is_file()
+    }
+
+    if themes_dir is None:
+        return sorted(bundled_names)
+
+    user = Path(themes_dir)
+    if not user.is_dir():
+        return sorted(bundled_names)
+    user_names = {f.stem for f in user.iterdir() if f.suffix == ".toml" and f.is_file()}
+    return sorted(bundled_names | user_names)
+
+
+def resolve_theme_path(
+    theme_name: str, themes_dir: str | Path | None = None
+) -> Path | None:
+    """Resolve a theme name to its .toml file path.
+
+    When themes_dir is set, the user directory is checked first (allowing
+    overrides), falling back to the bundled themes directory.  Returns
+    ``None`` when no matching file is found.
+    """
+    from eggpool.dashboard._resources import bundled_themes_dir
+
+    if themes_dir is not None:
+        user = Path(themes_dir) / f"{theme_name}.toml"
+        if user.is_file():
+            return user
+
+    bundled = bundled_themes_dir() / f"{theme_name}.toml"
+    if bundled.is_file():
+        return bundled
+    return None

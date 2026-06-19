@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import os
 import sys
+from pathlib import Path
 from typing import NoReturn
 
 import click
@@ -115,12 +116,12 @@ def serve(ctx: click.Context) -> None:
 @click.option(
     "--providers",
     "providers_path",
-    default="providers.toml",
-    help="Path to the providers template file.",
+    default=None,
+    help="Path to the providers template file. Uses bundled template if not specified.",
     type=click.Path(),
 )
 @click.pass_context
-def connect(ctx: click.Context, providers_path: str) -> None:
+def connect(ctx: click.Context, providers_path: str | None) -> None:
     """Connect to a new provider interactively."""
     if ctx.invoked_subcommand is not None:
         ctx.obj["providers_path"] = providers_path
@@ -143,10 +144,10 @@ def connect_list(ctx: click.Context) -> None:
     """List providers available for connection."""
     from eggpool.providers.connect import load_provider_templates
 
-    providers_path: str = ctx.obj.get("providers_path", "providers.toml")
+    providers_path: str | None = ctx.obj.get("providers_path")
     templates = load_provider_templates(providers_path)
     if not templates:
-        click.echo(f"No provider templates found in {providers_path}")
+        click.echo("No provider templates found")
         return
 
     click.echo("Available providers:")
@@ -1010,8 +1011,11 @@ def db_vacuum(ctx: click.Context) -> None:
 
 @cli.command()
 @click.option("--check", "check_only", is_flag=True, help="Only check, do not install.")
+@click.option(
+    "--from-source", is_flag=True, help="Force update from git source instead of PyPI."
+)
 @click.pass_context
-def update(ctx: click.Context, check_only: bool) -> None:
+def update(ctx: click.Context, check_only: bool, from_source: bool) -> None:
     """Check for updates and reinstall if a newer version is available.
 
     Config and database files are never overwritten. If the server is
@@ -1027,23 +1031,21 @@ def update(ctx: click.Context, check_only: bool) -> None:
     current_version = importlib.metadata.version("eggpool")
     click.echo(f"Current version: {current_version}")
 
-    # Query GitHub for the latest release tag
-    repo = "eggstack/eggpool"
-    api_url = f"https://api.github.com/repos/{repo}/releases/latest"
+    # Query PyPI for the latest version
+    pypi_url = "https://pypi.org/pypi/eggpool/json"
     try:
-        resp = httpx.get(api_url, timeout=15, follow_redirects=True)
+        resp = httpx.get(pypi_url, timeout=15, follow_redirects=True)
         resp.raise_for_status()
         data = resp.json()
     except Exception as exc:
         click.echo(f"Error checking for updates: {exc}", err=True)
         sys.exit(1)
 
-    latest_tag: str = data.get("tag_name", "")
-    if not latest_tag:
-        click.echo("Could not determine latest version from GitHub.", err=True)
+    latest_version: str = data.get("info", {}).get("version", "")
+    if not latest_version:
+        click.echo("Could not determine latest version from PyPI.", err=True)
         sys.exit(1)
 
-    latest_version = latest_tag.lstrip("v")
     click.echo(f"Latest version:  {latest_version}")
 
     if current_version == latest_version:
@@ -1056,9 +1058,22 @@ def update(ctx: click.Context, check_only: bool) -> None:
 
     click.echo(f"Updating from {current_version} to {latest_version}...")
 
-    # Prefer pip install from the GitHub repo
-    pip_target = f"git+https://github.com/{repo}.git@{latest_tag}"
-    cmd = [sys.executable, "-m", "pip", "install", pip_target]
+    # Determine if we're running under pipx
+    running_under_pipx = hasattr(sys, "real_prefix") or (
+        hasattr(sys, "base_prefix") and sys.base_prefix != sys.prefix
+    )
+
+    if from_source:
+        # Force update from git source
+        repo = "eggstack/eggpool"
+        pip_target = f"git+https://github.com/{repo}.git@v{latest_version}"
+        cmd = [sys.executable, "-m", "pip", "install", pip_target]
+    elif running_under_pipx:
+        # Running under pipx - try pipx upgrade first
+        cmd = ["pipx", "upgrade", "eggpool"]
+    else:
+        # Try pip install --upgrade
+        cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "eggpool"]
 
     click.echo(f"Running: {' '.join(cmd)}")
     result = subprocess.run(cmd, capture_output=True, text=True)  # noqa: S603
@@ -1088,12 +1103,12 @@ def update(ctx: click.Context, check_only: bool) -> None:
 @click.option(
     "--providers",
     "providers_path",
-    default="providers.toml",
-    help="Path to the providers template file.",
+    default=None,
+    help="Path to the providers template file. Uses bundled template if not specified.",
     type=click.Path(),
 )
 @click.pass_context
-def onboard(ctx: click.Context, providers_path: str) -> None:
+def onboard(ctx: click.Context, providers_path: str | None) -> None:
     """Run the interactive onboarding setup.
 
     Guides you through connecting providers, validates configuration,
@@ -1230,6 +1245,35 @@ def restart(ctx: click.Context, timeout: float) -> None:
     )
 
     click.echo("Server started.")
+
+
+@cli.command("init-config")
+@click.argument("target", required=False, type=click.Path())
+@click.option("--force", is_flag=True, help="Overwrite existing config file.")
+@click.pass_context
+def init_config(ctx: click.Context, target: str | None, force: bool) -> None:
+    """Write config.example.toml into the current directory (or TARGET)."""
+    from importlib.resources import as_file, files
+
+    ref = files("eggpool._share").joinpath("config.example.toml")
+    with as_file(ref) as source_path:
+        if not source_path.exists():
+            click.echo("Error: bundled config.example.toml not found", err=True)
+            sys.exit(1)
+
+        target_path = Path(target) if target else Path("config.toml")
+
+        if target_path.exists() and not force:
+            click.echo(
+                f"Error: {target_path} already exists. Use --force to overwrite.",
+                err=True,
+            )
+            sys.exit(1)
+
+        import shutil
+
+        shutil.copy2(source_path, target_path)
+        click.echo(f"Config written to {target_path}")
 
 
 def main() -> NoReturn:

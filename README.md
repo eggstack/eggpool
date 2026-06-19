@@ -1,3 +1,8 @@
+[![PyPI version](https://badge.fury.io/py/eggpool.svg)](https://pypi.org/project/eggpool/)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![CI](https://github.com/eggstack/eggpool/actions/workflows/ci.yml/badge.svg)](https://github.com/eggstack/eggpool/actions/workflows/ci.yml)
+
 # EggPool
 
 A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts
@@ -11,7 +16,7 @@ behind one OpenAI/Anthropic-compatible endpoint.
 - Routes requests across accounts based on estimated quota utilization
 - Tracks request, token, model, latency, error, and estimated-cost statistics in SQLite
 - Multi-page dashboard with overview, accounts, models, latency, pings, events, timeseries, and bandwidth views
-- 50+ themes from [Halloy](https://github.com/squidowl/halloy) with customizable styling
+- 50+ themes from [Halloy](https://github.com/squidowl/halloy) and [Chart.js](https://www.chartjs.org/) v4 (MIT) for dashboard charts
 - Designed for lightweight deployments such as Raspberry Pis
 
 ## Requirements
@@ -21,7 +26,28 @@ behind one OpenAI/Anthropic-compatible endpoint.
 
 ## Quick Start
 
-### Option 1: Automated install
+### Option 1: pipx install (recommended)
+
+```bash
+pipx install eggpool
+pipx run eggpool --help   # or just `eggpool --help` if PATH includes it
+```
+
+`pipx` installs `eggpool` into its own venv and exposes the
+`eggpool` console script globally. The bundled themes and
+provider templates ship inside the package — no extra files
+required to start.
+
+Then copy and edit configuration:
+
+```bash
+cp /path/to/your/eggpool-venv/lib/python*/site-packages/eggpool/_share/config.example.toml ~/.config/eggpool/config.toml
+```
+
+(We'll add a `eggpool init-config` helper in 0.1.1 that writes the
+example into the current directory; tracked separately.)
+
+### Option 2: Automated install
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/eggstack/eggpool/main/scripts/install.sh | bash
@@ -39,7 +65,7 @@ The script:
 Validation fails until `.env` contains real, non-placeholder keys. Edit
 `config.toml` and `.env`, then run the validation and migration commands below.
 
-### Option 2: Manual install
+### Option 3: Manual install
 
 ```bash
 # Install dependencies, including local development tools
@@ -63,7 +89,7 @@ uv run eggpool --config config.toml migrate
 uv run eggpool --config config.toml serve
 ```
 
-### Option 3: Interactive setup
+### Option 4: Interactive setup
 
 ```bash
 # Run the interactive onboarding wizard
@@ -334,3 +360,5 @@ sudo systemctl restart eggpool
 sudo systemctl status eggpool
 sudo journalctl -u eggpool -n 100 --no-pager
 ```
+
+See [CHANGELOG](CHANGELOG.md) for release history.

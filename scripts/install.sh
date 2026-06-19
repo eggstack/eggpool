@@ -49,6 +49,24 @@ if [ "$PYTHON_MAJOR" -lt 3 ] || { [ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR"
 fi
 echo "  Python $PYTHON_VERSION found"
 
+# Check for existing eggpool install
+echo "Checking for existing eggpool install..."
+if command -v eggpool >/dev/null 2>&1; then
+    echo "Existing eggpool install detected: $(command -v eggpool)"
+    echo "Using existing install. Run 'eggpool update' to upgrade."
+    eggpool --version
+    exec eggpool accounts status
+fi
+
+# Check for pipx
+echo "Checking for pipx..."
+if command -v pipx >/dev/null 2>&1; then
+    echo "Installing eggpool via pipx..."
+    pipx install eggpool
+    echo "Installation complete. Run 'eggpool init-config' to start."
+    exec pipx run eggpool accounts status
+fi
+
 # Check for uv
 echo "Checking uv package manager..."
 if ! command -v uv &> /dev/null; then

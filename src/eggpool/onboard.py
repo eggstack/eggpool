@@ -54,7 +54,7 @@ def _prompt_add_another() -> bool:
     return _prompt_yn("Add another provider?")
 
 
-def run_onboarding(config_path: str, providers_path: str) -> None:
+def run_onboarding(config_path: str, providers_path: str | None = None) -> None:
     """Run the interactive onboarding flow.
 
     1. Loop: connect a provider, ask if they want another

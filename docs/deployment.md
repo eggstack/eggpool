@@ -2,14 +2,33 @@
 
 Production deployment instructions for the EggPool.
 
+## Quick install (pipx)
+
+The fastest way to install EggPool on a production server is via `pipx`:
+
+```bash
+# Install pipx if not available
+sudo apt install pipx || pip install pipx
+pipx ensurepath
+
+# Install eggpool
+pipx install eggpool
+
+# Verify installation
+eggpool --version
+```
+
+Then proceed to the Configuration section below. The bundled themes and
+provider templates ship inside the package — no extra files required.
+
 ## Prerequisites
 
 - Linux server (Debian/Ubuntu recommended)
 - Python 3.12+
-- `uv` package manager
+- `uv` package manager (for source installs) or `pipx` (for pip installs)
 - Root or sudo access (for systemd)
 
-## Installation
+## Installation (source checkout)
 
 ### 1. Create system user
 
