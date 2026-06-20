@@ -14,6 +14,7 @@ behind one OpenAI/Anthropic-compatible endpoint.
 - Supports OpenAI-compatible and Anthropic-compatible upstream request paths
 - Dynamically discovers currently available models from each provider
 - Routes requests across accounts based on estimated quota utilization
+- Per-account outbound proxy support via [pproxy](https://pypi.org/project/pproxy/) (SOCKS5, HTTP, or any pproxy URI)
 - Tracks request, token, model, latency, error, and estimated-cost statistics in SQLite
 - Multi-page dashboard with overview, accounts, models, latency, pings, events, timeseries, and bandwidth views
 - 50+ themes from [Halloy](https://github.com/squidowl/halloy) and [Chart.js](https://www.chartjs.org/) v4 (MIT) for dashboard charts
@@ -210,6 +211,7 @@ See `config.example.toml` for all available options.
 - `[dashboard]` — Dashboard toggle, theme, retention, refresh interval
 - `[security]` — Allowed hosts, CORS, header redaction
 - `[providers.*]` — Provider configurations with accounts
+- `[proxies.*]` — Named outbound proxy definitions (pproxy URI syntax)
 - `[model_overrides.*]` — Per-model protocol or path overrides
 
 ### Provider Configuration
@@ -228,6 +230,41 @@ api_key = "sk-your-opencode-go-key"
 ```
 
 Use `eggpool connect` for interactive provider setup instead of manual configuration.
+
+### Per-Account Outbound Proxy
+
+Each account can route upstream traffic through a [pproxy](https://pypi.org/project/pproxy/)-compatible outbound proxy. This is useful for geo-routing, residential IP rotation, or isolating provider traffic by account.
+
+Three mutually exclusive fields on each account control the proxy:
+
+| Field | Description |
+|-------|-------------|
+| `proxy` | Reference a named entry from `[proxies.*]` |
+| `proxy_url` | Inline pproxy URI (use when the URI has no credentials) |
+| `proxy_url_env` | Environment variable name holding the pproxy URI (use when the URI contains credentials) |
+
+**Quick example — inline SOCKS5 proxy:**
+
+```toml
+[[providers.opencode-go.accounts]]
+name = "personal"
+api_key = "sk-your-key"
+proxy_url = "socks5://127.0.0.1:1080"
+```
+
+**Named proxy with env-var credentials:**
+
+```toml
+[proxies.residential-us]
+url_env = "MY_RESIDENTIAL_PROXY_URL"
+
+[[providers.opencode-go.accounts]]
+name = "personal"
+api_key = "sk-your-key"
+proxy = "residential-us"
+```
+
+The `proxy` field references a `[proxies.<name>]` entry, keeping credentials out of the config file. See `docs/proxy.md` for the full pproxy URI syntax and more examples.
 
 ### Model Limits
 
@@ -360,7 +397,8 @@ docs/                    # Documentation
 ├── backup-restore.md    # Backup and restore procedures
 ├── firewall.md          # Firewall configuration
 ├── filesystem-layout.md # Filesystem layout reference
-└── model-limits.md      # Model context limit configuration
+├── model-limits.md      # Model context limit configuration
+└── proxy.md             # Per-account outbound proxy (pproxy)
 
 config-examples/         # Editor-specific config snippets
 ├── opencode.jsonc       # OpenCode provider config (JSONC)
