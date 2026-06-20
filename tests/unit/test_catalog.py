@@ -50,6 +50,28 @@ def test_normalize_models_auto_detect() -> None:
     assert models[0]["protocol"] is None
 
 
+def test_normalizers_skip_malformed_rows_without_losing_valid_models() -> None:
+    raw = {
+        "data": [
+            None,
+            "not-an-object",
+            {"id": 123},
+            {"id": "  "},
+            {"id": "valid-model", "name": 123, "title": "Valid"},
+        ]
+    }
+
+    models = normalize_openai_models(raw)
+
+    assert [model["model_id"] for model in models] == ["valid-model"]
+    assert models[0]["display_name"] == "Valid"
+
+
+def test_normalizers_reject_non_list_data() -> None:
+    assert normalize_openai_models({"data": {"id": "nested"}}) == []
+    assert normalize_anthropic_models({"data": "not-a-list"}) == []
+
+
 def test_cache_update_from_account() -> None:
     cache = ModelCatalogCache()
     models = [

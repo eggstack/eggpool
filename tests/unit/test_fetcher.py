@@ -124,3 +124,37 @@ async def test_fetch_models_request_error_returns_empty() -> None:
     assert result.status_code is None
     assert result.error is not None
     assert result.model_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content", "json_data", "expected_error"),
+    [
+        (b"not json", None, "Invalid JSON response"),
+        (None, [], "Invalid model catalog response"),
+        (None, {"data": {}}, "Invalid model catalog response"),
+        (None, {"data": [None, {"id": 123}]}, "Invalid model catalog response"),
+    ],
+)
+async def test_fetch_models_rejects_malformed_success_responses(
+    content: bytes | None,
+    json_data: object,
+    expected_error: str,
+) -> None:
+    """A malformed 200 response is a failed refresh, not an empty catalog."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if content is not None:
+            return httpx.Response(200, content=content, request=request)
+        return httpx.Response(200, json=json_data, request=request)
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://example.com",
+    ) as client:
+        result = await fetch_models_for_account(client, "test-key", "acct1")
+
+    assert result.response == {}
+    assert result.status_code == 200
+    assert result.error == expected_error
+    assert result.model_count == 0

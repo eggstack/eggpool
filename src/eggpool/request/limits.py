@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from eggpool.errors import ContextLimitExceededError
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-ProtocolName = Literal["openai", "anthropic"]
+    from eggpool.catalog.protocols import ProtocolName
 
 MIN_ESTIMATED_INPUT_TOKENS = 1_000
 MAX_ESTIMATED_INPUT_TOKENS = 128_000

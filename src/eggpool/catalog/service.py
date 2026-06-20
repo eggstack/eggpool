@@ -16,7 +16,7 @@ from eggpool.catalog.pricing import (
     parse_microdollars_per_million,
     parse_price_per_1k,
 )
-from eggpool.catalog.protocols import ModelProtocolResolver
+from eggpool.catalog.protocols import SUPPORTED_PROTOCOLS, ModelProtocolResolver
 from eggpool.constants import DEFAULT_PROVIDER_ID
 from eggpool.db.repositories import PingRepository, PriceSnapshotRepository
 from eggpool.providers.client_pool import ProviderClientPool
@@ -235,7 +235,9 @@ class CatalogService:
                         # Fall back to catalog resolution, using persisted
                         # protocol as a fallback so previously-resolved
                         # models do not become unresolved on refresh.
-                        persisted = self._cache.get_model(model["model_id"])
+                        persisted = self._cache.get_provider_model_entry(
+                            model["model_id"], provider_id
+                        )
                         persisted_protocol = (
                             persisted.get("protocol") if persisted else None
                         )
@@ -418,7 +420,7 @@ class CatalogService:
 
         for model_id, model_info in self._cache.get_all_models().items():
             protocol = model_info.get("protocol")
-            if protocol not in ("openai", "anthropic"):
+            if protocol not in SUPPORTED_PROTOCOLS:
                 logger.warning(
                     "Skipping unresolved model during catalog persistence: %s",
                     model_id,

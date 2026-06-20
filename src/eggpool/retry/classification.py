@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import email.utils
+import math
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -72,7 +74,7 @@ class RetryClassifier:
         body: bytes | None = None,
     ) -> RetryableError:
         """Classify a status code into a retry category."""
-        headers = headers or {}
+        headers = {name.lower(): value for name, value in (headers or {}).items()}
 
         if status_code == 400:
             return RetryableError(
@@ -190,12 +192,16 @@ class RetryClassifier:
             return None
         # Try numeric seconds first
         try:
-            return max(0.0, float(value))
+            seconds = float(value)
+            return max(0.0, seconds) if math.isfinite(seconds) else None
         except ValueError:
             pass
         # Try HTTP-date (e.g. "Wed, 18 Jun 2026 21:00:00 GMT")
         try:
             parsed = email.utils.parsedate_to_datetime(value)
-            return max(0.0, parsed.timestamp() - time.time())
-        except (ValueError, TypeError):
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=dt.UTC)
+            seconds = parsed.timestamp() - time.time()
+            return max(0.0, seconds) if math.isfinite(seconds) else None
+        except (OverflowError, OSError, TypeError, ValueError):
             return None

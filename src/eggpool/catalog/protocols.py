@@ -13,12 +13,15 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from eggpool.models.config import AppConfig
 
 logger = logging.getLogger(__name__)
+
+ProtocolName = Literal["openai", "anthropic"]
+SUPPORTED_PROTOCOLS: frozenset[ProtocolName] = frozenset({"openai", "anthropic"})
 
 # Exact known-model -> protocol mappings
 EXACT_MODEL_PROTOCOLS: dict[str, str] = {
@@ -92,13 +95,13 @@ class ModelProtocolResolver:
 
         # Step 2: Explicit per-model metadata from upstream
         api_type = str(source_metadata.get("api_type", ""))
-        if api_type in ("openai", "anthropic"):
+        if api_type in SUPPORTED_PROTOCOLS:
             return ProtocolResolution(
                 protocol=api_type,
                 source="upstream_metadata",
             )
         protocol_field = str(source_metadata.get("protocol", ""))
-        if protocol_field in ("openai", "anthropic"):
+        if protocol_field in SUPPORTED_PROTOCOLS:
             return ProtocolResolution(
                 protocol=protocol_field,
                 source="upstream_metadata",
@@ -139,7 +142,7 @@ class ModelProtocolResolver:
                 )
 
         # Step 5: Previously persisted protocol
-        if persisted_protocol in ("openai", "anthropic"):
+        if persisted_protocol in SUPPORTED_PROTOCOLS:
             return ProtocolResolution(
                 protocol=persisted_protocol,
                 source="persisted",

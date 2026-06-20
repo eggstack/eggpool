@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from eggpool.catalog.service import CatalogService
+from eggpool.models.config import AppConfig, ProviderConfig
 
 
 def _make_config() -> MagicMock:
@@ -180,3 +181,46 @@ class TestCatalogServicePingRecording:
 
         call_kwargs = mock_ping_repo.record_ping.call_args[1]
         assert call_kwargs["model_count"] == 3
+
+    @pytest.mark.asyncio
+    async def test_unresolved_model_does_not_inherit_another_provider_protocol(
+        self,
+    ) -> None:
+        """Provider-local fallback must not borrow shared-model metadata."""
+        config = AppConfig(
+            providers={
+                provider_id: ProviderConfig(
+                    id=provider_id,
+                    base_url=f"https://{provider_id}.example",
+                    protocols=["openai", "anthropic"],
+                )
+                for provider_id in ("provider-a", "provider-b")
+            }
+        )
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"data": [{"id": "shared-model"}]}
+        mock_response.raise_for_status = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        service = CatalogService(
+            config=config,
+            registry=_make_registry(),
+            db=MagicMock(),
+            client_pool=mock_client,
+        )
+        service.cache.update_from_account(
+            "acct-a",
+            "provider-a",
+            [{"model_id": "shared-model", "protocol": "openai"}],
+        )
+
+        await service._fetch_and_process_account(
+            "acct-b", "test-key", "provider-b", mock_client
+        )
+
+        provider_b_model = service.cache.get_provider_model_entry(
+            "shared-model", "provider-b"
+        )
+        assert provider_b_model is not None
+        assert provider_b_model["protocol"] is None

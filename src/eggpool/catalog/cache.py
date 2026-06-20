@@ -361,6 +361,14 @@ class ModelCatalogCache:
                 return pinfo
         return self._models.get(model_id)
 
+    def get_provider_model_entry(
+        self,
+        model_id: str,
+        provider_id: str,
+    ) -> dict[str, Any] | None:
+        """Return exact provider metadata without a global fallback."""
+        return self._provider_models.get((model_id, provider_id))
+
     def get_model_for_account(
         self, model_id: str, account_name: str
     ) -> dict[str, Any] | None:

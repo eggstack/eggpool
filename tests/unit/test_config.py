@@ -287,6 +287,19 @@ def test_provider_config_valid_id() -> None:
     assert p.accounts == []
 
 
+@pytest.mark.parametrize("protocols", [[], ["unsupported"]])
+def test_provider_config_rejects_invalid_protocols(protocols: list[str]) -> None:
+    """Providers need at least one protocol implemented by the proxy."""
+    from eggpool.models.config import ProviderConfig
+
+    with pytest.raises(ValueError):
+        ProviderConfig(
+            id="test-provider",
+            base_url="https://example.com",
+            protocols=protocols,  # type: ignore[arg-type]
+        )
+
+
 def test_provider_config_invalid_id_rejected() -> None:
     """ProviderConfig rejects invalid IDs."""
     from eggpool.models.config import ProviderConfig

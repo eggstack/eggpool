@@ -116,6 +116,19 @@ class TestRetryAfterParsing:
         result = classifier.classify(429, headers={"retry-after": "30"})
         assert result.retry_after == 30.0
 
+    def test_header_name_is_case_insensitive(self, classifier: RetryClassifier) -> None:
+        result = classifier.classify(429, headers={"Retry-After": "30"})
+        assert result.retry_after == 30.0
+
+    @pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+    def test_non_finite_numeric_value_is_ignored(
+        self,
+        classifier: RetryClassifier,
+        value: str,
+    ) -> None:
+        result = classifier.classify(429, headers={"retry-after": value})
+        assert result.retry_after is None
+
     def test_numeric_zero(self, classifier: RetryClassifier) -> None:
         result = classifier.classify(429, headers={"retry-after": "0"})
         assert result.retry_after == 0.0

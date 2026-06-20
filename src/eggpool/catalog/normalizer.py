@@ -2,7 +2,56 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+_OPENAI_SOURCE_EXCLUDE = frozenset({"id", "name", "title", "object"})
+_ANTHROPIC_SOURCE_EXCLUDE = frozenset({"id", "display_name", "type"})
+
+
+def iter_model_items(raw_response: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    """Yield valid model objects while isolating malformed upstream rows."""
+    data_value: object = raw_response.get("data")
+    if not isinstance(data_value, list):
+        return
+    for item_value in cast("list[object]", data_value):
+        if not isinstance(item_value, dict):
+            continue
+        item = cast("dict[str, Any]", item_value)
+        model_id = item.get("id")
+        if not isinstance(model_id, str) or not model_id.strip():
+            continue
+        yield item
+
+
+def _normalize_item(
+    item: dict[str, Any],
+    *,
+    display_name_keys: tuple[str, ...],
+    capability_keys: tuple[str, ...],
+    source_exclude: frozenset[str],
+    protocol: str | None,
+) -> dict[str, Any]:
+    """Build the shared normalized representation for one model."""
+    display_name = next(
+        (
+            value
+            for key in display_name_keys
+            if isinstance((value := item.get(key)), str) and value
+        ),
+        None,
+    )
+    return {
+        "model_id": item["id"],
+        "display_name": display_name,
+        "protocol": protocol,
+        "capabilities": {key: item[key] for key in capability_keys if key in item},
+        "source_metadata": {
+            key: value for key, value in item.items() if key not in source_exclude
+        },
+    }
 
 
 def normalize_openai_models(
@@ -13,28 +62,15 @@ def normalize_openai_models(
     Returns a list of normalized model dicts ready for persistence.
     """
     models: list[dict[str, Any]] = []
-    for item in raw_response.get("data", []):
-        model_id = item.get("id", "")
-        if not model_id:
-            continue
-
-        capabilities: dict[str, object] = {}
-        if "context_window" in item:
-            capabilities["context_window"] = item["context_window"]
-        if "modalities" in item:
-            capabilities["modalities"] = item["modalities"]
-
-        source_exclude = ("id", "name", "title", "object")
+    for item in iter_model_items(raw_response):
         models.append(
-            {
-                "model_id": model_id,
-                "display_name": item.get("name") or item.get("title"),
-                "protocol": None,
-                "capabilities": capabilities,
-                "source_metadata": {
-                    k: v for k, v in item.items() if k not in source_exclude
-                },
-            }
+            _normalize_item(
+                item,
+                display_name_keys=("name", "title"),
+                capability_keys=("context_window", "modalities"),
+                source_exclude=_OPENAI_SOURCE_EXCLUDE,
+                protocol=None,
+            )
         )
 
     return models
@@ -48,28 +84,15 @@ def normalize_anthropic_models(
     Returns a list of normalized model dicts ready for persistence.
     """
     models: list[dict[str, Any]] = []
-    for item in raw_response.get("data", []):
-        model_id = item.get("id", "")
-        if not model_id:
-            continue
-
-        capabilities: dict[str, object] = {}
-        if "context_window" in item:
-            capabilities["context_window"] = item["context_window"]
-        if "max_output_tokens" in item:
-            capabilities["max_output_tokens"] = item["max_output_tokens"]
-
-        source_exclude = ("id", "display_name", "type")
+    for item in iter_model_items(raw_response):
         models.append(
-            {
-                "model_id": model_id,
-                "display_name": item.get("display_name"),
-                "protocol": "anthropic",
-                "capabilities": capabilities,
-                "source_metadata": {
-                    k: v for k, v in item.items() if k not in source_exclude
-                },
-            }
+            _normalize_item(
+                item,
+                display_name_keys=("display_name",),
+                capability_keys=("context_window", "max_output_tokens"),
+                source_exclude=_ANTHROPIC_SOURCE_EXCLUDE,
+                protocol="anthropic",
+            )
         )
 
     return models

@@ -7,13 +7,13 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from eggpool.auth import require_auth
 from eggpool.catalog.cache import parse_model_id
-from eggpool.catalog.protocols import ProtocolMismatchError
+from eggpool.catalog.protocols import ProtocolMismatchError, ProtocolName
 from eggpool.constants import MAX_REQUEST_BODY_BYTES
 from eggpool.errors import (
     CatalogUnavailableError,
@@ -38,8 +38,6 @@ if TYPE_CHECKING:
     from eggpool.models.config import AppConfig
 
 logger = logging.getLogger(__name__)
-
-ProtocolName = Literal["openai", "anthropic"]
 
 
 class ErrorResponseFactory(Protocol):

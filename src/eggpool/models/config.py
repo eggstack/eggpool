@@ -13,6 +13,7 @@ from eggpool.catalog.pricing import (
     parse_microdollars_per_million,
     parse_price_per_1k,
 )
+from eggpool.catalog.protocols import ProtocolName  # noqa: TCH001 — used by Pydantic
 from eggpool.constants import (
     DEFAULT_DATABASE_PATH,
     DEFAULT_HOST,
@@ -192,7 +193,10 @@ class ProviderConfig(BaseModel):
 
     id: str
     base_url: str
-    protocols: list[str] = ["openai"]
+    protocols: list[ProtocolName] = Field(
+        default_factory=lambda: ["openai"],
+        min_length=1,
+    )
     openai_path: str = "/chat/completions"
     anthropic_path: str = "/messages"
     models_method: str = "GET"
@@ -239,7 +243,7 @@ class ModelLimitOverrideConfig(BaseModel):
 class ModelOverrideConfig(ModelLimitOverrideConfig):
     model_config = ConfigDict(extra="forbid")
 
-    protocol: Literal["openai", "anthropic"] | None = None
+    protocol: ProtocolName | None = None
     input_price_per_1k: float | None = None
     output_price_per_1k: float | None = None
     cache_read_per_million_microdollars: int | None = None
