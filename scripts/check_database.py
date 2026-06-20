@@ -447,7 +447,7 @@ async def main(config_path: str | None = None) -> int:
 
         try:
             await _run_schema_preflight(db)
-        except SchemaCompatibilityError as exc:
+        except (SchemaCompatibilityError, InvariantQueryError) as exc:
             sys.stderr.write(f"{exc}\n")
             return 2
 

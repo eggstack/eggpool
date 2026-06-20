@@ -132,9 +132,6 @@ class HealthManager:
     _accounts: dict[str, AccountHealth] = field(
         default_factory=dict[str, AccountHealth]
     )
-    _model_health: dict[str, dict[str, AccountHealth]] = field(
-        default_factory=dict[str, dict[str, AccountHealth]]
-    )  # model_id -> account_name -> health
 
     def get_account_health(self, account_name: str) -> AccountHealth:
         """Get or create account health."""

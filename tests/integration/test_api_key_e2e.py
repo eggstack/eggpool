@@ -386,8 +386,8 @@ class TestConfigSetup:
         start = output.index("{")
         end = output.rindex("}") + 1
         snippet = json.loads(output[start:end])
-        assert snippet["providers"]["eggpool"]["api_key"] == SERVER_KEY
-        assert "11300" in snippet["providers"]["eggpool"]["base_url"]
+        assert snippet["provider"]["eggpool"]["options"]["apiKey"] == SERVER_KEY
+        assert "11300" in snippet["provider"]["eggpool"]["options"]["baseURL"]
 
     def test_configsetup_claude_code(
         self,

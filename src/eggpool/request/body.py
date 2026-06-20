@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 from eggpool.errors import RequestTooLargeError
@@ -45,9 +46,10 @@ async def read_body_limited(request: Request, max_bytes: int) -> bytes:
             # Swallow any drain errors so the RequestTooLargeError
             # raised below is the one propagated to the caller.
             try:
-                async for _chunk in request.stream():
-                    pass
-            except Exception:
+                async with asyncio.timeout(5.0):
+                    async for _chunk in request.stream():
+                        pass
+            except (TimeoutError, Exception):
                 pass
     if too_large:
         raise RequestTooLargeError(f"Request body exceeds limit of {max_bytes} bytes")

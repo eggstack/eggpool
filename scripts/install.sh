@@ -12,8 +12,10 @@ echo "EggPool quick install"
 echo ""
 
 # If not inside a cloned repo, download one
-if [ ! -f "$(dirname "${BASH_SOURCE[0]}")/../../pyproject.toml" ] || \
-   ! grep -q 'name = "eggpool"' "$(dirname "${BASH_SOURCE[0]}")/../../pyproject.toml" 2>/dev/null; then
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+if [ ! -f "$PROJECT_DIR/pyproject.toml" ] || \
+   ! grep -q 'name = "eggpool"' "$PROJECT_DIR/pyproject.toml" 2>/dev/null; then
     if [ -d "$INSTALL_DIR" ]; then
         echo "Using existing installation at $INSTALL_DIR"
         cd "$INSTALL_DIR"
@@ -24,8 +26,6 @@ if [ ! -f "$(dirname "${BASH_SOURCE[0]}")/../../pyproject.toml" ] || \
         cd "$INSTALL_DIR"
     fi
 else
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
     cd "$PROJECT_DIR"
 fi
 
@@ -64,7 +64,7 @@ if command -v pipx >/dev/null 2>&1; then
     echo "Installing eggpool via pipx..."
     pipx install eggpool
     echo "Installation complete. Run 'eggpool init-config' to start."
-    exec pipx run eggpool accounts status
+    exec eggpool accounts status
 fi
 
 # Check for uv

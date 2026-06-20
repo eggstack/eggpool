@@ -66,7 +66,7 @@ class CheckResult:
     name: str
     ok: bool
     detail: str = ""
-    timings: dict[str, float] = field(default_factory=dict[str, float])
+    timings: dict[str, float] = field(default_factory=dict[str, float])  # pyright: ignore[reportUnknownVariableType]
 
 
 @dataclass

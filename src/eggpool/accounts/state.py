@@ -45,9 +45,8 @@ class AccountRuntimeState:
 
         Auto-recoverable states ("rate_limited", "cooldown") are
         cleared either when the configured cooldown has elapsed or
-        when no cooldown is set. "quota_exhausted" is treated as
-        terminal and requires operator action to clear; the cooldown
-        timestamp is still honored when present.
+        when no cooldown is set. "quota_exhausted" recovers
+        automatically when the cooldown expires.
         """
         if now is None:
             now = time.time()
@@ -73,6 +72,7 @@ class AccountRuntimeState:
             "authentication_failed",
             "quota_exhausted",
             "cooldown",
+            "rate_limited",
         ):
             return False
         return self.cooldown_until <= time.time()
@@ -82,7 +82,7 @@ class AccountRuntimeState:
         self.consecutive_failures = 0
         self.last_success_at = time.time()
         self.last_failure_category = ""
-        if self.health_state == "cooldown":
+        if self.health_state in ("cooldown", "rate_limited"):
             self.health_state = "healthy"
 
     def record_failure(

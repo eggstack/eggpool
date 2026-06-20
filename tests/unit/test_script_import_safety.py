@@ -85,19 +85,14 @@ class TestImportSafety:
         self, clean_import_env: None, module_name: str
     ) -> None:
         """Reloading the module must not create an open :class:`Database`."""
-        _reload_module(module_name)
-        # The Database class does not maintain a global registry,
-        # but aiosqlite itself does not hold open connections from
-        # mere import. The closest observable side effect we can
-        # check is that no module-level attribute named ``_conn``
-        # has been populated, which would only be the case if the
-        # script eagerly instantiated and connected a Database.
         import os
 
         cwd = os.getcwd()
-        # No unexpected sqlite file artifacts should appear after import.
-        entries = set(os.listdir(cwd))
-        assert "usage.sqlite3" not in entries, (
+        entries_before = set(os.listdir(cwd))
+        _reload_module(module_name)
+        entries_after = set(os.listdir(cwd))
+        new_files = entries_after - entries_before
+        assert "usage.sqlite3" not in new_files, (
             f"{module_name} created a database file at import time"
         )
 

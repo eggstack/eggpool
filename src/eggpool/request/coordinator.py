@@ -906,7 +906,8 @@ class RequestCoordinator:
                     error_class=type(err).__name__,
                 ) from err
 
-            assert response is not None
+            if response is None:  # type: ignore[reportUnnecessaryComparison]
+                raise DatabaseError("Upstream response is None")
 
             # Check upstream status before creating downstream response
             if response.status_code >= 400:
@@ -964,7 +965,8 @@ class RequestCoordinator:
             ):
                 await response.aclose()
 
-        assert response is not None
+        if response is None:
+            raise DatabaseError("Upstream response is None")
 
         return PreparedProxyResponse(
             status_code=response.status_code,

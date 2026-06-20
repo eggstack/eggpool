@@ -571,8 +571,8 @@ class TestConfigSetup:
         end = output.rindex("}") + 1
         snippet = json.loads(output[start:end])
 
-        assert snippet["providers"]["eggpool"]["api_key"] == "ep_test_key"
-        assert "11300" in snippet["providers"]["eggpool"]["base_url"]
+        assert snippet["provider"]["eggpool"]["options"]["apiKey"] == "ep_test_key"
+        assert "11300" in snippet["provider"]["eggpool"]["options"]["baseURL"]
 
     def test_configsetup_claude_code_with_existing_key(self, tmp_path):
         """configsetup claude-code uses existing key and LAN IP."""
