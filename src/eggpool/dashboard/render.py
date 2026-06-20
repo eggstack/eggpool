@@ -1274,6 +1274,8 @@ def render_pings(
                 f"</div>"
             )
         provider_cards = f'<section class="cards">{"".join(cards)}</section>'
+    elif recent_pings:
+        provider_cards = ""
     else:
         provider_cards = (
             '<p class="empty">No ping data yet. '

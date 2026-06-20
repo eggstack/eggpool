@@ -905,6 +905,37 @@ class TestRenderPings:
         assert "142.0 ms" in html
         assert "200" in html
         assert "Recent pings" in html
+        assert "No ping data yet" not in html
+
+    def test_no_empty_message_when_pings_exist_outside_range(self) -> None:
+        """When ping_summary is empty (outside time range) but recent_pings
+        has data, the misleading 'No ping data yet' message must not appear."""
+        recent_pings = [
+            {
+                "provider_id": "opencode-go",
+                "account_name": "default",
+                "probed_at": "2024-01-01 12:00:00",
+                "latency_ms": 100,
+                "status_code": 200,
+                "model_count": 10,
+                "error": None,
+            },
+            {
+                "provider_id": "anthropic",
+                "account_name": "default",
+                "probed_at": "2024-01-01 11:00:00",
+                "latency_ms": 200,
+                "status_code": 200,
+                "model_count": 20,
+                "error": None,
+            },
+        ]
+        html = render_pings(ping_summary=[], recent_pings=recent_pings, period="24h")
+        assert "No ping data yet" not in html
+        assert "No pings recorded yet" not in html
+        assert "Recent pings" in html
+        assert "opencode-go" in html
+        assert "anthropic" in html
 
     def test_escapes_html_in_ping_data(self) -> None:
         recent_pings = [
