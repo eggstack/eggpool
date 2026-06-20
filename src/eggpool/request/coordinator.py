@@ -49,7 +49,7 @@ from eggpool.request.finalizer import (
     FinalizationOutcome,
     RequestFinalizer,
 )
-from eggpool.request.limits import estimate_input_tokens
+from eggpool.request.limits import estimate_reservation_tokens
 from eggpool.retry.classification import RetryCategory, RetryClassifier
 from eggpool.security.redaction import redact_error_detail
 
@@ -458,7 +458,7 @@ class RequestCoordinator:
                     )
 
                 # 2. Calculate projected request tokens once
-                estimated_tokens = estimate_input_tokens(context.original_body)
+                estimated_tokens = estimate_reservation_tokens(context.original_body)
 
                 # 3. Build per-account estimate map for scoring
                 request_estimates: dict[str, int] = {}

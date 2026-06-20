@@ -230,6 +230,64 @@ def test_config_example_validates() -> None:
     assert len(config.all_accounts()) == 0
 
 
+def test_provider_models_method_is_normalized() -> None:
+    config = AppConfig.from_dict(
+        {
+            "providers": {
+                "provider-a": {
+                    "id": "provider-a",
+                    "base_url": "https://example.com",
+                    "models_method": " post ",
+                }
+            }
+        }
+    )
+    assert config.providers["provider-a"].models_method == "POST"
+
+
+def test_provider_models_method_rejects_unknown_method() -> None:
+    with pytest.raises(ConfigError, match="models_method"):
+        AppConfig.from_dict(
+            {
+                "providers": {
+                    "provider-a": {
+                        "id": "provider-a",
+                        "base_url": "https://example.com",
+                        "models_method": "POTS",
+                    }
+                }
+            }
+        )
+
+
+def test_provider_mapping_key_must_match_declared_id() -> None:
+    with pytest.raises(ConfigError, match="does not match"):
+        AppConfig.from_dict(
+            {
+                "providers": {
+                    "provider-a": {
+                        "id": "provider-b",
+                        "base_url": "https://example.com",
+                    }
+                }
+            }
+        )
+
+
+def test_provider_id_rejects_trailing_newline() -> None:
+    with pytest.raises(ConfigError, match="Provider ID"):
+        AppConfig.from_dict(
+            {
+                "providers": {
+                    "provider-a\n": {
+                        "id": "provider-a\n",
+                        "base_url": "https://example.com",
+                    }
+                }
+            }
+        )
+
+
 def test_dashboard_config_defaults() -> None:
     """DashboardConfig has correct default values."""
     from eggpool.models.config import DashboardConfig

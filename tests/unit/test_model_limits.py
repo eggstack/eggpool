@@ -55,6 +55,13 @@ class TestModelLimitOverrideConfig:
         with pytest.raises(ValidationError, match="Extra inputs"):
             ModelLimitOverrideConfig(max_context_tokens=1000, bogus=True)  # type: ignore[call-arg]
 
+    def test_output_exceeding_context_is_rejected_at_base_type(self) -> None:
+        with pytest.raises(ConfigError, match="max_output_tokens.*exceeds"):
+            ModelLimitOverrideConfig(
+                max_context_tokens=1000,
+                max_output_tokens=1001,
+            )
+
 
 # ---------------------------------------------------------------------------
 # ModelOverrideConfig cross-field validation

@@ -27,15 +27,22 @@ class ModelLimitCatalog(Protocol):
 
 
 def estimate_input_tokens(body: bytes) -> int:
-    """Estimate input tokens from serialized request bytes.
+    """Conservatively estimate input tokens from serialized request bytes.
 
-    The estimate is deliberately conservative and bounded so it is useful
-    for both context-limit preflight and quota reservation sizing.
+    This estimate is intentionally not capped: context-limit enforcement must
+    preserve the size relationship for arbitrarily large request bodies.
     """
     if not body:
         return MIN_ESTIMATED_INPUT_TOKENS
-    estimate = max(MIN_ESTIMATED_INPUT_TOKENS, len(body) // ESTIMATED_BYTES_PER_TOKEN)
-    return min(estimate, MAX_ESTIMATED_INPUT_TOKENS)
+    byte_estimate = (len(body) + ESTIMATED_BYTES_PER_TOKEN - 1) // (
+        ESTIMATED_BYTES_PER_TOKEN
+    )
+    return max(MIN_ESTIMATED_INPUT_TOKENS, byte_estimate)
+
+
+def estimate_reservation_tokens(body: bytes) -> int:
+    """Estimate input tokens while bounding speculative quota reservations."""
+    return min(estimate_input_tokens(body), MAX_ESTIMATED_INPUT_TOKENS)
 
 
 def requested_output_tokens(

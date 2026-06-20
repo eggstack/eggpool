@@ -12,7 +12,11 @@ from eggpool.api.proxy_request import (
     _check_context_limits,
 )
 from eggpool.errors import ContextLimitExceededError
-from eggpool.request.limits import estimate_input_tokens, requested_output_tokens
+from eggpool.request.limits import (
+    estimate_input_tokens,
+    estimate_reservation_tokens,
+    requested_output_tokens,
+)
 
 
 class MockCatalogCache:
@@ -25,10 +29,15 @@ class MockCatalogCache:
         return self._model_info
 
 
-def test_shared_input_estimate_is_bounded() -> None:
+def test_context_input_estimate_is_conservative_and_unbounded() -> None:
     assert estimate_input_tokens(b"") == 1_000
     assert estimate_input_tokens(b"x" * 6000) == 2_000
-    assert estimate_input_tokens(b"x" * 1_000_000) == 128_000
+    assert estimate_input_tokens(b"x" * 6001) == 2_001
+    assert estimate_input_tokens(b"x" * 1_000_000) == 333_334
+
+
+def test_reservation_input_estimate_is_bounded() -> None:
+    assert estimate_reservation_tokens(b"x" * 1_000_000) == 128_000
 
 
 @pytest.mark.parametrize("value", [True, 1.5, "2000", 0, -1])
@@ -94,6 +103,26 @@ def test_request_above_context_limit_returns_error() -> None:
             provider_id=None,
             body=body,
             payload=payload,
+            protocol="openai",
+            catalog_cache=cache,
+        )
+
+
+def test_large_request_cannot_bypass_context_limit_estimate_cap() -> None:
+    cache = MockCatalogCache(
+        {
+            "effective_limits": {
+                "context_tokens": 200_000,
+                "enforce": True,
+            }
+        }
+    )
+    with pytest.raises(ContextLimitExceededError):
+        _check_context_limits(
+            model_id="m1",
+            provider_id=None,
+            body=b"x" * 1_000_000,
+            payload={"model": "m1"},
             protocol="openai",
             catalog_cache=cache,
         )
