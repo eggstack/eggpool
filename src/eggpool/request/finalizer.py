@@ -16,7 +16,10 @@ from eggpool.db.repositories import (
     ReservationRepository,
 )
 from eggpool.health.health_manager import classify_failure_category
-from eggpool.security.redaction import redact_error_detail
+from eggpool.security.redaction import (
+    MAX_REDACTED_ERROR_DETAIL_CHARS,
+    redact_error_detail,
+)
 
 if TYPE_CHECKING:
     from eggpool.accounts.registry import AccountRegistry
@@ -28,7 +31,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-MAX_ERROR_DETAIL_CHARS = 2048
+MAX_ERROR_DETAIL_CHARS = MAX_REDACTED_ERROR_DETAIL_CHARS
 
 
 class FinalizationOutcome(StrEnum):
@@ -118,8 +121,7 @@ class RequestFinalizer:
 
         # Default is fail-closed: do not persist arbitrary provider
         # error detail. When ``persist_error_detail`` is enabled the
-        # strengthened redactor is applied, then the result is bounded
-        # by ``MAX_ERROR_DETAIL_CHARS`` before any processing.
+        # shared redactor already returns a bounded string.
         if self._persist_error_detail and data.error_detail is not None:
             error_detail = redact_error_detail(data.error_detail)
         else:

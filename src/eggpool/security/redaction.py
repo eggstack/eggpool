@@ -123,6 +123,16 @@ def _is_user_content_key(key: Any) -> bool:
     return _truncate_key(key).lower() in USER_CONTENT_JSON_KEYS
 
 
+def _enforce_byte_budget(value: Any, byte_budget: int) -> Any:
+    """Collapse oversized sanitized values to a fail-closed marker."""
+    try:
+        if len(json.dumps(value, ensure_ascii=False)) > byte_budget:
+            return REDACTED
+    except (TypeError, ValueError):
+        return REDACTED
+    return value
+
+
 def sanitize_error_object(
     value: Any,
     *,
@@ -145,8 +155,9 @@ def sanitize_error_object(
       nested object underneath is not traversed into the output.
     - ``message`` is retained only after string-level redaction and
       per-string length bounding.
-    - Depth, item count, and serialized byte size are bounded so
-      arbitrary provider detail cannot leak.
+    - Depth, item count, and serialized byte size are bounded; when a
+      nested allowlisted structure still exceeds the serialized byte
+      budget it collapses to :data:`REDACTED`.
     - Non-string scalar values are kept for allowlisted keys and
       coerced to strings for redaction elsewhere.
     """
@@ -193,7 +204,10 @@ def sanitize_error_object(
                 item_budget=item_budget,
                 byte_budget=byte_budget,
             )
-        return result
+            collapsed: Any = _enforce_byte_budget(result, byte_budget)
+            if collapsed == REDACTED:
+                return REDACTED
+        return _enforce_byte_budget(result, byte_budget)
 
     if isinstance(value, list):
         result_list: list[Any] = []
@@ -210,22 +224,25 @@ def sanitize_error_object(
                     byte_budget=byte_budget,
                 )
             )
-        return result_list
+            collapsed_list: Any = _enforce_byte_budget(result_list, byte_budget)
+            if collapsed_list == REDACTED:
+                return REDACTED
+        return _enforce_byte_budget(result_list, byte_budget)
 
     if isinstance(value, str):
         redacted_string = redact_error_detail(value)
         if redacted_string is None:
             return None
-        return _truncate_string(redacted_string)
+        return _enforce_byte_budget(_truncate_string(redacted_string), byte_budget)
 
     if value is None or isinstance(value, (bool, int, float)):
-        return value
+        return _enforce_byte_budget(value, byte_budget)
 
     text = str(value)
     redacted_text = redact_error_detail(text)
     if redacted_text is None:
         return None
-    return _truncate_string(redacted_text)
+    return _enforce_byte_budget(_truncate_string(redacted_text), byte_budget)
 
 
 def _try_parse_json(value: str) -> Any | None:
@@ -288,6 +305,8 @@ def redact_error_detail(value: str | None) -> str | None:
             # partial retention is more likely to leak than to help.
             return _bound_output(REDACTED)
         sanitized = sanitize_error_object(parsed)
+        if sanitized == REDACTED:
+            return _bound_output(REDACTED)
         try:
             return _bound_output(json.dumps(sanitized, ensure_ascii=False))
         except (TypeError, ValueError):

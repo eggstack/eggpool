@@ -19,21 +19,7 @@ def signal_reload() -> bool:
 
     Returns True if the signal was sent successfully.
     """
-    from eggpool.constants import PID_FILE
-
-    if not PID_FILE.exists():
-        return False
-
-    try:
-        pid = int(PID_FILE.read_text(encoding="utf-8").strip())
-    except (ValueError, OSError):
-        return False
-
-    try:
-        os.kill(pid, signal.SIGHUP)
-        return True
-    except (ProcessLookupError, PermissionError, OSError):
-        return False
+    return _signal_pid_file(signal.SIGHUP)
 
 
 def signal_restart() -> bool:
@@ -41,6 +27,11 @@ def signal_restart() -> bool:
 
     Returns True if the signal was sent successfully.
     """
+    return _signal_pid_file(signal.SIGTERM)
+
+
+def _signal_pid_file(signum: int) -> bool:
+    """Send a signal to the PID stored in the runtime pid file."""
     from eggpool.constants import PID_FILE
 
     if not PID_FILE.exists():
@@ -52,7 +43,7 @@ def signal_restart() -> bool:
         return False
 
     try:
-        os.kill(pid, signal.SIGTERM)
+        os.kill(pid, signum)
         return True
     except (ProcessLookupError, PermissionError, OSError):
         return False
@@ -117,18 +108,22 @@ def load_provider_templates(
     so the connect flow is never stuck with zero options.
     """
     if providers_path is None:
-        from importlib.resources import as_file, files
+        from importlib.resources import files
 
-        ref = files("eggpool.providers").joinpath("_templates.toml")
-        with as_file(ref) as path:
-            pass
+        try:
+            text = (
+                files("eggpool.providers")
+                .joinpath("_templates.toml")
+                .read_text(encoding="utf-8")
+            )
+        except (FileNotFoundError, OSError):
+            return dict(_OPENCODE_GO_FALLBACK)
     else:
         path = Path(providers_path)
+        if not path.exists():
+            return dict(_OPENCODE_GO_FALLBACK)
+        text = path.read_text(encoding="utf-8")
 
-    if not path.exists():
-        return dict(_OPENCODE_GO_FALLBACK)
-
-    text = path.read_text(encoding="utf-8")
     parsed: dict[str, Any] = tomllib.loads(text)
 
     providers_raw: dict[str, Any] = parsed.get("providers", {})

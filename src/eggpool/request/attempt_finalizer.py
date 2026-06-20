@@ -6,7 +6,10 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from eggpool.security.redaction import redact_error_detail
+from eggpool.security.redaction import (
+    MAX_REDACTED_ERROR_DETAIL_CHARS,
+    redact_error_detail,
+)
 
 if TYPE_CHECKING:
     from eggpool.db.connection import Database
@@ -17,7 +20,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-ATTEMPT_MAX_ERROR_DETAIL_CHARS = 2048
+ATTEMPT_MAX_ERROR_DETAIL_CHARS = MAX_REDACTED_ERROR_DETAIL_CHARS
 
 
 @dataclass(frozen=True)
@@ -74,8 +77,7 @@ class AttemptFinalizer:
         """
         # Default is fail-closed: do not persist arbitrary provider
         # error detail. When ``persist_error_detail`` is enabled the
-        # strengthened redactor is applied, then the result is bounded
-        # by ``ATTEMPT_MAX_ERROR_DETAIL_CHARS``.
+        # shared redactor already returns a bounded string.
         if self._persist_error_detail and data.error_detail is not None:
             error_detail = redact_error_detail(data.error_detail)
         else:

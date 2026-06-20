@@ -208,6 +208,10 @@ class TestSanitizeErrorObject:
         assert "data" not in result
         assert "k0" not in json.dumps(result)
 
+    def test_byte_budget_bound(self) -> None:
+        result = sanitize_error_object({"message": "x"}, byte_budget=1)
+        assert result == REDACTED
+
     def test_allowlist_budget_bound(self) -> None:
         # Lists nested under an allowlisted key still honor the
         # item budget and collapse to REDACTED on exhaustion.

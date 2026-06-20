@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import colorsys
 import tomllib
+from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import Any, cast
 
@@ -147,8 +148,18 @@ class HalloyTheme(BaseModel):
     buffer: HalloyBuffer = Field(default_factory=HalloyBuffer)
 
     @classmethod
-    def from_toml(cls, path: str | Path) -> HalloyTheme:
+    def from_toml(cls, path: str | Path | Traversable) -> HalloyTheme:
         """Load a halloy theme from a TOML file."""
+        if isinstance(path, Path):
+            with path.open("rb") as f:
+                raw = tomllib.load(f)
+            return cls._from_dict(raw)
+
+        if isinstance(path, Traversable):
+            with path.open("rb") as f:
+                raw = tomllib.load(f)
+            return cls._from_dict(raw)
+
         p = Path(path)
         with p.open("rb") as f:
             raw = tomllib.load(f)
@@ -419,7 +430,7 @@ def translate_theme(halloy: HalloyTheme) -> DashboardTheme:
     )
 
 
-def load_theme(theme_path: str | Path) -> DashboardTheme:
+def load_theme(theme_path: str | Path | Traversable) -> DashboardTheme:
     """Load a halloy TOML theme and translate it to dashboard CSS variables."""
     halloy = HalloyTheme.from_toml(theme_path)
     return translate_theme(halloy)
@@ -441,7 +452,9 @@ def list_themes(themes_dir: str | Path | None = None) -> list[str]:
 
     bundled = bundled_themes_dir()
     bundled_names: set[str] = {
-        f.stem for f in bundled.iterdir() if f.suffix == ".toml" and f.is_file()
+        Path(f.name).stem
+        for f in bundled.iterdir()
+        if f.is_file() and f.name.endswith(".toml")
     }
 
     if themes_dir is None:
@@ -456,7 +469,7 @@ def list_themes(themes_dir: str | Path | None = None) -> list[str]:
 
 def resolve_theme_path(
     theme_name: str, themes_dir: str | Path | None = None
-) -> Path | None:
+) -> Traversable | None:
     """Resolve a theme name to its .toml file path.
 
     When themes_dir is set, the user directory is checked first (allowing
@@ -470,7 +483,7 @@ def resolve_theme_path(
         if user.is_file():
             return user
 
-    bundled = bundled_themes_dir() / f"{theme_name}.toml"
+    bundled = bundled_themes_dir().joinpath(f"{theme_name}.toml")
     if bundled.is_file():
         return bundled
     return None

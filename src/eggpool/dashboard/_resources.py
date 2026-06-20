@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from importlib.resources import as_file, files
+from importlib.resources import files
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from pathlib import Path
+    from importlib.resources.abc import Traversable
 
 
-def bundled_themes_dir() -> Path:
-    """Return the path to the bundled themes directory."""
-    ref = files("eggpool.dashboard").joinpath("themes")
-    path = as_file(ref).__enter__()
-    return path
+def bundled_themes_dir() -> Traversable:
+    """Return the bundled themes directory as a traversable resource."""
+    return files("eggpool.dashboard").joinpath("themes")

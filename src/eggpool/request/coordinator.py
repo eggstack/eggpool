@@ -86,6 +86,13 @@ def _safe_dict(value: Any) -> dict[str, Any] | None:
     return None
 
 
+def _prepare_error_detail(value: object | None, persist: bool) -> str | None:
+    """Redact error detail only when persistence is enabled."""
+    if not persist or value is None:
+        return None
+    return redact_error_detail(str(value))
+
+
 @dataclass
 class ProxyRequestContext:
     """Input context for a proxy request."""
@@ -1070,15 +1077,7 @@ class RequestCoordinator:
                 # Midstream error - finalize, no retry
                 observer.flush()
                 usage_result = observer.usage
-                # Default is fail-closed: do not persist arbitrary
-                # provider error detail. When explicitly enabled, the
-                # strengthened redactor is applied and bounded.
-                error_detail_value: str | None = None
-                if persist_error_detail:
-                    redacted = redact_error_detail(str(exc))
-                    error_detail_value = (
-                        redacted[:2048] if redacted is not None else None
-                    )
+                error_detail_value = _prepare_error_detail(exc, persist_error_detail)
                 await finalizer.finalize(
                     selected,
                     FinalizationData(
@@ -1341,14 +1340,9 @@ class RequestCoordinator:
                     error_class = last_error.error_class
                 else:
                     error_class = type(last_error).__name__
-                # Default is fail-closed: do not persist arbitrary
-                # provider error detail. When explicitly enabled, the
-                # strengthened redactor is applied and bounded.
-                if self._persist_error_detail:
-                    redacted_detail = redact_error_detail(str(last_error))
-                    error_detail = (
-                        redacted_detail[:2048] if redacted_detail is not None else None
-                    )
+                error_detail = _prepare_error_detail(
+                    last_error, self._persist_error_detail
+                )
                 if isinstance(last_error, _NonRetryableUpstreamError):
                     outcome = FinalizationOutcome.CLIENT_ERROR
                 elif isinstance(last_error, _RetryableUpstreamError):
@@ -1370,19 +1364,8 @@ class RequestCoordinator:
         elif context.client_metadata.get("db_request_id") is not None:
             # No selected attempt but request exists - just mark as interrupted
             db_request_id = context.client_metadata["db_request_id"]
-            # Default is fail-closed: do not persist arbitrary provider
-            # error detail. When explicitly enabled, the strengthened
-            # redactor is applied and bounded.
-            if self._persist_error_detail and last_error is not None:
-                redacted_detail = redact_error_detail(str(last_error))
-                detail_value: str = (
-                    redacted_detail[:2048]
-                    if redacted_detail is not None
-                    else "No attempts dispatched"
-                )
-            elif self._persist_error_detail:
-                detail_value = "No attempts dispatched"
-            else:
+            detail_value = _prepare_error_detail(last_error, self._persist_error_detail)
+            if detail_value is None:
                 detail_value = "No attempts dispatched"
             async with self._db.transaction():
                 await self._db.execute_write(
