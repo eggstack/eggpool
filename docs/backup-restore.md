@@ -118,10 +118,10 @@ sudo systemctl start eggpool
 sudo systemctl status eggpool
 
 # Check health
-curl -s http://localhost:8080/v1/healthz
+curl -s http://localhost:11300/v1/healthz
 
 # Check dashboard
-curl -s http://localhost:8080/
+curl -s http://localhost:11300/
 ```
 
 ## Database Migration

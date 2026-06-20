@@ -113,12 +113,15 @@ Use the exception hierarchy in `errors.py`. Chain exceptions with `raise ... fro
 | `eggpool newkey` | Generate a new server API key |
 | `eggpool edit` | Open the configuration file in the default editor |
 | `eggpool configsetup` | Print configuration snippets for code editors |
+| `eggpool configsetup opencode` | Print OpenCode provider config JSON with model limits |
+| `eggpool configsetup claude-code` | Print Claude Code config snippet |
 | `eggpool update` | Check for updates and reinstall if newer |
 | `eggpool models refresh` | Refresh the model catalog from upstream (syncs accounts first) |
 | `eggpool accounts status` | Show configured account status and key environment variables |
 | `eggpool accounts list` | List configured provider accounts and API key backends |
 | `eggpool dashboard public` | Toggle dashboard public access |
 | `eggpool db vacuum` | Reclaim SQLite space via the lock-owned `Database.vacuum()` helper |
+| `eggpool init-config` | Write bundled config.example.toml to current directory or TARGET |
 | `eggpool deploy systemd` | Print the systemd unit + install instructions |
 | `eggpool deploy logrotate` | Print the logrotate config + install instructions |
 | `eggpool deploy cron` | Print the daily-backup cron entry + install instructions |
@@ -151,3 +154,4 @@ Follow ruff TCH rules:
 - Deployment files: `deploy/`
 - Documentation: `docs/`
 - Architecture: `architecture/`
+- Config examples: `config-examples/` (OpenCode JSONC, Claude Code env)

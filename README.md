@@ -44,8 +44,11 @@ Then copy and edit configuration:
 cp /path/to/your/eggpool-venv/lib/python*/site-packages/eggpool/_share/config.example.toml ~/.config/eggpool/config.toml
 ```
 
-(We'll add a `eggpool init-config` helper in 0.1.1 that writes the
-example into the current directory; tracked separately.)
+Or use the built-in helper:
+
+```bash
+eggpool init-config
+```
 
 ### Option 2: Automated install
 
@@ -119,12 +122,15 @@ uv run eggpool connect list
 | `eggpool newkey` | Generate a new server API key |
 | `eggpool edit` | Open the configuration file in the default editor |
 | `eggpool configsetup` | Print configuration snippets for code editors |
+| `eggpool configsetup opencode` | Print OpenCode provider config JSON with model limits |
+| `eggpool configsetup claude-code` | Print Claude Code config snippet |
 | `eggpool update` | Check for updates and reinstall if newer |
 | `eggpool models refresh` | Refresh the model catalog from upstream |
 | `eggpool accounts status` | Show configured account status |
 | `eggpool accounts list` | List configured provider accounts |
 | `eggpool dashboard public` | Toggle dashboard public access |
 | `eggpool db vacuum` | Vacuum the database to reclaim space |
+| `eggpool init-config` | Write bundled config.example.toml to current directory or TARGET |
 | `eggpool deploy systemd` | Print the systemd unit + install instructions |
 | `eggpool deploy logrotate` | Print the logrotate config + install instructions |
 | `eggpool deploy cron` | Print the daily-backup cron entry + install instructions |
@@ -195,7 +201,7 @@ See `config.example.toml` for all available options.
 
 ### Key Sections
 
-- `[server]` — Bind address, port, API key environment variable, logging
+- `[server]` — Bind address, port (default 11300), API key, logging
 - `[upstream]` — Upstream API base URL, timeouts, connection pool
 - `[database]` — SQLite path, WAL mode, synchronous mode
 - `[models]` — Catalog refresh interval, exposure mode, staleness settings
@@ -309,7 +315,8 @@ src/eggpool/
 │   ├── coordinator.py       # Central request lifecycle orchestrator
 │   ├── attempt_finalizer.py # Per-attempt terminal lifecycle
 │   ├── finalizer.py         # Idempotent request finalization
-│   └── body.py              # Bounded request body reading
+│   ├── body.py              # Bounded request body reading
+│   └── limits.py            # Token estimation and context limit enforcement
 ├── accounts/            # Account registry and state
 ├── catalog/             # Model catalog, pricing, estimation, and protocols
 ├── routing/             # Quota-aware routing, eligibility, provider parsing
@@ -327,7 +334,10 @@ src/eggpool/
 │   ├── theme.py         # TOML theme to CSS variable translation
 │   ├── escape.py        # HTML escaping utilities
 │   └── static/          # CSS, JavaScript, and favicon
-└── security/            # Header redaction and security utilities
+├── integrations/        # External tool config generation (OpenCode, Claude Code)
+├── security/            # Header redaction and security utilities
+├── deploy/              # Bundled systemd/logrotate/cron snippets for CLI output
+└── _share/              # Bundled config examples and assets for pipx installs
 
 scripts/                 # Operational scripts
 ├── install.sh           # Quick install script
@@ -349,7 +359,12 @@ docs/                    # Documentation
 ├── raspberry-pi.md      # Raspberry Pi setup guide
 ├── backup-restore.md    # Backup and restore procedures
 ├── firewall.md          # Firewall configuration
-└── filesystem-layout.md # Filesystem layout reference
+├── filesystem-layout.md # Filesystem layout reference
+└── model-limits.md      # Model context limit configuration
+
+config-examples/         # Editor-specific config snippets
+├── opencode.jsonc       # OpenCode provider config (JSONC)
+└── claude-code.env      # Claude Code environment variables
 
 deploy/                  # Deployment files
 ├── eggpool.service      # systemd unit file

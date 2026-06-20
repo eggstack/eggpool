@@ -79,7 +79,7 @@ Update `/etc/eggpool/config.toml`:
 ```toml
 [server]
 host = "0.0.0.0"  # Listen on all interfaces for LAN access
-port = 8080
+port = 11300
 
 [database]
 path = "/var/lib/eggpool/usage.sqlite3"
@@ -200,7 +200,7 @@ If you see `database is locked` errors:
 
 1. Verify `server.host = "0.0.0.0"` in config
 2. Check firewall rules (see `docs/firewall.md`)
-3. Verify the port is listening: `ss -tlnp | grep 8080`
+3. Verify the port is listening: `ss -tlnp | grep 11300`
 
 ## Operational Scripts
 
@@ -224,7 +224,7 @@ than the checker expects. The documented exit codes are:
 ### Deployment smoke test
 
 ```bash
-GOROUTER_BASE_URL=http://127.0.0.1:8080 \
+GOROUTER_BASE_URL=http://127.0.0.1:11300 \
 GOROUTER_API_KEY=... \
 GOROUTER_OPENAI_MODEL=gpt-4 \
 GOROUTER_ANTHROPIC_MODEL=claude-3-5-sonnet \

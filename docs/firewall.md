@@ -1,6 +1,6 @@
 # Firewall Configuration
 
-The proxy listens on port 8080 by default. Restrict access to your LAN.
+The proxy listens on port 11300 by default. Restrict access to your LAN.
 
 ## nftables (recommended)
 
@@ -11,13 +11,13 @@ nft add rule inet filter input ct state established,related accept
 # Allow loopback
 nft add rule inet filter input iif lo accept
 
-# Allow LAN access to port 8080
-nft add rule inet filter input tcp dport 8080 ip saddr 192.168.0.0/16 accept
-nft add rule inet filter input tcp dport 8080 ip saddr 10.0.0.0/8 accept
-nft add rule inet filter input tcp dport 8080 ip saddr 172.16.0.0/12 accept
+# Allow LAN access to port 11300
+nft add rule inet filter input tcp dport 11300 ip saddr 192.168.0.0/16 accept
+nft add rule inet filter input tcp dport 11300 ip saddr 10.0.0.0/8 accept
+nft add rule inet filter input tcp dport 11300 ip saddr 172.16.0.0/12 accept
 
-# Drop all other traffic to port 8080
-nft add rule inet filter input tcp dport 8080 drop
+# Drop all other traffic to port 11300
+nft add rule inet filter input tcp dport 11300 drop
 ```
 
 To persist, save rules:
@@ -30,13 +30,13 @@ sudo systemctl enable nftables
 ## iptables
 
 ```bash
-# Allow LAN access to port 8080
-sudo iptables -A INPUT -p tcp --dport 8080 -s 192.168.0.0/16 -j ACCEPT
-sudo iptables -A INPUT -p tcp --dport 8080 -s 10.0.0.0/8 -j ACCEPT
-sudo iptables -A INPUT -p tcp --dport 8080 -s 172.16.0.0/12 -j ACCEPT
+# Allow LAN access to port 11300
+sudo iptables -A INPUT -p tcp --dport 11300 -s 192.168.0.0/16 -j ACCEPT
+sudo iptables -A INPUT -p tcp --dport 11300 -s 10.0.0.0/8 -j ACCEPT
+sudo iptables -A INPUT -p tcp --dport 11300 -s 172.16.0.0/12 -j ACCEPT
 
-# Drop all other traffic to port 8080
-sudo iptables -A INPUT -p tcp --dport 8080 -j DROP
+# Drop all other traffic to port 11300
+sudo iptables -A INPUT -p tcp --dport 11300 -j DROP
 
 # Save rules
 sudo apt install iptables-persistent
@@ -47,9 +47,9 @@ sudo netfilter-persistent save
 
 ```bash
 # Allow from LAN only
-sudo ufw allow from 192.168.0.0/16 to any port 8080
-sudo ufw allow from 10.0.0.0/8 to any port 8080
-sudo ufw allow from 172.16.0.0/12 to any port 8080
+sudo ufw allow from 192.168.0.0/16 to any port 11300
+sudo ufw allow from 10.0.0.0/8 to any port 11300
+sudo ufw allow from 172.16.0.0/12 to any port 11300
 
 # Enable firewall
 sudo ufw enable
@@ -70,8 +70,8 @@ No firewall rules are needed in this case.
 
 ```bash
 # Check listening ports
-ss -tlnp | grep 8080
+ss -tlnp | grep 11300
 
 # Test access from another machine
-curl http://<proxy-ip>:8080/v1/healthz
+curl http://<proxy-ip>:11300/v1/healthz
 ```

@@ -88,6 +88,7 @@ See `architecture/README.md` for the full design overview.
 - `UpstreamExhaustedError` — all upstream attempts exhausted (502)
 - `AccountSuspendedError` — account suspended (503)
 - `RequestTooLargeError` — request body exceeds configured limit
+- `ContextLimitExceededError` — estimated request context exceeds configured model limit
 - Chain exceptions with `raise ... from err` or `raise ... from None`
 
 ## Security

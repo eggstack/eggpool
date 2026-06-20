@@ -79,7 +79,7 @@ uv run coverage report
 - Upstream errors: `UpstreamError` and subclasses (`AuthenticationError`, `QuotaExhaustedError`, `RateLimitError`, `ModelUnavailableError`)
 - Proxy errors: `ProxyError`
 - Protocol errors: `ModelNotFoundError`, `NoEligibleAccountError`, `CatalogUnavailableError`, `AuthenticationUnavailableError`, `UpstreamExhaustedError`, `AccountSuspendedError`
-- Request errors: `RequestTooLargeError`
+- Request errors: `RequestTooLargeError`, `ContextLimitExceededError`
 
 ## Git Workflow
 

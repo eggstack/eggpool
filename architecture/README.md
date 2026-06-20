@@ -13,16 +13,18 @@ src/eggpool/
 ├── dashboard/         # Self-updating server-rendered HTML dashboard
 ├── db/                # SQLite connection, migrations, repositories, schema
 ├── health/            # Circuit breaker and health tracking
-├── integrations/      # External tool configuration generation (OpenCode)
+├── integrations/      # External tool configuration generation (OpenCode, Claude Code)
 ├── models/            # Pydantic config, domain, API, and database models
 ├── providers/         # ProviderClientPool, pproxy transport, connect CLI
 ├── proxy/             # Transparent proxy, SSE observer, usage extraction
 ├── quota/             # Quota estimation, reservations, scoring
-├── request/           # RequestCoordinator, finalizers, body reader
+├── request/           # RequestCoordinator, finalizers, body reader, limit enforcement
 ├── retry/             # Error classification and failover
 ├── routing/           # Quota-aware routing, eligibility, provider parsing
 ├── security/          # Header redaction, security utilities
 ├── stats/             # Statistics queries and service
+├── deploy/            # Bundled systemd/logrotate/cron snippets for CLI output
+├── _share/            # Bundled config examples and assets for pipx installs
 ├── auth.py            # Local API key authentication (constant-time)
 ├── cli.py             # Click CLI commands
 ├── errors.py          # Exception hierarchy
@@ -97,7 +99,7 @@ SQLite via aiosqlite with WAL mode. Single-connection serialization via a lock +
 
 ### Schema Migrations
 
-Ordered SQL migrations in `db/schema/` (0001 through 0019). Checksums tracked in `checksums.json`.
+Ordered SQL migrations in `db/schema/` (0001 through 0020). Checksums tracked in `checksums.json`.
 
 ### Repositories
 

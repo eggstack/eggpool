@@ -99,7 +99,7 @@ Key config for Pi:
 ```toml
 [server]
 host = "0.0.0.0"
-port = 8080
+port = 11300
 
 [database]
 path = "/var/lib/eggpool/usage.sqlite3"
@@ -163,10 +163,10 @@ The systemd unit already includes `ProtectSystem=strict` and `ReadWritePaths=/va
 ## Verifying from OpenCode
 
 1. Find the Pi's IP address: `hostname -I`
-2. Configure OpenCode to use `http://<pi-ip>:8080`
+2. Configure OpenCode to use `http://<pi-ip>:11300`
 3. Set the local API key in OpenCode's configuration
-4. Test: `curl http://<pi-ip>:8080/v1/healthz`
-5. Open dashboard: `http://<pi-ip>:8080/`
+4. Test: `curl http://<pi-ip>:11300/v1/healthz`
+5. Open dashboard: `http://<pi-ip>:11300/`
 
 ## Troubleshooting
 
@@ -234,7 +234,7 @@ sudo journalctl -u eggpool -n 20 --no-pager
 ### 4. Streaming smoke test
 
 ```bash
-GOROUTER_BASE_URL=http://127.0.0.1:8080 \
+GOROUTER_BASE_URL=http://127.0.0.1:11300 \
 GOROUTER_API_KEY=$(sudo grep ^GO_AGGREGATOR_API_KEY /etc/eggpool/env | cut -d= -f2-) \
 GOROUTER_OPENAI_MODEL="<your openai model>" \
 GOROUTER_ANTHROPIC_MODEL="<your anthropic model>" \
