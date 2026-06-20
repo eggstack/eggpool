@@ -1,0 +1,82 @@
+"""Tests for /v1/models serialization."""
+
+from __future__ import annotations
+
+from eggpool.api.models import serialize_openai_model
+
+
+def test_basic_model_serialization() -> None:
+    model = {
+        "model_id": "gpt-4",
+        "display_name": "GPT-4",
+        "first_seen_at": 1700000000.0,
+    }
+    result = serialize_openai_model(model)
+    assert result["id"] == "gpt-4"
+    assert result["object"] == "model"
+    assert result["name"] == "GPT-4"
+    assert "eggpool" not in result
+
+
+def test_provider_suffixed_model_with_limits() -> None:
+    model = {
+        "model_id": "MiniMax-M3/opencode-go",
+        "base_model_id": "MiniMax-M3",
+        "provider_id": "opencode-go",
+        "display_name": "MiniMax M3",
+        "first_seen_at": 1700000000.0,
+        "effective_limits": {
+            "context_tokens": 220000,
+            "input_tokens": None,
+            "output_tokens": 16384,
+            "enforce": True,
+            "context_source": "provider_override",
+            "input_source": "unknown",
+            "output_source": "provider_override",
+        },
+    }
+    result = serialize_openai_model(model)
+    assert result["id"] == "MiniMax-M3/opencode-go"
+    assert result["owned_by"] == "opencode-go"
+    assert result["eggpool"]["base_model_id"] == "MiniMax-M3"
+    assert result["eggpool"]["provider_id"] == "opencode-go"
+    assert result["eggpool"]["limits"]["context"] == 220000
+    assert result["eggpool"]["limits"]["output"] == 16384
+    assert "input" not in result["eggpool"]["limits"]
+
+
+def test_no_limits_when_all_unknown() -> None:
+    model = {
+        "model_id": "m1",
+        "effective_limits": {
+            "context_tokens": None,
+            "input_tokens": None,
+            "output_tokens": None,
+            "enforce": True,
+            "context_source": "unknown",
+            "input_source": "unknown",
+            "output_source": "unknown",
+        },
+    }
+    result = serialize_openai_model(model)
+    assert "eggpool" not in result
+
+
+def test_unsuffixed_model_with_limits() -> None:
+    model = {
+        "model_id": "gpt-4",
+        "display_name": "GPT-4",
+        "first_seen_at": 0,
+        "effective_limits": {
+            "context_tokens": 128000,
+            "input_tokens": None,
+            "output_tokens": 4096,
+            "enforce": True,
+            "context_source": "conservative_provider_minimum",
+            "input_source": "unknown",
+            "output_source": "conservative_provider_minimum",
+        },
+    }
+    result = serialize_openai_model(model)
+    assert result["eggpool"]["limits"]["context"] == 128000
+    assert result["eggpool"]["limits"]["output"] == 4096

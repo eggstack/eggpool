@@ -223,6 +223,37 @@ api_key = "sk-your-opencode-go-key"
 
 Use `eggpool connect` for interactive provider setup instead of manual configuration.
 
+### Model Limits
+
+EggPool supports configurable effective context limits for individual models on individual providers. This lets operators advertise a smaller context window than the provider physically supports, causing OpenCode to compact before reaching expensive long-context regimes.
+
+**Global overrides** apply to all providers:
+
+```toml
+[model_overrides."model-id"]
+max_context_tokens = 200000
+max_output_tokens = 16384
+```
+
+**Provider-specific overrides** take precedence per field:
+
+```toml
+[providers.opencode-go.model_overrides."MiniMax-M3"]
+max_context_tokens = 220000
+max_output_tokens = 16384
+enforce_context_limit = true
+```
+
+When the same model is served by multiple providers, unsuffixed model exposure uses the conservative minimum across all providers.
+
+To generate an OpenCode configuration with explicit model limits:
+
+```bash
+eggpool configsetup opencode --json-only > opencode-config.json
+```
+
+Model limit changes require a service restart.
+
 ## Development
 
 ```bash

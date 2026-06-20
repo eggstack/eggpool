@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from eggpool.catalog.cache import ModelCatalogCache
 from eggpool.catalog.fetcher import fetch_models_for_account
+from eggpool.catalog.limits import ModelLimitResolver, extract_upstream_limits
 from eggpool.catalog.normalizer import normalize_models
 from eggpool.catalog.pricing import (
     parse_microdollars_per_million,
@@ -92,6 +93,7 @@ class CatalogService:
         self._cache_loaded = False
         self._refresh_lock = asyncio.Lock()
         self._protocol_resolver = ModelProtocolResolver(config)
+        self._limit_resolver = ModelLimitResolver(config)
         self._price_change_callback: Callable[[str, str | None], None] | None = None
 
     def set_price_change_callback(
@@ -267,6 +269,35 @@ class CatalogService:
                         )
                         model["protocol"] = None
                         model["protocol_source"] = "provider_mismatch"
+
+            # Resolve effective limits for each model
+            for model in models:
+                capabilities = model.get("capabilities", {})
+                source_metadata = model.get("source_metadata", {})
+                effective = self._limit_resolver.resolve(
+                    provider_id=provider_id,
+                    model_id=model["model_id"],
+                    capabilities=capabilities,
+                    source_metadata=source_metadata,
+                )
+                # Discover upstream limits separately for diagnostics
+                disc_ctx, disc_inp, disc_out = extract_upstream_limits(
+                    capabilities, source_metadata
+                )
+                model["discovered_limits"] = {
+                    "context_tokens": disc_ctx,
+                    "input_tokens": disc_inp,
+                    "output_tokens": disc_out,
+                }
+                model["effective_limits"] = {
+                    "context_tokens": effective.context_tokens,
+                    "input_tokens": effective.input_tokens,
+                    "output_tokens": effective.output_tokens,
+                    "enforce": effective.enforce,
+                    "context_source": effective.context_source,
+                    "input_source": effective.input_source,
+                    "output_source": effective.output_source,
+                }
 
             self._cache.update_from_account(account_name, provider_id, models)
             logger.debug(

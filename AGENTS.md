@@ -56,6 +56,20 @@ EggPool supports multiple upstream providers. Key components:
 
 See `architecture/README.md` for details.
 
+## Model Context Limits
+
+EggPool supports configurable effective context limits per model per provider:
+
+- **`ModelLimitOverrideConfig`** — reusable limit fields (context, input, output tokens, enforcement)
+- **`ModelOverrideConfig`** — global overrides (inherits limit fields + protocol, pricing)
+- **`ProviderConfig.model_overrides`** — per-provider limit overrides
+- **`catalog/limits.py`** — `ModelLimitResolver`, `EffectiveModelLimits`, `conservative_limits()`
+- **Precedence**: provider override > global override > upstream metadata > unknown
+- **Unsuffixed models** use conservative minimum across all providers
+- **`eggpool configsetup opencode --json-only`** generates OpenCode config with model limits
+
+See `docs/model-limits.md` for operator documentation.
+
 ## Error Handling
 
 Use the exception hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or `raise ... from None`.
@@ -78,6 +92,7 @@ Use the exception hierarchy in `errors.py`. Chain exceptions with `raise ... fro
 - `UpstreamExhaustedError` — all upstream attempts exhausted (502)
 - `AccountSuspendedError` — account suspended (503)
 - `RequestTooLargeError` — request body exceeds configured limit
+- `ContextLimitExceededError` — estimated request context exceeds configured model limit
 
 ## CLI Commands
 

@@ -1,0 +1,162 @@
+"""Tests for OpenCode configuration generation."""
+
+from __future__ import annotations
+
+import json
+
+from eggpool.integrations.opencode import (
+    build_opencode_config_json,
+    build_opencode_provider_config,
+)
+
+
+def test_basic_provider_structure() -> None:
+    result = build_opencode_provider_config(
+        base_url="http://192.168.1.1:8080/v1",
+        api_key="ep_test123",
+        models=[],
+    )
+    assert result["$schema"] == "https://opencode.ai/config.json"
+    provider = result["provider"]["eggpool"]
+    assert provider["npm"] == "@ai-sdk/openai-compatible"
+    assert provider["name"] == "EggPool"
+    assert provider["options"]["baseURL"] == "http://192.168.1.1:8080/v1"
+    assert provider["options"]["apiKey"] == "ep_test123"
+    assert provider["models"] == {}
+
+
+def test_model_with_limits() -> None:
+    models = [
+        {
+            "model_id": "MiniMax-M3/opencode-go",
+            "display_name": "MiniMax M3",
+            "effective_limits": {
+                "context_tokens": 220000,
+                "input_tokens": None,
+                "output_tokens": 16384,
+                "enforce": True,
+            },
+        }
+    ]
+    result = build_opencode_provider_config(
+        base_url="http://host:8080/v1",
+        api_key="ep_key",
+        models=models,
+    )
+    m = result["provider"]["eggpool"]["models"]["MiniMax-M3/opencode-go"]
+    assert m["name"] == "MiniMax M3"
+    assert m["limit"]["context"] == 220000
+    assert m["limit"]["output"] == 16384
+    assert "input" not in m["limit"]
+
+
+def test_model_without_limits() -> None:
+    models = [
+        {
+            "model_id": "gpt-4",
+            "display_name": "GPT-4",
+            "effective_limits": {},
+        }
+    ]
+    result = build_opencode_provider_config(
+        base_url="http://host:8080/v1",
+        api_key="ep_key",
+        models=models,
+    )
+    m = result["provider"]["eggpool"]["models"]["gpt-4"]
+    assert m["name"] == "GPT-4"
+    assert "limit" not in m
+
+
+def test_models_sorted() -> None:
+    models = [
+        {"model_id": "zebra", "effective_limits": {}},
+        {"model_id": "alpha", "effective_limits": {}},
+        {"model_id": "middle", "effective_limits": {}},
+    ]
+    result = build_opencode_provider_config(
+        base_url="http://host:8080/v1",
+        api_key="ep_key",
+        models=models,
+    )
+    keys = list(result["provider"]["eggpool"]["models"].keys())
+    assert keys == ["alpha", "middle", "zebra"]
+
+
+def test_json_serialization() -> None:
+    models = [
+        {
+            "model_id": "m1",
+            "effective_limits": {"context_tokens": 100000},
+        }
+    ]
+    json_str = build_opencode_config_json(
+        base_url="http://host:8080/v1",
+        api_key="ep_key",
+        models=models,
+    )
+    parsed = json.loads(json_str)
+    assert parsed["provider"]["eggpool"]["models"]["m1"]["limit"]["context"] == 100000
+
+
+def test_zero_limits_not_emitted() -> None:
+    models = [
+        {
+            "model_id": "m1",
+            "effective_limits": {
+                "context_tokens": 0,
+                "output_tokens": 0,
+            },
+        }
+    ]
+    result = build_opencode_provider_config(
+        base_url="http://host:8080/v1",
+        api_key="ep_key",
+        models=models,
+    )
+    m = result["provider"]["eggpool"]["models"]["m1"]
+    assert "limit" not in m
+
+
+def test_empty_models_produces_valid_structure() -> None:
+    result = build_opencode_provider_config(
+        base_url="http://host:8080/v1",
+        api_key="ep_key",
+        models=[],
+    )
+    assert result["provider"]["eggpool"]["models"] == {}
+
+
+def test_provider_suffixed_id_preserved() -> None:
+    models = [
+        {
+            "model_id": "MiniMax-M3/opencode-go",
+            "effective_limits": {"context_tokens": 220000},
+        }
+    ]
+    result = build_opencode_provider_config(
+        base_url="http://host:8080/v1",
+        api_key="ep_key",
+        models=models,
+    )
+    assert "MiniMax-M3/opencode-go" in result["provider"]["eggpool"]["models"]
+
+
+def test_all_limit_fields() -> None:
+    models = [
+        {
+            "model_id": "m1",
+            "effective_limits": {
+                "context_tokens": 200000,
+                "input_tokens": 180000,
+                "output_tokens": 16384,
+            },
+        }
+    ]
+    result = build_opencode_provider_config(
+        base_url="http://host:8080/v1",
+        api_key="ep_key",
+        models=models,
+    )
+    limit = result["provider"]["eggpool"]["models"]["m1"]["limit"]
+    assert limit == {"context": 200000, "input": 180000, "output": 16384}

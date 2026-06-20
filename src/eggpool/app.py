@@ -22,6 +22,7 @@ from starlette.responses import Response as StarletteResponse
 from eggpool.accounts.registry import AccountRegistry, account_config_rows
 from eggpool.api.chat_completions import handle_chat_completions
 from eggpool.api.messages import handle_messages
+from eggpool.api.models import serialize_openai_model
 from eggpool.api.stats import register_stats_routes
 from eggpool.auth import require_auth, require_auth_at_startup
 from eggpool.background import TaskSupervisor
@@ -806,16 +807,7 @@ def create_app(
 
         return {
             "object": "list",
-            "data": [
-                {
-                    "id": m["model_id"],
-                    "object": "model",
-                    "created": int(m.get("first_seen_at", 0)),
-                    "owned_by": "opencode",
-                    "name": m.get("display_name") or m["model_id"],
-                }
-                for m in models
-            ],
+            "data": [serialize_openai_model(m) for m in models],
         }
 
     @app.post(f"{API_V1_PREFIX}/chat/completions")

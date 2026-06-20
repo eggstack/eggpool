@@ -89,3 +89,29 @@ class AccountSuspendedError(AggregatorError):
 
 class RequestTooLargeError(AggregatorError):
     """Raised when a request body exceeds the configured limit."""
+
+
+class ContextLimitExceededError(AggregatorError):
+    """Raised when estimated request context exceeds the configured limit."""
+
+    def __init__(
+        self,
+        *,
+        model_id: str,
+        estimated_input_tokens: int,
+        requested_output_tokens: int | None,
+        max_context_tokens: int | None,
+        max_input_tokens: int | None,
+    ) -> None:
+        self.model_id = model_id
+        self.estimated_input_tokens = estimated_input_tokens
+        self.requested_output_tokens = requested_output_tokens
+        self.max_context_tokens = max_context_tokens
+        self.max_input_tokens = max_input_tokens
+        parts = [f"model {model_id!r}"]
+        if max_context_tokens is not None:
+            parts.append(f"limit {max_context_tokens}")
+        parts.append(f"estimated input {estimated_input_tokens}")
+        if requested_output_tokens is not None:
+            parts.append(f"requested output {requested_output_tokens}")
+        super().__init__("Context limit exceeded: " + ", ".join(parts))

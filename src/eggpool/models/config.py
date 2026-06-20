@@ -203,6 +203,7 @@ class ProviderConfig(BaseModel):
     max_keepalive: int = Field(default=20, gt=0)
     keepalive_timeout_s: float = Field(default=30, ge=0)
     accounts: list[AccountConfig] = []
+    model_overrides: dict[str, ModelLimitOverrideConfig] = {}
 
     @model_validator(mode="after")
     def validate_keepalive(self) -> ProviderConfig:
@@ -223,7 +224,18 @@ class ProviderConfig(BaseModel):
         return value
 
 
-class ModelOverrideConfig(BaseModel):
+class ModelLimitOverrideConfig(BaseModel):
+    """Reusable model limit override fields for context/input/output ceilings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_context_tokens: int | None = Field(default=None, gt=0)
+    max_input_tokens: int | None = Field(default=None, gt=0)
+    max_output_tokens: int | None = Field(default=None, gt=0)
+    enforce_context_limit: bool = True
+
+
+class ModelOverrideConfig(ModelLimitOverrideConfig):
     model_config = ConfigDict(extra="forbid")
 
     protocol: Literal["openai", "anthropic"] | None = None
@@ -245,6 +257,22 @@ class ModelOverrideConfig(BaseModel):
     @classmethod
     def parse_cache_price(cls, value: object) -> int | None:
         return parse_microdollars_per_million(value)
+
+    @model_validator(mode="after")
+    def _validate_limit_cross_fields(self) -> ModelOverrideConfig:
+        ctx = self.max_context_tokens
+        if ctx is not None:
+            if self.max_input_tokens is not None and self.max_input_tokens > ctx:
+                raise ConfigError(
+                    f"max_input_tokens ({self.max_input_tokens}) exceeds "
+                    f"max_context_tokens ({ctx})"
+                )
+            if self.max_output_tokens is not None and self.max_output_tokens > ctx:
+                raise ConfigError(
+                    f"max_output_tokens ({self.max_output_tokens}) exceeds "
+                    f"max_context_tokens ({ctx})"
+                )
+        return self
 
 
 class AppConfig(BaseModel):
@@ -297,6 +325,33 @@ class AppConfig(BaseModel):
                 raise ConfigError(
                     f"Account {acct.name!r} references unknown proxy {acct.proxy!r}"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_provider_model_overrides(self) -> AppConfig:
+        """Validate cross-field constraints in provider-scoped model overrides."""
+        for prov_id, provider in self.providers.items():
+            for model_id, override in provider.model_overrides.items():
+                ctx = override.max_context_tokens
+                if ctx is not None:
+                    if (
+                        override.max_input_tokens is not None
+                        and override.max_input_tokens > ctx
+                    ):
+                        raise ConfigError(
+                            f"providers.{prov_id}.model_overrides.{model_id}: "
+                            f"max_input_tokens ({override.max_input_tokens}) "
+                            f"exceeds max_context_tokens ({ctx})"
+                        )
+                    if (
+                        override.max_output_tokens is not None
+                        and override.max_output_tokens > ctx
+                    ):
+                        raise ConfigError(
+                            f"providers.{prov_id}.model_overrides.{model_id}: "
+                            f"max_output_tokens ({override.max_output_tokens}) "
+                            f"exceeds max_context_tokens ({ctx})"
+                        )
         return self
 
     def all_accounts(self) -> list[AccountConfig]:

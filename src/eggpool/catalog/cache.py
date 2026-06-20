@@ -74,6 +74,8 @@ class ModelCatalogCache:
                 "source_metadata": model.get("source_metadata", {}),
                 "first_seen_at": now,
                 "last_seen_at": now,
+                "discovered_limits": model.get("discovered_limits", {}),
+                "effective_limits": model.get("effective_limits", {}),
             }
             self._provider_models[provider_key] = provider_info
 
@@ -89,6 +91,8 @@ class ModelCatalogCache:
                     "source_metadata": model.get("source_metadata", {}),
                     "first_seen_at": now,
                     "last_seen_at": now,
+                    "discovered_limits": model.get("discovered_limits", {}),
+                    "effective_limits": model.get("effective_limits", {}),
                 }
             else:
                 self._models[model_id]["last_seen_at"] = now
@@ -162,6 +166,42 @@ class ModelCatalogCache:
             model_info_copy = dict(best_info)
             model_info_copy["model_id"] = model_id
             model_info_copy["available_accounts"] = sorted(visible_accounts)
+
+            # Conservative merge of effective limits across all visible providers
+            from eggpool.catalog.limits import EffectiveModelLimits, conservative_limits
+
+            all_limits: list[EffectiveModelLimits] = []
+            for acct_name in visible_accounts:
+                pid = self._account_providers.get(acct_name)
+                if pid is None:
+                    continue
+                pinfo = self._provider_models.get((model_id, pid))
+                if pinfo is not None:
+                    el = pinfo.get("effective_limits", {})
+                    if el:
+                        all_limits.append(
+                            EffectiveModelLimits(
+                                context_tokens=el.get("context_tokens"),
+                                input_tokens=el.get("input_tokens"),
+                                output_tokens=el.get("output_tokens"),
+                                enforce=el.get("enforce", True),
+                                context_source=el.get("context_source"),
+                                input_source=el.get("input_source"),
+                                output_source=el.get("output_source"),
+                            )
+                        )
+            if all_limits:
+                merged = conservative_limits(all_limits)
+                model_info_copy["effective_limits"] = {
+                    "context_tokens": merged.context_tokens,
+                    "input_tokens": merged.input_tokens,
+                    "output_tokens": merged.output_tokens,
+                    "enforce": merged.enforce,
+                    "context_source": merged.context_source,
+                    "input_source": merged.input_source,
+                    "output_source": merged.output_source,
+                }
+
             result.append(model_info_copy)
 
         return sorted(result, key=lambda m: m["model_id"])

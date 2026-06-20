@@ -54,6 +54,15 @@ See `architecture/README.md` for the full design overview.
 - Legacy flat `[[accounts]]` auto-normalizes to default `opencode-go` provider
 - `parse_model_id()` in `catalog/cache.py` handles suffix parsing
 
+## Model Context Limits
+
+- `ModelLimitOverrideConfig` provides reusable limit fields (context, input, output, enforcement)
+- Global overrides via `[model_overrides.<model-id>]`, provider overrides via `[providers.<id>.model_overrides.<model-id>]`
+- `ModelLimitResolver` resolves per-field with precedence: provider > global > upstream > unknown
+- `conservative_limits()` merges provider limits for unsuffixed model exposure (minimum across providers)
+- `eggpool configsetup opencode --json-only` generates OpenCode config with explicit model limits
+- Effective limits are configuration-derived; no database migration needed for static overrides
+
 ## Health and Failure Classification
 
 - Health systems use a normalized `FailureCategory` vocabulary shared by `HealthManager` and `AccountRuntimeState`

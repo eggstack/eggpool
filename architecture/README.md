@@ -9,10 +9,11 @@ src/eggpool/
 ├── accounts/          # Account registry and runtime state
 ├── api/               # API endpoint handlers (chat completions, messages, stats)
 ├── background/        # TaskSupervisor, retention cleanup, periodic tasks
-├── catalog/           # Model catalog, pricing, protocols, fetcher, normalizer
+├── catalog/           # Model catalog, pricing, protocols, fetcher, normalizer, limits
 ├── dashboard/         # Self-updating server-rendered HTML dashboard
 ├── db/                # SQLite connection, migrations, repositories, schema
 ├── health/            # Circuit breaker and health tracking
+├── integrations/      # External tool configuration generation (OpenCode)
 ├── models/            # Pydantic config, domain, API, and database models
 ├── providers/         # ProviderClientPool, pproxy transport, connect CLI
 ├── proxy/             # Transparent proxy, SSE observer, usage extraction
@@ -145,8 +146,37 @@ AggregatorError (base)
 ├── AuthenticationUnavailableError
 ├── UpstreamExhaustedError
 ├── AccountSuspendedError
-└── RequestTooLargeError
+├── RequestTooLargeError
+└── ContextLimitExceededError
 ```
+
+## Model Context Limits
+
+EggPool supports configurable effective context limits per model per provider, allowing operators to advertise smaller context windows than the provider physically supports.
+
+### Configuration
+
+- **`ModelLimitOverrideConfig`** — reusable Pydantic model with `max_context_tokens`, `max_input_tokens`, `max_output_tokens`, `enforce_context_limit`
+- **Global overrides** — `[model_overrides.<model-id>]` applies to all providers
+- **Provider overrides** — `[providers.<id>.model_overrides.<model-id>]` per provider
+
+### Resolution
+
+`ModelLimitResolver` in `catalog/limits.py` resolves effective limits per field with precedence:
+1. Provider-specific override
+2. Global override
+3. Upstream-reported metadata
+4. Unknown (None)
+
+### Exposure
+
+- **Unsuffixed models** — `conservative_limits()` takes the minimum across all visible providers
+- **Provider-suffixed models** — each provider's exact limits are preserved
+- **`/v1/models`** — includes namespaced `eggpool.limits` extension for observability
+
+### OpenCode Integration
+
+`eggpool configsetup opencode --json-only` generates OpenCode provider config with explicit `limit.context`, `limit.input`, and `limit.output` per model. This drives OpenCode's native compaction machinery.
 
 ## Security
 

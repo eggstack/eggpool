@@ -7,7 +7,7 @@ import contextlib
 import os
 import sys
 from pathlib import Path
-from typing import NoReturn
+from typing import Any, NoReturn
 
 import click
 
@@ -421,9 +421,21 @@ def _copy_to_clipboard(text: str) -> bool:
 
 
 @configsetup.command("opencode")
+@click.option(
+    "--json-only",
+    is_flag=True,
+    default=False,
+    help="Print only JSON to stdout (no status messages).",
+)
 @click.pass_context
-def configsetup_opencode(ctx: click.Context) -> None:
-    """Print OpenCode config snippet for connecting to this router."""
+def configsetup_opencode(ctx: click.Context, json_only: bool) -> None:
+    """Print OpenCode config for connecting to this router."""
+    import json as _json
+
+    from eggpool.catalog.limits import ModelLimitResolver
+    from eggpool.integrations.opencode import build_opencode_config_json
+    from eggpool.models.config import AppConfig
+
     config_path: str = ctx.obj["config_path"]
 
     # Auto-generate API key if not present
@@ -435,25 +447,97 @@ def configsetup_opencode(ctx: click.Context) -> None:
 
     port = _read_server_port(config_path)
     lan_ip = _detect_lan_ip()
+    base_url = f"http://{lan_ip}:{port}/v1"
 
-    snippet = (
-        "{\n"
-        '  "providers": {\n'
-        '    "eggpool": {\n'
-        f'      "api_key": "{key}",\n'
-        f'      "base_url": "http://{lan_ip}:{port}/v1"\n'
-        "    }\n"
-        "  }\n"
-        "}"
+    # Try to load catalog from the database
+    models_data: list[dict[str, Any]] = []
+    try:
+        import asyncio
+
+        from eggpool.db.connection import Database
+
+        config = AppConfig.from_toml(config_path)
+        db_path = config.database.path
+
+        async def _load_catalog() -> list[dict[str, Any]]:
+            db = Database(db_path)
+            await db.connect()
+            try:
+                rows = await db.fetch_all(
+                    "SELECT model_id, display_name, capabilities, source_metadata "
+                    "FROM models"
+                )
+                result: list[dict[str, Any]] = []
+                for row in rows:
+                    caps_raw = row["capabilities"]
+                    meta_raw = row["source_metadata"]
+                    caps: dict[str, Any] = _json.loads(caps_raw) if caps_raw else {}
+                    meta: dict[str, Any] = _json.loads(meta_raw) if meta_raw else {}
+                    result.append(
+                        {
+                            "model_id": row["model_id"],
+                            "display_name": row["display_name"],
+                            "capabilities": caps,
+                            "source_metadata": meta,
+                            "effective_limits": {},
+                        }
+                    )
+                return result
+            finally:
+                await db.disconnect()
+
+        models_data = asyncio.run(_load_catalog())
+
+        # Re-apply current config overrides
+        if models_data:
+            resolver = ModelLimitResolver(config)
+            for m in models_data:
+                eff = resolver.resolve(
+                    provider_id="opencode-go",
+                    model_id=m["model_id"],
+                    capabilities=m.get("capabilities", {}),
+                    source_metadata=m.get("source_metadata", {}),
+                )
+                m["effective_limits"] = {
+                    "context_tokens": eff.context_tokens,
+                    "input_tokens": eff.input_tokens,
+                    "output_tokens": eff.output_tokens,
+                    "enforce": eff.enforce,
+                    "context_source": eff.context_source,
+                    "input_source": eff.input_source,
+                    "output_source": eff.output_source,
+                }
+    except Exception:
+        if not json_only:
+            click.echo(
+                "Warning: Could not load catalog. Run 'eggpool models refresh' "
+                "or start the server to populate the catalog before generating "
+                "model-specific limits.",
+                err=True,
+            )
+
+    config_json = build_opencode_config_json(
+        base_url=base_url,
+        api_key=key,
+        models=models_data,
     )
 
-    click.echo("Add to ~/.config/opencode/opencode.json:")
-    click.echo("")
-    click.echo(snippet)
-    click.echo("")
+    click.echo(config_json)
 
-    if _copy_to_clipboard(snippet):
-        click.echo("Copied to clipboard.")
+    if not json_only:
+        click.echo("", err=True)
+        if models_data:
+            click.echo(f"Generated config with {len(models_data)} models.", err=True)
+        else:
+            click.echo(
+                "Generated provider connection block (no model limits). "
+                "Run 'eggpool models refresh' to populate model metadata.",
+                err=True,
+            )
+        click.echo("Add to ~/.config/opencode/opencode.json:", err=True)
+
+        if _copy_to_clipboard(config_json):
+            click.echo("Copied to clipboard.", err=True)
 
 
 @configsetup.command("claude-code")
