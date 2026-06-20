@@ -42,7 +42,7 @@ def requested_output_tokens(
     payload: Mapping[str, Any],
     protocol: ProtocolName,
 ) -> int | None:
-    """Return a valid requested output-token limit, if present.
+    """Return the first valid requested output-token limit, if present.
 
     Token limits must be positive integers. In particular, booleans are not
     accepted even though ``bool`` is an ``int`` subclass in Python.
@@ -53,14 +53,9 @@ def requested_output_tokens(
         else ("max_completion_tokens", "max_tokens")
     )
     for key in keys:
-        if key not in payload:
-            continue
-        value = payload[key]
-        return (
-            value
-            if isinstance(value, int) and not isinstance(value, bool) and value > 0
-            else None
-        )
+        value = _positive_limit(payload.get(key))
+        if value is not None:
+            return value
     return None
 
 

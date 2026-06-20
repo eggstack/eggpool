@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 
+from eggpool.constants import DEFAULT_PROVIDER_ID
 from eggpool.errors import UpstreamError
 from eggpool.providers.pproxy_transport import AsyncPProxyTransport
 
@@ -49,6 +50,13 @@ class ProviderClientPool:
         if client is None:
             raise UpstreamError(f"No client for provider {provider_id!r}")
         return client
+
+    def get_default_client(self) -> httpx.AsyncClient | None:
+        """Return the legacy default provider client, if registered."""
+        try:
+            return self.get_client(DEFAULT_PROVIDER_ID)
+        except UpstreamError:
+            return None
 
     @property
     def providers(self) -> list[str]:

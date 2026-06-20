@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
+from eggpool.constants import DEFAULT_PROVIDER_ID
+
 if TYPE_CHECKING:
     from datetime import datetime
 
@@ -16,7 +18,7 @@ class AccountRow(BaseModel):
     api_key_env: str
     enabled: bool
     weight: float
-    provider_id: str = "opencode-go"
+    provider_id: str = DEFAULT_PROVIDER_ID
     created_at: datetime
 
 
@@ -26,7 +28,7 @@ class ModelRow(BaseModel):
     protocol: str
     capabilities: str
     source_metadata: str
-    provider_id: str = "opencode-go"
+    provider_id: str = DEFAULT_PROVIDER_ID
     first_seen_at: datetime
     last_seen_at: datetime
 
@@ -42,7 +44,7 @@ class RequestRow(BaseModel):
     id: int
     account_id: int
     model_id: str
-    provider_id: str = "opencode-go"
+    provider_id: str = DEFAULT_PROVIDER_ID
     started_at: datetime
     completed_at: datetime | None = None
     status: str

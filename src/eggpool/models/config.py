@@ -17,6 +17,7 @@ from eggpool.constants import (
     DEFAULT_DATABASE_PATH,
     DEFAULT_HOST,
     DEFAULT_PORT,
+    DEFAULT_PROVIDER_ID,
 )
 from eggpool.errors import ConfigError
 
@@ -296,8 +297,8 @@ class AppConfig(BaseModel):
         """Convert flat accounts to default provider if no providers defined."""
         if not self.providers and self.accounts:
             self.providers = {
-                "opencode-go": ProviderConfig(
-                    id="opencode-go",
+                DEFAULT_PROVIDER_ID: ProviderConfig(
+                    id=DEFAULT_PROVIDER_ID,
                     base_url=self.upstream.base_url,
                     protocols=["openai", "anthropic"],
                     openai_path="/chat/completions",

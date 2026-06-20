@@ -29,6 +29,17 @@ class TestProviderClientPool:
         with pytest.raises(UpstreamError, match="No client for provider"):
             pool.get_client("nonexistent")
 
+    def test_get_default_client_returns_legacy_provider(self) -> None:
+        pool = ProviderClientPool()
+        client = httpx.AsyncClient(base_url="https://opencode.example.com")
+        pool.register("opencode-go", client)
+        assert pool.get_default_client() is client
+
+    def test_get_default_client_missing_returns_none(self) -> None:
+        pool = ProviderClientPool()
+        pool.register("other", httpx.AsyncClient(base_url="https://other.example.com"))
+        assert pool.get_default_client() is None
+
     def test_providers_property(self) -> None:
         pool = ProviderClientPool()
         pool.register("a", httpx.AsyncClient(base_url="https://a.example.com"))

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, cast
 import httpx
 
 from eggpool.catalog.pricing import coerce_token_count
+from eggpool.constants import DEFAULT_PROVIDER_ID
 from eggpool.db.repositories import (
     AccountRepository,
     AttemptRepository,
@@ -128,7 +129,7 @@ class SelectedAttempt:
     estimated_tokens: int
     estimated_microdollars: int
     attempt_number: int
-    provider_id: str = "opencode-go"
+    provider_id: str = DEFAULT_PROVIDER_ID
 
 
 @dataclass
@@ -186,12 +187,7 @@ class RequestCoordinator:
         self._config = config
         if isinstance(client_pool, ProviderClientPool):
             self._client_pool: ProviderClientPool | None = client_pool
-            if "opencode-go" in client_pool.providers:
-                self._client: httpx.AsyncClient | None = client_pool.get_client(
-                    "opencode-go"
-                )
-            else:
-                self._client = None
+            self._client = client_pool.get_default_client()
         else:
             self._client_pool = None
             self._client = client_pool
@@ -553,7 +549,7 @@ class RequestCoordinator:
                         self._catalog.cache.get_provider_for_account(account_name)
                         or self._registry.get_provider_for_account(account_name)
                         or context.provider_id
-                        or "opencode-go"
+                        or DEFAULT_PROVIDER_ID
                     )
 
                     # 7. Use the exact estimate for the selected account.

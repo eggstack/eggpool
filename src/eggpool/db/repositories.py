@@ -9,6 +9,7 @@ from eggpool.catalog.pricing import (
     parse_microdollars_per_million,
     parse_price_per_1k,
 )
+from eggpool.constants import DEFAULT_PROVIDER_ID
 
 if TYPE_CHECKING:
     from eggpool.db.connection import Database
@@ -40,7 +41,7 @@ class AccountRepository:
 
         for acct in config_accounts:
             name = str(acct["name"])
-            provider_id = str(acct.get("provider_id") or "opencode-go")
+            provider_id = str(acct.get("provider_id") or DEFAULT_PROVIDER_ID)
             configured_names.add(name)
             row = await self._db.fetch_one(
                 "SELECT id FROM accounts WHERE name = ?",
@@ -123,7 +124,7 @@ class RequestRepository:
         account_id: int,
         reserved_microdollars: int = 0,
         started_at: float | None = None,
-        provider_id: str = "opencode-go",
+        provider_id: str = DEFAULT_PROVIDER_ID,
         client_ip: str = "",
     ) -> str:
         """Insert a new pending request, return the id as string.
@@ -679,7 +680,7 @@ class PriceSnapshotRepository:
         cache_read_per_million_microdollars: int | None = None,
         cache_write_per_million_microdollars: int | None = None,
         source: str = "upstream",
-        provider_id: str = "opencode-go",
+        provider_id: str = DEFAULT_PROVIDER_ID,
     ) -> None:
         """Record a new price snapshot.
 
@@ -721,7 +722,7 @@ class PriceSnapshotRepository:
         model_id: str,
         prices_dict: dict[str, float | int | str | None],
         *,
-        provider_id: str = "opencode-go",
+        provider_id: str = DEFAULT_PROVIDER_ID,
     ) -> None:
         """Record prices from a dictionary with input/output keys."""
         input_micro = prices_dict.get("input_per_million_microdollars")

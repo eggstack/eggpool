@@ -17,6 +17,7 @@ from eggpool.catalog.pricing import (
     parse_price_per_1k,
 )
 from eggpool.catalog.protocols import ModelProtocolResolver
+from eggpool.constants import DEFAULT_PROVIDER_ID
 from eggpool.db.repositories import PingRepository, PriceSnapshotRepository
 from eggpool.providers.client_pool import ProviderClientPool
 
@@ -80,12 +81,7 @@ class CatalogService:
         self._ping_repo = ping_repo
         if isinstance(client_pool, ProviderClientPool):
             self._client_pool: ProviderClientPool | None = client_pool
-            if "opencode-go" in client_pool.providers:
-                self._httpx_client: httpx.AsyncClient | None = client_pool.get_client(
-                    "opencode-go"
-                )
-            else:
-                self._httpx_client = None
+            self._httpx_client = client_pool.get_default_client()
         else:
             self._client_pool = None
             self._httpx_client = client_pool
@@ -352,7 +348,9 @@ class CatalogService:
             for row in am_rows:
                 model_id = row["model_id"]
                 account_name = id_to_name.get(row["account_id"])
-                provider_id = id_to_provider.get(row["account_id"]) or "opencode-go"
+                provider_id = (
+                    id_to_provider.get(row["account_id"]) or DEFAULT_PROVIDER_ID
+                )
                 if account_name:
                     self._cache.set_account_provider(account_name, provider_id)
                     if self._cache.has_model(model_id):
@@ -504,7 +502,7 @@ class CatalogService:
         self,
         model_id: str,
         model_info: dict[str, Any],
-        provider_id: str = "opencode-go",
+        provider_id: str = DEFAULT_PROVIDER_ID,
         latest: dict[str, Any] | None = None,
     ) -> None:
         """Insert a price snapshot if pricing data is available.
@@ -650,7 +648,7 @@ class CatalogService:
             old_cache_read = latest.get("cache_read_per_million_microdollars")
             old_cache_write = latest.get("cache_write_per_million_microdollars")
             old_source = latest.get("source")
-            old_provider = latest.get("provider_id", "opencode-go")
+            old_provider = latest.get("provider_id", DEFAULT_PROVIDER_ID)
             if (
                 old_input == input_price
                 and old_output == output_price

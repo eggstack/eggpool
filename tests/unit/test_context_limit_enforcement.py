@@ -46,6 +46,16 @@ def test_requested_output_tokens_prefers_modern_openai_field() -> None:
     )
 
 
+def test_requested_output_tokens_falls_back_to_legacy_field() -> None:
+    assert (
+        requested_output_tokens(
+            {"max_completion_tokens": 0, "max_tokens": 1_000},
+            "openai",
+        )
+        == 1_000
+    )
+
+
 def test_request_below_context_limit_is_forwarded() -> None:
     cache = MockCatalogCache(
         {

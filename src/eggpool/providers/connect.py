@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from eggpool.constants import DEFAULT_PROVIDER_ID
+
 
 def signal_reload() -> bool:
     """Send SIGHUP to the running server process to reload config.
@@ -71,18 +73,18 @@ class ConfiguredAccount:
 
 
 _OPENCODE_GO_FALLBACK: dict[str, dict[str, Any]] = {
-    "opencode-go": {
+    DEFAULT_PROVIDER_ID: {
         "display": "OpenCode Go",
         "url": "https://opencode.ai/zen/go/v1",
         "raw": (
-            "[providers.opencode-go]\n"
-            'id = "opencode-go"\n'
+            f"[providers.{DEFAULT_PROVIDER_ID}]\n"
+            f'id = "{DEFAULT_PROVIDER_ID}"\n'
             'base_url = "https://opencode.ai/zen/go/v1"\n'
             'protocols = ["openai", "anthropic"]\n'
             'api_key_env = "API_KEY"'
         ),
         "data": {
-            "id": "opencode-go",
+            "id": DEFAULT_PROVIDER_ID,
             "base_url": "https://opencode.ai/zen/go/v1",
             "protocols": ["openai", "anthropic"],
             "api_key_env": "API_KEY",
@@ -104,7 +106,7 @@ def load_provider_templates(
     - raw: raw TOML text of the [providers.<id>] block
     - data: parsed dict of the provider config (excluding display metadata)
 
-    Always includes ``opencode-go`` even if the file is missing or empty,
+    Always includes the default provider even if the file is missing or empty,
     so the connect flow is never stuck with zero options.
     """
     if providers_path is None:
@@ -152,8 +154,8 @@ def load_provider_templates(
         }
 
     # Ensure the primary provider is always available
-    if "opencode-go" not in templates:
-        templates["opencode-go"] = _OPENCODE_GO_FALLBACK["opencode-go"]
+    if DEFAULT_PROVIDER_ID not in templates:
+        templates[DEFAULT_PROVIDER_ID] = _OPENCODE_GO_FALLBACK[DEFAULT_PROVIDER_ID]
 
     return templates
 

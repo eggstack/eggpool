@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any
 
+from eggpool.constants import DEFAULT_PROVIDER_ID
+
 if TYPE_CHECKING:
     from eggpool.db.connection import Database
 
@@ -178,7 +180,7 @@ class PriceSnapshot:
     cache_read_per_million_microdollars: int | None = None
     cache_write_per_million_microdollars: int | None = None
     source: str = "upstream"
-    provider_id: str = "opencode-go"
+    provider_id: str = DEFAULT_PROVIDER_ID
 
 
 class PriceRepository:
@@ -198,7 +200,7 @@ class PriceRepository:
         cache_read_per_million_microdollars: int | None = None,
         cache_write_per_million_microdollars: int | None = None,
         source: str = "config",
-        provider_id: str = "opencode-go",
+        provider_id: str = DEFAULT_PROVIDER_ID,
     ) -> None:
         """Record a price snapshot for a model.
 
@@ -270,7 +272,7 @@ class PriceRepository:
         try:
             provider_id = row["provider_id"]
         except (IndexError, KeyError):
-            provider_id = "opencode-go"
+            provider_id = DEFAULT_PROVIDER_ID
         return PriceSnapshot(
             model_id=row["model_id"],
             input_price_per_1k=row["input_price_per_1k"],

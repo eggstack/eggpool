@@ -5,6 +5,7 @@ from pathlib import Path
 
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 11300
+DEFAULT_PROVIDER_ID = "opencode-go"
 
 # Use an absolute path so the database is not dependent on the process
 # working directory.  Follows XDG Base Directory conventions.

@@ -438,6 +438,7 @@ def configsetup_opencode(ctx: click.Context, json_only: bool) -> None:
     import json as _json
 
     from eggpool.catalog.limits import ModelLimitResolver
+    from eggpool.constants import DEFAULT_PROVIDER_ID
     from eggpool.integrations.opencode import build_opencode_config_json
     from eggpool.models.config import AppConfig
 
@@ -498,7 +499,7 @@ def configsetup_opencode(ctx: click.Context, json_only: bool) -> None:
             resolver = ModelLimitResolver(config)
             for m in models_data:
                 eff = resolver.resolve(
-                    provider_id="opencode-go",
+                    provider_id=DEFAULT_PROVIDER_ID,
                     model_id=m["model_id"],
                     capabilities=m.get("capabilities", {}),
                     source_metadata=m.get("source_metadata", {}),

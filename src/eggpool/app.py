@@ -329,8 +329,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     client_pool = ProviderClientPool.from_app_config(config)
     app.state.client_pool = client_pool
     # Keep backward-compatible alias during transition
-    if "opencode-go" in client_pool.providers:
-        app.state.httpx_client = client_pool.get_client("opencode-go")
+    legacy_client = client_pool.get_default_client()
+    if legacy_client is not None:
+        app.state.httpx_client = legacy_client
 
     # 8. Account registry (runtime state)
     registry = AccountRegistry(config)
