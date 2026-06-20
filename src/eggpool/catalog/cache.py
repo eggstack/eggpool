@@ -6,6 +6,8 @@ import logging
 import time
 from typing import Any
 
+from eggpool.catalog.limits import EffectiveModelLimits, conservative_limits
+
 logger = logging.getLogger(__name__)
 
 
@@ -65,7 +67,7 @@ class ModelCatalogCache:
 
             # Store per-provider metadata (provider-specific protocol,
             # display_name, capabilities, source_metadata).
-            provider_info: dict[str, Any] = {
+            model_info: dict[str, Any] = {
                 "model_id": model_id,
                 "display_name": model.get("display_name"),
                 "protocol": model.get("protocol"),
@@ -77,23 +79,12 @@ class ModelCatalogCache:
                 "discovered_limits": model.get("discovered_limits", {}),
                 "effective_limits": model.get("effective_limits", {}),
             }
-            self._provider_models[provider_key] = provider_info
+            self._provider_models[provider_key] = dict(model_info)
 
             # Global entry: only set on first encounter; never overwrite
             # metadata from an earlier provider for the same model_id.
             if model_id not in self._models:
-                self._models[model_id] = {
-                    "model_id": model_id,
-                    "display_name": model.get("display_name"),
-                    "protocol": model.get("protocol"),
-                    "protocol_source": model.get("protocol_source"),
-                    "capabilities": model.get("capabilities", {}),
-                    "source_metadata": model.get("source_metadata", {}),
-                    "first_seen_at": now,
-                    "last_seen_at": now,
-                    "discovered_limits": model.get("discovered_limits", {}),
-                    "effective_limits": model.get("effective_limits", {}),
-                }
+                self._models[model_id] = model_info
             else:
                 self._models[model_id]["last_seen_at"] = now
 
@@ -103,6 +94,120 @@ class ModelCatalogCache:
 
         self._last_refresh = now
         self._account_last_refresh[account_name] = now
+
+    @staticmethod
+    def _effective_limits_dict(
+        limits: EffectiveModelLimits,
+    ) -> dict[str, Any]:
+        """Convert resolved limits into the cache's serializable shape."""
+        return {
+            "context_tokens": limits.context_tokens,
+            "input_tokens": limits.input_tokens,
+            "output_tokens": limits.output_tokens,
+            "enforce": limits.enforce,
+            "context_source": limits.context_source,
+            "input_source": limits.input_source,
+            "output_source": limits.output_source,
+        }
+
+    def _visible_provider_ids(
+        self,
+        visible_accounts: set[str],
+    ) -> list[str]:
+        """Return deterministic provider IDs for the visible accounts."""
+        provider_ids = {
+            provider_id
+            for account_name in visible_accounts
+            if (provider_id := self._account_providers.get(account_name)) is not None
+        }
+        return sorted(provider_ids)
+
+    @staticmethod
+    def _copy_exposed_model(
+        model_info: dict[str, Any],
+        *,
+        model_id: str,
+        available_accounts: set[str],
+        provider_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Copy a cache entry into the serialized exposure format."""
+        model_copy = dict(model_info)
+        model_copy["model_id"] = (
+            f"{model_id}/{provider_id}" if provider_id is not None else model_id
+        )
+        if provider_id is not None:
+            model_copy["base_model_id"] = model_id
+            model_copy["provider_id"] = provider_id
+        model_copy["available_accounts"] = sorted(available_accounts)
+        return model_copy
+
+    def _select_unsuffixed_model_info(
+        self,
+        model_id: str,
+        provider_ids: list[str],
+    ) -> dict[str, Any] | None:
+        """Pick the metadata entry to expose for an unsuffixed model ID."""
+        found_provider_entry = False
+        for provider_id in provider_ids:
+            provider_info = self._provider_models.get((model_id, provider_id))
+            if provider_info is None:
+                continue
+            found_provider_entry = True
+            if provider_info.get("protocol"):
+                return provider_info
+
+        if not found_provider_entry:
+            global_info = self._models.get(model_id)
+            if global_info is not None and global_info.get("protocol"):
+                return global_info
+        return None
+
+    def _select_provider_model_info(
+        self,
+        model_id: str,
+        provider_id: str,
+    ) -> dict[str, Any] | None:
+        """Pick the metadata entry to expose for a provider-suffixed model."""
+        provider_info = self._provider_models.get((model_id, provider_id))
+        if provider_info is not None:
+            if not provider_info.get("protocol"):
+                return None
+            return provider_info
+
+        global_info = self._models.get(model_id)
+        if global_info is not None and global_info.get("protocol"):
+            return global_info
+        return None
+
+    def _merged_effective_limits(
+        self,
+        model_id: str,
+        provider_ids: list[str],
+    ) -> dict[str, Any] | None:
+        """Merge per-provider effective limits across visible providers."""
+        all_limits: list[EffectiveModelLimits] = []
+        for provider_id in provider_ids:
+            provider_info = self._provider_models.get((model_id, provider_id))
+            if provider_info is None:
+                continue
+            effective_limits = provider_info.get("effective_limits")
+            if not effective_limits:
+                continue
+            all_limits.append(
+                EffectiveModelLimits(
+                    context_tokens=effective_limits.get("context_tokens"),
+                    input_tokens=effective_limits.get("input_tokens"),
+                    output_tokens=effective_limits.get("output_tokens"),
+                    enforce=effective_limits.get("enforce", True),
+                    context_source=effective_limits.get("context_source"),
+                    input_source=effective_limits.get("input_source"),
+                    output_source=effective_limits.get("output_source"),
+                )
+            )
+
+        if not all_limits:
+            return None
+        return self._effective_limits_dict(conservative_limits(all_limits))
 
     def mark_account_models_unavailable(self, account_name: str) -> None:
         """Mark all models as unavailable for an account."""
@@ -127,7 +232,7 @@ class ModelCatalogCache:
         """
         result: list[dict[str, Any]] = []
 
-        for model_id, model_info in self._models.items():
+        for model_id, _model_info in self._models.items():
             accounts_supporting = self._account_support.get(model_id, set())
             visible_accounts = accounts_supporting & eligible_account_names
 
@@ -144,63 +249,20 @@ class ModelCatalogCache:
             if not should_include:
                 continue
 
-            # Find the best provider-specific entry for this model
-            # among the visible accounts.
-            best_info: dict[str, Any] | None = None
-            for acct_name in visible_accounts:
-                pid = self._account_providers.get(acct_name)
-                if pid is None:
-                    continue
-                pinfo = self._provider_models.get((model_id, pid))
-                if pinfo is not None and pinfo.get("protocol"):
-                    best_info = pinfo
-                    break
-
-            # Fall back to global entry if no provider-specific entry
-            # has a resolved protocol.
+            provider_ids = self._visible_provider_ids(visible_accounts)
+            best_info = self._select_unsuffixed_model_info(model_id, provider_ids)
             if best_info is None:
-                if not model_info.get("protocol"):
-                    continue
-                best_info = model_info
+                continue
 
-            model_info_copy = dict(best_info)
-            model_info_copy["model_id"] = model_id
-            model_info_copy["available_accounts"] = sorted(visible_accounts)
+            model_info_copy = self._copy_exposed_model(
+                best_info,
+                model_id=model_id,
+                available_accounts=visible_accounts,
+            )
 
-            # Conservative merge of effective limits across all visible providers
-            from eggpool.catalog.limits import EffectiveModelLimits, conservative_limits
-
-            all_limits: list[EffectiveModelLimits] = []
-            for acct_name in visible_accounts:
-                pid = self._account_providers.get(acct_name)
-                if pid is None:
-                    continue
-                pinfo = self._provider_models.get((model_id, pid))
-                if pinfo is not None:
-                    el = pinfo.get("effective_limits", {})
-                    if el:
-                        all_limits.append(
-                            EffectiveModelLimits(
-                                context_tokens=el.get("context_tokens"),
-                                input_tokens=el.get("input_tokens"),
-                                output_tokens=el.get("output_tokens"),
-                                enforce=el.get("enforce", True),
-                                context_source=el.get("context_source"),
-                                input_source=el.get("input_source"),
-                                output_source=el.get("output_source"),
-                            )
-                        )
-            if all_limits:
-                merged = conservative_limits(all_limits)
-                model_info_copy["effective_limits"] = {
-                    "context_tokens": merged.context_tokens,
-                    "input_tokens": merged.input_tokens,
-                    "output_tokens": merged.output_tokens,
-                    "enforce": merged.enforce,
-                    "context_source": merged.context_source,
-                    "input_source": merged.input_source,
-                    "output_source": merged.output_source,
-                }
+            merged_limits = self._merged_effective_limits(model_id, provider_ids)
+            if merged_limits is not None:
+                model_info_copy["effective_limits"] = merged_limits
 
             result.append(model_info_copy)
 
@@ -255,21 +317,21 @@ class ModelCatalogCache:
                     continue
 
                 # Use per-provider metadata for this (model_id, provider_id)
-                # if available; otherwise fall back to the global entry.
-                pinfo = self._provider_models.get((model_id, pid))
-                if pinfo is not None and pinfo.get("protocol"):
-                    model_copy = dict(pinfo)
-                elif self._models.get(model_id, {}).get("protocol"):
-                    model_copy = dict(self._models[model_id])
-                else:
+                # when available. If the provider-specific entry is
+                # unresolved, keep it hidden rather than borrowing another
+                # provider's protocol from the global cache entry.
+                model_info = self._select_provider_model_info(model_id, pid)
+                if model_info is None:
                     continue
 
-                suffixed_id = f"{model_id}/{pid}"
-                model_copy["model_id"] = suffixed_id
-                model_copy["base_model_id"] = model_id
-                model_copy["provider_id"] = pid
-                model_copy["available_accounts"] = sorted(visible)
-                result.append(model_copy)
+                result.append(
+                    self._copy_exposed_model(
+                        model_info,
+                        model_id=model_id,
+                        available_accounts=visible,
+                        provider_id=pid,
+                    )
+                )
 
         return sorted(result, key=lambda m: m["model_id"])
 

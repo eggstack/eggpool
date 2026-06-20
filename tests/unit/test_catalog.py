@@ -370,6 +370,46 @@ def test_provider_suffixed_models_cross_provider_independent() -> None:
     assert "gpt-4/provider-b" in ids
 
 
+def test_provider_suffixed_models_do_not_leak_protocols() -> None:
+    """An unresolved provider entry must not borrow another provider's protocol."""
+    cache = ModelCatalogCache()
+    cache.update_from_account(
+        "acct1",
+        "provider-a",
+        [{"model_id": "shared-model", "protocol": "openai"}],
+    )
+    cache.update_from_account(
+        "acct2",
+        "provider-b",
+        [{"model_id": "shared-model", "protocol": None}],
+    )
+
+    suffixed = cache.get_provider_suffixed_models("union", {"acct1", "acct2"})
+    suffixed_ids = {model["model_id"] for model in suffixed}
+    assert suffixed_ids == {"shared-model/provider-a"}
+
+    unsuffixed = cache.get_models_for_exposure("union", {"acct1", "acct2"})
+    assert [model["model_id"] for model in unsuffixed] == ["shared-model"]
+
+
+def test_unsuffixed_exposure_skips_unresolved_only_provider() -> None:
+    """Do not expose a model when the only visible provider entry is unresolved."""
+    cache = ModelCatalogCache()
+    cache.update_from_account(
+        "acct1",
+        "provider-a",
+        [{"model_id": "shared-model", "protocol": "openai"}],
+    )
+    cache.update_from_account(
+        "acct2",
+        "provider-b",
+        [{"model_id": "shared-model", "protocol": None}],
+    )
+
+    exposed = cache.get_models_for_exposure("union", {"acct2"})
+    assert exposed == []
+
+
 # ---------------------------------------------------------------------------
 # Effective/discovered limits integration
 # ---------------------------------------------------------------------------

@@ -40,7 +40,7 @@ class AccountRepository:
 
         for acct in config_accounts:
             name = str(acct["name"])
-            provider_id = str(acct.get("provider_id", "opencode-go"))
+            provider_id = str(acct.get("provider_id") or "opencode-go")
             configured_names.add(name)
             row = await self._db.fetch_one(
                 "SELECT id FROM accounts WHERE name = ?",

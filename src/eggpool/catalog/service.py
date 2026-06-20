@@ -352,7 +352,7 @@ class CatalogService:
             for row in am_rows:
                 model_id = row["model_id"]
                 account_name = id_to_name.get(row["account_id"])
-                provider_id = id_to_provider.get(row["account_id"], "opencode-go")
+                provider_id = id_to_provider.get(row["account_id"]) or "opencode-go"
                 if account_name:
                     self._cache.set_account_provider(account_name, provider_id)
                     if self._cache.has_model(model_id):
