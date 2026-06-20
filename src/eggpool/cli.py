@@ -314,11 +314,9 @@ def _detect_lan_ip() -> str:
     import socket
 
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("10.255.255.255", 1))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("10.255.255.255", 1))
+            return s.getsockname()[0]
     except Exception:
         return "127.0.0.1"
 
@@ -353,6 +351,13 @@ def _write_server_api_key(config_path: str, new_key: str) -> None:
             if line.strip() == "[server]":
                 new_lines.insert(i + 1, f'api_key = "{new_key}"')
                 break
+        else:
+            click.echo(
+                "Warning: No [server] section found in config. "
+                "API key was not written.",
+                err=True,
+            )
+            return
 
     path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
 
@@ -853,13 +858,16 @@ def _write_dashboard_public(config_path: str, public: bool) -> None:
 
 @dashboard.command("public")
 @click.option(
-    "--on", "set_public", flag_value="true", help="Require API key for dashboard."
+    "--on",
+    "set_public",
+    flag_value="true",
+    help="Allow public dashboard access (no API key required).",
 )
 @click.option(
     "--off",
     "set_public",
     flag_value="false",
-    help="Allow public dashboard access (default).",
+    help="Require API key for dashboard access.",
 )
 @click.pass_context
 def dashboard_public(ctx: click.Context, set_public: str | None) -> None:

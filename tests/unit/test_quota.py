@@ -61,7 +61,7 @@ class TestAccountQuota:
         """Test quota limit checking."""
         quota = AccountQuota(
             account_name="test-account",
-            capacity_7d_microdollars=10000,
+            capacity_5h_microdollars=10000,
         )
         quota.record_usage(100, 500)
         assert quota.is_within_limits()
@@ -73,7 +73,7 @@ class TestAccountQuota:
         """Test remaining capacity calculation."""
         quota = AccountQuota(
             account_name="test-account",
-            capacity_7d_microdollars=10000,
+            capacity_5h_microdollars=10000,
         )
         quota.record_usage(100, 5000)
         capacity = quota.get_remaining_capacity()
@@ -126,8 +126,8 @@ class TestQuotaEstimator:
     def test_eligible_accounts(self) -> None:
         """Test getting eligible accounts."""
         estimator = QuotaEstimator()
-        estimator.set_account_limits("account1", capacity_7d_microdollars=10000)
-        estimator.set_account_limits("account2", capacity_7d_microdollars=10000)
+        estimator.set_account_limits("account1", capacity_5h_microdollars=10000)
+        estimator.set_account_limits("account2", capacity_5h_microdollars=10000)
 
         # Account1 is at 50% usage
         estimator.record_usage("account1", 100, 5000)
@@ -273,8 +273,8 @@ class TestQuotaFairScorer:
     async def test_score_accounts(self) -> None:
         """Test scoring accounts. Lower score = less utilized = preferred."""
         estimator = QuotaEstimator()
-        estimator.set_account_limits("account1", capacity_7d_microdollars=10000)
-        estimator.set_account_limits("account2", capacity_7d_microdollars=10000)
+        estimator.set_account_limits("account1", capacity_5h_microdollars=10000)
+        estimator.set_account_limits("account2", capacity_5h_microdollars=10000)
         estimator.record_usage("account1", 100, 5000)
         estimator.record_usage("account2", 100, 9000)
 

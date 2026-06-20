@@ -69,7 +69,6 @@ class IncrementalSSEObserver:
         self._decoder = codecs.getincrementaldecoder("utf-8")()
 
         # Current event state (for assembling multi-line data)
-        self._current_event = ""
         self._current_data_lines: list[str] = []
 
         if protocol == "anthropic":
@@ -150,9 +149,7 @@ class IncrementalSSEObserver:
             value = value.lstrip(" ")
             if field_name == "data":
                 self._current_data_lines.append(value)
-            elif field_name == "event":
-                self._current_event = value
-            # Ignore unknown fields (id:, retry:, etc.)
+            # Ignore unknown fields (id:, retry:, event:, etc.)
         else:
             # Line with no colon - treat as field with empty value
             pass
@@ -164,7 +161,6 @@ class IncrementalSSEObserver:
 
         data = "\n".join(self._current_data_lines)
         self._current_data_lines.clear()
-        self._current_event = ""
 
         if data.strip() == "[DONE]":
             return

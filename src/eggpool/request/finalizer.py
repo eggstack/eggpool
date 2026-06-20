@@ -329,10 +329,13 @@ class RequestFinalizer:
                     FinalizationOutcome.TIMEOUT,
                     FinalizationOutcome.INTERRUPTED,
                 ):
+                    category = classify_failure_category(
+                        data.error_class, data.status_code
+                    )
                     self._health_manager.record_failure(
                         selected.account_name,
                         model_id=mid,
-                        reason=data.error_class,
+                        reason=category.value,
                     )
                 elif data.outcome in (
                     FinalizationOutcome.CLIENT_CANCELLED,
@@ -379,4 +382,11 @@ class RequestFinalizer:
 
 def _get_model_id(selected: Any) -> str:
     """Extract model_id from SelectedAttempt if available."""
-    return selected.model_id if hasattr(selected, "model_id") else ""
+    if hasattr(selected, "model_id") and selected.model_id:
+        return selected.model_id
+    logger.warning(
+        "selected object has no model_id attribute or it is empty "
+        "(type=%s). Cost and health tracking may be inaccurate.",
+        type(selected).__name__,
+    )
+    return ""

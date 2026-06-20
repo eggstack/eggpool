@@ -22,6 +22,8 @@ async def cleanup_stale_reservations(
 
     Returns the number of reservations cleaned up.
     """
+    if max_age_seconds <= 0:
+        max_age_seconds = 1.0
     async with db.transaction():
         rows = await db.execute_returning(
             """

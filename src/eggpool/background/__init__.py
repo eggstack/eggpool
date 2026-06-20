@@ -132,4 +132,6 @@ class TaskSupervisor:
     @property
     def all_healthy(self) -> bool:
         """Check if all tasks are running."""
+        if not self._tasks:
+            return False
         return all(t.is_running for t in self._tasks.values())

@@ -57,12 +57,17 @@ class ProviderClientPool:
 
     async def close(self) -> None:
         """Close all clients."""
+        closed: set[int] = set()
         for client in self._clients.values():
-            with contextlib.suppress(Exception):
-                await client.aclose()
+            if id(client) not in closed:
+                closed.add(id(client))
+                with contextlib.suppress(Exception):
+                    await client.aclose()
         for client in self._account_clients.values():
-            with contextlib.suppress(Exception):
-                await client.aclose()
+            if id(client) not in closed:
+                closed.add(id(client))
+                with contextlib.suppress(Exception):
+                    await client.aclose()
 
     @classmethod
     def from_config(cls, providers: dict[str, ProviderConfig]) -> ProviderClientPool:

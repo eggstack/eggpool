@@ -110,7 +110,8 @@ class TestEscape:
 
     def test_sanitize_class_name(self) -> None:
         assert sanitize_class_name("hello-world") == "hello-world"
-        assert sanitize_class_name("hello world!") == "hello world_"
+        assert sanitize_class_name("hello world!") == "hello_world_"
+        assert sanitize_class_name("foo.bar@baz") == "foo_bar_baz"
         assert sanitize_class_name("") == ""
 
 

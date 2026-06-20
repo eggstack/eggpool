@@ -10,7 +10,7 @@ import html
 import re
 from typing import Any
 
-_PATTERN: re.Pattern[str] = re.compile(r"[^\w\s\-\.:@/\?&=%]")
+_PATTERN: re.Pattern[str] = re.compile(r"[^a-zA-Z0-9_-]")
 
 
 def escape(value: Any) -> str:
@@ -87,9 +87,14 @@ def format_timestamp(value: Any) -> str:
 def truncate(value: Any, max_length: int = 80) -> str:
     """Truncate a string to a maximum length, escaping the result."""
     escaped = escape(value)
-    if len(escaped) > max_length:
-        return escaped[: max_length - 3] + "..."
-    return escaped
+    if len(escaped) <= max_length:
+        return escaped
+    truncated = escaped[: max_length - 3]
+    # Don't break an HTML entity mid-entity — back up to the last '&'
+    amp_pos = truncated.rfind("&")
+    if amp_pos != -1 and ";" not in truncated[amp_pos:]:
+        truncated = truncated[:amp_pos]
+    return truncated + "..."
 
 
 def sanitize_class_name(value: str) -> str:

@@ -682,6 +682,7 @@ class RequestCoordinator:
         except asyncio.CancelledError:
             # Client cancellation after selection - finalize the attempt
             elapsed_ms = int((time.time() - context.started_at) * 1000)
+            context.client_metadata["_cancelled_finalized"] = True
             await self._finalizer.finalize(
                 selected,
                 FinalizationData(
@@ -1039,25 +1040,30 @@ class RequestCoordinator:
                 )
 
             except asyncio.CancelledError:
-                # Client cancellation - finalize but don't penalize health
+                # Client cancellation - finalize but don't penalize health.
+                # Skip if _execute_upstream already finalized (the CancelledError
+                # propagates here after the outer handler runs).
                 observer.flush()
                 usage_result = observer.usage
-                await finalizer.finalize(
-                    selected,
-                    FinalizationData(
-                        outcome=FinalizationOutcome.CLIENT_CANCELLED,
-                        first_byte_ms=int(first_byte_ms) if first_byte_ms > 0 else None,
-                        upstream_latency_ms=int((time.time() - reference) * 1000),
-                        bytes_emitted=bytes_emitted,
-                        input_tokens=usage_result.input_tokens,
-                        output_tokens=usage_result.output_tokens,
-                        cache_read_tokens=usage_result.cache_read_tokens,
-                        cache_write_tokens=usage_result.cache_creation_tokens,
-                        reasoning_tokens=usage_result.reasoning_tokens,
-                        thinking_characters=usage_result.thinking_characters,
-                        bytes_received=len(context.original_body),
-                    ),
-                )
+                if not context.client_metadata.get("_cancelled_finalized"):
+                    await finalizer.finalize(
+                        selected,
+                        FinalizationData(
+                            outcome=FinalizationOutcome.CLIENT_CANCELLED,
+                            first_byte_ms=(
+                                int(first_byte_ms) if first_byte_ms > 0 else None
+                            ),
+                            upstream_latency_ms=int((time.time() - reference) * 1000),
+                            bytes_emitted=bytes_emitted,
+                            input_tokens=usage_result.input_tokens,
+                            output_tokens=usage_result.output_tokens,
+                            cache_read_tokens=usage_result.cache_read_tokens,
+                            cache_write_tokens=usage_result.cache_creation_tokens,
+                            reasoning_tokens=usage_result.reasoning_tokens,
+                            thinking_characters=usage_result.thinking_characters,
+                            bytes_received=len(context.original_body),
+                        ),
+                    )
                 raise
             except Exception as exc:
                 # Midstream error - finalize, no retry

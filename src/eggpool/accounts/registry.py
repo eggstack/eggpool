@@ -162,4 +162,4 @@ class AccountRegistry:
 
     def get_provider_ids(self) -> list[str]:
         """Get all unique provider IDs."""
-        return list(set(self._account_providers.values()))
+        return sorted(set(self._account_providers.values()))

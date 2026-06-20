@@ -12,5 +12,5 @@ if TYPE_CHECKING:
 def bundled_themes_dir() -> Path:
     """Return the path to the bundled themes directory."""
     ref = files("eggpool.dashboard").joinpath("themes")
-    with as_file(ref) as path:
-        return path
+    path = as_file(ref).__enter__()
+    return path

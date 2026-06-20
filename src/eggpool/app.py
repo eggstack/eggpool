@@ -670,11 +670,7 @@ def create_app(
                     to_evict = [
                         k
                         for k, (_, ts) in self._cache.items()
-                        if k != self._last_used
-                        and (
-                            now - ts >= self._ttl_s
-                            or len(self._cache) >= self._max_size
-                        )
+                        if k != self._last_used and now - ts >= self._ttl_s
                     ]
                     if to_evict:
                         del self._cache[to_evict[0]]

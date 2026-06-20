@@ -16,6 +16,10 @@ def _format_dt(dt: str) -> str:
     """Validate ISO 8601 datetime string for SQL parameter binding."""
     if not dt:
         return dt
+    # Basic format check: must start with a 4-digit year and contain
+    # at least a date portion.  Reject obviously invalid values.
+    if len(dt) < 10 or not dt[:4].isdigit() or dt[4] != "-":
+        return ""
     return dt
 
 
@@ -442,7 +446,10 @@ async def _fetch_ttft_percentiles(
           AND started_at >= ? AND started_at < ?
           {extra_filters}
     ) sub
-    WHERE sub.rn IN ((sub.total_count + 1) / 2, (sub.total_count + 2) / 2)
+    WHERE sub.rn IN (
+            CAST((sub.total_count + 1) / 2 AS INTEGER),
+            CAST((sub.total_count + 2) / 2 AS INTEGER)
+        )
        OR sub.rn = sub.p99_idx
     """
     row = await db.fetch_one(sql, tuple(params))
@@ -485,7 +492,10 @@ async def fetch_provider_model_ttft(
         COUNT(*) as request_count,
         COALESCE(AVG(first_byte_ms), 0) as avg_ttft_ms,
         COALESCE(AVG(CASE
-            WHEN rn IN ((group_count + 1) / 2, (group_count + 2) / 2)
+            WHEN rn IN (
+                CAST((group_count + 1) / 2 AS INTEGER),
+                CAST((group_count + 2) / 2 AS INTEGER)
+            )
             THEN first_byte_ms END), 0) as p50_ttft_ms,
         COALESCE(MAX(CASE
             WHEN rn = CAST(CEIL(0.99 * group_count) AS INTEGER)
@@ -523,7 +533,10 @@ async def fetch_provider_ttft_summary(
         COUNT(*) as request_count,
         COALESCE(AVG(first_byte_ms), 0) as avg_ttft_ms,
         COALESCE(AVG(CASE
-            WHEN rn IN ((group_count + 1) / 2, (group_count + 2) / 2)
+            WHEN rn IN (
+                CAST((group_count + 1) / 2 AS INTEGER),
+                CAST((group_count + 2) / 2 AS INTEGER)
+            )
             THEN first_byte_ms END), 0) as p50_ttft_ms,
         COALESCE(MAX(CASE
             WHEN rn = CAST(CEIL(0.99 * group_count) AS INTEGER)

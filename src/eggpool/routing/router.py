@@ -252,7 +252,10 @@ class Router:
                 if state.active_request_count > 0:
                     state.active_request_count -= 1
 
-    def has_eligible_pairing(self) -> bool:
+    def has_eligible_pairing(
+        self,
+        protocol: str | None = None,
+    ) -> bool:
         """Check if at least one eligible account-model pairing exists.
 
         Verifies at least one combination where:
@@ -296,6 +299,7 @@ class Router:
                     state.name,
                     model_id,
                     max_age_s=self._stale_after_s,
+                    protocol=protocol,
                 ):
                     continue
                 # Use model-level health check (includes circuit breaker

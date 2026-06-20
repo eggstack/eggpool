@@ -194,7 +194,7 @@ class AccountQuota:
         """
         capacities: list[float] = []
 
-        if self.capacity_5h_microdollars:
+        if self.capacity_5h_microdollars is not None:
             cost_5h = (
                 self.get_persisted_cost_5h()
                 + self.five_hour_offset
@@ -203,12 +203,12 @@ class AccountQuota:
             used_ratio = cost_5h / self.capacity_5h_microdollars
             capacities.append(max(0.0, 1.0 - used_ratio))
 
-        if self.capacity_7d_microdollars:
+        if self.capacity_7d_microdollars is not None:
             cost_7d = self.get_persisted_cost_7d() + self.weekly_offset
             used_ratio = cost_7d / self.capacity_7d_microdollars
             capacities.append(max(0.0, 1.0 - used_ratio))
 
-        if self.capacity_30d_microdollars:
+        if self.capacity_30d_microdollars is not None:
             cost_30d = self.get_persisted_cost_30d() + self.monthly_offset
             used_ratio = cost_30d / self.capacity_30d_microdollars
             capacities.append(max(0.0, 1.0 - used_ratio))
@@ -229,15 +229,13 @@ class AccountQuota:
         """Get 7d cost from persisted snapshot, or 0 if unavailable."""
         if self.persisted_snapshot is not None:
             return self.persisted_snapshot.cost_7d
-        _, cost = self.daily_window.get_usage()
-        return cost
+        return 0
 
     def get_persisted_cost_30d(self) -> int:
         """Get 30d cost from persisted snapshot, or 0 if unavailable."""
         if self.persisted_snapshot is not None:
             return self.persisted_snapshot.cost_30d
-        _, cost = self.daily_window.get_usage()
-        return cost
+        return 0
 
 
 # Model family fallback costs (dollars per 1M tokens)
