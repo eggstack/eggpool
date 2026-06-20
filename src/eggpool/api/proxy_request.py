@@ -30,6 +30,7 @@ from eggpool.request.coordinator import (
     ProxyRequestContext,
     RequestCoordinator,
 )
+from eggpool.request.limits import check_context_limits as _check_context_limits
 
 if TYPE_CHECKING:
     from fastapi import Request
@@ -96,104 +97,6 @@ def render_proxy_response(result: PreparedProxyResponse) -> Response:
     for name, value in result.headers:
         response.headers.append(name, value)
     return response
-
-
-def _estimate_input_tokens(body: bytes) -> int:
-    """Estimate input token count from the request body.
-
-    Uses the same conservative heuristic as the coordinator:
-    max(1_000, len(body) // 3), capped at 128_000.
-    """
-    if not body:
-        return 1_000
-    return min(max(1_000, len(body) // 3), 128_000)
-
-
-def _extract_output_tokens(payload: dict[str, Any], protocol: str) -> int | None:
-    """Extract the requested output token limit from the payload.
-
-    OpenAI-compatible requests may use ``max_tokens`` or
-    ``max_completion_tokens``.  Anthropic requests use ``max_tokens``.
-    """
-    if protocol == "anthropic":
-        value = payload.get("max_tokens")
-    else:
-        value = payload.get("max_completion_tokens") or payload.get("max_tokens")
-    if isinstance(value, (int, float)) and value > 0:
-        return int(value)
-    return None
-
-
-def _check_context_limits(
-    *,
-    model_id: str,
-    provider_id: str | None,
-    body: bytes,
-    payload: dict[str, Any],
-    protocol: str,
-    catalog_cache: Any,
-) -> None:
-    """Check request context against effective model limits.
-
-    Raises ``ContextLimitExceededError`` if the estimated request context
-    exceeds the configured effective limit for the model.
-    """
-    model_info = catalog_cache.get_model_for_provider(model_id, provider_id)
-    if model_info is None:
-        return
-
-    effective = model_info.get("effective_limits")
-    if not effective:
-        return
-
-    if not effective.get("enforce", True):
-        return
-
-    max_context = effective.get("context_tokens")
-    max_input = effective.get("input_tokens")
-    max_output = effective.get("output_tokens")
-
-    if max_context is None and max_input is None and max_output is None:
-        return
-
-    estimated_input = _estimate_input_tokens(body)
-    requested_output = _extract_output_tokens(payload, protocol)
-
-    # Check input-specific limit
-    if max_input is not None and estimated_input > max_input:
-        raise ContextLimitExceededError(
-            model_id=model_id,
-            estimated_input_tokens=estimated_input,
-            requested_output_tokens=requested_output,
-            max_context_tokens=max_context,
-            max_input_tokens=max_input,
-        )
-
-    # Check output-specific limit
-    if (
-        max_output is not None
-        and requested_output is not None
-        and requested_output > max_output
-    ):
-        raise ContextLimitExceededError(
-            model_id=model_id,
-            estimated_input_tokens=estimated_input,
-            requested_output_tokens=requested_output,
-            max_context_tokens=max_context,
-            max_input_tokens=max_input,
-        )
-
-    # Check total context limit
-    if max_context is not None:
-        total = estimated_input + (requested_output or 0)
-        if total > max_context:
-            raise ContextLimitExceededError(
-                model_id=model_id,
-                estimated_input_tokens=estimated_input,
-                requested_output_tokens=requested_output,
-                max_context_tokens=max_context,
-                max_input_tokens=max_input,
-            )
 
 
 async def handle_proxy_request(

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from eggpool.db.connection import Database
     from eggpool.quota.estimation import QuotaEstimator
+    from eggpool.routing.router import Router
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,7 @@ async def cleanup_stale_reservations(
     db: Database,
     max_age_seconds: float = 600.0,
     quota_estimator: QuotaEstimator | None = None,
-    router: Any | None = None,
+    router: Router | None = None,
 ) -> int:
     """Release stale reservations whose request is no longer pending.
 
@@ -28,7 +29,9 @@ async def cleanup_stale_reservations(
         rows = await db.execute_returning(
             """
             UPDATE reservations
-            SET status = 'released', released_at = datetime('now')
+            SET status = 'released',
+                released_at = datetime('now'),
+                release_reason = 'stale_cleanup'
             WHERE status = 'active'
               AND created_at < datetime('now', ? || ' seconds')
               AND NOT EXISTS (
@@ -47,19 +50,11 @@ async def cleanup_stale_reservations(
 
     count = len(transitioned_rows)
 
-    if quota_estimator is not None and transitioned_rows:
-        for row in transitioned_rows:
-            estimated_microdollars = row.get("reserved_microdollars") or 0
-            if estimated_microdollars <= 0:
-                continue
-            account_name = row.get("account_name")
-            if account_name is None:
-                continue
-            await quota_estimator.remove_reservation(
-                account_name, estimated_microdollars
-            )
-            if router is not None:
-                await router.decrement_active_request_count(account_name)
+    await _reconcile_runtime_reservations(
+        transitioned_rows,
+        quota_estimator=quota_estimator,
+        router=router,
+    )
 
     if count > 0:
         logger.info("Cleaned up %d stale reservations", count)
@@ -125,7 +120,7 @@ async def cleanup_old_events(
 async def reconcile_expired_reservations(
     db: Database,
     quota_estimator: QuotaEstimator | None = None,
-    router: Any | None = None,
+    router: Router | None = None,
 ) -> int:
     """Release reservations past their expiry atomically.
 
@@ -164,28 +159,42 @@ async def reconcile_expired_reservations(
 
     count = len(transitioned_rows)
 
-    # Sync in-memory reservation tracking for the rows we actually transitioned
-    if quota_estimator is not None and transitioned_rows:
-        for row in transitioned_rows:
-            account_id = row.get("account_id")
-            if account_id is None:
-                continue
-            estimated_microdollars = row.get("reserved_microdollars") or 0
-            if estimated_microdollars <= 0:
-                continue
-            account_name = row.get("account_name")
-            if account_name is None:
-                continue
-            await quota_estimator.remove_reservation(
-                account_name, estimated_microdollars
-            )
-            # Also decrement active request count if router is available
-            if router is not None:
-                await router.decrement_active_request_count(account_name)
+    await _reconcile_runtime_reservations(
+        transitioned_rows,
+        quota_estimator=quota_estimator,
+        router=router,
+    )
 
     if count > 0:
         logger.info("Reconciled %d expired reservations", count)
     return count
+
+
+async def _reconcile_runtime_reservations(
+    transitioned_rows: list[dict[str, object]],
+    *,
+    quota_estimator: QuotaEstimator | None,
+    router: Router | None,
+) -> None:
+    """Mirror durable reservation transitions into runtime accounting.
+
+    Active request counts track reservations, not their monetary value, so a
+    zero-cost reservation must still decrement the count when it transitions.
+    """
+    for row in transitioned_rows:
+        account_name_value = row.get("account_name")
+        if not isinstance(account_name_value, str):
+            continue
+
+        reserved_value = row.get("reserved_microdollars")
+        reserved_microdollars = reserved_value if isinstance(reserved_value, int) else 0
+        if quota_estimator is not None and reserved_microdollars > 0:
+            await quota_estimator.remove_reservation(
+                account_name_value,
+                reserved_microdollars,
+            )
+        if router is not None:
+            await router.decrement_active_request_count(account_name_value)
 
 
 async def checkpoint_database(db: Database) -> None:

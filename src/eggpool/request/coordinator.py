@@ -48,6 +48,7 @@ from eggpool.request.finalizer import (
     FinalizationOutcome,
     RequestFinalizer,
 )
+from eggpool.request.limits import estimate_input_tokens
 from eggpool.retry.classification import RetryCategory, RetryClassifier
 from eggpool.security.redaction import redact_error_detail
 
@@ -454,7 +455,7 @@ class RequestCoordinator:
                     )
 
                 # 2. Calculate projected request tokens once
-                estimated_tokens = self._estimate_request_tokens(context)
+                estimated_tokens = estimate_input_tokens(context.original_body)
 
                 # 3. Build per-account estimate map for scoring
                 request_estimates: dict[str, int] = {}
@@ -1477,19 +1478,6 @@ class RequestCoordinator:
         resolver = ModelProtocolResolver()
         model_protocol = sorted(model_protocols)[0]
         resolver.validate_endpoint(model_protocol, context.protocol, context.model_id)
-
-    @staticmethod
-    def _estimate_request_tokens(context: ProxyRequestContext) -> int:
-        """Estimate token count from the incoming request body.
-
-        Uses a conservative heuristic: max(1_000, len(body) // 3),
-        capped at 128_000 to avoid pathological reservations.
-        """
-        body = context.original_body
-        if not body:
-            return 1_000
-        estimated = max(1_000, len(body) // 3)
-        return min(estimated, 128_000)
 
     def invalidate_account_id_cache(self, account_name: str | None = None) -> None:
         """Clear cached account IDs.

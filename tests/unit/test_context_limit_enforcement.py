@@ -12,6 +12,7 @@ from eggpool.api.proxy_request import (
     _check_context_limits,
 )
 from eggpool.errors import ContextLimitExceededError
+from eggpool.request.limits import estimate_input_tokens, requested_output_tokens
 
 
 class MockCatalogCache:
@@ -22,6 +23,27 @@ class MockCatalogCache:
         self, model_id: str, provider_id: str | None
     ) -> dict | None:
         return self._model_info
+
+
+def test_shared_input_estimate_is_bounded() -> None:
+    assert estimate_input_tokens(b"") == 1_000
+    assert estimate_input_tokens(b"x" * 6000) == 2_000
+    assert estimate_input_tokens(b"x" * 1_000_000) == 128_000
+
+
+@pytest.mark.parametrize("value", [True, 1.5, "2000", 0, -1])
+def test_requested_output_tokens_rejects_non_positive_integers(value: object) -> None:
+    assert requested_output_tokens({"max_tokens": value}, "openai") is None
+
+
+def test_requested_output_tokens_prefers_modern_openai_field() -> None:
+    assert (
+        requested_output_tokens(
+            {"max_completion_tokens": 2_000, "max_tokens": 1_000},
+            "openai",
+        )
+        == 2_000
+    )
 
 
 def test_request_below_context_limit_is_forwarded() -> None:

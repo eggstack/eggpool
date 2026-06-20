@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -17,50 +18,37 @@ SCHEMA_DIR = Path(__file__).parent / "schema"
 
 
 def _split_statements(sql: str) -> list[str]:
-    """Split a SQL file into individual statements, stripping comments and blanks.
+    """Split a SQL migration using SQLite's own completeness parser.
 
-    Handles semicolons inside quoted string literals so that SQL like
-    ``INSERT INTO foo VALUES ('a;b')`` is not incorrectly split.
+    This handles quoted semicolons, comments, and trigger bodies according to
+    SQLite syntax instead of maintaining a partial SQL parser here.
     """
     statements: list[str] = []
     current: list[str] = []
-    in_quote: str | None = None
-
     for ch in sql:
-        if in_quote:
-            current.append(ch)
-            if ch == in_quote:
-                # SQL uses '' to escape a quote inside a quoted literal
-                if in_quote == "'" and len(current) >= 2 and current[-2] == "'":
-                    continue
-                in_quote = None
-        elif ch in ("'", '"'):
-            in_quote = ch
-            current.append(ch)
-        elif ch == ";":
-            block = "".join(current).strip()
+        current.append(ch)
+        if ch == ";":
+            candidate = "".join(current)
+            if not sqlite3.complete_statement(candidate):
+                continue
+            statement = candidate.strip()
             current = []
-            # Remove leading comment lines
-            lines = [
-                line for line in block.splitlines() if not line.strip().startswith("--")
-            ]
-            stmt = "\n".join(lines).strip()
-            if stmt:
-                statements.append(stmt)
-        else:
-            current.append(ch)
+            if _contains_sql(statement):
+                statements.append(statement)
 
-    # Handle trailing statement without semicolon
-    if current:
-        block = "".join(current).strip()
-        lines = [
-            line for line in block.splitlines() if not line.strip().startswith("--")
-        ]
-        stmt = "\n".join(lines).strip()
-        if stmt:
-            statements.append(stmt)
+    trailing = "".join(current).strip()
+    if _contains_sql(trailing):
+        statements.append(trailing)
 
     return statements
+
+
+def _contains_sql(candidate: str) -> bool:
+    """Return whether text contains more than whitespace and line comments."""
+    return any(
+        line.strip() and not line.lstrip().startswith("--")
+        for line in candidate.splitlines()
+    )
 
 
 class MigrationRunner:

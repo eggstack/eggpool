@@ -624,6 +624,67 @@ async def test_stale_reservation_cleanup_skips_pending_requests() -> None:
         await db.disconnect()
 
 
+@pytest.mark.asyncio
+async def test_zero_cost_cleanup_still_reconciles_active_count() -> None:
+    """Released zero-cost reservations must not leak routing active counts."""
+    db = Database(path=":memory:")
+    await db.connect()
+    await MigrationRunner(db).run()
+
+    class QuotaTracker:
+        removals: list[tuple[str, int]] = []
+
+        async def remove_reservation(self, name: str, amount: int) -> None:
+            self.removals.append((name, amount))
+
+    class RouterTracker:
+        decrements: list[str] = []
+
+        async def decrement_active_request_count(self, name: str) -> None:
+            self.decrements.append(name)
+
+    quota = QuotaTracker()
+    router = RouterTracker()
+    try:
+        async with db.transaction():
+            await db.execute_write(
+                "INSERT INTO accounts (name, api_key_env) VALUES (?, ?)",
+                ("zero-cost", "ZERO_COST_KEY"),
+            )
+            await db.execute_write(
+                "INSERT INTO models (model_id, protocol) VALUES (?, ?)",
+                ("gpt-4", "openai"),
+            )
+            await db.execute_write(
+                "INSERT INTO requests (account_id, model_id, status) "
+                "VALUES (1, 'gpt-4', 'completed')"
+            )
+            await db.execute_write(
+                "INSERT INTO reservations "
+                "(request_id, account_id, model_id, reserved_microdollars, "
+                "status, created_at) VALUES "
+                "(1, 1, 'gpt-4', 0, 'active', datetime('now', '-1200 seconds'))"
+            )
+
+        cleaned = await cleanup_stale_reservations(
+            db,
+            quota_estimator=quota,  # type: ignore[arg-type]
+            router=router,  # type: ignore[arg-type]
+        )
+
+        row = await db.fetch_one(
+            "SELECT status, release_reason FROM reservations WHERE id = 1"
+        )
+        assert cleaned == 1
+        assert row is not None
+        assert row["status"] == "released"
+        assert row["release_reason"] == "stale_cleanup"
+        assert quota.removals == []
+        assert router.decrements == ["zero-cost"]
+    finally:
+        await db.disconnect()
+
+
 # ── 7. Multiple accounts routing with weighted distribution ───────────────────
 
 

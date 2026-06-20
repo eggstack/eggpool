@@ -181,6 +181,11 @@ class Router:
         """Record usage for quota tracking."""
         self._quota_estimator.record_usage(account_name, tokens, cost_microdollars)
 
+    @property
+    def quota_estimator(self) -> QuotaEstimator:
+        """Return the quota service used by this router."""
+        return self._quota_estimator
+
     def get_account_usage(self, account_name: str) -> tuple[int, int]:
         """Get account usage (tokens, cost)."""
         quota = self._quota_estimator.get_account_quota(account_name)

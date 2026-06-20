@@ -33,8 +33,12 @@ class SupervisedTask:
         """Start the supervised task."""
         if self._running:
             return
+        self._restart_count = 0
         self._running = True
-        self._task = asyncio.create_task(self._run_loop())
+        self._task = asyncio.create_task(
+            self._run_loop(),
+            name=f"eggpool:{self.name}",
+        )
         logger.info("Started supervised task %r", self.name)
 
     async def stop(self) -> None:
@@ -44,33 +48,29 @@ class SupervisedTask:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
+        self._task = None
         logger.info("Stopped supervised task %r", self.name)
 
     async def _run_loop(self) -> None:
         """Run the task, restarting on failure with backoff."""
-        while self._running:
-            try:
-                coro = self._coro_factory()
-                await coro
-                # Task completed normally (e.g., one-shot task)
-                if not self._running:
+        try:
+            while self._running:
+                try:
+                    await self._coro_factory()
+                except asyncio.CancelledError:
                     break
-                logger.warning(
-                    "Supervised task %r completed unexpectedly, restarting",
-                    self.name,
-                )
-            except asyncio.CancelledError:
-                break
-            except Exception:
+                except Exception:
+                    logger.exception("Supervised task %r failed", self.name)
+                else:
+                    if not self._running:
+                        break
+                    logger.warning(
+                        "Supervised task %r completed unexpectedly",
+                        self.name,
+                    )
+
                 self._restart_count += 1
                 self._last_failure = time.time()
-                logger.exception(
-                    "Supervised task %r failed (restart %d/%d)",
-                    self.name,
-                    self._restart_count,
-                    self._max_restarts,
-                )
-
                 if self._restart_count >= self._max_restarts:
                     logger.error(
                         "Supervised task %r exceeded max restarts, giving up",
@@ -82,11 +82,19 @@ class SupervisedTask:
                     self._base_delay * (2 ** (self._restart_count - 1)),
                     self._max_delay,
                 )
-                logger.info("Restarting task %r in %.1fs", self.name, delay)
+                logger.info(
+                    "Restarting task %r in %.1fs (restart %d/%d)",
+                    self.name,
+                    delay,
+                    self._restart_count,
+                    self._max_restarts,
+                )
                 try:
                     await asyncio.sleep(delay)
                 except asyncio.CancelledError:
                     break
+        finally:
+            self._running = False
 
     @property
     def is_running(self) -> bool:
@@ -107,6 +115,8 @@ class TaskSupervisor:
         max_restarts: int = 10,
     ) -> SupervisedTask:
         """Register a new supervised task."""
+        if name in self._tasks:
+            raise ValueError(f"Task {name!r} is already registered")
         task = SupervisedTask(
             name=name,
             _coro_factory=coro_factory,

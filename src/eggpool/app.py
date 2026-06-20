@@ -396,7 +396,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         router._scorer.health_penalty_value = (  # pyright: ignore[reportPrivateUsage]
             config.routing.health_penalty / five_hour_capacity
         )
-    router._quota_estimator.default_unknown_reservation_microdollars = (  # pyright: ignore[reportPrivateUsage]
+    router.quota_estimator.default_unknown_reservation_microdollars = (
         config.routing.unknown_request_reservation_microdollars
     )
 
@@ -406,16 +406,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         output_price = override.output_price_per_1k
         if input_price is not None and output_price is not None:
             # Convert dollars/1K → dollars/1M (estimator Tier 4 units)
-            router._quota_estimator.set_model_override(  # pyright: ignore[reportPrivateUsage]
+            router.quota_estimator.set_model_override(
                 model_id,
                 input_price * 1000,
                 output_price * 1000,
             )
 
     # 18. Load persisted usage windows and set account weights/offsets
-    router._quota_estimator.set_usage_window_repo(  # pyright: ignore[reportPrivateUsage]
-        usage_window_repo
-    )
+    router.quota_estimator.set_usage_window_repo(usage_window_repo)
     config_offsets: dict[str, dict[str, int]] = {}
     for acct_cfg in config.all_accounts():
         config_offsets[acct_cfg.name] = {
@@ -423,7 +421,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             "weekly": acct_cfg.weekly_offset_microdollars,
             "monthly": acct_cfg.monthly_offset_microdollars,
         }
-    await router._quota_estimator.load_persisted_windows(  # pyright: ignore[reportPrivateUsage]
+    await router.quota_estimator.load_persisted_windows(
         offsets=config_offsets,
     )
     # Set account weights from config
@@ -467,7 +465,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         usage_window_repo=usage_window_repo,
         health_manager=health_manager,
         cost_calculator=cost_calculator,
-        quota_estimator=router._quota_estimator,  # pyright: ignore[reportPrivateUsage]
+        quota_estimator=router.quota_estimator,
         max_retry_attempts=1 + config.routing.max_retries_before_stream,
         quota_exhausted_cooldown_seconds=config.routing.quota_exhausted_cooldown_seconds,
         persist_error_detail=config.security.persist_redacted_error_detail,
@@ -479,7 +477,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # and in-memory quota state are accurate before readiness reports OK.
     await reconcile_expired_reservations(
         db,
-        quota_estimator=router._quota_estimator,  # pyright: ignore[reportPrivateUsage]
+        quota_estimator=router.quota_estimator,
         router=router,
     )
 
@@ -504,7 +502,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             # Reconcile expired reservations and sync in-memory state
             await reconcile_expired_reservations(
                 db,
-                quota_estimator=router._quota_estimator,  # pyright: ignore[reportPrivateUsage]
+                quota_estimator=router.quota_estimator,
                 router=router,
             )
 
@@ -523,7 +521,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         while True:
             await asyncio.sleep(60)
             try:
-                await router._quota_estimator.load_persisted_windows()  # pyright: ignore[reportPrivateUsage]
+                await router.quota_estimator.load_persisted_windows()
             except Exception:
                 logger.exception("Failed to refresh usage windows")
 
