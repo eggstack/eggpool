@@ -242,3 +242,78 @@ max_context_tokens = 500000
         config = AppConfig.from_toml(str(config_file))
         assert config.providers["p1"].model_overrides["m1"].max_context_tokens == 100000
         assert config.providers["p2"].model_overrides["m1"].max_context_tokens == 500000
+
+
+# ---------------------------------------------------------------------------
+# Cross-layer merge: provider override for one field + global for another
+# ---------------------------------------------------------------------------
+
+
+class TestCrossLayerMerge:
+    def test_provider_context_global_output_merge(self, tmp_path: Path) -> None:
+        """Provider sets context, global sets output; effective is the merge."""
+        config_file = tmp_path / "cross_layer.toml"
+        config_file.write_text(
+            """
+[model_overrides."m1"]
+max_output_tokens = 16384
+
+[providers.p1]
+id = "p1"
+base_url = "https://example.com"
+
+[providers.p1.model_overrides."m1"]
+max_context_tokens = 220000
+"""
+        )
+        config = AppConfig.from_toml(str(config_file))
+        provider_override = config.providers["p1"].model_overrides["m1"]
+        global_override = config.model_overrides["m1"]
+        assert provider_override.max_context_tokens == 220000
+        assert provider_override.max_output_tokens is None
+        assert global_override.max_output_tokens == 16384
+        assert global_override.max_context_tokens is None
+
+
+class TestMixedCaseModelIds:
+    def test_mixed_case_model_id_parsed(self, tmp_path: Path) -> None:
+        """Mixed-case model IDs in TOML quoted keys are handled."""
+        config_file = tmp_path / "mixed_case.toml"
+        config_file.write_text(
+            """
+[providers.p1]
+id = "p1"
+base_url = "https://example.com"
+
+[providers.p1.model_overrides."MiniMax-M3"]
+max_context_tokens = 220000
+max_output_tokens = 16384
+"""
+        )
+        config = AppConfig.from_toml(str(config_file))
+        override = config.providers["p1"].model_overrides["MiniMax-M3"]
+        assert override.max_context_tokens == 220000
+        assert override.max_output_tokens == 16384
+
+    def test_mixed_case_global_and_provider(self, tmp_path: Path) -> None:
+        """Mixed-case model IDs work in both global and provider sections."""
+        config_file = tmp_path / "mixed_case2.toml"
+        config_file.write_text(
+            """
+[model_overrides."Claude-3-Opus"]
+max_output_tokens = 4096
+
+[providers.p1]
+id = "p1"
+base_url = "https://example.com"
+
+[providers.p1.model_overrides."Claude-3-Opus"]
+max_context_tokens = 200000
+"""
+        )
+        config = AppConfig.from_toml(str(config_file))
+        assert config.model_overrides["Claude-3-Opus"].max_output_tokens == 4096
+        assert (
+            config.providers["p1"].model_overrides["Claude-3-Opus"].max_context_tokens
+            == 200000
+        )

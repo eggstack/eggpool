@@ -364,8 +364,37 @@ class CatalogService:
                         if provider_key not in self._cache.get_provider_model_entries():
                             model_info = self._cache.get_model(model_id)
                             if model_info is not None:
+                                provider_entry = dict(model_info)
+                                # Rerun limit resolution so config changes
+                                # take effect immediately after restart
+                                # without waiting for a live refresh.
+                                caps = provider_entry.get("capabilities", {})
+                                meta = provider_entry.get("source_metadata", {})
+                                effective = self._limit_resolver.resolve(
+                                    provider_id=provider_id,
+                                    model_id=model_id,
+                                    capabilities=caps,
+                                    source_metadata=meta,
+                                )
+                                disc_ctx, disc_inp, disc_out = extract_upstream_limits(
+                                    caps, meta
+                                )
+                                provider_entry["discovered_limits"] = {
+                                    "context_tokens": disc_ctx,
+                                    "input_tokens": disc_inp,
+                                    "output_tokens": disc_out,
+                                }
+                                provider_entry["effective_limits"] = {
+                                    "context_tokens": effective.context_tokens,
+                                    "input_tokens": effective.input_tokens,
+                                    "output_tokens": effective.output_tokens,
+                                    "enforce": effective.enforce,
+                                    "context_source": effective.context_source,
+                                    "input_source": effective.input_source,
+                                    "output_source": effective.output_source,
+                                }
                                 self._cache.set_provider_model_entry(
-                                    model_id, provider_id, dict(model_info)
+                                    model_id, provider_id, provider_entry
                                 )
 
             if self._cache.model_count > 0:

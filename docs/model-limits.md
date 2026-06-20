@@ -83,3 +83,7 @@ Enforcement returns HTTP 400 with protocol-appropriate error envelopes for OpenA
 ## Restart Requirements
 
 Configuration changes to model limits require a service restart. Live reload is not supported for model limit policy.
+
+## Dashboard Visibility
+
+Dashboard visibility of discovered and effective context limits is planned as a follow-up. Currently the dashboard model table does not display limit-related columns.

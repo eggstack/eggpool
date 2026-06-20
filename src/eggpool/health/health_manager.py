@@ -21,6 +21,7 @@ class FailureCategory(StrEnum):
     CONNECTION_FAILURE = "connection_failure"
     UPSTREAM_SERVER_ERROR = "upstream_server_error"
     PROTOCOL_ERROR = "protocol_error"
+    CONTEXT_LIMIT_EXCEEDED = "context_limit_exceeded"
     UNKNOWN = "unknown"
 
 
@@ -48,6 +49,8 @@ def classify_failure_category(
             return FailureCategory.UPSTREAM_SERVER_ERROR
         return FailureCategory.UNKNOWN
     ec = error_class.lower()
+    if "contextlimitexceeded" in ec or "context_limit_exceeded" in ec:
+        return FailureCategory.CONTEXT_LIMIT_EXCEEDED
     if "auth" in ec:
         return FailureCategory.AUTHENTICATION_FAILED
     if "quotaexhausted" in ec or "quota_exhausted" in ec:

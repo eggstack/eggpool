@@ -368,3 +368,229 @@ def test_provider_suffixed_models_cross_provider_independent() -> None:
     assert "claude-3/provider-b" not in ids
     assert "gpt-4/provider-a" in ids
     assert "gpt-4/provider-b" in ids
+
+
+# ---------------------------------------------------------------------------
+# Effective/discovered limits integration
+# ---------------------------------------------------------------------------
+
+
+def test_effective_limits_survive_update_from_account() -> None:
+    """Provider-specific effective limits persist through update_from_account."""
+    cache = ModelCatalogCache()
+    cache.update_from_account(
+        "acct1",
+        "provider-a",
+        [
+            {
+                "model_id": "gpt-4",
+                "protocol": "openai",
+                "effective_limits": {
+                    "context_tokens": 8192,
+                    "input_tokens": None,
+                    "output_tokens": 4096,
+                    "enforce": True,
+                    "context_source": "provider_override",
+                    "input_source": "unknown",
+                    "output_source": "provider_override",
+                },
+                "discovered_limits": {
+                    "context_tokens": 128000,
+                    "input_tokens": None,
+                    "output_tokens": None,
+                },
+            }
+        ],
+    )
+    entries = cache.get_provider_model_entries()
+    entry = entries[("gpt-4", "provider-a")]
+    assert entry["effective_limits"]["context_tokens"] == 8192
+    assert entry["effective_limits"]["output_tokens"] == 4096
+    assert entry["discovered_limits"]["context_tokens"] == 128000
+
+
+def test_two_providers_retain_different_limits() -> None:
+    """Two providers can store different effective limits for one base model."""
+    cache = ModelCatalogCache()
+    cache.update_from_account(
+        "acct1",
+        "provider-a",
+        [
+            {
+                "model_id": "m1",
+                "protocol": "openai",
+                "effective_limits": {"context_tokens": 100000},
+            }
+        ],
+    )
+    cache.update_from_account(
+        "acct2",
+        "provider-b",
+        [
+            {
+                "model_id": "m1",
+                "protocol": "openai",
+                "effective_limits": {"context_tokens": 500000},
+            }
+        ],
+    )
+    entries = cache.get_provider_model_entries()
+    assert entries[("m1", "provider-a")]["effective_limits"]["context_tokens"] == 100000
+    assert entries[("m1", "provider-b")]["effective_limits"]["context_tokens"] == 500000
+
+
+def test_suffixed_exposure_returns_exact_provider_limits() -> None:
+    """Suffixed model exposure carries the provider's exact effective limits."""
+    cache = ModelCatalogCache()
+    cache.update_from_account(
+        "acct1",
+        "provider-a",
+        [
+            {
+                "model_id": "m1",
+                "protocol": "openai",
+                "effective_limits": {"context_tokens": 100000},
+            }
+        ],
+    )
+    cache.update_from_account(
+        "acct2",
+        "provider-b",
+        [
+            {
+                "model_id": "m1",
+                "protocol": "openai",
+                "effective_limits": {"context_tokens": 500000},
+            }
+        ],
+    )
+    result = cache.get_provider_suffixed_models("union", {"acct1", "acct2"})
+    by_id = {m["model_id"]: m for m in result}
+    assert by_id["m1/provider-a"]["effective_limits"]["context_tokens"] == 100000
+    assert by_id["m1/provider-b"]["effective_limits"]["context_tokens"] == 500000
+
+
+def test_unsuffixed_exposure_returns_conservative_minimum() -> None:
+    """Unsuffixed exposure uses the conservative minimum across providers."""
+    cache = ModelCatalogCache()
+    cache.update_from_account(
+        "acct1",
+        "provider-a",
+        [
+            {
+                "model_id": "m1",
+                "protocol": "openai",
+                "effective_limits": {"context_tokens": 100000},
+            }
+        ],
+    )
+    cache.update_from_account(
+        "acct2",
+        "provider-b",
+        [
+            {
+                "model_id": "m1",
+                "protocol": "openai",
+                "effective_limits": {"context_tokens": 500000},
+            }
+        ],
+    )
+    result = cache.get_models_for_exposure("union", {"acct1", "acct2"})
+    assert len(result) == 1
+    assert result[0]["effective_limits"]["context_tokens"] == 100000
+
+
+def test_account_iteration_order_does_not_change_exposed_limit() -> None:
+    """Conservative merge is order-independent."""
+    cache = ModelCatalogCache()
+    # Insert in one order
+    cache.update_from_account(
+        "acct1",
+        "provider-a",
+        [
+            {
+                "model_id": "m1",
+                "protocol": "openai",
+                "effective_limits": {"context_tokens": 500000},
+            }
+        ],
+    )
+    cache.update_from_account(
+        "acct2",
+        "provider-b",
+        [
+            {
+                "model_id": "m1",
+                "protocol": "openai",
+                "effective_limits": {"context_tokens": 100000},
+            }
+        ],
+    )
+    result1 = cache.get_models_for_exposure("union", {"acct1", "acct2"})[0][
+        "effective_limits"
+    ]["context_tokens"]
+
+    # Reverse insertion order
+    cache2 = ModelCatalogCache()
+    cache2.update_from_account(
+        "acct2",
+        "provider-b",
+        [
+            {
+                "model_id": "m1",
+                "protocol": "openai",
+                "effective_limits": {"context_tokens": 100000},
+            }
+        ],
+    )
+    cache2.update_from_account(
+        "acct1",
+        "provider-a",
+        [
+            {
+                "model_id": "m1",
+                "protocol": "openai",
+                "effective_limits": {"context_tokens": 500000},
+            }
+        ],
+    )
+    result2 = cache2.get_models_for_exposure("union", {"acct1", "acct2"})[0][
+        "effective_limits"
+    ]["context_tokens"]
+
+    assert result1 == result2 == 100000
+
+
+def test_stale_provider_removal_updates_conservative_limits() -> None:
+    """Removing a provider updates the conservative minimum correctly."""
+    cache = ModelCatalogCache()
+    cache.update_from_account(
+        "acct1",
+        "provider-a",
+        [
+            {
+                "model_id": "m1",
+                "protocol": "openai",
+                "effective_limits": {"context_tokens": 100000},
+            }
+        ],
+    )
+    cache.update_from_account(
+        "acct2",
+        "provider-b",
+        [
+            {
+                "model_id": "m1",
+                "protocol": "openai",
+                "effective_limits": {"context_tokens": 500000},
+            }
+        ],
+    )
+    # Both visible
+    result = cache.get_models_for_exposure("union", {"acct1", "acct2"})
+    assert result[0]["effective_limits"]["context_tokens"] == 100000
+
+    # Remove provider-a (low limit)
+    cache.mark_account_models_unavailable("acct1")
+    result = cache.get_models_for_exposure("union", {"acct2"})
+    assert result[0]["effective_limits"]["context_tokens"] == 500000

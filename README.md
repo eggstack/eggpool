@@ -252,6 +252,8 @@ To generate an OpenCode configuration with explicit model limits:
 eggpool configsetup opencode --json-only > opencode-config.json
 ```
 
+Merge the generated provider definition into your OpenCode configuration. OpenCode must consume these model definitions for proactive compaction to work --- without them, OpenCode uses default context sizes and will not compact before the effective limit.
+
 Model limit changes require a service restart.
 
 ## Development

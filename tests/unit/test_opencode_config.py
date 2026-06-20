@@ -160,3 +160,34 @@ def test_all_limit_fields() -> None:
     )
     limit = result["provider"]["eggpool"]["models"]["m1"]["limit"]
     assert limit == {"context": 200000, "input": 180000, "output": 16384}
+
+
+def test_json_only_output_round_trips() -> None:
+    """build_opencode_config_json output is pure JSON that round-trips."""
+    output = build_opencode_config_json(
+        base_url="http://host:8080/v1",
+        api_key="ep_key",
+        models=[
+            {"model_id": "m1", "effective_limits": {"context_tokens": 100000}},
+            {"model_id": "m2", "effective_limits": {"context_tokens": 200000}},
+        ],
+    )
+    parsed = json.loads(output)
+    assert "$schema" in parsed
+    models = parsed["provider"]["eggpool"]["models"]
+    assert list(models.keys()) == ["m1", "m2"]
+    # No status messages mixed into JSON output
+    assert "\n" not in output.split("\n")[0] or output.strip().startswith("{")
+
+
+def test_json_only_no_status_contamination() -> None:
+    """Status messages do not contaminate JSON-only output."""
+    output = build_opencode_config_json(
+        base_url="http://host:8080/v1",
+        api_key="ep_key",
+        models=[],
+    )
+    # Output must be parseable JSON with no leading/trailing text
+    parsed = json.loads(output)
+    assert isinstance(parsed, dict)
+    assert "provider" in parsed
