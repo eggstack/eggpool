@@ -51,6 +51,10 @@ class QuotaWindow:
             _, tokens, cost = self.observations.popleft()
             self.used_tokens -= tokens
             self.used_cost_microdollars -= cost
+        if self.used_tokens < 0:
+            self.used_tokens = 0
+        if self.used_cost_microdollars < 0:
+            self.used_cost_microdollars = 0
 
     def get_usage(self, current_time: float | None = None) -> tuple[int, int]:
         """Get current usage within the window."""

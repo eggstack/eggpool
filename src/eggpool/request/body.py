@@ -31,8 +31,9 @@ async def read_body_limited(request: Request, max_bytes: int) -> bytes:
     chunks: list[bytes] = []
     total = 0
     too_large = False
+    stream = request.stream()
     try:
-        async for chunk in request.stream():
+        async for chunk in stream:
             total += len(chunk)
             if total > max_bytes:
                 too_large = True
@@ -43,11 +44,12 @@ async def read_body_limited(request: Request, max_bytes: int) -> bytes:
             # Drain the remaining stream so the upstream connection
             # is properly released; otherwise HTTP/1.1 keep-alive
             # connections may stall waiting for the body to finish.
-            # Swallow any drain errors so the RequestTooLargeError
-            # raised below is the one propagated to the caller.
+            # Consume from the existing generator — request.stream()
+            # is a one-shot async generator that cannot be called
+            # again after partial consumption.
             try:
                 async with asyncio.timeout(5.0):
-                    async for _chunk in request.stream():
+                    async for _chunk in stream:
                         pass
             except (TimeoutError, Exception):
                 pass

@@ -234,6 +234,12 @@ async def reload_config(app: FastAPI) -> None:
     if registry is not None:
         registry.reload(new_config)
 
+    # Invalidate account ID cache so stale IDs from removed accounts
+    # are not reused after re-adding with a new database row.
+    coordinator: RequestCoordinator | None = getattr(app.state, "coordinator", None)
+    if coordinator is not None:
+        coordinator.invalidate_account_id_cache()
+
     logger.info(
         "reload: synced %d providers, %d accounts",
         len(new_config.providers),

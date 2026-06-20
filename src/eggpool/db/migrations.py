@@ -17,17 +17,49 @@ SCHEMA_DIR = Path(__file__).parent / "schema"
 
 
 def _split_statements(sql: str) -> list[str]:
-    """Split a SQL file into individual statements, stripping comments and blanks."""
+    """Split a SQL file into individual statements, stripping comments and blanks.
+
+    Handles semicolons inside quoted string literals so that SQL like
+    ``INSERT INTO foo VALUES ('a;b')`` is not incorrectly split.
+    """
     statements: list[str] = []
-    for block in sql.split(";"):
-        cleaned = block.strip()
-        # Remove leading comment lines
+    current: list[str] = []
+    in_quote: str | None = None
+
+    for ch in sql:
+        if in_quote:
+            current.append(ch)
+            if ch == in_quote:
+                # SQL uses '' to escape a quote inside a quoted literal
+                if in_quote == "'" and len(current) >= 2 and current[-2] == "'":
+                    continue
+                in_quote = None
+        elif ch in ("'", '"'):
+            in_quote = ch
+            current.append(ch)
+        elif ch == ";":
+            block = "".join(current).strip()
+            current = []
+            # Remove leading comment lines
+            lines = [
+                line for line in block.splitlines() if not line.strip().startswith("--")
+            ]
+            stmt = "\n".join(lines).strip()
+            if stmt:
+                statements.append(stmt)
+        else:
+            current.append(ch)
+
+    # Handle trailing statement without semicolon
+    if current:
+        block = "".join(current).strip()
         lines = [
-            line for line in cleaned.splitlines() if not line.strip().startswith("--")
+            line for line in block.splitlines() if not line.strip().startswith("--")
         ]
         stmt = "\n".join(lines).strip()
         if stmt:
             statements.append(stmt)
+
     return statements
 
 

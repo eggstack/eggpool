@@ -122,8 +122,6 @@ class RequestFinalizer:
         # by ``MAX_ERROR_DETAIL_CHARS`` before any processing.
         if self._persist_error_detail and data.error_detail is not None:
             error_detail = redact_error_detail(data.error_detail)
-            if error_detail is not None and len(error_detail) > MAX_ERROR_DETAIL_CHARS:
-                error_detail = error_detail[:MAX_ERROR_DETAIL_CHARS]
         else:
             error_detail = None
 

@@ -49,9 +49,10 @@ class Router:
         self._quota_estimator = quota_estimator or QuotaEstimator()
         self._health_manager = health_manager
         self._stale_after_s = stale_after_s
-        # Serializes increment/decrement of active_request_count so
-        # concurrent coordinators and cleanup tasks cannot lose updates.
-        self._active_count_lock = asyncio.Lock()
+        # Per-account locks for increment/decrement of active_request_count
+        # so concurrent coordinators for different accounts do not serialize.
+        self._active_count_locks: dict[str, asyncio.Lock] = {}
+        self._active_count_locks_lock = asyncio.Lock()
         self._scorer = QuotaFairScorer(
             quota_estimator=self._quota_estimator,
             health_manager=self._health_manager,
@@ -234,11 +235,25 @@ class Router:
             offset_30d_microdollars=offset_30d_microdollars,
         )
 
+    async def _get_account_lock(self, account_name: str) -> asyncio.Lock:
+        """Get or create a per-account lock for active request counting."""
+        lock = self._active_count_locks.get(account_name)
+        if lock is not None:
+            return lock
+        async with self._active_count_locks_lock:
+            # Double-check after acquiring the creation lock
+            lock = self._active_count_locks.get(account_name)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._active_count_locks[account_name] = lock
+            return lock
+
     async def increment_active_request_count(self, account_name: str) -> None:
         """Increment the active request count for an account."""
         state = self._registry.get_state(account_name)
         if state is not None:
-            async with self._active_count_lock:
+            lock = await self._get_account_lock(account_name)
+            async with lock:
                 state.active_request_count += 1
 
     async def decrement_active_request_count(self, account_name: str) -> None:
@@ -248,7 +263,8 @@ class Router:
         """
         state = self._registry.get_state(account_name)
         if state is not None:
-            async with self._active_count_lock:
+            lock = await self._get_account_lock(account_name)
+            async with lock:
                 if state.active_request_count > 0:
                     state.active_request_count -= 1
 

@@ -47,7 +47,10 @@ class Database:
             "database_transaction_depth",
             default=0,
         )
-        self._transaction_owner: asyncio.Task[object] | None = None
+        self._transaction_owner: ContextVar[asyncio.Task[object] | None] = ContextVar(
+            "database_transaction_owner",
+            default=None,
+        )
 
     @property
     def read_only(self) -> bool:
@@ -59,8 +62,8 @@ class Database:
             if self._read_only:
                 # Use a read-only URI so SQLite refuses to change
                 # journal mode, create WAL files, or apply migrations.
-                uri = self._build_read_only_uri(self._path)
-                self._conn = await aiosqlite.connect(uri, uri=True)
+                uri, use_uri = self._build_read_only_uri(self._path)
+                self._conn = await aiosqlite.connect(uri, uri=use_uri)
                 self._conn.row_factory = aiosqlite.Row
                 await self._conn.execute(
                     f"PRAGMA busy_timeout = {self._busy_timeout_ms}"
@@ -78,18 +81,19 @@ class Database:
             raise DatabaseError(f"Failed to connect to database: {exc}") from exc
 
     @staticmethod
-    def _build_read_only_uri(path: str) -> str:
+    def _build_read_only_uri(path: str) -> tuple[str, bool]:
         """Build a SQLite URI with read-only mode.
 
         In-memory databases cannot be opened in read-only mode; we
         fall back to the plain path in that case (the test fixtures
-        rely on it).
+        rely on it).  Returns ``(path, use_uri)`` where *use_uri*
+        indicates whether the path is a SQLite URI.
         """
         if path == ":memory:":
-            return path
+            return path, False
         if "://" in path:
-            return path
-        return f"file:{path}?mode=ro"
+            return path, True
+        return f"file:{path}?mode=ro", True
 
     async def disconnect(self) -> None:
         """Close the connection."""
@@ -105,9 +109,10 @@ class Database:
 
     def _current_task_owns_transaction(self) -> bool:
         """Check if the current asyncio task owns the active transaction."""
+        owner = self._transaction_owner.get()
         return (
-            self._transaction_owner is not None
-            and self._transaction_owner is asyncio.current_task()
+            owner is not None
+            and owner is asyncio.current_task()
             and self._transaction_depth.get() > 0
         )
 
@@ -356,7 +361,7 @@ class Database:
         owner = asyncio.current_task()
 
         # Nested detection: depth > 0 AND same task owns it
-        if depth > 0 and self._transaction_owner is owner:
+        if depth > 0 and self._transaction_owner.get() is owner:
             token = self._transaction_depth.set(depth + 1)
             try:
                 yield
@@ -367,8 +372,8 @@ class Database:
         # Outer transaction: hold the connection lock for the entire
         # transaction lifetime so no other task can interleave SQL.
         async with self._connection_lock:
-            token = self._transaction_depth.set(1)
-            self._transaction_owner = owner
+            depth_token = self._transaction_depth.set(1)
+            owner_token = self._transaction_owner.set(owner)
             try:
                 await self.connection.execute("BEGIN IMMEDIATE")
                 try:
@@ -379,5 +384,5 @@ class Database:
                 else:
                     await self.connection.commit()
             finally:
-                self._transaction_owner = None
-                self._transaction_depth.reset(token)
+                self._transaction_owner.reset(owner_token)
+                self._transaction_depth.reset(depth_token)

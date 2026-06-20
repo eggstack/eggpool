@@ -1491,11 +1491,31 @@ class RequestCoordinator:
         estimated = max(1_000, len(body) // 3)
         return min(estimated, 128_000)
 
+    def invalidate_account_id_cache(self, account_name: str | None = None) -> None:
+        """Clear cached account IDs.
+
+        Call after an account is removed or re-added so stale IDs are
+        not reused.  Pass *account_name* to invalidate a single entry,
+        or ``None`` to clear the entire cache.
+        """
+        if account_name is None:
+            self._account_id_cache.clear()
+        else:
+            self._account_id_cache.pop(account_name, None)
+
     @staticmethod
     def _error_status_code(err: Exception | None) -> int:
         """Map an exception to an HTTP status code."""
         if err is None:
             return 500
+        if isinstance(err, AuthenticationError):
+            return 502
+        if isinstance(err, RateLimitError):
+            return 429
+        if isinstance(err, QuotaExhaustedError):
+            return 503
+        if isinstance(err, ModelUnavailableError):
+            return 503
         if isinstance(err, UpstreamError) and err.status_code is not None:
             return err.status_code
         if isinstance(err, _RetryableUpstreamError):
@@ -1506,14 +1526,6 @@ class RequestCoordinator:
             if err.status_code is not None:
                 return err.status_code
             return 502
-        if isinstance(err, AuthenticationError):
-            return 502
-        if isinstance(err, RateLimitError):
-            return 429
-        if isinstance(err, QuotaExhaustedError):
-            return 503
-        if isinstance(err, ModelUnavailableError):
-            return 503
         return 502
 
 

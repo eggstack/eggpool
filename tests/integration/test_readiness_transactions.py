@@ -131,7 +131,7 @@ async def test_child_task_does_not_inherit_ownership() -> None:
         # The child should NOT be treated as nested owner
         # It should wait for the parent's transaction to complete
         depth = db._transaction_depth.get()
-        owner = db._transaction_owner
+        owner = db._transaction_owner.get()
         current = asyncio.current_task()
         # If owner is the parent (not current task), depth check would fail nested path
         is_nested_owner = depth > 0 and owner is current

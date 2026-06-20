@@ -78,11 +78,6 @@ class AttemptFinalizer:
         # by ``ATTEMPT_MAX_ERROR_DETAIL_CHARS``.
         if self._persist_error_detail and data.error_detail is not None:
             error_detail = redact_error_detail(data.error_detail)
-            if (
-                error_detail is not None
-                and len(error_detail) > ATTEMPT_MAX_ERROR_DETAIL_CHARS
-            ):
-                error_detail = error_detail[:ATTEMPT_MAX_ERROR_DETAIL_CHARS]
         else:
             error_detail = None
 

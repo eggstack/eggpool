@@ -205,14 +205,14 @@ async def test_concurrent_readers_during_write() -> None:
         db1._read_only = False  # type: ignore[reportPrivateUsage]
         db1._connection_lock = asyncio.Lock()
         db1._transaction_depth = ContextVar("database_transaction_depth", default=0)
-        db1._transaction_owner = None
+        db1._transaction_owner = ContextVar("database_transaction_owner", default=None)
         db2 = Database.__new__(Database)
         db2._conn = conn2  # type: ignore[reportPrivateUsage]
         db2._path = db_uri  # type: ignore[reportPrivateUsage]
         db2._read_only = False  # type: ignore[reportPrivateUsage]
         db2._connection_lock = asyncio.Lock()
         db2._transaction_depth = ContextVar("database_transaction_depth2", default=0)
-        db2._transaction_owner = None
+        db2._transaction_owner = ContextVar("database_transaction_owner2", default=None)
 
         await _run_migrations(db1)
 

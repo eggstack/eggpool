@@ -5,7 +5,16 @@ from pathlib import Path
 
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 11300
-DEFAULT_DATABASE_PATH = "usage.sqlite3"
+
+# Use an absolute path so the database is not dependent on the process
+# working directory.  Follows XDG Base Directory conventions.
+_xdg_data = os.environ.get("XDG_DATA_HOME", "")
+if _xdg_data:
+    _data_dir = Path(_xdg_data) / "eggpool"
+else:
+    _data_dir = Path.home() / ".local" / "share" / "eggpool"
+DEFAULT_DATABASE_PATH = str(_data_dir / "usage.sqlite3")
+
 API_V1_PREFIX = "/v1"
 MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024  # 10 MB
 MAX_SSE_FRAME_SIZE = 64 * 1024  # 64 KB

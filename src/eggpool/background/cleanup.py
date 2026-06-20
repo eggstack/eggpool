@@ -41,7 +41,7 @@ async def cleanup_stale_reservations(
                 (SELECT name FROM accounts WHERE id = reservations.account_id)
                 AS account_name
             """,
-            (f"-{int(max_age_seconds)}",),
+            (-int(max_age_seconds),),
         )
         transitioned_rows = [dict(row) for row in rows]
 
@@ -85,7 +85,7 @@ async def cleanup_old_requests(
                 WHERE started_at < datetime('now', ? || ' days')
             )
             """,
-            (f"-{retain_days}",),
+            (-retain_days,),
         )
 
         count = await db.execute_write(
@@ -93,7 +93,7 @@ async def cleanup_old_requests(
             DELETE FROM requests
             WHERE started_at < datetime('now', ? || ' days')
             """,
-            (f"-{retain_days}",),
+            (-retain_days,),
         )
     if count > 0:
         logger.info(
@@ -115,7 +115,7 @@ async def cleanup_old_events(
             DELETE FROM account_events
             WHERE created_at < datetime('now', ? || ' days')
             """,
-            (f"-{retain_days}",),
+            (-retain_days,),
         )
     if count > 0:
         logger.info("Deleted %d old account events", count)

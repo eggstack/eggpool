@@ -782,7 +782,7 @@ def export_env_var(env_name: str, value: str) -> Path | None:
             new_lines: list[str] = []
             for line in file_lines:
                 if line.strip().startswith(f"export {env_name}="):
-                    new_lines.append(f"export {env_name}={value}")
+                    new_lines.append(f'export {env_name}="{value}"')
                 else:
                     new_lines.append(line)
             profile.write_text("\n".join(new_lines), encoding="utf-8")
@@ -791,7 +791,7 @@ def export_env_var(env_name: str, value: str) -> Path | None:
     # Append
     with profile.open("a", encoding="utf-8") as f:
         f.write("\n# Added by eggpool connect\n")
-        f.write(f"export {env_name}={value}\n")
+        f.write(f'export {env_name}="{value}"\n')
 
     return profile
 

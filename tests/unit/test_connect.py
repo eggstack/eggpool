@@ -561,7 +561,7 @@ class TestExportEnvVar:
         assert profile.exists()
 
         content = profile.read_text()
-        assert "export TEST_API_KEY=sk-test-123" in content
+        assert 'export TEST_API_KEY="sk-test-123"' in content
 
     def test_replaces_existing_var(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -576,7 +576,7 @@ class TestExportEnvVar:
         export_env_var("TEST_KEY", "new-value")
 
         content = profile.read_text()
-        assert "export TEST_KEY=new-value" in content
+        assert 'export TEST_KEY="new-value"' in content
         assert "export OLD_KEY=old-value" in content
         # Should not have duplicate entries
         assert content.count("export TEST_KEY=") == 1
@@ -595,7 +595,7 @@ class TestExportEnvVar:
 
         content = profile.read_text()
         assert "export PATH=/usr/bin" in content
-        assert "export NEW_KEY=new-value" in content
+        assert 'export NEW_KEY="new-value"' in content
 
 
 class TestCliConnectList:
