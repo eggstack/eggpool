@@ -468,18 +468,14 @@ class RequestCoordinator:
             request_estimates: dict[str, int] = {}
             if self._quota_estimator is not None:
                 for acct_name in eligible_account_names:
-                    request_estimates[acct_name] = (
-                        self._quota_estimator.estimate_cost(
-                            acct_name, context.model_id, estimated_tokens
-                        )
+                    request_estimates[acct_name] = self._quota_estimator.estimate_cost(
+                        acct_name, context.model_id, estimated_tokens
                     )
 
             # 4. Rank accounts once using projected estimates, then
             #    acquire the circuit-breaker probe slot atomically.
             exclude: set[str] = (
-                set(context.attempted_accounts)
-                if context.attempted_accounts
-                else set()
+                set(context.attempted_accounts) if context.attempted_accounts else set()
             )
             selected_state = None
             ranked_candidates = await self._router.select_accounts_for_failover(
@@ -558,10 +554,7 @@ class RequestCoordinator:
 
                 # 7. Use the exact estimate for the selected account.
                 estimated_microdollars = request_estimates.get(account_name, 0)
-                if (
-                    estimated_microdollars == 0
-                    and self._quota_estimator is not None
-                ):
+                if estimated_microdollars == 0 and self._quota_estimator is not None:
                     estimated_microdollars = self._quota_estimator.estimate_cost(
                         account_name, context.model_id, estimated_tokens
                     )

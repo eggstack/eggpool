@@ -9,6 +9,7 @@ naturally to dashboard UI elements.
 from __future__ import annotations
 
 import colorsys
+import re
 import tomllib
 from importlib.resources.abc import Traversable
 from pathlib import Path
@@ -454,7 +455,9 @@ def list_themes(themes_dir: str | Path | None = None) -> list[str]:
     bundled_names: set[str] = {
         Path(f.name).stem
         for f in bundled.iterdir()
-        if f.is_file() and f.name.endswith(".toml")
+        if f.is_file()
+        and f.name.endswith(".toml")
+        and _SAFE_THEME_NAME_RE.match(Path(f.name).stem)
     }
 
     if themes_dir is None:
@@ -463,8 +466,22 @@ def list_themes(themes_dir: str | Path | None = None) -> list[str]:
     user = Path(themes_dir)
     if not user.is_dir():
         return sorted(bundled_names)
-    user_names = {f.stem for f in user.iterdir() if f.suffix == ".toml" and f.is_file()}
+    user_names = {
+        f.stem
+        for f in user.iterdir()
+        if f.suffix == ".toml" and f.is_file() and _SAFE_THEME_NAME_RE.match(f.stem)
+    }
     return sorted(bundled_names | user_names)
+
+
+_SAFE_THEME_NAME_RE = re.compile(r"^[A-Za-z0-9 _.()\-]+$")
+
+
+def _is_safe_theme_name(theme_name: str) -> bool:
+    """Reject theme names that could escape the themes directory via
+    path traversal or other separator characters.
+    """
+    return bool(theme_name) and _SAFE_THEME_NAME_RE.fullmatch(theme_name) is not None
 
 
 def resolve_theme_path(
@@ -475,12 +492,20 @@ def resolve_theme_path(
     When themes_dir is set, the user directory is checked first (allowing
     overrides), falling back to the bundled themes directory.  Returns
     ``None`` when no matching file is found.
+
+    Theme names are validated against a strict character allowlist and the
+    resolved path must remain inside ``themes_dir`` to defeat path
+    traversal via ``..`` or absolute paths.
     """
     from eggpool.dashboard._resources import bundled_themes_dir
 
+    if not _is_safe_theme_name(theme_name):
+        return None
+
     if themes_dir is not None:
-        user = Path(themes_dir) / f"{theme_name}.toml"
-        if user.is_file():
+        themes_dir_path = Path(themes_dir).resolve()
+        user = (themes_dir_path / f"{theme_name}.toml").resolve()
+        if user.is_file() and user.is_relative_to(themes_dir_path):
             return user
 
     bundled = bundled_themes_dir().joinpath(f"{theme_name}.toml")

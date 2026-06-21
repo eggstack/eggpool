@@ -51,6 +51,20 @@ def test_verify_api_key_missing(mock_request: MagicMock) -> None:
     assert verify_api_key(mock_request, "secret123") is False
 
 
+def test_verify_api_key_rejects_malformed_format(mock_request: MagicMock) -> None:
+    """Regression test (M11): provided keys that fail format
+    validation must not be compared against the configured key.
+    """
+    mock_request.headers = {"x-api-key": "short"}
+    assert verify_api_key(mock_request, "short") is False
+
+    mock_request.headers = {"x-api-key": "contains space char"}
+    assert verify_api_key(mock_request, "contains space char") is False
+
+    mock_request.headers = {"x-api-key": "weird\x00chars"}
+    assert verify_api_key(mock_request, "weird\x00chars") is False
+
+
 def test_require_auth_no_key() -> None:
     """When no api_key is set and no env var exists, auth is disabled."""
     config = AppConfig()

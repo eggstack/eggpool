@@ -6,6 +6,7 @@ small. All values rendered into HTML are escaped via the `escape` module.
 
 from __future__ import annotations
 
+import json
 from datetime import date, timedelta
 from html import escape as _html_escape
 from typing import Any
@@ -346,7 +347,7 @@ def _render_timeseries_chart(period: str = "24h") -> str:
 </section>
 <script>
 (() => {{
-  const period = '{period}';
+  const period = {json.dumps(period)};
   const ctx = document.getElementById('timeseries-chart');
   if (!ctx) return;
 
@@ -812,7 +813,7 @@ def _render_account_table(accounts: list[dict[str, Any]]) -> str:
             f"<td>{provider}</td>"
             f'<td class="{"yes" if enabled else "no"}">'
             f"{'yes' if enabled else 'no'}</td>"
-            f'<td class="{sanitize_class_name(health)}">{health}</td>'
+            f'<td class="{sanitize_class_name(health)}">{escape(health)}</td>'
             f"<td>{int(row.get('request_count', 0)):,}</td>"
             f"<td>{int(row.get('error_count', 0)):,}</td>"
             f"<td>{in_tok}</td>"

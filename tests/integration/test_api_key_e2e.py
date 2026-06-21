@@ -352,6 +352,39 @@ class TestGetkeyNewkey:
         assert key.startswith("ep_")
         assert len(key) == 67  # "ep_" + 64 hex chars
 
+    def test_newkey_preserves_api_key_env(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Regression test: ``eggpool newkey`` must not clobber
+        ``api_key_env`` declarations in the [server] section.
+        """
+        monkeypatch.setenv("EGGPOOL_API_KEY", "env-sourced-server-key")
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            textwrap.dedent("""\
+                [server]
+                api_key_env = "EGGPOOL_API_KEY"
+                port = 11300
+            """)
+        )
+
+        from click.testing import CliRunner
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "newkey"],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        written = config_path.read_text(encoding="utf-8")
+        assert "api_key_env" in written
+        assert "EGGPOOL_API_KEY" in written
+        assert 'api_key = "' not in written
+
 
 class TestConfigSetup:
     """Verify configsetup commands produce valid snippets."""

@@ -382,6 +382,38 @@ class TestRenderOverview:
         assert "<detail>" not in html
         assert "&lt;detail&gt;" in html
 
+    def test_escapes_period_in_timeseries_chart(self) -> None:
+        """Regression test: ``period`` is interpolated into a JS literal;
+        a malicious value must not escape the string literal.
+        """
+        html = render_overview(
+            overview={
+                "summary": {
+                    "total_requests": 0,
+                    "successful_requests": 0,
+                    "error_requests": 0,
+                    "error_rate": 0.0,
+                    "total_input_tokens": 0,
+                    "total_output_tokens": 0,
+                    "total_cost_microdollars": 0,
+                    "avg_latency_ms": 0.0,
+                },
+                "imbalance": {
+                    "imbalance_ratio": 0.0,
+                    "active_accounts": 0,
+                    "most_used": {"name": "a", "cost_microdollars": 0},
+                    "least_used": {"name": "b", "cost_microdollars": 0},
+                },
+                "period_label": "24h",
+                "start": "2024-01-01 00:00:00",
+                "end": "2024-01-02 00:00:00",
+            },
+            accounts=[],
+            period="';alert(1)//",
+        )
+        assert "');alert(1)//" not in html
+        assert r"\'" in html or r"\u0027" in html or '"' in html
+
 
 class TestRenderAccounts:
     """Tests for the accounts page renderer."""
@@ -445,6 +477,28 @@ class TestRenderAccounts:
         html = render_accounts(accounts=accounts, period="24h")
         assert "<script>alert(1)</script>" not in html
         assert "&lt;script&gt;" in html
+
+    def test_health_state_html_injection_blocked(self) -> None:
+        """Regression test (H4): ``health_state`` flows from DB rows and
+        must be escaped before being rendered as HTML body content.
+        """
+        accounts = [
+            {
+                "account_name": "alpha",
+                "account_enabled": 1,
+                "request_count": 0,
+                "error_count": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cost_microdollars": 0,
+                "avg_latency_ms": 0.0,
+                "reserved_microdollars": 0,
+                "health_state": "<script>alert(1)</script>",
+            }
+        ]
+        html = render_accounts(accounts=accounts, period="24h")
+        assert "<script>alert(1)</script>" not in html
+        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
 
 
 class TestRenderModels:

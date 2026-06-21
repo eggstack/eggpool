@@ -788,23 +788,6 @@ class ProviderRepository:
     def __init__(self, db: Database) -> None:
         self._db = db
 
-    async def upsert(
-        self,
-        provider_id: str,
-        base_url: str,
-        protocols: list[str],
-    ) -> None:
-        """Insert or update a provider record."""
-        import json
-
-        await self._db.execute_write(
-            "INSERT INTO providers (provider_id, base_url, protocols) "
-            "VALUES (?, ?, ?) "
-            "ON CONFLICT(provider_id) DO UPDATE SET "
-            "base_url = excluded.base_url, protocols = excluded.protocols",
-            (provider_id, base_url, json.dumps(protocols)),
-        )
-
     async def list_enabled(self) -> list[dict[str, Any]]:
         """List all enabled providers."""
         rows = await self._db.fetch_all("SELECT * FROM providers WHERE enabled = 1")

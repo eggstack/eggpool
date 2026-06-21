@@ -120,9 +120,9 @@ class DashboardConfig(BaseModel):
     store_request_content: bool = False
     refresh_interval_s: int = Field(default=60, gt=0)
 
-    @field_validator("store_request_content")
+    @field_validator("store_request_content", mode="before")
     @classmethod
-    def reject_storing_content(cls, value: bool) -> bool:
+    def reject_storing_content(cls, value: object) -> object:
         if value:
             raise ValueError(
                 "store_request_content must be false; "
@@ -210,7 +210,7 @@ class ProviderConfig(BaseModel):
     max_keepalive: int = Field(default=20, gt=0)
     keepalive_timeout_s: float = Field(default=30, ge=0)
     accounts: list[AccountConfig] = []
-    model_overrides: dict[str, ModelLimitOverrideConfig] = {}
+    model_overrides: dict[str, ModelOverrideConfig] = {}
 
     @field_validator("models_method", mode="before")
     @classmethod
@@ -421,7 +421,7 @@ class AppConfig(BaseModel):
                 f"Account {account_name!r} references proxy env var "
                 f"{env_name!r}, but it is whitespace-only"
             )
-        return value
+        return value.strip()
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> AppConfig:

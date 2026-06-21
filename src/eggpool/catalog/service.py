@@ -411,7 +411,9 @@ class CatalogService:
 
     async def _persist_catalog(self) -> None:
         """Persist the in-memory catalog to the database."""
-        now_sql = "datetime('now')"
+        from datetime import UTC, datetime
+
+        now_iso = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
 
         acct_rows = await self._db.fetch_all("SELECT id, name FROM accounts")
         latest_prices = await PriceSnapshotRepository(self._db).get_all_latest()
@@ -437,6 +439,8 @@ class CatalogService:
                     model_info["protocol"],
                     json.dumps(model_info.get("capabilities", {})),
                     json.dumps(model_info.get("source_metadata", {})),
+                    now_iso,
+                    now_iso,
                     protocol_source,
                 )
             )
@@ -449,35 +453,36 @@ class CatalogService:
                     acct_row["id"],
                     model_id,
                     1 if acct_row["name"] in supporting_accounts else 0,
+                    now_iso,
                 )
                 for acct_row in acct_rows
             )
 
         async with self._db.transaction():
             await self._db.execute_many(
-                f"""
+                """
                     INSERT INTO models (
                         model_id, display_name, protocol,
                         capabilities, source_metadata,
                         first_seen_at, last_seen_at, protocol_source,
                         resolution_status
-                    ) VALUES (?, ?, ?, ?, ?, {now_sql}, {now_sql}, ?, 'resolved')
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'resolved')
                     ON CONFLICT(model_id) DO UPDATE SET
                         display_name = excluded.display_name,
                         protocol = excluded.protocol,
                         capabilities = excluded.capabilities,
                         source_metadata = excluded.source_metadata,
-                        last_seen_at = {now_sql},
+                        last_seen_at = excluded.last_seen_at,
                         protocol_source = excluded.protocol_source,
                         resolution_status = 'resolved'
                 """,
                 model_rows,
             )
             await self._db.execute_many(
-                f"""
+                """
                         INSERT INTO account_models (
                             account_id, model_id, enabled, created_at
-                        ) VALUES (?, ?, ?, {now_sql})
+                        ) VALUES (?, ?, ?, ?)
                         ON CONFLICT(account_id, model_id) DO UPDATE SET
                             enabled = excluded.enabled
                         WHERE account_models.enabled IS NOT excluded.enabled

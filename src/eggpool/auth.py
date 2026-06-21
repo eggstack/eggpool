@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _BEARER_RE = re.compile(r"^bearer[ \t]+(.+)$", re.IGNORECASE)
+_PROVIDED_KEY_RE = re.compile(r"^[A-Za-z0-9_\-]{8,512}$")
 
 
 def verify_api_key(request: Request, api_key: str) -> bool:
@@ -33,6 +34,8 @@ def verify_api_key(request: Request, api_key: str) -> bool:
     if not provided:
         provided = request.headers.get("x-api-key", "").strip()
     if not api_key:
+        return False
+    if not _PROVIDED_KEY_RE.fullmatch(provided):
         return False
     return hmac.compare_digest(provided, api_key)
 

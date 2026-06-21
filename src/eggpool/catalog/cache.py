@@ -20,6 +20,7 @@ def parse_model_id(
     when no suffix is present or the suffix does not match a known
     provider.
     """
+    model_id = model_id.strip()
     if "/" in model_id:
         base, candidate = model_id.rsplit("/", 1)
         if (

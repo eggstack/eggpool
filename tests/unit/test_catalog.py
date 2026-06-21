@@ -225,6 +225,19 @@ def test_parse_model_id_rejects_empty_model_prefix() -> None:
     assert provider is None
 
 
+def test_parse_model_id_strips_whitespace() -> None:
+    """Regression test (L8): leading/trailing whitespace must be
+    normalized away before parsing.
+    """
+    base, provider = parse_model_id("  gpt-4/opencode-go  ", {"opencode-go"})
+    assert base == "gpt-4"
+    assert provider == "opencode-go"
+
+    base, provider = parse_model_id("claude-opus-4\n", {"opencode-go"})
+    assert base == "claude-opus-4"
+    assert provider is None
+
+
 # ===================================================================
 # Provider tracking tests
 # ===================================================================

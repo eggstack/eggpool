@@ -245,6 +245,36 @@ def test_provider_models_method_is_normalized() -> None:
     assert config.providers["provider-a"].models_method == "POST"
 
 
+def test_provider_model_overrides_preserves_pricing_fields() -> None:
+    """Regression test (H1): provider-level ``[model_overrides]`` must
+    accept the full set of override fields (pricing, protocol), not just
+    the limit-only subset.
+    """
+    config = AppConfig.from_dict(
+        {
+            "providers": {
+                "provider-a": {
+                    "id": "provider-a",
+                    "base_url": "https://example.com",
+                    "model_overrides": {
+                        "claude-opus-4": {
+                            "input_price_per_1k": "$3 / 1M",
+                            "output_price_per_1k": "$15 / 1M",
+                            "protocol": "anthropic",
+                            "max_context_tokens": 200000,
+                        }
+                    },
+                }
+            }
+        }
+    )
+    override = config.providers["provider-a"].model_overrides["claude-opus-4"]
+    assert override.input_price_per_1k == pytest.approx(0.003)
+    assert override.output_price_per_1k == pytest.approx(0.015)
+    assert override.protocol == "anthropic"
+    assert override.max_context_tokens == 200000
+
+
 def test_provider_models_method_rejects_unknown_method() -> None:
     with pytest.raises(ConfigError, match="models_method"):
         AppConfig.from_dict(
@@ -299,6 +329,20 @@ def test_dashboard_config_defaults() -> None:
     assert dc.retain_event_days == 90
     assert dc.store_request_content is False
     assert dc.refresh_interval_s == 60
+
+
+def test_dashboard_store_request_content_rejected_every_form() -> None:
+    """Regression test (M13): every truthy form must be rejected
+    regardless of Pydantic coercion order.
+    """
+    import pytest
+    from pydantic import ValidationError
+
+    from eggpool.models.config import DashboardConfig
+
+    for truthy in (True, "true", "True", "1", 1, 1.0, "yes"):
+        with pytest.raises(ValidationError):
+            DashboardConfig(store_request_content=truthy)
 
 
 def test_server_config_api_key_env_default() -> None:

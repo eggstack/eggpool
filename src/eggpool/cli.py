@@ -322,7 +322,13 @@ def _detect_lan_ip() -> str:
 
 
 def _write_server_api_key(config_path: str, new_key: str) -> None:
-    """Write a server API key to the [server] section of the config."""
+    """Write a server API key to the [server] section of the config.
+
+    If the [server] section declares ``api_key_env`` instead of an inline
+    ``api_key = "..."`` line, the directive is preserved and no inline key
+    is written. The operator must rotate the env-var to actually pick up
+    the new value.
+    """
     from pathlib import Path
 
     path = Path(config_path)
@@ -330,6 +336,7 @@ def _write_server_api_key(config_path: str, new_key: str) -> None:
     new_lines: list[str] = []
     in_server = False
     found = False
+    has_api_key_env = False
 
     for line in lines:
         stripped = line.strip()
@@ -339,13 +346,15 @@ def _write_server_api_key(config_path: str, new_key: str) -> None:
             continue
         if stripped.startswith("[") and stripped.endswith("]"):
             in_server = False
-        if in_server and stripped.startswith("api_key"):
+        if in_server and stripped.startswith("api_key ="):
             new_lines.append(f'api_key = "{new_key}"')
             found = True
             continue
+        if in_server and stripped.startswith("api_key_env"):
+            has_api_key_env = True
         new_lines.append(line)
 
-    if not found:
+    if not found and not has_api_key_env:
         # Insert after [server] header
         for i, line in enumerate(new_lines):
             if line.strip() == "[server]":
@@ -358,6 +367,12 @@ def _write_server_api_key(config_path: str, new_key: str) -> None:
                 err=True,
             )
             return
+    elif not found and has_api_key_env:
+        click.echo(
+            "Warning: [server] uses api_key_env; rotate the env-var "
+            "to apply the new key.",
+            err=True,
+        )
 
     path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
 

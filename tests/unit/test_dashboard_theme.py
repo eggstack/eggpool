@@ -282,6 +282,38 @@ class TestThemeLoading:
         assert len(themes) >= 50
 
 
+class TestThemePathTraversal:
+    """Regression tests (H5): ``resolve_theme_path`` must reject any
+    ``theme_name`` containing path separators or traversal sequences
+    and must never return a path that escapes ``themes_dir``.
+    """
+
+    def test_path_traversal_rejected(self, tmp_path: Path) -> None:
+        evil = tmp_path / "evil.toml"
+        evil.write_text("[general]\nbackground = '#000000'")
+        # Create a file outside the themes dir that should not be reachable.
+        outside = tmp_path.parent / "outside.toml"
+        outside.write_text("[general]\nbackground = '#ff0000'")
+        try:
+            assert resolve_theme_path("../outside", tmp_path) is None
+            assert resolve_theme_path("../../etc/passwd", tmp_path) is None
+            assert resolve_theme_path("/etc/passwd", tmp_path) is None
+            assert resolve_theme_path("..\\evil", tmp_path) is None
+        finally:
+            outside.unlink(missing_ok=True)
+
+    def test_special_characters_rejected(self) -> None:
+        assert resolve_theme_path("foo/bar") is None
+        assert resolve_theme_path("foo\\bar") is None
+        assert resolve_theme_path("foo\0bar") is None
+        assert resolve_theme_path("") is None
+        assert resolve_theme_path(".") is None
+
+    def test_safe_name_resolves(self, tmp_path: Path) -> None:
+        (tmp_path / "valid_name.toml").write_text("[general]\nbackground = '#000000'")
+        assert resolve_theme_path("valid_name", tmp_path) is not None
+
+
 # ---------------------------------------------------------------------------
 # Render integration tests
 # ---------------------------------------------------------------------------
