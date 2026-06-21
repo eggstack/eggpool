@@ -168,8 +168,8 @@ def logout(ctx: click.Context, target: str | None) -> None:
         TerminalMenu,
         matching_logout_accounts,
         remove_account_from_config,
+        restart_server,
         select_config_account,
-        signal_reload,
     )
 
     config_path: str = ctx.obj["config_path"]
@@ -216,8 +216,8 @@ def logout(ctx: click.Context, target: str | None) -> None:
 
     click.echo(f"Removed {account.provider_id}/{account.name} from {config_path}.")
 
-    if signal_reload():
-        click.echo("  Configuration reloaded.")
+    if restart_server(config_path):
+        click.echo("  Server restarted.")
     else:
         click.echo("  Server is not running.")
 
@@ -396,7 +396,7 @@ def getkey(ctx: click.Context) -> None:
 @click.pass_context
 def newkey(ctx: click.Context) -> None:
     """Generate a new server API key, overwriting the old one."""
-    from eggpool.providers.connect import signal_reload, signal_restart
+    from eggpool.providers.connect import restart_server
 
     config_path: str = ctx.obj["config_path"]
     old_key = _read_server_api_key(config_path)
@@ -407,9 +407,7 @@ def newkey(ctx: click.Context) -> None:
         click.echo(f"Old key (expired): {old_key}")
     click.echo(f"New key (use this): {new_key}")
 
-    if signal_reload():
-        click.echo("Configuration reloaded.")
-    elif signal_restart():
+    if restart_server(config_path):
         click.echo("Server restarted.")
     else:
         click.echo("Server is not running. Start it to apply the new key.")
@@ -762,14 +760,8 @@ def deploy_all(ctx: click.Context) -> None:
 @cli.command()
 @click.pass_context
 def rehash(ctx: click.Context) -> None:
-    """Reload configuration in the running server."""
-    from eggpool.providers.connect import signal_reload
-
-    if signal_reload():
-        click.echo("Configuration reloaded.")
-    else:
-        click.echo("Server is not running.", err=True)
-        sys.exit(1)
+    """Restart the server to apply configuration changes."""
+    ctx.invoke(restart, timeout=10.0)
 
 
 def _update_server_config(config_path: str, key: str, value: str) -> None:
@@ -825,16 +817,14 @@ def set_config(ctx: click.Context, key: str, value: str) -> None:
     port/host changes to take effect; this command restarts it
     automatically if a PID file is found.
     """
-    from eggpool.providers.connect import signal_reload, signal_restart
+    from eggpool.providers.connect import restart_server
 
     config_path: str = ctx.obj["config_path"]
     _update_server_config(config_path, key, value)
     click.echo(f"Set {key} = {value} in {config_path}.")
 
-    if signal_restart():
+    if restart_server(config_path):
         click.echo("Server restarted.")
-    elif signal_reload():
-        click.echo("Configuration reloaded.")
     else:
         click.echo("Server is not running.")
 
@@ -930,7 +920,7 @@ def dashboard_public(ctx: click.Context, set_public: str | None) -> None:
     Without options, shows the current setting and toggles it.
     With --on/--off, sets the value explicitly.
     """
-    from eggpool.providers.connect import signal_reload
+    from eggpool.providers.connect import restart_server
 
     config_path: str = ctx.obj["config_path"]
     current = _read_dashboard_public(config_path)
@@ -944,8 +934,8 @@ def dashboard_public(ctx: click.Context, set_public: str | None) -> None:
     else:
         click.echo("Dashboard now requires API key authentication.")
 
-    if signal_reload():
-        click.echo("Configuration reloaded.")
+    if restart_server(config_path):
+        click.echo("Server restarted.")
     else:
         click.echo("Server is not running.")
 
@@ -1172,8 +1162,9 @@ def update(ctx: click.Context, check_only: bool, from_source: bool) -> None:
 
     import httpx
 
-    from eggpool.providers.connect import signal_reload, signal_restart
+    from eggpool.providers.connect import restart_server
 
+    config_path: str = ctx.obj["config_path"]
     current_version = importlib.metadata.version("eggpool")
     click.echo(f"Current version: {current_version}")
 
@@ -1237,10 +1228,8 @@ def update(ctx: click.Context, check_only: bool, from_source: bool) -> None:
 
     click.echo(f"Installed version: {new_version}")
 
-    if signal_restart():
+    if restart_server(config_path):
         click.echo("Server restarted.")
-    elif signal_reload():
-        click.echo("Configuration reloaded.")
     else:
         click.echo("Server is not running.")
 
@@ -1349,7 +1338,7 @@ def restart(ctx: click.Context, timeout: float) -> None:
     """Fully restart the server (stop then start).
 
     This stops the current process and starts a fresh one.
-    For config-only reloads, use 'eggpool rehash' instead.
+    The legacy 'eggpool rehash' command delegates to this full restart path.
     """
     import contextlib
     import os

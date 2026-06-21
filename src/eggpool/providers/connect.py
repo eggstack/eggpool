@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import select
 import signal
+import subprocess
 import sys
 import termios
+import time
 import tomllib
 import tty
 from dataclasses import dataclass
@@ -16,39 +19,40 @@ from typing import Any
 from eggpool.constants import DEFAULT_PROVIDER_ID
 
 
-def signal_reload() -> bool:
-    """Send SIGHUP to the running server process to reload config.
-
-    Returns True if the signal was sent successfully.
-    """
-    return _signal_pid_file(signal.SIGHUP)
-
-
-def signal_restart() -> bool:
-    """Send SIGTERM to the running server process to trigger a restart.
-
-    Returns True if the signal was sent successfully.
-    """
-    return _signal_pid_file(signal.SIGTERM)
-
-
-def _signal_pid_file(signum: int) -> bool:
-    """Send a signal to the PID stored in the runtime pid file."""
+def restart_server(config_path: str, timeout: float = 10.0) -> bool:
+    """Stop a running standalone server and start it with fresh configuration."""
     from eggpool.constants import PID_FILE
 
     if not PID_FILE.exists():
         return False
-
     try:
         pid = int(PID_FILE.read_text(encoding="utf-8").strip())
-    except (ValueError, OSError):
+        os.kill(pid, 0)
+        os.kill(pid, signal.SIGTERM)
+    except (ValueError, ProcessLookupError, PermissionError, OSError):
         return False
 
-    try:
-        os.kill(pid, signum)
-        return True
-    except (ProcessLookupError, PermissionError, OSError):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        except (PermissionError, OSError):
+            return False
+        time.sleep(0.1)
+    else:
         return False
+
+    with contextlib.suppress(OSError):
+        PID_FILE.unlink(missing_ok=True)
+    resolved_config = str(Path(config_path).resolve())
+    subprocess.Popen(  # noqa: S603
+        [sys.executable, "-m", "eggpool", "--config", resolved_config, "serve"],
+        cwd=os.getcwd(),
+        start_new_session=True,
+    )
+    return True
 
 
 @dataclass(frozen=True)
@@ -916,10 +920,7 @@ def connect(
 
     sys.stdout.write(f"  Added {account_name} to {provider_id}.\n")
 
-    # Auto-reload the running server
-    if signal_reload():
-        sys.stdout.write("  Configuration reloaded.\n")
-    elif signal_restart():
+    if restart_server(config_path):
         sys.stdout.write("  Server restarted.\n")
     else:
         sys.stdout.write("  Start the server to apply changes.\n")

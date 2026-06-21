@@ -87,7 +87,12 @@ class ModelCatalogCache:
             if model_id not in self._models:
                 self._models[model_id] = model_info
             else:
-                self._models[model_id]["last_seen_at"] = now
+                global_info = self._models[model_id]
+                if not global_info.get("protocol") and model_info.get("protocol"):
+                    model_info["first_seen_at"] = global_info.get("first_seen_at", now)
+                    self._models[model_id] = model_info
+                else:
+                    global_info["last_seen_at"] = now
 
             if model_id not in self._account_support:
                 self._account_support[model_id] = set()

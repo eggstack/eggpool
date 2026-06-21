@@ -334,6 +334,55 @@ class CatalogService:
                     last_seen_at=_ts_to_unix(row["last_seen_at"]),
                 )
 
+            provider_rows = await self._db.fetch_all(
+                "SELECT model_id, provider_id, display_name, protocol, "
+                "capabilities, source_metadata, protocol_source, "
+                "first_seen_at, last_seen_at "
+                "FROM provider_model_metadata"
+            )
+            for row in provider_rows:
+                caps_raw = row["capabilities"]
+                caps: dict[str, Any] = json.loads(caps_raw) if caps_raw else {}
+                meta_raw = row["source_metadata"]
+                meta: dict[str, Any] = json.loads(meta_raw) if meta_raw else {}
+                provider_id = str(row["provider_id"])
+                model_id = str(row["model_id"])
+                effective = self._limit_resolver.resolve(
+                    provider_id=provider_id,
+                    model_id=model_id,
+                    capabilities=caps,
+                    source_metadata=meta,
+                )
+                disc_ctx, disc_inp, disc_out = extract_upstream_limits(caps, meta)
+                self._cache.set_provider_model_entry(
+                    model_id,
+                    provider_id,
+                    {
+                        "model_id": model_id,
+                        "display_name": row["display_name"],
+                        "protocol": row["protocol"],
+                        "protocol_source": row["protocol_source"],
+                        "capabilities": caps,
+                        "source_metadata": meta,
+                        "first_seen_at": _ts_to_unix(row["first_seen_at"]),
+                        "last_seen_at": _ts_to_unix(row["last_seen_at"]),
+                        "discovered_limits": {
+                            "context_tokens": disc_ctx,
+                            "input_tokens": disc_inp,
+                            "output_tokens": disc_out,
+                        },
+                        "effective_limits": {
+                            "context_tokens": effective.context_tokens,
+                            "input_tokens": effective.input_tokens,
+                            "output_tokens": effective.output_tokens,
+                            "enforce": effective.enforce,
+                            "context_source": effective.context_source,
+                            "input_source": effective.input_source,
+                            "output_source": effective.output_source,
+                        },
+                    },
+                )
+
             # Load account-model relationships with provider info
             am_rows = await self._db.fetch_all(
                 "SELECT account_id, model_id FROM account_models WHERE enabled = 1"
@@ -416,9 +465,13 @@ class CatalogService:
         now_iso = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
 
         acct_rows = await self._db.fetch_all("SELECT id, name FROM accounts")
+        existing_support_rows = await self._db.fetch_all(
+            "SELECT account_id, model_id FROM account_models WHERE enabled = 1"
+        )
         latest_prices = await PriceSnapshotRepository(self._db).get_all_latest()
         model_rows: list[tuple[Any, ...]] = []
-        account_model_rows: list[tuple[Any, ...]] = []
+        provider_model_rows: list[tuple[Any, ...]] = []
+        desired_support: set[tuple[int, str]] = set()
 
         for model_id, model_info in self._cache.get_all_models().items():
             protocol = model_info.get("protocol")
@@ -448,15 +501,40 @@ class CatalogService:
             supporting_accounts = self._cache.get_supporting_accounts_for_model(
                 model_id
             )
-            account_model_rows.extend(
-                (
-                    acct_row["id"],
-                    model_id,
-                    1 if acct_row["name"] in supporting_accounts else 0,
-                    now_iso,
-                )
+            desired_support.update(
+                (int(acct_row["id"]), model_id)
                 for acct_row in acct_rows
+                if acct_row["name"] in supporting_accounts
             )
+
+        persisted_model_ids = {str(row[0]) for row in model_rows}
+        for (
+            model_id,
+            provider_id,
+        ), model_info in self._cache.get_provider_model_entries().items():
+            if model_id not in persisted_model_ids:
+                continue
+            provider_model_rows.append(
+                (
+                    model_id,
+                    provider_id,
+                    model_info.get("display_name"),
+                    model_info.get("protocol"),
+                    json.dumps(model_info.get("capabilities", {})),
+                    json.dumps(model_info.get("source_metadata", {})),
+                    model_info.get("protocol_source"),
+                    now_iso,
+                    now_iso,
+                    "resolved" if model_info.get("protocol") else "unresolved",
+                )
+            )
+
+        existing_support = {
+            (int(row["account_id"]), str(row["model_id"]))
+            for row in existing_support_rows
+        }
+        support_to_enable = desired_support - existing_support
+        support_to_disable = existing_support - desired_support
 
         async with self._db.transaction():
             await self._db.execute_many(
@@ -480,14 +558,35 @@ class CatalogService:
             )
             await self._db.execute_many(
                 """
-                        INSERT INTO account_models (
-                            account_id, model_id, enabled, created_at
-                        ) VALUES (?, ?, ?, ?)
-                        ON CONFLICT(account_id, model_id) DO UPDATE SET
-                            enabled = excluded.enabled
-                        WHERE account_models.enabled IS NOT excluded.enabled
+                    INSERT INTO provider_model_metadata (
+                        model_id, provider_id, display_name, protocol,
+                        capabilities, source_metadata, protocol_source,
+                        first_seen_at, last_seen_at, resolution_status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(model_id, provider_id) DO UPDATE SET
+                        display_name = excluded.display_name,
+                        protocol = excluded.protocol,
+                        capabilities = excluded.capabilities,
+                        source_metadata = excluded.source_metadata,
+                        protocol_source = excluded.protocol_source,
+                        last_seen_at = excluded.last_seen_at,
+                        resolution_status = excluded.resolution_status
                 """,
-                account_model_rows,
+                provider_model_rows,
+            )
+            await self._db.execute_many(
+                """
+                    INSERT INTO account_models (
+                        account_id, model_id, enabled, created_at
+                    ) VALUES (?, ?, 1, ?)
+                    ON CONFLICT(account_id, model_id) DO UPDATE SET enabled = 1
+                """,
+                [(*pair, now_iso) for pair in sorted(support_to_enable)],
+            )
+            await self._db.execute_many(
+                "UPDATE account_models SET enabled = 0 "
+                "WHERE account_id = ? AND model_id = ? AND enabled = 1",
+                sorted(support_to_disable),
             )
 
             # Persist provider-specific pricing only. A global snapshot would

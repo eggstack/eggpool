@@ -19,6 +19,7 @@
     "0017_price_snapshots_provider_id.sql": "af44d3bcc8704cac626b2ac59a65f85c32ff50bda7469c7bbd4328601e062323",
     "0018_provider_pings.sql": "1c7ca82c05c4f54bd93eda374a1562599751de544ff45c6942782811fe022153",
     "0019_client_ip.sql": "6f2e409d2481692350c33b0e4a396da3199a3da5cb63f3052dd35cde89b0ec27",
-    "0020_performance_indexes.sql": "f24b294c0e3cc9b5e3f5e0bf4c8fa74094eab0e435c3dbc14a58b349aa206198"
+    "0020_performance_indexes.sql": "f24b294c0e3cc9b5e3f5e0bf4c8fa74094eab0e435c3dbc14a58b349aa206198",
+    "0021_provider_model_metadata.sql": "4fa6068dde0ec352b02f5f34cfca455be0c7e0090501ed17a1aa7135dd292516"
   }
 }

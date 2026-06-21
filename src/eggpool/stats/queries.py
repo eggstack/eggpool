@@ -36,9 +36,14 @@ async def fetch_summary(
     db: Database,
     start: str,
     end: str,
+    account_id: int | None = None,
 ) -> dict[str, Any]:
     """Get aggregate summary statistics for a time window."""
-    sql = """
+    account_filter = " AND account_id = ?" if account_id is not None else ""
+    params: list[Any] = [_format_dt(start), _format_dt(end)]
+    if account_id is not None:
+        params.append(account_id)
+    sql = f"""
     SELECT
         COUNT(*) as total_requests,
         COALESCE(SUM(input_tokens), 0) as total_input_tokens,
@@ -73,16 +78,16 @@ async def fetch_summary(
         COALESCE(AVG(CASE WHEN streamed = 1 THEN first_byte_ms END), 0)
             as avg_ttft_ms
     FROM requests
-    WHERE started_at >= ? AND started_at < ?
+    WHERE started_at >= ? AND started_at < ?{account_filter}
     """
-    row = await db.fetch_one(sql, (_format_dt(start), _format_dt(end)))
+    row = await db.fetch_one(sql, tuple(params))
     if row is None:
         return _empty_summary()
 
     result = _build_summary(dict(row))
 
     # Compute TTFT percentiles (streamed only) — requires window functions
-    ttft = await _fetch_ttft_percentiles(db, start, end)
+    ttft = await _fetch_ttft_percentiles(db, start, end, account_id=account_id)
     result.update(ttft)
 
     return result
@@ -422,6 +427,7 @@ async def _fetch_ttft_percentiles(
     end: str,
     provider_id: str | None = None,
     model_id: str | None = None,
+    account_id: int | None = None,
 ) -> dict[str, Any]:
     """Compute P50 and P99 of first_byte_ms for streamed requests.
 
@@ -437,10 +443,16 @@ async def _fetch_ttft_percentiles(
     if model_id is not None:
         extra_filters += " AND model_id = ?"
         params.append(model_id)
+    if account_id is not None:
+        extra_filters += " AND account_id = ?"
+        params.append(account_id)
 
     sql = f"""
     SELECT
-        AVG(sub.first_byte_ms) as p50_ttft_ms,
+        AVG(CASE WHEN sub.rn IN (
+            CAST((sub.total_count + 1) / 2 AS INTEGER),
+            CAST((sub.total_count + 2) / 2 AS INTEGER)
+        ) THEN sub.first_byte_ms END) as p50_ttft_ms,
         MAX(CASE WHEN sub.rn = sub.p99_idx THEN sub.first_byte_ms END)
             as p99_ttft_ms
     FROM (

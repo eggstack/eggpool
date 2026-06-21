@@ -490,10 +490,8 @@ class TestModelsRefreshDisabledAccount:
                 model_rows = await db.fetch_all("SELECT model_id FROM models")
                 assert {r["model_id"] for r in model_rows} == {"gpt-4"}
 
-                # The disabled account's account_models row exists but
-                # is marked enabled=0; the enabled account's row is
-                # enabled=1. This proves the disabled account cannot
-                # make a model eligible for routing.
+                # Only supported relationships need rows. Absence and
+                # enabled=0 are both non-routable states.
                 am_rows = await db.fetch_all(
                     "SELECT a.name AS account_name, am.enabled "
                     "FROM account_models am "
@@ -504,7 +502,7 @@ class TestModelsRefreshDisabledAccount:
                     row["account_name"]: bool(row["enabled"]) for row in am_rows
                 }
                 assert am_by_name.get("acct-active") is True
-                assert am_by_name.get("acct-disabled") is False
+                assert am_by_name.get("acct-disabled", False) is False
             finally:
                 await db.disconnect()
 

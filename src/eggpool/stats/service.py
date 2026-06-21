@@ -170,14 +170,26 @@ class StatsService:
         self._dashboard_cache[key] = (time.monotonic(), copy.deepcopy(value))
 
     async def get_summary(
-        self, time_range: TimeRange, *, use_cache: bool = False
+        self,
+        time_range: TimeRange,
+        account_name: str | None = None,
+        *,
+        use_cache: bool = False,
     ) -> dict[str, Any]:
         """Get a top-line summary for the given time range."""
-        key = self._dashboard_cache_key("summary", time_range)
+        key = self._dashboard_cache_key("summary", time_range, account_name or "")
         if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
             return cast("dict[str, Any]", cached)
+        account_id: int | None = None
+        if account_name:
+            account_id = await fetch_account_id(self._db, account_name)
+            if account_id is None:
+                account_id = -1
         result = await fetch_summary(
-            self._db, time_range.start_str(), time_range.end_str()
+            self._db,
+            time_range.start_str(),
+            time_range.end_str(),
+            account_id=account_id,
         )
         if use_cache:
             self._set_dashboard_cache(key, result)

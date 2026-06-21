@@ -25,7 +25,48 @@ from eggpool.providers.connect import (
     load_provider_templates,
     merge_provider_into_config,
     remove_account_from_config,
+    restart_server,
 )
+
+
+class TestRestartServer:
+    def test_returns_false_without_pid_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("eggpool.constants.PID_FILE", tmp_path / "missing.pid")
+        assert restart_server(str(tmp_path / "config.toml")) is False
+
+    def test_stops_and_starts_with_resolved_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from eggpool.providers import connect as connect_module
+
+        pid_file = tmp_path / "eggpool.pid"
+        pid_file.write_text("42", encoding="utf-8")
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("", encoding="utf-8")
+        monkeypatch.setattr("eggpool.constants.PID_FILE", pid_file)
+
+        kill_calls: list[tuple[int, int]] = []
+
+        def fake_kill(pid: int, signum: int) -> None:
+            kill_calls.append((pid, signum))
+            if len(kill_calls) >= 3:
+                raise ProcessLookupError
+
+        popen_calls: list[list[str]] = []
+
+        def fake_popen(command: list[str], **_kwargs: object) -> object:
+            popen_calls.append(command)
+            return object()
+
+        monkeypatch.setattr(connect_module.os, "kill", fake_kill)
+        monkeypatch.setattr(connect_module.subprocess, "Popen", fake_popen)
+
+        assert restart_server(str(config_path), timeout=1.0) is True
+        assert kill_calls[:2] == [(42, 0), (42, connect_module.signal.SIGTERM)]
+        assert popen_calls[0][-3:] == ["--config", str(config_path.resolve()), "serve"]
+        assert not pid_file.exists()
 
 
 class TestLoadProviderTemplates:
@@ -1401,7 +1442,7 @@ class TestUpdateCommand:
 
         from eggpool.providers import connect as connect_module
 
-        monkeypatch.setattr(connect_module, "signal_restart", lambda: True)
+        monkeypatch.setattr(connect_module, "restart_server", lambda _path: True)
 
         runner = CliRunner()
         result = runner.invoke(cli, ["update"])

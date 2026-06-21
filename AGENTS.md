@@ -105,7 +105,7 @@ Use the exception hierarchy in `errors.py`. Chain exceptions with `raise ... fro
 | `eggpool connect` | Connect to a new provider interactively |
 | `eggpool connect list` | List available providers for connection |
 | `eggpool logout` | Remove a configured provider account |
-| `eggpool rehash` | Reload configuration in the running server |
+| `eggpool rehash` | Restart the server to apply configuration changes |
 | `eggpool restart` | Fully restart the server (stop then start) |
 | `eggpool stop` | Stop the running server |
 | `eggpool set` | Set a server configuration value and restart |

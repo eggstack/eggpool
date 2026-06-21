@@ -198,6 +198,7 @@ class TestMigrationCompatibility:
             required = {
                 "accounts",
                 "models",
+                "provider_model_metadata",
                 "account_models",
                 "requests",
                 "request_attempts",

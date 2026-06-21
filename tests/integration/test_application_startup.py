@@ -95,6 +95,10 @@ class TestApplicationStartup:
                 db: Database = app.state.db
                 assert db is not None
                 assert db._conn is not None  # noqa: SLF001
+                stats_db: Database = app.state.stats_db
+                assert stats_db is not db
+                assert stats_db.read_only is True
+                assert stats_db._conn is not None  # noqa: SLF001
 
                 rows = await db.fetch_all("SELECT name FROM accounts ORDER BY name")
                 names = [row["name"] for row in rows]
@@ -122,6 +126,7 @@ class TestApplicationStartup:
             assert db._conn is None, (  # noqa: SLF001
                 "Connection should be released after shutdown."
             )
+            assert stats_db._conn is None  # noqa: SLF001
 
         # Reopen the database; rows should still be there.
         db2 = Database(path=db_path)
@@ -266,3 +271,37 @@ class TestApplicationStartupRequiresAuth:
         assert "placeholder" in str(excinfo.value).lower() or isinstance(
             excinfo.value, AggregatorError
         )
+
+
+@pytest.mark.asyncio
+async def test_startup_failure_closes_all_initialized_resources(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Failures before lifespan yield still close databases, clients, and PID."""
+    from eggpool.errors import CatalogUnavailableError
+
+    pid_path = tmp_path / "eggpool.pid"
+    monkeypatch.setattr("eggpool.app.PID_FILE", pid_path)
+    config = AppConfig.from_dict(
+        {
+            "server": {"api_key_env": "", "host": "127.0.0.1", "port": 0},
+            "database": {"path": str(tmp_path / "startup-failure.sqlite3")},
+            "models": {
+                "startup_refresh": False,
+                "refresh_interval_s": 0,
+                "allow_stale_catalog": False,
+            },
+            "accounts": [],
+            "dashboard": {"enabled": False},
+        }
+    )
+    app = create_app(config)
+
+    with pytest.raises(CatalogUnavailableError):
+        async with app.router.lifespan_context(app):
+            pass
+
+    assert app.state.db._conn is None  # noqa: SLF001
+    assert app.state.stats_db._conn is None  # noqa: SLF001
+    assert all(client.is_closed for client in app.state.client_pool._clients.values())  # noqa: SLF001
+    assert not pid_path.exists()

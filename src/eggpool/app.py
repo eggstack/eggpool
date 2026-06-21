@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import os
-import signal
 import time
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -200,61 +199,6 @@ async def _crash_recovery(db: Database) -> None:
         logger.info("Crash recovery: no stale requests found")
 
 
-async def reload_config(app: FastAPI) -> None:
-    """Reload configuration from disk and re-sync providers/accounts.
-
-    This re-reads the TOML config file, re-syncs providers and accounts
-    to SQLite, and updates in-memory state. Called on SIGHUP.
-    """
-    config_path: str | None = getattr(app.state, "config_path", None)
-    if config_path is None:
-        logger.warning("reload: no config_path set, cannot reload")
-        return
-
-    try:
-        new_config = AppConfig.from_toml(config_path)
-    except Exception:
-        logger.exception("reload: failed to parse %s", config_path)
-        return
-
-    app.state.config = new_config
-    logger.info("reload: config re-read from %s", config_path)
-
-    db: Database | None = getattr(app.state, "db", None)
-    if db is None:
-        logger.warning("reload: database not connected, skipping sync")
-        return
-
-    # Re-sync providers
-    provider_repo = ProviderRepository(db)
-    configured_providers = {
-        pid: {"base_url": pcfg.base_url, "protocols": pcfg.protocols}
-        for pid, pcfg in new_config.providers.items()
-    }
-    await provider_repo.sync_from_config(configured_providers)
-
-    # Re-sync accounts
-    account_repo = AccountRepository(db)
-    await account_repo.sync_from_config(account_config_rows(new_config))
-
-    # Update account registry
-    registry: AccountRegistry | None = getattr(app.state, "registry", None)
-    if registry is not None:
-        registry.reload(new_config)
-
-    # Invalidate account ID cache so stale IDs from removed accounts
-    # are not reused after re-adding with a new database row.
-    coordinator: RequestCoordinator | None = getattr(app.state, "coordinator", None)
-    if coordinator is not None:
-        coordinator.invalidate_account_id_cache()
-
-    logger.info(
-        "reload: synced %d providers, %d accounts",
-        len(new_config.providers),
-        len(new_config.all_accounts()),
-    )
-
-
 def _write_pid_file() -> None:
     """Write the current PID to the PID file."""
     try:
@@ -270,8 +214,8 @@ def _remove_pid_file() -> None:
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
-    """Manage application startup and shutdown."""
+async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
+    """Initialize runtime state; cleanup is owned by the outer lifespan."""
     config: AppConfig = app.state.config
 
     configure_logging(level=config.server.log_level)
@@ -282,19 +226,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # 1b. Validate account credentials
     config.validate_account_credentials()
 
-    # 1c. Write PID file and install SIGHUP handler for config reload
+    # 1c. Write PID file. Configuration is restart-only by design.
     _write_pid_file()
-    loop = asyncio.get_running_loop()
-
-    def _handle_sighup() -> None:
-        logger.info("Received SIGHUP, reloading configuration")
-        asyncio.ensure_future(reload_config(app))
-
-    try:
-        loop.add_signal_handler(signal.SIGHUP, _handle_sighup)
-    except (NotImplementedError, OSError):
-        # add_signal_handler not supported on Windows
-        logger.debug("SIGHUP handler not installed (unsupported platform)")
 
     # 2. Database
     db = Database(
@@ -325,6 +258,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     # 6. Crash recovery
     await _crash_recovery(db)
+
+    # Keep analytics reads off the data-plane connection lock. In-memory
+    # SQLite databases cannot be shared by opening a second connection.
+    stats_db = db
+    if config.database.path != ":memory:":
+        stats_db = Database(
+            path=config.database.path,
+            busy_timeout_ms=config.database.busy_timeout_ms,
+            read_only=True,
+        )
+        await stats_db.connect()
+    app.state.stats_db = stats_db
 
     # 7. Initialize repositories
     request_repo = RequestRepository(db)
@@ -458,7 +403,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     # 17. Statistics service
     app.state.stats = StatsService(
-        db, health_manager=health_manager, ping_repo=ping_repo
+        stats_db,
+        health_manager=health_manager,
+        ping_repo=PingRepository(stats_db),
     )
 
     # 18. Request coordinator
@@ -549,17 +496,42 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     yield
 
-    # Shutdown
-    logger.info("Application shutting down")
-    _remove_pid_file()
-    await supervisor.stop_all()
-    client_pool = getattr(app.state, "client_pool", None)
-    if client_pool is not None:
-        try:
-            await client_pool.close()
-        except Exception:
-            logger.exception("Error closing client pool during shutdown")
-    await db.disconnect()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
+    """Manage startup and clean up resources even when startup fails."""
+    try:
+        async with _lifespan_runtime(app):
+            yield
+    finally:
+        logger.info("Application shutting down")
+        supervisor: TaskSupervisor | None = getattr(app.state, "supervisor", None)
+        if supervisor is not None:
+            try:
+                await supervisor.stop_all()
+            except Exception:
+                logger.exception("Error stopping background tasks during shutdown")
+
+        client_pool: ProviderClientPool | None = getattr(app.state, "client_pool", None)
+        if client_pool is not None:
+            try:
+                await client_pool.close()
+            except Exception:
+                logger.exception("Error closing client pool during shutdown")
+
+        db: Database | None = getattr(app.state, "db", None)
+        stats_db: Database | None = getattr(app.state, "stats_db", None)
+        if stats_db is not None and stats_db is not db:
+            try:
+                await stats_db.disconnect()
+            except Exception:
+                logger.exception("Error closing statistics database during shutdown")
+        if db is not None:
+            try:
+                await db.disconnect()
+            except Exception:
+                logger.exception("Error closing database during shutdown")
+        _remove_pid_file()
 
 
 async def _catalog_refresh_loop(

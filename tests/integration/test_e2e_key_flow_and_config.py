@@ -327,7 +327,7 @@ class TestSetConfig:
         assert config.server.host == "0.0.0.0"
 
     def test_set_config_signals_restart(self, tmp_path, monkeypatch):
-        """set command writes config and sends signal_restart."""
+        """set command writes config and restarts the running server."""
         config_path = tmp_path / "config.toml"
         config_path.write_text(
             '[server]\napi_key = "test"\nport = 8080\nhost = "127.0.0.1"\n'
@@ -338,16 +338,11 @@ class TestSetConfig:
         runner = CliRunner()
         signaled: list[str] = []
 
-        def fake_restart():
+        def fake_restart(_config_path: str):
             signaled.append("restart")
             return True
 
-        def fake_reload():
-            signaled.append("reload")
-            return True
-
-        monkeypatch.setattr("eggpool.providers.connect.signal_restart", fake_restart)
-        monkeypatch.setattr("eggpool.providers.connect.signal_reload", fake_reload)
+        monkeypatch.setattr("eggpool.providers.connect.restart_server", fake_restart)
 
         result = runner.invoke(
             cli,
@@ -363,8 +358,8 @@ class TestSetConfig:
         config = AppConfig.from_toml(str(config_path))
         assert config.server.port == 3000
 
-    def test_set_config_falls_back_to_reload(self, tmp_path, monkeypatch):
-        """set command falls back to signal_reload if restart fails."""
+    def test_set_config_does_not_fall_back_to_live_reload(self, tmp_path, monkeypatch):
+        """set reports a stopped server when restart signaling fails."""
         config_path = tmp_path / "config.toml"
         config_path.write_text(
             '[server]\napi_key = "test"\nport = 8080\nhost = "127.0.0.1"\n'
@@ -374,8 +369,9 @@ class TestSetConfig:
 
         runner = CliRunner()
 
-        monkeypatch.setattr("eggpool.providers.connect.signal_restart", lambda: False)
-        monkeypatch.setattr("eggpool.providers.connect.signal_reload", lambda: True)
+        monkeypatch.setattr(
+            "eggpool.providers.connect.restart_server", lambda _path: False
+        )
 
         result = runner.invoke(
             cli,
@@ -383,7 +379,7 @@ class TestSetConfig:
         )
 
         assert result.exit_code == 0
-        assert "Configuration reloaded" in result.output
+        assert "Server is not running" in result.output
 
     def test_set_config_no_server_running(self, tmp_path, monkeypatch):
         """set command reports server not running when no PID file."""
@@ -396,8 +392,9 @@ class TestSetConfig:
 
         runner = CliRunner()
 
-        monkeypatch.setattr("eggpool.providers.connect.signal_restart", lambda: False)
-        monkeypatch.setattr("eggpool.providers.connect.signal_reload", lambda: False)
+        monkeypatch.setattr(
+            "eggpool.providers.connect.restart_server", lambda _path: False
+        )
 
         result = runner.invoke(
             cli,
@@ -415,11 +412,11 @@ class TestSetConfig:
 # ─── newkey signals reload ─────────────────────────────────────────────
 
 
-class TestNewkeySignalsReload:
-    """Verify newkey generates key, saves it, and signals server."""
+class TestNewkeySignalsRestart:
+    """Verify newkey generates key, saves it, and requests a restart."""
 
-    def test_newkey_signals_reload(self, tmp_path, monkeypatch):
-        """newkey writes new key and calls signal_reload/signal_restart."""
+    def test_newkey_signals_restart(self, tmp_path, monkeypatch):
+        """newkey writes the new key and requests a restart."""
         config_path = tmp_path / "config.toml"
         config_path.write_text('[server]\napi_key = "ep_old_key_12345"\nport = 8080\n')
 
@@ -428,16 +425,11 @@ class TestNewkeySignalsReload:
         runner = CliRunner()
         signaled: list[str] = []
 
-        def fake_reload():
-            signaled.append("reload")
-            return True
-
-        def fake_restart():
+        def fake_restart(_config_path: str):
             signaled.append("restart")
             return True
 
-        monkeypatch.setattr("eggpool.providers.connect.signal_reload", fake_reload)
-        monkeypatch.setattr("eggpool.providers.connect.signal_restart", fake_restart)
+        monkeypatch.setattr("eggpool.providers.connect.restart_server", fake_restart)
 
         result = runner.invoke(
             cli,
@@ -447,8 +439,8 @@ class TestNewkeySignalsReload:
         assert result.exit_code == 0
         assert "Old key (expired): ep_old_key_12345" in result.output
         assert "New key (use this): ep_" in result.output
-        assert "Configuration reloaded" in result.output
-        assert signaled == ["reload"]
+        assert "Server restarted" in result.output
+        assert signaled == ["restart"]
 
         # Verify new key was saved
         config = AppConfig.from_toml(str(config_path))
@@ -456,8 +448,8 @@ class TestNewkeySignalsReload:
         assert config.server.api_key.startswith("ep_")
         assert config.server.api_key != "ep_old_key_12345"
 
-    def test_newkey_falls_back_to_restart(self, tmp_path, monkeypatch):
-        """newkey falls back to signal_restart if reload fails."""
+    def test_newkey_restart_requested(self, tmp_path, monkeypatch):
+        """newkey reports a successful restart request."""
         config_path = tmp_path / "config.toml"
         config_path.write_text('[server]\napi_key = "ep_old_key"\nport = 8080\n')
 
@@ -465,8 +457,9 @@ class TestNewkeySignalsReload:
 
         runner = CliRunner()
 
-        monkeypatch.setattr("eggpool.providers.connect.signal_reload", lambda: False)
-        monkeypatch.setattr("eggpool.providers.connect.signal_restart", lambda: True)
+        monkeypatch.setattr(
+            "eggpool.providers.connect.restart_server", lambda _path: True
+        )
 
         result = runner.invoke(
             cli,
@@ -485,8 +478,9 @@ class TestNewkeySignalsReload:
 
         runner = CliRunner()
 
-        monkeypatch.setattr("eggpool.providers.connect.signal_reload", lambda: False)
-        monkeypatch.setattr("eggpool.providers.connect.signal_restart", lambda: False)
+        monkeypatch.setattr(
+            "eggpool.providers.connect.restart_server", lambda _path: False
+        )
 
         result = runner.invoke(
             cli,

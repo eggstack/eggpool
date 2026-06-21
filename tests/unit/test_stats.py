@@ -367,6 +367,21 @@ class TestStatsService:
         assert summary["total_requests"] == 5
 
     @pytest.mark.asyncio()
+    async def test_get_summary_filters_by_account(self, seeded_db: Database) -> None:
+        service = StatsService(seeded_db)
+        summary = await service.get_summary(
+            TimeRange(
+                start=datetime.fromisoformat("2000-01-01"),
+                end=datetime.fromisoformat("2099-12-31"),
+                label="custom",
+            ),
+            account_name="acct_a",
+        )
+        assert summary["total_requests"] == 3
+        assert summary["successful_requests"] == 3
+        assert summary["error_requests"] == 0
+
+    @pytest.mark.asyncio()
     async def test_get_account_stats_includes_reservations(
         self, seeded_db: Database
     ) -> None:
@@ -887,8 +902,9 @@ class TestTTFTStatsQueries:
         result = await queries.fetch_summary(
             ttft_db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
         )
-        # P50 of [100, 200, 300, 400, 500] should be ~300
-        assert float(result["p50_ttft_ms"]) == pytest.approx(300.0, abs=100.0)
+        # P50 of [100, 200, 300, 400, 500] is 300. The P99 row must not
+        # contaminate the median average.
+        assert float(result["p50_ttft_ms"]) == pytest.approx(300.0)
 
     @pytest.mark.asyncio()
     async def test_summary_ttft_p99_correct(self, ttft_db: Database) -> None:

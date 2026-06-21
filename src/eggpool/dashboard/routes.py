@@ -284,7 +284,9 @@ async def handle_bandwidth(
     if bucket not in ("hour", "day"):
         bucket = "hour"
     stats = request.app.state.stats
-    summary = await stats.get_summary(time_range, use_cache=True)
+    summary = await stats.get_summary(
+        time_range, account_name=account or None, use_cache=True
+    )
     daily = await stats.get_bandwidth_timeseries(
         time_range, account_name=account or None
     )

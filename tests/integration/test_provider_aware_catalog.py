@@ -10,7 +10,7 @@ from eggpool.catalog.cache import ModelCatalogCache
 from eggpool.catalog.service import CatalogService
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
-from eggpool.models.config import AppConfig, ProviderConfig
+from eggpool.models.config import AccountConfig, AppConfig, ProviderConfig
 
 
 @pytest.mark.asyncio
@@ -134,6 +134,85 @@ async def test_persist_catalog_stores_provider_id() -> None:
     assert rows[0]["provider_id"] == "custom-provider"
 
     await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_shared_model_provider_metadata_survives_cached_restart() -> None:
+    """Shared IDs retain independent protocols and metadata after persistence."""
+    db = Database(path=":memory:")
+    await db.connect()
+    await MigrationRunner(db).run()
+    config = AppConfig(
+        providers={
+            "provider-a": ProviderConfig(
+                id="provider-a",
+                base_url="https://provider-a.example",
+                protocols=["openai"],
+                accounts=[AccountConfig(name="acct-a", api_key="key-a")],
+            ),
+            "provider-b": ProviderConfig(
+                id="provider-b",
+                base_url="https://provider-b.example",
+                protocols=["anthropic"],
+                accounts=[AccountConfig(name="acct-b", api_key="key-b")],
+            ),
+        }
+    )
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT INTO accounts (name, api_key_env, provider_id) VALUES (?, ?, ?)",
+            ("acct-a", "", "provider-a"),
+        )
+        await db.execute_write(
+            "INSERT INTO accounts (name, api_key_env, provider_id) VALUES (?, ?, ?)",
+            ("acct-b", "", "provider-b"),
+        )
+
+    client = httpx.AsyncClient()
+    try:
+        service = CatalogService(config, AccountRegistry(config), db, client)
+        service.cache.update_from_account(
+            "acct-a",
+            "provider-a",
+            [
+                {
+                    "model_id": "shared-model",
+                    "protocol": "openai",
+                    "capabilities": {"context_length": 100_000},
+                }
+            ],
+        )
+        service.cache.update_from_account(
+            "acct-b",
+            "provider-b",
+            [
+                {
+                    "model_id": "shared-model",
+                    "protocol": "anthropic",
+                    "capabilities": {"context_length": 200_000},
+                }
+            ],
+        )
+        await service._persist_catalog()  # pyright: ignore[reportPrivateUsage]
+
+        restarted = CatalogService(config, AccountRegistry(config), db, client)
+        await restarted._load_cached_models()  # pyright: ignore[reportPrivateUsage]
+
+        provider_a = restarted.cache.get_provider_model_entry(
+            "shared-model", "provider-a"
+        )
+        provider_b = restarted.cache.get_provider_model_entry(
+            "shared-model", "provider-b"
+        )
+        assert provider_a is not None
+        assert provider_b is not None
+        assert provider_a["protocol"] == "openai"
+        assert provider_b["protocol"] == "anthropic"
+        assert provider_a["capabilities"]["context_length"] == 100_000
+        assert provider_b["capabilities"]["context_length"] == 200_000
+    finally:
+        await client.aclose()
+        await db.disconnect()
 
 
 @pytest.mark.asyncio
