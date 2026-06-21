@@ -110,6 +110,7 @@ persist_redacted_error_detail = false
 # provider's dashboard. Or use `eggpool connect` for interactive setup.
 
 # DeepSeek — OpenAI compatible, very cost-effective
+# Status: verified (official docs confirm OpenAI + Anthropic compatibility)
 # [providers.deepseek]
 # id = "deepseek"
 # base_url = "https://api.deepseek.com"
@@ -123,6 +124,7 @@ persist_redacted_error_detail = false
 # mode = "bearer"
 
 # OpenRouter — 400+ models through one API key
+# Status: verified (official docs confirm OpenAI-compatible endpoint)
 # [providers.openrouter]
 # id = "openrouter"
 # base_url = "https://openrouter.ai/api/v1"
@@ -144,6 +146,7 @@ persist_redacted_error_detail = false
 # # value = "EggPool"
 
 # Together AI — popular inference provider
+# Status: verified (official docs confirm OpenAI-compatible endpoint)
 # [providers.together]
 # id = "together"
 # base_url = "https://api.together.ai/v1"
@@ -157,6 +160,7 @@ persist_redacted_error_detail = false
 # mode = "bearer"
 
 # Fireworks AI — fast inference for open-source models
+# Status: verified (official docs confirm Bearer auth + OpenAI-compatible endpoint)
 # [providers.fireworks]
 # id = "fireworks"
 # base_url = "https://api.fireworks.ai/inference/v1"
@@ -170,6 +174,7 @@ persist_redacted_error_detail = false
 # mode = "bearer"
 
 # Z.AI (ZhipuAI GLM) — OpenAI compatible
+# Status: live-verification-required — confirm base_url and endpoints before production use
 # [providers.zai]
 # id = "zai"
 # base_url = "https://api.z.ai/api/paas/v4"
@@ -184,6 +189,7 @@ persist_redacted_error_detail = false
 # mode = "bearer"
 
 # Alibaba Qwen — popular Chinese provider
+# Status: verified (official docs confirm OpenAI-compatible endpoint; use regional base_url)
 # [providers.alibaba]
 # id = "alibaba"
 # base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -202,6 +208,7 @@ persist_redacted_error_detail = false
 # # Hong Kong: https://cn-hongkong.dashscope.aliyuncs.com/compatible-mode/v1
 
 # Novita AI — various open-source models
+# Status: live-verification-required — confirm base_url and model-list endpoint
 # [providers.novita]
 # id = "novita"
 # base_url = "https://api.novita.ai/openai"
@@ -214,6 +221,7 @@ persist_redacted_error_detail = false
 # # Live-verification-required: confirm base_url and endpoints before production use
 
 # MiniMax — OpenAI + Anthropic compatible
+# Status: live-verification-required — auth mode/header may need adjustment (401 observed)
 # [providers.minimax]
 # id = "minimax"
 # base_url = "https://api.minimaxi.com"
@@ -230,6 +238,7 @@ persist_redacted_error_detail = false
 # mode = "bearer"
 
 # GeneralCompute — OpenAI compatible (uses POST for model listing)
+# Status: unverified — base_url path composition was corrected; run verifier before use
 # [providers.generalcompute]
 # id = "generalcompute"
 # base_url = "https://api.generalcompute.com/v1"
@@ -245,6 +254,7 @@ persist_redacted_error_detail = false
 # mode = "bearer"
 
 # NeuralWatt — OpenAI compatible, energy-based pricing
+# Status: live-verification-required — confirm base_url and model-list endpoint
 # [providers.neuralwatt]
 # id = "neuralwatt"
 # base_url = "https://api.neuralwatt.com/v1"
@@ -257,6 +267,7 @@ persist_redacted_error_detail = false
 # # Live-verification-required: confirm base_url and endpoints before production use
 
 # Ollama (local) — OpenAI compatible, no auth required
+# Status: verified (well-known local service)
 # [providers.ollama-local]
 # id = "ollama-local"
 # base_url = "http://localhost:11434/v1"
@@ -270,6 +281,7 @@ persist_redacted_error_detail = false
 # mode = "none"
 
 # Ollama (cloud) — OpenAI compatible via /v1 endpoints
+# Status: unverified — confirm base_url and auth before production use
 # [providers.ollama-cloud]
 # id = "ollama-cloud"
 # base_url = "https://ollama.com/v1"

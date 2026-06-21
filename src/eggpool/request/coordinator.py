@@ -67,6 +67,20 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def _redact_auth_shape(auth_headers: dict[str, str]) -> str:
+    """Return a redacted representation of auth headers for debug logging."""
+    if not auth_headers:
+        return "none"
+    parts: list[str] = []
+    for name, value in auth_headers.items():
+        if len(value) > 10:
+            parts.append(f"{name}: {value[:4]}***{value[-4:]}")
+        else:
+            parts.append(f"{name}: ***")
+    return ", ".join(parts)
+
+
 # Default maximum retry attempts for pre-body failures
 DEFAULT_MAX_RETRY_ATTEMPTS = 3
 
@@ -1231,7 +1245,11 @@ class RequestCoordinator:
         selected: SelectedAttempt,
     ) -> dict[str, str]:
         """Build upstream headers using provider contract when available."""
-        from eggpool.providers.contract import build_upstream_headers
+        from eggpool.providers.contract import (
+            build_auth_headers,
+            build_static_headers,
+            build_upstream_headers,
+        )
         from eggpool.proxy.client import sanitize_request_headers
 
         sanitized = sanitize_request_headers(dict(context.incoming_headers))
@@ -1243,6 +1261,16 @@ class RequestCoordinator:
         if provider_cfg is not None:
             auth_headers = build_upstream_headers(provider_cfg, selected.api_key)
             sanitized.update(auth_headers)
+            if logger.isEnabledFor(logging.DEBUG):
+                auth_shape = build_auth_headers(provider_cfg, selected.api_key)
+                static_names = list(build_static_headers(provider_cfg).keys())
+                logger.debug(
+                    "provider=%s account=%s auth=%s static_headers=%s",
+                    selected.provider_id,
+                    selected.account_name,
+                    _redact_auth_shape(auth_shape),
+                    static_names or None,
+                )
         else:
             # Fallback: legacy Bearer auth
             from eggpool.proxy.client import build_upstream_auth_headers
