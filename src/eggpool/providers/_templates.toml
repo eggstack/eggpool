@@ -26,11 +26,12 @@ api_key_env = "API_KEY"
 
 [providers.generalcompute]
 # GeneralCompute — OpenAI compatible (POST /v1/models/list)
+# base_url already includes /v1, so paths must NOT repeat the prefix.
 id = "generalcompute"
 base_url = "https://api.generalcompute.com/v1"
 protocols = ["openai"]
 models_method = "POST"
-models_path = "/v1/models/list"
+models_path = "/models/list"
 api_key_env = "API_KEY"
 
 [providers.zai]
