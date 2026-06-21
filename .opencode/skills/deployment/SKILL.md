@@ -72,6 +72,17 @@ GOROUTER_ANTHROPIC_MODEL="claude-3-5-sonnet" \
 
 Operator-only; not run in CI. Bypasses EggPool to confirm the configured key works directly upstream.
 
+For per-provider verification with the contract rendered from `config.toml`:
+
+```bash
+uv run python scripts/verify_upstream_auth.py \
+  --config config.toml \
+  --provider minimax \
+  --verbose
+```
+
+The verifier consumes `[providers.<id>.verify] probe_model` and `probe_protocol` when neither `--openai-model` nor `--anthropic-model` is supplied. CLI flags always win. Bearer-prefixed API keys (e.g., `Bearer sk-...`) are rejected before any network call so the operator gets an actionable error rather than a misleading upstream 401.
+
 ## Systemd Unit
 
 - Intentionally omits `ExecReload`; all config changes require `sudo systemctl restart eggpool`

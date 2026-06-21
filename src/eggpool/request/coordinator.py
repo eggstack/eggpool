@@ -719,14 +719,14 @@ class RequestCoordinator:
     ) -> PreparedProxyResponse:
         """Execute a non-streaming request."""
         headers = self._build_upstream_headers(context, selected)
-        upstream_path = self._get_upstream_path(context.protocol, selected.provider_id)
+        upstream_url = self._get_upstream_url(context.protocol, selected.provider_id)
 
         response: httpx.Response | None = None
         try:
             client = self._get_client(selected.provider_id, selected.account_name)
             upstream_request = client.build_request(
                 "POST",
-                upstream_path,
+                upstream_url,
                 headers=headers,
                 content=context.original_body,
             )
@@ -862,7 +862,7 @@ class RequestCoordinator:
     ) -> PreparedProxyResponse:
         """Execute a streaming request."""
         headers = self._build_upstream_headers(context, selected)
-        upstream_path = self._get_upstream_path(context.protocol, selected.provider_id)
+        upstream_url = self._get_upstream_url(context.protocol, selected.provider_id)
 
         # Inject stream_options.include_usage for OpenAI
         body_to_send = context.original_body
@@ -891,7 +891,7 @@ class RequestCoordinator:
         client = self._get_client(selected.provider_id, selected.account_name)
         request = client.build_request(
             "POST",
-            upstream_path,
+            upstream_url,
             headers=headers,
             content=body_to_send,
         )
@@ -1227,14 +1227,26 @@ class RequestCoordinator:
 
         return None
 
-    def _get_upstream_path(self, protocol: str, provider_id: str | None = None) -> str:
-        """Get the upstream path for a protocol and provider."""
+    def _get_upstream_url(self, protocol: str, provider_id: str | None = None) -> str:
+        """Get the absolute upstream URL for a protocol and provider.
+
+        When a provider configuration is available, uses
+        ``compose_provider_url()`` to combine ``base_url`` with the
+        configured protocol-specific path so all outbound dispatch
+        paths share the same URL composition rules as catalog fetch.
+        Falls back to bare paths when no provider config is loaded.
+        """
         if provider_id and self._config is not None:
             provider_cfg = self._config.providers.get(provider_id)
             if provider_cfg is not None:
-                if protocol == "anthropic":
-                    return provider_cfg.anthropic_path
-                return provider_cfg.openai_path
+                from eggpool.providers.contract import compose_provider_url
+
+                path = (
+                    provider_cfg.anthropic_path
+                    if protocol == "anthropic"
+                    else provider_cfg.openai_path
+                )
+                return compose_provider_url(provider_cfg, path)
         if protocol == "anthropic":
             return "/messages"
         return "/chat/completions"

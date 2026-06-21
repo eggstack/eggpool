@@ -15,13 +15,21 @@ protocols = ["openai", "anthropic"]
 api_key_env = "API_KEY"
 
 [providers.minimax]
-# MiniMax — OpenAI + Anthropic compatible
+# MiniMax International — OpenAI compatible
 id = "minimax"
-base_url = "https://api.minimaxi.com"
-protocols = ["openai", "anthropic"]
-openai_path = "/v1/chat/completions"
-anthropic_path = "/anthropic/v1/messages"
-models_path = "/v1/models"
+base_url = "https://api.minimax.io/v1"
+protocols = ["openai"]
+openai_path = "/chat/completions"
+models_path = "/models"
+api_key_env = "API_KEY"
+
+[providers.minimax-cn]
+# MiniMax China — OpenAI compatible
+id = "minimax-cn"
+base_url = "https://api.minimaxi.com/v1"
+protocols = ["openai"]
+openai_path = "/chat/completions"
+models_path = "/models"
 api_key_env = "API_KEY"
 
 [providers.generalcompute]

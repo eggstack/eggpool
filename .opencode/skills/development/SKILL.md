@@ -69,6 +69,16 @@ Run contract-specific tests:
 uv run pytest tests/unit/test_contract.py tests/unit/test_contract_urls.py -v
 ```
 
+### URL Composition Tests
+
+`compose_provider_url()` is the single source of truth for upstream URL
+construction. Catalog fetch, non-streaming chat, and streaming chat all
+call it through the provider config. Verify the consistency with:
+
+```bash
+uv run pytest tests/unit/test_contract_urls.py tests/unit/test_fetcher.py tests/unit/test_coordinator_provider.py -v
+```
+
 ## Code Style
 
 - Python 3.12+ with `from __future__ import annotations` in all files

@@ -452,6 +452,31 @@ class AppConfig(BaseModel):
         """
         from eggpool.constants import PLACEHOLDER_API_KEYS
 
+        for provider_id, provider in self.providers.items():
+            if provider.auth.mode != "bearer":
+                continue
+            for acct in provider.accounts:
+                if not acct.enabled:
+                    continue
+                raw_key = acct.api_key or os.environ.get(acct.api_key_env)
+                if not raw_key:
+                    source = (
+                        "api_key" if acct.api_key else f"env var {acct.api_key_env!r}"
+                    )
+                    raise ConfigError(
+                        f"Provider {provider_id!r} account {acct.name!r}: "
+                        f"{source} is not set"
+                    )
+                if raw_key.strip().lower().startswith("bearer "):
+                    source = (
+                        "api_key" if acct.api_key else f"env var {acct.api_key_env!r}"
+                    )
+                    raise ConfigError(
+                        f"Provider {provider_id!r} account {acct.name!r}: "
+                        f"{source} must be the raw token, not 'Bearer <token>'. "
+                        "EggPool adds the Bearer scheme automatically."
+                    )
+
         for acct in self.all_accounts():
             if acct.enabled:
                 raw_key = acct.api_key or os.environ.get(acct.api_key_env)

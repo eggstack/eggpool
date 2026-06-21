@@ -54,6 +54,13 @@ EggPool supports multiple upstream providers. Key components:
 - **`routing/provider.py`** — `parse_model_provider()` and `format_model_provider()` utilities
 - **Flat config auto-normalization** — legacy `[[accounts]]` configs become a default `opencode-go` provider
 
+### MiniMax Templates
+
+- `minimax` — international host `https://api.minimax.io/v1` (default for `minimax.io` keys)
+- `minimax-cn` — China host `https://api.minimaxi.com/v1`
+
+Both are OpenAI-only and use `bearer` auth. API keys must be raw tokens; EggPool prepends `Bearer ` automatically.
+
 See `architecture/README.md` for details.
 
 ## Provider Contracts
@@ -63,13 +70,18 @@ Each provider declares an explicit contract for authentication, URL composition,
 - **`ProviderAuthConfig`** — auth mode (`bearer`, `api_key`, `raw_authorization`, `none`), header name, scheme
 - **`ProviderStaticHeaderConfig`** — optional static headers (e.g., attribution headers for OpenRouter)
 - **`ProviderModelsEndpointConfig`** — model listing method, path, body, query params
-- **`ProviderVerifyConfig`** — live verification probe settings
+- **`ProviderVerifyConfig`** — live verification probe settings (probe_model, probe_protocol)
 
 Key design rules:
 - `base_url` ending `/v1` plus path beginning `/v1/` is rejected (duplicate version prefix)
 - `auth.mode = "none"` sends no upstream auth (used by Ollama local)
 - `compose_provider_url()` always produces absolute URLs for HTTPX
 - `build_auth_headers()` reads from `ProviderConfig.auth` instead of hardcoding Bearer
+- All outbound dispatch paths (catalog fetch, non-streaming chat, streaming chat) use `compose_provider_url()` so providers cannot list at one host and dispatch to another
+
+### Bearer-prefix guard
+
+`AppConfig.validate_account_credentials()` rejects API keys that begin with the `Bearer` scheme for `auth.mode = "bearer"` providers. EggPool adds the scheme automatically; a stored `Bearer <token>` would produce `Authorization: Bearer Bearer <token>` upstream and cause 401s. The same guard runs in `scripts/verify_upstream_auth.py` so the operator gets an explicit error before any upstream call. Providers using `auth.mode = "raw_authorization"` are unaffected because they pass the value verbatim.
 
 See `src/eggpool/providers/contract.py` for the centralized renderer.
 

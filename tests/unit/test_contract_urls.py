@@ -82,23 +82,35 @@ class TestProviderUrlComposition:
         assert url == "https://api.generalcompute.com/v1/models/list"
         assert url.count("/v1/") == 1, f"Duplicate /v1 in URL: {url}"
 
-    def test_minimax_host_level_base_with_versioned_path(self):
+    def test_minimax_international_url(self):
         cfg = ProviderConfig(
             id="minimax",
-            base_url="https://api.minimaxi.com",
-            openai_path="/v1/chat/completions",
-            anthropic_path="/anthropic/v1/messages",
-            models_path="/v1/models",
+            base_url="https://api.minimax.io/v1",
+            openai_path="/chat/completions",
+            models_path="/models",
+        )
+        assert compose_provider_url(cfg, cfg.openai_path) == (
+            "https://api.minimax.io/v1/chat/completions"
+        )
+        assert compose_provider_url(cfg, cfg.models_path) == (
+            "https://api.minimax.io/v1/models"
+        )
+        assert "/v1/v1" not in compose_provider_url(cfg, cfg.openai_path)
+
+    def test_minimax_china_url(self):
+        cfg = ProviderConfig(
+            id="minimax-cn",
+            base_url="https://api.minimaxi.com/v1",
+            openai_path="/chat/completions",
+            models_path="/models",
         )
         assert compose_provider_url(cfg, cfg.openai_path) == (
             "https://api.minimaxi.com/v1/chat/completions"
         )
-        assert compose_provider_url(cfg, cfg.anthropic_path) == (
-            "https://api.minimaxi.com/anthropic/v1/messages"
-        )
         assert compose_provider_url(cfg, cfg.models_path) == (
             "https://api.minimaxi.com/v1/models"
         )
+        assert "/v1/v1" not in compose_provider_url(cfg, cfg.openai_path)
 
     def test_ollama_local_url(self):
         cfg = ProviderConfig(
@@ -234,11 +246,18 @@ _TEMPLATE_PROVIDERS: dict[str, dict] = {
     },
     "minimax": {
         "id": "minimax",
-        "base_url": "https://api.minimaxi.com",
-        "protocols": ["openai", "anthropic"],
-        "openai_path": "/v1/chat/completions",
-        "anthropic_path": "/anthropic/v1/messages",
-        "models_path": "/v1/models",
+        "base_url": "https://api.minimax.io/v1",
+        "protocols": ["openai"],
+        "openai_path": "/chat/completions",
+        "models_path": "/models",
+        "auth": {"mode": "bearer"},
+    },
+    "minimax-cn": {
+        "id": "minimax-cn",
+        "base_url": "https://api.minimaxi.com/v1",
+        "protocols": ["openai"],
+        "openai_path": "/chat/completions",
+        "models_path": "/models",
         "auth": {"mode": "bearer"},
     },
     "generalcompute": {
@@ -313,6 +332,7 @@ class TestTemplateLinter:
             "alibaba",
             "novita",
             "minimax",
+            "minimax-cn",
             "generalcompute",
             "neuralwatt",
             "ollama-local",
@@ -331,7 +351,7 @@ class TestTemplateLinter:
 
     @pytest.mark.parametrize(
         "provider_id",
-        ["opencode-go", "deepseek", "minimax"],
+        ["opencode-go", "deepseek"],
     )
     def test_no_duplicate_version_in_anthropic_url(self, provider_id):
         cfg = _get_provider_configs()[provider_id]
@@ -354,6 +374,7 @@ class TestTemplateLinter:
             "alibaba",
             "novita",
             "minimax",
+            "minimax-cn",
             "generalcompute",
             "neuralwatt",
             "ollama-local",
@@ -373,10 +394,30 @@ class TestTemplateLinter:
         url = compose_provider_url(cfg, cfg.models_path or "/models/list")
         assert url == "https://api.generalcompute.com/v1/models/list"
 
-    def test_minimax_host_level_v1_ok(self):
+    def test_minimax_international_default_url(self):
         cfg = _get_provider_configs()["minimax"]
+        assert cfg.base_url == "https://api.minimax.io/v1"
+        assert cfg.openai_path == "/chat/completions"
+        url = compose_provider_url(cfg, cfg.openai_path)
+        assert url == "https://api.minimax.io/v1/chat/completions"
+
+    def test_minimax_china_default_url(self):
+        cfg = _get_provider_configs()["minimax-cn"]
+        assert cfg.base_url == "https://api.minimaxi.com/v1"
+        assert cfg.openai_path == "/chat/completions"
         url = compose_provider_url(cfg, cfg.openai_path)
         assert url == "https://api.minimaxi.com/v1/chat/completions"
+
+    def test_minimax_templates_no_double_v1(self):
+        for provider_id in ("minimax", "minimax-cn"):
+            cfg = _get_provider_configs()[provider_id]
+            for path in (cfg.openai_path, cfg.anthropic_path, cfg.models_path):
+                if not path:
+                    continue
+                url = compose_provider_url(cfg, path)
+                assert "/v1/v1" not in url, (
+                    f"{provider_id}: {path} composes duplicate /v1/v1: {url}"
+                )
 
     def test_ollama_local_no_auth(self):
         cfg = _get_provider_configs()["ollama-local"]

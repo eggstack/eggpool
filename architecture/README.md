@@ -44,15 +44,25 @@ All data-plane requests flow through `RequestCoordinator`:
 6. **Streaming** is handled by `proxy/sse_observer.py` with chunk-level usage extraction
 7. **Finalization** records usage, releases reservations, updates health state
 
+All outbound dispatch paths (non-streaming chat, streaming chat, catalog refresh) share the same `compose_provider_url()` rules so a provider cannot list models at one host and dispatch requests to another. The coordinator's `_get_upstream_url()` returns an absolute URL for provider-configured paths, falling back to bare paths only when no provider config is loaded.
+
 Key invariants:
 - Requests must be persisted before upstream dispatch
 - Pre-body failures can retry; no retry after first downstream byte emitted
 - Every retryable failed attempt must reach terminal state before the next attempt
 - Each attempt reservation is released exactly once via `AttemptFinalizer`
+- The same URL composition rules apply to catalog fetch and chat dispatch
 
 ## Multi-Provider Architecture
 
-EggPool supports multiple upstream providers (OpenCode Go, MiniMax, GeneralCompute, etc.), each with its own base URL, account pool, supported protocols, and model catalog.
+EggPool supports multiple upstream providers (OpenCode Go, MiniMax International, MiniMax China, GeneralCompute, etc.), each with its own base URL, account pool, supported protocols, and model catalog.
+
+### MiniMax templates
+
+- **`minimax`** — international host `https://api.minimax.io/v1` with `/chat/completions` and `/models` paths. Default for keys from `minimax.io`.
+- **`minimax-cn`** — China host `https://api.minimaxi.com/v1` with the same paths. For keys from the China console.
+
+Both are OpenAI-only and use `bearer` auth. A stored key must be the raw token; EggPool prepends `Bearer ` automatically. An optional `[providers.minimax.verify]` block lets the verifier know which model to probe when neither `--openai-model` nor `--anthropic-model` is passed on the CLI.
 
 ### Provider Configuration
 
@@ -97,7 +107,11 @@ Each provider declares an explicit contract for authentication, URL composition,
 - `build_static_headers()` — static provider headers from config
 - `build_upstream_headers()` — combines auth + static headers
 
-The coordinator calls `_build_upstream_headers()` which uses the provider contract when available, falling back to legacy Bearer auth.
+The coordinator calls `_build_upstream_headers()` and `_get_upstream_url()` which use the provider contract when available, falling back to legacy Bearer auth and bare paths respectively.
+
+#### Bearer-prefix guard
+
+`AppConfig.validate_account_credentials()` rejects API keys that begin with the `Bearer` scheme for providers configured with `auth.mode = "bearer"`. EggPool adds the scheme automatically, so a stored `Bearer <token>` would produce `Authorization: Bearer Bearer <token>` upstream and cause 401s. The same guard runs in `scripts/verify_upstream_auth.py` so the operator gets an explicit error before any upstream call. Providers using `auth.mode = "raw_authorization"` are unaffected because they pass the value verbatim.
 
 ## Database
 

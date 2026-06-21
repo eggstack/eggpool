@@ -14,12 +14,16 @@ transport to verify:
 
 from __future__ import annotations
 
+import json
 import sys
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import pytest
 import verify_upstream_auth  # noqa: E402  (path setup in tests/conftest.py)
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 UPSTREAM_KEY = "sk-test-verifier-1234567890abcdef"
 
@@ -368,3 +372,371 @@ class TestSecretAbsenceInAllPaths:
         assert UPSTREAM_KEY not in captured.err
         assert "Bearer " + UPSTREAM_KEY not in captured.out
         assert "Bearer " + UPSTREAM_KEY not in captured.err
+
+
+class TestBearerPrefixRejection:
+    """Bearer-prefixed keys must be rejected before any network call so the
+    operator gets an actionable verifier error rather than a misleading
+    upstream 401.
+    """
+
+    def _write_config(self, tmp_path: Path, *, api_key: str) -> Path:
+        cfg_path: Path = tmp_path / "config.toml"
+        cfg_path.write_text(
+            f"""\
+[providers.minimax]
+id = "minimax"
+base_url = "https://api.minimax.io/v1"
+protocols = ["openai"]
+openai_path = "/chat/completions"
+models_path = "/models"
+
+[[providers.minimax.accounts]]
+name = "default"
+api_key = "{api_key}"
+
+[providers.minimax.auth]
+mode = "bearer"
+
+[providers.minimax.verify]
+probe_model = "MiniMax-M2.5"
+probe_protocol = "openai"
+"""
+        )
+        return cfg_path
+
+    def test_bearer_prefixed_inline_key_rejected(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        cfg_path = self._write_config(tmp_path, api_key="Bearer sk-test-123")
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "verify_upstream_auth",
+                "--config",
+                str(cfg_path),
+                "--provider",
+                "minimax",
+            ],
+        )
+
+        called: dict[str, int] = {"count": 0}
+
+        def _explode(request: httpx.Request) -> httpx.Response:
+            called["count"] += 1
+            return httpx.Response(200, content=b"{}")
+
+        def _factory() -> httpx.Client:
+            return httpx.Client(transport=httpx.MockTransport(_explode), timeout=5.0)
+
+        monkeypatch.setattr(verify_upstream_auth, "_make_client", _factory)
+
+        rc = verify_upstream_auth.main()
+        assert rc != 0
+        assert called["count"] == 0, (
+            "verifier must reject bearer-prefixed key before any network call"
+        )
+        captured = capsys.readouterr()
+        assert "raw key must not include Bearer prefix" in captured.out
+        assert "sk-test-123" not in captured.out
+        assert "sk-test-123" not in captured.err
+
+    def test_bearer_prefixed_env_key_rejected(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.setenv("MINIMAX_KEY", "Bearer sk-test-123")
+        cfg_path: Path = tmp_path / "config.toml"
+        cfg_path.write_text(
+            """\
+[providers.minimax]
+id = "minimax"
+base_url = "https://api.minimax.io/v1"
+protocols = ["openai"]
+openai_path = "/chat/completions"
+models_path = "/models"
+
+[[providers.minimax.accounts]]
+name = "default"
+api_key_env = "MINIMAX_KEY"
+
+[providers.minimax.auth]
+mode = "bearer"
+
+[providers.minimax.verify]
+probe_model = "MiniMax-M2.5"
+probe_protocol = "openai"
+"""
+        )
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "verify_upstream_auth",
+                "--config",
+                str(cfg_path),
+                "--provider",
+                "minimax",
+            ],
+        )
+
+        called: dict[str, int] = {"count": 0}
+
+        def _explode(request: httpx.Request) -> httpx.Response:
+            called["count"] += 1
+            return httpx.Response(200, content=b"{}")
+
+        def _factory() -> httpx.Client:
+            return httpx.Client(transport=httpx.MockTransport(_explode), timeout=5.0)
+
+        monkeypatch.setattr(verify_upstream_auth, "_make_client", _factory)
+
+        rc = verify_upstream_auth.main()
+        assert rc != 0
+        assert called["count"] == 0
+        captured = capsys.readouterr()
+        assert "raw key must not include Bearer prefix" in captured.out
+
+    def test_raw_key_passes_bearer_prefix_check(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        cfg_path: Path = tmp_path / "config.toml"
+        cfg_path.write_text(
+            f"""\
+[providers.minimax]
+id = "minimax"
+base_url = "https://api.minimax.io/v1"
+protocols = ["openai"]
+openai_path = "/chat/completions"
+models_path = "/models"
+
+[[providers.minimax.accounts]]
+name = "default"
+api_key = "{UPSTREAM_KEY}"
+
+[providers.minimax.auth]
+mode = "bearer"
+"""
+        )
+
+        state = _capture_transport()
+        _install_mock_client(monkeypatch, state)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "verify_upstream_auth",
+                "--config",
+                str(cfg_path),
+                "--provider",
+                "minimax",
+            ],
+        )
+
+        rc = verify_upstream_auth.main()
+        assert rc == 0
+
+
+class TestProviderVerifyConfigProbeModel:
+    """The verifier consumes ``[providers.<id>.verify] probe_model`` and
+    ``probe_protocol`` when CLI model flags are absent. CLI flags win.
+    """
+
+    def _write_minimax_config(self, tmp_path: Path, *, include_verify: bool) -> Path:
+        cfg_path: Path = tmp_path / "config.toml"
+        verify_block = ""
+        if include_verify:
+            verify_block = (
+                "\n[providers.minimax.verify]\n"
+                'probe_model = "MiniMax-M2.5"\n'
+                'probe_protocol = "openai"\n'
+            )
+        cfg_path.write_text(
+            f"""\
+[providers.minimax]
+id = "minimax"
+base_url = "https://api.minimax.io/v1"
+protocols = ["openai"]
+openai_path = "/chat/completions"
+models_path = "/models"
+
+[[providers.minimax.accounts]]
+name = "default"
+api_key = "{UPSTREAM_KEY}"
+
+[providers.minimax.auth]
+mode = "bearer"
+{verify_block}
+"""
+        )
+        return cfg_path
+
+    def _argv_for(self, cfg_path: Any, *, openai_model: str | None) -> list[str]:
+        argv = [
+            "verify_upstream_auth",
+            "--config",
+            str(cfg_path),
+            "--provider",
+            "minimax",
+        ]
+        if openai_model is not None:
+            argv += ["--openai-model", openai_model]
+        return argv
+
+    def test_probe_model_used_when_cli_flag_absent(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        cfg_path = self._write_minimax_config(tmp_path, include_verify=True)
+        state = _capture_transport()
+        _install_mock_client(monkeypatch, state)
+        monkeypatch.setattr(sys, "argv", self._argv_for(cfg_path, openai_model=None))
+
+        rc = verify_upstream_auth.main()
+        assert rc == 0
+        captured = state.get("openai")
+        body_value: object = captured["body"]
+        payload = json.loads(body_value)
+        assert payload["model"] == "MiniMax-M2.5"
+
+    def test_cli_openai_model_overrides_probe_model(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        cfg_path = self._write_minimax_config(tmp_path, include_verify=True)
+        state = _capture_transport()
+        _install_mock_client(monkeypatch, state)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            self._argv_for(cfg_path, openai_model="MiniMax-OTHER"),
+        )
+
+        rc = verify_upstream_auth.main()
+        assert rc == 0
+        captured = state.get("openai")
+        body_value: object = captured["body"]
+        payload = json.loads(body_value)
+        assert payload["model"] == "MiniMax-OTHER"
+
+    def test_no_probe_model_skips_chat_probe(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        cfg_path = self._write_minimax_config(tmp_path, include_verify=False)
+        state = _capture_transport()
+        _install_mock_client(monkeypatch, state)
+        monkeypatch.setattr(sys, "argv", self._argv_for(cfg_path, openai_model=None))
+
+        rc = verify_upstream_auth.main()
+        assert rc == 0
+        assert "openai" not in state.captured, (
+            "no chat probe should run without --openai-model or probe_model"
+        )
+
+    def test_verbose_output_includes_resolved_url_and_auth_shape(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        cfg_path = self._write_minimax_config(tmp_path, include_verify=True)
+        state = _capture_transport()
+        _install_mock_client(monkeypatch, state)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            self._argv_for(cfg_path, openai_model=None) + ["--verbose"],
+        )
+
+        rc = verify_upstream_auth.main()
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "https://api.minimax.io/v1/chat/completions" in captured.out
+        assert "Authorization: Bearer ***" in captured.out
+        assert UPSTREAM_KEY not in captured.out
+
+    def test_verbose_distinguishes_models_failure_from_chat_failure(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        cfg_path: Path = tmp_path / "config.toml"
+        cfg_path.write_text(
+            f"""\
+[providers.minimax]
+id = "minimax"
+base_url = "https://api.minimax.io/v1"
+protocols = ["openai"]
+openai_path = "/chat/completions"
+models_path = "/models"
+
+[[providers.minimax.accounts]]
+name = "default"
+api_key = "{UPSTREAM_KEY}"
+
+[providers.minimax.auth]
+mode = "bearer"
+
+[providers.minimax.verify]
+probe_model = "MiniMax-M2.5"
+probe_protocol = "openai"
+"""
+        )
+
+        state = _TransportState(openai_status=200)
+        state.openai_status = 200
+        state.openai_body = b'{"id":"x","choices":[]}'
+        state.openai_request_id = "openai-req-1"
+        state.anthropic_status = 200
+        state.anthropic_body = b'{"id":"x","content":[]}'
+        state.anthropic_request_id = "anthropic-req-1"
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            path = request.url.path
+            if path.endswith("/models"):
+                return httpx.Response(500, content=b"upstream models failure")
+            if path.endswith("/chat/completions"):
+                return httpx.Response(
+                    200,
+                    headers={"x-request-id": "openai-req-1"},
+                    content=b'{"id":"x","choices":[]}',
+                )
+            return httpx.Response(599, content=b"unrouted")
+
+        def _factory() -> httpx.Client:
+            return httpx.Client(transport=httpx.MockTransport(_handler), timeout=5.0)
+
+        monkeypatch.setattr(verify_upstream_auth, "_make_client", _factory)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "verify_upstream_auth",
+                "--config",
+                str(cfg_path),
+                "--provider",
+                "minimax",
+                "--verbose",
+            ],
+        )
+
+        rc = verify_upstream_auth.main()
+        assert rc != 0
+        captured = capsys.readouterr()
+        assert "models: " in captured.out
+        assert "openai: " in captured.out
+        assert "[FAIL]" in captured.out
+        assert "[OK]" in captured.out

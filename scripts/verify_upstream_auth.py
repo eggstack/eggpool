@@ -154,6 +154,26 @@ def _verify_config_provider(
     auth_header = auth_cfg.get("header", "Authorization")
     auth_scheme = auth_cfg.get("scheme", "Bearer")
 
+    # Reject keys that already include the Bearer scheme so the
+    # operator gets an actionable error before any upstream call.
+    if auth_mode == "bearer" and api_key.strip().lower().startswith("bearer "):
+        return [
+            _AuthCheckResult(
+                provider_id=provider_id,
+                account_name=account_name,
+                family="auth",
+                ok=False,
+                status_code=None,
+                request_id=None,
+                resolved_url="",
+                auth_shape=f"{auth_header}: {auth_scheme} ***",
+                detail=(
+                    "raw key must not include Bearer prefix; "
+                    "EggPool adds the Bearer scheme automatically"
+                ),
+            )
+        ]
+
     auth_headers = _build_auth_headers(auth_mode, auth_header, auth_scheme, api_key)
     auth_shape = (
         f"{auth_header}: {auth_scheme} ***"
@@ -162,6 +182,22 @@ def _verify_config_provider(
     )
 
     results: list[_AuthCheckResult] = []
+
+    # Resolve chat probe models with precedence:
+    # 1. CLI --openai-model / --anthropic-model
+    # 2. [providers.<id>.verify] probe_model / probe_protocol
+    # 3. None (only model-list verification runs)
+    verify_cfg: dict[str, Any] = provider_cfg.get("verify", {}) or {}
+    probe_model = verify_cfg.get("probe_model")
+    probe_protocol = verify_cfg.get("probe_protocol", "openai")
+
+    resolved_openai_model = openai_model
+    resolved_anthropic_model = anthropic_model
+    if probe_model and not openai_model and not anthropic_model:
+        if probe_protocol == "anthropic":
+            resolved_anthropic_model = probe_model
+        else:
+            resolved_openai_model = probe_model
 
     # Verify model listing endpoint
     models_cfg: dict[str, Any] = provider_cfg.get("models_endpoint") or {}  # type: ignore[assignment]
@@ -218,11 +254,11 @@ def _verify_config_provider(
 
     # Verify OpenAI chat endpoint
     openai_path = provider_cfg.get("openai_path")
-    if openai_path and openai_model:
+    if openai_path and resolved_openai_model:
         chat_url = _compose_url(base_url, openai_path)
         headers = {**auth_headers, "Content-Type": "application/json"}
         payload = {
-            "model": openai_model,
+            "model": resolved_openai_model,
             "max_tokens": 1,
             "messages": [{"role": "user", "content": "ping"}],
         }
@@ -243,10 +279,11 @@ def _verify_config_provider(
                 f"  [{marker}] {provider_id}/{account_name} openai: {result.detail}\n"
             )
             sys.stdout.write(f"    resolved_url={result.resolved_url}\n")
+            sys.stdout.write(f"    auth={result.auth_shape}\n")
 
     # Verify Anthropic messages endpoint
     anthropic_path = provider_cfg.get("anthropic_path")
-    if anthropic_path and anthropic_model:
+    if anthropic_path and resolved_anthropic_model:
         msg_url = _compose_url(base_url, anthropic_path)
         headers = {
             **auth_headers,
@@ -254,7 +291,7 @@ def _verify_config_provider(
             "anthropic-version": "2023-06-01",
         }
         payload = {
-            "model": anthropic_model,
+            "model": resolved_anthropic_model,
             "max_tokens": 1,
             "messages": [{"role": "user", "content": "ping"}],
         }
@@ -276,6 +313,7 @@ def _verify_config_provider(
                 f"{result.detail}\n"
             )
             sys.stdout.write(f"    resolved_url={result.resolved_url}\n")
+            sys.stdout.write(f"    auth={result.auth_shape}\n")
 
     return results
 

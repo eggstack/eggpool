@@ -187,6 +187,96 @@ enabled = false
     assert all_accts[0].enabled is False
 
 
+def test_bearer_mode_rejects_bearer_prefixed_key() -> None:
+    config = AppConfig.from_dict(
+        {
+            "providers": {
+                "minimax": {
+                    "id": "minimax",
+                    "base_url": "https://api.minimax.io/v1",
+                    "protocols": ["openai"],
+                    "accounts": [{"name": "default", "api_key": "Bearer sk-test"}],
+                }
+            }
+        }
+    )
+    with pytest.raises(ConfigError, match="must be the raw token"):
+        config.validate_account_credentials()
+
+
+def test_bearer_mode_rejects_bearer_prefixed_env_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINIMAX_KEY", "Bearer sk-test")
+    config = AppConfig.from_dict(
+        {
+            "providers": {
+                "minimax": {
+                    "id": "minimax",
+                    "base_url": "https://api.minimax.io/v1",
+                    "protocols": ["openai"],
+                    "accounts": [{"name": "default", "api_key_env": "MINIMAX_KEY"}],
+                }
+            }
+        }
+    )
+    with pytest.raises(ConfigError, match="must be the raw token"):
+        config.validate_account_credentials()
+
+
+def test_bearer_mode_accepts_raw_token() -> None:
+    config = AppConfig.from_dict(
+        {
+            "providers": {
+                "minimax": {
+                    "id": "minimax",
+                    "base_url": "https://api.minimax.io/v1",
+                    "protocols": ["openai"],
+                    "accounts": [{"name": "default", "api_key": "sk-test"}],
+                }
+            }
+        }
+    )
+    config.validate_account_credentials()
+
+
+def test_raw_authorization_allows_bearer_prefixed_value() -> None:
+    """``raw_authorization`` mode passes the key through verbatim so a
+    ``Bearer <token>`` value is permitted there.
+    """
+    config = AppConfig.from_dict(
+        {
+            "providers": {
+                "raw": {
+                    "id": "raw",
+                    "base_url": "https://api.example.com",
+                    "protocols": ["openai"],
+                    "auth": {"mode": "raw_authorization"},
+                    "accounts": [{"name": "default", "api_key": "Bearer sk-test"}],
+                }
+            }
+        }
+    )
+    config.validate_account_credentials()
+
+
+def test_bearer_mode_case_insensitive_prefix_rejected() -> None:
+    config = AppConfig.from_dict(
+        {
+            "providers": {
+                "minimax": {
+                    "id": "minimax",
+                    "base_url": "https://api.minimax.io/v1",
+                    "protocols": ["openai"],
+                    "accounts": [{"name": "default", "api_key": "  bearer sk-test"}],
+                }
+            }
+        }
+    )
+    with pytest.raises(ConfigError, match="must be the raw token"):
+        config.validate_account_credentials()
+
+
 def test_model_override_price_strings_are_normalized(tmp_path: Path) -> None:
     config_file = tmp_path / "prices.toml"
     config_file.write_text(

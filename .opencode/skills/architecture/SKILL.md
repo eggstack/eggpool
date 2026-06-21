@@ -62,8 +62,26 @@ See `architecture/README.md` for the full design overview.
 - `build_static_headers()` — static provider headers from config
 - `build_upstream_headers()` — combines auth + static headers
 
-The coordinator calls `_build_upstream_headers()` which uses the provider
-contract when available, falling back to legacy Bearer auth.
+The coordinator calls `_build_upstream_headers()` and `_get_upstream_url()` which use the provider
+contract when available, falling back to legacy Bearer auth and bare paths respectively.
+
+### URL Composition Consistency
+
+`compose_provider_url()` is the single source of truth for upstream URL
+construction. Catalog fetch, non-streaming chat, and streaming chat all
+call it through the provider config so a provider cannot list models at
+one host and dispatch requests to another. The coordinator's
+`_get_upstream_url()` returns an absolute URL when a provider config is
+present; only the no-config fallback returns bare paths.
+
+### MiniMax Templates
+
+- `minimax` — international host `https://api.minimax.io/v1` (default for `minimax.io` keys)
+- `minimax-cn` — China host `https://api.minimaxi.com/v1`
+
+Both are OpenAI-only and use `bearer` auth. API keys must be raw tokens;
+EggPool prepends `Bearer ` automatically. An optional
+`[providers.<id>.verify]` block controls live verification probes.
 
 ## Model Context Limits
 

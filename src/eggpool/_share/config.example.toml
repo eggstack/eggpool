@@ -220,21 +220,42 @@ persist_redacted_error_detail = false
 #
 # # Live-verification-required: confirm base_url and endpoints before production use
 
-# MiniMax — OpenAI + Anthropic compatible
-# Status: live-verification-required — auth mode/header may need adjustment (401 observed)
+# MiniMax International — OpenAI compatible
+# Status: live-verification-required; use for keys from minimax.io
 # [providers.minimax]
 # id = "minimax"
-# base_url = "https://api.minimaxi.com"
-# protocols = ["openai", "anthropic"]
-# openai_path = "/v1/chat/completions"
-# anthropic_path = "/anthropic/v1/messages"
-# models_path = "/v1/models"
+# base_url = "https://api.minimax.io/v1"
+# protocols = ["openai"]
+# openai_path = "/chat/completions"
+# models_path = "/models"
 #
 # [[providers.minimax.accounts]]
 # name = "default"
 # api_key = "sk-your-minimax-key"
 #
 # [providers.minimax.auth]
+# mode = "bearer"
+#
+# # Optional live-verification probe — the verifier uses this when neither
+# # --openai-model nor --anthropic-model is supplied.
+# # [providers.minimax.verify]
+# # probe_model = "MiniMax-M2.5"
+# # probe_protocol = "openai"
+
+# MiniMax China — OpenAI compatible
+# Status: live-verification-required; use for keys from the China MiniMax console
+# [providers.minimax-cn]
+# id = "minimax-cn"
+# base_url = "https://api.minimaxi.com/v1"
+# protocols = ["openai"]
+# openai_path = "/chat/completions"
+# models_path = "/models"
+#
+# [[providers.minimax-cn.accounts]]
+# name = "default"
+# api_key = "sk-your-minimax-cn-key"
+#
+# [providers.minimax-cn.auth]
 # mode = "bearer"
 
 # GeneralCompute — OpenAI compatible (uses POST for model listing)

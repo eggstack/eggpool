@@ -149,7 +149,7 @@ class TestGetClientProviderAware:
             coordinator._get_client()
 
 
-class TestGetUpstreamPathProviderAware:
+class TestGetUpstreamUrlProviderAware:
     def _make_coordinator(self, config: AppConfig | None = None) -> RequestCoordinator:
         registry = MagicMock()
         catalog = MagicMock()
@@ -178,8 +178,8 @@ class TestGetUpstreamPathProviderAware:
             }
         )
         coordinator = self._make_coordinator(config)
-        result = coordinator._get_upstream_path("openai", "custom")
-        assert result == "/v1/chat"
+        result = coordinator._get_upstream_url("openai", "custom")
+        assert result == "https://custom.example.com/v1/chat"
 
     def test_uses_provider_config_anthropic_path(self) -> None:
         config = AppConfig(
@@ -193,20 +193,18 @@ class TestGetUpstreamPathProviderAware:
             }
         )
         coordinator = self._make_coordinator(config)
-        result = coordinator._get_upstream_path("anthropic", "custom")
-        assert result == "/v1/messages"
+        result = coordinator._get_upstream_url("anthropic", "custom")
+        assert result == "https://custom.example.com/v1/messages"
 
     def test_falls_back_to_defaults_when_no_config(self) -> None:
         coordinator = self._make_coordinator(config=None)
-        assert coordinator._get_upstream_path("openai") == "/chat/completions"
-        assert coordinator._get_upstream_path("anthropic") == "/messages"
+        assert coordinator._get_upstream_url("openai") == "/chat/completions"
+        assert coordinator._get_upstream_url("anthropic") == "/messages"
 
     def test_falls_back_to_defaults_when_unknown_provider(self) -> None:
         config = AppConfig(providers={})
         coordinator = self._make_coordinator(config)
-        assert (
-            coordinator._get_upstream_path("openai", "unknown") == "/chat/completions"
-        )
+        assert coordinator._get_upstream_url("openai", "unknown") == "/chat/completions"
 
     def test_falls_back_when_provider_id_none(self) -> None:
         config = AppConfig(
@@ -219,7 +217,72 @@ class TestGetUpstreamPathProviderAware:
             }
         )
         coordinator = self._make_coordinator(config)
-        assert coordinator._get_upstream_path("openai", None) == "/chat/completions"
+        assert coordinator._get_upstream_url("openai", None) == "/chat/completions"
+
+    @pytest.mark.parametrize(
+        ("base_url", "path", "expected"),
+        [
+            (
+                "https://api.minimax.io/v1",
+                "/chat/completions",
+                "https://api.minimax.io/v1/chat/completions",
+            ),
+            (
+                "https://api.minimaxi.com/v1",
+                "/chat/completions",
+                "https://api.minimaxi.com/v1/chat/completions",
+            ),
+            (
+                "https://opencode.ai/zen/go/v1",
+                "/chat/completions",
+                "https://opencode.ai/zen/go/v1/chat/completions",
+            ),
+        ],
+    )
+    def test_chat_dispatch_uses_absolute_url_composition(
+        self, base_url: str, path: str, expected: str
+    ) -> None:
+        cfg = AppConfig(
+            providers={"p": ProviderConfig(id="p", base_url=base_url, openai_path=path)}
+        )
+        coordinator = self._make_coordinator(cfg)
+        assert coordinator._get_upstream_url("openai", "p") == expected
+
+    def test_minimax_international_default_dispatch(self) -> None:
+        cfg = AppConfig(
+            providers={
+                "minimax": ProviderConfig(
+                    id="minimax",
+                    base_url="https://api.minimax.io/v1",
+                    protocols=["openai"],
+                    openai_path="/chat/completions",
+                    models_path="/models",
+                )
+            }
+        )
+        coordinator = self._make_coordinator(cfg)
+        assert (
+            coordinator._get_upstream_url("openai", "minimax")
+            == "https://api.minimax.io/v1/chat/completions"
+        )
+
+    def test_minimax_china_default_dispatch(self) -> None:
+        cfg = AppConfig(
+            providers={
+                "minimax-cn": ProviderConfig(
+                    id="minimax-cn",
+                    base_url="https://api.minimaxi.com/v1",
+                    protocols=["openai"],
+                    openai_path="/chat/completions",
+                    models_path="/models",
+                )
+            }
+        )
+        coordinator = self._make_coordinator(cfg)
+        assert (
+            coordinator._get_upstream_url("openai", "minimax-cn")
+            == "https://api.minimaxi.com/v1/chat/completions"
+        )
 
 
 class TestCoordinatorInitConfig:
@@ -316,3 +379,54 @@ class TestValidateEndpointProviderAware:
 
         with pytest.raises(ModelUnavailableError):
             coordinator._validate_endpoint(_make_context(model_id="shared-model"))
+
+
+class TestDispatchUrlMatchesComposeProviderUrl:
+    """Confirm coordinator dispatch URL composition matches the contract
+    renderer used by the catalog fetcher.
+    """
+
+    def test_get_upstream_url_matches_compose_provider_url(self) -> None:
+        from eggpool.providers.contract import compose_provider_url
+
+        cfg = AppConfig(
+            providers={
+                "minimax": ProviderConfig(
+                    id="minimax",
+                    base_url="https://api.minimax.io/v1",
+                    protocols=["openai"],
+                    openai_path="/chat/completions",
+                    models_path="/models",
+                ),
+                "minimax-cn": ProviderConfig(
+                    id="minimax-cn",
+                    base_url="https://api.minimaxi.com/v1",
+                    protocols=["openai"],
+                    openai_path="/chat/completions",
+                    models_path="/models",
+                ),
+            }
+        )
+
+        registry = MagicMock()
+        catalog = MagicMock()
+        router = MagicMock()
+        db = MagicMock()
+        client = httpx.AsyncClient()
+        coordinator = RequestCoordinator(
+            registry=registry,
+            catalog=catalog,
+            router=router,
+            db=db,
+            client_pool=client,
+            config=cfg,
+        )
+
+        for provider_id, base in (
+            ("minimax", "https://api.minimax.io/v1"),
+            ("minimax-cn", "https://api.minimaxi.com/v1"),
+        ):
+            provider_cfg = cfg.providers[provider_id]
+            composed = compose_provider_url(provider_cfg, provider_cfg.openai_path)
+            assert coordinator._get_upstream_url("openai", provider_id) == composed
+            assert composed == f"{base}/chat/completions"

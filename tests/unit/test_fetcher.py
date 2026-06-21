@@ -184,3 +184,71 @@ class TestFetcherProviderAware:
         # Verify legacy auth header was used
         # The mock transport captures requests; we verify via the response
         # that the fetch succeeded with default Bearer auth
+
+
+class TestFetcherAndDispatchUrlConsistency:
+    """Catalog fetcher and chat dispatch must use the same URL composition
+    rules so a provider cannot end up listing at one host and dispatching
+    to another.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("base_url", "models_path", "expected_url"),
+        [
+            (
+                "https://api.minimax.io/v1",
+                "/models",
+                "https://api.minimax.io/v1/models",
+            ),
+            (
+                "https://api.minimaxi.com/v1",
+                "/models",
+                "https://api.minimaxi.com/v1/models",
+            ),
+            (
+                "https://opencode.ai/zen/go/v1",
+                "/models",
+                "https://opencode.ai/zen/go/v1/models",
+            ),
+        ],
+    )
+    async def test_catalog_url_matches_compose_provider_url(
+        self,
+        base_url: str,
+        models_path: str,
+        expected_url: str,
+    ) -> None:
+        from eggpool.models.config import ProviderConfig
+        from eggpool.providers.contract import compose_provider_url
+
+        provider_cfg = ProviderConfig(
+            id="p",
+            base_url=base_url,
+            openai_path="/chat/completions",
+            models_path=models_path,
+        )
+
+        captured_urls: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured_urls.append(str(request.url))
+            return httpx.Response(
+                200,
+                json={"data": [{"id": "m", "object": "model"}]},
+                request=request,
+            )
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="https://placeholder.invalid"
+        ) as client:
+            await fetch_models_for_account(
+                client,
+                "sk-test",
+                "acct1",
+                provider_cfg=provider_cfg,
+            )
+
+        assert captured_urls == [expected_url]
+        assert captured_urls[0] == compose_provider_url(provider_cfg, models_path)
