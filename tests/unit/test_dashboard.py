@@ -209,7 +209,7 @@ class TestRenderOverview:
         assert 'viewBox="0 0 1600 900"' in html
         assert 'preserveAspectRatio="xMidYMid slice"' in html
         assert 'aria-hidden="true"' in html
-        # Single egg-shell path, no crack or yolk
+        # Single egg-shell path (the soft egg body) — no crack, no yolk
         assert 'class="egg-shell"' in html
         assert html.count('class="egg-shell"') == 1
         assert 'class="egg-crack"' not in html
@@ -1197,9 +1197,10 @@ class TestDashboardStylesheet:
         assert ".egg-background" in css
         assert "position: fixed" in css
         assert "pointer-events: none" in css
-        # The egg is a single outline (no fill, no crack)
+        # The egg has a soft fill body and an outline, no crack
         assert ".egg-shell" in css
-        assert "fill: none" in css
+        assert "fill:" in css
+        assert "stroke:" in css
         assert ".egg-crack" not in css
         # Egg color must track the theme via CSS variables (no hardcoded hex)
         assert "var(--page-bg)" in css

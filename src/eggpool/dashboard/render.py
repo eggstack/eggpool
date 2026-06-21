@@ -108,10 +108,10 @@ def _render_layout(
      aria-hidden="true" focusable="false">
   <path class="egg-shell"
         d="M 800 80
-           C 960 80, 1100 280, 1140 460
-           C 1180 640, 1040 830, 800 830
-           C 560 830, 420 640, 460 460
-           C 500 280, 640 80, 800 80 Z" />
+           C 843 80, 1140 393, 1140 460
+           C 1140 527, 873 830, 800 830
+           C 727 830, 460 527, 460 460
+           C 460 393, 757 80, 800 80 Z" />
 </svg>
 <header class="topbar">
   <h1><a href="/?period={_html_escape(period)}&amp;theme={
