@@ -254,8 +254,13 @@ MODEL_FAMILY_FALLBACKS: dict[str, tuple[float, float]] = {
     "claude-3.5-sonnet": (3.0, 15.0),
 }
 
-# Global unknown-request fallback (dollars per 1M tokens)
+# Global unknown-request fallback (dollars per 1M tokens). The
+# conservative minimum of the two bounds is used by Tier 5 so a
+# single misrouted request cannot over-reserve by ~10x. Routing
+# scoring still treats the unknown tier as informational; weighted
+# fair-share scoring is not influenced by it.
 GLOBAL_FALLBACK = (3.0, 15.0)
+GLOBAL_FALLBACK_FLOOR_MICRODOLLARS_PER_TOKEN = 0.5
 
 
 @dataclass
@@ -405,9 +410,14 @@ class QuotaEstimator:
             cost = int(estimated_tokens * cost_per_token * self.default_safety_factor)
             return max(cost, 1)
 
-        # Tier 5: Global unknown-request fallback
-        avg_rate = (GLOBAL_FALLBACK[0] + GLOBAL_FALLBACK[1]) / 2.0
-        cost_per_token = avg_rate
+        # Tier 5: Global unknown-request fallback. Use the conservative
+        # lower bound of the unknown-price range, clamped by a small
+        # floor, so the reservation does not balloon for models whose
+        # actual cost is sub-1 microdollars/token.
+        cost_per_token = max(
+            GLOBAL_FALLBACK[0],
+            GLOBAL_FALLBACK_FLOOR_MICRODOLLARS_PER_TOKEN,
+        )
         cost = int(estimated_tokens * cost_per_token * self.default_safety_factor)
         return max(cost, 1)
 

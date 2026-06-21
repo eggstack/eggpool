@@ -611,13 +611,13 @@ class TestCooldownParity:
     def test_runtime_state_rate_limit_with_retry_after(self) -> None:
         state = AccountRuntimeState(name="a", enabled=True)
         state.record_failure("rate_limited", rate_limit_retry_after=120.0)
-        assert state.health_state == "cooldown"
+        assert state.health_state == "rate_limited"
         assert state.cooldown_until > time.time() + 110.0
 
     def test_runtime_state_rate_limit_backoff_when_no_retry_after(self) -> None:
         state = AccountRuntimeState(name="a", enabled=True)
         state.record_failure("rate_limited")
-        assert state.health_state == "cooldown"
+        assert state.health_state == "rate_limited"
         assert state.cooldown_until > time.time() + 25.0
 
 

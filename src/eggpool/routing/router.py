@@ -145,6 +145,7 @@ class Router:
             provider_id=provider_id,
             protocol=protocol,
             account_supports_protocol=self._registry.account_supports_protocol,
+            quota_estimator=self._quota_estimator,
         )
         if exclude_accounts:
             eligible = [
@@ -264,7 +265,9 @@ class Router:
     async def decrement_active_request_count(self, account_name: str) -> None:
         """Decrement the active request count for an account.
 
-        Never allows the count to become negative.
+        Never allows the count to become negative. When the count
+        reaches zero, prune the per-account lock entry so the locks
+        dict does not grow monotonically across connect/logout cycles.
         """
         state = self._registry.get_state(account_name)
         if state is not None:
@@ -272,6 +275,9 @@ class Router:
             async with lock:
                 if state.active_request_count > 0:
                     state.active_request_count -= 1
+                    if state.active_request_count == 0:
+                        async with self._active_count_locks_lock:
+                            self._active_count_locks.pop(account_name, None)
 
     def has_eligible_pairing(
         self,
@@ -291,6 +297,11 @@ class Router:
         if not all_states:
             return False
 
+        # Snapshot the catalog once so each account iteration does not
+        # allocate a fresh dict.  Per-account fresh-supporting sets are
+        # cheap to compute but a 50-account readiness probe otherwise
+        # re-snapshots the full catalog on every iteration.
+        all_models = self._catalog.cache.get_all_models()
         for state in all_states:
             if not state.is_eligible():
                 continue
@@ -306,7 +317,6 @@ class Router:
             ):
                 continue
             # Check model availability with model-level health
-            all_models = self._catalog.cache.get_all_models()
             for model_id in all_models:
                 if self._stale_after_s is not None:
                     supporting = self._catalog.cache.get_fresh_supporting_accounts(

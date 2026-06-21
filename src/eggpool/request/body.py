@@ -51,7 +51,7 @@ async def read_body_limited(request: Request, max_bytes: int) -> bytes:
                 async with asyncio.timeout(5.0):
                     async for _chunk in stream:
                         pass
-            except (TimeoutError, Exception):
+            except Exception:
                 pass
     if too_large:
         raise RequestTooLargeError(f"Request body exceeds limit of {max_bytes} bytes")

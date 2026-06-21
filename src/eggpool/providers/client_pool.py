@@ -124,7 +124,7 @@ def _build_client(
             connect=cfg.connect_timeout_s,
             read=cfg.read_timeout_s,
             write=cfg.write_timeout_s,
-            pool=cfg.connect_timeout_s,
+            pool=cfg.pool_timeout_s,
         ),
         limits=limits,
         transport=transport,

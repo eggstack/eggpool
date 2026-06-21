@@ -39,7 +39,7 @@ from eggpool.health.health_manager import (
 from eggpool.providers.client_pool import ProviderClientPool
 from eggpool.proxy.client import filter_request_headers, filter_response_headers
 from eggpool.proxy.sse_observer import IncrementalSSEObserver
-from eggpool.proxy.usage import StreamUsageResult
+from eggpool.proxy.usage import StreamUsageResult, safe_dict
 from eggpool.request.attempt_finalizer import (
     AttemptFinalizationData,
     AttemptFinalizer,
@@ -78,13 +78,6 @@ _UPSTREAM_REQUEST_ID_HEADERS: list[str] = [
     "anthropic-request-id",
     "x-amzn-requestid",
 ]
-
-
-def _safe_dict(value: Any) -> dict[str, Any] | None:
-    """Return value if it is a dict, else None."""
-    if isinstance(value, dict):
-        return cast("dict[str, Any]", value)
-    return None
 
 
 def _prepare_error_detail(value: object | None, persist: bool) -> str | None:
@@ -390,7 +383,10 @@ class RequestCoordinator:
                 )
                 # Apply health transition for non-retryable errors that
                 # indicate account-level problems (e.g., 401/403 auth
-                # failures) so the circuit breaker can open.
+                # failures, 429 rate limits, 402 quota exhausted) so the
+                # circuit breaker can open. Mark ``health_applied`` so
+                # ``_handle_exhausted`` does not double-apply the same
+                # failure through the finalizer.
                 if self._health_manager is not None:
                     category = classify_failure_category(None, err.status_code)
                     if category == FailureCategory.AUTHENTICATION_FAILED:
@@ -404,6 +400,15 @@ class RequestCoordinator:
                         self._health_manager.record_quota_exhausted(
                             selected.account_name,
                             self._quota_exhausted_cooldown_seconds,
+                        )
+                        health_applied = True
+                    elif category == FailureCategory.RATE_LIMITED:
+                        # Non-retryable 429s are propagated to the
+                        # client but still indicate upstream pressure.
+                        # ``_NonRetryableUpstreamError`` does not carry
+                        # ``retry_after`` so default to a 60 s cooldown.
+                        self._health_manager.record_rate_limit(
+                            selected.account_name, 60.0
                         )
                         health_applied = True
                 break
@@ -440,221 +445,222 @@ class RequestCoordinator:
         ):
             raise DatabaseError("Cannot persist: database repositories unavailable")
 
-        async with self._select_lock:
-            async with self._db.transaction():
-                # 1. Get eligible account names excluding attempted ones
-                eligible_account_names = self._router.get_eligible_account_names(
-                    context.model_id,
-                    exclude_accounts=context.attempted_accounts
-                    if context.attempted_accounts
-                    else None,
-                    provider_id=context.provider_id,
-                    protocol=context.protocol,
+        async with self._select_lock, self._db.transaction():
+            # 1. Get eligible account names excluding attempted ones
+            eligible_account_names = self._router.get_eligible_account_names(
+                context.model_id,
+                exclude_accounts=context.attempted_accounts
+                if context.attempted_accounts
+                else None,
+                provider_id=context.provider_id,
+                protocol=context.protocol,
+            )
+
+            if not eligible_account_names:
+                raise ModelUnavailableError(
+                    f"No accounts available for model {context.model_id!r}"
                 )
 
-                if not eligible_account_names:
-                    raise ModelUnavailableError(
-                        f"No accounts available for model {context.model_id!r}"
+            # 2. Calculate projected request tokens once
+            estimated_tokens = estimate_reservation_tokens(context.original_body)
+
+            # 3. Build per-account estimate map for scoring
+            request_estimates: dict[str, int] = {}
+            if self._quota_estimator is not None:
+                for acct_name in eligible_account_names:
+                    request_estimates[acct_name] = (
+                        self._quota_estimator.estimate_cost(
+                            acct_name, context.model_id, estimated_tokens
+                        )
                     )
 
-                # 2. Calculate projected request tokens once
-                estimated_tokens = estimate_reservation_tokens(context.original_body)
+            # 4. Rank accounts once using projected estimates, then
+            #    acquire the circuit-breaker probe slot atomically.
+            exclude: set[str] = (
+                set(context.attempted_accounts)
+                if context.attempted_accounts
+                else set()
+            )
+            selected_state = None
+            ranked_candidates = await self._router.select_accounts_for_failover(
+                context.model_id,
+                max_accounts=len(eligible_account_names),
+                request_estimates=request_estimates,
+                exclude_accounts=exclude if exclude else None,
+                provider_id=context.provider_id,
+                protocol=context.protocol,
+            )
+            for candidate_state, _score in ranked_candidates:
+                # Acquire the circuit-breaker probe slot. If the
+                # breaker rejects this account (half-open slot
+                # consumed or still open), try the next ranked
+                # account without rebuilding and rescoring the
+                # whole candidate list.
+                if (
+                    self._health_manager is not None
+                    and not self._health_manager.try_acquire_request(
+                        candidate_state.name, context.model_id
+                    )
+                ):
+                    continue
+                selected_state = candidate_state
+                break
 
-                # 3. Build per-account estimate map for scoring
-                request_estimates: dict[str, int] = {}
-                if self._quota_estimator is not None:
-                    for acct_name in eligible_account_names:
-                        request_estimates[acct_name] = (
-                            self._quota_estimator.estimate_cost(
-                                acct_name, context.model_id, estimated_tokens
-                            )
-                        )
-
-                # 4. Rank accounts once using projected estimates, then
-                #    acquire the circuit-breaker probe slot atomically.
-                exclude: set[str] = (
-                    set(context.attempted_accounts)
-                    if context.attempted_accounts
-                    else set()
-                )
-                selected_state = None
-                ranked_candidates = await self._router.select_accounts_for_failover(
-                    context.model_id,
-                    max_accounts=len(eligible_account_names),
+            if selected_state is None and not ranked_candidates:
+                selected_state = await self._router.select_account(
+                    model_id=context.model_id,
                     request_estimates=request_estimates,
                     exclude_accounts=exclude if exclude else None,
                     provider_id=context.provider_id,
                     protocol=context.protocol,
                 )
-                for candidate_state, _score in ranked_candidates:
-                    # Acquire the circuit-breaker probe slot. If the
-                    # breaker rejects this account (half-open slot
-                    # consumed or still open), try the next ranked
-                    # account without rebuilding and rescoring the
-                    # whole candidate list.
-                    if (
-                        self._health_manager is not None
-                        and not self._health_manager.try_acquire_request(
-                            candidate_state.name, context.model_id
-                        )
-                    ):
-                        continue
-                    selected_state = candidate_state
-                    break
-
-                if selected_state is None and not ranked_candidates:
-                    selected_state = await self._router.select_account(
-                        model_id=context.model_id,
-                        request_estimates=request_estimates,
-                        exclude_accounts=exclude if exclude else None,
-                        provider_id=context.provider_id,
-                        protocol=context.protocol,
+                if (
+                    selected_state is not None
+                    and self._health_manager is not None
+                    and not self._health_manager.try_acquire_request(
+                        selected_state.name, context.model_id
                     )
-                    if (
-                        selected_state is not None
-                        and self._health_manager is not None
-                        and not self._health_manager.try_acquire_request(
-                            selected_state.name, context.model_id
-                        )
-                    ):
-                        selected_state = None
+                ):
+                    selected_state = None
 
-                if selected_state is None:
-                    raise ModelUnavailableError(
-                        f"No accounts available for model {context.model_id!r}"
-                    )
+            if selected_state is None:
+                raise ModelUnavailableError(
+                    f"No accounts available for model {context.model_id!r}"
+                )
 
-                account_name = selected_state.name
-                try:
-                    api_key = self._registry.get_api_key(account_name)
-                    if not api_key or not api_key.strip():
-                        raise AuthenticationError(
-                            f"API key not available for account {account_name!r}"
-                        )
-
-                    # 5. Resolve the immutable account ID once per process.
-                    account_id = self._account_id_cache.get(account_name)
-                    if account_id is None:
-                        account_repo = AccountRepository(self._db)
-                        account_id = await account_repo.get_id_by_name(account_name)
-                        if account_id is not None:
-                            self._account_id_cache[account_name] = account_id
-                    if account_id is None:
-                        raise DatabaseError(
-                            f"Account {account_name!r} not found in database"
-                        )
-
-                    # 6. Resolve the selected account's provider
-                    resolved_provider_id = (
-                        self._catalog.cache.get_provider_for_account(account_name)
-                        or self._registry.get_provider_for_account(account_name)
-                        or context.provider_id
-                        or DEFAULT_PROVIDER_ID
-                    )
-
-                    # 7. Use the exact estimate for the selected account.
-                    estimated_microdollars = request_estimates.get(account_name, 0)
-                    if (
-                        estimated_microdollars == 0
-                        and self._quota_estimator is not None
-                    ):
-                        estimated_microdollars = self._quota_estimator.estimate_cost(
-                            account_name, context.model_id, estimated_tokens
-                        )
-
-                    # 8. Create pending request if first attempt. Store the
-                    # reservation estimate in the INSERT so the common path
-                    # does not immediately UPDATE the same row.
-                    created_request = "db_request_id" not in context.client_metadata
-                    if created_request:
-                        db_request_id = await self._request_repo.create_pending(
-                            request_id=context.request_id,
-                            model_id=context.model_id,
-                            protocol=context.protocol,
-                            streamed=context.streaming,
-                            account_id=account_id,
-                            reserved_microdollars=estimated_microdollars,
-                            started_at=context.started_at,
-                            provider_id=resolved_provider_id,
-                            client_ip=context.client_ip,
-                        )
-                        context.client_metadata["db_request_id"] = db_request_id
-                    db_request_id = context.client_metadata["db_request_id"]
-
-                    # 9. Create reservation
-                    reservation_id = await self._reservation_repo.create(
-                        request_id=db_request_id,
-                        account_id=account_id,
-                        model_id=context.model_id,
-                        estimated_tokens=estimated_tokens,
-                        estimated_microdollars=estimated_microdollars,
-                    )
-
-                    # 10. Create attempt row
-                    attempt_id = await self._attempt_repo.create(
-                        request_id=db_request_id,
-                        attempt_number=attempt_number,
-                        account_id=account_id,
-                    )
-
-                    # Retries select a new account and reservation estimate.
-                    if not created_request:
-                        await self._request_repo.update_after_selection(
-                            request_id=db_request_id,
-                            account_id=account_id,
-                            reserved_microdollars=estimated_microdollars,
-                        )
-                except BaseException:
-                    if self._health_manager is not None:
-                        self._health_manager.release_request(account_name)
-                    raise
-
-                # Record the account under the same select lock so a
-                # concurrent caller observing the same context cannot
-                # race on attempted_accounts before this attempt is
-                # fully persisted and committed.
-                context.attempted_accounts.add(account_name)
-                context.client_metadata["account_name"] = account_name
-
-            # Transaction committed here. All rows are durable.
-            # Apply runtime updates now so they stay consistent with
-            # the persisted state; a rollback above never reaches here.
-
-            active_count_increased = False
+            account_name = selected_state.name
             try:
-                # 11. Increment runtime active count
-                await self._router.increment_active_request_count(account_name)
-                active_count_increased = True
+                api_key = self._registry.get_api_key(account_name)
+                if not api_key or not api_key.strip():
+                    raise AuthenticationError(
+                        f"API key not available for account {account_name!r}"
+                    )
 
-                # 12. Add exact reserved amount to in-memory cache
-                if self._quota_estimator is not None:
-                    await self._quota_estimator.add_reservation(
-                        account_name, estimated_microdollars
+                # 5. Resolve the immutable account ID once per process.
+                account_id = self._account_id_cache.get(account_name)
+                if account_id is None:
+                    account_repo = AccountRepository(self._db)
+                    account_id = await account_repo.get_id_by_name(account_name)
+                    if account_id is not None:
+                        self._account_id_cache[account_name] = account_id
+                if account_id is None:
+                    raise DatabaseError(
+                        f"Account {account_name!r} not found in database"
+                    )
+
+                # 6. Resolve the selected account's provider
+                resolved_provider_id = (
+                    self._catalog.cache.get_provider_for_account(account_name)
+                    or self._registry.get_provider_for_account(account_name)
+                    or context.provider_id
+                    or DEFAULT_PROVIDER_ID
+                )
+
+                # 7. Use the exact estimate for the selected account.
+                estimated_microdollars = request_estimates.get(account_name, 0)
+                if (
+                    estimated_microdollars == 0
+                    and self._quota_estimator is not None
+                ):
+                    estimated_microdollars = self._quota_estimator.estimate_cost(
+                        account_name, context.model_id, estimated_tokens
+                    )
+
+                # 8. Create pending request if first attempt. Store the
+                # reservation estimate in the INSERT so the common path
+                # does not immediately UPDATE the same row.
+                created_request = "db_request_id" not in context.client_metadata
+                if created_request:
+                    db_request_id = await self._request_repo.create_pending(
+                        request_id=context.request_id,
+                        model_id=context.model_id,
+                        protocol=context.protocol,
+                        streamed=context.streaming,
+                        account_id=account_id,
+                        reserved_microdollars=estimated_microdollars,
+                        started_at=context.started_at,
+                        provider_id=resolved_provider_id,
+                        client_ip=context.client_ip,
+                    )
+                    context.client_metadata["db_request_id"] = db_request_id
+                db_request_id = context.client_metadata["db_request_id"]
+
+                # 9. Create reservation
+                reservation_id = await self._reservation_repo.create(
+                    request_id=db_request_id,
+                    account_id=account_id,
+                    model_id=context.model_id,
+                    estimated_tokens=estimated_tokens,
+                    estimated_microdollars=estimated_microdollars,
+                )
+
+                # 10. Create attempt row
+                attempt_id = await self._attempt_repo.create(
+                    request_id=db_request_id,
+                    attempt_number=attempt_number,
+                    account_id=account_id,
+                )
+
+                # Retries select a new account and reservation estimate.
+                if not created_request:
+                    await self._request_repo.update_after_selection(
+                        request_id=db_request_id,
+                        account_id=account_id,
+                        reserved_microdollars=estimated_microdollars,
                     )
             except BaseException:
-                # Compensate: undo the active count increment so
-                # runtime state stays consistent with the durable row.
-                if active_count_increased:
-                    await self._router.decrement_active_request_count(account_name)
-                # Finalize the just-created attempt as cancelled so
-                # normal finalization has no stale durable IDs.
-                await asyncio.shield(
-                    self._attempt_finalizer.finalize_failed_attempt(
-                        attempt_id=attempt_id,
-                        reservation_id=reservation_id,
-                        data=AttemptFinalizationData(
-                            status_code=None,
-                            error_class="PostCommitInterrupted",
-                            release_reason="post_commit_interrupted",
-                        ),
-                    )
-                )
                 if self._health_manager is not None:
                     self._health_manager.release_request(account_name)
-                context.client_metadata["post_commit_interrupted"] = True
                 raise
 
-        # Select lock released here.
+            # Record the account under the same select lock so a
+            # concurrent caller observing the same context cannot
+            # race on attempted_accounts before this attempt is
+            # fully persisted and committed.
+            context.attempted_accounts.add(account_name)
+            context.client_metadata["account_name"] = account_name
+
+            # Transaction committed here. All rows are durable.
+
+        # Select lock released here. Subsequent runtime updates
+        # (``increment_active_request_count``, ``add_reservation``)
+        # happen outside the lock so a coordinator selecting account
+        # B does not block on a coordinator finishing post-commit
+        # work for account A.
+
+        active_count_increased = False
+        try:
+            # 11. Increment runtime active count
+            await self._router.increment_active_request_count(account_name)
+            active_count_increased = True
+
+            # 12. Add exact reserved amount to in-memory cache
+            if self._quota_estimator is not None:
+                await self._quota_estimator.add_reservation(
+                    account_name, estimated_microdollars
+                )
+        except BaseException:
+            # Compensate: undo the active count increment so
+            # runtime state stays consistent with the durable row.
+            if active_count_increased:
+                await self._router.decrement_active_request_count(account_name)
+            # Finalize the just-created attempt as cancelled so
+            # normal finalization has no stale durable IDs.
+            await asyncio.shield(
+                self._attempt_finalizer.finalize_failed_attempt(
+                    attempt_id=attempt_id,
+                    reservation_id=reservation_id,
+                    data=AttemptFinalizationData(
+                        status_code=None,
+                        error_class="PostCommitInterrupted",
+                        release_reason="post_commit_interrupted",
+                    ),
+                )
+            )
+            if self._health_manager is not None:
+                self._health_manager.release_request(account_name)
+            context.client_metadata["post_commit_interrupted"] = True
+            raise
 
         return SelectedAttempt(
             proxy_request_id=context.request_id,
@@ -1126,7 +1132,7 @@ class RequestCoordinator:
         data_dict = cast("dict[str, Any]", data)
 
         if protocol == "anthropic":
-            usage_raw = _safe_dict(data_dict.get("usage"))
+            usage_raw = safe_dict(data_dict.get("usage"))
             if usage_raw is None:
                 return None
             return StreamUsageResult(
@@ -1141,11 +1147,11 @@ class RequestCoordinator:
                 is_complete=True,
             )
         else:
-            usage_raw = _safe_dict(data_dict.get("usage"))
+            usage_raw = safe_dict(data_dict.get("usage"))
             if not usage_raw:
                 return None
-            prompt_details = _safe_dict(usage_raw.get("prompt_tokens_details"))
-            completion_details = _safe_dict(usage_raw.get("completion_tokens_details"))
+            prompt_details = safe_dict(usage_raw.get("prompt_tokens_details"))
+            completion_details = safe_dict(usage_raw.get("completion_tokens_details"))
             return StreamUsageResult(
                 input_tokens=coerce_token_count(usage_raw.get("prompt_tokens", 0)),
                 output_tokens=coerce_token_count(usage_raw.get("completion_tokens", 0)),
@@ -1358,23 +1364,43 @@ class RequestCoordinator:
                 ),
             )
         elif context.client_metadata.get("db_request_id") is not None:
-            # No selected attempt but request exists - just mark as interrupted
+            # No selected attempt but request exists - synthesize a
+            # SelectedAttempt so the existing finalizer path populates
+            # every request column and records the audit event. The
+            # synthetic attempt_id/reservation_id have no matching
+            # rows so the attempt and reservation steps no-op.
             db_request_id = context.client_metadata["db_request_id"]
-            detail_value = _prepare_error_detail(last_error, self._persist_error_detail)
-            if detail_value is None:
-                detail_value = "No attempts dispatched"
-            async with self._db.transaction():
-                await self._db.execute_write(
-                    "UPDATE requests SET status = 'error', "
-                    "completed_at = CURRENT_TIMESTAMP, "
-                    "error_class = ?, error_detail = ? "
-                    "WHERE id = ? AND status = 'pending'",
-                    (
-                        type(last_error).__name__ if last_error else "exhausted",
-                        detail_value,
-                        db_request_id,
-                    ),
-                )
+            account_name = str(context.client_metadata.get("account_name", ""))
+            error_class = type(last_error).__name__ if last_error else "exhausted"
+            status_code: int | None = None
+            if last_upstream_response is not None:
+                status_code = last_upstream_response[0]
+            error_detail = _prepare_error_detail(last_error, self._persist_error_detail)
+            synthetic = SelectedAttempt(
+                proxy_request_id=context.request_id,
+                db_request_id=db_request_id,
+                attempt_id=0,
+                reservation_id="0",
+                account_id=0,
+                account_name=account_name,
+                api_key="",
+                model_id=context.model_id,
+                estimated_tokens=0,
+                estimated_microdollars=0,
+                attempt_number=0,
+                provider_id=context.provider_id or DEFAULT_PROVIDER_ID,
+            )
+            await self._finalizer.finalize(
+                synthetic,
+                FinalizationData(
+                    outcome=FinalizationOutcome.UPSTREAM_ERROR,
+                    status_code=status_code,
+                    error_class=error_class,
+                    error_detail=error_detail,
+                    upstream_latency_ms=elapsed_ms,
+                    bytes_received=len(context.original_body),
+                ),
+            )
 
         # Use last upstream response if available
         if last_upstream_response is not None:

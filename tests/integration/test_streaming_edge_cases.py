@@ -262,7 +262,7 @@ async def test_upstream_non_200_before_body(
     assert "error" in error_body
     state = coordinator._registry.get_state("test-acct")
     assert state is not None
-    assert state.health_state == "cooldown"
+    assert state.health_state == "rate_limited"
     assert state.cooldown_until > time.time() + 25
 
 

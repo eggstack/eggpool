@@ -47,7 +47,7 @@ def test_account_runtime_state_record_failure() -> None:
     state = AccountRuntimeState(name="test")
     state.record_failure("rate_limited")
     assert state.consecutive_failures == 1
-    assert state.health_state == "cooldown"
+    assert state.health_state == "rate_limited"
 
 
 def test_account_runtime_state_auth_failure() -> None:

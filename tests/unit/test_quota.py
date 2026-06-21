@@ -360,10 +360,16 @@ class TestEstimateCostTierPriority:
         estimator = QuotaEstimator()
         cost = estimator.estimate_cost("acct", "unknown-model-xyz", 1000)
 
-        from eggpool.quota.estimation import GLOBAL_FALLBACK
+        from eggpool.quota.estimation import (
+            GLOBAL_FALLBACK,
+            GLOBAL_FALLBACK_FLOOR_MICRODOLLARS_PER_TOKEN,
+        )
 
-        avg_rate = (GLOBAL_FALLBACK[0] + GLOBAL_FALLBACK[1]) / 2.0
-        expected = int(1000 * avg_rate * estimator.default_safety_factor)
+        cost_per_token = max(
+            GLOBAL_FALLBACK[0],
+            GLOBAL_FALLBACK_FLOOR_MICRODOLLARS_PER_TOKEN,
+        )
+        expected = int(1000 * cost_per_token * estimator.default_safety_factor)
         assert cost == max(expected, 1)
 
     def test_tier1_account_ewma_used_when_sufficient_samples(self) -> None:

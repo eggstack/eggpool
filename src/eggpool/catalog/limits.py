@@ -14,9 +14,9 @@ if TYPE_CHECKING:
 # -- Upstream metadata key aliases -------------------------------------------
 
 _CONTEXT_KEYS: tuple[str, ...] = (
+    "max_context_tokens",
     "context_window",
     "context_length",
-    "max_context_tokens",
     "max_position_embeddings",
 )
 

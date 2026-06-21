@@ -82,7 +82,7 @@ class AccountRuntimeState:
         self.consecutive_failures = 0
         self.last_success_at = time.time()
         self.last_failure_category = ""
-        if self.health_state in ("cooldown", "rate_limited"):
+        if self.health_state in ("cooldown", "rate_limited", "quota_exhausted"):
             self.health_state = "healthy"
 
     def record_failure(
@@ -120,25 +120,31 @@ class AccountRuntimeState:
                 else DEFAULT_QUOTA_EXHAUSTED_COOLDOWN_SECONDS
             )
             self.cooldown_until = time.time() + duration
-        elif error_class in (
-            "rate_limited",
-            "connect_timeout",
-            "read_timeout",
-            "connection_failure",
-            "connection_error",
-        ):
-            self.health_state = "cooldown"
+        elif error_class == "rate_limited":
+            # Mirror HealthManager.record_rate_limit so both state
+            # machines expose the same label for the same event.
+            self.health_state = "rate_limited"
             if rate_limit_retry_after is not None and rate_limit_retry_after > 0:
-                # Honor the upstream-suggested retry interval.
                 self.cooldown_until = time.time() + rate_limit_retry_after
             else:
-                # Exponential backoff: 30s, 60s, 120s, ... max 1 hour
                 backoff = min(
                     DEFAULT_BACKOFF_BASE_SECONDS
                     * (2 ** (self.consecutive_failures - 1)),
                     DEFAULT_BACKOFF_MAX_SECONDS,
                 )
                 self.cooldown_until = time.time() + backoff
+        elif error_class in (
+            "connect_timeout",
+            "read_timeout",
+            "connection_failure",
+            "connection_error",
+        ):
+            self.health_state = "cooldown"
+            backoff = min(
+                DEFAULT_BACKOFF_BASE_SECONDS * (2 ** (self.consecutive_failures - 1)),
+                DEFAULT_BACKOFF_MAX_SECONDS,
+            )
+            self.cooldown_until = time.time() + backoff
         # upstream_server_error, protocol_error, unknown, etc. - no cooldown
 
     def reset_health(self) -> None:
@@ -147,3 +153,7 @@ class AccountRuntimeState:
         self.cooldown_until = 0.0
         self.consecutive_failures = 0
         self.last_failure_category = ""
+        # Per-model disable map must be cleared alongside the
+        # account-level state so reset_health mirrors the same
+        # reset semantics as HealthManager.enable_account.
+        self.model_availability.clear()

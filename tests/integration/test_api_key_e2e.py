@@ -375,17 +375,20 @@ class TestConfigSetup:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["--config", str(config_path), "configsetup", "opencode"],
+            [
+                "--config",
+                str(config_path),
+                "configsetup",
+                "opencode",
+                "--json-only",
+            ],
         )
 
         assert result.exit_code == 0
         assert SERVER_KEY in result.output
 
-        # Extract the JSON snippet between first { and last }
-        output = result.output
-        start = output.index("{")
-        end = output.rindex("}") + 1
-        snippet = json.loads(output[start:end])
+        # The entire stdout is the JSON snippet
+        snippet = json.loads(result.output)
         assert snippet["provider"]["eggpool"]["options"]["apiKey"] == SERVER_KEY
         assert "11300" in snippet["provider"]["eggpool"]["options"]["baseURL"]
 
@@ -393,7 +396,11 @@ class TestConfigSetup:
         self,
         tmp_path: Path,
     ) -> None:
-        """configsetup claude-code produces valid JSON with the real key."""
+        """configsetup claude-code writes the key-bearing snippet to clipboard.
+
+        The key is no longer echoed to stdout (B14); capture the
+        clipboard payload instead.
+        """
         config_path = tmp_path / "config.toml"
         config_path.write_text(
             textwrap.dedent(f"""\
@@ -403,22 +410,28 @@ class TestConfigSetup:
             """)
         )
 
+        from unittest.mock import patch
+
         from click.testing import CliRunner
 
+        captured: dict[str, str] = {}
+
+        def fake_copy(text: str) -> bool:
+            captured["text"] = text
+            return True
+
         runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "configsetup", "claude-code"],
-        )
+        with patch("eggpool.cli._copy_to_clipboard", side_effect=fake_copy):
+            result = runner.invoke(
+                cli,
+                ["--config", str(config_path), "configsetup", "claude-code"],
+            )
 
         assert result.exit_code == 0
-        assert SERVER_KEY in result.output
-
-        # Extract the JSON snippet between first { and last }
-        output = result.output
-        start = output.index("{")
-        end = output.rindex("}") + 1
-        snippet = json.loads(output[start:end])
+        # Key must NOT appear in scrollback (B14).
+        assert SERVER_KEY not in result.output
+        assert "text" in captured
+        snippet = json.loads(captured["text"])
         assert snippet["api_key"] == SERVER_KEY
         assert "11300" in snippet["base_url"]
 

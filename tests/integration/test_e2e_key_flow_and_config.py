@@ -515,7 +515,13 @@ class TestConfigSetup:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["--config", str(config_path), "configsetup", "opencode"],
+            [
+                "--config",
+                str(config_path),
+                "configsetup",
+                "opencode",
+                "--json-only",
+            ],
         )
 
         assert result.exit_code == 0
@@ -534,12 +540,16 @@ class TestConfigSetup:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["--config", str(config_path), "configsetup", "opencode"],
+            [
+                "--config",
+                str(config_path),
+                "configsetup",
+                "opencode",
+                "--json-only",
+            ],
         )
 
         assert result.exit_code == 0
-        # Key was auto-generated
-        assert "Generated new server API key" in result.output
         # Key is in the snippet
         assert "ep_" in result.output
         assert "9090" in result.output
@@ -560,22 +570,33 @@ class TestConfigSetup:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["--config", str(config_path), "configsetup", "opencode"],
+            [
+                "--config",
+                str(config_path),
+                "configsetup",
+                "opencode",
+                "--json-only",
+            ],
         )
 
         assert result.exit_code == 0
 
-        # Extract JSON snippet
-        output = result.output
-        start = output.index("{")
-        end = output.rindex("}") + 1
-        snippet = json.loads(output[start:end])
+        # The entire stdout is the JSON snippet
+        snippet = json.loads(result.output)
 
         assert snippet["provider"]["eggpool"]["options"]["apiKey"] == "ep_test_key"
         assert "11300" in snippet["provider"]["eggpool"]["options"]["baseURL"]
 
     def test_configsetup_claude_code_with_existing_key(self, tmp_path):
-        """configsetup claude-code uses existing key and LAN IP."""
+        """configsetup claude-code uses existing key and LAN IP.
+
+        Note: ``configsetup claude-code`` writes only to the clipboard
+        in normal mode; the key is not echoed to stdout. This test
+        exists to assert the existing key is *not* leaked into the
+        non-JSON status output.
+        """
+        from unittest.mock import patch
+
         config_path = tmp_path / "config.toml"
         config_path.write_text(
             '[server]\napi_key = "ep_existing_key_456"\nport = 8080\n'
@@ -583,57 +604,88 @@ class TestConfigSetup:
 
         from click.testing import CliRunner
 
+        captured: dict[str, str] = {}
+
+        def fake_copy(text: str) -> bool:
+            captured["text"] = text
+            return True
+
         runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "configsetup", "claude-code"],
-        )
+        with patch("eggpool.cli._copy_to_clipboard", side_effect=fake_copy):
+            result = runner.invoke(
+                cli,
+                ["--config", str(config_path), "configsetup", "claude-code"],
+            )
 
         assert result.exit_code == 0
-        assert "ep_existing_key_456" in result.output
-        assert "8080" in result.output
-        assert "localhost" not in result.output
+        # Key must NOT appear in scrollback (B14).
+        assert "ep_existing_key_456" not in result.output
+        assert "ep_existing_key_456" in captured["text"]
+        assert "8080" in captured["text"]
 
     def test_configsetup_claude_code_auto_generates_key(self, tmp_path):
         """configsetup claude-code auto-generates key if not present."""
+        from unittest.mock import patch
+
         config_path = tmp_path / "config.toml"
         config_path.write_text("[server]\nport = 7777\n")
 
         from click.testing import CliRunner
 
+        captured: dict[str, str] = {}
+
+        def fake_copy(text: str) -> bool:
+            captured["text"] = text
+            return True
+
         runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "configsetup", "claude-code"],
-        )
+        with patch("eggpool.cli._copy_to_clipboard", side_effect=fake_copy):
+            result = runner.invoke(
+                cli,
+                ["--config", str(config_path), "configsetup", "claude-code"],
+            )
 
         assert result.exit_code == 0
-        assert "Generated new server API key" in result.output
-        assert "ep_" in result.output
-        assert "7777" in result.output
+        # The auto-generated key must not be echoed to stdout (B14).
+        assert "ep_" not in result.output
+        assert "ep_" in captured["text"]
+        assert "7777" in captured["text"]
+        # Verify key was written to config
+        key = _read_server_api_key(str(config_path))
+        assert key.startswith("ep_")
 
     def test_configsetup_claude_code_valid_json(self, tmp_path):
-        """configsetup claude-code produces valid JSON."""
+        """configsetup claude-code writes valid JSON to the clipboard.
+
+        The snippet format is exercised indirectly by mocking
+        ``_copy_to_clipboard`` to capture the rendered text, ensuring
+        the key never appears in scrollback (B14).
+        """
         import json
+        from unittest.mock import patch
 
         config_path = tmp_path / "config.toml"
         config_path.write_text('[server]\napi_key = "ep_claude_key"\nport = 11300\n')
 
         from click.testing import CliRunner
 
+        captured: dict[str, str] = {}
+
+        def fake_copy(text: str) -> bool:
+            captured["text"] = text
+            return True
+
         runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "configsetup", "claude-code"],
-        )
+        with patch("eggpool.cli._copy_to_clipboard", side_effect=fake_copy):
+            result = runner.invoke(
+                cli,
+                ["--config", str(config_path), "configsetup", "claude-code"],
+            )
 
         assert result.exit_code == 0
-
-        output = result.output
-        start = output.index("{")
-        end = output.rindex("}") + 1
-        snippet = json.loads(output[start:end])
-
+        assert "ep_claude_key" not in result.output
+        assert "text" in captured
+        snippet = json.loads(captured["text"])
         assert snippet["api_key"] == "ep_claude_key"
         assert "11300" in snippet["base_url"]
 
@@ -672,7 +724,13 @@ class TestConfigSetup:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["--config", str(config_path), "configsetup", "opencode"],
+            [
+                "--config",
+                str(config_path),
+                "configsetup",
+                "opencode",
+                "--json-only",
+            ],
         )
 
         # Should succeed despite duplicate account names

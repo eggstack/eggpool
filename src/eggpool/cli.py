@@ -444,12 +444,22 @@ def configsetup_opencode(ctx: click.Context, json_only: bool) -> None:
 
     config_path: str = ctx.obj["config_path"]
 
-    # Auto-generate API key if not present
+    # Auto-generate API key if not present. A read-only filesystem or
+    # permission error here would otherwise leave the user with a
+    # key in stdout/clipboard that they cannot reuse on the next run.
     key = _read_server_api_key(config_path)
     if not key:
-        key = _generate_api_key()
-        _write_server_api_key(config_path, key)
-        click.echo("Generated new server API key.", err=True)
+        try:
+            key = _generate_api_key()
+            _write_server_api_key(config_path, key)
+            click.echo("Generated new server API key.", err=True)
+        except OSError as exc:
+            click.echo(
+                f"Error: cannot persist new API key to {config_path}: {exc}. "
+                "Refusing to print a key that would not survive a restart.",
+                err=True,
+            )
+            sys.exit(1)
 
     port = _read_server_port(config_path)
     lan_ip = _detect_lan_ip()
@@ -528,22 +538,31 @@ def configsetup_opencode(ctx: click.Context, json_only: bool) -> None:
         models=models_data,
     )
 
-    click.echo(config_json)
+    # When --json-only is set, emit the snippet to stdout. Otherwise
+    # only write the key-bearing snippet to the clipboard and report
+    # status to stderr so the API key never lands in terminal scrollback.
+    if json_only:
+        click.echo(config_json)
+        return
 
-    if not json_only:
-        click.echo("", err=True)
-        if models_data:
-            click.echo(f"Generated config with {len(models_data)} models.", err=True)
-        else:
-            click.echo(
-                "Generated provider connection block (no model limits). "
-                "Run 'eggpool models refresh' to populate model metadata.",
-                err=True,
-            )
-        click.echo("Add to ~/.config/opencode/opencode.json:", err=True)
+    if _copy_to_clipboard(config_json):
+        click.echo("Copied config to clipboard.", err=True)
+    else:
+        click.echo(
+            "Could not copy to clipboard. Re-run with --json-only to "
+            "print the config (contains the API key).",
+            err=True,
+        )
 
-        if _copy_to_clipboard(config_json):
-            click.echo("Copied to clipboard.", err=True)
+    if models_data:
+        click.echo(f"Generated config with {len(models_data)} models.", err=True)
+    else:
+        click.echo(
+            "Generated provider connection block (no model limits). "
+            "Run 'eggpool models refresh' to populate model metadata.",
+            err=True,
+        )
+    click.echo("Paste into ~/.config/opencode/opencode.json.", err=True)
 
 
 @configsetup.command("claude-code")
@@ -552,12 +571,21 @@ def configsetup_claude_code(ctx: click.Context) -> None:
     """Print Claude Code config snippet for connecting to this router."""
     config_path: str = ctx.obj["config_path"]
 
-    # Auto-generate API key if not present
+    # Auto-generate API key if not present. See configsetup opencode
+    # above for why the write must succeed before we proceed.
     key = _read_server_api_key(config_path)
     if not key:
-        key = _generate_api_key()
-        _write_server_api_key(config_path, key)
-        click.echo("Generated new server API key.", err=True)
+        try:
+            key = _generate_api_key()
+            _write_server_api_key(config_path, key)
+            click.echo("Generated new server API key.", err=True)
+        except OSError as exc:
+            click.echo(
+                f"Error: cannot persist new API key to {config_path}: {exc}. "
+                "Refusing to print a key that would not survive a restart.",
+                err=True,
+            )
+            sys.exit(1)
 
     port = _read_server_port(config_path)
     lan_ip = _detect_lan_ip()
@@ -572,14 +600,24 @@ def configsetup_claude_code(ctx: click.Context) -> None:
         + '/v1"\n}'
     )
 
-    click.echo("Add to ~/.claude/settings.json or pass via --api-key and --base-url:")
-    click.echo("")
-    click.echo(snippet)
-    click.echo("")
-    click.echo(f"Or run: claude --api-key {key} --base-url http://{lan_ip}:{port}/v1")
-
+    # The snippet contains the API key. Only send it through the
+    # clipboard so it never appears in terminal scrollback; report
+    # status to stderr and omit the echo line that used to include
+    # ``claude --api-key <key>`` in plaintext.
     if _copy_to_clipboard(snippet):
-        click.echo("Copied to clipboard.")
+        click.echo("Copied config to clipboard.", err=True)
+    else:
+        click.echo(
+            "Could not copy to clipboard. Use `eggpool getkey` and "
+            "pass --api-key to the Claude Code CLI.",
+            err=True,
+        )
+
+    click.echo(
+        "Paste into ~/.claude/settings.json or pass via --api-key "
+        "and --base-url to the Claude Code CLI.",
+        err=True,
+    )
 
 
 @cli.group()

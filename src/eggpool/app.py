@@ -135,15 +135,20 @@ class _HeaderRedactionMiddleware(BaseHTTPMiddleware):
 
 async def _crash_recovery(db: Database) -> None:
     """Mark stale pending requests as interrupted, release their reservations."""
+    # 5 minutes covers the typical read_timeout (300 s) plus a small
+    # grace period. The previous 10-minute threshold left long-running
+    # streams "pending" long after the process was killed.
+    threshold_arg = "-5 minutes"
     # Collect affected account_ids before recovery
     affected = await db.fetch_all(
         "SELECT DISTINCT account_id FROM requests "
         "WHERE status = 'pending' "
-        "AND started_at < datetime('now', '-10 minutes') "
+        "AND started_at < datetime('now', ?) "
         "UNION "
         "SELECT DISTINCT account_id FROM reservations "
         "WHERE status = 'active' "
-        "AND created_at < datetime('now', '-10 minutes')"
+        "AND created_at < datetime('now', ?)",
+        (threshold_arg, threshold_arg),
     )
     affected_account_ids = [int(row["account_id"]) for row in affected]
 
@@ -152,19 +157,22 @@ async def _crash_recovery(db: Database) -> None:
             "UPDATE requests SET status = 'interrupted', "
             "completed_at = CURRENT_TIMESTAMP "
             "WHERE status = 'pending' "
-            "AND started_at < datetime('now', '-10 minutes')"
+            "AND started_at < datetime('now', ?)",
+            (threshold_arg,),
         )
         stale_reservations = await db.execute_write(
             "UPDATE reservations SET status = 'released', "
             "released_at = CURRENT_TIMESTAMP, release_reason = 'crash_recovery' "
             "WHERE status = 'active' "
-            "AND created_at < datetime('now', '-10 minutes')"
+            "AND created_at < datetime('now', ?)",
+            (threshold_arg,),
         )
         await db.execute_write(
             "UPDATE request_attempts SET "
             "completed_at = CURRENT_TIMESTAMP, error_class = 'process_interrupted' "
             "WHERE completed_at IS NULL "
-            "AND started_at < datetime('now', '-10 minutes')"
+            "AND started_at < datetime('now', ?)",
+            (threshold_arg,),
         )
 
         # Record recovery events in the same transaction so a crash
@@ -680,7 +688,10 @@ def create_app(
                     if to_evict:
                         del self._cache[to_evict[0]]
                     elif self._cache:
-                        oldest = min(self._cache, key=lambda k: self._cache[k][1])
+                        oldest = min(
+                            self._cache,
+                            key=lambda k: self._cache[k][1],
+                        )
                         if oldest != self._last_used:
                             del self._cache[oldest]
                 self._cache[theme_name] = (css, time.monotonic())

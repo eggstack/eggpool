@@ -13,13 +13,22 @@ if TYPE_CHECKING:
 
 
 def _format_dt(dt: str) -> str:
-    """Validate ISO 8601 datetime string for SQL parameter binding."""
+    """Validate ISO 8601 datetime string for SQL parameter binding.
+
+    Empty input is preserved so callers can pass ``""`` when no
+    filter is desired; otherwise the value must start with a 4-digit
+    year and contain at least a date portion. Raises :class:`ValueError`
+    on obviously invalid input so a malformed date does not silently
+    match every row.
+    """
     if not dt:
         return dt
     # Basic format check: must start with a 4-digit year and contain
     # at least a date portion.  Reject obviously invalid values.
     if len(dt) < 10 or not dt[:4].isdigit() or dt[4] != "-":
-        return ""
+        raise ValueError(
+            f"Invalid datetime {dt!r}: expected ISO 8601 string (YYYY-MM-DD[ HH:MM:SS])"
+        )
     return dt
 
 

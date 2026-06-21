@@ -44,10 +44,21 @@ class AccountRepository:
             provider_id = str(acct.get("provider_id") or DEFAULT_PROVIDER_ID)
             configured_names.add(name)
             row = await self._db.fetch_one(
-                "SELECT id FROM accounts WHERE name = ?",
+                "SELECT id, provider_id FROM accounts WHERE name = ?",
                 (name,),
             )
             if row is not None:
+                existing_provider_id = str(row["provider_id"])
+                if existing_provider_id != provider_id:
+                    logger.warning(
+                        "Account %r provider_id changed from %r to %r; "
+                        "subsequent routing decisions will use the new provider. "
+                        "Run `eggpool logout` and `eggpool connect` to make "
+                        "this an explicit, audited change.",
+                        name,
+                        existing_provider_id,
+                        provider_id,
+                    )
                 await self._db.execute_write(
                     "UPDATE accounts SET api_key_env = ?, enabled = ?, "
                     "weight = ?, provider_id = ? WHERE name = ?",
