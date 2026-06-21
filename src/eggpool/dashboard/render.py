@@ -105,7 +105,7 @@ def _render_layout(
 </head>
 <body>
 <svg class="egg-background" viewBox="0 0 256 256"
-     preserveAspectRatio="xMidYMid slice"
+     preserveAspectRatio="xMidYMid meet"
      aria-hidden="true" focusable="false">
   <path class="shape"
         d="M128 30

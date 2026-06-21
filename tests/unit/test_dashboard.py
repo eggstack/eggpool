@@ -207,7 +207,9 @@ class TestRenderOverview:
         )
         assert 'class="egg-background"' in html
         assert 'viewBox="0 0 256 256"' in html
-        assert 'preserveAspectRatio="xMidYMid slice"' in html
+        # `meet` (not `slice`) so the top and bottom of the egg are always
+        # visible regardless of viewport aspect ratio.
+        assert 'preserveAspectRatio="xMidYMid meet"' in html
         assert 'aria-hidden="true"' in html
         # Egg body, heartbeat line, and two endpoint dots
         assert 'class="shape"' in html
