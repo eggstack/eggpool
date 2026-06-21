@@ -13,6 +13,20 @@ id = "opencode-go"
 base_url = "https://opencode.ai/zen/go/v1"
 protocols = ["openai", "anthropic"]
 api_key_env = "API_KEY"
+display_name = "OpenCode Go"
+status = "verified"
+category = "direct"
+region = "US"
+recommended = true
+notes = "Primary provider; OpenAI + Anthropic protocols"
+
+[providers.opencode-go.auth]
+mode = "bearer"
+
+[providers.opencode-go.verify]
+probe_model = "gpt-5.5-mini"
+probe_protocol = "openai"
+require_models = true
 
 [providers.minimax]
 # MiniMax International — OpenAI compatible
@@ -22,6 +36,20 @@ protocols = ["openai"]
 openai_path = "/chat/completions"
 models_path = "/models"
 api_key_env = "API_KEY"
+display_name = "MiniMax International"
+status = "experimental"
+category = "direct"
+region = "global"
+recommended = false
+notes = "401 auth issue unresolved; verify before use"
+
+[providers.minimax.auth]
+mode = "bearer"
+
+[providers.minimax.verify]
+probe_model = "MiniMax-M2.5"
+probe_protocol = "openai"
+require_models = false
 
 [providers.minimax-cn]
 # MiniMax China — OpenAI compatible
@@ -31,6 +59,20 @@ protocols = ["openai"]
 openai_path = "/chat/completions"
 models_path = "/models"
 api_key_env = "API_KEY"
+display_name = "MiniMax China"
+status = "experimental"
+category = "direct"
+region = "CN"
+recommended = false
+notes = "China endpoint; same auth issue as minimax"
+
+[providers.minimax-cn.auth]
+mode = "bearer"
+
+[providers.minimax-cn.verify]
+probe_model = "MiniMax-M2.5"
+probe_protocol = "openai"
+require_models = false
 
 [providers.generalcompute]
 # GeneralCompute — OpenAI compatible (POST /v1/models/list)
@@ -41,6 +83,19 @@ protocols = ["openai"]
 models_method = "POST"
 models_path = "/models/list"
 api_key_env = "API_KEY"
+display_name = "GeneralCompute"
+status = "experimental"
+category = "direct"
+region = "US"
+recommended = false
+notes = "POST model listing; confirm /models/list body"
+
+[providers.generalcompute.auth]
+mode = "bearer"
+
+[providers.generalcompute.verify]
+probe_protocol = "openai"
+require_models = true
 
 [providers.zai]
 # Z.AI (ZhipuAI GLM) — OpenAI compatible
@@ -48,6 +103,19 @@ id = "zai"
 base_url = "https://api.z.ai/api/paas/v4"
 protocols = ["openai"]
 api_key_env = "API_KEY"
+display_name = "Z.AI (ZhipuAI GLM)"
+status = "experimental"
+category = "direct"
+region = "CN"
+recommended = false
+notes = "Confirm base_url and model listing"
+
+[providers.zai.auth]
+mode = "bearer"
+
+[providers.zai.verify]
+probe_protocol = "openai"
+require_models = false
 
 [providers.neuralwatt]
 # NeuralWatt — OpenAI compatible, energy-based pricing
@@ -55,6 +123,19 @@ id = "neuralwatt"
 base_url = "https://api.neuralwatt.com/v1"
 protocols = ["openai"]
 api_key_env = "API_KEY"
+display_name = "NeuralWatt"
+status = "experimental"
+category = "direct"
+region = "US"
+recommended = false
+notes = "Energy-based pricing; verify endpoints"
+
+[providers.neuralwatt.auth]
+mode = "bearer"
+
+[providers.neuralwatt.verify]
+probe_protocol = "openai"
+require_models = false
 
 [providers.openrouter]
 # OpenRouter — OpenAI compatible, 400+ models
@@ -62,6 +143,20 @@ id = "openrouter"
 base_url = "https://openrouter.ai/api/v1"
 protocols = ["openai"]
 api_key_env = "API_KEY"
+display_name = "OpenRouter"
+status = "verified"
+category = "aggregator"
+region = "global"
+recommended = true
+notes = "400+ models; optional attribution headers"
+
+[providers.openrouter.auth]
+mode = "bearer"
+
+[providers.openrouter.verify]
+probe_model = "openai/gpt-4o-mini"
+probe_protocol = "openai"
+require_models = true
 
 [providers.ollama-local]
 # Ollama (local) — OpenAI compatible, no auth required
@@ -69,6 +164,20 @@ id = "ollama-local"
 base_url = "http://localhost:11434/v1"
 protocols = ["openai"]
 api_key_env = "API_KEY"
+display_name = "Ollama (local)"
+status = "verified"
+category = "local"
+region = "local"
+recommended = false
+notes = "Local development; no auth required"
+
+[providers.ollama-local.auth]
+mode = "none"
+
+[providers.ollama-local.verify]
+probe_model = "llama3.2"
+probe_protocol = "openai"
+require_models = true
 
 [providers.ollama-cloud]
 # Ollama (cloud) — OpenAI compatible via /v1 endpoints
@@ -76,6 +185,19 @@ id = "ollama-cloud"
 base_url = "https://ollama.com/v1"
 protocols = ["openai"]
 api_key_env = "API_KEY"
+display_name = "Ollama (cloud)"
+status = "experimental"
+category = "direct"
+region = "US"
+recommended = false
+notes = "Confirm cloud auth and /models endpoint"
+
+[providers.ollama-cloud.auth]
+mode = "bearer"
+
+[providers.ollama-cloud.verify]
+probe_protocol = "openai"
+require_models = false
 
 [providers.openai]
 # OpenAI — direct OpenAI API
@@ -83,6 +205,20 @@ id = "openai"
 base_url = "https://api.openai.com/v1"
 protocols = ["openai"]
 api_key_env = "API_KEY"
+display_name = "OpenAI"
+status = "verified"
+category = "direct"
+region = "US"
+recommended = true
+notes = "Reference OpenAI-compatible provider"
+
+[providers.openai.auth]
+mode = "bearer"
+
+[providers.openai.verify]
+probe_model = "gpt-5.5-mini"
+probe_protocol = "openai"
+require_models = true
 
 [providers.anthropic]
 # Anthropic — direct Claude API
@@ -91,6 +227,21 @@ base_url = "https://api.anthropic.com/v1"
 protocols = ["anthropic"]
 anthropic_path = "/messages"
 api_key_env = "API_KEY"
+display_name = "Anthropic"
+status = "verified"
+category = "direct"
+region = "US"
+recommended = true
+notes = "x-api-key auth; anthropic-version header required"
+
+[providers.anthropic.auth]
+mode = "api_key"
+header = "x-api-key"
+
+[providers.anthropic.verify]
+probe_model = "claude-sonnet-4-5"
+probe_protocol = "anthropic"
+require_models = false
 
 [providers.groq]
 # Groq — low-latency OpenAI-compatible inference
@@ -98,6 +249,20 @@ id = "groq"
 base_url = "https://api.groq.com/openai/v1"
 protocols = ["openai"]
 api_key_env = "API_KEY"
+display_name = "Groq"
+status = "verified"
+category = "direct"
+region = "US"
+recommended = true
+notes = "Low-latency; avoid unsupported OpenAI params"
+
+[providers.groq.auth]
+mode = "bearer"
+
+[providers.groq.verify]
+probe_model = "openai/gpt-oss-20b"
+probe_protocol = "openai"
+require_models = true
 
 [providers.deepinfra]
 # DeepInfra — OpenAI-compatible open-model inference
@@ -105,6 +270,20 @@ id = "deepinfra"
 base_url = "https://api.deepinfra.com/v1/openai"
 protocols = ["openai"]
 api_key_env = "API_KEY"
+display_name = "DeepInfra"
+status = "verified"
+category = "direct"
+region = "US"
+recommended = true
+notes = "Broad open-model catalog; org/model IDs"
+
+[providers.deepinfra.auth]
+mode = "bearer"
+
+[providers.deepinfra.verify]
+probe_model = "deepseek-ai/DeepSeek-V3"
+probe_protocol = "openai"
+require_models = true
 
 [providers.gemini]
 # Google Gemini — OpenAI-compatible Gemini API surface
@@ -112,6 +291,20 @@ id = "gemini"
 base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
 protocols = ["openai"]
 api_key_env = "API_KEY"
+display_name = "Google Gemini"
+status = "verified"
+category = "direct"
+region = "US"
+recommended = true
+notes = "OpenAI-compatible surface; long-context models"
+
+[providers.gemini.auth]
+mode = "bearer"
+
+[providers.gemini.verify]
+probe_model = "gemini-3.5-flash"
+probe_protocol = "openai"
+require_models = true
 
 [providers.xai]
 # xAI — direct Grok API
@@ -119,6 +312,20 @@ id = "xai"
 base_url = "https://api.x.ai/v1"
 protocols = ["openai"]
 api_key_env = "API_KEY"
+display_name = "xAI (Grok)"
+status = "verified"
+category = "direct"
+region = "US"
+recommended = true
+notes = "Direct Grok API; chat completions only"
+
+[providers.xai.auth]
+mode = "bearer"
+
+[providers.xai.verify]
+probe_model = "grok-4.3"
+probe_protocol = "openai"
+require_models = true
 
 [providers.mistral]
 # Mistral — direct Mistral API
@@ -126,6 +333,20 @@ id = "mistral"
 base_url = "https://api.mistral.ai/v1"
 protocols = ["openai"]
 api_key_env = "API_KEY"
+display_name = "Mistral"
+status = "verified"
+category = "direct"
+region = "EU"
+recommended = true
+notes = "European provider; pass-through native params"
+
+[providers.mistral.auth]
+mode = "bearer"
+
+[providers.mistral.verify]
+probe_model = "mistral-small-latest"
+probe_protocol = "openai"
+require_models = true
 
 [providers.siliconflow]
 # SiliconFlow — OpenAI-compatible Chinese model aggregator
@@ -133,6 +354,20 @@ id = "siliconflow"
 base_url = "https://api.siliconflow.cn/v1"
 protocols = ["openai"]
 api_key_env = "API_KEY"
+display_name = "SiliconFlow"
+status = "verified"
+category = "aggregator"
+region = "CN"
+recommended = false
+notes = "Chinese aggregator; slash-heavy model IDs"
+
+[providers.siliconflow.auth]
+mode = "bearer"
+
+[providers.siliconflow.verify]
+probe_model = "Pro/zai-org/GLM-4.7"
+probe_protocol = "openai"
+require_models = true
 
 [providers.cerebras]
 # Cerebras — fast OpenAI-compatible inference
@@ -140,6 +375,19 @@ id = "cerebras"
 base_url = "https://api.cerebras.ai/v1"
 protocols = ["openai"]
 api_key_env = "API_KEY"
+display_name = "Cerebras"
+status = "experimental"
+category = "direct"
+region = "US"
+recommended = false
+notes = "Fast inference; confirm model availability"
+
+[providers.cerebras.auth]
+mode = "bearer"
+
+[providers.cerebras.verify]
+probe_protocol = "openai"
+require_models = false
 
 [providers.sambanova]
 # SambaNova Cloud — OpenAI-compatible hosted open models
@@ -147,6 +395,19 @@ id = "sambanova"
 base_url = "https://api.sambanova.ai/v1"
 protocols = ["openai"]
 api_key_env = "API_KEY"
+display_name = "SambaNova Cloud"
+status = "experimental"
+category = "direct"
+region = "US"
+recommended = false
+notes = "Enterprise open-model hosting; verify endpoints"
+
+[providers.sambanova.auth]
+mode = "bearer"
+
+[providers.sambanova.verify]
+probe_protocol = "openai"
+require_models = false
 
 [providers.hyperbolic]
 # Hyperbolic — OpenAI-compatible open-model inference
@@ -154,6 +415,19 @@ id = "hyperbolic"
 base_url = "https://api.hyperbolic.xyz/v1"
 protocols = ["openai"]
 api_key_env = "API_KEY"
+display_name = "Hyperbolic"
+status = "experimental"
+category = "direct"
+region = "US"
+recommended = false
+notes = "Open-model inference; confirm /models and SSE"
+
+[providers.hyperbolic.auth]
+mode = "bearer"
+
+[providers.hyperbolic.verify]
+probe_protocol = "openai"
+require_models = false
 
 [providers.featherless]
 # Featherless AI — OpenAI-compatible serverless open-model API
@@ -161,6 +435,19 @@ id = "featherless"
 base_url = "https://api.featherless.ai/v1"
 protocols = ["openai"]
 api_key_env = "API_KEY"
+display_name = "Featherless AI"
+status = "experimental"
+category = "direct"
+region = "US"
+recommended = false
+notes = "Serverless open models; verify catalog stability"
+
+[providers.featherless.auth]
+mode = "bearer"
+
+[providers.featherless.verify]
+probe_protocol = "openai"
+require_models = false
 
 [providers.moonshot]
 # Moonshot AI / Kimi — direct OpenAI-compatible API
@@ -168,3 +455,16 @@ id = "moonshot"
 base_url = "https://api.moonshot.ai/v1"
 protocols = ["openai"]
 api_key_env = "API_KEY"
+display_name = "Moonshot AI (Kimi)"
+status = "experimental"
+category = "direct"
+region = "CN"
+recommended = false
+notes = "Kimi models; confirm intl vs CN endpoint parity"
+
+[providers.moonshot.auth]
+mode = "bearer"
+
+[providers.moonshot.verify]
+probe_protocol = "openai"
+require_models = false

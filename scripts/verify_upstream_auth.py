@@ -21,10 +21,11 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 import time
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -46,6 +47,7 @@ class _AuthCheckResult:
     resolved_url: str
     auth_shape: str
     detail: str
+    failure_class: str | None = field(default=None)
 
 
 def _require_env(name: str) -> str:
@@ -91,6 +93,24 @@ def _make_client() -> httpx.Client:
     return httpx.Client(timeout=DEFAULT_TIMEOUT)
 
 
+def _compute_failure_class(
+    ok: bool, status_code: int | None, family: str
+) -> str | None:
+    if ok:
+        return None
+    if status_code is None:
+        return "transport_error"
+    if status_code in (401, 403):
+        return "auth_failed"
+    if family == "models":
+        return "models_failed"
+    if family.startswith("stream_"):
+        return "stream_failed"
+    if family in (OPENAI_FAMILY, ANTHROPIC_FAMILY):
+        return "chat_failed"
+    return None
+
+
 def _run_single_check(
     client: httpx.Client,
     provider_id: str,
@@ -115,6 +135,7 @@ def _run_single_check(
             resolved_url=resolved_url,
             auth_shape=auth_shape,
             detail=f"transport_error: {type(exc).__name__} elapsed_ms={elapsed:.0f}",
+            failure_class="transport_error",
         )
 
     elapsed = (time.time() - started) * 1000.0
@@ -124,6 +145,7 @@ def _run_single_check(
         f"status={response.status_code} elapsed_ms={elapsed:.0f} "
         f"request_id={request_id or '-'}"
     )
+    fc = _compute_failure_class(status_ok, response.status_code, family)
     return _AuthCheckResult(
         provider_id=provider_id,
         account_name=account_name,
@@ -134,6 +156,116 @@ def _run_single_check(
         resolved_url=resolved_url,
         auth_shape=auth_shape,
         detail=detail,
+        failure_class=fc,
+    )
+
+
+_STREAM_TIMEOUT = 15.0
+_AUTH_HEADER_RE = re.compile(
+    r"^((?:authorization|x-api-key|x-goog-api-key)\s*:\s*).*$",
+    re.IGNORECASE,
+)
+
+
+def _redact_headers(headers: dict[str, str]) -> dict[str, str]:
+    redacted: dict[str, str] = {}
+    for k, v in headers.items():
+        m = _AUTH_HEADER_RE.match(f"{k}: {v}")
+        if m:
+            redacted[k] = "***"
+        else:
+            redacted[k] = v
+    return redacted
+
+
+def _run_stream_check(
+    client: httpx.Client,
+    provider_id: str,
+    account_name: str,
+    base_family: str,
+    request: httpx.Request,
+    resolved_url: str,
+    auth_shape: str,
+) -> _AuthCheckResult:
+    family = f"stream_{base_family}"
+    started = time.time()
+    try:
+        response = client.send(request)
+    except httpx.HTTPError as exc:
+        elapsed = (time.time() - started) * 1000.0
+        return _AuthCheckResult(
+            provider_id=provider_id,
+            account_name=account_name,
+            family=family,
+            ok=False,
+            status_code=None,
+            request_id=None,
+            resolved_url=resolved_url,
+            auth_shape=auth_shape,
+            detail=(f"transport_error: {type(exc).__name__} elapsed_ms={elapsed:.0f}"),
+            failure_class="transport_error",
+        )
+
+    if response.status_code >= 400:
+        elapsed = (time.time() - started) * 1000.0
+        request_id = _extract_request_id(response.headers)
+        return _AuthCheckResult(
+            provider_id=provider_id,
+            account_name=account_name,
+            family=family,
+            ok=False,
+            status_code=response.status_code,
+            request_id=request_id,
+            resolved_url=resolved_url,
+            auth_shape=auth_shape,
+            detail=(
+                f"status={response.status_code} elapsed_ms={elapsed:.0f} "
+                f"request_id={request_id or '-'}"
+            ),
+            failure_class=_compute_failure_class(False, response.status_code, family),
+        )
+
+    got_event = False
+    request_id = _extract_request_id(response.headers)
+    for line in response.iter_lines():
+        if not line.startswith("data: "):
+            continue
+        payload = line[6:]
+        if payload.strip() == "[DONE]":
+            continue
+        got_event = True
+        break
+
+    elapsed = (time.time() - started) * 1000.0
+    if got_event:
+        return _AuthCheckResult(
+            provider_id=provider_id,
+            account_name=account_name,
+            family=family,
+            ok=True,
+            status_code=response.status_code,
+            request_id=request_id,
+            resolved_url=resolved_url,
+            auth_shape=auth_shape,
+            detail=(
+                f"status={response.status_code} elapsed_ms={elapsed:.0f} "
+                f"request_id={request_id or '-'}"
+            ),
+        )
+    return _AuthCheckResult(
+        provider_id=provider_id,
+        account_name=account_name,
+        family=family,
+        ok=False,
+        status_code=response.status_code,
+        request_id=request_id,
+        resolved_url=resolved_url,
+        auth_shape=auth_shape,
+        detail=(
+            f"stream timeout: no SSE data: events in {elapsed:.0f}ms "
+            f"request_id={request_id or '-'}"
+        ),
+        failure_class="stream_failed",
     )
 
 
@@ -210,6 +342,10 @@ def _verify_config_provider(
 
     if models_method != "DISABLED" and models_path:
         models_url = _compose_url(base_url, models_path)
+        models_query: dict[str, str] = models_cfg.get("query") or {}  # type: ignore[assignment]
+        if models_query:
+            url_obj = httpx.URL(models_url).copy_merge_params(models_query)
+            models_url = str(url_obj)
         headers = {**auth_headers, "Accept": "application/json"}
         try:
             if models_method.upper() == "POST":
@@ -237,6 +373,7 @@ def _verify_config_provider(
                 )
                 sys.stdout.write(f"    resolved_url={result.resolved_url}\n")
                 sys.stdout.write(f"    auth={result.auth_shape}\n")
+                sys.stdout.write(f"    headers={_redact_headers(dict(req.headers))}\n")
         except Exception as exc:
             results.append(
                 _AuthCheckResult(
@@ -280,6 +417,34 @@ def _verify_config_provider(
             )
             sys.stdout.write(f"    resolved_url={result.resolved_url}\n")
             sys.stdout.write(f"    auth={result.auth_shape}\n")
+            sys.stdout.write(f"    headers={_redact_headers(dict(req.headers))}\n")
+
+        # Streaming probe
+        stream_payload = {**payload, "stream": True}
+        stream_req = httpx.Request(
+            "POST", chat_url, headers=headers, json=stream_payload
+        )
+        stream_result = _run_stream_check(
+            client,
+            provider_id,
+            account_name,
+            OPENAI_FAMILY,
+            stream_req,
+            chat_url,
+            auth_shape,
+        )
+        results.append(stream_result)
+        if verbose:
+            marker = "OK" if stream_result.ok else "FAIL"
+            sys.stdout.write(
+                f"  [{marker}] {provider_id}/{account_name} stream_openai: "
+                f"{stream_result.detail}\n"
+            )
+            sys.stdout.write(f"    resolved_url={stream_result.resolved_url}\n")
+            sys.stdout.write(f"    auth={stream_result.auth_shape}\n")
+            sys.stdout.write(
+                f"    headers={_redact_headers(dict(stream_req.headers))}\n"
+            )
 
     # Verify Anthropic messages endpoint
     anthropic_path = provider_cfg.get("anthropic_path")
@@ -314,6 +479,34 @@ def _verify_config_provider(
             )
             sys.stdout.write(f"    resolved_url={result.resolved_url}\n")
             sys.stdout.write(f"    auth={result.auth_shape}\n")
+            sys.stdout.write(f"    headers={_redact_headers(dict(req.headers))}\n")
+
+        # Streaming probe
+        stream_payload = {**payload, "stream": True}
+        stream_req = httpx.Request(
+            "POST", msg_url, headers=headers, json=stream_payload
+        )
+        stream_result = _run_stream_check(
+            client,
+            provider_id,
+            account_name,
+            ANTHROPIC_FAMILY,
+            stream_req,
+            msg_url,
+            auth_shape,
+        )
+        results.append(stream_result)
+        if verbose:
+            marker = "OK" if stream_result.ok else "FAIL"
+            sys.stdout.write(
+                f"  [{marker}] {provider_id}/{account_name} stream_anthropic: "
+                f"{stream_result.detail}\n"
+            )
+            sys.stdout.write(f"    resolved_url={stream_result.resolved_url}\n")
+            sys.stdout.write(f"    auth={stream_result.auth_shape}\n")
+            sys.stdout.write(
+                f"    headers={_redact_headers(dict(stream_req.headers))}\n"
+            )
 
     return results
 
@@ -387,6 +580,40 @@ def _run_legacy_checks(
                 auth_shape,
             )
         )
+        # Streaming probes
+        stream_openai_payload = {**openai_payload, "stream": True}
+        stream_openai_req = httpx.Request(
+            "POST", openai_url, headers=openai_headers, json=stream_openai_payload
+        )
+        results.append(
+            _run_stream_check(
+                c,
+                "legacy",
+                "default",
+                OPENAI_FAMILY,
+                stream_openai_req,
+                openai_url,
+                auth_shape,
+            )
+        )
+        stream_anthropic_payload = {**anthropic_payload, "stream": True}
+        stream_anthropic_req = httpx.Request(
+            "POST",
+            anthropic_url,
+            headers=anthropic_headers,
+            json=stream_anthropic_payload,
+        )
+        results.append(
+            _run_stream_check(
+                c,
+                "legacy",
+                "default",
+                ANTHROPIC_FAMILY,
+                stream_anthropic_req,
+                anthropic_url,
+                auth_shape,
+            )
+        )
     finally:
         c.close()
     return results
@@ -402,6 +629,7 @@ def main() -> int:
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
     parser.add_argument("--openai-model", help="OpenAI model for chat probe")
     parser.add_argument("--anthropic-model", help="Anthropic model for chat probe")
+    parser.add_argument("--account", help="Filter to a specific account name")
     args = parser.parse_args()
 
     if args.config:
@@ -440,6 +668,8 @@ def main() -> int:
                 prov = providers[pid]
                 for acct in prov.get("accounts", []):
                     acct_name = acct.get("name", "default")
+                    if args.account and acct_name != args.account:
+                        continue
                     api_key = acct.get("api_key") or os.environ.get(
                         acct.get("api_key_env", "")
                     )
@@ -466,15 +696,24 @@ def main() -> int:
         failed = [r for r in all_results if not r.ok]
         if not args.verbose:
             for r in all_results:
-                marker = "OK" if r.ok else "FAIL"
+                if r.failure_class == "usage_missing":
+                    marker = "\u26a0\ufe0f"
+                elif r.ok:
+                    marker = "OK"
+                else:
+                    marker = "FAIL"
                 sys.stdout.write(
                     f"  [{marker}] {r.provider_id}/{r.account_name} "
                     f"{r.family}: {r.detail}\n"
                 )
 
         if failed:
-            sys.stdout.write(f"\n{len(failed)}/{len(all_results)} checks failed\n")
-            return 1
+            non_usage = [r for r in failed if r.failure_class != "usage_missing"]
+            if non_usage:
+                sys.stdout.write(
+                    f"\n{len(non_usage)}/{len(all_results)} checks failed\n"
+                )
+                return 1
         sys.stdout.write(f"\nAll {len(all_results)} checks passed\n")
         return 0
 

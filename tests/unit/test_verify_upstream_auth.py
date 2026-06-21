@@ -51,25 +51,40 @@ class _TransportState:
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
+        body = json.loads(request.content) if request.content else {}
+        is_stream = body.get("stream", False)
         if path.endswith("/chat/completions"):
             self.captured["openai"] = {
                 "headers": dict(request.headers),
                 "body": request.content,
             }
+            if is_stream:
+                content = (
+                    b'data: {"id":"x","choices":[],"object":"chat.completion.chunk"}\n'
+                    b"data: [DONE]\n"
+                )
+            else:
+                content = self.openai_body
             return httpx.Response(
                 self.openai_status,
                 headers={"x-request-id": self.openai_request_id},
-                content=self.openai_body,
+                content=content,
             )
         if path.endswith("/messages"):
             self.captured["anthropic"] = {
                 "headers": dict(request.headers),
                 "body": request.content,
             }
+            if is_stream:
+                content = (
+                    b'data: {"type":"content_block_start","index":0}\ndata: [DONE]\n'
+                )
+            else:
+                content = self.anthropic_body
             return httpx.Response(
                 self.anthropic_status,
                 headers={"anthropic-request-id": self.anthropic_request_id},
-                content=self.anthropic_body,
+                content=content,
             )
         if path.endswith("/models") or path.endswith("/models/list"):
             self.captured["models"] = {

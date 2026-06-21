@@ -152,7 +152,30 @@ def connect_list(ctx: click.Context) -> None:
 
     click.echo("Available providers:")
     for provider_id, tmpl in templates.items():
-        click.echo(f"  {provider_id}: {tmpl['display']} ({tmpl['url']})")
+        status = tmpl.get("status", "unverified")
+        notes = tmpl.get("notes", "")
+        marker = "*" if tmpl.get("recommended") else " "
+        status_labels = {"verified": "✓", "experimental": "~", "unverified": "?"}
+        status_label = status_labels.get(status, "?")
+        note_str = f" — {notes}" if notes else ""
+        display_line = (
+            f"  {marker} {provider_id}: {tmpl['display']}"
+            f" ({tmpl['url']}) [{status_label}]{note_str}"
+        )
+        click.echo(display_line)
+
+    verified = sum(1 for t in templates.values() if t.get("status") == "verified")
+    experimental = sum(
+        1 for t in templates.values() if t.get("status") == "experimental"
+    )
+    unverified = sum(
+        1
+        for t in templates.values()
+        if t.get("status") not in ("verified", "experimental")
+    )
+    click.echo(
+        f"\n  {verified} verified, {experimental} experimental, {unverified} unverified"
+    )
 
 
 @cli.command()

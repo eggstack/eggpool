@@ -155,6 +155,11 @@ def load_provider_templates(
             "url": base_url,
             "raw": raw_block,
             "data": provider_data,
+            "status": str(provider_data_raw.get("status", "unverified")),  # type: ignore[arg-type]
+            "category": str(provider_data_raw.get("category", "direct")),  # type: ignore[arg-type]
+            "region": str(provider_data_raw.get("region", "global")),  # type: ignore[arg-type]
+            "recommended": bool(provider_data_raw.get("recommended", False)),  # type: ignore[arg-type]
+            "notes": str(provider_data_raw.get("notes", "")),  # type: ignore[arg-type]
         }
 
     # Ensure the primary provider is always available
@@ -858,7 +863,10 @@ def connect(
     options: list[str] = []
     provider_ids: list[str] = []
     for pid, tmpl in templates.items():
-        options.append(f"{tmpl['display']}  ({tmpl['url']})")
+        status = tmpl.get("status", "unverified")
+        status_labels = {"verified": "✓", "experimental": "~", "unverified": "?"}
+        status_label = status_labels.get(status, "?")
+        options.append(f"[{status_label}] {tmpl['display']}  ({tmpl['url']})")
         provider_ids.append(pid)
 
     # Show interactive selector
