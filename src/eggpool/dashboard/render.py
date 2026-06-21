@@ -106,10 +106,19 @@ def _render_layout(
 <svg class="egg-background" viewBox="0 0 1600 900"
      preserveAspectRatio="xMidYMid slice"
      aria-hidden="true" focusable="false">
-  <path d="M 800 150 C 1070 135, 1310 215, 1430 380 C 1530 510, 1500 685, 1350 790
-           C 1150 880, 830 890, 580 830 C 350 770, 165 615, 195 455
-           C 235 285, 520 165, 800 150 Z" />
-  <circle cx="820" cy="450" r="210" />
+  <path class="egg-shell"
+        d="M 800 80
+           C 920 80, 1020 160, 1080 290
+           C 1140 420, 1140 590, 1080 720
+           C 1010 830, 900 840, 800 840
+           C 700 840, 590 830, 520 720
+           C 460 590, 460 420, 520 290
+           C 580 160, 680 80, 800 80 Z" />
+  <path class="egg-crack"
+        d="M 460 400 L 530 340 L 590 400 L 660 330 L 740 400
+           L 820 330 L 900 400 L 980 330 L 1050 400 L 1110 340 L 1150 400" />
+  <path class="egg-crack"
+        d="M 620 540 L 670 510 L 730 545 L 790 510 L 850 545 L 910 515" />
 </svg>
 <header class="topbar">
   <h1><a href="/?period={_html_escape(period)}&amp;theme={
