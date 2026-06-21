@@ -180,6 +180,164 @@ persist_redacted_error_detail = false
 # [providers.fireworks.auth]
 # mode = "bearer"
 
+# OpenAI — direct OpenAI API
+# Status: verified — reference OpenAI-compatible provider
+# [providers.openai]
+# id = "openai"
+# base_url = "https://api.openai.com/v1"
+# protocols = ["openai"]
+#
+# [[providers.openai.accounts]]
+# name = "default"
+# api_key = "sk-your-openai-key"
+#
+# [providers.openai.auth]
+# mode = "bearer"
+#
+# # [providers.openai.verify]
+# # probe_model = "gpt-5.5-mini"
+# # probe_protocol = "openai"
+# # require_models = true
+
+# Anthropic — direct Claude API
+# Status: verified — Anthropic Messages API with x-api-key auth and required version header
+# [providers.anthropic]
+# id = "anthropic"
+# base_url = "https://api.anthropic.com/v1"
+# protocols = ["anthropic"]
+# anthropic_path = "/messages"
+#
+# [[providers.anthropic.accounts]]
+# name = "default"
+# api_key = "sk-your-anthropic-key"
+#
+# [providers.anthropic.auth]
+# mode = "api_key"
+# header = "x-api-key"
+#
+# [[providers.anthropic.headers]]
+# name = "anthropic-version"
+# value = "2023-06-01"
+#
+# # [providers.anthropic.verify]
+# # probe_model = "claude-sonnet-4-5"
+# # probe_protocol = "anthropic"
+# # require_models = false
+
+# Groq — low-latency OpenAI-compatible inference
+# Status: verified — official docs use https://api.groq.com/openai/v1 with OpenAI clients
+# [providers.groq]
+# id = "groq"
+# base_url = "https://api.groq.com/openai/v1"
+# protocols = ["openai"]
+#
+# [[providers.groq.accounts]]
+# name = "default"
+# api_key = "sk-your-groq-key"
+#
+# [providers.groq.auth]
+# mode = "bearer"
+#
+# # [providers.groq.verify]
+# # probe_model = "openai/gpt-oss-20b"
+# # probe_protocol = "openai"
+# # require_models = true
+
+# DeepInfra — OpenAI-compatible open-model inference
+# Status: verified — official docs use https://api.deepinfra.com/v1/openai
+# [providers.deepinfra]
+# id = "deepinfra"
+# base_url = "https://api.deepinfra.com/v1/openai"
+# protocols = ["openai"]
+#
+# [[providers.deepinfra.accounts]]
+# name = "default"
+# api_key = "sk-your-deepinfra-key"
+#
+# [providers.deepinfra.auth]
+# mode = "bearer"
+#
+# # [providers.deepinfra.verify]
+# # probe_model = "deepseek-ai/DeepSeek-V3"
+# # probe_protocol = "openai"
+# # require_models = true
+
+# Google Gemini — OpenAI-compatible Gemini API surface
+# Status: verified — official docs use OpenAI clients with Gemini API keys
+# [providers.gemini]
+# id = "gemini"
+# base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+# protocols = ["openai"]
+#
+# [[providers.gemini.accounts]]
+# name = "default"
+# api_key = "sk-your-gemini-key"
+#
+# [providers.gemini.auth]
+# mode = "bearer"
+#
+# # [providers.gemini.verify]
+# # probe_model = "gemini-3.5-flash"
+# # probe_protocol = "openai"
+# # require_models = true
+
+# xAI — direct Grok API
+# Status: verified — API-key OpenAI client usage with https://api.x.ai/v1
+# [providers.xai]
+# id = "xai"
+# base_url = "https://api.x.ai/v1"
+# protocols = ["openai"]
+#
+# [[providers.xai.accounts]]
+# name = "default"
+# api_key = "sk-your-xai-key"
+#
+# [providers.xai.auth]
+# mode = "bearer"
+#
+# # [providers.xai.verify]
+# # probe_model = "grok-4.3"
+# # probe_protocol = "openai"
+# # require_models = true
+
+# Mistral — direct Mistral API
+# Status: verified — /v1/chat/completions with Bearer auth
+# [providers.mistral]
+# id = "mistral"
+# base_url = "https://api.mistral.ai/v1"
+# protocols = ["openai"]
+#
+# [[providers.mistral.accounts]]
+# name = "default"
+# api_key = "sk-your-mistral-key"
+#
+# [providers.mistral.auth]
+# mode = "bearer"
+#
+# # [providers.mistral.verify]
+# # probe_model = "mistral-small-latest"
+# # probe_protocol = "openai"
+# # require_models = true
+
+# SiliconFlow — OpenAI-compatible Chinese model aggregator
+# Status: verified — /v1/chat/completions with Bearer auth; verify model listing live
+# [providers.siliconflow]
+# id = "siliconflow"
+# base_url = "https://api.siliconflow.cn/v1"
+# protocols = ["openai"]
+#
+# [[providers.siliconflow.accounts]]
+# name = "default"
+# api_key = "sk-your-siliconflow-key"
+#
+# [providers.siliconflow.auth]
+# mode = "bearer"
+#
+# # [providers.siliconflow.verify]
+# # probe_model = "Pro/zai-org/GLM-4.7"
+# # probe_protocol = "openai"
+# # require_models = true
+
 # Z.AI (ZhipuAI GLM) — OpenAI compatible
 # Status: live-verification-required — confirm base_url and endpoints before production use
 # [providers.zai]
@@ -321,6 +479,61 @@ persist_redacted_error_detail = false
 #
 # [providers.ollama-cloud.auth]
 # mode = "bearer"
+
+# Cerebras — fast OpenAI-compatible inference
+# Status: live-verification-required — confirm base_url and model listing
+# [providers.cerebras]
+# id = "cerebras"
+# base_url = "https://api.cerebras.ai/v1"
+# protocols = ["openai"]
+#
+# [[providers.cerebras.accounts]]
+# name = "default"
+# api_key = "sk-your-cerebras-key"
+
+# SambaNova Cloud — OpenAI-compatible hosted open models
+# Status: live-verification-required — confirm base_url and model listing
+# [providers.sambanova]
+# id = "sambanova"
+# base_url = "https://api.sambanova.ai/v1"
+# protocols = ["openai"]
+#
+# [[providers.sambanova.accounts]]
+# name = "default"
+# api_key = "sk-your-sambanova-key"
+
+# Hyperbolic — OpenAI-compatible open-model inference
+# Status: live-verification-required — confirm base_url and model listing
+# [providers.hyperbolic]
+# id = "hyperbolic"
+# base_url = "https://api.hyperbolic.xyz/v1"
+# protocols = ["openai"]
+#
+# [[providers.hyperbolic.accounts]]
+# name = "default"
+# api_key = "sk-your-hyperbolic-key"
+
+# Featherless AI — OpenAI-compatible serverless open-model API
+# Status: live-verification-required — confirm base_url and model listing
+# [providers.featherless]
+# id = "featherless"
+# base_url = "https://api.featherless.ai/v1"
+# protocols = ["openai"]
+#
+# [[providers.featherless.accounts]]
+# name = "default"
+# api_key = "sk-your-featherless-key"
+
+# Moonshot AI / Kimi — direct OpenAI-compatible API
+# Status: live-verification-required — confirm base_url and model listing
+# [providers.moonshot]
+# id = "moonshot"
+# base_url = "https://api.moonshot.ai/v1"
+# protocols = ["openai"]
+#
+# [[providers.moonshot.accounts]]
+# name = "default"
+# api_key = "sk-your-moonshot-key"
 
 # Global model overrides apply to all providers. Provider-specific
 # overrides take precedence per field. Token limit fields:

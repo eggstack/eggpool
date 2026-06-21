@@ -137,6 +137,98 @@ class TestProviderUrlComposition:
             "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
         )
 
+    def test_openai_chat_url(self):
+        cfg = ProviderConfig(
+            id="openai",
+            base_url="https://api.openai.com/v1",
+            openai_path="/chat/completions",
+        )
+        assert compose_provider_url(cfg, cfg.openai_path) == (
+            "https://api.openai.com/v1/chat/completions"
+        )
+
+    def test_anthropic_messages_url(self):
+        cfg = ProviderConfig(
+            id="anthropic",
+            base_url="https://api.anthropic.com/v1",
+            anthropic_path="/messages",
+        )
+        assert compose_provider_url(cfg, cfg.anthropic_path) == (
+            "https://api.anthropic.com/v1/messages"
+        )
+
+    def test_groq_chat_url(self):
+        cfg = ProviderConfig(
+            id="groq",
+            base_url="https://api.groq.com/openai/v1",
+            openai_path="/chat/completions",
+        )
+        assert compose_provider_url(cfg, cfg.openai_path) == (
+            "https://api.groq.com/openai/v1/chat/completions"
+        )
+
+    def test_deepinfra_chat_url(self):
+        cfg = ProviderConfig(
+            id="deepinfra",
+            base_url="https://api.deepinfra.com/v1/openai",
+            openai_path="/chat/completions",
+        )
+        assert compose_provider_url(cfg, cfg.openai_path) == (
+            "https://api.deepinfra.com/v1/openai/chat/completions"
+        )
+
+    def test_gemini_chat_url(self):
+        cfg = ProviderConfig(
+            id="gemini",
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+            openai_path="/chat/completions",
+        )
+        assert compose_provider_url(cfg, cfg.openai_path) == (
+            "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+        )
+
+    def test_xai_chat_url(self):
+        cfg = ProviderConfig(
+            id="xai",
+            base_url="https://api.x.ai/v1",
+            openai_path="/chat/completions",
+        )
+        assert compose_provider_url(cfg, cfg.openai_path) == (
+            "https://api.x.ai/v1/chat/completions"
+        )
+
+    def test_mistral_chat_url(self):
+        cfg = ProviderConfig(
+            id="mistral",
+            base_url="https://api.mistral.ai/v1",
+            openai_path="/chat/completions",
+        )
+        assert compose_provider_url(cfg, cfg.openai_path) == (
+            "https://api.mistral.ai/v1/chat/completions"
+        )
+
+    def test_siliconflow_chat_url(self):
+        cfg = ProviderConfig(
+            id="siliconflow",
+            base_url="https://api.siliconflow.cn/v1",
+            openai_path="/chat/completions",
+        )
+        assert compose_provider_url(cfg, cfg.openai_path) == (
+            "https://api.siliconflow.cn/v1/chat/completions"
+        )
+
+    def test_anthropic_api_key_auth(self):
+        from eggpool.providers.contract import build_auth_headers
+
+        cfg = ProviderConfig(
+            id="anthropic",
+            base_url="https://api.anthropic.com/v1",
+            auth={"mode": "api_key", "header": "x-api-key"},
+        )
+        headers = build_auth_headers(cfg, "test-key-123")
+        assert headers["x-api-key"] == "test-key-123"
+        assert "Authorization" not in headers
+
     @pytest.mark.parametrize(
         "base_url,path,expected",
         [
@@ -293,6 +385,111 @@ _TEMPLATE_PROVIDERS: dict[str, dict] = {
         "models_path": "/models",
         "auth": {"mode": "bearer"},
     },
+    "openai": {
+        "id": "openai",
+        "base_url": "https://api.openai.com/v1",
+        "protocols": ["openai"],
+        "openai_path": "/chat/completions",
+        "models_path": "/models",
+        "auth": {"mode": "bearer"},
+    },
+    "anthropic": {
+        "id": "anthropic",
+        "base_url": "https://api.anthropic.com/v1",
+        "protocols": ["anthropic"],
+        "openai_path": "/chat/completions",
+        "anthropic_path": "/messages",
+        "models_path": "/models",
+        "auth": {"mode": "api_key", "header": "x-api-key"},
+    },
+    "groq": {
+        "id": "groq",
+        "base_url": "https://api.groq.com/openai/v1",
+        "protocols": ["openai"],
+        "openai_path": "/chat/completions",
+        "models_path": "/models",
+        "auth": {"mode": "bearer"},
+    },
+    "deepinfra": {
+        "id": "deepinfra",
+        "base_url": "https://api.deepinfra.com/v1/openai",
+        "protocols": ["openai"],
+        "openai_path": "/chat/completions",
+        "models_path": "/models",
+        "auth": {"mode": "bearer"},
+    },
+    "gemini": {
+        "id": "gemini",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "protocols": ["openai"],
+        "openai_path": "/chat/completions",
+        "models_path": "/models",
+        "auth": {"mode": "bearer"},
+    },
+    "xai": {
+        "id": "xai",
+        "base_url": "https://api.x.ai/v1",
+        "protocols": ["openai"],
+        "openai_path": "/chat/completions",
+        "models_path": "/models",
+        "auth": {"mode": "bearer"},
+    },
+    "mistral": {
+        "id": "mistral",
+        "base_url": "https://api.mistral.ai/v1",
+        "protocols": ["openai"],
+        "openai_path": "/chat/completions",
+        "models_path": "/models",
+        "auth": {"mode": "bearer"},
+    },
+    "siliconflow": {
+        "id": "siliconflow",
+        "base_url": "https://api.siliconflow.cn/v1",
+        "protocols": ["openai"],
+        "openai_path": "/chat/completions",
+        "models_path": "/models",
+        "auth": {"mode": "bearer"},
+    },
+    "cerebras": {
+        "id": "cerebras",
+        "base_url": "https://api.cerebras.ai/v1",
+        "protocols": ["openai"],
+        "openai_path": "/chat/completions",
+        "models_path": "/models",
+        "auth": {"mode": "bearer"},
+    },
+    "sambanova": {
+        "id": "sambanova",
+        "base_url": "https://api.sambanova.ai/v1",
+        "protocols": ["openai"],
+        "openai_path": "/chat/completions",
+        "models_path": "/models",
+        "auth": {"mode": "bearer"},
+    },
+    "hyperbolic": {
+        "id": "hyperbolic",
+        "base_url": "https://api.hyperbolic.xyz/v1",
+        "protocols": ["openai"],
+        "openai_path": "/chat/completions",
+        "models_path": "/models",
+        "auth": {"mode": "bearer"},
+    },
+    "featherless": {
+        "id": "featherless",
+        "base_url": "https://api.featherless.ai/v1",
+        "protocols": ["openai"],
+        "openai_path": "/chat/completions",
+        "models_path": "/models",
+        "auth": {"mode": "bearer"},
+    },
+    "moonshot": {
+        "id": "moonshot",
+        "base_url": "https://api.moonshot.ai/v1",
+        "protocols": ["openai"],
+        "openai_path": "/chat/completions",
+        "models_path": "/models",
+        "auth": {"mode": "bearer"},
+    },
 }
 
 
@@ -318,7 +515,7 @@ class TestTemplateLinter:
 
     def test_all_providers_parse(self):
         configs = _get_provider_configs()
-        assert len(configs) >= 10, f"Expected at least 10 providers, got {len(configs)}"
+        assert len(configs) >= 20, f"Expected at least 20 providers, got {len(configs)}"
 
     @pytest.mark.parametrize(
         "provider_id",
@@ -337,6 +534,19 @@ class TestTemplateLinter:
             "neuralwatt",
             "ollama-local",
             "ollama-cloud",
+            "openai",
+            "anthropic",
+            "groq",
+            "deepinfra",
+            "gemini",
+            "xai",
+            "mistral",
+            "siliconflow",
+            "cerebras",
+            "sambanova",
+            "hyperbolic",
+            "featherless",
+            "moonshot",
         ],
     )
     def test_no_duplicate_version_in_chat_url(self, provider_id):
@@ -379,6 +589,19 @@ class TestTemplateLinter:
             "neuralwatt",
             "ollama-local",
             "ollama-cloud",
+            "openai",
+            "anthropic",
+            "groq",
+            "deepinfra",
+            "gemini",
+            "xai",
+            "mistral",
+            "siliconflow",
+            "cerebras",
+            "sambanova",
+            "hyperbolic",
+            "featherless",
+            "moonshot",
         ],
     )
     def test_no_duplicate_version_in_models_url(self, provider_id):

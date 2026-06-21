@@ -61,6 +61,18 @@ EggPool supports multiple upstream providers. Key components:
 
 Both are OpenAI-only and use `bearer` auth. API keys must be raw tokens; EggPool prepends `Bearer ` automatically.
 
+### Provider Roster
+
+EggPool ships templates for 27+ providers across verified, experimental, and unverified tiers. See `docs/providers.md` for the full catalog.
+
+**Verified** (API-key auth confirmed): opencode-go, openai, anthropic, openrouter, deepseek, together, fireworks, groq, deepinfra, gemini, xai, mistral, siliconflow, alibaba, ollama-local
+
+**Experimental** (live-verification-required): zai, novita, minimax, minimax-cn, neuralwatt, ollama-cloud, cerebras, sambanova, hyperbolic, featherless, moonshot
+
+**Unverified** (needs testing): generalcompute
+
+Use `eggpool connect list` to see available providers and `eggpool connect <id>` for interactive setup.
+
 See `architecture/README.md` for details.
 
 ## Provider Contracts

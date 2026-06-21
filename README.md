@@ -231,6 +231,8 @@ api_key = "sk-your-opencode-go-key"
 
 Use `eggpool connect` for interactive provider setup instead of manual configuration.
 
+See [docs/providers.md](docs/providers.md) for the full provider catalog with status definitions, verification commands, and provider-specific notes.
+
 ### Per-Account Outbound Proxy
 
 Each account can route upstream traffic through a [pproxy](https://pypi.org/project/pproxy/)-compatible outbound proxy. This is useful for geo-routing, residential IP rotation, or isolating provider traffic by account.
@@ -398,6 +400,7 @@ docs/                    # Documentation
 ├── firewall.md          # Firewall configuration
 ├── filesystem-layout.md # Filesystem layout reference
 ├── model-limits.md      # Model context limit configuration
+├── providers.md         # Provider catalog and configuration guide
 └── proxy.md             # Per-account outbound proxy (pproxy)
 
 config-examples/         # Editor-specific config snippets

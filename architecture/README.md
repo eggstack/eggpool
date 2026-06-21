@@ -55,7 +55,7 @@ Key invariants:
 
 ## Multi-Provider Architecture
 
-EggPool supports multiple upstream providers (OpenCode Go, MiniMax International, MiniMax China, GeneralCompute, etc.), each with its own base URL, account pool, supported protocols, and model catalog.
+EggPool supports 27+ upstream providers (OpenCode Go, OpenAI, Anthropic, Groq, DeepInfra, Gemini, xAI, Mistral, SiliconFlow, DeepSeek, Together, Fireworks, OpenRouter, Alibaba, MiniMax, and more), each with its own base URL, account pool, supported protocols, and model catalog. See `docs/providers.md` for the full roster.
 
 ### MiniMax templates
 
