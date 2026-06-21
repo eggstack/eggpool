@@ -66,12 +66,22 @@ body::before {
   opacity: 0.55;
 }
 
-.egg-shell {
+.shape {
   fill: color-mix(in srgb, var(--page-bg) 85%, var(--page-text) 15%);
+  stroke: color-mix(in srgb, var(--page-bg) 55%, var(--page-text) 45%);
+  stroke-width: 5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.thin {
+  fill: none;
   stroke: color-mix(in srgb, var(--page-bg) 55%, var(--page-text) 45%);
   stroke-width: 3;
   stroke-linejoin: round;
   stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
 }
 
 header.topbar {

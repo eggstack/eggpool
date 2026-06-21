@@ -103,15 +103,19 @@ def _render_layout(
 {theme_link}
 </head>
 <body>
-<svg class="egg-background" viewBox="0 0 1600 900"
+<svg class="egg-background" viewBox="0 0 256 256"
      preserveAspectRatio="xMidYMid slice"
      aria-hidden="true" focusable="false">
-  <path class="egg-shell"
-        d="M 800 80
-           C 843 80, 1140 393, 1140 460
-           C 1140 527, 873 830, 800 830
-           C 727 830, 460 527, 460 460
-           C 460 393, 757 80, 800 80 Z" />
+  <path class="shape"
+        d="M128 30
+           C82 30 55 88 57 145
+           C59 202 89 231 128 231
+           C167 231 197 202 199 145
+           C201 88 174 30 128 30 Z" />
+  <path class="thin"
+        d="M86 132 H112 L126 111 L144 158 L159 132 H174" />
+  <circle class="shape" cx="85" cy="132" r="5" />
+  <circle class="shape" cx="174" cy="132" r="5" />
 </svg>
 <header class="topbar">
   <h1><a href="/?period={_html_escape(period)}&amp;theme={
