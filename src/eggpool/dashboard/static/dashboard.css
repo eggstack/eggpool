@@ -29,7 +29,12 @@
 body {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   margin: 0;
-  background: var(--page-bg);
+  background: linear-gradient(
+    180deg,
+    var(--page-bg) 0%,
+    color-mix(in srgb, var(--page-bg) 92%, var(--page-text) 8%) 100%
+  );
+  background-attachment: fixed;
   color: var(--page-text);
   line-height: 1.45;
 }
@@ -48,6 +53,22 @@ body::before {
   );
   mix-blend-mode: screen;
   opacity: 0.35;
+  z-index: 2;
+}
+
+.egg-background {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 0;
+  fill: none;
+  stroke: color-mix(in srgb, var(--page-bg) 55%, var(--page-text) 45%);
+  stroke-width: 3;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  opacity: 0.4;
 }
 
 header.topbar {
@@ -60,6 +81,8 @@ header.topbar {
   color: var(--topbar-text);
   border-bottom: 1px solid var(--topbar-border);
   box-shadow: 0 1px 0 var(--page-border);
+  position: relative;
+  z-index: 1;
 }
 
 header.topbar h1 {
@@ -106,6 +129,8 @@ main {
   max-width: 1440px;
   margin: 0 auto;
   padding: 1.5rem;
+  position: relative;
+  z-index: 1;
 }
 
 footer {
@@ -114,6 +139,8 @@ footer {
   padding: 1rem 1.5rem 2rem;
   color: var(--text-muted);
   font-size: 0.85rem;
+  position: relative;
+  z-index: 1;
 }
 
 footer .period-label {

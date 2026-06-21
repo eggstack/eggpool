@@ -103,6 +103,14 @@ def _render_layout(
 {theme_link}
 </head>
 <body>
+<svg class="egg-background" viewBox="0 0 1600 900"
+     preserveAspectRatio="xMidYMid slice"
+     aria-hidden="true" focusable="false">
+  <path d="M 800 150 C 1070 135, 1310 215, 1430 380 C 1530 510, 1500 685, 1350 790
+           C 1150 880, 830 890, 580 830 C 350 770, 165 615, 195 455
+           C 235 285, 520 165, 800 150 Z" />
+  <circle cx="820" cy="450" r="210" />
+</svg>
 <header class="topbar">
   <h1><a href="/?period={_html_escape(period)}&amp;theme={
         _html_escape(current_theme)

@@ -180,6 +180,43 @@ class TestRenderOverview:
         assert "<bad>" not in html
         assert "&lt;bad&gt;" in html
 
+    def test_renders_egg_background_svg(self) -> None:
+        html = render_overview(
+            overview={
+                "summary": {
+                    "total_requests": 0,
+                    "successful_requests": 0,
+                    "error_requests": 0,
+                    "error_rate": 0.0,
+                    "total_input_tokens": 0,
+                    "total_output_tokens": 0,
+                    "total_cost_microdollars": 0,
+                    "avg_latency_ms": 0.0,
+                },
+                "imbalance": {
+                    "imbalance_ratio": 0.0,
+                    "active_accounts": 0,
+                    "most_used": {"name": "a", "cost_microdollars": 0},
+                    "least_used": {"name": "b", "cost_microdollars": 0},
+                },
+                "period_label": "24h",
+                "start": "2024-01-01 00:00:00",
+                "end": "2024-01-02 00:00:00",
+            },
+            accounts=[],
+        )
+        assert 'class="egg-background"' in html
+        assert 'viewBox="0 0 1600 900"' in html
+        assert 'preserveAspectRatio="xMidYMid slice"' in html
+        assert 'aria-hidden="true"' in html
+        assert "<circle" in html
+        assert "<path" in html
+        # Egg SVG should be the first child of <body>, before the topbar
+        body_open = html.index("<body>")
+        svg_open = html.index('<svg class="egg-background"')
+        topbar_open = html.index('<header class="topbar"')
+        assert body_open < svg_open < topbar_open
+
     def test_renders_account_table(self) -> None:
         accounts = [
             {
@@ -1132,3 +1169,46 @@ class TestRenderOverviewProviderHealth:
         )
         assert "degraded" in html
         assert "bad-provider" in html
+
+
+class TestDashboardStylesheet:
+    """Tests for the dashboard CSS file."""
+
+    @staticmethod
+    def _load_css() -> str:
+        from pathlib import Path
+
+        css_path = (
+            Path(__file__).parent.parent.parent
+            / "src"
+            / "eggpool"
+            / "dashboard"
+            / "static"
+            / "dashboard.css"
+        )
+        return css_path.read_text(encoding="utf-8")
+
+    def test_egg_background_is_fixed_and_above_gradient(self) -> None:
+        css = self._load_css()
+        # The egg must be a fixed-position watermark, not scroll with content
+        assert ".egg-background" in css
+        assert "position: fixed" in css
+        assert "pointer-events: none" in css
+        # Egg color must track the theme via CSS variables (no hardcoded hex)
+        assert "var(--page-bg)" in css
+        assert "var(--page-text)" in css
+        assert "color-mix" in css
+
+    def test_body_has_gradient_and_fixed_background(self) -> None:
+        css = self._load_css()
+        # Subtle vertical gradient instead of a flat background color
+        assert "linear-gradient(" in css
+        assert "background-attachment: fixed" in css
+
+    def test_content_sits_above_egg_watermark(self) -> None:
+        css = self._load_css()
+        # The topbar, main, and footer must be positioned above the egg
+        for selector in ("header.topbar", "main", "footer"):
+            assert selector in css
+        assert "z-index: 1" in css
+        assert "position: relative" in css
