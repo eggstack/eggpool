@@ -666,3 +666,88 @@ def test_backward_compatible_flat_config() -> None:
     assert config.accounts == []
     assert len(config.all_accounts()) == 1
     assert config.all_accounts()[0].name == "a"
+
+
+class TestProviderContractConfig:
+    """Tests for provider contract config additions."""
+
+    def test_auth_config_defaults(self):
+        from eggpool.models.config import ProviderAuthConfig
+
+        cfg = ProviderAuthConfig()
+        assert cfg.mode == "bearer"
+        assert cfg.header == "Authorization"
+        assert cfg.scheme == "Bearer"
+
+    def test_models_endpoint_disabled(self):
+        from eggpool.models.config import ProviderModelsEndpointConfig
+
+        ep = ProviderModelsEndpointConfig(method="DISABLED")
+        assert ep.method == "DISABLED"
+        assert ep.path == "/models"
+
+    def test_verify_config_defaults(self):
+        from eggpool.models.config import ProviderVerifyConfig
+
+        v = ProviderVerifyConfig()
+        assert v.probe_model is None
+        assert v.probe_protocol == "openai"
+        assert v.require_models is True
+
+    def test_provider_config_with_all_contract_fields(self):
+        from eggpool.models.config import (
+            ProviderAuthConfig,
+            ProviderConfig,
+            ProviderModelsEndpointConfig,
+            ProviderStaticHeaderConfig,
+            ProviderVerifyConfig,
+        )
+
+        cfg = ProviderConfig(
+            id="test",
+            base_url="https://api.example.com",
+            auth=ProviderAuthConfig(mode="api_key", header="X-Key"),
+            headers=[ProviderStaticHeaderConfig(name="X-Ref", value="test.com")],
+            models_endpoint=ProviderModelsEndpointConfig(
+                method="POST", body={"key": "val"}
+            ),
+            verify=ProviderVerifyConfig(probe_model="gpt-4"),
+        )
+        assert cfg.auth.mode == "api_key"
+        assert len(cfg.headers) == 1
+        assert cfg.models_endpoint is not None
+        assert cfg.verify.probe_model == "gpt-4"
+
+    def test_old_style_config_backwards_compatible(self):
+        """Config without contract fields still loads."""
+        from eggpool.models.config import ProviderConfig
+
+        cfg = ProviderConfig(
+            id="old",
+            base_url="https://api.example.com/v1",
+            models_method="GET",
+            models_path="/models",
+        )
+        assert cfg.auth.mode == "bearer"
+        assert cfg.models_endpoint is not None
+        assert cfg.models_endpoint.method == "GET"
+
+    def test_duplicate_v1_in_openai_path_rejected(self):
+        from eggpool.models.config import ProviderConfig
+
+        with pytest.raises(ConfigError, match="duplicate version prefix"):
+            ProviderConfig(
+                id="bad",
+                base_url="https://api.example.com/v1",
+                openai_path="/v1/chat/completions",
+            )
+
+    def test_duplicate_v1_in_anthropic_path_rejected(self):
+        from eggpool.models.config import ProviderConfig
+
+        with pytest.raises(ConfigError, match="duplicate version prefix"):
+            ProviderConfig(
+                id="bad",
+                base_url="https://api.example.com/v1",
+                anthropic_path="/v1/messages",
+            )

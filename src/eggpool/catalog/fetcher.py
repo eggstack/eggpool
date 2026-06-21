@@ -5,11 +5,14 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 
 from eggpool.catalog.normalizer import iter_model_items
+
+if TYPE_CHECKING:
+    from eggpool.models.config import ProviderConfig
 
 logger = logging.getLogger(__name__)
 
@@ -47,22 +50,63 @@ async def fetch_models_for_account(
     account_name: str,
     models_method: str = "GET",
     models_path: str = "/models",
+    *,
+    provider_cfg: ProviderConfig | None = None,
 ) -> FetchResult:
     """Fetch the model list from an upstream account with timing data.
 
     Supports both GET and POST methods for different providers.
+    When ``provider_cfg`` is provided, uses its contract for auth
+    headers, model-list body, query params, and absolute URL composition.
     Returns a FetchResult with response data, timing, and error info.
     """
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Accept": "application/json",
-    }
+    if provider_cfg is not None:
+        from eggpool.providers.contract import (
+            build_upstream_headers,
+            compose_provider_url,
+        )
+
+        auth_headers = build_upstream_headers(provider_cfg, api_key)
+        endpoint = provider_cfg.models_endpoint
+        if endpoint is not None and endpoint.method == "DISABLED":
+            return FetchResult(
+                response={},
+                latency_ms=0,
+                status_code=None,
+                error=None,
+                model_count=0,
+            )
+        method = provider_cfg.models_method
+        path = provider_cfg.models_path
+        url = compose_provider_url(provider_cfg, path)
+        headers = {**auth_headers, "Accept": "application/json"}
+        body = endpoint.body if endpoint is not None else None
+        query = endpoint.query if endpoint is not None else {}
+    else:
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "application/json",
+        }
+        method = models_method
+        path = models_path
+        url = None  # Use relative path with httpx client
+        body = None
+        query = {}
     start = time.monotonic()
     try:
-        if models_method.upper() == "POST":
-            response = await client.post(models_path, headers=headers, json={})
+        if method.upper() == "POST":
+            response = await client.post(
+                path if url is None else url,
+                headers=headers,
+                json=body if body is not None else {},
+                params=query or None,
+            )
         else:
-            response = await client.get(models_path, headers=headers)
+            response = await client.get(
+                path if url is None else url,
+                headers=headers,
+                params=query or None,
+            )
         latency_ms = int((time.monotonic() - start) * 1000)
         status_code = response.status_code
         response.raise_for_status()

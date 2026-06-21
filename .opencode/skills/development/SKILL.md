@@ -62,6 +62,13 @@ uv run coverage run -m pytest
 uv run coverage report
 ```
 
+### Provider Contract Tests
+
+Run contract-specific tests:
+```bash
+uv run pytest tests/unit/test_contract.py tests/unit/test_contract_urls.py -v
+```
+
 ## Code Style
 
 - Python 3.12+ with `from __future__ import annotations` in all files

@@ -39,9 +39,10 @@ All data-plane requests flow through `RequestCoordinator`:
 1. **Endpoint** (`api/chat_completions.py` or `api/messages.py`) extracts model ID, parses provider suffix
 2. **Routing** selects an eligible account via quota-aware scoring (`routing/router.py`)
 3. **Attempt** is persisted to SQLite before upstream dispatch
-4. **Proxy** sends the request via the provider's `httpx.AsyncClient` from `ProviderClientPool`
-5. **Streaming** is handled by `proxy/sse_observer.py` with chunk-level usage extraction
-6. **Finalization** records usage, releases reservations, updates health state
+4. **Provider Contract** renders absolute URL (`compose_provider_url()`) and auth headers (`build_upstream_headers()`) from `providers/contract.py`
+5. **Proxy** sends the request via the provider's `httpx.AsyncClient` from `ProviderClientPool`
+6. **Streaming** is handled by `proxy/sse_observer.py` with chunk-level usage extraction
+7. **Finalization** records usage, releases reservations, updates health state
 
 Key invariants:
 - Requests must be persisted before upstream dispatch
@@ -85,6 +86,18 @@ Each provider can configure custom upstream paths:
 - `anthropic_path` (default: `/messages`)
 - `models_path` (default: `/models`)
 - `models_method` (default: `GET`, some providers use `POST`)
+
+### Provider Contracts
+
+Each provider declares an explicit contract for authentication, URL composition, and model listing via `ProviderAuthConfig`, `ProviderStaticHeaderConfig`, `ProviderModelsEndpointConfig`, and `ProviderVerifyConfig` in `config.toml`.
+
+`src/eggpool/providers/contract.py` centralizes:
+- `compose_provider_url()` — absolute URL composition (rejects duplicate `/v1` prefix)
+- `build_auth_headers()` — provider-aware auth header construction (`bearer`, `api_key`, `raw_authorization`, `none`)
+- `build_static_headers()` — static provider headers from config
+- `build_upstream_headers()` — combines auth + static headers
+
+The coordinator calls `_build_upstream_headers()` which uses the provider contract when available, falling back to legacy Bearer auth.
 
 ## Database
 

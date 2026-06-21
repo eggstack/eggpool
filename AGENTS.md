@@ -56,6 +56,23 @@ EggPool supports multiple upstream providers. Key components:
 
 See `architecture/README.md` for details.
 
+## Provider Contracts
+
+Each provider declares an explicit contract for authentication, URL composition, and model listing:
+
+- **`ProviderAuthConfig`** — auth mode (`bearer`, `api_key`, `raw_authorization`, `none`), header name, scheme
+- **`ProviderStaticHeaderConfig`** — optional static headers (e.g., attribution headers for OpenRouter)
+- **`ProviderModelsEndpointConfig`** — model listing method, path, body, query params
+- **`ProviderVerifyConfig`** — live verification probe settings
+
+Key design rules:
+- `base_url` ending `/v1` plus path beginning `/v1/` is rejected (duplicate version prefix)
+- `auth.mode = "none"` sends no upstream auth (used by Ollama local)
+- `compose_provider_url()` always produces absolute URLs for HTTPX
+- `build_auth_headers()` reads from `ProviderConfig.auth` instead of hardcoding Bearer
+
+See `src/eggpool/providers/contract.py` for the centralized renderer.
+
 ## Model Context Limits
 
 EggPool supports configurable effective context limits per model per provider:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 import tomllib
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -189,6 +189,57 @@ class AccountConfig(BaseModel):
         return self
 
 
+class ProviderAuthConfig(BaseModel):
+    """Provider-specific authentication configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["bearer", "api_key", "raw_authorization", "none"] = "bearer"
+    header: str = "Authorization"
+    scheme: str = "Bearer"
+
+
+class ProviderStaticHeaderConfig(BaseModel):
+    """A static header to include in upstream requests."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    value: str | None = None
+    value_env: str | None = None
+
+    @model_validator(mode="after")
+    def validate_value_source(self) -> ProviderStaticHeaderConfig:
+        if self.value is not None and self.value_env is not None:
+            raise ConfigError(
+                f"Static header {self.name!r} must set exactly one of "
+                "value or value_env"
+            )
+        return self
+
+
+class ProviderModelsEndpointConfig(BaseModel):
+    """Provider-specific model listing endpoint configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    method: Literal["GET", "POST", "DISABLED"] = "GET"
+    path: str = "/models"
+    body: dict[str, Any] | None = None
+    query: dict[str, str] = {}
+    required: bool = True
+
+
+class ProviderVerifyConfig(BaseModel):
+    """Configuration for live verification of provider endpoints."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    probe_model: str | None = None
+    probe_protocol: Literal["openai", "anthropic"] = "openai"
+    require_models: bool = True
+
+
 class ProviderConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -211,6 +262,10 @@ class ProviderConfig(BaseModel):
     keepalive_timeout_s: float = Field(default=30, ge=0)
     accounts: list[AccountConfig] = []
     model_overrides: dict[str, ModelOverrideConfig] = {}
+    auth: ProviderAuthConfig = ProviderAuthConfig()
+    headers: list[ProviderStaticHeaderConfig] = []
+    models_endpoint: ProviderModelsEndpointConfig | None = None
+    verify: ProviderVerifyConfig = ProviderVerifyConfig()
 
     @field_validator("models_method", mode="before")
     @classmethod
@@ -225,6 +280,38 @@ class ProviderConfig(BaseModel):
                 f"max_keepalive ({self.max_keepalive}) must not exceed "
                 f"max_connections ({self.max_connections})"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _synthesize_models_endpoint(self) -> ProviderConfig:
+        """Synthesize models_endpoint from legacy fields when not set."""
+        if self.models_endpoint is None and self.models_path:
+            method: Literal["GET", "POST", "DISABLED"] = self.models_method  # type: ignore[assignment]
+            self.models_endpoint = ProviderModelsEndpointConfig(
+                method=method,
+                path=self.models_path,
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_no_duplicate_version(self) -> ProviderConfig:
+        """Reject base_url + path combinations that duplicate /v1 prefixes."""
+        base = self.base_url.rstrip("/")
+        versioned_suffixes = ("/v1", "/api/v1", "/compatible-mode/v1")
+        for suffix in versioned_suffixes:
+            if base.endswith(suffix):
+                paths_to_check = [self.openai_path, self.anthropic_path]
+                if self.models_endpoint is not None:
+                    paths_to_check.append(self.models_endpoint.path)
+                elif self.models_path:
+                    paths_to_check.append(self.models_path)
+                for p in paths_to_check:
+                    if p and p.startswith(suffix + "/"):
+                        raise ConfigError(
+                            f"Provider {self.id!r}: base_url ends with {suffix!r} "
+                            f"but path {p!r} also starts with {suffix}/ — "
+                            f"this creates a duplicate version prefix"
+                        )
         return self
 
     @field_validator("id")

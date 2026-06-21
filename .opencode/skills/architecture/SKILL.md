@@ -54,6 +54,17 @@ See `architecture/README.md` for the full design overview.
 - Legacy flat `[[accounts]]` auto-normalizes to default `opencode-go` provider
 - `parse_model_id()` in `catalog/cache.py` handles suffix parsing
 
+### Provider Contract Rendering
+
+`src/eggpool/providers/contract.py` centralizes:
+- `compose_provider_url()` — absolute URL composition
+- `build_auth_headers()` — provider-aware auth header construction
+- `build_static_headers()` — static provider headers from config
+- `build_upstream_headers()` — combines auth + static headers
+
+The coordinator calls `_build_upstream_headers()` which uses the provider
+contract when available, falling back to legacy Bearer auth.
+
 ## Model Context Limits
 
 - `ModelLimitOverrideConfig` provides reusable limit fields (context, input, output, enforcement)

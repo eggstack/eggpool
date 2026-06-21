@@ -38,12 +38,31 @@ def build_upstream_auth_headers(
 ) -> dict[str, str]:
     """Build the upstream authentication header set.
 
-    The OpenCode Go gateway accepts a single ``Authorization: Bearer``
-    header for both OpenAI-compatible and Anthropic-compatible payloads.
-    Returning exactly one header keeps the contract explicit and
-    prevents accidental duplicate ``Authorization`` fields.
+    .. deprecated::
+        Use :func:`eggpool.providers.contract.build_auth_headers` instead.
+        This wrapper exists for backwards compatibility only.
     """
     return {"Authorization": f"Bearer {upstream_api_key}"}
+
+
+def sanitize_request_headers(headers: dict[str, str]) -> dict[str, str]:
+    """Strip local credentials, hop-by-hop, and framing headers.
+
+    This does NOT inject upstream auth. Use
+    :func:`eggpool.providers.contract.build_upstream_headers` to compose
+    the final upstream header set after sanitization.
+    """
+    filtered: dict[str, str] = {}
+    for key, value in headers.items():
+        lower_key = key.lower()
+        if lower_key in LOCAL_CREDENTIAL_HEADERS:
+            continue
+        if lower_key in HOP_BY_HOP_HEADERS:
+            continue
+        if lower_key in ("host", "content-length"):
+            continue
+        filtered[key] = value
+    return filtered
 
 
 def filter_request_headers(
@@ -59,17 +78,7 @@ def filter_request_headers(
     - Remove hop-by-hop headers
     - Remove host and content-length (recalculated by httpx)
     """
-    filtered: dict[str, str] = {}
-    for key, value in headers.items():
-        lower_key = key.lower()
-        if lower_key in LOCAL_CREDENTIAL_HEADERS:
-            continue
-        if lower_key in HOP_BY_HOP_HEADERS:
-            continue
-        if lower_key in ("host", "content-length"):
-            continue
-        filtered[key] = value
-
+    filtered = sanitize_request_headers(headers)
     filtered.update(
         build_upstream_auth_headers(protocol="", upstream_api_key=upstream_api_key)
     )

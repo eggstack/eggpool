@@ -208,3 +208,47 @@ def test_filter_response_headers_strips_content_encoding() -> None:
     assert "content-encoding" not in result_dict
     assert "content-length" not in result_dict
     assert "x-custom" in result_dict
+
+
+class TestSanitizeRequestHeaders:
+    def test_strips_authorization(self):
+        from eggpool.proxy.client import sanitize_request_headers
+
+        headers = {"Authorization": "Bearer old", "Content-Type": "application/json"}
+        result = sanitize_request_headers(headers)
+        assert "Authorization" not in result
+        assert result["Content-Type"] == "application/json"
+
+    def test_strips_x_api_key(self):
+        from eggpool.proxy.client import sanitize_request_headers
+
+        headers = {"X-Api-Key": "secret", "X-Custom": "val"}
+        result = sanitize_request_headers(headers)
+        assert "X-Api-Key" not in result
+        assert result["X-Custom"] == "val"
+
+    def test_preserves_non_credential_headers(self):
+        from eggpool.proxy.client import sanitize_request_headers
+
+        headers = {
+            "Content-Type": "application/json",
+            "X-Request-Id": "abc",
+            "Host": "example.com",
+        }
+        result = sanitize_request_headers(headers)
+        assert "Content-Type" in result
+        assert "X-Request-Id" in result
+        assert "Host" not in result
+
+    def test_strips_hop_by_hop(self):
+        from eggpool.proxy.client import sanitize_request_headers
+
+        headers = {
+            "Connection": "keep-alive",
+            "Transfer-Encoding": "chunked",
+            "X-Custom": "val",
+        }
+        result = sanitize_request_headers(headers)
+        assert "Connection" not in result
+        assert "Transfer-Encoding" not in result
+        assert result["X-Custom"] == "val"

@@ -99,6 +99,11 @@ persist_redacted_error_detail = false
 # # proxy = "residential-us"
 # # proxy_url = "ss://chacha20:password@proxy.example.com:8388"
 # # proxy_url_env = "GOROUTER_PERSONAL_PROXY_URL"
+#
+# [providers.opencode-go.auth]
+# mode = "bearer"
+# header = "Authorization"
+# scheme = "Bearer"
 
 # ─── Popular Provider Defaults ─────────────────────────────────────────
 # Uncomment providers you want to use. Each requires an API key from the
@@ -113,6 +118,9 @@ persist_redacted_error_detail = false
 # [[providers.deepseek.accounts]]
 # name = "default"
 # api_key = "sk-your-deepseek-key"
+#
+# [providers.deepseek.auth]
+# mode = "bearer"
 
 # OpenRouter — 400+ models through one API key
 # [providers.openrouter]
@@ -123,6 +131,17 @@ persist_redacted_error_detail = false
 # [[providers.openrouter.accounts]]
 # name = "default"
 # api_key = "sk-your-openrouter-key"
+#
+# [providers.openrouter.auth]
+# mode = "bearer"
+#
+# # Optional attribution headers:
+# # [[providers.openrouter.headers]]
+# # name = "HTTP-Referer"
+# # value = "https://example.local"
+# # [[providers.openrouter.headers]]
+# # name = "X-OpenRouter-Title"
+# # value = "EggPool"
 
 # Together AI — popular inference provider
 # [providers.together]
@@ -133,6 +152,9 @@ persist_redacted_error_detail = false
 # [[providers.together.accounts]]
 # name = "default"
 # api_key = "sk-your-together-key"
+#
+# [providers.together.auth]
+# mode = "bearer"
 
 # Fireworks AI — fast inference for open-source models
 # [providers.fireworks]
@@ -143,6 +165,9 @@ persist_redacted_error_detail = false
 # [[providers.fireworks.accounts]]
 # name = "default"
 # api_key = "sk-your-fireworks-key"
+#
+# [providers.fireworks.auth]
+# mode = "bearer"
 
 # Z.AI (ZhipuAI GLM) — OpenAI compatible
 # [providers.zai]
@@ -153,6 +178,10 @@ persist_redacted_error_detail = false
 # [[providers.zai.accounts]]
 # name = "default"
 # api_key = "sk-your-zai-key"
+#
+# # Live-verification-required: confirm base_url and endpoints before production use
+# [providers.zai.auth]
+# mode = "bearer"
 
 # Alibaba Qwen — popular Chinese provider
 # [providers.alibaba]
@@ -163,6 +192,14 @@ persist_redacted_error_detail = false
 # [[providers.alibaba.accounts]]
 # name = "default"
 # api_key = "sk-your-alibaba-key"
+#
+# [providers.alibaba.auth]
+# mode = "bearer"
+#
+# # Regional alternatives:
+# # US Virginia: https://dashscope-us.aliyuncs.com/compatible-mode/v1
+# # China Beijing: https://dashscope.aliyuncs.com/compatible-mode/v1
+# # Hong Kong: https://cn-hongkong.dashscope.aliyuncs.com/compatible-mode/v1
 
 # Novita AI — various open-source models
 # [providers.novita]
@@ -173,6 +210,8 @@ persist_redacted_error_detail = false
 # [[providers.novita.accounts]]
 # name = "default"
 # api_key = "sk-your-novita-key"
+#
+# # Live-verification-required: confirm base_url and endpoints before production use
 
 # MiniMax — OpenAI + Anthropic compatible
 # [providers.minimax]
@@ -186,6 +225,9 @@ persist_redacted_error_detail = false
 # [[providers.minimax.accounts]]
 # name = "default"
 # api_key = "sk-your-minimax-key"
+#
+# [providers.minimax.auth]
+# mode = "bearer"
 
 # GeneralCompute — OpenAI compatible (uses POST for model listing)
 # [providers.generalcompute]
@@ -193,11 +235,14 @@ persist_redacted_error_detail = false
 # base_url = "https://api.generalcompute.com/v1"
 # protocols = ["openai"]
 # models_method = "POST"
-# models_path = "/v1/models/list"
+# models_path = "/models/list"
 #
 # [[providers.generalcompute.accounts]]
 # name = "default"
 # api_key = "sk-your-generalcompute-key"
+#
+# [providers.generalcompute.auth]
+# mode = "bearer"
 
 # NeuralWatt — OpenAI compatible, energy-based pricing
 # [providers.neuralwatt]
@@ -208,6 +253,8 @@ persist_redacted_error_detail = false
 # [[providers.neuralwatt.accounts]]
 # name = "default"
 # api_key = "sk-your-neuralwatt-key"
+#
+# # Live-verification-required: confirm base_url and endpoints before production use
 
 # Ollama (local) — OpenAI compatible, no auth required
 # [providers.ollama-local]
@@ -218,6 +265,9 @@ persist_redacted_error_detail = false
 # [[providers.ollama-local.accounts]]
 # name = "default"
 # api_key = "ollama"
+#
+# [providers.ollama-local.auth]
+# mode = "none"
 
 # Ollama (cloud) — OpenAI compatible via /v1 endpoints
 # [providers.ollama-cloud]
@@ -228,6 +278,9 @@ persist_redacted_error_detail = false
 # [[providers.ollama-cloud.accounts]]
 # name = "default"
 # api_key = "sk-your-ollama-key"
+#
+# [providers.ollama-cloud.auth]
+# mode = "bearer"
 
 [model_overrides."claude-opus-4"]
 protocol = "anthropic"

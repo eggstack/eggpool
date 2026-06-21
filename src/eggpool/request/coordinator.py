@@ -37,7 +37,7 @@ from eggpool.health.health_manager import (
     classify_failure_category,
 )
 from eggpool.providers.client_pool import ProviderClientPool
-from eggpool.proxy.client import filter_request_headers, filter_response_headers
+from eggpool.proxy.client import filter_response_headers
 from eggpool.proxy.sse_observer import IncrementalSSEObserver
 from eggpool.proxy.usage import StreamUsageResult, safe_dict
 from eggpool.request.attempt_finalizer import (
@@ -704,9 +704,7 @@ class RequestCoordinator:
         attempt_num: int,
     ) -> PreparedProxyResponse:
         """Execute a non-streaming request."""
-        headers = filter_request_headers(
-            dict(context.incoming_headers), selected.api_key
-        )
+        headers = self._build_upstream_headers(context, selected)
         upstream_path = self._get_upstream_path(context.protocol, selected.provider_id)
 
         response: httpx.Response | None = None
@@ -849,9 +847,7 @@ class RequestCoordinator:
         attempt_num: int,
     ) -> PreparedProxyResponse:
         """Execute a streaming request."""
-        headers = filter_request_headers(
-            dict(context.incoming_headers), selected.api_key
-        )
+        headers = self._build_upstream_headers(context, selected)
         upstream_path = self._get_upstream_path(context.protocol, selected.provider_id)
 
         # Inject stream_options.include_usage for OpenAI
@@ -1228,6 +1224,35 @@ class RequestCoordinator:
         if protocol == "anthropic":
             return "/messages"
         return "/chat/completions"
+
+    def _build_upstream_headers(
+        self,
+        context: ProxyRequestContext,
+        selected: SelectedAttempt,
+    ) -> dict[str, str]:
+        """Build upstream headers using provider contract when available."""
+        from eggpool.providers.contract import build_upstream_headers
+        from eggpool.proxy.client import sanitize_request_headers
+
+        sanitized = sanitize_request_headers(dict(context.incoming_headers))
+        provider_cfg = (
+            self._config.providers.get(selected.provider_id)
+            if self._config is not None
+            else None
+        )
+        if provider_cfg is not None:
+            auth_headers = build_upstream_headers(provider_cfg, selected.api_key)
+            sanitized.update(auth_headers)
+        else:
+            # Fallback: legacy Bearer auth
+            from eggpool.proxy.client import build_upstream_auth_headers
+
+            sanitized.update(
+                build_upstream_auth_headers(
+                    protocol="", upstream_api_key=selected.api_key
+                )
+            )
+        return sanitized
 
     def _apply_health_transition(
         self,

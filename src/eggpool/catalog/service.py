@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from eggpool.accounts.registry import AccountRegistry
     from eggpool.db.connection import Database
     from eggpool.health.health_manager import HealthManager
-    from eggpool.models.config import AppConfig
+    from eggpool.models.config import AppConfig, ProviderConfig
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +163,7 @@ class CatalogService:
                             client,
                             models_method,
                             models_path,
+                            provider_cfg=provider_cfg,
                         )
                     )
                 )
@@ -187,6 +188,8 @@ class CatalogService:
         client: httpx.AsyncClient,
         models_method: str = "GET",
         models_path: str = "/models",
+        *,
+        provider_cfg: ProviderConfig | None = None,
     ) -> None:
         """Fetch models for one account and update the cache."""
         try:
@@ -196,6 +199,7 @@ class CatalogService:
                 account_name,
                 models_method=models_method,
                 models_path=models_path,
+                provider_cfg=provider_cfg,
             )
 
             # Record ping data for this provider/account
