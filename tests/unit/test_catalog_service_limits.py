@@ -215,7 +215,7 @@ async def test_persisted_catalog_hydration_reapplies_configuration() -> None:
     acct_row = {"id": 1, "name": "acct1", "provider_id": "p1"}
     am_row = {"account_id": 1, "model_id": "m1"}
 
-    mock_db.fetch_all = AsyncMock(side_effect=[[model_row], [am_row], [acct_row]])
+    mock_db.fetch_all = AsyncMock(side_effect=[[model_row], [], [am_row], [acct_row]])
 
     await service._load_cached_models()
 
@@ -254,7 +254,7 @@ async def test_changed_limit_reflected_after_reload() -> None:
     acct_row = {"id": 1, "name": "acct1", "provider_id": "p1"}
     am_row = {"account_id": 1, "model_id": "m1"}
 
-    mock_db.fetch_all = AsyncMock(side_effect=[[model_row], [am_row], [acct_row]])
+    mock_db.fetch_all = AsyncMock(side_effect=[[model_row], [], [am_row], [acct_row]])
     await service._load_cached_models()
 
     entry_v1 = service.cache.get_provider_model_entries().get(("m1", "p1"))
@@ -274,7 +274,7 @@ async def test_changed_limit_reflected_after_reload() -> None:
     service._limit_resolver = ModelLimitResolver(config_v2)
     service._cache = type(service._cache)()
 
-    mock_db.fetch_all = AsyncMock(side_effect=[[model_row], [am_row], [acct_row]])
+    mock_db.fetch_all = AsyncMock(side_effect=[[model_row], [], [am_row], [acct_row]])
     await service._load_cached_models()
 
     entry_v2 = service.cache.get_provider_model_entries().get(("m1", "p1"))
