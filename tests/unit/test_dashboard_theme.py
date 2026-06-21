@@ -9,7 +9,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from eggpool.dashboard.render import get_theme, get_theme_css
+from eggpool.dashboard import render as render_module
+from eggpool.dashboard.render import get_available_themes, get_theme, get_theme_css
 from eggpool.dashboard.theme import (
     DashboardTheme,
     HalloyGeneral,
@@ -456,3 +457,61 @@ class TestBundledThemes:
         css = get_theme_css("Test CSS", str(tmp_path))
         assert ":root {" in css
         assert "--page-bg:" in css
+
+
+# ---------------------------------------------------------------------------
+# Theme / theme-list caching tests
+# ---------------------------------------------------------------------------
+
+
+class TestThemeCache:
+    """Theme and available-themes caches avoid repeated disk work."""
+
+    def setup_method(self) -> None:
+        render_module._THEME_CACHE.clear()
+        render_module._THEME_CSS_CACHE.clear()
+        render_module._THEMES_LIST_CACHE.clear()
+
+    def test_get_theme_returns_cached_object(self, tmp_path: Path) -> None:
+        """Repeated calls for the same theme reuse the cached instance."""
+        (tmp_path / "Cache Test.toml").write_text(
+            "[general]\nbackground = '#222222'\n"
+            "[text]\nprimary = '#eeeeee'\nsuccess = '#00ff00'\nerror = '#ff0000'\n"
+        )
+        first = get_theme("Cache Test", str(tmp_path))
+        second = get_theme("Cache Test", str(tmp_path))
+        assert first is second
+
+    def test_get_theme_css_is_cached(self, tmp_path: Path) -> None:
+        """CSS strings are cached; missing themes are cached as empty too."""
+        (tmp_path / "Cache CSS.toml").write_text(
+            "[general]\nbackground = '#333333'\n"
+            "[text]\nprimary = '#dddddd'\nsuccess = '#00ff00'\nerror = '#ff0000'\n"
+        )
+        first = get_theme_css("Cache CSS", str(tmp_path))
+        second = get_theme_css("Cache CSS", str(tmp_path))
+        assert first == second
+        assert first  # non-empty for a real theme
+
+        empty_first = get_theme_css("definitely not a real theme", str(tmp_path))
+        empty_second = get_theme_css("definitely not a real theme", str(tmp_path))
+        assert empty_first == "" == empty_second
+
+    def test_get_available_themes_includes_default(self) -> None:
+        """get_available_themes always puts 'default' first in the list."""
+        themes = get_available_themes()
+        assert themes[0] == "default"
+        assert len(themes) == len(set(themes))
+
+    def test_get_available_themes_caches_results(self, tmp_path: Path) -> None:
+        """Available theme list is cached per themes_dir."""
+        (tmp_path / "User Only.toml").write_text(
+            "[general]\nbackground = '#000000'\n"
+            "[text]\nprimary = '#ffffff'\nsuccess = '#00ff00'\nerror = '#ff0000'\n"
+        )
+        first = get_available_themes(tmp_path)
+        # Mutating the cached list must not affect future calls.
+        first.clear()
+        second = get_available_themes(tmp_path)
+        assert "User Only" in second
+        assert "default" in second

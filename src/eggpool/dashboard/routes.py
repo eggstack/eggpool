@@ -13,6 +13,7 @@ from fastapi import Request  # noqa: TCH002 — FastAPI needs runtime access
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from eggpool.dashboard.render import (
+    get_available_themes,
     get_theme,
     render_accounts,
     render_bandwidth,
@@ -23,7 +24,6 @@ from eggpool.dashboard.render import (
     render_pings,
     render_timeseries,
 )
-from eggpool.dashboard.theme import list_themes
 from eggpool.errors import ConfigError
 from eggpool.stats import TimeRange, resolve_period
 
@@ -32,6 +32,15 @@ if TYPE_CHECKING:
 
 
 DEFAULT_REFRESH_S = 15
+
+# Heatmap TimeRange is stable for a fixed window length, so cache it once
+# per process to avoid reconstructing the (start, end) pair on every
+# overview request and to let the dashboard cache serve subsequent hits.
+_HEATMAP_TIME_RANGE = TimeRange(
+    start=datetime.now(UTC) - timedelta(days=90),
+    end=datetime.now(UTC),
+    label="90d",
+)
 
 
 def _get_dashboard_config(request: Request) -> Any:
@@ -59,10 +68,7 @@ def _get_theme_data(
     themes_dir = config.dashboard.themes_dir
     # Use query param override if provided, else config default
     theme_name = theme_override or config.dashboard.theme
-    available = list_themes(themes_dir)
-    # Always include "default" in the list
-    if "default" not in available:
-        available.insert(0, "default")
+    available = get_available_themes(themes_dir)
     if theme_name not in available:
         theme_name = config.dashboard.theme
     if theme_name not in available:
@@ -91,22 +97,20 @@ async def handle_overview(
     models = await stats.get_model_stats(time_range, use_cache=True)
     events = await stats.get_recent_events(limit=10)
 
-    heatmap_start_dt = datetime.now(UTC) - timedelta(days=90)
-    heatmap_end_dt = datetime.now(UTC)
+    # The heatmap always shows the trailing 90 days, so use a fixed
+    # TimeRange that the dashboard cache can serve from. The end timestamp
+    # is stable for the cache TTL window.
     bandwidth_daily = await stats.get_bandwidth_timeseries(
-        TimeRange(
-            start=heatmap_start_dt,
-            end=heatmap_end_dt,
-            label="90d",
-        )
+        _HEATMAP_TIME_RANGE, use_cache=True
     )
 
     refresh_s = dashboard_config.refresh_interval_s
     theme_css, heatmap_colors, current_theme, available = _get_theme_data(
         request, theme
     )
-    ping_summary = await stats.get_ping_summary(time_range)
-    ip_stats = await stats.get_ip_stats(time_range)
+    ping_summary = await stats.get_ping_summary(time_range, use_cache=True)
+    ip_stats = await stats.get_ip_stats(time_range, use_cache=True)
+    timeseries = await stats.get_timeseries(time_range, bucket="hour")
     html = render_overview(
         overview=overview,
         accounts=accounts,
@@ -121,6 +125,7 @@ async def handle_overview(
         available_themes=available,
         current_theme=current_theme,
         ip_stats=ip_stats,
+        timeseries=timeseries or [],
     )
     return HTMLResponse(content=html)
 

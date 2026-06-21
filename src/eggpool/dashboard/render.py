@@ -26,6 +26,7 @@ from eggpool.dashboard.escape import (
 from eggpool.dashboard.theme import (
     DashboardTheme,
     get_default_theme,
+    list_themes,
     load_theme,
     resolve_theme_path,
 )
@@ -38,40 +39,89 @@ _DEFAULT_HEATMAP_COLORS = [
     "#216e39",
 ]
 
+# Module-level caches. Theme TOML files are immutable for the lifetime of
+# the process and ``themes_dir`` is taken from config (which only changes
+# via ``eggpool rehash`` / restart), so a simple dict cache avoids repeated
+# disk reads on every dashboard request.
+_THEME_CACHE: dict[tuple[str, str | None], DashboardTheme] = {}
+_THEME_CSS_CACHE: dict[tuple[str, str | None], str] = {}
+_THEMES_LIST_CACHE: dict[str | None, list[str]] = {}
+
+
+def _themes_dir_key(themes_dir: str | None) -> str | None:
+    """Normalize ``themes_dir`` for use as a cache key."""
+    if themes_dir is None:
+        return None
+    return str(themes_dir)
+
 
 def get_theme_css(theme_name: str, themes_dir: str | None = None) -> str:
     """Load a theme by name and return the CSS :root block, or empty string.
 
     When themes_dir is set, user-provided themes take precedence over
-    bundled themes with the same name.
+    bundled themes with the same name. Results are cached so repeated
+    requests for the same theme do not re-read the TOML file from disk.
     """
     if theme_name == "default":
         return ""
+    key = (theme_name, _themes_dir_key(themes_dir))
+    cached = _THEME_CSS_CACHE.get(key)
+    if cached is not None:
+        return cached
     try:
         theme_path = resolve_theme_path(theme_name, themes_dir)
         if theme_path is None:
+            _THEME_CSS_CACHE[key] = ""
             return ""
         theme = load_theme(theme_path)
-        return theme.to_css_variables()
+        css = theme.to_css_variables()
     except Exception:
-        return ""
+        css = ""
+    _THEME_CSS_CACHE[key] = css
+    return css
 
 
 def get_theme(theme_name: str, themes_dir: str | None = None) -> DashboardTheme:
     """Load a theme by name, returning the default on failure.
 
     When themes_dir is set, user-provided themes take precedence over
-    bundled themes with the same name.
+    bundled themes with the same name. Results are cached so repeated
+    requests for the same theme do not re-read the TOML file from disk.
     """
     if theme_name == "default":
         return get_default_theme()
+    key = (theme_name, _themes_dir_key(themes_dir))
+    cached = _THEME_CACHE.get(key)
+    if cached is not None:
+        return cached
     try:
         theme_path = resolve_theme_path(theme_name, themes_dir)
-        if theme_path is None:
-            return get_default_theme()
-        return load_theme(theme_path)
-    except Exception:
-        return get_default_theme()
+        if theme_path is None:  # noqa: SIM108
+            theme = get_default_theme()
+        else:
+            theme = load_theme(theme_path)
+    except Exception:  # noqa: BLE001
+        theme = get_default_theme()
+    _THEME_CACHE[key] = theme
+    return theme
+
+
+def get_available_themes(themes_dir: str | None = None) -> list[str]:
+    """Return the list of available theme names, with "default" first.
+
+    Results are cached per ``themes_dir`` because the on-disk theme set
+    is stable for the lifetime of the process; ``eggpool rehash`` and
+    other config-changing operations restart the server.
+    """
+    key = _themes_dir_key(themes_dir)
+    cached = _THEMES_LIST_CACHE.get(key)
+    if cached is not None:
+        return list(cached)
+    available = list_themes(themes_dir)
+    if "default" not in available:
+        available.insert(0, "default")
+    _THEMES_LIST_CACHE[key] = list(available)
+    return available
 
 
 def _render_layout(
@@ -84,13 +134,23 @@ def _render_layout(
     available_themes: list[str] | None = None,
     current_theme: str = "",
     auto_refresh: bool = False,
+    include_chart_js: bool = False,
 ) -> str:
-    """Wrap a page body in the standard layout."""
+    """Wrap a page body in the standard layout.
+
+    Chart.js is only loaded on pages that render a chart; doing so lazily
+    avoids blocking initial render with a ~200 KB script on every page.
+    When loaded it is appended at the end of ``<body>`` so it never
+    blocks HTML parsing on the critical path.
+    """
     nav = _render_nav(active_nav, period, available_themes, current_theme)
     theme_href = f"/static/theme.css?theme={_html_escape(current_theme)}"
     theme_link = f'<link rel="stylesheet" href="{theme_href}">' if current_theme else ""
     script_block = (
         _render_auto_refresh_script(refresh_interval_s) if auto_refresh else ""
+    )
+    chart_script = (
+        '<script defer src="/static/chart.js"></script>' if include_chart_js else ""
     )
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -99,8 +159,8 @@ def _render_layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{_html_escape(title)}</title>
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<link rel="preload" href="/static/dashboard.css" as="style">
 <link rel="stylesheet" href="/static/dashboard.css">
-<script src="/static/chart.js"></script>
 {theme_link}
 </head>
 <body>
@@ -133,6 +193,7 @@ def _render_layout(
     &middot; <span id="dashboard-updated">ready</span></small>
 </footer>
 {script_block}
+{chart_script}
 </body>
 </html>"""
 
@@ -336,8 +397,17 @@ def _render_ip_stats(ip_stats: list[dict[str, Any]]) -> str:
     )
 
 
-def _render_timeseries_chart(period: str = "24h") -> str:
-    """Render an interactive timeseries chart using Chart.js."""
+def _render_timeseries_chart(
+    period: str = "24h", initial_data: list[dict[str, Any]] | None = None
+) -> str:
+    """Render an interactive timeseries chart using Chart.js.
+
+    When ``initial_data`` is provided, the chart renders immediately with
+    the data already inlined; the script then re-fetches every 60s to
+    pick up new buckets. When ``initial_data`` is ``None`` (or empty)
+    the chart fetches its data on load.
+    """
+    initial_json = json.dumps(initial_data or [])
     return f"""
 <section class="panel">
   <h3>Request timeseries</h3>
@@ -348,23 +418,28 @@ def _render_timeseries_chart(period: str = "24h") -> str:
 <script>
 (() => {{
   const period = {json.dumps(period)};
+  const initialData = {initial_json};
   const ctx = document.getElementById('timeseries-chart');
   if (!ctx) return;
+
+  const labels0 = initialData.map(d => d.bucket);
+  const requests0 = initialData.map(d => d.request_count || 0);
+  const errors0 = initialData.map(d => d.error_count || 0);
 
   const chart = new Chart(ctx, {{
     type: 'line',
     data: {{
-      labels: [],
+      labels: labels0,
       datasets: [
         {{
           label: 'Requests',
-          data: [],
+          data: requests0,
           borderColor: 'rgb(75, 192, 192)',
           tension: 0.1
         }},
         {{
           label: 'Errors',
-          data: [],
+          data: errors0,
           borderColor: 'rgb(255, 99, 132)',
           tension: 0.1
         }}
@@ -397,20 +472,15 @@ def _render_timeseries_chart(period: str = "24h") -> str:
       if (!response.ok) return;
       const data = await response.json();
 
-      const labels = data.map(d => d.bucket);
-      const requests = data.map(d => d.request_count || 0);
-      const errors = data.map(d => d.error_count || 0);
-
-      chart.data.labels = labels;
-      chart.data.datasets[0].data = requests;
-      chart.data.datasets[1].data = errors;
+      chart.data.labels = data.map(d => d.bucket);
+      chart.data.datasets[0].data = data.map(d => d.request_count || 0);
+      chart.data.datasets[1].data = data.map(d => d.error_count || 0);
       chart.update();
     }} catch (err) {{
       console.error('Failed to load timeseries data:', err);
     }}
   }}
 
-  loadData();
   window.setInterval(loadData, 60000);
 }})();
 </script>
@@ -613,6 +683,7 @@ def render_overview(
     available_themes: list[str] | None = None,
     current_theme: str = "",
     ip_stats: list[dict[str, Any]] | None = None,
+    timeseries: list[dict[str, Any]] | None = None,
 ) -> str:
     """Render the overview dashboard page."""
     summary = overview.get("summary", {})
@@ -721,7 +792,7 @@ def render_overview(
   {_render_account_table(accounts)}
 </section>
 
-{_render_timeseries_chart(period)}
+{_render_timeseries_chart(period, initial_data=timeseries)}
 
 <section class="overview-grid">
   <div class="panel">
@@ -764,6 +835,7 @@ def render_overview(
         available_themes=available_themes,
         current_theme=current_theme,
         auto_refresh=True,
+        include_chart_js=True,
     )
 
 

@@ -152,6 +152,38 @@ class TestRenderOverview:
         assert "setInterval" in html
         assert "/static/dashboard.css" in html
 
+    def test_loads_chart_js(self) -> None:
+        """The overview page must load Chart.js with the ``defer`` attribute."""
+        html = render_overview(
+            overview={
+                "summary": {"total_requests": 0},
+                "imbalance": {"imbalance_ratio": 0.0},
+            },
+            accounts=[],
+        )
+        assert '<script defer src="/static/chart.js"></script>' in html
+
+    def test_chart_preloads_inlined_timeseries_data(self) -> None:
+        """The chart script must seed itself from the inlined payload."""
+        timeseries = [
+            {
+                "bucket": "2024-01-01 12:00:00",
+                "request_count": 3,
+                "error_count": 1,
+            }
+        ]
+        html = render_overview(
+            overview={
+                "summary": {"total_requests": 3},
+                "imbalance": {"imbalance_ratio": 0.0},
+            },
+            accounts=[],
+            timeseries=timeseries,
+        )
+        assert "Request timeseries" in html
+        assert '"2024-01-01 12:00:00"' in html
+        assert "/api/timeseries" in html  # refresh URL preserved
+
     def test_escapes_account_name_in_overview(self) -> None:
         html = render_overview(
             overview={
@@ -502,6 +534,11 @@ class TestRenderAccounts:
         assert "<script>alert(1)</script>" not in html
         assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
 
+    def test_does_not_load_chart_js(self) -> None:
+        """The accounts page must not pull in the 200 KB Chart.js script."""
+        html = render_accounts(accounts=[], period="24h")
+        assert "/static/chart.js" not in html
+
 
 class TestRenderModels:
     """Tests for the models page renderer."""
@@ -530,6 +567,10 @@ class TestRenderModels:
         html = render_models(models=[], account_filter="acct_a", period="24h")
         assert 'value="acct_a"' in html
 
+    def test_does_not_load_chart_js(self) -> None:
+        html = render_models(models=[], period="24h")
+        assert "/static/chart.js" not in html
+
 
 class TestRenderEvents:
     """Tests for the events page renderer."""
@@ -555,6 +596,10 @@ class TestRenderEvents:
     def test_event_type_filter_in_form(self) -> None:
         html = render_events(events=[], event_type="cooldown_active", period="24h")
         assert 'value="cooldown_active"' in html
+
+    def test_does_not_load_chart_js(self) -> None:
+        html = render_events(events=[], period="24h")
+        assert "/static/chart.js" not in html
 
 
 class TestRenderTimeseries:
@@ -780,6 +825,14 @@ class TestRenderBandwidthPage:
         )
         assert 'value="acct_a"' in html
 
+    def test_does_not_load_chart_js(self) -> None:
+        html = render_bandwidth(
+            summary={"total_bytes_received": 0, "total_bytes_emitted": 0},
+            daily=[],
+            timeseries=[],
+        )
+        assert "/static/chart.js" not in html
+
 
 class TestRenderOverviewBandwidth:
     """Tests for bandwidth integration in overview page."""
@@ -938,6 +991,10 @@ class TestRenderLatency:
         html = render_latency(provider_ttft=[], model_ttft=[], period="24h")
         assert "No model data" in html
 
+    def test_does_not_load_chart_js(self) -> None:
+        html = render_latency(provider_ttft=[], model_ttft=[], period="24h")
+        assert "/static/chart.js" not in html
+
     def test_escapes_html_in_provider_id(self) -> None:
         provider_ttft = [
             {
@@ -961,6 +1018,10 @@ class TestRenderPings:
         assert "Provider Pings" in html
         assert "No ping data yet" in html
         assert "No pings recorded" in html
+
+    def test_does_not_load_chart_js(self) -> None:
+        html = render_pings(ping_summary=[], recent_pings=[], period="24h")
+        assert "/static/chart.js" not in html
 
     def test_renders_provider_cards(self) -> None:
         ping_summary = [

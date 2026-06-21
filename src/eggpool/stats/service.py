@@ -6,7 +6,6 @@ Used by both the JSON API and the server-rendered dashboard.
 
 from __future__ import annotations
 
-import copy
 import math
 import time
 from dataclasses import dataclass
@@ -155,7 +154,11 @@ class StatsService:
         if time.monotonic() - stored_at >= _DASHBOARD_CACHE_TTL_S:
             self._dashboard_cache.pop(key, None)
             return None
-        return copy.deepcopy(value)
+        # Dashboard cache values are read-only data frames (dicts and
+        # lists of dicts) returned straight to renderers; the renderer
+        # never mutates them. Return the cached reference directly to
+        # avoid the cost of a deep copy on every cache hit.
+        return value
 
     def _set_dashboard_cache(self, key: tuple[str, ...], value: object) -> None:
         if (
@@ -167,7 +170,7 @@ class StatsService:
                 key=lambda item: self._dashboard_cache[item][0],
             )
             self._dashboard_cache.pop(oldest, None)
-        self._dashboard_cache[key] = (time.monotonic(), copy.deepcopy(value))
+        self._dashboard_cache[key] = (time.monotonic(), value)
 
     async def get_summary(
         self,
@@ -351,19 +354,30 @@ class StatsService:
         self,
         time_range: TimeRange,
         account_name: str | None = None,
+        *,
+        use_cache: bool = False,
     ) -> list[dict[str, Any]]:
         """Get daily-bucketed bandwidth for heatmap and detail views."""
+        key = self._dashboard_cache_key("bandwidth", time_range, account_name or "")
+        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
+            return cast("list[dict[str, Any]]", cached)
         account_id: int | None = None
         if account_name is not None and account_name != "":
             account_id = await fetch_account_id(self._db, account_name)
             if account_id is None:
-                return []
-        return await fetch_bandwidth_timeseries(
+                result: list[dict[str, Any]] = []
+                if use_cache:
+                    self._set_dashboard_cache(key, result)
+                return result
+        result = await fetch_bandwidth_timeseries(
             self._db,
             time_range.start_str(),
             time_range.end_str(),
             account_id=account_id,
         )
+        if use_cache:
+            self._set_dashboard_cache(key, result)
+        return result
 
     async def get_error_breakdown(
         self, time_range: TimeRange, limit: int = 20
@@ -477,13 +491,21 @@ class StatsService:
             self._db, time_range.start_str(), time_range.end_str()
         )
 
-    async def get_ping_summary(self, time_range: TimeRange) -> list[dict[str, Any]]:
+    async def get_ping_summary(
+        self, time_range: TimeRange, *, use_cache: bool = False
+    ) -> list[dict[str, Any]]:
         """Get per-provider ping summary: avg/min/max latency, success rate."""
         if self._ping_repo is None:
             return []
-        return await self._ping_repo.get_provider_ping_summary(
+        key = self._dashboard_cache_key("pings", time_range)
+        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
+            return cast("list[dict[str, Any]]", cached)
+        result = await self._ping_repo.get_provider_ping_summary(
             time_range.start_str(), time_range.end_str()
         )
+        if use_cache:
+            self._set_dashboard_cache(key, result)
+        return result
 
     async def get_ping_timeseries(
         self,
@@ -511,8 +533,16 @@ class StatsService:
             return []
         return await self._ping_repo.get_ping_recent(provider_id, limit)
 
-    async def get_ip_stats(self, time_range: TimeRange) -> list[dict[str, Any]]:
+    async def get_ip_stats(
+        self, time_range: TimeRange, *, use_cache: bool = False
+    ) -> list[dict[str, Any]]:
         """Get per-IP statistics for a time window."""
-        return await fetch_ip_stats(
+        key = self._dashboard_cache_key("ips", time_range)
+        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
+            return cast("list[dict[str, Any]]", cached)
+        result = await fetch_ip_stats(
             self._db, time_range.start_str(), time_range.end_str()
         )
+        if use_cache:
+            self._set_dashboard_cache(key, result)
+        return result

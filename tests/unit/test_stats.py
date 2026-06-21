@@ -1071,9 +1071,16 @@ class TestTTFTProviderModelQueries:
 
 class TestDashboardStatsCache:
     @pytest.mark.asyncio()
-    async def test_summary_cache_is_bounded_and_returns_a_copy(
+    async def test_summary_cache_is_bounded_and_reuses_reference(
         self, db: Database
     ) -> None:
+        """Cache returns the same reference on hits; callers must not mutate.
+
+        The dashboard cache intentionally avoids a ``deepcopy`` on every
+        hit to keep page rendering cheap; cached data is read-only by
+        contract and any consumer that mutates the returned value will
+        observe the mutation on subsequent calls within the TTL window.
+        """
         service = StatsService(db)
         time_range = TimeRange(
             start=datetime(2025, 1, 1, tzinfo=UTC),
@@ -1087,12 +1094,73 @@ class TestDashboardStatsCache:
             new=AsyncMock(return_value=expected),
         ) as fetch:
             first = await service.get_summary(time_range, use_cache=True)
-            first["total_requests"] = 99
             second = await service.get_summary(time_range, use_cache=True)
 
-        assert second["total_requests"] == 10
+        assert second is first
         fetch.assert_awaited_once()
         assert len(service._dashboard_cache) <= 32
+
+    @pytest.mark.asyncio()
+    async def test_bandwidth_cache_serves_repeated_lookups(self, db: Database) -> None:
+        """The 90-day heatmap query is served from the dashboard cache."""
+        service = StatsService(db)
+        time_range = TimeRange(
+            start=datetime(2025, 1, 1, tzinfo=UTC),
+            end=datetime(2025, 1, 2, tzinfo=UTC),
+            label="90d",
+        )
+
+        with patch(
+            "eggpool.stats.service.fetch_bandwidth_timeseries",
+            new=AsyncMock(return_value=[{"day": "2025-01-01"}]),
+        ) as fetch:
+            first = await service.get_bandwidth_timeseries(time_range, use_cache=True)
+            second = await service.get_bandwidth_timeseries(time_range, use_cache=True)
+
+        assert second is first
+        fetch.assert_awaited_once()
+
+    @pytest.mark.asyncio()
+    async def test_ping_summary_cache(self, db: Database) -> None:
+        """Ping summary hits the dashboard cache on repeat lookups."""
+        from unittest.mock import MagicMock
+
+        repo = MagicMock()
+        repo.get_provider_ping_summary = AsyncMock(
+            return_value=[{"provider_id": "opencode-go"}]
+        )
+        service = StatsService(db, ping_repo=repo)
+        time_range = TimeRange(
+            start=datetime(2025, 1, 1, tzinfo=UTC),
+            end=datetime(2025, 1, 2, tzinfo=UTC),
+            label="24h",
+        )
+
+        first = await service.get_ping_summary(time_range, use_cache=True)
+        second = await service.get_ping_summary(time_range, use_cache=True)
+
+        assert second is first
+        repo.get_provider_ping_summary.assert_awaited_once()
+
+    @pytest.mark.asyncio()
+    async def test_ip_stats_cache(self, db: Database) -> None:
+        """IP stats hits the dashboard cache on repeat lookups."""
+        service = StatsService(db)
+        time_range = TimeRange(
+            start=datetime(2025, 1, 1, tzinfo=UTC),
+            end=datetime(2025, 1, 2, tzinfo=UTC),
+            label="24h",
+        )
+
+        with patch(
+            "eggpool.stats.service.fetch_ip_stats",
+            new=AsyncMock(return_value=[{"client_ip": "127.0.0.1"}]),
+        ) as fetch:
+            first = await service.get_ip_stats(time_range, use_cache=True)
+            second = await service.get_ip_stats(time_range, use_cache=True)
+
+        assert second is first
+        fetch.assert_awaited_once()
 
 
 class TestTTFTStatsService:

@@ -600,33 +600,36 @@ def create_app(
         register_stats_routes(app, require_auth=dashboard_require_auth)
 
         @app.get("/static/dashboard.css")
-        async def dashboard_css() -> FileResponse:  # pyright: ignore[reportUnusedFunction]
+        async def dashboard_css() -> Response:  # pyright: ignore[reportUnusedFunction]
             css_path: Path = (
                 Path(__file__).parent / "dashboard" / "static" / "dashboard.css"
             )
             return FileResponse(
                 path=str(css_path),
                 media_type="text/css",
+                headers={"Cache-Control": "public, max-age=300"},
             )
 
         @app.get("/static/favicon.svg")
-        async def favicon_svg() -> FileResponse:  # pyright: ignore[reportUnusedFunction]
+        async def favicon_svg() -> Response:  # pyright: ignore[reportUnusedFunction]
             svg_path: Path = (
                 Path(__file__).parent / "dashboard" / "static" / "favicon.svg"
             )
             return FileResponse(
                 path=str(svg_path),
                 media_type="image/svg+xml",
+                headers={"Cache-Control": "public, max-age=86400"},
             )
 
         @app.get("/static/chart.js")
-        async def chart_js() -> FileResponse:  # pyright: ignore[reportUnusedFunction]
+        async def chart_js() -> Response:  # pyright: ignore[reportUnusedFunction]
             js_path: Path = (
                 Path(__file__).parent / "dashboard" / "static" / "chart.umd.min.js"
             )
             return FileResponse(
                 path=str(js_path),
                 media_type="application/javascript",
+                headers={"Cache-Control": "public, max-age=86400"},
             )
 
         # LRU cache for theme CSS: keeps last 3 used themes, TTL 300s for non-active
