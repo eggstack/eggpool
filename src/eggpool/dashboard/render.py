@@ -108,17 +108,10 @@ def _render_layout(
      aria-hidden="true" focusable="false">
   <path class="egg-shell"
         d="M 800 80
-           C 920 80, 1020 160, 1080 290
-           C 1140 420, 1140 590, 1080 720
-           C 1010 830, 900 840, 800 840
-           C 700 840, 590 830, 520 720
-           C 460 590, 460 420, 520 290
-           C 580 160, 680 80, 800 80 Z" />
-  <path class="egg-crack"
-        d="M 460 400 L 530 340 L 590 400 L 660 330 L 740 400
-           L 820 330 L 900 400 L 980 330 L 1050 400 L 1110 340 L 1150 400" />
-  <path class="egg-crack"
-        d="M 620 540 L 670 510 L 730 545 L 790 510 L 850 545 L 910 515" />
+           C 960 80, 1100 280, 1140 460
+           C 1180 640, 1040 830, 800 830
+           C 560 830, 420 640, 460 460
+           C 500 280, 640 80, 800 80 Z" />
 </svg>
 <header class="topbar">
   <h1><a href="/?period={_html_escape(period)}&amp;theme={

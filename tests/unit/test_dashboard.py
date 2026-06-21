@@ -209,12 +209,10 @@ class TestRenderOverview:
         assert 'viewBox="0 0 1600 900"' in html
         assert 'preserveAspectRatio="xMidYMid slice"' in html
         assert 'aria-hidden="true"' in html
-        # Egg shell with fill (the hatching egg body)
+        # Single egg-shell path, no crack or yolk
         assert 'class="egg-shell"' in html
-        # At least one crack (we have a main zigzag and a secondary one)
-        assert 'class="egg-crack"' in html
-        assert html.count('class="egg-crack"') >= 1
-        # No more sunny-side-up yolk circle
+        assert html.count('class="egg-shell"') == 1
+        assert 'class="egg-crack"' not in html
         assert "<circle" not in html
         # Egg SVG should be the first child of <body>, before the topbar
         body_open = html.index("<body>")
@@ -1199,10 +1197,10 @@ class TestDashboardStylesheet:
         assert ".egg-background" in css
         assert "position: fixed" in css
         assert "pointer-events: none" in css
-        # The hatching egg has a shell with fill and a separate crack
+        # The egg is a single outline (no fill, no crack)
         assert ".egg-shell" in css
-        assert ".egg-crack" in css
-        assert "fill:" in css
+        assert "fill: none" in css
+        assert ".egg-crack" not in css
         # Egg color must track the theme via CSS variables (no hardcoded hex)
         assert "var(--page-bg)" in css
         assert "var(--page-text)" in css

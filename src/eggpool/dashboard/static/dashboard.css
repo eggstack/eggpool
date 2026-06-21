@@ -63,23 +63,15 @@ body::before {
   height: 100%;
   pointer-events: none;
   z-index: 0;
-  opacity: 0.55;
+  opacity: 0.45;
 }
 
 .egg-shell {
-  fill: color-mix(in srgb, var(--page-bg) 85%, var(--page-text) 15%);
-  stroke: color-mix(in srgb, var(--page-bg) 55%, var(--page-text) 45%);
+  fill: none;
+  stroke: color-mix(in srgb, var(--page-bg) 50%, var(--page-text) 50%);
   stroke-width: 3;
   stroke-linejoin: round;
   stroke-linecap: round;
-}
-
-.egg-crack {
-  fill: none;
-  stroke: color-mix(in srgb, var(--page-bg) 45%, var(--page-text) 55%);
-  stroke-width: 3;
-  stroke-linejoin: miter;
-  stroke-linecap: square;
 }
 
 header.topbar {
