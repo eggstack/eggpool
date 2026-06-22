@@ -111,6 +111,10 @@ echo "  uv found"
 # Install dependencies
 echo ""
 echo "Installing dependencies..."
+# Pre-create the venv with -S to avoid loading broken system .pth files
+# (common on Debian where /usr/lib/python3/dist-packages/ has old .pth files
+# that are incompatible with Python 3.12+).
+PYTHONPATH= PYTHONNOUSERSITE=1 "$PYTHON" -S -m venv .venv 2>/dev/null || true
 uv sync --extra dev
 
 # Copy example configuration if it doesn't exist
@@ -140,11 +144,12 @@ echo ""
 # Prefer stdin when it is already interactive; otherwise reconnect the prompt
 # to the controlling terminal. Keep the existing EOF/skip behavior when no
 # controlling terminal is available (for example, in unattended installs).
+# Use -S to avoid processing broken system .pth files (see above).
 if [ -t 0 ]; then
-    $PYTHON "${SCRIPTS_DIR}/install_prompt.py"
+    "$PYTHON" -S "${SCRIPTS_DIR}/install_prompt.py"
 elif { exec 3</dev/tty; } 2>/dev/null; then
-    $PYTHON "${SCRIPTS_DIR}/install_prompt.py" <&3
+    "$PYTHON" -S "${SCRIPTS_DIR}/install_prompt.py" <&3
     exec 3<&-
 else
-    $PYTHON "${SCRIPTS_DIR}/install_prompt.py"
+    "$PYTHON" -S "${SCRIPTS_DIR}/install_prompt.py"
 fi
