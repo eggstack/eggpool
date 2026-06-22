@@ -90,6 +90,7 @@ class _TransportState:
             self.captured["models"] = {
                 "headers": dict(request.headers),
                 "body": request.content,
+                "url": str(request.url),
             }
             return httpx.Response(
                 200,
@@ -755,6 +756,196 @@ probe_protocol = "openai"
         assert "openai: " in captured.out
         assert "[FAIL]" in captured.out
         assert "[OK]" in captured.out
+
+
+class TestProviderContractParity:
+    """Config-mode verification must match production provider contracts."""
+
+    def test_custom_auth_header_is_redacted_from_verbose_output(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        state = _capture_transport()
+        _install_mock_client(monkeypatch, state)
+        client = verify_upstream_auth._make_client()
+        try:
+            results = verify_upstream_auth._verify_config_provider(
+                client,
+                {
+                    "id": "custom",
+                    "base_url": "https://api.example.com/v1",
+                    "models_path": "/models",
+                    "auth": {"mode": "api_key", "header": "X-Custom-Token"},
+                },
+                UPSTREAM_KEY,
+                "default",
+                None,
+                None,
+                True,
+            )
+        finally:
+            client.close()
+
+        assert all(result.ok for result in results)
+        captured = capsys.readouterr()
+        assert UPSTREAM_KEY not in captured.out
+        assert "'x-custom-token': '***'" in captured.out
+
+    def test_static_headers_are_sent_and_redacted(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        static_secret = "provider-static-secret"
+        monkeypatch.setenv("PROVIDER_STATIC_SECRET", static_secret)
+        state = _capture_transport()
+        _install_mock_client(monkeypatch, state)
+        client = verify_upstream_auth._make_client()
+        try:
+            results = verify_upstream_auth._verify_config_provider(
+                client,
+                {
+                    "id": "custom",
+                    "base_url": "https://api.example.com/v1",
+                    "models_path": "/models",
+                    "auth": {"mode": "none"},
+                    "headers": [
+                        {"name": "X-Inline", "value": "inline-value"},
+                        {
+                            "name": "X-Provider-Secret",
+                            "value_env": "PROVIDER_STATIC_SECRET",
+                        },
+                    ],
+                },
+                "",
+                "default",
+                None,
+                None,
+                True,
+            )
+        finally:
+            client.close()
+
+        assert all(result.ok for result in results)
+        request_headers = state.get("models")["headers"]
+        assert request_headers["x-inline"] == "inline-value"
+        assert request_headers["x-provider-secret"] == static_secret
+        captured = capsys.readouterr()
+        assert static_secret not in captured.out
+        assert "inline-value" not in captured.out
+        assert "'x-provider-secret': '***'" in captured.out
+
+    def test_explicit_models_endpoint_wins_over_legacy_fields(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        state = _capture_transport()
+        _install_mock_client(monkeypatch, state)
+        client = verify_upstream_auth._make_client()
+        try:
+            results = verify_upstream_auth._verify_config_provider(
+                client,
+                {
+                    "id": "custom",
+                    "base_url": "https://api.example.com/v1",
+                    "models_method": "GET",
+                    "models_path": "/legacy-models",
+                    "models_endpoint": {
+                        "method": "POST",
+                        "path": "/models/list",
+                        "body": {"limit": 1},
+                    },
+                    "auth": {"mode": "none"},
+                },
+                "",
+                "default",
+                None,
+                None,
+                False,
+            )
+        finally:
+            client.close()
+
+        assert all(result.ok for result in results)
+        assert results[0].resolved_url == "https://api.example.com/v1/models/list"
+        assert state.get("models")["body"] == b'{"limit":1}'
+
+    def test_model_query_values_are_redacted_from_verbose_output(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        query_secret = "secret-query-token"
+        state = _capture_transport()
+        _install_mock_client(monkeypatch, state)
+        client = verify_upstream_auth._make_client()
+        try:
+            results = verify_upstream_auth._verify_config_provider(
+                client,
+                {
+                    "id": "custom",
+                    "base_url": "https://api.example.com/v1",
+                    "models_endpoint": {
+                        "method": "GET",
+                        "path": "/models",
+                        "query": {"api_key": query_secret},
+                    },
+                    "auth": {"mode": "none"},
+                },
+                "",
+                "default",
+                None,
+                None,
+                True,
+            )
+        finally:
+            client.close()
+
+        assert all(result.ok for result in results)
+        assert query_secret in state.get("models")["url"]
+        captured = capsys.readouterr()
+        assert query_secret not in captured.out
+        assert "api_key=%2A%2A%2A" in captured.out
+
+    def test_missing_enabled_account_key_fails_closed(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        cfg_path = tmp_path / "config.toml"
+        cfg_path.write_text(
+            """\
+[providers.custom]
+id = "custom"
+base_url = "https://api.example.com/v1"
+models_path = "/models"
+
+[[providers.custom.accounts]]
+name = "default"
+api_key_env = "MISSING_CUSTOM_KEY"
+"""
+        )
+        monkeypatch.delenv("MISSING_CUSTOM_KEY", raising=False)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "verify_upstream_auth",
+                "--config",
+                str(cfg_path),
+                "--provider",
+                "custom",
+                "--verbose",
+            ],
+        )
+
+        rc = verify_upstream_auth.main()
+
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert "no API key available" in captured.out
+        assert "All 0 checks passed" not in captured.out
 
 
 def test_config_mode_verifies_none_auth_without_api_key(
