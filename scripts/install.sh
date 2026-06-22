@@ -40,7 +40,7 @@ find_python() {
         local candidate="python3.${minor}"
         if command -v "$candidate" &> /dev/null; then
             local ver
-            ver=$("$candidate" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null) || continue
+            ver=$("$candidate" -S -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null) || continue
             local maj min
             maj=$(echo "$ver" | cut -d. -f1)
             min=$(echo "$ver" | cut -d. -f2)
@@ -54,7 +54,7 @@ find_python() {
     # Fallback to bare python3
     if command -v python3 &> /dev/null; then
         local ver
-        ver=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null) || true
+        ver=$(python3 -S -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null) || true
         local maj min
         maj=$(echo "$ver" | cut -d. -f1)
         min=$(echo "$ver" | cut -d. -f2)
