@@ -162,7 +162,7 @@ def test_all_limit_fields() -> None:
     assert limit == {"context": 200000, "input": 180000, "output": 16384}
 
 
-def test_json_only_output_round_trips() -> None:
+def test_output_is_valid_json() -> None:
     """build_opencode_config_json output is pure JSON that round-trips."""
     output = build_opencode_config_json(
         base_url="http://host:8080/v1",
@@ -180,8 +180,8 @@ def test_json_only_output_round_trips() -> None:
     assert "\n" not in output.split("\n")[0] or output.strip().startswith("{")
 
 
-def test_json_only_no_status_contamination() -> None:
-    """Status messages do not contaminate JSON-only output."""
+def test_output_no_status_contamination() -> None:
+    """Status messages do not contaminate JSON output."""
     output = build_opencode_config_json(
         base_url="http://host:8080/v1",
         api_key="ep_key",

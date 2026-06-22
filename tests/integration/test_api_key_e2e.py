@@ -413,15 +413,14 @@ class TestConfigSetup:
                 str(config_path),
                 "configsetup",
                 "opencode",
-                "--json-only",
             ],
         )
 
         assert result.exit_code == 0
-        assert SERVER_KEY in result.output
+        assert SERVER_KEY in result.stdout
 
-        # The entire stdout is the JSON snippet
-        snippet = json.loads(result.output)
+        # stdout is the JSON snippet
+        snippet = json.loads(result.stdout)
         assert snippet["provider"]["eggpool"]["options"]["apiKey"] == SERVER_KEY
         assert "11300" in snippet["provider"]["eggpool"]["options"]["baseURL"]
 

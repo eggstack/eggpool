@@ -514,15 +514,14 @@ class TestConfigSetup:
                 str(config_path),
                 "configsetup",
                 "opencode",
-                "--json-only",
             ],
         )
 
         assert result.exit_code == 0
-        assert "ep_existing_key_123" in result.output
-        assert "8080" in result.output
+        assert "ep_existing_key_123" in result.stdout
+        assert "8080" in result.stdout
         # Should use LAN IP, not localhost
-        assert "localhost" not in result.output
+        assert "localhost" not in result.stdout
 
     def test_configsetup_opencode_auto_generates_key(self, tmp_path):
         """configsetup opencode auto-generates key if not present."""
@@ -539,14 +538,13 @@ class TestConfigSetup:
                 str(config_path),
                 "configsetup",
                 "opencode",
-                "--json-only",
             ],
         )
 
         assert result.exit_code == 0
         # Key is in the snippet
-        assert "ep_" in result.output
-        assert "9090" in result.output
+        assert "ep_" in result.stdout
+        assert "9090" in result.stdout
 
         # Verify key was written to config
         key = _read_server_api_key(str(config_path))
@@ -569,14 +567,13 @@ class TestConfigSetup:
                 str(config_path),
                 "configsetup",
                 "opencode",
-                "--json-only",
             ],
         )
 
         assert result.exit_code == 0
 
-        # The entire stdout is the JSON snippet
-        snippet = json.loads(result.output)
+        # stdout contains only the JSON snippet
+        snippet = json.loads(result.stdout)
 
         assert snippet["provider"]["eggpool"]["options"]["apiKey"] == "ep_test_key"
         assert "11300" in snippet["provider"]["eggpool"]["options"]["baseURL"]
@@ -723,13 +720,12 @@ class TestConfigSetup:
                 str(config_path),
                 "configsetup",
                 "opencode",
-                "--json-only",
             ],
         )
 
         # Should succeed despite duplicate account names
         assert result.exit_code == 0
-        assert "ep_server_key" in result.output
+        assert "ep_server_key" in result.stdout
 
     def test_configsetup_does_not_overwrite_full_config(self, tmp_path):
         """configsetup only adds api_key, does not rewrite the entire file."""

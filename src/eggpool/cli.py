@@ -462,14 +462,8 @@ def _copy_to_clipboard(text: str) -> bool:
 
 
 @configsetup.command("opencode")
-@click.option(
-    "--json-only",
-    is_flag=True,
-    default=False,
-    help="Print only JSON to stdout (no status messages).",
-)
 @click.pass_context
-def configsetup_opencode(ctx: click.Context, json_only: bool) -> None:
+def configsetup_opencode(ctx: click.Context) -> None:
     """Print OpenCode config for connecting to this router."""
     import json as _json
 
@@ -560,13 +554,12 @@ def configsetup_opencode(ctx: click.Context, json_only: bool) -> None:
                     "output_source": eff.output_source,
                 }
     except Exception:
-        if not json_only:
-            click.echo(
-                "Warning: Could not load catalog. Run 'eggpool models refresh' "
-                "or start the server to populate the catalog before generating "
-                "model-specific limits.",
-                err=True,
-            )
+        click.echo(
+            "Warning: Could not load catalog. Run 'eggpool models refresh' "
+            "or start the server to populate the catalog before generating "
+            "model-specific limits.",
+            err=True,
+        )
 
     config_json = build_opencode_config_json(
         base_url=base_url,
@@ -574,19 +567,15 @@ def configsetup_opencode(ctx: click.Context, json_only: bool) -> None:
         models=models_data,
     )
 
-    # When --json-only is set, emit the snippet to stdout. Otherwise
-    # only write the key-bearing snippet to the clipboard and report
-    # status to stderr so the API key never lands in terminal scrollback.
-    if json_only:
-        click.echo(config_json)
-        return
+    # Print the config to stdout (contains the API key) and also try to
+    # copy it to the clipboard so the user can paste it directly.
+    click.echo(config_json)
 
     if _copy_to_clipboard(config_json):
         click.echo("Copied config to clipboard.", err=True)
     else:
         click.echo(
-            "Could not copy to clipboard. Re-run with --json-only to "
-            "print the config (contains the API key).",
+            "Could not copy to clipboard. Use the printed config above.",
             err=True,
         )
 
