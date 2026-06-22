@@ -20,6 +20,7 @@ from eggpool.errors import AggregatorError
 from eggpool.logging import configure_logging
 from eggpool.models.config import AppConfig
 from eggpool.providers.client_pool import ProviderClientPool
+from eggpool.providers.contract import PROVIDER_STATUS_SYMBOLS
 
 
 @click.group(invoke_without_command=True)
@@ -155,8 +156,7 @@ def connect_list(ctx: click.Context) -> None:
         status = tmpl.get("status", "unverified")
         notes = tmpl.get("notes", "")
         marker = "*" if tmpl.get("recommended") else " "
-        status_labels = {"verified": "✓", "experimental": "~", "unverified": "?"}
-        status_label = status_labels.get(status, "?")
+        status_label = PROVIDER_STATUS_SYMBOLS.get(status, "?")
         note_str = f" — {notes}" if notes else ""
         display_line = (
             f"  {marker} {provider_id}: {tmpl['display']}"
@@ -176,6 +176,7 @@ def connect_list(ctx: click.Context) -> None:
     click.echo(
         f"\n  {verified} verified, {experimental} experimental, {unverified} unverified"
     )
+    click.echo("  ✓ verified  ~ experimental  ? unverified")
 
 
 @cli.command()

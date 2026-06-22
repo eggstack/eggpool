@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from eggpool.constants import DEFAULT_PROVIDER_ID
+from eggpool.providers.contract import PROVIDER_STATUS_SYMBOLS
 
 _REGISTRY_METADATA_FIELDS = frozenset(
     {
@@ -885,8 +886,7 @@ def connect(
     provider_ids: list[str] = []
     for pid, tmpl in templates.items():
         status = tmpl.get("status", "unverified")
-        status_labels = {"verified": "✓", "experimental": "~", "unverified": "?"}
-        status_label = status_labels.get(status, "?")
+        status_label = PROVIDER_STATUS_SYMBOLS.get(status, "?")
         options.append(f"[{status_label}] {tmpl['display']}  ({tmpl['url']})")
         provider_ids.append(pid)
 

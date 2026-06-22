@@ -7,6 +7,20 @@ from typing import TYPE_CHECKING
 
 from eggpool.errors import ConfigError
 
+# Provider verification status tiers.  Used by the CLI and interactive
+# connect flow to label each provider with a symbol and human description.
+PROVIDER_STATUS_SYMBOLS: dict[str, str] = {
+    "verified": "✓",
+    "experimental": "~",
+    "unverified": "?",
+}
+
+PROVIDER_STATUS_DESCRIPTIONS: dict[str, str] = {
+    "verified": "live-tested and confirmed working",
+    "experimental": "plausible but needs verification",
+    "unverified": "not tested",
+}
+
 if TYPE_CHECKING:
     from eggpool.models.config import ProviderConfig, ProviderStaticHeaderConfig
 
