@@ -468,3 +468,107 @@ mode = "bearer"
 [providers.moonshot.verify]
 probe_protocol = "openai"
 require_models = false
+
+[providers.deepseek]
+# DeepSeek — direct OpenAI-compatible API
+id = "deepseek"
+base_url = "https://api.deepseek.com"
+protocols = ["openai"]
+api_key_env = "API_KEY"
+display_name = "DeepSeek"
+status = "verified"
+category = "direct"
+region = "CN"
+recommended = true
+notes = "Direct API; OpenAI-compatible chat completions"
+
+[providers.deepseek.auth]
+mode = "bearer"
+
+[providers.deepseek.verify]
+probe_model = "deepseek-v4-flash"
+probe_protocol = "openai"
+require_models = true
+
+[providers.together]
+# Together AI — OpenAI-compatible open-model inference
+id = "together"
+base_url = "https://api.together.ai/v1"
+protocols = ["openai"]
+api_key_env = "API_KEY"
+display_name = "Together AI"
+status = "verified"
+category = "direct"
+region = "US"
+recommended = true
+notes = "Broad serverless open-model catalog"
+
+[providers.together.auth]
+mode = "bearer"
+
+[providers.together.verify]
+probe_model = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+probe_protocol = "openai"
+require_models = true
+
+[providers.fireworks]
+# Fireworks AI — OpenAI-compatible open-model inference
+id = "fireworks"
+base_url = "https://api.fireworks.ai/inference/v1"
+protocols = ["openai"]
+api_key_env = "API_KEY"
+display_name = "Fireworks AI"
+status = "verified"
+category = "direct"
+region = "US"
+recommended = true
+notes = "Fast serverless inference for open models"
+
+[providers.fireworks.auth]
+mode = "bearer"
+
+[providers.fireworks.verify]
+probe_model = "accounts/fireworks/models/deepseek-v3p1"
+probe_protocol = "openai"
+require_models = true
+
+[providers.alibaba]
+# Alibaba Qwen — OpenAI-compatible Model Studio API (Beijing)
+id = "alibaba"
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+protocols = ["openai"]
+api_key_env = "API_KEY"
+display_name = "Alibaba Qwen"
+status = "verified"
+category = "direct"
+region = "CN"
+recommended = true
+notes = "Beijing endpoint; use the regional base URL matching the API key"
+
+[providers.alibaba.auth]
+mode = "bearer"
+
+[providers.alibaba.verify]
+probe_model = "qwen-plus"
+probe_protocol = "openai"
+require_models = true
+
+[providers.novita]
+# Novita AI — OpenAI-compatible open-model inference
+id = "novita"
+base_url = "https://api.novita.ai/openai"
+protocols = ["openai"]
+api_key_env = "API_KEY"
+display_name = "Novita AI"
+status = "experimental"
+category = "direct"
+region = "global"
+recommended = false
+notes = "Confirm base URL, model listing, and SSE behavior before production"
+
+[providers.novita.auth]
+mode = "bearer"
+
+[providers.novita.verify]
+probe_protocol = "openai"
+require_models = false

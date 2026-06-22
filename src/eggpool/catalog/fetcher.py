@@ -76,8 +76,8 @@ async def fetch_models_for_account(
                 error=None,
                 model_count=0,
             )
-        method = provider_cfg.models_method
-        path = provider_cfg.models_path
+        method = endpoint.method if endpoint is not None else provider_cfg.models_method
+        path = endpoint.path if endpoint is not None else provider_cfg.models_path
         url = compose_provider_url(provider_cfg, path)
         headers = {**auth_headers, "Accept": "application/json"}
         body = endpoint.body if endpoint is not None else None

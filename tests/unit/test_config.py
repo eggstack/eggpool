@@ -260,6 +260,40 @@ def test_raw_authorization_allows_bearer_prefixed_value() -> None:
     config.validate_account_credentials()
 
 
+def test_none_auth_accepts_account_without_key() -> None:
+    config = AppConfig.from_dict(
+        {
+            "providers": {
+                "local": {
+                    "id": "local",
+                    "base_url": "http://localhost:11434/v1",
+                    "auth": {"mode": "none"},
+                    "accounts": [{"name": "local-default"}],
+                }
+            }
+        }
+    )
+
+    config.validate_account_credentials()
+    assert config.providers["local"].accounts[0].api_key is None
+    assert config.providers["local"].accounts[0].api_key_env == ""
+
+
+def test_authenticated_provider_rejects_account_without_key_source() -> None:
+    with pytest.raises(ConfigError, match="must set api_key or api_key_env"):
+        AppConfig.from_dict(
+            {
+                "providers": {
+                    "remote": {
+                        "id": "remote",
+                        "base_url": "https://api.example.com/v1",
+                        "accounts": [{"name": "remote-default"}],
+                    }
+                }
+            }
+        )
+
+
 def test_bearer_mode_case_insensitive_prefix_rejected() -> None:
     config = AppConfig.from_dict(
         {
@@ -374,6 +408,32 @@ def test_provider_models_method_rejects_unknown_method() -> None:
                         "id": "provider-a",
                         "base_url": "https://example.com",
                         "models_method": "POTS",
+                    }
+                }
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "api.example.com/v1",
+        "ftp://api.example.com/v1",
+        "https://user:secret@api.example.com/v1",
+        "https://api.example.com/v1?tenant=a",
+        "https://api.example.com/v1#models",
+        " https://api.example.com/v1",
+    ],
+)
+def test_provider_base_url_rejects_non_dispatchable_values(base_url: str) -> None:
+    with pytest.raises(ConfigError, match="base_url"):
+        AppConfig.from_dict(
+            {
+                "providers": {
+                    "invalid": {
+                        "id": "invalid",
+                        "base_url": base_url,
+                        "accounts": [{"name": "default", "api_key": "sk-test"}],
                     }
                 }
             }

@@ -55,7 +55,11 @@ class AccountRegistry:
                 api_key = acct_config.api_key or os.environ.get(
                     acct_config.api_key_env, ""
                 )
-                if acct_config.enabled and not api_key:
+                if (
+                    acct_config.enabled
+                    and provider_cfg.auth.mode != "none"
+                    and not api_key
+                ):
                     raise ConfigError(
                         f"Account {acct_config.name!r} is enabled but "
                         f"no API key available"
@@ -93,6 +97,16 @@ class AccountRegistry:
     def get_api_key(self, name: str) -> str | None:
         """Get the resolved API key for an account."""
         return self._api_keys.get(name)
+
+    def has_usable_credentials(self, name: str) -> bool:
+        """Return whether an account can satisfy its provider auth contract."""
+        provider_id = self._account_providers.get(name)
+        if provider_id is None:
+            return False
+        provider = self._config.providers.get(provider_id)
+        if provider is None:
+            return False
+        return provider.auth.mode == "none" or bool(self._api_keys.get(name))
 
     def get_all_states(self) -> list[AccountRuntimeState]:
         """Get all account runtime states."""

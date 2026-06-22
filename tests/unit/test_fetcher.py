@@ -185,6 +185,48 @@ class TestFetcherProviderAware:
         # The mock transport captures requests; we verify via the response
         # that the fetch succeeded with default Bearer auth
 
+    @pytest.mark.asyncio
+    async def test_explicit_models_endpoint_controls_method_and_path(self) -> None:
+        """The contract endpoint is authoritative over legacy defaults."""
+        from eggpool.models.config import (
+            ProviderConfig,
+            ProviderModelsEndpointConfig,
+        )
+
+        captured_requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured_requests.append(request)
+            return httpx.Response(200, json={"data": []}, request=request)
+
+        provider_cfg = ProviderConfig(
+            id="p",
+            base_url="https://api.example.com/v1",
+            models_endpoint=ProviderModelsEndpointConfig(
+                method="POST",
+                path="/catalog/list",
+                body={"active": True},
+                query={"limit": "25"},
+            ),
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            base_url="https://placeholder.invalid",
+        ) as client:
+            result = await fetch_models_for_account(
+                client,
+                "sk-test",
+                "acct1",
+                provider_cfg=provider_cfg,
+            )
+
+        assert result.error is None
+        assert len(captured_requests) == 1
+        request = captured_requests[0]
+        assert request.method == "POST"
+        assert str(request.url) == "https://api.example.com/v1/catalog/list?limit=25"
+        assert request.content == b'{"active":true}'
+
 
 class TestFetcherAndDispatchUrlConsistency:
     """Catalog fetcher and chat dispatch must use the same URL composition

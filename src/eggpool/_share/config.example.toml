@@ -85,7 +85,8 @@ persist_redacted_error_detail = false
 #
 # Manual configuration is possible but not recommended. If you prefer
 # editing this file directly, uncomment and customize the examples below.
-# Each account needs an `api_key` (inline) or `api_key_env` (env var name).
+# Authenticated providers need an `api_key` (inline) or `api_key_env` (env var
+# name). Providers with `auth.mode = "none"` need neither.
 
 # [providers.opencode-go]
 # id = "opencode-go"
@@ -461,7 +462,6 @@ persist_redacted_error_detail = false
 #
 # [[providers.ollama-local.accounts]]
 # name = "default"
-# api_key = "ollama"
 #
 # [providers.ollama-local.auth]
 # mode = "none"

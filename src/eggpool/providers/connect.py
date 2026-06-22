@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import select
 import signal
@@ -14,9 +15,20 @@ import tomllib
 import tty
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from eggpool.constants import DEFAULT_PROVIDER_ID
+
+_REGISTRY_METADATA_FIELDS = frozenset(
+    {
+        "display_name",
+        "status",
+        "category",
+        "region",
+        "recommended",
+        "notes",
+    }
+)
 
 
 def restart_server(config_path: str, timeout: float = 10.0) -> bool:
@@ -141,10 +153,14 @@ def load_provider_templates(
             continue
 
         provider_data: dict[str, Any] = dict(provider_data_raw)  # type: ignore[reportUnknownArgumentType]
-        raw_display: Any = provider_data.pop("_display", None)
+        raw_display: Any = provider_data.get(
+            "display_name", provider_data.pop("_display", None)
+        )
         display_name: str = str(raw_display) if raw_display is not None else provider_id
         raw_url: Any = provider_data.get("base_url", "")
         base_url: str = str(raw_url) if raw_url is not None else ""
+        for field in _REGISTRY_METADATA_FIELDS:
+            provider_data.pop(field, None)
         provider_data["id"] = provider_id
 
         # Extract the raw TOML block for this provider from the file
@@ -415,7 +431,7 @@ def collect_api_key(provider_name: str) -> str:
 def merge_provider_into_config(
     config_path: str,
     provider_data: dict[str, Any],
-    api_key: str,
+    api_key: str | None,
 ) -> bool:
     """Add a provider and account to the config TOML file.
 
@@ -437,7 +453,7 @@ def merge_provider_into_config(
 
     # Check if provider already exists
     existing_accounts = _get_existing_accounts(content, provider_id)
-    if existing_accounts is not None and len(existing_accounts) > 0:
+    if existing_accounts is not None:
         # Append new account to existing provider
         account_name = _unique_account_name(provider_id, all_names, total_count)
         content = _append_account(content, provider_id, account_name, api_key)
@@ -456,10 +472,11 @@ def merge_provider_into_config(
 def _get_existing_accounts(content: str, provider_id: str) -> list[str] | None:
     """Get existing account names for a provider. Returns None if not found."""
     # TOML array-of-tables uses [[providers.X.accounts]] syntax
+    provider_header = f"[providers.{provider_id}]"
     header_single = f"[providers.{provider_id}.accounts"
     header_double = f"[[providers.{provider_id}.accounts"
-    has_section = header_single in content or header_double in content
-    if not has_section:
+    has_provider = any(line.strip() == provider_header for line in content.split("\n"))
+    if not has_provider:
         return None
 
     accounts: list[str] = []
@@ -523,7 +540,7 @@ def _unique_account_name(
 def _format_provider_block(
     provider_id: str,
     data: dict[str, Any],
-    api_key: str,
+    api_key: str | None,
     account_name: str,
 ) -> str:
     """Format a provider config block as TOML text."""
@@ -533,11 +550,12 @@ def _format_provider_block(
             continue
         lines.append(f"{key} = {_toml_value(value)}")
 
-    # Add account with inline API key
+    # Add an account, including a key only for authenticated providers.
     lines.append("")
     lines.append(f"[[providers.{provider_id}.accounts]]")
-    lines.append(f'name = "{account_name}"')
-    lines.append(f'api_key = "{api_key}"')
+    lines.append(f"name = {_toml_value(account_name)}")
+    if api_key is not None:
+        lines.append(f"api_key = {_toml_value(api_key)}")
 
     return "\n".join(lines)
 
@@ -551,16 +569,18 @@ def _toml_value(value: Any) -> str:  # noqa: ANN401
     if isinstance(value, float):
         return str(value)
     if isinstance(value, str):
-        return f'"{value}"'
+        return json.dumps(value, ensure_ascii=False)
     if isinstance(value, list):
-        # pyright can't track types through map() on Any
-        result = (
-            "["
-            + ", ".join(f'"{item}"' for item in map(str, value))  # type: ignore[arg-type]
-            + "]"
+        items = cast("list[object]", value)
+        return "[" + ", ".join(_toml_value(item) for item in items) + "]"
+    if isinstance(value, dict):
+        mapping = cast("dict[object, object]", value)
+        fields = (
+            f"{json.dumps(str(key), ensure_ascii=False)} = {_toml_value(item)}"
+            for key, item in mapping.items()
         )
-        return result
-    return f'"{value}"'
+        return "{ " + ", ".join(fields) + " }"
+    raise TypeError(f"Unsupported TOML value type: {type(value).__name__}")
 
 
 def _insert_provider_block(content: str, block: str) -> str:
@@ -583,7 +603,7 @@ def _append_account(
     content: str,
     provider_id: str,
     account_name: str,
-    api_key: str,
+    api_key: str | None,
 ) -> str:
     """Append an account entry to an existing provider section."""
     lines = content.split("\n")
@@ -610,9 +630,10 @@ def _append_account(
     account_lines = [
         "",
         f"[[providers.{provider_id}.accounts]]",
-        f'name = "{account_name}"',
-        f'api_key = "{api_key}"',
+        f"name = {_toml_value(account_name)}",
     ]
+    if api_key is not None:
+        account_lines.append(f"api_key = {_toml_value(api_key)}")
 
     new_lines = lines[:insert_idx] + account_lines + lines[insert_idx:]
     return "\n".join(new_lines)
@@ -901,16 +922,25 @@ def connect(
         provider_id, all_existing_names, total_account_count
     )
 
-    # Prompt for API key
+    # Prompt only when the provider contract requires credentials.
     sys.stdout.write(f"\n  Provider: {tmpl['display']}\n")
-    api_key = collect_api_key(tmpl["display"])
-
-    if not api_key:
-        sys.stdout.write("  No API key provided. Aborted.\n")
-        return False
+    provider_data = cast("dict[str, Any]", tmpl["data"])
+    auth_value: object = provider_data.get("auth")
+    auth = cast("dict[str, object]", auth_value) if isinstance(auth_value, dict) else {}
+    auth_mode = str(auth.get("mode", "bearer"))
+    api_key: str | None = None
+    if auth_mode != "none":
+        api_key = collect_api_key(tmpl["display"])
+        if not api_key:
+            sys.stdout.write("  No API key provided. Aborted.\n")
+            return False
 
     # Check for duplicate API key
-    existing_provider = _check_duplicate_api_key(config_path, provider_id, api_key)
+    existing_provider = (
+        _check_duplicate_api_key(config_path, provider_id, api_key)
+        if api_key is not None
+        else None
+    )
     if existing_provider:
         sys.stdout.write(
             f"  Account with this API key exists for {existing_provider}.\n"
@@ -918,7 +948,7 @@ def connect(
         return False
 
     # Merge into config (writes api_key directly, no env var needed)
-    provider_data = tmpl["data"].copy()
+    provider_data = provider_data.copy()
     provider_data["id"] = provider_id
     ok = merge_provider_into_config(config_path, provider_data, api_key)
 

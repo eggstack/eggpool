@@ -755,3 +755,45 @@ probe_protocol = "openai"
         assert "openai: " in captured.out
         assert "[FAIL]" in captured.out
         assert "[OK]" in captured.out
+
+
+def test_config_mode_verifies_none_auth_without_api_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cfg_path = tmp_path / "config.toml"
+    cfg_path.write_text(
+        """\
+[providers.local]
+id = "local"
+base_url = "http://localhost:11434/v1"
+protocols = ["openai"]
+models_path = "/models"
+
+[[providers.local.accounts]]
+name = "default"
+
+[providers.local.auth]
+mode = "none"
+""",
+        encoding="utf-8",
+    )
+    state = _capture_transport()
+    _install_mock_client(monkeypatch, state)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "verify_upstream_auth",
+            "--config",
+            str(cfg_path),
+            "--provider",
+            "local",
+            "--verbose",
+        ],
+    )
+
+    assert verify_upstream_auth.main() == 0
+    assert "authorization" not in state.get("models")["headers"]
+    assert "auth=none" in capsys.readouterr().out

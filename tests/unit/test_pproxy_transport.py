@@ -30,7 +30,10 @@ async def test_pproxy_transport_sends_http_request() -> None:
         writer.close()
         await writer.wait_closed()
 
-    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    try:
+        server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    except PermissionError:
+        pytest.skip("runner does not permit binding a loopback test server")
     try:
         socket = server.sockets[0]
         host, port = socket.getsockname()[:2]

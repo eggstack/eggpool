@@ -541,7 +541,9 @@ class RequestCoordinator:
             account_name = selected_state.name
             try:
                 api_key = self._registry.get_api_key(account_name)
-                if not api_key or not api_key.strip():
+                if api_key is None or not self._registry.has_usable_credentials(
+                    account_name
+                ):
                     raise AuthenticationError(
                         f"API key not available for account {account_name!r}"
                     )

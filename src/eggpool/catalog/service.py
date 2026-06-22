@@ -122,10 +122,12 @@ class CatalogService:
             tasks: list[asyncio.Task[None]] = []
             for state in enabled_accounts:
                 api_key = self._registry.get_api_key(state.name)
-                if not api_key:
-                    continue
                 provider_id = self._registry.get_provider_for_account(state.name)
                 if provider_id is None:
+                    continue
+                if api_key is None or not self._registry.has_usable_credentials(
+                    state.name
+                ):
                     continue
 
                 # Get provider-specific client

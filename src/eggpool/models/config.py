@@ -6,6 +6,7 @@ import os
 import re
 import tomllib
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -169,12 +170,6 @@ class AccountConfig(BaseModel):
     proxy_url_env: str | None = None
 
     @model_validator(mode="after")
-    def validate_key_source(self) -> AccountConfig:
-        if not self.api_key and not self.api_key_env:
-            raise ConfigError(f"Account {self.name!r} must set api_key or api_key_env")
-        return self
-
-    @model_validator(mode="after")
     def validate_proxy_source(self) -> AccountConfig:
         configured = [
             value
@@ -272,6 +267,27 @@ class ProviderConfig(BaseModel):
     def normalize_models_method(cls, value: object) -> object:
         """Normalize supported HTTP methods before strict validation."""
         return value.strip().upper() if isinstance(value, str) else value
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url(cls, value: str) -> str:
+        """Require an absolute credential-free HTTP(S) provider URL."""
+        if value != value.strip() or any(char.isspace() for char in value):
+            raise ConfigError("Provider base_url must not contain whitespace")
+        try:
+            parsed = urlsplit(value)
+            _port = parsed.port
+        except ValueError as exc:
+            raise ConfigError(f"Invalid provider base_url {value!r}: {exc}") from exc
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ConfigError(
+                f"Provider base_url {value!r} must be an absolute HTTP(S) URL"
+            )
+        if parsed.username is not None or parsed.password is not None:
+            raise ConfigError("Provider base_url must not contain credentials")
+        if parsed.query or parsed.fragment:
+            raise ConfigError("Provider base_url must not contain a query or fragment")
+        return value
 
     @model_validator(mode="after")
     def validate_keepalive(self) -> ProviderConfig:
@@ -421,19 +437,26 @@ class AppConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_accounts(self) -> AppConfig:
-        names: list[str] = []
-        for acct in self.all_accounts():
-            if acct.name in names:
-                raise ConfigError(f"Duplicate account name: {acct.name!r}")
-            names.append(acct.name)
-            if acct.weight <= 0:
-                raise ConfigError(
-                    f"Account {acct.name!r} has non-positive weight: {acct.weight}"
-                )
-            if acct.proxy is not None and acct.proxy not in self.proxies:
-                raise ConfigError(
-                    f"Account {acct.name!r} references unknown proxy {acct.proxy!r}"
-                )
+        names: set[str] = set()
+        for provider in self.providers.values():
+            for acct in provider.accounts:
+                if acct.name in names:
+                    raise ConfigError(f"Duplicate account name: {acct.name!r}")
+                names.add(acct.name)
+                if provider.auth.mode != "none" and not (
+                    acct.api_key or acct.api_key_env
+                ):
+                    raise ConfigError(
+                        f"Account {acct.name!r} must set api_key or api_key_env"
+                    )
+                if acct.weight <= 0:
+                    raise ConfigError(
+                        f"Account {acct.name!r} has non-positive weight: {acct.weight}"
+                    )
+                if acct.proxy is not None and acct.proxy not in self.proxies:
+                    raise ConfigError(
+                        f"Account {acct.name!r} references unknown proxy {acct.proxy!r}"
+                    )
         return self
 
     def all_accounts(self) -> list[AccountConfig]:
@@ -453,10 +476,8 @@ class AppConfig(BaseModel):
         from eggpool.constants import PLACEHOLDER_API_KEYS
 
         for provider_id, provider in self.providers.items():
-            if provider.auth.mode != "bearer":
-                continue
             for acct in provider.accounts:
-                if not acct.enabled:
+                if not acct.enabled or provider.auth.mode == "none":
                     continue
                 raw_key = acct.api_key or os.environ.get(acct.api_key_env)
                 if not raw_key:
@@ -467,7 +488,10 @@ class AppConfig(BaseModel):
                         f"Provider {provider_id!r} account {acct.name!r}: "
                         f"{source} is not set"
                     )
-                if raw_key.strip().lower().startswith("bearer "):
+                if (
+                    provider.auth.mode == "bearer"
+                    and raw_key.strip().lower().startswith("bearer ")
+                ):
                     source = (
                         "api_key" if acct.api_key else f"env var {acct.api_key_env!r}"
                     )
@@ -477,16 +501,6 @@ class AppConfig(BaseModel):
                         "EggPool adds the Bearer scheme automatically."
                     )
 
-        for acct in self.all_accounts():
-            if acct.enabled:
-                raw_key = acct.api_key or os.environ.get(acct.api_key_env)
-                if not raw_key:
-                    source = (
-                        "api_key" if acct.api_key else f"env var {acct.api_key_env!r}"
-                    )
-                    raise ConfigError(
-                        f"Account {acct.name!r} is enabled but {source} is not set"
-                    )
                 if not raw_key.strip():
                     source = (
                         "api_key" if acct.api_key else f"env var {acct.api_key_env!r}"

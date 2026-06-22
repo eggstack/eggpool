@@ -69,6 +69,39 @@ class TestRestartServer:
         assert not pid_file.exists()
 
 
+def test_connect_none_auth_provider_does_not_prompt_for_api_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The interactive flow can configure a credential-free provider."""
+    from eggpool.models.config import AppConfig
+    from eggpool.providers import connect as connect_module
+
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    class SelectOllama:
+        def __init__(self, _title: str, options: list[str]) -> None:
+            self.options = options
+
+        def run(self) -> str:
+            return next(option for option in self.options if "Ollama (local)" in option)
+
+    def unexpected_prompt(_provider_name: str) -> str:
+        pytest.fail("auth.mode=none must not prompt for an API key")
+
+    monkeypatch.setattr(connect_module, "TerminalMenu", SelectOllama)
+    monkeypatch.setattr(connect_module, "collect_api_key", unexpected_prompt)
+    monkeypatch.setattr(connect_module, "restart_server", lambda _path: False)
+
+    assert connect_module.connect(str(config_path)) is True
+    config = AppConfig.from_toml(str(config_path))
+    config.validate_account_credentials()
+    provider = config.providers["ollama-local"]
+    assert provider.accounts[0].api_key is None
+    assert provider.accounts[0].api_key_env == ""
+
+
 class TestLoadProviderTemplates:
     """Tests for loading provider templates from TOML."""
 
@@ -135,6 +168,11 @@ class TestLoadProviderTemplates:
         templates = load_provider_templates(str(providers_toml))
         assert "opencode-go" in templates
         assert templates["opencode-go"]["display"] == "OpenCode Go"
+
+    def test_bundled_display_name_is_used(self) -> None:
+        templates = load_provider_templates()
+        assert templates["anthropic"]["display"] == "Anthropic"
+        assert "display_name" not in templates["anthropic"]["data"]
 
 
 class TestExtractRawBlock:
@@ -222,6 +260,14 @@ class TestTomlValue:
     def test_empty_list(self) -> None:
         assert _toml_value([]) == "[]"
 
+    def test_nested_dict(self) -> None:
+        assert _toml_value({"mode": "api_key", "enabled": True}) == (
+            '{ "mode" = "api_key", "enabled" = true }'
+        )
+
+    def test_string_is_escaped(self) -> None:
+        assert _toml_value('token"with\\characters') == ('"token\\"with\\\\characters"')
+
 
 class TestFormatProviderBlock:
     """Tests for formatting provider blocks as TOML."""
@@ -295,6 +341,44 @@ class TestFormatProviderBlock:
         assert len(config.providers["minimax"].accounts) == 1
         assert config.providers["minimax"].accounts[0].api_key == "MINIMAX_API_KEY"
 
+    def test_bundled_template_round_trips_with_contract_fields(
+        self, tmp_path: Path
+    ) -> None:
+        """Registry metadata is excluded and nested contracts remain typed."""
+        from eggpool.models.config import AppConfig
+
+        data = load_provider_templates()["anthropic"]["data"]
+        block = _format_provider_block(
+            "anthropic", data, 'secret"with\\escapes', "anthropic-0001"
+        )
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(block, encoding="utf-8")
+
+        config = AppConfig.from_toml(str(config_file))
+        provider = config.providers["anthropic"]
+        assert provider.auth.mode == "api_key"
+        assert provider.verify.probe_protocol == "anthropic"
+        assert provider.accounts[0].api_key == 'secret"with\\escapes'
+        assert "display_name" not in block
+        assert "status" not in block
+
+    def test_none_auth_provider_round_trips_without_fake_key(
+        self, tmp_path: Path
+    ) -> None:
+        """Credential-free providers emit an account with no key field."""
+        from eggpool.models.config import AppConfig
+
+        data = load_provider_templates()["ollama-local"]["data"]
+        block = _format_provider_block("ollama-local", data, None, "ollama-local-0001")
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(block, encoding="utf-8")
+
+        config = AppConfig.from_toml(str(config_file))
+        config.validate_account_credentials()
+        assert config.providers["ollama-local"].auth.mode == "none"
+        assert config.providers["ollama-local"].accounts[0].api_key is None
+        assert "api_key =" not in block
+
 
 class TestMergeProviderIntoConfig:
     """Tests for merging providers into config files."""
@@ -358,6 +442,32 @@ class TestMergeProviderIntoConfig:
         assert content.count("[[providers.minimax.accounts]]") == 2
         assert 'name = "minimax-0002"' in content
         assert 'api_key = "MINIMAX_API_KEY_2"' in content
+
+    def test_adds_first_account_without_duplicating_provider(
+        self, tmp_path: Path
+    ) -> None:
+        """An existing accountless provider remains a single TOML table."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(
+            textwrap.dedent("""\
+                [providers.minimax]
+                id = "minimax"
+                base_url = "https://api.minimaxi.com"
+            """),
+            encoding="utf-8",
+        )
+
+        ok = merge_provider_into_config(
+            str(config_file),
+            {"id": "minimax", "base_url": "https://api.minimaxi.com"},
+            "MINIMAX_API_KEY",
+        )
+
+        content = config_file.read_text(encoding="utf-8")
+        assert ok is True
+        assert content.count("[providers.minimax]") == 1
+        assert content.count("[[providers.minimax.accounts]]") == 1
+        assert 'api_key = "MINIMAX_API_KEY"' in content
 
     def test_preserves_existing_config(self, tmp_path: Path) -> None:
         """Preserves existing config sections when adding a provider."""

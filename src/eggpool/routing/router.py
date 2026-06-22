@@ -306,7 +306,7 @@ class Router:
             if not state.is_eligible():
                 continue
             # Check credential loaded
-            if not self._registry.get_api_key(state.name):
+            if not self._registry.has_usable_credentials(state.name):
                 continue
             # Check account-level health (disabled, cooled, etc.) so we
             # don't report an eligible pairing for an account that would

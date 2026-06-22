@@ -99,6 +99,27 @@ def test_account_registry_rejects_missing_key() -> None:
         config.validate_account_credentials()
 
 
+def test_account_registry_loads_none_auth_account_without_key() -> None:
+    config = AppConfig.from_dict(
+        {
+            "providers": {
+                "local": {
+                    "id": "local",
+                    "base_url": "http://localhost:11434/v1",
+                    "auth": {"mode": "none"},
+                    "accounts": [{"name": "local-default"}],
+                }
+            }
+        }
+    )
+
+    registry = AccountRegistry(config)
+
+    assert registry.get_api_key("local-default") == ""
+    assert registry.has_usable_credentials("local-default") is True
+    assert registry.has_usable_credentials("missing") is False
+
+
 def test_account_registry_disabled_skips_key_check() -> None:
     config = AppConfig.from_dict(
         {

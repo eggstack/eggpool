@@ -26,7 +26,7 @@ import sys
 import time
 import tomllib
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -307,11 +307,12 @@ def _verify_config_provider(
         ]
 
     auth_headers = _build_auth_headers(auth_mode, auth_header, auth_scheme, api_key)
-    auth_shape = (
-        f"{auth_header}: {auth_scheme} ***"
-        if auth_mode == "bearer"
-        else f"{auth_header}: ***"
-    )
+    if auth_mode == "none":
+        auth_shape = "none"
+    elif auth_mode == "bearer":
+        auth_shape = f"{auth_header}: {auth_scheme} ***"
+    else:
+        auth_shape = f"{auth_header}: ***"
 
     results: list[_AuthCheckResult] = []
 
@@ -666,6 +667,13 @@ def main() -> int:
         try:
             for pid in provider_ids:
                 prov = providers[pid]
+                auth_value: object = prov.get("auth")
+                auth_cfg = (
+                    cast("dict[str, object]", auth_value)
+                    if isinstance(auth_value, dict)
+                    else {}
+                )
+                auth_mode = str(auth_cfg.get("mode", "bearer"))
                 for acct in prov.get("accounts", []):
                     acct_name = acct.get("name", "default")
                     if args.account and acct_name != args.account:
@@ -673,7 +681,7 @@ def main() -> int:
                     api_key = acct.get("api_key") or os.environ.get(
                         acct.get("api_key_env", "")
                     )
-                    if not api_key:
+                    if not api_key and auth_mode != "none":
                         sys.stdout.write(
                             f"  [SKIP] {pid}/{acct_name}: no API key available\n"
                         )
@@ -682,7 +690,7 @@ def main() -> int:
                     results = _verify_config_provider(
                         c,
                         prov,
-                        api_key,
+                        api_key or "",
                         acct_name,
                         args.openai_model,
                         args.anthropic_model,

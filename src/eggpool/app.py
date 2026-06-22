@@ -736,7 +736,9 @@ def create_app(
         registry: AccountRegistry | None = getattr(request.app.state, "registry", None)
         if registry is not None:
             enabled_states = registry.get_enabled_states()
-            has_credentials = any(registry.get_api_key(s.name) for s in enabled_states)
+            has_credentials = any(
+                registry.has_usable_credentials(s.name) for s in enabled_states
+            )
             if not has_credentials:
                 return Response(
                     content='{"status":"degraded","reason":"no loaded credentials"}',

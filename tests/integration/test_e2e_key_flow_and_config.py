@@ -761,9 +761,26 @@ class TestConfigSetup:
         assert "custom.example.com" in content
         assert "api_key" in content
 
-    def test_configsetup_lan_ip_detection(self, tmp_path):
+    def test_configsetup_lan_ip_detection(self, tmp_path, monkeypatch):
         """configsetup detects LAN IP address."""
+        import socket
+
         from eggpool.cli import _detect_lan_ip
+
+        class FakeSocket:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def connect(self, _address):
+                return None
+
+            def getsockname(self):
+                return ("192.168.1.25", 12345)
+
+        monkeypatch.setattr(socket, "socket", lambda *_args: FakeSocket())
 
         lan_ip = _detect_lan_ip()
         # Should be a valid IP address

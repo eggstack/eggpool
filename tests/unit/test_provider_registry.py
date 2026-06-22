@@ -33,6 +33,40 @@ def provider_entries(registry: dict[str, dict[str, Any]]) -> dict[str, dict[str,
 
 
 class TestRegistryStructure:
+    def test_matches_documented_provider_roster(
+        self, provider_entries: dict[str, dict[str, Any]]
+    ) -> None:
+        expected = {
+            "alibaba",
+            "anthropic",
+            "cerebras",
+            "deepinfra",
+            "deepseek",
+            "featherless",
+            "fireworks",
+            "gemini",
+            "generalcompute",
+            "groq",
+            "hyperbolic",
+            "minimax",
+            "minimax-cn",
+            "mistral",
+            "moonshot",
+            "neuralwatt",
+            "novita",
+            "ollama-cloud",
+            "ollama-local",
+            "openai",
+            "opencode-go",
+            "openrouter",
+            "sambanova",
+            "siliconflow",
+            "together",
+            "xai",
+            "zai",
+        }
+        assert set(provider_entries) == expected
+
     def test_has_providers_section(self, registry: dict[str, Any]) -> None:
         assert "providers" in registry
         assert len(registry["providers"]) > 0
