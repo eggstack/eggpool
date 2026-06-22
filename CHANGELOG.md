@@ -18,8 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `connect`, `connect list`, `logout`, `accounts list`,
   `accounts status`, `models refresh`, `db vacuum`, `dashboard public`,
   `rehash`, `restart`, `stop`, `update`, `getkey`, `newkey`, `edit`,
-  `configsetup opencode`, `configsetup claude-code`, `set`, and the
-  `deploy` group (`systemd`, `logrotate`, `cron`, `all`).
+  `configsetup opencode`, `configsetup claude-code`, `set`,
+  `init-config`, and the `deploy` group (`systemd`, `logrotate`,
+  `cron`, `all`).
 - Operational scripts: `install.sh`, `install_prompt.py`,
   `check_database.py`, `smoke_test.py`, `verify_upstream_auth.py`.
 

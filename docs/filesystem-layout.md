@@ -19,14 +19,14 @@ Standard directories for a production deployment on Linux.
 
 /opt/eggpool/
 ├── .venv/               # Python virtual environment
-└── src/                 # Application source code
+└── src/eggpool/         # Application source code
 ```
 
 ## Permissions
 
 | Path | Owner | Mode | Description |
 |------|-------|------|-------------|
-| `/etc/eggpool/` | `root:root` | `0755` | Configuration directory |
+| `/etc/eggpool/` | `root:eggpool` | `0755` | Configuration directory |
 | `/etc/eggpool/config.toml` | `root:eggpool` | `0640` | Configuration file |
 | `/etc/eggpool/env` | `root:eggpool` | `0640` | Environment file (contains secrets) |
 | `/var/lib/eggpool/` | `eggpool:eggpool` | `0750` | Data directory |

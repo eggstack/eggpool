@@ -21,6 +21,13 @@ eggpool --version
 Then proceed to the Configuration section below. The bundled themes and
 provider templates ship inside the package — no extra files required.
 
+For pipx installs, use `eggpool init-config` to create a starter config:
+
+```bash
+sudo mkdir -p /etc/eggpool
+sudo eggpool init-config /etc/eggpool/config.toml
+```
+
 ## Prerequisites
 
 - Linux server (Debian/Ubuntu recommended)
