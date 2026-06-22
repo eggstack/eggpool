@@ -284,6 +284,11 @@ class QuotaEstimator:
     model_overrides: dict[str, tuple[float, float]] = field(
         default_factory=dict[str, tuple[float, float]]
     )
+    # Provider-specific pricing resolved to account names. Accounts belong to
+    # exactly one provider, so this keeps the hot estimate path lookup-only.
+    account_model_overrides: dict[str, dict[str, tuple[float, float]]] = field(
+        default_factory=dict[str, dict[str, tuple[float, float]]]
+    )
     # Config
     default_safety_factor: float = 1.15
     default_unknown_reservation_microdollars: int = 1_000_000
@@ -389,7 +394,9 @@ class QuotaEstimator:
             return max(cost, 1)
 
         # Tier 3: Configured per-model override
-        override = self.model_overrides.get(model_id)
+        override = self.account_model_overrides.get(account_name, {}).get(model_id)
+        if override is None:
+            override = self.model_overrides.get(model_id)
         if override is not None:
             input_rate, output_rate = override
             avg_rate = (input_rate + output_rate) / 2.0
@@ -516,6 +523,19 @@ class QuotaEstimator:
     ) -> None:
         """Set a configured per-model price override (Tier 4)."""
         self.model_overrides[model_id] = (input_price, output_price)
+
+    def set_account_model_override(
+        self,
+        account_name: str,
+        model_id: str,
+        input_price: float,
+        output_price: float,
+    ) -> None:
+        """Set provider-specific model pricing for one provider account."""
+        self.account_model_overrides.setdefault(account_name, {})[model_id] = (
+            input_price,
+            output_price,
+        )
 
     async def add_reservation(self, account_name: str, cost: int) -> None:
         """Track an active reservation's estimated cost for scoring."""

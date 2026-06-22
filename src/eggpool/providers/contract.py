@@ -58,6 +58,9 @@ def build_upstream_headers(
     api_key: str,
 ) -> dict[str, str]:
     """Build all upstream headers: auth + static provider headers."""
-    headers = build_auth_headers(provider, api_key)
-    headers.update(build_static_headers(provider))
+    # Authentication is authoritative. ProviderConfig rejects a static
+    # header with the same name, but applying auth last is defense in depth
+    # for programmatically mutated config objects.
+    headers = build_static_headers(provider)
+    headers.update(build_auth_headers(provider, api_key))
     return headers

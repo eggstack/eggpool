@@ -34,6 +34,15 @@ def _make_config(
                 mo.max_input_tokens = ovr.get("max_input_tokens")
                 mo.max_output_tokens = ovr.get("max_output_tokens")
                 mo.enforce_context_limit = ovr.get("enforce_context_limit", True)
+                mo.protocol = ovr.get("protocol")
+                mo.input_price_per_1k = ovr.get("input_price_per_1k")
+                mo.output_price_per_1k = ovr.get("output_price_per_1k")
+                mo.cache_read_per_million_microdollars = ovr.get(
+                    "cache_read_per_million_microdollars"
+                )
+                mo.cache_write_per_million_microdollars = ovr.get(
+                    "cache_write_per_million_microdollars"
+                )
                 model_overrides[mid] = mo
             prov.model_overrides = model_overrides
             providers[pid] = prov
@@ -47,6 +56,15 @@ def _make_config(
             mo.max_input_tokens = ovr.get("max_input_tokens")
             mo.max_output_tokens = ovr.get("max_output_tokens")
             mo.enforce_context_limit = ovr.get("enforce_context_limit", True)
+            mo.protocol = ovr.get("protocol")
+            mo.input_price_per_1k = ovr.get("input_price_per_1k")
+            mo.output_price_per_1k = ovr.get("output_price_per_1k")
+            mo.cache_read_per_million_microdollars = ovr.get(
+                "cache_read_per_million_microdollars"
+            )
+            mo.cache_write_per_million_microdollars = ovr.get(
+                "cache_write_per_million_microdollars"
+            )
             mo_global[mid] = mo
     config.model_overrides = mo_global
 
@@ -153,6 +171,118 @@ async def test_provider_override_applied_during_refresh() -> None:
     assert eff["context_source"] == "provider_override"
     assert eff["output_tokens"] == 4096
     assert eff["output_source"] == "provider_override"
+
+
+@pytest.mark.asyncio
+async def test_provider_protocol_override_applied_during_refresh() -> None:
+    config = AppConfig.from_dict(
+        {
+            "providers": {
+                "p1": {
+                    "id": "p1",
+                    "base_url": "https://provider.example.com",
+                    "protocols": ["anthropic"],
+                    "model_overrides": {"m1": {"protocol": "anthropic"}},
+                }
+            }
+        }
+    )
+    fetch_result = FetchResult(
+        response=_upstream_response({"id": "m1", "name": "Model One"}),
+        latency_ms=10,
+        status_code=200,
+        error=None,
+        model_count=1,
+    )
+    service, _ = _make_service(config)
+
+    with patch(
+        "eggpool.catalog.service.fetch_models_for_account",
+        new_callable=AsyncMock,
+        return_value=fetch_result,
+    ):
+        await service._fetch_and_process_account(
+            "acct1", "key1", "p1", MagicMock(spec=httpx.AsyncClient)
+        )
+
+    cached = service.cache.get_provider_model_entry("m1", "p1")
+    assert cached is not None
+    assert cached["protocol"] == "anthropic"
+    assert cached["protocol_source"] == "config"
+
+
+@pytest.mark.asyncio
+async def test_global_protocol_fills_missing_provider_protocol_field() -> None:
+    config = AppConfig.from_dict(
+        {
+            "model_overrides": {"m1": {"protocol": "anthropic"}},
+            "providers": {
+                "p1": {
+                    "id": "p1",
+                    "base_url": "https://provider.example.com",
+                    "protocols": ["anthropic"],
+                    "model_overrides": {"m1": {"max_context_tokens": 100_000}},
+                }
+            },
+        }
+    )
+    fetch_result = FetchResult(
+        response=_upstream_response({"id": "m1"}),
+        latency_ms=10,
+        status_code=200,
+        error=None,
+        model_count=1,
+    )
+    service, _ = _make_service(config)
+
+    with patch(
+        "eggpool.catalog.service.fetch_models_for_account",
+        new_callable=AsyncMock,
+        return_value=fetch_result,
+    ):
+        await service._fetch_and_process_account(
+            "acct1", "key1", "p1", MagicMock(spec=httpx.AsyncClient)
+        )
+
+    cached = service.cache.get_provider_model_entry("m1", "p1")
+    assert cached is not None
+    assert cached["protocol"] == "anthropic"
+
+
+@pytest.mark.asyncio
+async def test_provider_pricing_override_takes_per_field_precedence() -> None:
+    config = AppConfig.from_dict(
+        {
+            "model_overrides": {
+                "m1": {
+                    "input_price_per_1k": 0.001,
+                    "output_price_per_1k": 0.002,
+                    "cache_read_per_million_microdollars": 300_000,
+                }
+            },
+            "providers": {
+                "p1": {
+                    "id": "p1",
+                    "base_url": "https://provider.example.com",
+                    "model_overrides": {
+                        "m1": {
+                            "output_price_per_1k": 0.009,
+                            "cache_write_per_million_microdollars": 900_000,
+                        }
+                    },
+                }
+            },
+        }
+    )
+    service, mock_db = _make_service(config)
+
+    await service._maybe_insert_price_snapshot(
+        "m1", {"source_metadata": {}}, provider_id="p1"
+    )
+
+    values = mock_db.execute_write.await_args.args[1]
+    assert values[0:3] == ("m1", 0.001, 0.009)
+    assert values[5:9] == (300_000, 900_000, "config", "p1")
 
 
 @pytest.mark.asyncio

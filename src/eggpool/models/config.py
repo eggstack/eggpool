@@ -299,6 +299,25 @@ class ProviderConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def validate_static_headers(self) -> ProviderConfig:
+        """Keep static headers from replacing credentials or each other."""
+        seen: set[str] = set()
+        auth_header = self.auth.header.casefold()
+        for header in self.headers:
+            name = header.name.casefold()
+            if name in seen:
+                raise ConfigError(
+                    f"Provider {self.id!r} has duplicate static header {header.name!r}"
+                )
+            if name == auth_header:
+                raise ConfigError(
+                    f"Provider {self.id!r} static header {header.name!r} "
+                    "conflicts with the configured authentication header"
+                )
+            seen.add(name)
+        return self
+
+    @model_validator(mode="after")
     def _synthesize_models_endpoint(self) -> ProviderConfig:
         """Synthesize models_endpoint from legacy fields when not set."""
         if self.models_endpoint is None and self.models_path:

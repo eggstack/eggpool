@@ -66,7 +66,9 @@ class IncrementalSSEObserver:
         self._usage_result = StreamUsageResult()
         self._frame_count = 0
         self._error_count = 0
-        self._decoder = codecs.getincrementaldecoder("utf-8")()
+        # Telemetry must never terminate an otherwise valid byte stream.
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        self._pending_cr = False
 
         # Current event state (for assembling multi-line data)
         self._current_data_lines: list[str] = []
@@ -85,9 +87,18 @@ class IncrementalSSEObserver:
         self._bytes_emitted += len(chunk)
 
         # Decode and normalize line endings using incremental decoder
-        text = self._decoder.decode(chunk).replace("\r\n", "\n")
-        # Also normalize lone CR to LF
-        text = text.replace("\r", "\n")
+        text = self._decoder.decode(chunk)
+        # Preserve a trailing CR until the next chunk so a CRLF split at the
+        # transport boundary is normalized to one newline, not two.
+        if self._pending_cr:
+            if text.startswith("\n"):
+                text = text[1:]
+            text = "\n" + text
+            self._pending_cr = False
+        if text.endswith("\r"):
+            text = text[:-1]
+            self._pending_cr = True
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
         lines = (self._buffer + text).split("\n")
         self._buffer = lines.pop()
 
@@ -132,7 +143,7 @@ class IncrementalSSEObserver:
                 self._buffer = self._buffer[drop_at + 1 :]
             else:
                 self._buffer = self._buffer[-MAX_INCOMPLETE_FRAME_BYTES:]
-            self._decoder = codecs.getincrementaldecoder("utf-8")()
+            self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
     def _process_line(self, line: str) -> None:
         """Process a single SSE line."""
@@ -230,6 +241,9 @@ class IncrementalSSEObserver:
             remainder = ""
         if remainder:
             self._buffer += remainder.replace("\r\n", "\n").replace("\r", "\n")
+        if self._pending_cr:
+            self._buffer += "\n"
+            self._pending_cr = False
 
         # Process any remaining complete lines
         lines = self._buffer.split("\n")

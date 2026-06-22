@@ -546,6 +546,20 @@ async def test_chat_completions_missing_model_returns_400() -> None:
 
 
 @pytest.mark.asyncio
+async def test_chat_completions_whitespace_model_returns_400() -> None:
+    app = _make_real_chat_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/chat/completions",
+            json={"model": "  \t", "messages": []},
+        )
+
+    assert resp.status_code == 400
+    assert "Missing model" in resp.json()["error"]["message"]
+
+
+@pytest.mark.asyncio
 async def test_messages_missing_model_returns_400() -> None:
     """Missing 'model' field must return 400 for Anthropic endpoint."""
     app = _make_real_messages_app()

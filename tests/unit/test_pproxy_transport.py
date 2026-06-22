@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import AsyncMock, MagicMock
 
+import httpcore
 import httpx
 import pytest
 
-from eggpool.providers.pproxy_transport import AsyncPProxyTransport
+from eggpool.providers.pproxy_transport import (
+    AsyncPProxyTransport,
+    PProxyNetworkBackend,
+)
 
 
 @pytest.mark.asyncio
@@ -54,3 +59,27 @@ async def test_pproxy_transport_sends_http_request() -> None:
     assert response.text == "through proxy"
     assert requests
     assert requests[0].startswith(b"GET /models HTTP/1.1\r\n")
+
+
+@pytest.mark.asyncio
+async def test_connect_closes_stream_when_socket_options_fail() -> None:
+    backend = PProxyNetworkBackend("direct://")
+    reader = asyncio.StreamReader()
+    writer = MagicMock(spec=asyncio.StreamWriter)
+    writer.wait_closed = AsyncMock()
+    sock = MagicMock()
+    sock.setsockopt.side_effect = OSError("invalid socket option")
+    writer.get_extra_info.return_value = sock
+    proxy = MagicMock()
+    proxy.tcp_connect = AsyncMock(return_value=(reader, writer))
+    backend._proxy = proxy
+
+    with pytest.raises(httpcore.ConnectError, match="invalid socket option"):
+        await backend.connect_tcp(
+            "example.com",
+            443,
+            socket_options=[(1, 2, 3)],
+        )
+
+    writer.close.assert_called_once_with()
+    writer.wait_closed.assert_awaited_once_with()

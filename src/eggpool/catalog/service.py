@@ -220,13 +220,30 @@ class CatalogService:
                 return
 
             models = normalize_models(result.response)
+            provider_cfg = provider_cfg or self._config.providers.get(provider_id)
 
             # Apply per-model protocol resolution (Section 11)
             for model in models:
-                # Check config override first
-                override = self._config.model_overrides.get(model["model_id"])
-                if override and override.protocol:
-                    model["protocol"] = override.protocol
+                # Provider-specific config takes precedence over a global
+                # override, matching limit and pricing resolution.
+                provider_override = (
+                    provider_cfg.model_overrides.get(model["model_id"])
+                    if provider_cfg is not None
+                    else None
+                )
+                global_override = self._config.model_overrides.get(model["model_id"])
+                protocol_override = (
+                    provider_override.protocol
+                    if provider_override is not None
+                    and provider_override.protocol is not None
+                    else (
+                        global_override.protocol
+                        if global_override is not None
+                        else None
+                    )
+                )
+                if protocol_override is not None:
+                    model["protocol"] = protocol_override
                     model["protocol_source"] = "config"
                 else:
                     # Resolve from per-model metadata
@@ -259,7 +276,6 @@ class CatalogService:
             # models whose resolved protocol is not supported by this
             # provider so they are not routed through an incompatible
             # upstream.
-            provider_cfg = self._config.providers.get(provider_id)
             if provider_cfg is not None:
                 supported = set(provider_cfg.protocols)
                 for model in models:
@@ -634,9 +650,19 @@ class CatalogService:
         """
         # Per-category override values (None means: no override for this
         # category, fall back to upstream).
-        override = self._config.model_overrides.get(model_id)
+        global_override = self._config.model_overrides.get(model_id)
+        provider_cfg = self._config.providers.get(provider_id)
+        provider_override = (
+            provider_cfg.model_overrides.get(model_id)
+            if provider_cfg is not None
+            else None
+        )
         override_values: dict[str, Any] = {}
-        if override is not None:
+        # Populate global values first, then replace individual categories
+        # supplied by the provider-specific override.
+        for override in (global_override, provider_override):
+            if override is None:
+                continue
             if override.input_price_per_1k is not None:
                 override_values["input"] = override.input_price_per_1k
             if override.output_price_per_1k is not None:

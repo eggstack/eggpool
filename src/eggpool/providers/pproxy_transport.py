@@ -127,15 +127,28 @@ class PProxyNetworkBackend(httpcore.AsyncNetworkBackend):
         socket_options: Iterable[SOCKET_OPTION] | None = None,
     ) -> httpcore.AsyncNetworkStream:
         options = tuple(socket_options or self._socket_options)
+        writer: asyncio.StreamWriter | None = None
         try:
             connect = self._proxy.tcp_connect(host, port, local_addr=local_address)
             reader, writer = await asyncio.wait_for(connect, timeout=timeout)
             _apply_socket_options(writer, options)
         except TimeoutError as exc:
+            if writer is not None:
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await writer.wait_closed()
             raise httpcore.ConnectTimeout(exc) from exc
         except OSError as exc:
+            if writer is not None:
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await writer.wait_closed()
             raise httpcore.ConnectError(exc) from exc
         except Exception as exc:
+            if writer is not None:
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await writer.wait_closed()
             raise httpcore.ConnectError(
                 f"pproxy connection via {self._proxy_uri!r} failed: {exc}"
             ) from exc

@@ -162,6 +162,16 @@ class TestBuildUpstreamHeaders:
         assert headers == {"X-Custom": "val"}
         assert "Authorization" not in headers
 
+    def test_auth_remains_authoritative_after_config_mutation(self):
+        cfg = ProviderConfig(id="t", base_url="https://api.example.com")
+        cfg.headers.append(
+            ProviderStaticHeaderConfig(name="Authorization", value="bad-static-key")
+        )
+
+        assert build_upstream_headers(cfg, "selected-key")["Authorization"] == (
+            "Bearer selected-key"
+        )
+
 
 class TestProviderConfigContract:
     def test_old_style_config_synthesizes_models_endpoint(self):
@@ -202,6 +212,29 @@ class TestProviderConfigContract:
         assert cfg.verify.probe_model is None
         assert cfg.verify.probe_protocol == "openai"
         assert cfg.verify.require_models is True
+
+    def test_static_header_cannot_replace_auth_case_insensitively(self):
+        with pytest.raises(ConfigError, match="authentication header"):
+            ProviderConfig(
+                id="t",
+                base_url="https://api.example.com",
+                headers=[
+                    ProviderStaticHeaderConfig(
+                        name="authorization", value="bad-static-key"
+                    )
+                ],
+            )
+
+    def test_duplicate_static_headers_rejected_case_insensitively(self):
+        with pytest.raises(ConfigError, match="duplicate static header"):
+            ProviderConfig(
+                id="t",
+                base_url="https://api.example.com",
+                headers=[
+                    ProviderStaticHeaderConfig(name="X-Custom", value="one"),
+                    ProviderStaticHeaderConfig(name="x-custom", value="two"),
+                ],
+            )
 
 
 class TestDuplicateVersionValidation:

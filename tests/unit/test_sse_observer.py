@@ -411,6 +411,31 @@ class TestArbitraryChunking:
                 f"Split at {split_point}: input_tokens should be 99"
             )
 
+    def test_split_crlf_preserves_multiline_event(self) -> None:
+        """A split CRLF must not become a false event separator."""
+        raw = (
+            b'data: {"usage": {"prompt_tokens": 10,\r\n'
+            b'data: "completion_tokens": 20}}\r\n\r\n'
+        )
+        split_point = raw.index(b"\r\n") + 1
+        observer = IncrementalSSEObserver(protocol="openai")
+
+        observer.observe(raw[:split_point])
+        observer.observe(raw[split_point:])
+        observer.flush()
+
+        assert observer.usage.input_tokens == 10
+        assert observer.usage.output_tokens == 20
+
+    def test_invalid_utf8_does_not_break_stream_observation(self) -> None:
+        """Malformed telemetry bytes are ignored instead of raising."""
+        observer = IncrementalSSEObserver(protocol="openai")
+
+        observer.observe(b"data: \xff\xfe\n\n")
+        observer.flush()
+
+        assert observer.error_count == 1
+
     def test_split_across_blank_line_boundary(self) -> None:
         """Splitting across a blank line event boundary works."""
         p1 = {"usage": {"prompt_tokens": 10}}

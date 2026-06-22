@@ -132,7 +132,7 @@ async def handle_proxy_request(
     payload = cast("dict[str, Any]", payload_obj)
 
     model_value = payload.get("model")
-    if not isinstance(model_value, str) or not model_value:
+    if not isinstance(model_value, str) or not model_value.strip():
         return endpoint.error_response(
             status_code=400,
             message="Missing model field",

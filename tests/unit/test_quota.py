@@ -345,6 +345,22 @@ class TestEstimateCostTierPriority:
         family_cost = int(1000 * family_avg * estimator.default_safety_factor)
         assert cost_override != family_cost
 
+    def test_account_override_beats_global_model_override(self) -> None:
+        estimator = QuotaEstimator()
+        estimator.set_model_override("gpt-4o", input_price=1.0, output_price=1.0)
+        estimator.set_account_model_override(
+            "provider-b-account",
+            "gpt-4o",
+            input_price=9.0,
+            output_price=9.0,
+        )
+
+        provider_cost = estimator.estimate_cost("provider-b-account", "gpt-4o", 1000)
+        global_cost = estimator.estimate_cost("provider-a-account", "gpt-4o", 1000)
+
+        assert provider_cost == int(1000 * 9.0 * estimator.default_safety_factor)
+        assert global_cost == int(1000 * 1.0 * estimator.default_safety_factor)
+
     def test_tier4_family_fallback_used_when_no_override(self) -> None:
         """Family fallback is used when no override is configured."""
         estimator = QuotaEstimator()

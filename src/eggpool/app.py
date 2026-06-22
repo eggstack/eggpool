@@ -365,6 +365,36 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
                 input_price * 1000,
                 output_price * 1000,
             )
+    for provider in config.providers.values():
+        for model_id, override in provider.model_overrides.items():
+            global_override = config.model_overrides.get(model_id)
+            input_price = (
+                override.input_price_per_1k
+                if override.input_price_per_1k is not None
+                else (
+                    global_override.input_price_per_1k
+                    if global_override is not None
+                    else None
+                )
+            )
+            output_price = (
+                override.output_price_per_1k
+                if override.output_price_per_1k is not None
+                else (
+                    global_override.output_price_per_1k
+                    if global_override is not None
+                    else None
+                )
+            )
+            if input_price is None or output_price is None:
+                continue
+            for account in provider.accounts:
+                router.quota_estimator.set_account_model_override(
+                    account.name,
+                    model_id,
+                    input_price * 1000,
+                    output_price * 1000,
+                )
 
     # 18. Load persisted usage windows and set account weights/offsets
     router.quota_estimator.set_usage_window_repo(usage_window_repo)
