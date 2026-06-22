@@ -219,6 +219,34 @@ class TestHealthManager:
         manager.record_success("account1", "model1")
         assert manager.is_account_healthy("account1")
 
+    def test_record_success_clears_transient_cooldown(self) -> None:
+        manager = HealthManager()
+        manager.record_rate_limit("account1", 60)
+        manager.record_success("account1")
+        health = manager.get_account_health("account1")
+        assert health.cooldown_until == 0.0
+        assert manager.is_account_healthy("account1")
+
+    def test_inflight_success_does_not_undo_operator_disable(self) -> None:
+        manager = HealthManager()
+        manager.disable_account("account1", "maintenance")
+        manager.record_success("account1")
+        assert not manager.is_account_healthy("account1")
+
+    def test_explicit_zero_duration_expires_immediately(self) -> None:
+        manager = HealthManager()
+        manager.disable_account("account1", "maintenance", duration_seconds=0)
+        manager.disable_model("account2", "model1", duration_seconds=0)
+        assert manager.is_account_healthy("account1")
+        assert manager.is_model_healthy("account2", "model1")
+
+    def test_expired_model_disable_is_removed_from_stats(self) -> None:
+        manager = HealthManager()
+        health = manager.get_account_health("account1")
+        health.disabled_models["model1"] = time.time() - 1
+        stats = manager.get_health_stats("account1")
+        assert stats["disabled_models"] == []
+
     def test_record_failure(self) -> None:
         """Test recording failure."""
         manager = HealthManager()

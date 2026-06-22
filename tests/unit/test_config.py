@@ -240,6 +240,23 @@ def test_bearer_mode_accepts_raw_token() -> None:
     config.validate_account_credentials()
 
 
+@pytest.mark.parametrize("api_key", ["sk-test\rvalue", "sk-test\nvalue", "sk\x00test"])
+def test_account_credentials_reject_header_control_characters(api_key: str) -> None:
+    config = AppConfig.from_dict(
+        {
+            "providers": {
+                "test": {
+                    "id": "test",
+                    "base_url": "https://api.example.com",
+                    "accounts": [{"name": "default", "api_key": api_key}],
+                }
+            }
+        }
+    )
+    with pytest.raises(ConfigError, match="contains CR, LF, or NUL"):
+        config.validate_account_credentials()
+
+
 def test_raw_authorization_allows_bearer_prefixed_value() -> None:
     """``raw_authorization`` mode passes the key through verbatim so a
     ``Bearer <token>`` value is permitted there.

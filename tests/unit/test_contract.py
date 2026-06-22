@@ -292,6 +292,32 @@ class TestProviderStaticHeaderConfig:
         assert h.value is None
         assert h.value_env is None
 
+    @pytest.mark.parametrize(
+        "name",
+        ["", " leading-space", "X-Bad\nName", "Connection", "Content-Length", "Host"],
+    )
+    def test_invalid_or_proxy_managed_names_rejected(self, name: str) -> None:
+        with pytest.raises(ValueError):
+            ProviderStaticHeaderConfig(name=name, value="test")
+
+    def test_inline_control_characters_rejected(self) -> None:
+        with pytest.raises(ValueError, match="CR, LF, or NUL"):
+            ProviderStaticHeaderConfig(name="X-Test", value="bad\r\nvalue")
+
+    def test_environment_control_characters_rejected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("BAD_STATIC_HEADER", "bad\nvalue")
+        cfg = ProviderConfig(
+            id="test",
+            base_url="https://api.example.com",
+            headers=[
+                ProviderStaticHeaderConfig(name="X-Test", value_env="BAD_STATIC_HEADER")
+            ],
+        )
+        with pytest.raises(ConfigError, match="contains CR, LF, or NUL"):
+            build_static_headers(cfg)
+
 
 class TestProviderModelsEndpointConfig:
     def test_disabled_endpoint(self):

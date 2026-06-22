@@ -316,16 +316,10 @@ class Router:
                 and not self._health_manager.is_account_healthy(state.name)
             ):
                 continue
-            # Check model availability with model-level health
+            # is_account_model_available performs support, freshness, and
+            # protocol checks together. Avoid materializing the same fresh
+            # support set once here and again inside that method.
             for model_id in all_models:
-                if self._stale_after_s is not None:
-                    supporting = self._catalog.cache.get_fresh_supporting_accounts(
-                        model_id, self._stale_after_s
-                    )
-                else:
-                    supporting = self._catalog.cache.get_supporting_accounts(model_id)
-                if state.name not in supporting:
-                    continue
                 if not self._catalog.cache.is_account_model_available(
                     state.name,
                     model_id,

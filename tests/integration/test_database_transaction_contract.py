@@ -310,6 +310,20 @@ class TestPragmaHelper:
             await db.disconnect()
 
     @pytest.mark.asyncio
+    async def test_execute_pragma_inside_owned_transaction_does_not_deadlock(
+        self,
+    ) -> None:
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            async with asyncio.timeout(1):
+                async with db.transaction():
+                    rows = await db.execute_pragma("PRAGMA foreign_keys")
+            assert rows[0]["foreign_keys"] == 1
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio
     async def test_execute_pragma_rejects_non_pragma(self) -> None:
         db = Database(path=":memory:")
         await db.connect()

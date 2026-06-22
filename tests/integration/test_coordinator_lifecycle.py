@@ -480,6 +480,42 @@ async def test_rate_limit_records_cooldown(
 
 
 @pytest.mark.asyncio
+async def test_retry_after_zero_does_not_create_default_cooldown(
+    coordinator: RequestCoordinator,
+) -> None:
+    request_body = json.dumps(
+        {"model": "gpt-4", "messages": [{"role": "user", "content": "Hi"}]}
+    ).encode()
+
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+            return_value=httpx.Response(
+                429,
+                json={"error": {"message": "Rate limited"}},
+                headers={"retry-after": "0"},
+            )
+        )
+        response = await coordinator.execute(
+            ProxyRequestContext(
+                request_id="test-req-rl-zero",
+                protocol="openai",
+                model_id="gpt-4",
+                streaming=False,
+                original_body=request_body,
+                incoming_headers={"content-type": "application/json"},
+            )
+        )
+
+    assert response.status_code == 429
+    health_manager = coordinator._health_manager
+    assert health_manager is not None
+    assert health_manager.is_account_healthy("test-acct")
+    state = coordinator._registry.get_state("test-acct")
+    assert state is not None
+    assert state.is_eligible()
+
+
+@pytest.mark.asyncio
 async def test_openai_stream_injects_stream_options(
     coordinator: RequestCoordinator,
     db: Database,

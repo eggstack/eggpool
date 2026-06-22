@@ -1319,13 +1319,16 @@ class RequestCoordinator:
             return
 
         category = classify_failure_category(err.error_class, err.status_code)
+        rate_limit_retry_after: float | None = None
         if category == FailureCategory.AUTHENTICATION_FAILED:
             self._health_manager.record_failure(
                 account_name, model_id=model_id, reason="authentication_failed"
             )
         elif category == FailureCategory.RATE_LIMITED:
-            retry_after = err.retry_after or 60.0
-            self._health_manager.record_rate_limit(account_name, retry_after)
+            rate_limit_retry_after = (
+                60.0 if err.retry_after is None else err.retry_after
+            )
+            self._health_manager.record_rate_limit(account_name, rate_limit_retry_after)
             self._health_manager.release_request(account_name)
         elif category == FailureCategory.QUOTA_EXHAUSTED:
             self._health_manager.record_quota_exhausted(
@@ -1348,7 +1351,7 @@ class RequestCoordinator:
             state.record_failure(
                 category.value,
                 cooldown_seconds=self._quota_exhausted_cooldown_seconds,
-                rate_limit_retry_after=err.retry_after,
+                rate_limit_retry_after=rate_limit_retry_after,
             )
 
     async def _finalize_non_retryable(

@@ -37,10 +37,27 @@ def test_account_runtime_state_quota_exhausted() -> None:
 
 
 def test_account_runtime_state_record_success() -> None:
-    state = AccountRuntimeState(name="test", health_state="cooldown")
+    state = AccountRuntimeState(
+        name="test", health_state="cooldown", cooldown_until=time.time() + 60
+    )
     state.record_success()
     assert state.health_state == "healthy"
     assert state.consecutive_failures == 0
+    assert state.cooldown_until == 0.0
+
+
+def test_account_runtime_state_honors_explicit_zero_retry_after() -> None:
+    state = AccountRuntimeState(name="test")
+    state.record_failure("rate_limited", rate_limit_retry_after=0.0)
+    assert state.cooldown_until <= time.time()
+    assert state.is_eligible()
+
+
+def test_account_runtime_state_caps_backoff_for_large_failure_counts() -> None:
+    state = AccountRuntimeState(name="test", consecutive_failures=100_000)
+    before = time.time()
+    state.record_failure("connection_failure")
+    assert state.cooldown_until <= before + DEFAULT_BACKOFF_MAX_SECONDS + 1
 
 
 def test_account_runtime_state_record_failure() -> None:

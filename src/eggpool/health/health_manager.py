@@ -106,9 +106,9 @@ class AccountHealth:
             current_time = time.time()
 
         disabled = (
-            self.disabled_until is not None and current_time <= self.disabled_until
+            self.disabled_until is not None and current_time < self.disabled_until
         )
-        cooled = self.cooldown_until > 0 and current_time <= self.cooldown_until
+        cooled = self.cooldown_until > 0 and current_time < self.cooldown_until
         return disabled or cooled
 
     def is_model_disabled(
@@ -122,7 +122,11 @@ class AccountHealth:
         until = self.disabled_models[model_id]
         if until is None:
             return True
-        return (current_time if current_time is not None else time.time()) <= until
+        now = current_time if current_time is not None else time.time()
+        if now >= until:
+            self.disabled_models.pop(model_id, None)
+            return False
+        return True
 
 
 @dataclass
@@ -144,9 +148,15 @@ class HealthManager:
         health = self.get_account_health(account_name)
         health.consecutive_failures = 0
         health.last_check = time.time()
-        if health.health_state != "authentication_failed":
+        # An in-flight request may succeed after an operator disables its
+        # account. Do not let that completion undo an explicit disable.
+        if (
+            health.health_state != "authentication_failed"
+            and not health.disabled_reason
+        ):
             health.is_healthy = True
             health.health_state = "healthy"
+            health.cooldown_until = 0.0
         health.circuit_breaker.record_success()
 
     def record_failure(
@@ -181,7 +191,7 @@ class HealthManager:
     def record_rate_limit(self, account_name: str, retry_after_seconds: float) -> None:
         """Record a rate limit with explicit cooldown."""
         health = self.get_account_health(account_name)
-        health.cooldown_until = time.time() + retry_after_seconds
+        health.cooldown_until = time.time() + max(0.0, retry_after_seconds)
         health.health_state = "rate_limited"
         health.is_healthy = False
 
@@ -195,8 +205,11 @@ class HealthManager:
         health = self.get_account_health(account_name)
         health.is_healthy = False
         health.disabled_reason = reason
-        if duration_seconds:
-            health.disabled_until = time.time() + duration_seconds
+        health.disabled_until = (
+            None
+            if duration_seconds is None
+            else time.time() + max(0.0, duration_seconds)
+        )
 
     def enable_account(self, account_name: str) -> None:
         """Enable an account."""
@@ -222,10 +235,11 @@ class HealthManager:
         called.
         """
         health = self.get_account_health(account_name)
-        if duration_seconds:
-            health.disabled_models[model_id] = time.time() + duration_seconds
-        else:
-            health.disabled_models[model_id] = None
+        health.disabled_models[model_id] = (
+            None
+            if duration_seconds is None
+            else time.time() + max(0.0, duration_seconds)
+        )
 
     def enable_model(self, account_name: str, model_id: str) -> None:
         """Enable a model for an account."""
@@ -310,6 +324,9 @@ class HealthManager:
     def get_health_stats(self, account_name: str) -> dict[str, Any]:
         """Get health statistics for an account."""
         health = self.get_account_health(account_name)
+        self._refresh_transient_state(health)
+        for model_id in list(health.disabled_models):
+            health.is_model_disabled(model_id)
         return {
             "account_name": health.account_name,
             "is_healthy": health.is_healthy,

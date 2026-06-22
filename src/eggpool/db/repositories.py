@@ -453,7 +453,7 @@ class ReservationRepository:
             "UPDATE reservations SET status = 'expired', "
             "released_at = CURRENT_TIMESTAMP, release_reason = 'expired' "
             "WHERE status = 'active' AND expires_at IS NOT NULL "
-            "AND expires_at < CURRENT_TIMESTAMP "
+            "AND expires_at <= CURRENT_TIMESTAMP "
             "AND NOT EXISTS ("
             "  SELECT 1 FROM requests"
             "  WHERE requests.id = reservations.request_id"

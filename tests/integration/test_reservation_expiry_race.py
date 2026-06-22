@@ -127,3 +127,39 @@ async def test_concurrent_expiry_cleanup_no_double_count() -> None:
     assert total == 1
 
     await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_reservation_expires_at_exact_database_boundary() -> None:
+    db = Database(path=":memory:")
+    await db.connect()
+    await MigrationRunner(db).run()
+    await _seed_db(db)
+    request_repo = RequestRepository(db)
+    reservation_repo = ReservationRepository(db)
+
+    async with db.transaction():
+        db_id = await request_repo.create_pending(
+            request_id="boundary-req",
+            model_id="gpt-4",
+            protocol="openai",
+            streamed=False,
+            account_id=1,
+        )
+        reservation_id = await reservation_repo.create(
+            request_id=db_id,
+            account_id=1,
+            model_id="gpt-4",
+            estimated_tokens=1,
+            estimated_microdollars=1,
+            ttl_seconds=0,
+        )
+        await request_repo.update_after_completion(db_id, status="succeeded")
+
+    assert await reconcile_expired_reservations(db) == 1
+    row = await db.fetch_one(
+        "SELECT status FROM reservations WHERE id = ?", (reservation_id,)
+    )
+    assert row is not None
+    assert row["status"] == "expired"
+    await db.disconnect()

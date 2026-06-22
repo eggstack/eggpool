@@ -11,6 +11,12 @@ from eggpool.providers.contract import compose_provider_url
 
 
 class TestProviderUrlComposition:
+    def test_preserves_endpoint_trailing_slash(self):
+        cfg = ProviderConfig(id="test", base_url="https://api.example.com/v1/")
+        assert compose_provider_url(cfg, "/chat/completions/") == (
+            "https://api.example.com/v1/chat/completions/"
+        )
+
     def test_opencode_go_chat_url(self):
         cfg = ProviderConfig(
             id="opencode-go",

@@ -326,7 +326,7 @@ class Database:
             raise DatabaseError(
                 "execute_pragma() only accepts SQL beginning with 'PRAGMA '"
             )
-        async with self._connection_lock:
+        async with self._connection_access():
             try:
                 cursor = await self.connection.execute(sql)  # type: ignore[union-attr]
                 rows = await cursor.fetchall()

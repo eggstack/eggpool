@@ -140,7 +140,7 @@ async def reconcile_expired_reservations(
                     release_reason = 'expired'
                 WHERE status = 'active'
                   AND expires_at IS NOT NULL
-                  AND expires_at < CURRENT_TIMESTAMP
+                  AND expires_at <= CURRENT_TIMESTAMP
                   AND NOT EXISTS (
                       SELECT 1
                       FROM requests

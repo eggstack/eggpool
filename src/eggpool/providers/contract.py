@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
+from eggpool.errors import ConfigError
+
 if TYPE_CHECKING:
     from eggpool.models.config import ProviderConfig, ProviderStaticHeaderConfig
 
@@ -13,10 +15,13 @@ def compose_provider_url(provider: ProviderConfig, endpoint_path: str) -> str:
     """Compose an absolute URL from provider base_url and an endpoint path.
 
     Strips trailing slashes from base_url and leading slashes from
-    endpoint_path, then joins them with a single slash.
+    endpoint_path, then joins them with a single slash. A trailing slash on
+    endpoint_path is preserved because it may be semantically significant.
     """
     base = provider.base_url.rstrip("/")
-    path = endpoint_path.strip("/")
+    # A trailing slash can be semantically significant (especially for POST
+    # endpoints), so remove only the leading separators needed for joining.
+    path = endpoint_path.lstrip("/")
     return f"{base}/{path}"
 
 
@@ -39,7 +44,13 @@ def resolve_static_header_value(header: ProviderStaticHeaderConfig) -> str | Non
     if header.value is not None:
         return header.value
     if header.value_env is not None:
-        return os.environ.get(header.value_env)
+        value = os.environ.get(header.value_env)
+        if value is not None and any(char in value for char in ("\r", "\n", "\x00")):
+            raise ConfigError(
+                f"Static header {header.name!r} from environment variable "
+                f"{header.value_env!r} contains CR, LF, or NUL"
+            )
+        return value
     return None
 
 

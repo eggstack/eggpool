@@ -23,6 +23,39 @@ from eggpool.constants import (
 )
 from eggpool.errors import ConfigError
 
+_HTTP_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+_PROXY_MANAGED_HEADERS = frozenset(
+    {
+        "connection",
+        "content-length",
+        "host",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "trailers",
+        "transfer-encoding",
+        "upgrade",
+    }
+)
+
+
+def _validate_upstream_header_name(value: str) -> str:
+    """Reject malformed or proxy-managed upstream header names."""
+    if _HTTP_HEADER_NAME_RE.fullmatch(value) is None:
+        raise ValueError(f"Invalid HTTP header name {value!r}")
+    if value.casefold() in _PROXY_MANAGED_HEADERS:
+        raise ValueError(f"HTTP header {value!r} is managed by the proxy")
+    return value
+
+
+def _validate_upstream_header_value(value: str) -> str:
+    """Reject control characters that cannot be represented safely on wire."""
+    if any(char in value for char in ("\r", "\n", "\x00")):
+        raise ValueError("HTTP header values must not contain CR, LF, or NUL")
+    return value
+
 
 class ServerConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -193,6 +226,18 @@ class ProviderAuthConfig(BaseModel):
     header: str = "Authorization"
     scheme: str = "Bearer"
 
+    @field_validator("header")
+    @classmethod
+    def validate_header(cls, value: str) -> str:
+        return _validate_upstream_header_name(value)
+
+    @field_validator("scheme")
+    @classmethod
+    def validate_scheme(cls, value: str) -> str:
+        if not value or any(char.isspace() for char in value):
+            raise ValueError("Authentication scheme must be a non-empty token")
+        return _validate_upstream_header_value(value)
+
 
 class ProviderStaticHeaderConfig(BaseModel):
     """A static header to include in upstream requests."""
@@ -202,6 +247,16 @@ class ProviderStaticHeaderConfig(BaseModel):
     name: str
     value: str | None = None
     value_env: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        return _validate_upstream_header_name(value)
+
+    @field_validator("value")
+    @classmethod
+    def validate_value(cls, value: str | None) -> str | None:
+        return None if value is None else _validate_upstream_header_value(value)
 
     @model_validator(mode="after")
     def validate_value_source(self) -> ProviderStaticHeaderConfig:
@@ -506,6 +561,14 @@ class AppConfig(BaseModel):
                     raise ConfigError(
                         f"Provider {provider_id!r} account {acct.name!r}: "
                         f"{source} is not set"
+                    )
+                if any(char in raw_key for char in ("\r", "\n", "\x00")):
+                    source = (
+                        "api_key" if acct.api_key else f"env var {acct.api_key_env!r}"
+                    )
+                    raise ConfigError(
+                        f"Provider {provider_id!r} account {acct.name!r}: "
+                        f"{source} contains CR, LF, or NUL"
                     )
                 if (
                     provider.auth.mode == "bearer"

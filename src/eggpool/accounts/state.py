@@ -17,6 +17,20 @@ DEFAULT_BACKOFF_BASE_SECONDS = 30.0
 DEFAULT_BACKOFF_MAX_SECONDS = 3600.0  # 1 hour max backoff for rate limits
 
 
+def _failure_backoff(consecutive_failures: int) -> float:
+    """Return capped exponential backoff without constructing huge integers."""
+    if consecutive_failures <= 1:
+        return DEFAULT_BACKOFF_BASE_SECONDS
+    max_doublings = int(
+        DEFAULT_BACKOFF_MAX_SECONDS / DEFAULT_BACKOFF_BASE_SECONDS
+    ).bit_length()
+    doublings = min(consecutive_failures - 1, max_doublings)
+    return min(
+        DEFAULT_BACKOFF_BASE_SECONDS * (2**doublings),
+        DEFAULT_BACKOFF_MAX_SECONDS,
+    )
+
+
 @dataclass
 class AccountRuntimeState:
     """Mutable runtime state for an account."""
@@ -84,6 +98,7 @@ class AccountRuntimeState:
         self.last_failure_category = ""
         if self.health_state in ("cooldown", "rate_limited", "quota_exhausted"):
             self.health_state = "healthy"
+            self.cooldown_until = 0.0
 
     def record_failure(
         self,
@@ -124,15 +139,12 @@ class AccountRuntimeState:
             # Mirror HealthManager.record_rate_limit so both state
             # machines expose the same label for the same event.
             self.health_state = "rate_limited"
-            if rate_limit_retry_after is not None and rate_limit_retry_after > 0:
-                self.cooldown_until = time.time() + rate_limit_retry_after
+            if rate_limit_retry_after is not None:
+                self.cooldown_until = time.time() + max(0.0, rate_limit_retry_after)
             else:
-                backoff = min(
-                    DEFAULT_BACKOFF_BASE_SECONDS
-                    * (2 ** (self.consecutive_failures - 1)),
-                    DEFAULT_BACKOFF_MAX_SECONDS,
+                self.cooldown_until = time.time() + _failure_backoff(
+                    self.consecutive_failures
                 )
-                self.cooldown_until = time.time() + backoff
         elif error_class in (
             "connect_timeout",
             "read_timeout",
@@ -140,11 +152,9 @@ class AccountRuntimeState:
             "connection_error",
         ):
             self.health_state = "cooldown"
-            backoff = min(
-                DEFAULT_BACKOFF_BASE_SECONDS * (2 ** (self.consecutive_failures - 1)),
-                DEFAULT_BACKOFF_MAX_SECONDS,
+            self.cooldown_until = time.time() + _failure_backoff(
+                self.consecutive_failures
             )
-            self.cooldown_until = time.time() + backoff
         # upstream_server_error, protocol_error, unknown, etc. - no cooldown
 
     def reset_health(self) -> None:
