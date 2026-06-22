@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol
 
 from eggpool.errors import ContextLimitExceededError
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from eggpool.catalog.limits import EffectiveModelLimits
     from eggpool.catalog.protocols import ProtocolName
 
 MIN_ESTIMATED_INPUT_TOKENS = 1_000
@@ -19,11 +20,11 @@ ESTIMATED_BYTES_PER_TOKEN = 3
 class ModelLimitCatalog(Protocol):
     """Catalog behavior needed to enforce request context limits."""
 
-    def get_model_for_provider(
+    def get_effective_limits(
         self,
         model_id: str,
         provider_id: str | None,
-    ) -> dict[str, Any] | None: ...
+    ) -> EffectiveModelLimits | None: ...
 
 
 def estimate_input_tokens(body: bytes) -> int:
@@ -76,20 +77,13 @@ def check_context_limits(
     catalog_cache: ModelLimitCatalog,
 ) -> None:
     """Reject requests that exceed a model's configured effective limits."""
-    model_info = catalog_cache.get_model_for_provider(model_id, provider_id)
-    if model_info is None:
+    effective = catalog_cache.get_effective_limits(model_id, provider_id)
+    if effective is None or not effective.enforce:
         return
 
-    effective_value = model_info.get("effective_limits")
-    if not isinstance(effective_value, dict) or not effective_value:
-        return
-    effective = cast("dict[str, Any]", effective_value)
-    if not effective.get("enforce", True):
-        return
-
-    max_context = _positive_limit(effective.get("context_tokens"))
-    max_input = _positive_limit(effective.get("input_tokens"))
-    max_output = _positive_limit(effective.get("output_tokens"))
+    max_context = _positive_limit(effective.context_tokens)
+    max_input = _positive_limit(effective.input_tokens)
+    max_output = _positive_limit(effective.output_tokens)
     if max_context is None and max_input is None and max_output is None:
         return
 
@@ -98,7 +92,12 @@ def check_context_limits(
 
     if max_input is not None and estimated_input > max_input:
         _raise_limit_error(
-            model_id, estimated_input, requested_output, max_context, max_input
+            model_id,
+            estimated_input,
+            requested_output,
+            max_context,
+            max_input,
+            max_output,
         )
     if (
         max_output is not None
@@ -106,14 +105,24 @@ def check_context_limits(
         and requested_output > max_output
     ):
         _raise_limit_error(
-            model_id, estimated_input, requested_output, max_context, max_input
+            model_id,
+            estimated_input,
+            requested_output,
+            max_context,
+            max_input,
+            max_output,
         )
     if (
         max_context is not None
         and estimated_input + (requested_output or 0) > max_context
     ):
         _raise_limit_error(
-            model_id, estimated_input, requested_output, max_context, max_input
+            model_id,
+            estimated_input,
+            requested_output,
+            max_context,
+            max_input,
+            max_output,
         )
 
 
@@ -130,6 +139,7 @@ def _raise_limit_error(
     requested_output: int | None,
     max_context: int | None,
     max_input: int | None,
+    max_output: int | None,
 ) -> None:
     """Raise a consistently populated context-limit error."""
     raise ContextLimitExceededError(
@@ -138,4 +148,5 @@ def _raise_limit_error(
         requested_output_tokens=requested_output,
         max_context_tokens=max_context,
         max_input_tokens=max_input,
+        max_output_tokens=max_output,
     )

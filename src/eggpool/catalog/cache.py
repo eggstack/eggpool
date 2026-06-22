@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
+from typing import Any, cast
 
 from eggpool.catalog.limits import EffectiveModelLimits, conservative_limits
 
@@ -116,6 +116,27 @@ class ModelCatalogCache:
             "output_source": limits.output_source,
         }
 
+    @staticmethod
+    def _effective_limits_from_info(
+        model_info: dict[str, Any] | None,
+    ) -> EffectiveModelLimits | None:
+        """Read typed effective limits from a model metadata entry."""
+        if model_info is None:
+            return None
+        raw_limits_value = model_info.get("effective_limits")
+        if not isinstance(raw_limits_value, dict) or not raw_limits_value:
+            return None
+        raw_limits = cast("dict[str, Any]", raw_limits_value)
+        return EffectiveModelLimits(
+            context_tokens=raw_limits.get("context_tokens"),
+            input_tokens=raw_limits.get("input_tokens"),
+            output_tokens=raw_limits.get("output_tokens"),
+            enforce=raw_limits.get("enforce", True),
+            context_source=raw_limits.get("context_source"),
+            input_source=raw_limits.get("input_source"),
+            output_source=raw_limits.get("output_source"),
+        )
+
     def _visible_provider_ids(
         self,
         visible_accounts: set[str],
@@ -191,29 +212,25 @@ class ModelCatalogCache:
         provider_ids: list[str],
     ) -> dict[str, Any] | None:
         """Merge per-provider effective limits across visible providers."""
+        limits = self._merged_effective_limits_value(model_id, provider_ids)
+        return None if limits is None else self._effective_limits_dict(limits)
+
+    def _merged_effective_limits_value(
+        self,
+        model_id: str,
+        provider_ids: list[str],
+    ) -> EffectiveModelLimits | None:
+        """Return typed conservative limits across visible providers."""
         all_limits: list[EffectiveModelLimits] = []
         for provider_id in provider_ids:
             provider_info = self._provider_models.get((model_id, provider_id))
-            if provider_info is None:
-                continue
-            effective_limits = provider_info.get("effective_limits")
-            if not effective_limits:
-                continue
-            all_limits.append(
-                EffectiveModelLimits(
-                    context_tokens=effective_limits.get("context_tokens"),
-                    input_tokens=effective_limits.get("input_tokens"),
-                    output_tokens=effective_limits.get("output_tokens"),
-                    enforce=effective_limits.get("enforce", True),
-                    context_source=effective_limits.get("context_source"),
-                    input_source=effective_limits.get("input_source"),
-                    output_source=effective_limits.get("output_source"),
-                )
-            )
+            limits = self._effective_limits_from_info(provider_info)
+            if limits is not None:
+                all_limits.append(limits)
 
         if not all_limits:
             return None
-        return self._effective_limits_dict(conservative_limits(all_limits))
+        return conservative_limits(all_limits)
 
     def mark_account_models_unavailable(self, account_name: str) -> None:
         """Mark all models as unavailable for an account."""
@@ -366,6 +383,31 @@ class ModelCatalogCache:
             if pinfo is not None:
                 return pinfo
         return self._models.get(model_id)
+
+    def get_effective_limits(
+        self,
+        model_id: str,
+        provider_id: str | None,
+    ) -> EffectiveModelLimits | None:
+        """Return request limits for a model and optional provider.
+
+        Provider-suffixed requests use that provider's limits. Unsuffixed
+        requests use the conservative merge across every provider that
+        currently supports the model, matching the limits exposed by the
+        model catalog.
+        """
+        if provider_id is not None:
+            return self._effective_limits_from_info(
+                self._provider_models.get((model_id, provider_id))
+            )
+
+        supporting_accounts = self._account_support.get(model_id, set())
+        provider_ids = self._visible_provider_ids(supporting_accounts)
+        merged = self._merged_effective_limits_value(model_id, provider_ids)
+        if merged is not None:
+            return merged
+
+        return self._effective_limits_from_info(self._models.get(model_id))
 
     def get_provider_model_entry(
         self,

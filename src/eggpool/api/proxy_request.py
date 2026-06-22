@@ -24,7 +24,7 @@ from eggpool.errors import (
     RequestTooLargeError,
     UpstreamExhaustedError,
 )
-from eggpool.request.body import read_body_limited
+from eggpool.request.body import encode_json_body, read_body_limited
 from eggpool.request.coordinator import (
     PreparedProxyResponse,
     ProxyRequestContext,
@@ -181,6 +181,7 @@ async def handle_proxy_request(
         started_at=time.time(),
         provider_id=provider_id,
         client_ip=get_client_ip(request),
+        upstream_body=_rewrite_provider_model(payload, model_id, provider_id),
     )
 
     logger.info(
@@ -223,3 +224,19 @@ async def handle_proxy_request(
         )
 
     return render_proxy_response(result)
+
+
+def _rewrite_provider_model(
+    payload: dict[str, Any],
+    model_id: str,
+    provider_id: str | None,
+) -> bytes | None:
+    """Remove EggPool's provider suffix before upstream dispatch.
+
+    ``None`` means the original request body can be forwarded byte-for-byte.
+    """
+    if provider_id is None:
+        return None
+    upstream_payload = dict(payload)
+    upstream_payload["model"] = model_id
+    return encode_json_body(upstream_payload)

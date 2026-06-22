@@ -3,12 +3,24 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+import json
+from typing import TYPE_CHECKING, Any
 
 from eggpool.errors import RequestTooLargeError
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from starlette.requests import Request
+
+
+def encode_json_body(payload: Mapping[str, Any]) -> bytes:
+    """Encode a modified proxy payload consistently and without ASCII expansion."""
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode()
 
 
 async def read_body_limited(request: Request, max_bytes: int) -> bytes:

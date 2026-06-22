@@ -23,12 +23,15 @@ def test_properties() -> None:
         requested_output_tokens=16384,
         max_context_tokens=220000,
         max_input_tokens=200000,
+        max_output_tokens=16384,
     )
     assert err.model_id == "MiniMax-M3/opencode-go"
     assert err.estimated_input_tokens == 200000
     assert err.requested_output_tokens == 16384
     assert err.max_context_tokens == 220000
     assert err.max_input_tokens == 200000
+    assert err.max_output_tokens == 16384
+    assert "max output 16384" in str(err)
 
 
 def test_message_contains_model() -> None:

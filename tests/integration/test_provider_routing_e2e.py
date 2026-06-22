@@ -7,6 +7,7 @@ clients are used.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 import httpx
@@ -246,7 +247,7 @@ async def test_opencode_go_provider_openai_path(
 ) -> None:
     """Request to opencode-go provider uses /chat/completions path."""
     with respx.mock:
-        respx.post(f"{OPENCODE_BASE}/chat/completions").mock(
+        route = respx.post(f"{OPENCODE_BASE}/chat/completions").mock(
             return_value=httpx.Response(200, json=MOCK_OPENAI_RESPONSE)
         )
 
@@ -262,6 +263,7 @@ async def test_opencode_go_provider_openai_path(
     assert response.status_code == 200
     body = response.json()
     assert body["choices"][0]["message"]["content"] == "Hello from provider"
+    assert json.loads(route.calls.last.request.content)["model"] == "gpt-4"
 
 
 # ── MiniMax provider: OpenAI path ──────────────────────────────────────────
@@ -274,7 +276,7 @@ async def test_minimax_provider_openai_path(
 ) -> None:
     """Request to minimax provider uses /v1/chat/completions path."""
     with respx.mock:
-        respx.post(f"{MINIMAX_BASE}/v1/chat/completions").mock(
+        route = respx.post(f"{MINIMAX_BASE}/v1/chat/completions").mock(
             return_value=httpx.Response(200, json=MOCK_OPENAI_RESPONSE)
         )
 
@@ -290,6 +292,39 @@ async def test_minimax_provider_openai_path(
     assert response.status_code == 200
     body = response.json()
     assert body["choices"][0]["message"]["content"] == "Hello from provider"
+    assert json.loads(route.calls.last.request.content)["model"] == "gpt-4"
+
+
+@pytest.mark.asyncio
+async def test_provider_suffix_is_removed_from_streaming_payload(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+) -> None:
+    """Streaming rewrites the model while retaining usage-option injection."""
+    stream_body = b'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\ndata: [DONE]\n\n'
+    with respx.mock:
+        route = respx.post(f"{MINIMAX_BASE}/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                content=stream_body,
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+
+        response = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-4/minimax",
+                "messages": [{"role": "user", "content": "Hi"}],
+                "stream": True,
+            },
+            headers=auth_headers,
+        )
+
+    assert response.status_code == 200
+    sent_payload = json.loads(route.calls.last.request.content)
+    assert sent_payload["model"] == "gpt-4"
+    assert sent_payload["stream_options"] == {"include_usage": True}
 
 
 # ── MiniMax provider: Anthropic path ───────────────────────────────────────
@@ -302,7 +337,7 @@ async def test_minimax_provider_anthropic_path(
 ) -> None:
     """Request to minimax provider uses /anthropic/v1/messages path."""
     with respx.mock:
-        respx.post(f"{MINIMAX_BASE}/anthropic/v1/messages").mock(
+        route = respx.post(f"{MINIMAX_BASE}/anthropic/v1/messages").mock(
             return_value=httpx.Response(200, json=MOCK_ANTHROPIC_RESPONSE)
         )
 
@@ -319,6 +354,7 @@ async def test_minimax_provider_anthropic_path(
     assert response.status_code == 200
     body = response.json()
     assert body["content"][0]["text"] == "Hello from provider"
+    assert json.loads(route.calls.last.request.content)["model"] == "claude-3"
 
 
 # ── No provider suffix: defaults to opencode-go ────────────────────────────

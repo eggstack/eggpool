@@ -102,15 +102,21 @@ class ContextLimitExceededError(AggregatorError):
         requested_output_tokens: int | None,
         max_context_tokens: int | None,
         max_input_tokens: int | None,
+        max_output_tokens: int | None = None,
     ) -> None:
         self.model_id = model_id
         self.estimated_input_tokens = estimated_input_tokens
         self.requested_output_tokens = requested_output_tokens
         self.max_context_tokens = max_context_tokens
         self.max_input_tokens = max_input_tokens
+        self.max_output_tokens = max_output_tokens
         parts = [f"model {model_id!r}"]
         if max_context_tokens is not None:
-            parts.append(f"limit {max_context_tokens}")
+            parts.append(f"max context {max_context_tokens}")
+        if max_input_tokens is not None:
+            parts.append(f"max input {max_input_tokens}")
+        if max_output_tokens is not None:
+            parts.append(f"max output {max_output_tokens}")
         parts.append(f"estimated input {estimated_input_tokens}")
         if requested_output_tokens is not None:
             parts.append(f"requested output {requested_output_tokens}")

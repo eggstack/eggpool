@@ -11,6 +11,8 @@ from eggpool.api.errors import anthropic_error_response, openai_error_response
 from eggpool.api.proxy_request import (
     _check_context_limits,
 )
+from eggpool.catalog.cache import ModelCatalogCache
+from eggpool.catalog.limits import EffectiveModelLimits
 from eggpool.errors import ContextLimitExceededError
 from eggpool.request.limits import (
     estimate_input_tokens,
@@ -23,10 +25,36 @@ class MockCatalogCache:
     def __init__(self, model_info: dict | None) -> None:
         self._model_info = model_info
 
-    def get_model_for_provider(
+    def get_effective_limits(
         self, model_id: str, provider_id: str | None
-    ) -> dict | None:
-        return self._model_info
+    ) -> EffectiveModelLimits | None:
+        if self._model_info is None:
+            return None
+        raw = self._model_info.get("effective_limits")
+        if not isinstance(raw, dict) or not raw:
+            return None
+        return EffectiveModelLimits(
+            context_tokens=raw.get("context_tokens"),
+            input_tokens=raw.get("input_tokens"),
+            output_tokens=raw.get("output_tokens"),
+            enforce=raw.get("enforce", True),
+            context_source=raw.get("context_source"),
+            input_source=raw.get("input_source"),
+            output_source=raw.get("output_source"),
+        )
+
+
+def _catalog_model(context_tokens: int) -> dict[str, object]:
+    return {
+        "model_id": "m1",
+        "protocol": "openai",
+        "effective_limits": {
+            "context_tokens": context_tokens,
+            "input_tokens": None,
+            "output_tokens": None,
+            "enforce": True,
+        },
+    }
 
 
 def test_context_input_estimate_is_conservative_and_unbounded() -> None:
@@ -213,6 +241,53 @@ def test_provider_specific_limits_are_used() -> None:
             protocol="openai",
             catalog_cache=cache,
         )
+
+
+def test_unsuffixed_request_uses_conservative_provider_limits() -> None:
+    cache = ModelCatalogCache()
+    cache.update_from_account("wide", "provider-wide", [_catalog_model(10_000)])
+    cache.update_from_account("narrow", "provider-narrow", [_catalog_model(1_000)])
+
+    with pytest.raises(ContextLimitExceededError) as exc_info:
+        _check_context_limits(
+            model_id="m1",
+            provider_id=None,
+            body=b"x" * 3_003,
+            payload={"model": "m1"},
+            protocol="openai",
+            catalog_cache=cache,
+        )
+
+    assert exc_info.value.max_context_tokens == 1_000
+
+
+def test_provider_suffix_keeps_provider_specific_limits() -> None:
+    cache = ModelCatalogCache()
+    cache.update_from_account("wide", "provider-wide", [_catalog_model(10_000)])
+    cache.update_from_account("narrow", "provider-narrow", [_catalog_model(1_000)])
+
+    _check_context_limits(
+        model_id="m1",
+        provider_id="provider-wide",
+        body=b"x" * 3_003,
+        payload={"model": "m1"},
+        protocol="openai",
+        catalog_cache=cache,
+    )
+
+
+def test_provider_suffix_does_not_borrow_another_providers_limits() -> None:
+    cache = ModelCatalogCache()
+    cache.update_from_account("narrow", "provider-narrow", [_catalog_model(1_000)])
+
+    _check_context_limits(
+        model_id="m1",
+        provider_id="provider-without-model",
+        body=b"x" * 3_003,
+        payload={"model": "m1"},
+        protocol="openai",
+        catalog_cache=cache,
+    )
 
 
 def test_policy_rejection_does_not_penalize_account_health() -> None:

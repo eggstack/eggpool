@@ -44,6 +44,7 @@ from eggpool.request.attempt_finalizer import (
     AttemptFinalizationData,
     AttemptFinalizer,
 )
+from eggpool.request.body import encode_json_body
 from eggpool.request.finalizer import (
     FinalizationData,
     FinalizationOutcome,
@@ -117,6 +118,12 @@ class ProxyRequestContext:
     attempted_accounts: set[str] = field(default_factory=set[str])
     provider_id: str | None = None
     client_ip: str = ""
+    upstream_body: bytes | None = None
+
+    @property
+    def body_for_upstream(self) -> bytes:
+        """Return the dispatch body, preserving original client bytes separately."""
+        return self.original_body if self.upstream_body is None else self.upstream_body
 
 
 @dataclass(frozen=True)
@@ -731,7 +738,7 @@ class RequestCoordinator:
                 "POST",
                 upstream_url,
                 headers=headers,
-                content=context.original_body,
+                content=context.body_for_upstream,
             )
             response = await client.send(upstream_request, stream=True)
             # Headers available immediately after send(); capture
@@ -868,11 +875,11 @@ class RequestCoordinator:
         upstream_url = self._get_upstream_url(context.protocol, selected.provider_id)
 
         # Inject stream_options.include_usage for OpenAI
-        body_to_send = context.original_body
+        body_to_send = context.body_for_upstream
         if context.protocol == "openai":
             payload_obj: object
             try:
-                payload_obj = json.loads(context.original_body)
+                payload_obj = json.loads(body_to_send)
             except (json.JSONDecodeError, ValueError):
                 pass
             else:
@@ -882,10 +889,10 @@ class RequestCoordinator:
                     if isinstance(stream_opts_value, dict):
                         if "include_usage" not in stream_opts_value:
                             stream_opts_value["include_usage"] = True
-                            body_to_send = json.dumps(payload).encode()
+                            body_to_send = encode_json_body(payload)
                     elif stream_opts_value is None:
                         payload["stream_options"] = {"include_usage": True}
-                        body_to_send = json.dumps(payload).encode()
+                        body_to_send = encode_json_body(payload)
                     else:
                         # Non-dict stream_options (list, str, bool, etc.) —
                         # leave the body unchanged and let upstream reject it.
