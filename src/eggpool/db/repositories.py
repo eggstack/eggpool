@@ -870,31 +870,44 @@ class PingRepository:
         start: str,
         end: str,
     ) -> list[dict[str, Any]]:
-        """Per-provider aggregate: avg/min/max latency, success rate, last ping."""
+        """Per-provider aggregate: avg/min/max latency, success rate, last ping.
+
+        Uses a single window function to identify the most recent ping per
+        provider instead of two correlated subqueries, so SQLite scans
+        ``provider_pings`` once and aggregates in a single pass.
+        """
         sql = """
+        WITH ranked AS (
+            SELECT
+                pp.provider_id,
+                pp.latency_ms,
+                pp.error,
+                pp.model_count,
+                pp.probed_at,
+                ROW_NUMBER() OVER (
+                    PARTITION BY pp.provider_id ORDER BY pp.probed_at DESC
+                ) as rn
+            FROM provider_pings pp
+            WHERE pp.probed_at >= ? AND pp.probed_at < ?
+        )
         SELECT
-            pp.provider_id,
+            provider_id,
             COUNT(*) as ping_count,
-            COALESCE(AVG(pp.latency_ms), 0) as avg_latency_ms,
-            COALESCE(MIN(pp.latency_ms), 0) as min_latency_ms,
-            COALESCE(MAX(pp.latency_ms), 0) as max_latency_ms,
-            SUM(CASE WHEN pp.error IS NULL THEN 1 ELSE 0 END) as success_count,
-            SUM(CASE WHEN pp.error IS NOT NULL THEN 1 ELSE 0 END) as failure_count,
+            COALESCE(AVG(latency_ms), 0) as avg_latency_ms,
+            COALESCE(MIN(latency_ms), 0) as min_latency_ms,
+            COALESCE(MAX(latency_ms), 0) as max_latency_ms,
+            SUM(CASE WHEN error IS NULL THEN 1 ELSE 0 END) as success_count,
+            SUM(CASE WHEN error IS NOT NULL THEN 1 ELSE 0 END) as failure_count,
             ROUND(
-                100.0 * SUM(CASE WHEN pp.error IS NULL THEN 1 ELSE 0 END) / COUNT(*),
+                100.0 * SUM(CASE WHEN error IS NULL THEN 1 ELSE 0 END) / COUNT(*),
                 1
             ) as success_rate,
-            MAX(pp.probed_at) as last_ping_at,
-            (SELECT pp2.latency_ms FROM provider_pings pp2
-             WHERE pp2.provider_id = pp.provider_id
-             ORDER BY pp2.probed_at DESC LIMIT 1) as last_latency_ms,
-            (SELECT pp3.model_count FROM provider_pings pp3
-             WHERE pp3.provider_id = pp.provider_id
-             ORDER BY pp3.probed_at DESC LIMIT 1) as last_model_count
-        FROM provider_pings pp
-        WHERE pp.probed_at >= ? AND pp.probed_at < ?
-        GROUP BY pp.provider_id
-        ORDER BY pp.provider_id
+            MAX(probed_at) as last_ping_at,
+            MAX(CASE WHEN rn = 1 THEN latency_ms END) as last_latency_ms,
+            MAX(CASE WHEN rn = 1 THEN model_count END) as last_model_count
+        FROM ranked
+        GROUP BY provider_id
+        ORDER BY provider_id
         """
         rows = await self._db.fetch_all(sql, (start, end))
         return [dict(row) for row in rows]

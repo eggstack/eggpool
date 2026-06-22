@@ -6,6 +6,7 @@ All free-text fields are HTML-escaped.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -33,14 +34,21 @@ if TYPE_CHECKING:
 
 DEFAULT_REFRESH_S = 15
 
-# Heatmap TimeRange is stable for a fixed window length, so cache it once
-# per process to avoid reconstructing the (start, end) pair on every
-# overview request and to let the dashboard cache serve subsequent hits.
-_HEATMAP_TIME_RANGE = TimeRange(
-    start=datetime.now(UTC) - timedelta(days=90),
-    end=datetime.now(UTC),
-    label="90d",
-)
+# Heatmap TimeRange shows the trailing window.  Capped at 90 days so the
+# grid stays bounded and at ``retain_request_stats_days`` so it never
+# scans rows the retention job will purge.  Recomputed per request so
+# the dashboard cache key naturally advances with wall-clock time.
+_HEATMAP_MAX_DAYS = 90
+
+
+def _heatmap_time_range(retain_days: int) -> TimeRange:
+    """Return a TimeRange for the heatmap bounded by retention + max."""
+    days = max(1, min(_HEATMAP_MAX_DAYS, retain_days))
+    return TimeRange(
+        start=datetime.now(UTC) - timedelta(days=days),
+        end=datetime.now(UTC),
+        label=f"{days}d",
+    )
 
 
 def _get_dashboard_config(request: Request) -> Any:
@@ -90,27 +98,40 @@ async def handle_overview(
     dashboard_config = _get_dashboard_config(request)
     time_range = _resolve(request, period)
     stats = request.app.state.stats
-    accounts = await stats.get_account_stats(time_range, use_cache=True)
+    heatmap_range = _heatmap_time_range(dashboard_config.retain_request_stats_days)
+
+    # Fan out the independent stat reads concurrently.  The single
+    # shared connection lock serializes per-query execution, so without
+    # this the page load is the sum of ten sequential round trips; with
+    # it the load is bounded by the slowest query instead.
+    (
+        accounts,
+        models,
+        events,
+        bandwidth_daily,
+        ping_summary,
+        ip_stats,
+        timeseries,
+    ) = await asyncio.gather(
+        stats.get_account_stats(time_range, use_cache=True),
+        stats.get_model_stats(time_range, use_cache=True),
+        stats.get_recent_events(limit=10),
+        stats.get_bandwidth_timeseries(heatmap_range, use_cache=True),
+        stats.get_ping_summary(time_range, use_cache=True),
+        stats.get_ip_stats(time_range, use_cache=True),
+        stats.get_timeseries(time_range, bucket="hour"),
+    )
+
+    # ``get_dashboard_overview`` is derived from ``accounts`` and the
+    # per-period summary; both are cache hits after the gather above.
     overview = await stats.get_dashboard_overview(
         time_range, account_stats=accounts, use_cache=True
-    )
-    models = await stats.get_model_stats(time_range, use_cache=True)
-    events = await stats.get_recent_events(limit=10)
-
-    # The heatmap always shows the trailing 90 days, so use a fixed
-    # TimeRange that the dashboard cache can serve from. The end timestamp
-    # is stable for the cache TTL window.
-    bandwidth_daily = await stats.get_bandwidth_timeseries(
-        _HEATMAP_TIME_RANGE, use_cache=True
     )
 
     refresh_s = dashboard_config.refresh_interval_s
     theme_css, heatmap_colors, current_theme, available = _get_theme_data(
         request, theme
     )
-    ping_summary = await stats.get_ping_summary(time_range, use_cache=True)
-    ip_stats = await stats.get_ip_stats(time_range, use_cache=True)
-    timeseries = await stats.get_timeseries(time_range, bucket="hour")
     html = render_overview(
         overview=overview,
         accounts=accounts,
