@@ -32,22 +32,48 @@ fi
 # Save the scripts directory for install_prompt.py
 SCRIPTS_DIR="${SCRIPTS_DIR:-$(pwd)/scripts}"
 
-# Check for Python 3.12+
+# Find the best available Python >= 3.12
+# Probes version-suffixed binaries (python3.15, python3.14, ...) for systems
+# where the default `python3` is an older system version.
+find_python() {
+    for minor in 15 14 13 12; do
+        local candidate="python3.${minor}"
+        if command -v "$candidate" &> /dev/null; then
+            local ver
+            ver=$("$candidate" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null) || continue
+            local maj min
+            maj=$(echo "$ver" | cut -d. -f1)
+            min=$(echo "$ver" | cut -d. -f2)
+            if [ "$maj" -ge 3 ] && [ "$min" -ge 12 ]; then
+                PYTHON="$candidate"
+                PYTHON_VERSION="$ver"
+                return 0
+            fi
+        fi
+    done
+    # Fallback to bare python3
+    if command -v python3 &> /dev/null; then
+        local ver
+        ver=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null) || true
+        local maj min
+        maj=$(echo "$ver" | cut -d. -f1)
+        min=$(echo "$ver" | cut -d. -f2)
+        if [ "$maj" -ge 3 ] && [ "$min" -ge 12 ]; then
+            PYTHON="python3"
+            PYTHON_VERSION="$ver"
+            return 0
+        fi
+    fi
+    return 1
+}
+
 echo "Checking Python version..."
-if ! command -v python3 &> /dev/null; then
-    echo "Error: python3 not found. Please install Python 3.12 or later."
+if ! find_python; then
+    echo "Error: Python 3.12 or later required."
+    echo "Install Python from https://www.python.org/downloads/ or your package manager."
     exit 1
 fi
-
-PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-PYTHON_MAJOR=$(echo "$PYTHON_VERSION" | cut -d. -f1)
-PYTHON_MINOR=$(echo "$PYTHON_VERSION" | cut -d. -f2)
-
-if [ "$PYTHON_MAJOR" -lt 3 ] || { [ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -lt 12 ]; }; then
-    echo "Error: Python 3.12 or later required (found $PYTHON_VERSION)"
-    exit 1
-fi
-echo "  Python $PYTHON_VERSION found"
+echo "  Python $PYTHON_VERSION found ($PYTHON)"
 
 # Check for existing eggpool install
 echo "Checking for existing eggpool install..."
@@ -115,10 +141,10 @@ echo ""
 # to the controlling terminal. Keep the existing EOF/skip behavior when no
 # controlling terminal is available (for example, in unattended installs).
 if [ -t 0 ]; then
-    python3 "${SCRIPTS_DIR}/install_prompt.py"
+    $PYTHON "${SCRIPTS_DIR}/install_prompt.py"
 elif { exec 3</dev/tty; } 2>/dev/null; then
-    python3 "${SCRIPTS_DIR}/install_prompt.py" <&3
+    $PYTHON "${SCRIPTS_DIR}/install_prompt.py" <&3
     exec 3<&-
 else
-    python3 "${SCRIPTS_DIR}/install_prompt.py"
+    $PYTHON "${SCRIPTS_DIR}/install_prompt.py"
 fi
