@@ -6,7 +6,7 @@ import asyncio
 import datetime as _dt
 import json
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from eggpool.catalog.cache import ModelCatalogCache
 from eggpool.catalog.fetcher import fetch_models_for_account
@@ -62,6 +62,48 @@ def _ts_to_unix(value: object) -> float:
             return dt.timestamp()
         except ValueError:
             return 0.0
+
+
+def _parse_metadata_object(
+    value: object,
+    *,
+    model_id: str,
+    field_name: str,
+) -> dict[str, Any]:
+    """Parse a persisted model-metadata object without aborting hydration.
+
+    Catalog metadata is advisory. A corrupt value must not prevent unrelated
+    models and account support from loading, but it should remain observable to
+    operators through a warning.
+    """
+    if value is None or value == "":
+        return {}
+    if isinstance(value, dict):
+        return dict(cast("dict[str, Any]", value))
+    if not isinstance(value, (str, bytes, bytearray)):
+        logger.warning(
+            "Ignoring invalid cached %s for model %r",
+            field_name,
+            model_id,
+        )
+        return {}
+    try:
+        parsed: object = json.loads(value)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        logger.warning(
+            "Ignoring malformed cached %s for model %r",
+            field_name,
+            model_id,
+        )
+        return {}
+    if not isinstance(parsed, dict):
+        logger.warning(
+            "Ignoring non-object cached %s for model %r",
+            field_name,
+            model_id,
+        )
+        return {}
+    return cast("dict[str, Any]", parsed)
 
 
 class CatalogService:
@@ -340,11 +382,17 @@ class CatalogService:
                 "first_seen_at, last_seen_at, protocol_source FROM models"
             )
             for row in rows:
-                model_id = row["model_id"]
-                caps_raw = row["capabilities"]
-                caps: dict[str, Any] = json.loads(caps_raw) if caps_raw else {}
-                meta_raw = row["source_metadata"]
-                meta: dict[str, Any] = json.loads(meta_raw) if meta_raw else {}
+                model_id = str(row["model_id"])
+                caps = _parse_metadata_object(
+                    row["capabilities"],
+                    model_id=model_id,
+                    field_name="capabilities",
+                )
+                meta = _parse_metadata_object(
+                    row["source_metadata"],
+                    model_id=model_id,
+                    field_name="source_metadata",
+                )
                 self._cache.load_model(
                     model_id=model_id,
                     display_name=row["display_name"],
@@ -363,12 +411,18 @@ class CatalogService:
                 "FROM provider_model_metadata"
             )
             for row in provider_rows:
-                caps_raw = row["capabilities"]
-                caps: dict[str, Any] = json.loads(caps_raw) if caps_raw else {}
-                meta_raw = row["source_metadata"]
-                meta: dict[str, Any] = json.loads(meta_raw) if meta_raw else {}
                 provider_id = str(row["provider_id"])
                 model_id = str(row["model_id"])
+                caps = _parse_metadata_object(
+                    row["capabilities"],
+                    model_id=model_id,
+                    field_name="capabilities",
+                )
+                meta = _parse_metadata_object(
+                    row["source_metadata"],
+                    model_id=model_id,
+                    field_name="source_metadata",
+                )
                 effective = self._limit_resolver.resolve(
                     provider_id=provider_id,
                     model_id=model_id,
@@ -431,8 +485,10 @@ class CatalogService:
                         # Populate per-provider metadata from global entry
                         # so provider-suffixed exposure works before the
                         # next live refresh.
-                        provider_key = (model_id, provider_id)
-                        if provider_key not in self._cache.get_provider_model_entries():
+                        if (
+                            self._cache.get_provider_model_entry(model_id, provider_id)
+                            is None
+                        ):
                             model_info = self._cache.get_model(model_id)
                             if model_info is not None:
                                 provider_entry = dict(model_info)
