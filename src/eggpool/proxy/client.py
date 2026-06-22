@@ -6,6 +6,8 @@ import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     import httpx
 
 logger = logging.getLogger(__name__)
@@ -14,9 +16,11 @@ HOP_BY_HOP_HEADERS = frozenset(
     {
         "connection",
         "keep-alive",
+        "proxy-connection",
         "proxy-authenticate",
         "proxy-authorization",
         "te",
+        "trailer",
         "trailers",
         "transfer-encoding",
         "upgrade",
@@ -52,12 +56,17 @@ def sanitize_request_headers(headers: dict[str, str]) -> dict[str, str]:
     :func:`eggpool.providers.contract.build_upstream_headers` to compose
     the final upstream header set after sanitization.
     """
+    connection_headers = _connection_header_tokens(
+        value for key, value in headers.items() if key.casefold() == "connection"
+    )
     filtered: dict[str, str] = {}
     for key, value in headers.items():
         lower_key = key.lower()
         if lower_key in LOCAL_CREDENTIAL_HEADERS:
             continue
         if lower_key in HOP_BY_HOP_HEADERS:
+            continue
+        if lower_key in connection_headers:
             continue
         if lower_key in ("host", "content-length"):
             continue
@@ -98,10 +107,17 @@ def filter_response_headers(
     - Preserve useful headers
     - Preserve duplicate headers (e.g. multiple Set-Cookie) as separate entries
     """
+    connection_headers = _connection_header_tokens(
+        raw_value.decode("latin-1")
+        for raw_name, raw_value in headers.raw
+        if raw_name.decode("latin-1").casefold() == "connection"
+    )
     filtered: list[tuple[str, str]] = []
     for raw_name, raw_value in headers.raw:
         lower_name = raw_name.decode("latin-1").lower()
         if lower_name in HOP_BY_HOP_HEADERS:
+            continue
+        if lower_name in connection_headers:
             continue
         if lower_name in ("content-encoding", "content-length"):
             # HTTPX decodes compressed bodies for .content and
@@ -112,3 +128,13 @@ def filter_response_headers(
             continue
         filtered.append((raw_name.decode("latin-1"), raw_value.decode("latin-1")))
     return filtered
+
+
+def _connection_header_tokens(values: Iterable[str]) -> set[str]:
+    """Return lower-cased header names nominated by Connection fields."""
+    return {
+        token.strip().casefold()
+        for value in values
+        for token in value.split(",")
+        if token.strip()
+    }

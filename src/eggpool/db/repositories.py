@@ -238,7 +238,7 @@ class RequestRepository:
             "cache_read_tokens = ?, cache_write_tokens = ?, "
             "reasoning_tokens = ?, thinking_characters = ?, "
             "retry_count = ?, status_code = ? "
-            "WHERE id = ?",
+            "WHERE id = ? AND status = 'pending'",
             (
                 status,
                 input_tokens,
@@ -289,7 +289,7 @@ class RequestRepository:
             "cache_read_tokens = ?, cache_write_tokens = ?, "
             "reasoning_tokens = ?, thinking_characters = ?, "
             "retry_count = ?, status_code = ? "
-            "WHERE id = ?",
+            "WHERE id = ? AND status = 'pending'",
             (
                 status,
                 input_tokens,

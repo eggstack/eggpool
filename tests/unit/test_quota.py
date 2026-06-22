@@ -216,6 +216,20 @@ class TestReservation:
         assert reservation.released
         assert reservation.release_reason == "completed"
 
+    def test_expiry_boundary_and_epoch_release_timestamp(self) -> None:
+        reservation = Reservation(
+            reservation_id="test-id",
+            account_name="test-account",
+            estimated_tokens=100,
+            estimated_cost_microdollars=500,
+            request_id="req-123",
+            created_at=0.0,
+            expires_at=10.0,
+        )
+        assert reservation.is_expired(10.0)
+        reservation.release("completed", timestamp=0.0)
+        assert reservation.released_at == 0.0
+
 
 class TestReservationManager:
     """Tests for ReservationManager."""
@@ -264,6 +278,13 @@ class TestReservationManager:
 
         cleaned = manager.reconcile_reservations()
         assert cleaned == 1
+
+    def test_explicit_zero_ttl_is_not_replaced_by_default(self) -> None:
+        manager = ReservationManager(reservation_ttl_seconds=300.0)
+        reservation = manager.create_reservation(
+            "account1", 100, 500, "req-1", ttl_seconds=0.0
+        )
+        assert reservation.expires_at == reservation.created_at
 
 
 class TestQuotaFairScorer:

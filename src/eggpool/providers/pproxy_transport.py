@@ -216,6 +216,9 @@ class PProxyNetworkStream(httpcore.AsyncNetworkStream):
                 server_hostname=server_hostname,
                 ssl_handshake_timeout=timeout,
             )
+        except asyncio.CancelledError:
+            await self.aclose()
+            raise
         except TimeoutError as exc:
             await self.aclose()
             raise httpcore.ConnectTimeout(exc) from exc

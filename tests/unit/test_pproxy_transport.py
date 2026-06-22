@@ -12,6 +12,7 @@ import pytest
 from eggpool.providers.pproxy_transport import (
     AsyncPProxyTransport,
     PProxyNetworkBackend,
+    PProxyNetworkStream,
 )
 
 
@@ -80,6 +81,21 @@ async def test_connect_closes_stream_when_socket_options_fail() -> None:
             443,
             socket_options=[(1, 2, 3)],
         )
+
+    writer.close.assert_called_once_with()
+    writer.wait_closed.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_tls_cancellation_closes_stream() -> None:
+    reader = asyncio.StreamReader()
+    writer = MagicMock(spec=asyncio.StreamWriter)
+    writer.start_tls = AsyncMock(side_effect=asyncio.CancelledError)
+    writer.wait_closed = AsyncMock()
+    stream = PProxyNetworkStream(reader, writer)
+
+    with pytest.raises(asyncio.CancelledError):
+        await stream.start_tls(MagicMock())
 
     writer.close.assert_called_once_with()
     writer.wait_closed.assert_awaited_once_with()

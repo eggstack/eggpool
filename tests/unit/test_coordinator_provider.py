@@ -34,6 +34,12 @@ def _make_context(**overrides: Any) -> ProxyRequestContext:
     return ProxyRequestContext(**defaults)
 
 
+def test_elapsed_latency_uses_monotonic_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    context = _make_context(started_at=10_000.0, started_monotonic=100.0)
+    monkeypatch.setattr("eggpool.request.coordinator.time.monotonic", lambda: 100.25)
+    assert RequestCoordinator._elapsed_ms(context) == 250
+
+
 class TestSelectedAttemptProviderId:
     def test_has_provider_id_field(self) -> None:
         attempt = SelectedAttempt(

@@ -37,14 +37,14 @@ class Reservation:
         """Check if reservation has expired."""
         if current_time is None:
             current_time = time.time()
-        return current_time > self.expires_at
+        return current_time >= self.expires_at
 
     def release(self, reason: str = "", timestamp: float | None = None) -> None:
         """Mark reservation as released."""
         if self.released:
             return
         self.released = True
-        self.released_at = timestamp or time.time()
+        self.released_at = time.time() if timestamp is None else timestamp
         self.release_reason = reason
 
 
@@ -71,7 +71,7 @@ class ReservationManager:
         """Create a new reservation for an account."""
         reservation_id = str(uuid.uuid4())
         now = time.time()
-        ttl = ttl_seconds or self.reservation_ttl_seconds
+        ttl = self.reservation_ttl_seconds if ttl_seconds is None else ttl_seconds
 
         reservation = Reservation(
             reservation_id=reservation_id,

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
 
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
+from eggpool.errors import DatabaseError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -30,6 +32,36 @@ async def test_connect_disconnect(tmp_path: pytest.TempPathFactory) -> None:
     await database.connect()
     assert database.connection is not None
     await database.disconnect()
+
+
+@pytest.mark.asyncio()
+async def test_connect_rejects_duplicate_connection(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    database = Database(path=str(tmp_path / "duplicate.sqlite3"))
+    await database.connect()
+    try:
+        with pytest.raises(DatabaseError, match="already connected"):
+            await database.connect()
+    finally:
+        await database.disconnect()
+
+
+@pytest.mark.asyncio()
+async def test_connect_closes_partially_initialized_connection(monkeypatch) -> None:
+    connection = MagicMock()
+    connection.execute = AsyncMock(side_effect=RuntimeError("pragma failed"))
+    connection.close = AsyncMock()
+    connect = AsyncMock(return_value=connection)
+    monkeypatch.setattr("eggpool.db.connection.aiosqlite.connect", connect)
+    database = Database(path="broken.sqlite3")
+
+    with pytest.raises(DatabaseError, match="pragma failed"):
+        await database.connect()
+
+    connection.close.assert_awaited_once_with()
+    with pytest.raises(DatabaseError, match="not connected"):
+        _ = database.connection
 
 
 @pytest.mark.asyncio()

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
@@ -58,6 +58,8 @@ class Database:
 
     async def connect(self) -> None:
         """Open the connection and set pragmas."""
+        if self._conn is not None:
+            raise DatabaseError("Database already connected")
         try:
             if self._read_only:
                 # Use a read-only URI so SQLite refuses to change
@@ -77,8 +79,19 @@ class Database:
                 await self._conn.execute("PRAGMA journal_mode = WAL")
             await self._conn.execute(f"PRAGMA synchronous = {self._synchronous}")
             await self._conn.commit()
+        except asyncio.CancelledError:
+            await self._close_failed_connection()
+            raise
         except Exception as exc:
+            await self._close_failed_connection()
             raise DatabaseError(f"Failed to connect to database: {exc}") from exc
+
+    async def _close_failed_connection(self) -> None:
+        """Close and forget a partially initialized connection."""
+        conn, self._conn = self._conn, None
+        if conn is not None:
+            with suppress(Exception):
+                await conn.close()
 
     @staticmethod
     def _build_read_only_uri(path: str) -> tuple[str, bool]:

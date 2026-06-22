@@ -112,6 +112,7 @@ class ProxyRequestContext:
     original_body: bytes
     incoming_headers: dict[str, str]
     started_at: float = field(default_factory=time.time)
+    started_monotonic: float = field(default_factory=time.monotonic)
     client_metadata: dict[str, Any] = field(default_factory=dict[str, Any])
     attempted_accounts: set[str] = field(default_factory=set[str])
     provider_id: str | None = None
@@ -700,7 +701,7 @@ class RequestCoordinator:
                 return await self._execute_non_streaming(context, selected, attempt_num)
         except asyncio.CancelledError:
             # Client cancellation after selection - finalize the attempt
-            elapsed_ms = int((time.time() - context.started_at) * 1000)
+            elapsed_ms = self._elapsed_ms(context)
             context.client_metadata["_cancelled_finalized"] = True
             await self._finalizer.finalize(
                 selected,
@@ -735,7 +736,7 @@ class RequestCoordinator:
             response = await client.send(upstream_request, stream=True)
             # Headers available immediately after send(); capture
             # first-byte time before reading the body.
-            first_byte_ms = int((time.time() - context.started_at) * 1000)
+            first_byte_ms = self._elapsed_ms(context)
             await response.aread()
         except httpx.ConnectError as err:
             if response is not None:
@@ -794,7 +795,7 @@ class RequestCoordinator:
                 await self._finalize_non_retryable(
                     context, selected, response.status_code, resp_headers, resp_body
                 )
-                elapsed_ms = int((time.time() - context.started_at) * 1000)
+                elapsed_ms = self._elapsed_ms(context)
                 resp_headers.append(("x-proxy-request-id", context.request_id))
                 resp_headers.append(("x-proxy-attempt-count", str(attempt_num)))
                 return PreparedProxyResponse(
@@ -810,7 +811,7 @@ class RequestCoordinator:
             # Success path
             body = response.content
             resp_headers = filter_response_headers(response.headers)
-            elapsed_ms = int((time.time() - context.started_at) * 1000)
+            elapsed_ms = self._elapsed_ms(context)
 
             usage = self._extract_non_stream_usage(context.protocol, body)
             upstream_req_id = self._get_header_value(
@@ -972,7 +973,7 @@ class RequestCoordinator:
                 upstream_response=response,
                 selected=selected,
                 resp_headers=resp_headers,
-                request_started_at=context.started_at,
+                request_started_monotonic=context.started_monotonic,
             )
             generator_created = True
         finally:
@@ -990,7 +991,7 @@ class RequestCoordinator:
             stream_iterator=stream_iter,
             request_id=context.request_id,
             account_name=selected.account_name,
-            latency_ms=int((time.time() - context.started_at) * 1000),
+            latency_ms=self._elapsed_ms(context),
             attempt_count=attempt_num,
         )
 
@@ -1000,7 +1001,7 @@ class RequestCoordinator:
         upstream_response: httpx.Response,
         selected: SelectedAttempt,
         resp_headers: list[tuple[str, str]],
-        request_started_at: float | None = None,
+        request_started_monotonic: float | None = None,
     ) -> AsyncIterator[bytes]:
         """Build an async generator that streams upstream bytes downstream,
         extracts usage via IncrementalSSEObserver, and finalizes the request
@@ -1008,11 +1009,15 @@ class RequestCoordinator:
         observer = IncrementalSSEObserver(context.protocol)
         bytes_emitted = 0
         first_byte_ms = 0.0
-        started = time.time()
+        started = time.monotonic()
         # Use the caller-provided request start time so first_byte_ms
         # and upstream_latency_ms include routing, persistence, and
         # upstream connection/header time.
-        reference = request_started_at if request_started_at is not None else started
+        reference = (
+            request_started_monotonic
+            if request_started_monotonic is not None
+            else started
+        )
         finalizer = self._finalizer
         persist_error_detail = self._persist_error_detail
 
@@ -1021,7 +1026,7 @@ class RequestCoordinator:
             try:
                 async for chunk in upstream_response.aiter_bytes():
                     if first_byte_ms == 0.0:
-                        first_byte_ms = (time.time() - reference) * 1000
+                        first_byte_ms = (time.monotonic() - reference) * 1000
 
                     observer.observe(chunk)
                     bytes_emitted = observer.bytes_emitted
@@ -1045,7 +1050,7 @@ class RequestCoordinator:
                         reasoning_tokens=usage_result.reasoning_tokens,
                         thinking_characters=usage_result.thinking_characters,
                         first_byte_ms=int(first_byte_ms) if first_byte_ms > 0 else None,
-                        upstream_latency_ms=int((time.time() - reference) * 1000),
+                        upstream_latency_ms=int((time.monotonic() - reference) * 1000),
                         bytes_emitted=bytes_emitted,
                         upstream_request_id=self._get_header_value(
                             resp_headers, _UPSTREAM_REQUEST_ID_HEADERS
@@ -1068,7 +1073,9 @@ class RequestCoordinator:
                             first_byte_ms=(
                                 int(first_byte_ms) if first_byte_ms > 0 else None
                             ),
-                            upstream_latency_ms=int((time.time() - reference) * 1000),
+                            upstream_latency_ms=int(
+                                (time.monotonic() - reference) * 1000
+                            ),
                             bytes_emitted=bytes_emitted,
                             input_tokens=usage_result.input_tokens,
                             output_tokens=usage_result.output_tokens,
@@ -1090,7 +1097,7 @@ class RequestCoordinator:
                     FinalizationData(
                         outcome=FinalizationOutcome.MIDSTREAM_ERROR,
                         first_byte_ms=int(first_byte_ms) if first_byte_ms > 0 else None,
-                        upstream_latency_ms=int((time.time() - reference) * 1000),
+                        upstream_latency_ms=int((time.monotonic() - reference) * 1000),
                         bytes_emitted=bytes_emitted,
                         input_tokens=usage_result.input_tokens,
                         output_tokens=usage_result.output_tokens,
@@ -1189,6 +1196,11 @@ class RequestCoordinator:
             if key.lower() in lower_names:
                 return value
         return None
+
+    @staticmethod
+    def _elapsed_ms(context: ProxyRequestContext) -> int:
+        """Return request latency from a clock unaffected by wall-clock jumps."""
+        return max(0, int((time.monotonic() - context.started_monotonic) * 1000))
 
     def _classify_upstream_error(
         self,
@@ -1348,7 +1360,7 @@ class RequestCoordinator:
         resp_body: bytes,
     ) -> None:
         """Finalize a non-retryable client error (4xx)."""
-        elapsed_ms = int((time.time() - context.started_at) * 1000)
+        elapsed_ms = self._elapsed_ms(context)
         await self._finalizer.finalize(
             selected,
             FinalizationData(
@@ -1377,7 +1389,7 @@ class RequestCoordinator:
         Uses last_selected for finalization instead of reconstructing from DB.
         Preserves the last upstream response when available.
         """
-        elapsed_ms = int((time.time() - context.started_at) * 1000)
+        elapsed_ms = self._elapsed_ms(context)
 
         # Finalize the request if we have a selected attempt
         if last_selected is not None:

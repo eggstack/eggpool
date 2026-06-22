@@ -195,6 +195,14 @@ class TestRequireAuthAtStartup:
         result = require_auth_at_startup("secret-value")
         assert result == "secret-value"
 
+    @pytest.mark.parametrize(
+        "value",
+        ["short", "contains spaces", "contains.dot", "x" * 513],
+    )
+    def test_rejects_keys_runtime_validation_cannot_accept(self, value: str) -> None:
+        with pytest.raises(RuntimeError, match="8-512 characters"):
+            require_auth_at_startup(value)
+
     def test_raises_when_key_is_whitespace(self) -> None:
         """Raises RuntimeError when key is whitespace-only."""
         with pytest.raises(RuntimeError, match="not set"):

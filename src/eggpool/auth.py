@@ -63,6 +63,11 @@ def require_auth_at_startup(api_key: str | None) -> str | None:
             "API key contains a placeholder value. "
             "Set a real key before starting the service."
         )
+    if _PROVIDED_KEY_RE.fullmatch(expected) is None:
+        raise RuntimeError(
+            "API key must be 8-512 characters and contain only letters, "
+            "numbers, underscores, or hyphens"
+        )
     return expected
 
 

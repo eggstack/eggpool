@@ -70,9 +70,11 @@ def test_hop_by_hop_headers_complete() -> None:
     expected = {
         "connection",
         "keep-alive",
+        "proxy-connection",
         "proxy-authenticate",
         "proxy-authorization",
         "te",
+        "trailer",
         "trailers",
         "transfer-encoding",
         "upgrade",

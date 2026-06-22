@@ -96,6 +96,18 @@ def test_filter_request_headers_strips_hop_by_hop() -> None:
     assert result["Content-Type"] == "application/json"
 
 
+def test_filter_request_headers_strips_connection_nominated_headers() -> None:
+    headers = {
+        "Connection": "X-Internal, Keep-Alive",
+        "X-Internal": "must-not-cross-proxy",
+        "X-End-To-End": "preserved",
+    }
+    result = filter_request_headers(headers, "key")
+    normalized = {key.casefold(): value for key, value in result.items()}
+    assert "x-internal" not in normalized
+    assert normalized["x-end-to-end"] == "preserved"
+
+
 def test_filter_request_headers_strips_host() -> None:
     headers = {
         "Host": "example.com",
@@ -157,13 +169,30 @@ def test_filter_response_headers_removes_hop_by_hop() -> None:
     assert "x-custom" in result_dict
 
 
+def test_filter_response_headers_strips_connection_nominated_headers() -> None:
+    import httpx
+
+    headers = httpx.Headers(
+        [
+            ("Connection", "X-Internal, Keep-Alive"),
+            ("X-Internal", "must-not-cross-proxy"),
+            ("X-End-To-End", "preserved"),
+        ]
+    )
+    result = {key.casefold(): value for key, value in filter_response_headers(headers)}
+    assert "x-internal" not in result
+    assert result["x-end-to-end"] == "preserved"
+
+
 def test_hop_by_hop_headers_complete() -> None:
     expected = {
         "connection",
         "keep-alive",
+        "proxy-connection",
         "proxy-authenticate",
         "proxy-authorization",
         "te",
+        "trailer",
         "trailers",
         "transfer-encoding",
         "upgrade",

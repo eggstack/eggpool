@@ -158,7 +158,7 @@ async def test_finalization_idempotency() -> None:
 
     async with db.transaction():
         await request_repo.update_after_completion(
-            created_id, status="completed", input_tokens=10, output_tokens=5
+            created_id, status="error", input_tokens=999, output_tokens=999
         )
 
     row_after_second = await db.fetch_one(
@@ -167,6 +167,8 @@ async def test_finalization_idempotency() -> None:
     assert row_after_second is not None
     assert row_after_second["status"] == "completed"
     assert row_after_second["completed_at"] is not None
+    assert row_after_second["input_tokens"] == 10
+    assert row_after_second["output_tokens"] == 5
 
     await db.disconnect()
 
