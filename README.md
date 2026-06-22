@@ -205,12 +205,12 @@ See `config.example.toml` for all available options.
 - `[server]` — Bind address, port (default 11300), API key, logging
 - `[upstream]` — Upstream API base URL, timeouts, connection pool
 - `[database]` — SQLite path, WAL mode, synchronous mode
-- `[models]` — Catalog refresh interval, exposure mode, staleness settings
+- `[models]` — Catalog refresh interval, exposure mode, staleness settings, `collapse_models` flag
 - `[routing]` — Routing strategy, retry limits, penalties
 - `[limits]` — Quota windows (5-hour, weekly, monthly)
 - `[dashboard]` — Dashboard toggle, theme, retention, refresh interval
 - `[security]` — Allowed hosts, CORS, header redaction
-- `[providers.*]` — Provider configurations with accounts
+- `[providers.*]` — Provider configurations with accounts and `routing_priority`
 - `[proxies.*]` — Named outbound proxy definitions (pproxy URI syntax)
 - `[model_overrides.*]` — Per-model protocol or path overrides
 
@@ -229,9 +229,25 @@ name = "personal"
 api_key = "sk-your-opencode-go-key"
 ```
 
-Use `eggpool connect` for interactive provider setup instead of manual configuration.
+Use `eggpool connect` for interactive provider setup instead of manual configuration. Each provider account is auto-labeled with `routing_priority = 0` on first `eggpool connect`, so operators can rebalance later by editing `[providers.<id>].routing_priority` and restarting the service. See [docs/providers.md](docs/providers.md) for the full provider catalog with status definitions, verification commands, and provider-specific notes.
 
-See [docs/providers.md](docs/providers.md) for the full provider catalog with status definitions, verification commands, and provider-specific notes.
+### Routing Priority and Model Collapse
+
+Two related knobs control how requests for the same base model fan out across
+providers and how the model appears in `/v1/models`:
+
+- `[providers.<id>].routing_priority` — non-negative integer (default `0`).
+  Higher values are preferred. Accounts inside a tier are still load-balanced
+  by the existing quota-fair scorer.
+- `[models].collapse_models` — boolean (default `false`). When `false`, the
+  catalog exposes one provider-suffixed entry per `(model_id, provider_id)`.
+  When `true`, the same base model collapses to a single unsuffixed ID and is
+  routed across every provider that supports it.
+
+`eggpool configsetup opencode` output reflects the current `collapse_models`
+setting: suffixed IDs when `false`, unsuffixed when `true`. See
+[docs/providers.md](docs/providers.md) for the full worked example with three
+providers and three priorities.
 
 ### Per-Account Outbound Proxy
 

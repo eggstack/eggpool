@@ -882,12 +882,39 @@ class CatalogService:
         self,
         health_manager: HealthManager | None = None,
     ) -> list[dict[str, Any]]:
-        """Get models to expose via /v1/models with provider-suffixed IDs."""
+        """Get models to expose via /v1/models.
+
+        When ``models.collapse_models`` is true, base model IDs are exposed
+        unsuffixed with conservative-merged limits across providers. When
+        false (the default), each ``(model_id, provider_id)`` pair is
+        exposed as a suffixed ``model-id/provider-id`` entry. ``expose_mode``
+        is applied in both branches.
+        """
         eligible = {s.name for s in self._registry.get_eligible_states()}
         if self._config.models.expose_mode == "healthy_union" and health_manager:
             eligible = {
                 name for name in eligible if health_manager.is_account_healthy(name)
             }
+        if self._config.models.collapse_models:
+            return self._cache.get_models_for_exposure(
+                self._config.models.expose_mode,
+                eligible,
+            )
+        return self._cache.get_provider_suffixed_models(
+            self._config.models.expose_mode,
+            eligible,
+        )
+
+    def get_models_for_dispatch(
+        self,
+    ) -> list[dict[str, Any]]:
+        """Return provider-suffixed model entries for internal dispatch.
+
+        Independent of ``models.collapse_models`` — the runtime always
+        routes per-suffixed-ID. OpenCode provider-suffixed clients also
+        consume this shape directly.
+        """
+        eligible = {s.name for s in self._registry.get_eligible_states()}
         return self._cache.get_provider_suffixed_models(
             self._config.models.expose_mode,
             eligible,

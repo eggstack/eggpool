@@ -227,3 +227,114 @@ class TestRegistryPydanticParsing:
             assert url.startswith("http"), (
                 f"Provider {pid!r} base_url {url!r} is not absolute"
             )
+
+
+class TestAccountRegistryRoutingPriority:
+    """Tests that the AccountRegistry copies routing_priority onto state."""
+
+    def test_routing_priority_copied_from_provider(self):
+        from eggpool.accounts.registry import AccountRegistry
+        from eggpool.models.config import (
+            AppConfig,
+        )
+
+        config = AppConfig.model_validate(
+            {
+                "providers": {
+                    "p1": {
+                        "id": "p1",
+                        "base_url": "https://api.example.com/v1",
+                        "routing_priority": 5,
+                        "accounts": [
+                            {"name": "a", "api_key": "sk-a"},
+                        ],
+                    }
+                }
+            }
+        )
+        registry = AccountRegistry(config)
+        state = registry.get_state("a")
+        assert state is not None
+        assert state.routing_priority == 5
+
+    def test_routing_priority_defaults_to_zero_when_omitted(self):
+        from eggpool.accounts.registry import AccountRegistry
+        from eggpool.models.config import AppConfig
+
+        config = AppConfig.model_validate(
+            {
+                "providers": {
+                    "p1": {
+                        "id": "p1",
+                        "base_url": "https://api.example.com/v1",
+                        "accounts": [
+                            {"name": "a", "api_key": "sk-a"},
+                        ],
+                    }
+                }
+            }
+        )
+        registry = AccountRegistry(config)
+        state = registry.get_state("a")
+        assert state is not None
+        assert state.routing_priority == 0
+
+    def test_routing_priority_independent_per_provider(self):
+        from eggpool.accounts.registry import AccountRegistry
+        from eggpool.models.config import AppConfig
+
+        config = AppConfig.model_validate(
+            {
+                "providers": {
+                    "p1": {
+                        "id": "p1",
+                        "base_url": "https://api.example.com/v1",
+                        "routing_priority": 3,
+                        "accounts": [{"name": "a", "api_key": "sk-a"}],
+                    },
+                    "p2": {
+                        "id": "p2",
+                        "base_url": "https://api.example.com/v1",
+                        "routing_priority": 7,
+                        "accounts": [{"name": "b", "api_key": "sk-b"}],
+                    },
+                }
+            }
+        )
+        registry = AccountRegistry(config)
+        assert registry.get_state("a").routing_priority == 3
+        assert registry.get_state("b").routing_priority == 7
+
+    def test_routing_priority_updated_on_reload(self):
+        from eggpool.accounts.registry import AccountRegistry
+        from eggpool.models.config import AppConfig
+
+        initial = AppConfig.model_validate(
+            {
+                "providers": {
+                    "p1": {
+                        "id": "p1",
+                        "base_url": "https://api.example.com/v1",
+                        "routing_priority": 1,
+                        "accounts": [{"name": "a", "api_key": "sk-a"}],
+                    }
+                }
+            }
+        )
+        registry = AccountRegistry(initial)
+        assert registry.get_state("a").routing_priority == 1
+
+        updated = AppConfig.model_validate(
+            {
+                "providers": {
+                    "p1": {
+                        "id": "p1",
+                        "base_url": "https://api.example.com/v1",
+                        "routing_priority": 9,
+                        "accounts": [{"name": "a", "api_key": "sk-a"}],
+                    }
+                }
+            }
+        )
+        registry.reload(updated)
+        assert registry.get_state("a").routing_priority == 9

@@ -31,6 +31,10 @@ stale_after_s = 7200
 allow_stale_catalog = true
 # How many days to retain provider ping data.
 ping_retain_days = 7
+# collapse_models = false  # when true, a base model exposed by multiple
+#                          # providers is collapsed to a single unsuffixed
+#                          # ID and routed across all of them. Default false
+#                          # emits one provider-suffixed entry per provider.
 
 [routing]
 strategy = "quota_fair"
@@ -92,6 +96,8 @@ persist_redacted_error_detail = false
 # id = "opencode-go"
 # base_url = "https://opencode.ai/zen/go/v1"
 # protocols = ["openai", "anthropic"]
+# routing_priority = 0  # higher = preferred; default 0 means "load balance
+#                       # within this provider using the existing scorer".
 #
 # [[providers.opencode-go.accounts]]
 # name = "personal"

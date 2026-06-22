@@ -115,6 +115,7 @@ class ModelsConfig(BaseModel):
     stale_after_s: int = Field(default=7200, gt=0)
     allow_stale_catalog: bool = True
     ping_retain_days: int = Field(default=7, ge=1)
+    collapse_models: bool = False
 
 
 class RoutingConfig(BaseModel):
@@ -310,6 +311,7 @@ class ProviderConfig(BaseModel):
     max_connections: int = Field(default=100, gt=0)
     max_keepalive: int = Field(default=20, gt=0)
     keepalive_timeout_s: float = Field(default=30, ge=0)
+    routing_priority: int = Field(default=0, ge=0)
     accounts: list[AccountConfig] = []
     model_overrides: dict[str, ModelOverrideConfig] = {}
     auth: ProviderAuthConfig = ProviderAuthConfig()

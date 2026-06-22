@@ -8,11 +8,16 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
 
-def serialize_openai_model(model: Mapping[str, Any]) -> dict[str, Any]:
+def serialize_openai_model(
+    model: Mapping[str, Any],
+    *,
+    routing_priority: int | None = None,
+) -> dict[str, Any]:
     """Serialize a catalog model entry to OpenAI-compatible model dict.
 
     Includes the namespaced ``eggpool`` extension with base model ID,
-    provider ID, and effective limits when available.
+    provider ID, routing priority (when supplied), and effective limits
+    when available.
     """
     result: dict[str, Any] = {
         "id": model["model_id"],
@@ -30,6 +35,8 @@ def serialize_openai_model(model: Mapping[str, Any]) -> dict[str, Any]:
         eggpool_meta["base_model_id"] = base_model_id
     if provider_id is not None:
         eggpool_meta["provider_id"] = provider_id
+    if routing_priority is not None:
+        eggpool_meta["routing_priority"] = routing_priority
 
     effective = model.get("effective_limits", {})
     if effective:

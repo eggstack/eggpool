@@ -69,6 +69,7 @@ class AccountRegistry:
                     name=acct_config.name,
                     enabled=acct_config.enabled,
                     weight=acct_config.weight,
+                    routing_priority=provider_cfg.routing_priority,
                 )
                 self._states[acct_config.name] = state
                 self._api_keys[acct_config.name] = api_key
@@ -76,9 +77,10 @@ class AccountRegistry:
 
                 if acct_config.enabled:
                     logger.info(
-                        "Loaded account %r (weight=%.2f, provider=%r)",
+                        "Loaded account %r (weight=%.2f, priority=%d, provider=%r)",
                         acct_config.name,
                         acct_config.weight,
+                        provider_cfg.routing_priority,
                         provider_id,
                     )
 

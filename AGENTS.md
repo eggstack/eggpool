@@ -97,6 +97,41 @@ Key design rules:
 
 See `src/eggpool/providers/contract.py` for the centralized renderer.
 
+## Provider Routing Priority and Model Collapse
+
+Two configuration knobs control how requests for the same base model fan out
+across providers and how the model appears in the catalog:
+
+- **`routing_priority`** — `[providers.<id>]` accepts `routing_priority: int`
+  with `Field(default=0, ge=0)`. Higher values are preferred. The field is
+  per-provider; accounts inside a tier are still load-balanced by
+  `QuotaFairScorer`. The router groups eligible accounts by priority, picks
+  the highest non-empty tier, and falls through to the next tier only on
+  pre-body failure or exhaustion.
+- **`collapse_models`** — `[models]` accepts `collapse_models: bool` (default
+  `false`). When `false`, the catalog exposes one provider-suffixed entry per
+  `(model_id, provider_id)`. When `true`, the same base model collapses to a
+  single unsuffixed `model_id` and is routed across every provider that
+  supports it.
+
+The two knobs are independent. `collapse_models` changes the catalog shape;
+`routing_priority` changes selection order inside that shape. A single
+request still picks one upstream account. Configuration changes require a
+service restart.
+
+CLI surface:
+
+- `eggpool connect` writes `routing_priority = 0` on every newly created
+  provider block and leaves existing blocks untouched, so operators can edit
+  one number to rebalance.
+- `eggpool configsetup opencode` honors `collapse_models`: suffixed model
+  IDs when `false`, unsuffixed when `true`.
+- `/v1/models` includes an `eggpool.routing_priority` extension field on
+  each suffixed entry.
+
+See `plans/provider_priority.md` for the full design and `docs/providers.md`
+for the worked example with three providers and three priorities.
+
 ## Model Context Limits
 
 EggPool supports configurable effective context limits per model per provider:

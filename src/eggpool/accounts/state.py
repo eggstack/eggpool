@@ -38,6 +38,7 @@ class AccountRuntimeState:
     name: str
     enabled: bool = True
     weight: float = 1.0
+    routing_priority: int = 0
 
     health_state: str = "healthy"
     cooldown_until: float = 0.0

@@ -80,3 +80,27 @@ def test_unsuffixed_model_with_limits() -> None:
     result = serialize_openai_model(model)
     assert result["eggpool"]["limits"]["context"] == 128000
     assert result["eggpool"]["limits"]["output"] == 4096
+
+
+def test_routing_priority_emitted_when_supplied() -> None:
+    model = {
+        "model_id": "minimax-m2.7/generalcompute",
+        "base_model_id": "minimax-m2.7",
+        "provider_id": "generalcompute",
+        "display_name": "MiniMax M2.7",
+    }
+    result = serialize_openai_model(model, routing_priority=3)
+    assert result["eggpool"]["routing_priority"] == 3
+    assert result["eggpool"]["provider_id"] == "generalcompute"
+
+
+def test_routing_priority_omitted_when_none() -> None:
+    model = {
+        "model_id": "gpt-4",
+        "display_name": "GPT-4",
+    }
+    result = serialize_openai_model(model, routing_priority=None)
+    assert "eggpool" not in result
+
+    explicit_none = serialize_openai_model(model)
+    assert "eggpool" not in explicit_none

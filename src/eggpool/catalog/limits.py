@@ -159,7 +159,7 @@ class ModelLimitResolver:
     def resolve(
         self,
         *,
-        provider_id: str,
+        provider_id: str | None,
         model_id: str,
         capabilities: Mapping[str, object],
         source_metadata: Mapping[str, object],
@@ -171,8 +171,14 @@ class ModelLimitResolver:
         2. Global override
         3. Upstream metadata
         4. Unknown (None)
+
+        When ``provider_id`` is None (unsuffixed exposure), provider-specific
+        overrides are skipped and only the global override and upstream
+        metadata contribute.
         """
-        provider_cfg = self._config.providers.get(provider_id)
+        provider_cfg = (
+            self._config.providers.get(provider_id) if provider_id is not None else None
+        )
         provider_override = (
             provider_cfg.model_overrides.get(model_id)
             if provider_cfg is not None

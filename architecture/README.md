@@ -143,17 +143,99 @@ Ordered SQL migrations in `db/schema/` (0001 through 0020). Checksums tracked in
 
 ## Quota and Routing
 
-Routing uses a `QuotaFairScorer` that balances:
+Routing happens in two stages: a *priority grouping* step picks the highest
+non-empty tier of providers, then a `QuotaFairScorer` load-balances inside
+that tier.
+
+The grouping step partitions eligible `AccountRuntimeState` records by their
+provider's `routing_priority` (default `0`, must be `>= 0`). The router
+selects the highest-priority tier that contains at least one eligible account;
+if every account in that tier becomes unhealthy, exhausted, or fails pre-body,
+the request falls through to the next tier. The `QuotaFairScorer` runs
+unchanged against the accounts of the chosen tier, balancing across:
+
 - Quota utilization across 5h/7d/30d windows
 - In-flight request penalty
 - Health penalty for degraded accounts
 - Random tie-breaking for near-equal scores
+
+The `weight` field continues to bias scoring inside a single tier. `weight`
+orders accounts within a tier; `routing_priority` orders tiers.
 
 Accounts are excluded from routing when:
 - Quota is exhausted (recovers after cooldown)
 - Account is disabled or suspended
 - Model is not supported by the account
 - Health circuit breaker is open
+
+A single request still picks one upstream account. Failover across priority
+tiers happens only through the existing `exclude_accounts` retry path.
+
+## Provider Routing Priority and Model Collapse
+
+Two related configuration knobs let operators control how requests for the
+same base model fan out across providers and how that model appears in the
+catalog.
+
+- **`routing_priority`** — `[providers.<id>].routing_priority` is a non-negative
+  integer (default `0`). Higher values are preferred. The field is per-provider,
+  not per-account: keys of the same provider share a tier and are
+  load-balanced by `QuotaFairScorer`.
+- **`collapse_models`** — `[models].collapse_models` is a boolean (default
+  `false`). When `false`, the catalog exposes one provider-suffixed entry per
+  `(model_id, provider_id)`. When `true`, the same base model collapses to a
+  single unsuffixed `model_id` and is routed across every provider that
+  supports it.
+
+`collapse_models` and `routing_priority` are independent. Either can change
+without re-deriving the other. Both require a service restart.
+
+### Default behavior
+
+With defaults (`collapse_models = false`, `routing_priority = 0`), three
+providers that all expose `minimax-m2.7` (`opencode-go`, `minimax`,
+`generalcompute`) are surfaced as three distinct suffixed model IDs:
+`minimax-m2.7/opencode-go`, `minimax-m2.7/minimax`,
+`minimax-m2.7/generalcompute`. Each suffixed ID routes only against its own
+provider's accounts, load-balanced within the provider.
+
+### Worked example
+
+A `generalcompute`-first / `minimax`-second / `opencode-go`-last ordering
+with three `opencode-go` keys load-balancing inside their tier:
+
+```toml
+[models]
+# collapse_models = false  # default; emit suffixed IDs
+
+[providers.opencode-go]
+routing_priority = 0  # load balance within this tier
+
+[providers.minimax]
+routing_priority = 2
+
+[providers.generalcompute]
+routing_priority = 3  # tried first
+```
+
+A request for `minimax-m2.7/generalcompute` first hits the
+`generalcompute` accounts (load balanced inside the tier). If every
+`generalcompute` account fails pre-body, the coordinator retries the
+`minimax` tier, then the `opencode-go` tier. A request for
+`minimax-m2.7/opencode-go` only ever hits `opencode-go` accounts regardless
+of priority — priority only orders the eligible account set inside one
+suffixed (or unsuffixed) model ID.
+
+### Catalog exposure and CLI surface
+
+- `/v1/models` includes an `eggpool.routing_priority` extension field on
+  each suffixed entry.
+- `eggpool configsetup opencode` generates suffixed IDs when
+  `collapse_models = false` and a single unsuffixed ID per base model when
+  `collapse_models = true`.
+- `eggpool connect` writes `routing_priority = 0` on every newly created
+  provider block and leaves existing blocks untouched, so operators can edit
+  one number to rebalance.
 
 ## Error Hierarchy
 

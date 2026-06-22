@@ -818,16 +818,24 @@ def create_app(
     ) -> dict[str, Any]:
         await require_auth(request)
 
+        config: AppConfig = request.app.state.config
         catalog: CatalogService = request.app.state.catalog
         health_mgr: HealthManager | None = getattr(
             request.app.state, "health_manager", None
         )
         models = catalog.get_models_for_exposure(health_manager=health_mgr)
 
-        return {
-            "object": "list",
-            "data": [serialize_openai_model(m) for m in models],
-        }
+        data: list[dict[str, Any]] = []
+        for m in models:
+            provider_id = m.get("provider_id")
+            routing_priority: int | None = None
+            if provider_id is not None:
+                provider_cfg = config.providers.get(provider_id)
+                if provider_cfg is not None:
+                    routing_priority = provider_cfg.routing_priority
+            data.append(serialize_openai_model(m, routing_priority=routing_priority))
+
+        return {"object": "list", "data": data}
 
     @app.post(f"{API_V1_PREFIX}/chat/completions")
     async def chat_completions(  # pyright: ignore[reportUnusedFunction]

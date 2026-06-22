@@ -20,6 +20,33 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _group_by_priority(
+    states: list[AccountRuntimeState],
+) -> list[list[AccountRuntimeState]]:
+    """Group eligible states into priority tiers (highest first).
+
+    Returns a list of tiers, each a list of states sharing the same
+    ``routing_priority``. The tier list is sorted by descending priority
+    so the first tier is the most preferred. Within a tier, the original
+    eligibility order is preserved.
+    """
+    sorted_states = sorted(states, key=lambda s: s.routing_priority, reverse=True)
+    tiers: list[list[AccountRuntimeState]] = []
+    if not sorted_states:
+        return tiers
+    current_tier: list[AccountRuntimeState] = [sorted_states[0]]
+    current_priority = sorted_states[0].routing_priority
+    for state in sorted_states[1:]:
+        if state.routing_priority == current_priority:
+            current_tier.append(state)
+            continue
+        tiers.append(current_tier)
+        current_tier = [state]
+        current_priority = state.routing_priority
+    tiers.append(current_tier)
+    return tiers
+
+
 @dataclass(frozen=True)
 class RoutingCandidates:
     """Eligible account states and their lookup index for one routing decision."""
@@ -31,6 +58,16 @@ class RoutingCandidates:
     def names(self) -> list[str]:
         """Return candidate account names in eligibility order."""
         return [state.name for state in self.states]
+
+    def tiered(self) -> list[tuple[int, list[AccountRuntimeState]]]:
+        """Return eligible states grouped into priority tiers (highest first).
+
+        Each entry is ``(priority, states_in_tier)``. The list contains only
+        tiers with at least one state. Within a tier, eligibility order is
+        preserved.
+        """
+        tiers = _group_by_priority(self.states)
+        return [(tier[0].routing_priority, tier) for tier in tiers]
 
 
 class Router:
@@ -66,21 +103,31 @@ class Router:
         provider_id: str | None = None,
         protocol: str | None = None,
     ) -> AccountRuntimeState | None:
-        """Select an account for the given model."""
+        """Select an account for the given model.
+
+        Eligible accounts are grouped into priority tiers (highest first).
+        The highest non-empty tier is selected and the existing
+        ``QuotaFairScorer`` is used to load balance within it.
+        """
         candidates = self._selection_candidates(
             model_id, exclude_accounts, provider_id, protocol
         )
-        if not candidates.states:
+        tiers = candidates.tiered()
+        if not tiers:
             return None
 
-        scores = await self._score_eligible_accounts(
-            candidates, model_id, request_estimates
-        )
-        best = self._scorer.select_account(scores)
-        if best is None:
-            return None
-
-        return candidates.by_name.get(best.account_name)
+        for _priority, tier_states in tiers:
+            tier_candidates = RoutingCandidates(
+                states=tier_states,
+                by_name={state.name: state for state in tier_states},
+            )
+            scores = await self._score_eligible_accounts(
+                tier_candidates, model_id, request_estimates
+            )
+            best = self._scorer.select_account(scores)
+            if best is not None:
+                return tier_candidates.by_name.get(best.account_name)
+        return None
 
     def get_eligible_account_names(
         self,
@@ -92,7 +139,8 @@ class Router:
         """Get eligible account names for a model.
 
         Uses the same eligibility logic as select_account() so estimate
-        generation and selection cannot disagree.
+        generation and selection cannot disagree. Names are returned in
+        eligibility order, not priority order.
         """
         candidates = self._selection_candidates(
             model_id, exclude_accounts, provider_id, protocol
@@ -108,24 +156,40 @@ class Router:
         provider_id: str | None = None,
         protocol: str | None = None,
     ) -> list[tuple[AccountRuntimeState, RoutingScore]]:
-        """Select multiple accounts for failover, ranked by score."""
+        """Select multiple accounts for failover, ranked by score.
+
+        Results are returned in priority order (highest tier first); within
+        each tier, accounts are ranked by the quota-fair scorer so the
+        coordinator's retry loop can prefer the best account in the best
+        available tier. Failover between tiers is allowed: callers that want
+        strict tier-bounded failover can stop at the first tier boundary
+        using the per-account priority from the returned
+        ``AccountRuntimeState``.
+        """
         candidates = self._selection_candidates(
             model_id, exclude_accounts, provider_id, protocol
         )
-        if not candidates.states:
+        tiers = candidates.tiered()
+        if not tiers:
             return []
 
-        scores = await self._score_eligible_accounts(
-            candidates, model_id, request_estimates
-        )
-        ranked = self._scorer.rank_accounts(scores)
-
         result: list[tuple[AccountRuntimeState, RoutingScore]] = []
-        for score in ranked[:max_accounts]:
-            state = candidates.by_name.get(score.account_name)
-            if state is not None:
+        for _priority, tier_states in tiers:
+            tier_candidates = RoutingCandidates(
+                states=tier_states,
+                by_name={state.name: state for state in tier_states},
+            )
+            scores = await self._score_eligible_accounts(
+                tier_candidates, model_id, request_estimates
+            )
+            ranked = self._scorer.rank_accounts(scores)
+            for score in ranked:
+                state = tier_candidates.by_name.get(score.account_name)
+                if state is None:
+                    continue
                 result.append((state, score))
-
+                if len(result) >= max_accounts:
+                    return result
         return result
 
     def _selection_candidates(

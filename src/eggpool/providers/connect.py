@@ -462,7 +462,11 @@ def merge_provider_into_config(
         # Insert new provider block with generated account name
         account_name = _unique_account_name(provider_id, all_names, total_count)
         block = _format_provider_block(
-            provider_id, provider_data, api_key, account_name
+            provider_id,
+            provider_data,
+            api_key,
+            account_name,
+            include_routing_priority=True,
         )
         content = _insert_provider_block(content, block)
 
@@ -543,13 +547,31 @@ def _format_provider_block(
     data: dict[str, Any],
     api_key: str | None,
     account_name: str,
+    *,
+    include_routing_priority: bool = True,
 ) -> str:
-    """Format a provider config block as TOML text."""
+    """Format a provider config block as TOML text.
+
+    When ``include_routing_priority`` is true, a commented
+    ``routing_priority = 0`` line is emitted on the new provider block so
+    operators can edit one number to rebalance. Existing provider blocks
+    must be passed with this flag set to false so connect does not mutate
+    a value the operator has already tuned.
+    """
     lines = [f"[providers.{provider_id}]"]
     for key, value in data.items():
         if key == "accounts" or key == "api_key_env":
             continue
         lines.append(f"{key} = {_toml_value(value)}")
+
+    if include_routing_priority:
+        lines.append(
+            "# routing_priority: higher = preferred. Default 0 = "
+            "load balanced within the existing quota-fair scorer. "
+            "Increase to push this provider's models to the front "
+            "of the request queue."
+        )
+        lines.append("routing_priority = 0")
 
     # Add an account, including a key only for authenticated providers.
     lines.append("")

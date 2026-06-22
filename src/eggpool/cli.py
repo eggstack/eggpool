@@ -465,11 +465,20 @@ def _copy_to_clipboard(text: str) -> bool:
 @configsetup.command("opencode")
 @click.pass_context
 def configsetup_opencode(ctx: click.Context) -> None:
-    """Print OpenCode config for connecting to this router."""
+    """Print OpenCode config for connecting to this router.
+
+    When ``[models].collapse_models`` is false (the default), the generated
+    models map uses provider-suffixed IDs (``model-id/provider-id``) with
+    per-provider limits. When true, the map uses unsuffixed IDs with
+    conservative-merged limits across all providers that serve the model.
+    """
     import json as _json
 
-    from eggpool.catalog.limits import ModelLimitResolver
-    from eggpool.constants import DEFAULT_PROVIDER_ID
+    from eggpool.catalog.limits import (
+        EffectiveModelLimits,
+        ModelLimitResolver,
+        conservative_limits,
+    )
     from eggpool.integrations.opencode import build_opencode_config_json
     from eggpool.models.config import AppConfig
 
@@ -505,31 +514,62 @@ def configsetup_opencode(ctx: click.Context) -> None:
 
         config = AppConfig.from_toml(config_path)
         db_path = config.database.path
+        collapse_models = config.models.collapse_models
 
         async def _load_catalog() -> list[dict[str, Any]]:
             db = Database(db_path)
             await db.connect()
             try:
+                if collapse_models:
+                    rows = await db.fetch_all(
+                        "SELECT model_id, display_name, capabilities, "
+                        "source_metadata FROM models"
+                    )
+                    out: list[dict[str, Any]] = []
+                    for row in rows:
+                        caps_raw = row["capabilities"]
+                        meta_raw = row["source_metadata"]
+                        caps: dict[str, Any] = _json.loads(caps_raw) if caps_raw else {}
+                        meta: dict[str, Any] = _json.loads(meta_raw) if meta_raw else {}
+                        out.append(
+                            {
+                                "model_id": row["model_id"],
+                                "display_name": row["display_name"],
+                                "capabilities": caps,
+                                "source_metadata": meta,
+                                "effective_limits": {},
+                            }
+                        )
+                    return out
+
                 rows = await db.fetch_all(
-                    "SELECT model_id, display_name, capabilities, source_metadata "
-                    "FROM models"
+                    "SELECT model_id, provider_id, display_name, "
+                    "capabilities, source_metadata FROM provider_model_metadata"
                 )
-                result: list[dict[str, Any]] = []
+                out = []
                 for row in rows:
                     caps_raw = row["capabilities"]
                     meta_raw = row["source_metadata"]
                     caps: dict[str, Any] = _json.loads(caps_raw) if caps_raw else {}
                     meta: dict[str, Any] = _json.loads(meta_raw) if meta_raw else {}
-                    result.append(
+                    base_model_id = row["model_id"]
+                    provider_id = row["provider_id"]
+                    out.append(
                         {
-                            "model_id": row["model_id"],
+                            "model_id": (
+                                f"{base_model_id}/{provider_id}"
+                                if provider_id
+                                else base_model_id
+                            ),
+                            "base_model_id": base_model_id,
+                            "provider_id": provider_id,
                             "display_name": row["display_name"],
                             "capabilities": caps,
                             "source_metadata": meta,
                             "effective_limits": {},
                         }
                     )
-                return result
+                return out
             finally:
                 await db.disconnect()
 
@@ -538,22 +578,64 @@ def configsetup_opencode(ctx: click.Context) -> None:
         # Re-apply current config overrides
         if models_data:
             resolver = ModelLimitResolver(config)
-            for m in models_data:
-                eff = resolver.resolve(
-                    provider_id=DEFAULT_PROVIDER_ID,
-                    model_id=m["model_id"],
-                    capabilities=m.get("capabilities", {}),
-                    source_metadata=m.get("source_metadata", {}),
-                )
-                m["effective_limits"] = {
-                    "context_tokens": eff.context_tokens,
-                    "input_tokens": eff.input_tokens,
-                    "output_tokens": eff.output_tokens,
-                    "enforce": eff.enforce,
-                    "context_source": eff.context_source,
-                    "input_source": eff.input_source,
-                    "output_source": eff.output_source,
-                }
+            if collapse_models:
+                for m in models_data:
+                    eff = resolver.resolve(
+                        provider_id=None,
+                        model_id=m["model_id"],
+                        capabilities=m.get("capabilities", {}),
+                        source_metadata=m.get("source_metadata", {}),
+                    )
+                    m["effective_limits"] = {
+                        "context_tokens": eff.context_tokens,
+                        "input_tokens": eff.input_tokens,
+                        "output_tokens": eff.output_tokens,
+                        "enforce": eff.enforce,
+                        "context_source": eff.context_source,
+                        "input_source": eff.input_source,
+                        "output_source": eff.output_source,
+                    }
+            else:
+                # Group by base model_id and apply conservative merge
+                # so OpenCode compacts before any single provider's
+                # limit is exceeded.
+                grouped: dict[str, list[dict[str, Any]]] = {}
+                for m in models_data:
+                    base = m.get("base_model_id", m["model_id"])
+                    grouped.setdefault(base, []).append(m)
+                for entries in grouped.values():
+                    limits_list: list[EffectiveModelLimits] = []
+                    for m in entries:
+                        provider_id = m.get("provider_id")
+                        eff = resolver.resolve(
+                            provider_id=provider_id,
+                            model_id=m.get("base_model_id", m["model_id"]),
+                            capabilities=m.get("capabilities", {}),
+                            source_metadata=m.get("source_metadata", {}),
+                        )
+                        limits_list.append(
+                            EffectiveModelLimits(
+                                context_tokens=eff.context_tokens,
+                                input_tokens=eff.input_tokens,
+                                output_tokens=eff.output_tokens,
+                                enforce=eff.enforce,
+                                context_source=eff.context_source,
+                                input_source=eff.input_source,
+                                output_source=eff.output_source,
+                            )
+                        )
+                    merged = conservative_limits(limits_list)
+                    merged_dict = {
+                        "context_tokens": merged.context_tokens,
+                        "input_tokens": merged.input_tokens,
+                        "output_tokens": merged.output_tokens,
+                        "enforce": merged.enforce,
+                        "context_source": merged.context_source,
+                        "input_source": merged.input_source,
+                        "output_source": merged.output_source,
+                    }
+                    for m in entries:
+                        m["effective_limits"] = merged_dict
     except Exception:
         click.echo(
             "Warning: Could not load catalog. Run 'eggpool models refresh' "

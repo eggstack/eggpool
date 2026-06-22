@@ -379,6 +379,37 @@ class TestFormatProviderBlock:
         assert config.providers["ollama-local"].accounts[0].api_key is None
         assert "api_key =" not in block
 
+    def test_emits_routing_priority_for_new_provider(self) -> None:
+        """New provider blocks include a routing_priority = 0 default."""
+        data = {"base_url": "https://example.com", "protocols": ["openai"]}
+        block = _format_provider_block(
+            "new", data, "KEY", "new-0001", include_routing_priority=True
+        )
+        assert "routing_priority = 0" in block
+
+    def test_skips_routing_priority_when_existing_provider(self, tmp_path) -> None:
+        """Existing provider paths must not rewrite routing_priority."""
+        from eggpool.models.config import AppConfig
+
+        data = {
+            "id": "existing",
+            "base_url": "https://example.com",
+            "protocols": ["openai"],
+        }
+        block = _format_provider_block(
+            "existing",
+            data,
+            "KEY",
+            "existing-0002",
+            include_routing_priority=False,
+        )
+        assert "routing_priority" not in block
+        # Round-trip parses without requiring the routing_priority key.
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(block, encoding="utf-8")
+        cfg = AppConfig.from_toml(str(config_file))
+        assert cfg.providers["existing"].routing_priority == 0
+
 
 class TestMergeProviderIntoConfig:
     """Tests for merging providers into config files."""
@@ -410,6 +441,39 @@ class TestMergeProviderIntoConfig:
         assert "[providers.new-provider]" in content
         assert "new.example.com" in content
         assert 'api_key = "NEW_API_KEY"' in content
+        # New provider blocks emit a routing_priority = 0 default
+        assert "routing_priority = 0" in content
+
+    def test_appending_to_existing_provider_does_not_change_priority(
+        self, tmp_path: Path
+    ) -> None:
+        """Appending an account must NOT rewrite an operator-tuned priority."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(
+            textwrap.dedent("""\
+                [providers.minimax]
+                id = "minimax"
+                base_url = "https://api.minimaxi.com"
+                routing_priority = 5
+
+                [[providers.minimax.accounts]]
+                name = "minimax-0001"
+                api_key = "sk-existing"
+            """)
+        )
+
+        ok = merge_provider_into_config(
+            str(config_file),
+            {"id": "minimax", "base_url": "https://api.minimaxi.com"},
+            "sk-second",
+        )
+        assert ok is True
+
+        content = config_file.read_text()
+        # The existing priority line is unchanged; no second routing_priority
+        # line is introduced.
+        assert content.count("routing_priority = 5") == 1
+        assert "routing_priority = 0" not in content
 
     def test_appends_account_to_existing_provider(self, tmp_path: Path) -> None:
         """Appends a new account to an existing provider."""

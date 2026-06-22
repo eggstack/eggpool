@@ -119,6 +119,83 @@ name = "anthropic-version"
 value = "2023-06-01"
 ```
 
+## Routing Priority and Model Collapse
+
+When several providers can serve the same base model, EggPool exposes two
+configuration knobs that decide *which* provider gets a given request and *how*
+the model appears in `/v1/models`:
+
+- **`routing_priority`** — per-provider integer (default `0`, must be `>= 0`).
+  Higher values are preferred. Accounts inside the same priority tier are still
+  load-balanced by the existing `QuotaFairScorer`.
+- **`collapse_models`** — top-level `[models]` flag (default `false`). When
+  `false`, the catalog exposes one provider-suffixed entry per
+  `(model_id, provider_id)` (e.g. `minimax-m2.7/generalcompute`,
+  `minimax-m2.7/minimax`, `minimax-m2.7/opencode-go`). When `true`, the same
+  base model collapses to a single unsuffixed `minimax-m2.7` ID.
+
+The two knobs are independent. `collapse_models` changes the *catalog shape*;
+`routing_priority` changes the *selection order* inside that shape.
+
+### Worked example
+
+Three providers all expose `minimax-m2.7`. The desired order is
+`generalcompute` first, `minimax` second, `opencode-go` last, with three
+`opencode-go` API keys load-balancing within their tier:
+
+```toml
+[models]
+# collapse_models = false  # default; emit one suffixed entry per provider
+
+[providers.opencode-go]
+routing_priority = 0  # 3 API keys load balance within this tier
+
+[providers.minimax]
+routing_priority = 2  # tried after generalcompute, before opencode-go
+
+[providers.generalcompute]
+routing_priority = 3  # tried first
+```
+
+With `collapse_models = false` and the priorities above, `/v1/models` emits:
+
+- `minimax-m2.7/generalcompute` — `routing_priority = 3`
+- `minimax-m2.7/minimax` — `routing_priority = 2`
+- `minimax-m2.7/opencode-go` — `routing_priority = 0`
+
+A request for `minimax-m2.7/generalcompute` first hits the `generalcompute`
+accounts (load balanced by `QuotaFairScorer` inside the tier). If every
+`generalcompute` account is unhealthy, exhausted, or fails pre-body, the
+coordinator retries against `minimax` accounts, then `opencode-go` accounts.
+
+A request for `minimax-m2.7/opencode-go` only ever routes against
+`opencode-go` accounts, regardless of priority. Priority only orders the
+account set inside a single suffixed (or unsuffixed) model ID.
+
+When `collapse_models = true`, the same three providers collapse to a single
+`minimax-m2.7` entry. The router still picks one provider per request, with
+the same priority ordering. Each suffixed entry's `/v1/models` response
+carries an `eggpool.routing_priority` extension field for observability.
+
+### Defaults and migration
+
+The defaults are `collapse_models = false` and `routing_priority = 0`. Existing
+deployments that used the unsuffixed `minimax-m2.7` ID should either:
+
+- Set `collapse_models = true` to keep the old single-ID exposure, or
+- Rewrite the client to use the suffixed `minimax-m2.7/<provider>` IDs.
+
+Either change requires a service restart; live reload is intentionally not
+supported.
+
+### Rebalancing providers
+
+`eggpool connect` writes `routing_priority = 0` on every newly created provider
+block. The value is left untouched on existing blocks, so adding more accounts
+to an already-configured provider does not disturb the operator's tier choice.
+Operators can rebalance later by editing a single number in
+`[providers.<id>].routing_priority` and restarting the service.
+
 ## Verification
 
 Verify a provider's auth, model listing, and chat endpoints:

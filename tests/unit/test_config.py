@@ -918,3 +918,73 @@ class TestProviderContractConfig:
                 base_url="https://api.example.com/v1",
                 anthropic_path="/v1/messages",
             )
+
+
+class TestRoutingPriority:
+    """Tests for the per-provider ``routing_priority`` field."""
+
+    def test_routing_priority_defaults_to_zero(self):
+        from eggpool.models.config import ProviderConfig
+
+        cfg = ProviderConfig(id="p", base_url="https://api.example.com/v1")
+        assert cfg.routing_priority == 0
+
+    def test_routing_priority_parses_positive_integer(self):
+        from eggpool.models.config import ProviderConfig
+
+        cfg = ProviderConfig(
+            id="p",
+            base_url="https://api.example.com/v1",
+            routing_priority=3,
+        )
+        assert cfg.routing_priority == 3
+
+    def test_routing_priority_rejects_negative(self):
+        from pydantic import ValidationError
+
+        from eggpool.models.config import ProviderConfig
+
+        with pytest.raises(ValidationError):
+            ProviderConfig(
+                id="p",
+                base_url="https://api.example.com/v1",
+                routing_priority=-1,
+            )
+
+    def test_routing_priority_rejects_non_integer(self):
+        from pydantic import ValidationError
+
+        from eggpool.models.config import ProviderConfig
+
+        with pytest.raises(ValidationError):
+            ProviderConfig.model_validate(
+                {
+                    "id": "p",
+                    "base_url": "https://api.example.com/v1",
+                    "routing_priority": "high",
+                }
+            )
+
+
+class TestCollapseModels:
+    """Tests for the top-level ``[models].collapse_models`` flag."""
+
+    def test_collapse_models_defaults_to_false(self):
+        from eggpool.models.config import ModelsConfig
+
+        cfg = ModelsConfig()
+        assert cfg.collapse_models is False
+
+    def test_collapse_models_parses_true(self):
+        from eggpool.models.config import ModelsConfig
+
+        cfg = ModelsConfig(collapse_models=True)
+        assert cfg.collapse_models is True
+
+    def test_collapse_models_rejects_non_boolean(self):
+        from pydantic import ValidationError
+
+        from eggpool.models.config import ModelsConfig
+
+        with pytest.raises(ValidationError):
+            ModelsConfig.model_validate({"collapse_models": [1, 2]})
