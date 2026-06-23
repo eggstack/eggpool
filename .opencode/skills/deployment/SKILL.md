@@ -26,7 +26,7 @@ sudo systemctl status eggpool
 
 ## Configuration Changes
 
-**All configuration changes require a full restart.** The systemd unit intentionally omits `ExecReload` so `systemctl reload eggpool` fails cleanly.
+**All configuration changes require a full restart.** The systemd unit intentionally omits `ExecReload` so `systemctl reload eggpool` fails cleanly. This includes changes to `routing_priority`, `collapse_models`, `expose_mode`, `model_overrides`, and any other config field.
 
 ```bash
 sudo systemctl restart eggpool

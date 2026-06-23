@@ -45,6 +45,9 @@ See `architecture/README.md` for the full design overview.
 - Pending active requests are excluded from expiry cleanup
 - Cancelled nonzero-cost requests remain in usage windows
 - Cache-only rate changes create snapshots; cache-only token usage invokes cost calculation
+- Tier-based routing: eligible accounts are grouped by `routing_priority` (default `0`); the highest non-empty tier wins; the `QuotaFairScorer` load-balances within the chosen tier; lower tiers are reached only via `exclude_accounts` retry paths
+- `routing_priority` orders tiers; `weight` orders accounts within a tier — the two compose
+- `collapse_models = false` (default) exposes provider-suffixed model IDs; `collapse_models = true` collapses to a single unsuffixed ID routed across all providers
 
 ## Multi-Provider
 
@@ -53,6 +56,12 @@ See `architecture/README.md` for the full design overview.
 - Per-provider upstream paths: `openai_path`, `anthropic_path`, `models_path`
 - Legacy flat `[[accounts]]` auto-normalizes to default `opencode-go` provider
 - `parse_model_id()` in `catalog/cache.py` handles suffix parsing
+- **`routing_priority`** — `[providers.<id>]` accepts `routing_priority: int` with `Field(default=0, ge=0)`. Higher values are preferred. The field is per-provider; accounts inside a tier are still load-balanced by `QuotaFairScorer`.
+- **`collapse_models`** — `[models]` accepts `collapse_models: bool` (default `false`). When `false`, the catalog exposes one provider-suffixed entry per `(model_id, provider_id)`. When `true`, the same base model collapses to a single unsuffixed `model_id` and is routed across every provider that supports it.
+- `eggpool connect` writes `routing_priority = 0` on every newly created provider block and leaves existing blocks untouched, so operators can edit one number to rebalance.
+- `eggpool configsetup opencode` honors `collapse_models`: suffixed model IDs when `false`, unsuffixed when `true`.
+- `/v1/models` includes an `eggpool.routing_priority` extension field on each suffixed entry.
+- See `plans/provider_priority.md` for the full design and `docs/providers.md` for the worked example with three providers and three priorities.
 
 ### Provider Contract Rendering
 

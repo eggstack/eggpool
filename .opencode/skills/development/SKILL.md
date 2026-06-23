@@ -79,6 +79,23 @@ call it through the provider config. Verify the consistency with:
 uv run pytest tests/unit/test_contract_urls.py tests/unit/test_fetcher.py tests/unit/test_coordinator_provider.py -v
 ```
 
+### Provider Routing Priority Tests
+
+Tier-based routing is tested in `tests/unit/test_routing_priority.py`.
+Key test classes:
+
+- `TestGroupByPriority` — pure `_group_by_priority()` helper
+- `TestRouterTieredSelection` — end-to-end tier selection, fall-through, failover ordering
+- `TestMixedPriorityLoadBalance` — mixed priorities with load balance within tier
+- `TestTierFallthroughOnCooldown` — top tier in cooldown falls through to lower tier
+- `TestFailoverTierBoundary` — `exclude_accounts` skips tiers, failover list is contiguous by tier
+
+Run with:
+
+```bash
+uv run pytest tests/unit/test_routing_priority.py -v
+```
+
 ## Code Style
 
 - Python 3.12+ with `from __future__ import annotations` in all files
