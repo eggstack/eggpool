@@ -89,7 +89,7 @@ echo "Checking for pipx..."
 if command -v pipx >/dev/null 2>&1; then
     echo "Installing eggpool via pipx..."
     pipx install eggpool
-    echo "Installation complete. Run 'eggpool init-config' to start."
+    echo "Installation complete. Run 'eggpool onboard' to start."
     exec eggpool accounts status
 fi
 

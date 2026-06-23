@@ -19,7 +19,7 @@ import pytest
 import respx
 
 from eggpool.app import create_app
-from eggpool.cli import _generate_api_key, _read_server_api_key, cli
+from eggpool.cli import _read_server_api_key, cli, generate_api_key
 from eggpool.models.config import AppConfig
 from eggpool.providers.connect import merge_provider_into_config
 
@@ -348,7 +348,7 @@ class TestGetkeyNewkey:
 
     def test_generate_api_key_format(self) -> None:
         """Generated keys have the expected format."""
-        key = _generate_api_key()
+        key = generate_api_key()
         assert key.startswith("ep_")
         assert len(key) == 67  # "ep_" + 64 hex chars
 

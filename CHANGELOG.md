@@ -5,6 +5,21 @@ All notable changes to EggPool are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-06-23
+
+### Changed
+
+- `eggpool onboard` now creates a minimal config and generates a server
+  API key on fresh installs, eliminating the need for `init-config`.
+- Install script recommends `eggpool onboard` instead of `init-config`.
+- `init-config` shows a helpful warning when config exists, recommending
+  `eggpool onboard` for provider setup.
+
+### Fixed
+
+- Onboard flow now works deterministically on fresh installs without
+  requiring manual config creation first.
+
 ## [0.1.2] - 2026-06-23
 
 ### Fixed

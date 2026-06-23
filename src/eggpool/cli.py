@@ -334,7 +334,7 @@ def edit(ctx: click.Context) -> None:
         sys.exit(1)
 
 
-def _generate_api_key() -> str:
+def generate_api_key() -> str:
     """Generate a cryptographically secure API key."""
     import secrets
 
@@ -383,7 +383,7 @@ def _detect_lan_ip() -> str:
         return "127.0.0.1"
 
 
-def _write_server_api_key(config_path: str, new_key: str) -> None:
+def write_server_api_key(config_path: str, new_key: str) -> None:
     """Write a server API key to the [server] section of the config.
 
     If the [server] section declares ``api_key_env`` instead of an inline
@@ -443,8 +443,8 @@ def newkey(ctx: click.Context) -> None:
 
     config_path: str = ctx.obj["config_path"]
     old_key = _read_server_api_key(config_path)
-    new_key = _generate_api_key()
-    _write_server_api_key(config_path, new_key)
+    new_key = generate_api_key()
+    write_server_api_key(config_path, new_key)
 
     if old_key:
         click.echo(f"Old key (expired): {old_key}")
@@ -633,8 +633,8 @@ def configsetup_opencode(ctx: click.Context) -> None:
     key = _read_server_api_key(config_path)
     if not key:
         try:
-            key = _generate_api_key()
-            _write_server_api_key(config_path, key)
+            key = generate_api_key()
+            write_server_api_key(config_path, key)
             click.echo("Generated new server API key.", err=True)
         except OSError as exc:
             click.echo(
@@ -828,8 +828,8 @@ def configsetup_claude_code(ctx: click.Context) -> None:
     key = _read_server_api_key(config_path)
     if not key:
         try:
-            key = _generate_api_key()
-            _write_server_api_key(config_path, key)
+            key = generate_api_key()
+            write_server_api_key(config_path, key)
             click.echo("Generated new server API key.", err=True)
         except OSError as exc:
             click.echo(
@@ -1740,7 +1740,11 @@ def restart(ctx: click.Context, timeout: float) -> None:
 @click.option("--force", is_flag=True, help="Overwrite existing config file.")
 @click.pass_context
 def init_config(ctx: click.Context, target: str | None, force: bool) -> None:
-    """Write config.example.toml into the current directory (or TARGET)."""
+    """Write config.example.toml into the current directory (or TARGET).
+
+    For fresh installs, prefer 'eggpool onboard' which handles
+    config creation, API key generation, and provider setup.
+    """
     from importlib.resources import as_file, files
 
     ref = files("eggpool._share").joinpath("config.example.toml")
@@ -1753,7 +1757,10 @@ def init_config(ctx: click.Context, target: str | None, force: bool) -> None:
 
         if target_path.exists() and not force:
             click.echo(
-                f"Error: {target_path} already exists. Use --force to overwrite.",
+                f"Warning: {target_path} already exists.\n"
+                "This will overwrite your configuration.\n"
+                "For a fresh config, use --force.\n"
+                "For provider setup, use 'eggpool onboard' instead.",
                 err=True,
             )
             sys.exit(1)

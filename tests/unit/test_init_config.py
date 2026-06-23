@@ -30,13 +30,14 @@ class TestInitConfig:
             assert f"Config written to {target}" in result.output
 
     def test_init_config_fails_if_exists_without_force(self, tmp_path: Path) -> None:
-        """init-config fails if config.toml already exists without --force."""
+        """init-config fails with warning if config.toml already exists."""
         runner = CliRunner()
         with runner.isolated_filesystem(temp_dir=tmp_path):
             Path("config.toml").write_text("existing content")
             result = runner.invoke(cli, ["init-config"])
             assert result.exit_code == 1
             assert "already exists" in result.output
+            assert "eggpool onboard" in result.output
 
     def test_init_config_overwrites_with_force(self, tmp_path: Path) -> None:
         """init-config with --force overwrites existing config.toml."""

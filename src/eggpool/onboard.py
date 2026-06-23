@@ -54,14 +54,62 @@ def _prompt_add_another() -> bool:
     return _prompt_yn("Add another provider?")
 
 
+def _ensure_config_with_api_key(config_path: str) -> None:
+    """Create config if missing and ensure a server API key exists.
+
+    This is called at the start of onboarding so fresh installs get a
+    working config with a real API key before any provider is connected.
+    """
+    from pathlib import Path
+
+    path = Path(config_path)
+
+    if not path.exists():
+        minimal = (
+            "[server]\n"
+            'host = "0.0.0.0"\n'
+            "port = 11300\n"
+            'log_level = "INFO"\n'
+            "\n"
+            "[database]\n"
+            'path = "usage.sqlite3"\n'
+            "\n"
+            "[models]\n"
+            "refresh_interval_s = 300\n"
+        )
+        path.write_text(minimal, encoding="utf-8")
+        sys.stdout.write(f"  Created {config_path}\n")
+
+    # Generate a server API key if one doesn't exist
+    import tomllib
+
+    with open(path, "rb") as f:
+        raw = tomllib.load(f)
+
+    server = raw.get("server", {})
+    existing_key = server.get("api_key", "")
+
+    if not existing_key:
+        from eggpool.cli import generate_api_key, write_server_api_key
+
+        new_key = generate_api_key()
+        write_server_api_key(config_path, new_key)
+        sys.stdout.write("  Generated server API key\n")
+
+
 def run_onboarding(config_path: str, providers_path: str | None = None) -> None:
     """Run the interactive onboarding flow.
 
-    1. Loop: connect a provider, ask if they want another
-    2. Run check-config
-    3. Start the server (if not already running)
+    1. Ensure config exists with a server API key
+    2. Loop: connect a provider, ask if they want another
+    3. Run check-config
+    4. Start the server (if not already running)
     """
     sys.stdout.write("\n=== EggPool Onboarding ===\n\n")
+
+    # Ensure we have a config file with a server API key
+    sys.stdout.write("--- Setting Up Configuration ---\n")
+    _ensure_config_with_api_key(config_path)
 
     from eggpool.providers.connect import connect as do_connect
 

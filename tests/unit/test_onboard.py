@@ -147,6 +147,94 @@ class TestOnboardCommand:
             onboard_mod.run_onboarding(str(config_path), "providers.toml")
 
 
+class TestOnboardFreshInstall:
+    """Tests for fresh-install onboarding behavior."""
+
+    def test_ensure_config_creates_minimal_config(self, tmp_path: Path) -> None:
+        """_ensure_config_with_api_key creates config if missing."""
+        from eggpool.onboard import _ensure_config_with_api_key
+
+        config_path = str(tmp_path / "config.toml")
+        _ensure_config_with_api_key(config_path)
+
+        assert Path(config_path).exists()
+        content = Path(config_path).read_text()
+        assert "[server]" in content
+        assert "[database]" in content
+        assert "[models]" in content
+
+    def test_ensure_config_generates_api_key(self, tmp_path: Path) -> None:
+        """_ensure_config_with_api_key generates server API key if missing."""
+        from eggpool.onboard import _ensure_config_with_api_key
+
+        config_path = str(tmp_path / "config.toml")
+        _ensure_config_with_api_key(config_path)
+
+        import tomllib
+
+        with open(config_path, "rb") as f:
+            config = tomllib.load(f)
+
+        api_key = config.get("server", {}).get("api_key", "")
+        assert api_key.startswith("ep_")
+        assert len(api_key) > 10
+
+    def test_ensure_config_preserves_existing_api_key(self, tmp_path: Path) -> None:
+        """_ensure_config_with_api_key does not overwrite existing API key."""
+        from eggpool.onboard import _ensure_config_with_api_key
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            '[server]\napi_key = "ep_existing_key_12345"\nport = 11300\n'
+        )
+
+        _ensure_config_with_api_key(str(config_path))
+
+        import tomllib
+
+        with open(config_path, "rb") as f:
+            config = tomllib.load(f)
+
+        assert config["server"]["api_key"] == "ep_existing_key_12345"
+
+    def test_fresh_install_onboard_creates_config_and_key(self, tmp_path: Path) -> None:
+        """Full onboard flow creates config and API key on fresh install."""
+        from unittest.mock import MagicMock, patch
+
+        import eggpool.onboard as onboard_mod
+
+        config_path = str(tmp_path / "config.toml")
+
+        with (
+            patch("eggpool.providers.connect.connect", return_value=True),
+            patch.object(onboard_mod, "_prompt_add_another", return_value=False),
+            patch("subprocess.run", return_value=MagicMock(returncode=0)),
+            patch("os.execvp"),
+        ):
+            onboard_mod.run_onboarding(config_path, "providers.toml")
+
+        assert Path(config_path).exists()
+
+        import tomllib
+
+        with open(config_path, "rb") as f:
+            config = tomllib.load(f)
+
+        # Config has server section with API key
+        assert config.get("server", {}).get("api_key", "").startswith("ep_")
+        # Config has required sections
+        assert "database" in config
+        assert "models" in config
+
+    def test_install_script_recommends_onboard(self) -> None:
+        """install.sh recommends 'eggpool onboard' not 'init-config'."""
+        install_path = Path(__file__).parent.parent.parent / "scripts" / "install.sh"
+        source = install_path.read_text(encoding="utf-8")
+
+        assert "eggpool onboard" in source
+        assert "eggpool init-config" not in source
+
+
 class TestOnboardPromptFunctions:
     """Tests for onboarding prompt functions."""
 
