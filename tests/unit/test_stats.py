@@ -330,6 +330,16 @@ class TestResolvePeriod:
         assert end.year == 2024
         assert (end - start).total_seconds() == 86400.0
 
+    @pytest.mark.parametrize(
+        "period",
+        ["not-a-period", "invalid..2024-01-02", "2024-01-02..2024-01-01"],
+    )
+    def test_invalid_period_defaults_to_24h(self, period: str) -> None:
+        start, end, label = resolve_period(period)
+
+        assert label == "24h"
+        assert (end - start).total_seconds() == pytest.approx(86400.0)
+
     def test_period_presets_complete(self) -> None:
         assert "1h" in PERIOD_PRESETS
         assert "24h" in PERIOD_PRESETS

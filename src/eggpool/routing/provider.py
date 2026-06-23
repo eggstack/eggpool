@@ -1,8 +1,6 @@
-"""Provider ID parsing utilities for model IDs."""
+"""Provider-aware model ID parsing and formatting utilities."""
 
 from __future__ import annotations
-
-from eggpool.catalog.cache import parse_model_id
 
 
 def parse_model_provider(
@@ -12,7 +10,16 @@ def parse_model_provider(
 
     If no configured provider suffix is present, returns (model_id, None).
     """
-    return parse_model_id(model_id, known_providers)
+    normalized = model_id.strip()
+    if "/" in normalized:
+        base, candidate = normalized.rsplit("/", 1)
+        if (
+            base
+            and candidate
+            and (known_providers is None or candidate in known_providers)
+        ):
+            return base, candidate
+    return normalized, None
 
 
 def format_model_provider(model_id: str, provider_id: str) -> str:

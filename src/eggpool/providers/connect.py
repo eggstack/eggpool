@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import json
 import os
 import select
 import signal
@@ -19,6 +18,7 @@ from typing import Any, cast
 
 from eggpool.constants import DEFAULT_PROVIDER_ID
 from eggpool.providers.contract import PROVIDER_STATUS_SYMBOLS
+from eggpool.toml_edit import render_toml_value
 
 _REGISTRY_METADATA_FIELDS = frozenset(
     {
@@ -583,27 +583,7 @@ def _format_provider_block(
     return "\n".join(lines)
 
 
-def _toml_value(value: Any) -> str:  # noqa: ANN401
-    """Format a Python value as a TOML value string."""
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, float):
-        return str(value)
-    if isinstance(value, str):
-        return json.dumps(value, ensure_ascii=False)
-    if isinstance(value, list):
-        items = cast("list[object]", value)
-        return "[" + ", ".join(_toml_value(item) for item in items) + "]"
-    if isinstance(value, dict):
-        mapping = cast("dict[object, object]", value)
-        fields = (
-            f"{json.dumps(str(key), ensure_ascii=False)} = {_toml_value(item)}"
-            for key, item in mapping.items()
-        )
-        return "{ " + ", ".join(fields) + " }"
-    raise TypeError(f"Unsupported TOML value type: {type(value).__name__}")
+_toml_value = render_toml_value
 
 
 def _insert_provider_block(content: str, block: str) -> str:

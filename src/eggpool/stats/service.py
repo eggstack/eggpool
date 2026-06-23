@@ -54,26 +54,33 @@ def resolve_period(period: str | None) -> tuple[datetime, datetime, str]:
     - Preset: "1h", "24h", "7d", "30d"
     - ISO datetime range: "START..END"
     """
+    now = datetime.now(UTC)
     if period is None or period == "":
-        period = "24h"
+        return _preset_period("24h", now)
 
     if ".." in period:
         start_str, end_str = period.split("..", 1)
         start = _parse_iso(start_str)
         end = _parse_iso(end_str)
+        if start is None or end is None or start >= end:
+            return _preset_period("24h", now)
         return start, end, "custom"
 
     if period in PERIOD_PRESETS:
-        seconds = PERIOD_PRESETS[period]
-        end = datetime.now(UTC)
-        start = end - timedelta(seconds=seconds)
-        return start, end, period
+        return _preset_period(period, now)
 
     start = _parse_iso(period)
-    return start, datetime.now(UTC), "since"
+    if start is None:
+        return _preset_period("24h", now)
+    return start, now, "since"
 
 
-def _parse_iso(value: str) -> datetime:
+def _preset_period(period: str, end: datetime) -> tuple[datetime, datetime, str]:
+    """Build a preset range from one consistent wall-clock sample."""
+    return end - timedelta(seconds=PERIOD_PRESETS[period]), end, period
+
+
+def _parse_iso(value: str) -> datetime | None:
     """Parse an ISO 8601 datetime string into a timezone-aware datetime."""
     if "T" not in value and " " not in value:
         value = f"{value} 00:00:00"
@@ -82,7 +89,7 @@ def _parse_iso(value: str) -> datetime:
     try:
         dt = datetime.fromisoformat(value)  # noqa: DTZ007
     except ValueError:
-        return datetime.now(UTC)
+        return None
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)
     return dt
@@ -117,6 +124,12 @@ class TimeRange:
 
     def end_str(self) -> str:
         return format_dt(self.end)
+
+
+def resolve_time_range(period: str | None) -> TimeRange:
+    """Resolve a period directly into the service's shared range type."""
+    start, end, label = resolve_period(period)
+    return TimeRange(start=start, end=end, label=label)
 
 
 class StatsService:

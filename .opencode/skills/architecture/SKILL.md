@@ -55,7 +55,8 @@ See `architecture/README.md` for the full design overview.
 - `ProviderClientPool` manages per-provider `httpx.AsyncClient` instances
 - Per-provider upstream paths: `openai_path`, `anthropic_path`, `models_path`
 - Legacy flat `[[accounts]]` auto-normalizes to default `opencode-go` provider
-- `parse_model_id()` in `catalog/cache.py` handles suffix parsing
+- `parse_model_provider()` in `routing/provider.py` handles suffix parsing;
+  `catalog/cache.py` retains a compatibility alias
 - **`routing_priority`** — `[providers.<id>]` accepts `routing_priority: int` with `Field(default=0, ge=0)`. Higher values are preferred. The field is per-provider; accounts inside a tier are still load-balanced by `QuotaFairScorer`.
 - **`collapse_models`** — `[models]` accepts `collapse_models: bool` (default `false`). When `false`, the catalog exposes one provider-suffixed entry per `(model_id, provider_id)`. When `true`, the same base model collapses to a single unsuffixed `model_id` and is routed across every provider that supports it.
 - `eggpool connect` writes `routing_priority = 0` on every newly created provider block and leaves existing blocks untouched, so operators can edit one number to rebalance.

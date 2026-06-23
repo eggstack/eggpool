@@ -592,7 +592,7 @@ def create_app(
 
     app = FastAPI(
         title="EggPool",
-        version="0.1.0",
+        version="0.1.1",
         docs_url=f"{API_V1_PREFIX}/docs",
         openapi_url=f"{API_V1_PREFIX}/openapi.json",
         lifespan=lifespan,

@@ -19,21 +19,15 @@ from typing import TYPE_CHECKING, Any
 from fastapi import Request  # noqa: TCH002 — FastAPI needs runtime access
 from fastapi.responses import JSONResponse
 
-from eggpool.stats import TimeRange, resolve_period
+from eggpool.stats import resolve_time_range
 
 if TYPE_CHECKING:
     from fastapi.responses import Response
 
 
-def _resolve(request: Request, period: str | None) -> TimeRange:
-    """Resolve a period string into a TimeRange."""
-    start, end, label = resolve_period(period)
-    return TimeRange(start=start, end=end, label=label)
-
-
 async def handle_summary(request: Request, period: str | None = "24h") -> Response:
     """GET /api/stats/summary."""
-    time_range = _resolve(request, period)
+    time_range = resolve_time_range(period)
     stats = request.app.state.stats
     summary = await stats.get_summary(time_range)
     return JSONResponse(content={"period": time_range.label, **summary})
@@ -43,7 +37,7 @@ async def handle_account_stats(
     request: Request, period: str | None = "24h"
 ) -> Response:
     """GET /api/stats/accounts."""
-    time_range = _resolve(request, period)
+    time_range = resolve_time_range(period)
     stats = request.app.state.stats
     accounts = await stats.get_account_stats(time_range)
     return JSONResponse(content={"period": time_range.label, "accounts": accounts})
@@ -55,7 +49,7 @@ async def handle_model_stats(
     account: str | None = None,
 ) -> Response:
     """GET /api/stats/models."""
-    time_range = _resolve(request, period)
+    time_range = resolve_time_range(period)
     stats = request.app.state.stats
     models = await stats.get_model_stats(time_range, account_name=account or None)
     if models is None:
@@ -80,7 +74,7 @@ async def handle_timeseries(
     model: str | None = None,
 ) -> Response:
     """GET /api/stats/timeseries."""
-    time_range = _resolve(request, period)
+    time_range = resolve_time_range(period)
     if bucket not in ("hour", "day"):
         bucket = "hour"
     stats = request.app.state.stats
@@ -111,7 +105,7 @@ async def handle_errors(
 ) -> Response:
     """GET /api/stats/errors."""
     limit = max(1, min(limit, 100))
-    time_range = _resolve(request, period)
+    time_range = resolve_time_range(period)
     stats = request.app.state.stats
     errors = await stats.get_error_breakdown(time_range, limit=limit)
     return JSONResponse(content={"period": time_range.label, "errors": errors})
@@ -135,7 +129,7 @@ async def handle_bandwidth(
     account: str | None = None,
 ) -> Response:
     """GET /api/stats/bandwidth."""
-    time_range = _resolve(request, period)
+    time_range = resolve_time_range(period)
     stats = request.app.state.stats
     daily = await stats.get_bandwidth_timeseries(
         time_range, account_name=account or None
@@ -154,7 +148,7 @@ async def handle_latency(
     period: str | None = "24h",
 ) -> Response:
     """GET /api/stats/latency."""
-    time_range = _resolve(request, period)
+    time_range = resolve_time_range(period)
     stats = request.app.state.stats
     provider_ttft = await stats.get_provider_ttft_summary(time_range)
     model_ttft = await stats.get_provider_model_ttft(time_range)
@@ -173,7 +167,7 @@ async def handle_pings(
     provider: str | None = None,
 ) -> Response:
     """GET /api/stats/pings."""
-    time_range = _resolve(request, period)
+    time_range = resolve_time_range(period)
     stats = request.app.state.stats
     ping_summary = await stats.get_ping_summary(time_range)
     recent_pings = await stats.get_ping_recent(provider_id=provider or None, limit=50)
@@ -189,7 +183,7 @@ async def handle_pings(
 
 async def handle_ip_stats(request: Request, period: str | None = "24h") -> Response:
     """GET /api/stats/ips."""
-    time_range = _resolve(request, period)
+    time_range = resolve_time_range(period)
     stats = request.app.state.stats
     ip_stats = await stats.get_ip_stats(time_range)
     return JSONResponse(content={"period": time_range.label, "ips": ip_stats})

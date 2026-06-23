@@ -172,6 +172,16 @@ class TestBuildUpstreamHeaders:
             "Bearer selected-key"
         )
 
+    def test_auth_remains_unique_after_case_variant_config_mutation(self):
+        cfg = ProviderConfig(id="t", base_url="https://api.example.com")
+        cfg.headers.append(
+            ProviderStaticHeaderConfig(name="authorization", value="bad-static-key")
+        )
+
+        headers = build_upstream_headers(cfg, "selected-key")
+
+        assert headers == {"Authorization": "Bearer selected-key"}
+
 
 class TestProviderConfigContract:
     def test_old_style_config_synthesizes_models_endpoint(self):

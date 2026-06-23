@@ -7,6 +7,7 @@ import time
 from typing import Any, cast
 
 from eggpool.catalog.limits import EffectiveModelLimits, conservative_limits
+from eggpool.routing.provider import parse_model_provider
 
 logger = logging.getLogger(__name__)
 
@@ -20,16 +21,7 @@ def parse_model_id(
     when no suffix is present or the suffix does not match a known
     provider.
     """
-    model_id = model_id.strip()
-    if "/" in model_id:
-        base, candidate = model_id.rsplit("/", 1)
-        if (
-            base
-            and candidate
-            and (known_providers is None or candidate in known_providers)
-        ):
-            return base, candidate
-    return model_id, None
+    return parse_model_provider(model_id, known_providers)
 
 
 class ModelCatalogCache:
@@ -133,6 +125,17 @@ class ModelCatalogCache:
             if (provider_id := self._account_providers.get(account_name)) is not None
         }
         return sorted(provider_ids)
+
+    @staticmethod
+    def _is_visible(
+        expose_mode: str,
+        visible_accounts: set[str],
+        eligible_accounts: set[str],
+    ) -> bool:
+        """Return whether account support satisfies the exposure policy."""
+        if expose_mode == "intersection":
+            return bool(eligible_accounts) and visible_accounts == eligible_accounts
+        return expose_mode in {"union", "healthy_union"} and bool(visible_accounts)
 
     @staticmethod
     def _copy_exposed_model(
@@ -244,17 +247,11 @@ class ModelCatalogCache:
             accounts_supporting = self._account_support.get(model_id, set())
             visible_accounts = accounts_supporting & eligible_account_names
 
-            should_include = (
-                (expose_mode == "union" and visible_accounts)
-                or (
-                    expose_mode == "intersection"
-                    and eligible_account_names
-                    and visible_accounts == eligible_account_names
-                )
-                or (expose_mode == "healthy_union" and visible_accounts)
-            )
-
-            if not should_include:
+            if not self._is_visible(
+                expose_mode,
+                visible_accounts,
+                eligible_account_names,
+            ):
                 continue
 
             provider_ids = self._visible_provider_ids(visible_accounts)
@@ -314,17 +311,11 @@ class ModelCatalogCache:
                 supporting_in_provider = provider_support.get(pid, set())
                 visible = supporting_in_provider & eligible_in_provider
 
-                should_include = (
-                    (expose_mode == "union" and visible)
-                    or (
-                        expose_mode == "intersection"
-                        and eligible_in_provider
-                        and visible == eligible_in_provider
-                    )
-                    or (expose_mode == "healthy_union" and visible)
-                )
-
-                if not should_include:
+                if not self._is_visible(
+                    expose_mode,
+                    visible,
+                    eligible_in_provider,
+                ):
                     continue
 
                 # Use per-provider metadata for this (model_id, provider_id)

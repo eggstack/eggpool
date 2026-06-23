@@ -87,7 +87,7 @@ Legacy flat `[[accounts]]` configs auto-normalize to a default `opencode-go` pro
 
 ### Model ID Format
 
-Models are exposed with provider-suffixed IDs: `model-id/provider-id` (e.g., `claude-sonnet-4/opencode-go`). `parse_model_id()` in `catalog/cache.py` handles suffix parsing.
+Models are exposed with provider-suffixed IDs: `model-id/provider-id` (e.g., `claude-sonnet-4/opencode-go`). `parse_model_provider()` in `routing/provider.py` is the canonical suffix parser; `catalog/cache.py` retains a compatibility alias.
 
 ### Provider-Specific Paths
 

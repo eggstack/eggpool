@@ -87,5 +87,12 @@ def build_upstream_headers(
     # header with the same name, but applying auth last is defense in depth
     # for programmatically mutated config objects.
     headers = build_static_headers(provider)
-    headers.update(build_auth_headers(provider, api_key))
+    auth_headers = build_auth_headers(provider, api_key)
+    auth_names = {name.casefold() for name in auth_headers}
+    headers = {
+        name: value
+        for name, value in headers.items()
+        if name.casefold() not in auth_names
+    }
+    headers.update(auth_headers)
     return headers

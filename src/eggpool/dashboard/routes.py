@@ -26,7 +26,7 @@ from eggpool.dashboard.render import (
     render_timeseries,
 )
 from eggpool.errors import ConfigError
-from eggpool.stats import TimeRange, resolve_period
+from eggpool.stats import TimeRange, resolve_time_range
 
 if TYPE_CHECKING:
     from fastapi.responses import Response
@@ -85,18 +85,12 @@ def _get_theme_data(
     return theme.to_css_variables(), theme.heatmap_colors(), theme_name, available
 
 
-def _resolve(request: Request, period: str | None) -> TimeRange:
-    """Resolve a period string into a TimeRange."""
-    start, end, label = resolve_period(period)
-    return TimeRange(start=start, end=end, label=label)
-
-
 async def handle_overview(
     request: Request, period: str | None = "24h", theme: str | None = None
 ) -> Response:
     """Render the overview page."""
     dashboard_config = _get_dashboard_config(request)
-    time_range = _resolve(request, period)
+    time_range = resolve_time_range(period)
     stats = request.app.state.stats
     heatmap_range = _heatmap_time_range(dashboard_config.retain_request_stats_days)
 
@@ -156,7 +150,7 @@ async def handle_accounts(
 ) -> Response:
     """Render the accounts page."""
     _get_dashboard_config(request)
-    time_range = _resolve(request, period)
+    time_range = resolve_time_range(period)
     stats = request.app.state.stats
     accounts = await stats.get_account_stats(time_range, use_cache=True)
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
@@ -179,7 +173,7 @@ async def handle_models(
 ) -> Response:
     """Render the models page."""
     _get_dashboard_config(request)
-    time_range = _resolve(request, period)
+    time_range = resolve_time_range(period)
     stats = request.app.state.stats
     models = await stats.get_model_stats(
         time_range, account_name=account or None, use_cache=True
@@ -202,7 +196,7 @@ async def handle_latency(
 ) -> Response:
     """Render the latency breakdown page."""
     _get_dashboard_config(request)
-    time_range = _resolve(request, period)
+    time_range = resolve_time_range(period)
     stats = request.app.state.stats
     provider_ttft = await stats.get_provider_ttft_summary(time_range)
     model_ttft = await stats.get_provider_model_ttft(time_range)
@@ -224,7 +218,7 @@ async def handle_pings(
 ) -> Response:
     """Render the provider pings health page."""
     _get_dashboard_config(request)
-    time_range = _resolve(request, period)
+    time_range = resolve_time_range(period)
     stats = request.app.state.stats
     ping_summary = await stats.get_ping_summary(time_range)
     recent_pings = await stats.get_ping_recent(limit=50)
@@ -274,7 +268,7 @@ async def handle_timeseries(
 ) -> Response:
     """Render the timeseries page."""
     _get_dashboard_config(request)
-    time_range = _resolve(request, period)
+    time_range = resolve_time_range(period)
     if bucket not in ("hour", "day"):
         bucket = "hour"
     stats = request.app.state.stats
@@ -306,7 +300,7 @@ async def handle_bandwidth(
 ) -> Response:
     """Render the bandwidth page."""
     _get_dashboard_config(request)
-    time_range = _resolve(request, period)
+    time_range = resolve_time_range(period)
     if bucket not in ("hour", "day"):
         bucket = "hour"
     stats = request.app.state.stats
@@ -347,7 +341,7 @@ async def handle_timeseries_json(
 ) -> Response:
     """Return timeseries data as JSON for Chart.js."""
     _get_dashboard_config(request)
-    time_range = _resolve(request, period)
+    time_range = resolve_time_range(period)
     if bucket not in ("hour", "day"):
         bucket = "hour"
     stats = request.app.state.stats

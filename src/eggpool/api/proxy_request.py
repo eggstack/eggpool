@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from eggpool.auth import require_auth
-from eggpool.catalog.cache import parse_model_id
 from eggpool.catalog.protocols import ProtocolMismatchError, ProtocolName
 from eggpool.constants import MAX_REQUEST_BODY_BYTES
 from eggpool.errors import (
@@ -31,6 +30,7 @@ from eggpool.request.coordinator import (
     RequestCoordinator,
 )
 from eggpool.request.limits import check_context_limits as _check_context_limits
+from eggpool.routing.provider import parse_model_provider
 
 if TYPE_CHECKING:
     from fastapi import Request
@@ -141,7 +141,7 @@ async def handle_proxy_request(
 
     config = cast("AppConfig | None", getattr(request.app.state, "config", None))
     known_providers = set(config.providers) if config is not None else None
-    model_id, provider_id = parse_model_id(model_value, known_providers)
+    model_id, provider_id = parse_model_provider(model_value, known_providers)
 
     # Preflight context limit check (guardrail, not primary enforcement).
     catalog = getattr(request.app.state, "catalog", None)

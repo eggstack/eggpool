@@ -18,6 +18,7 @@ from eggpool.stats.service import (
     StatsService,
     TimeRange,
     resolve_period,
+    resolve_time_range,
 )
 
 __all__ = [
@@ -34,4 +35,5 @@ __all__ = [
     "fetch_summary",
     "fetch_timeseries",
     "resolve_period",
+    "resolve_time_range",
 ]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from typing import cast
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,27 @@ class TomlEditResult:
 def render_toml_string(value: str) -> str:
     """Render a string as a TOML-compatible basic string."""
     return json.dumps(value, ensure_ascii=False)
+
+
+def render_toml_value(value: object) -> str:
+    """Render supported Python scalar and container values as TOML."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int | float):
+        return str(value)
+    if isinstance(value, str):
+        return render_toml_string(value)
+    if isinstance(value, list):
+        items = cast("list[object]", value)
+        return "[" + ", ".join(render_toml_value(item) for item in items) + "]"
+    if isinstance(value, dict):
+        mapping = cast("dict[object, object]", value)
+        fields = (
+            f"{render_toml_string(str(key))} = {render_toml_value(item)}"
+            for key, item in mapping.items()
+        )
+        return "{ " + ", ".join(fields) + " }"
+    raise TypeError(f"Unsupported TOML value type: {type(value).__name__}")
 
 
 def section_has_key(lines: list[str], section: str, key: str) -> bool:
