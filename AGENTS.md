@@ -67,9 +67,7 @@ EggPool ships templates for 27+ providers across verified, experimental, and unv
 
 **Verified** (API-key auth confirmed): opencode-go, openai, anthropic, openrouter, deepseek, together, fireworks, groq, deepinfra, gemini, xai, mistral, siliconflow, alibaba, ollama-local
 
-**Experimental** (live-verification-required): zai, novita, minimax, minimax-cn, neuralwatt, ollama-cloud, cerebras, sambanova, hyperbolic, featherless, moonshot
-
-**Unverified** (needs testing): generalcompute
+**Experimental** (live-verification-required): zai, novita, minimax, minimax-cn, generalcompute, neuralwatt, ollama-cloud, cerebras, sambanova, hyperbolic, featherless, moonshot
 
 Use `eggpool connect list` to see available providers and `eggpool connect <id>` for interactive setup.
 
