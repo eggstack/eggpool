@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class HealthResponse(BaseModel):
@@ -29,4 +29,4 @@ class ModelObject(BaseModel):
 
 class ModelListResponse(BaseModel):
     object: str = "list"
-    data: list[ModelObject] = []
+    data: list[ModelObject] = Field(default_factory=list[ModelObject])

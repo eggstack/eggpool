@@ -87,6 +87,15 @@ def serve(ctx: click.Context) -> None:
 
     config_path: str = ctx.obj["config_path"]
 
+    if not Path(config_path).exists():
+        click.echo(
+            f"Config file not found: {config_path}\n"
+            "  Run `eggpool onboard` to set up providers, or\n"
+            "  `eggpool connect` to add a provider account.",
+            err=True,
+        )
+        sys.exit(1)
+
     try:
         config = AppConfig.from_toml(config_path)
     except AggregatorError as exc:
@@ -296,6 +305,15 @@ def logout(ctx: click.Context, target: str | None) -> None:
 def check_config(ctx: click.Context) -> None:
     """Validate the configuration file."""
     config_path: str = ctx.obj["config_path"]
+
+    if not Path(config_path).exists():
+        click.echo(
+            f"Config file not found: {config_path}\n"
+            "  Run `eggpool onboard` to set up providers, or\n"
+            "  `eggpool connect` to add a provider account.",
+            err=True,
+        )
+        sys.exit(1)
 
     try:
         config = AppConfig.from_toml(config_path)

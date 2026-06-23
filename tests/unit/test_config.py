@@ -328,6 +328,42 @@ def test_bearer_mode_case_insensitive_prefix_rejected() -> None:
         config.validate_account_credentials()
 
 
+@pytest.mark.parametrize("api_key", ["Bearer", "Bearer\tsk-test"])
+def test_bearer_mode_rejects_non_space_scheme_separators(api_key: str) -> None:
+    config = AppConfig.from_dict(
+        {
+            "providers": {
+                "minimax": {
+                    "id": "minimax",
+                    "base_url": "https://api.minimax.io/v1",
+                    "accounts": [{"name": "default", "api_key": api_key}],
+                }
+            }
+        }
+    )
+
+    with pytest.raises(ConfigError, match="must be the raw token"):
+        config.validate_account_credentials()
+
+
+def test_bearer_mode_rejects_configured_scheme_prefix() -> None:
+    config = AppConfig.from_dict(
+        {
+            "providers": {
+                "custom": {
+                    "id": "custom",
+                    "base_url": "https://api.example.com/v1",
+                    "auth": {"mode": "bearer", "scheme": "Token"},
+                    "accounts": [{"name": "default", "api_key": "Token custom-key"}],
+                }
+            }
+        }
+    )
+
+    with pytest.raises(ConfigError, match="not 'Token <token>'"):
+        config.validate_account_credentials()
+
+
 def test_model_override_price_strings_are_normalized(tmp_path: Path) -> None:
     config_file = tmp_path / "prices.toml"
     config_file.write_text(

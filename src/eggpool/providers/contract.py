@@ -6,6 +6,7 @@ import os
 from typing import TYPE_CHECKING
 
 from eggpool.errors import ConfigError
+from eggpool.providers.auth import render_auth_headers
 
 # Provider verification status tiers.  Used by the CLI and interactive
 # connect flow to label each provider with a symbol and human description.
@@ -45,12 +46,12 @@ def build_auth_headers(provider: ProviderConfig, api_key: str) -> dict[str, str]
     Returns an empty dict when auth mode is ``none``.
     """
     auth = provider.auth
-    if auth.mode == "none":
-        return {}
-    if auth.mode in ("api_key", "raw_authorization"):
-        return {auth.header: api_key}
-    # bearer mode (default)
-    return {auth.header: f"{auth.scheme} {api_key}"}
+    return render_auth_headers(
+        mode=auth.mode,
+        header=auth.header,
+        scheme=auth.scheme,
+        api_key=api_key,
+    )
 
 
 def resolve_static_header_value(header: ProviderStaticHeaderConfig) -> str | None:

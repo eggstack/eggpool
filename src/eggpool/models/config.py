@@ -22,6 +22,7 @@ from eggpool.constants import (
     DEFAULT_PROVIDER_ID,
 )
 from eggpool.errors import ConfigError
+from eggpool.providers.auth import has_auth_scheme_prefix
 
 _HTTP_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 _PROXY_MANAGED_HEADERS = frozenset(
@@ -169,9 +170,11 @@ class DashboardConfig(BaseModel):
 class SecurityConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    allowed_hosts: list[str] = []
-    cors_origins: list[str] = []
-    redact_headers: list[str] = ["authorization", "x-api-key"]
+    allowed_hosts: list[str] = Field(default_factory=list)
+    cors_origins: list[str] = Field(default_factory=list)
+    redact_headers: list[str] = Field(
+        default_factory=lambda: ["authorization", "x-api-key"]
+    )
     persist_redacted_error_detail: bool = False
 
 
@@ -277,7 +280,7 @@ class ProviderModelsEndpointConfig(BaseModel):
     method: Literal["GET", "POST", "DISABLED"] = "GET"
     path: str = "/models"
     body: dict[str, Any] | None = None
-    query: dict[str, str] = {}
+    query: dict[str, str] = Field(default_factory=dict)
     required: bool = True
 
 
@@ -312,12 +315,14 @@ class ProviderConfig(BaseModel):
     max_keepalive: int = Field(default=20, gt=0)
     keepalive_timeout_s: float = Field(default=30, ge=0)
     routing_priority: int = Field(default=0, ge=0)
-    accounts: list[AccountConfig] = []
-    model_overrides: dict[str, ModelOverrideConfig] = {}
-    auth: ProviderAuthConfig = ProviderAuthConfig()
-    headers: list[ProviderStaticHeaderConfig] = []
+    accounts: list[AccountConfig] = Field(default_factory=list[AccountConfig])
+    model_overrides: dict[str, ModelOverrideConfig] = Field(default_factory=dict)
+    auth: ProviderAuthConfig = Field(default_factory=ProviderAuthConfig)
+    headers: list[ProviderStaticHeaderConfig] = Field(
+        default_factory=list[ProviderStaticHeaderConfig]
+    )
     models_endpoint: ProviderModelsEndpointConfig | None = None
-    verify: ProviderVerifyConfig = ProviderVerifyConfig()
+    verify: ProviderVerifyConfig = Field(default_factory=ProviderVerifyConfig)
 
     @field_validator("models_method", mode="before")
     @classmethod
@@ -468,18 +473,18 @@ class ModelOverrideConfig(ModelLimitOverrideConfig):
 class AppConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    server: ServerConfig = ServerConfig()
-    upstream: UpstreamConfig = UpstreamConfig()
-    database: DatabaseConfig = DatabaseConfig()
-    models: ModelsConfig = ModelsConfig()
-    routing: RoutingConfig = RoutingConfig()
-    limits: LimitsConfig = LimitsConfig()
-    dashboard: DashboardConfig = DashboardConfig()
-    security: SecurityConfig = SecurityConfig()
-    proxies: dict[str, ProxyConfig] = {}
-    accounts: list[AccountConfig] = []
-    providers: dict[str, ProviderConfig] = {}
-    model_overrides: dict[str, ModelOverrideConfig] = {}
+    server: ServerConfig = Field(default_factory=ServerConfig)
+    upstream: UpstreamConfig = Field(default_factory=UpstreamConfig)
+    database: DatabaseConfig = Field(default_factory=DatabaseConfig)
+    models: ModelsConfig = Field(default_factory=ModelsConfig)
+    routing: RoutingConfig = Field(default_factory=RoutingConfig)
+    limits: LimitsConfig = Field(default_factory=LimitsConfig)
+    dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
+    security: SecurityConfig = Field(default_factory=SecurityConfig)
+    proxies: dict[str, ProxyConfig] = Field(default_factory=dict)
+    accounts: list[AccountConfig] = Field(default_factory=list[AccountConfig])
+    providers: dict[str, ProviderConfig] = Field(default_factory=dict)
+    model_overrides: dict[str, ModelOverrideConfig] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _normalize_providers(self) -> AppConfig:
@@ -572,17 +577,17 @@ class AppConfig(BaseModel):
                         f"Provider {provider_id!r} account {acct.name!r}: "
                         f"{source} contains CR, LF, or NUL"
                     )
-                if (
-                    provider.auth.mode == "bearer"
-                    and raw_key.strip().lower().startswith("bearer ")
+                if provider.auth.mode == "bearer" and has_auth_scheme_prefix(
+                    raw_key, provider.auth.scheme
                 ):
                     source = (
                         "api_key" if acct.api_key else f"env var {acct.api_key_env!r}"
                     )
                     raise ConfigError(
                         f"Provider {provider_id!r} account {acct.name!r}: "
-                        f"{source} must be the raw token, not 'Bearer <token>'. "
-                        "EggPool adds the Bearer scheme automatically."
+                        f"{source} must be the raw token, not "
+                        f"'{provider.auth.scheme} <token>'. EggPool adds the "
+                        f"{provider.auth.scheme} scheme automatically."
                     )
 
                 if not raw_key.strip():

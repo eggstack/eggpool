@@ -11,6 +11,7 @@ from eggpool.models.config import (
     ProviderModelsEndpointConfig,
     ProviderStaticHeaderConfig,
 )
+from eggpool.providers.auth import has_auth_scheme_prefix, render_auth_headers
 from eggpool.providers.contract import (
     build_auth_headers,
     build_static_headers,
@@ -97,6 +98,44 @@ class TestBuildAuthHeaders:
             auth=ProviderAuthConfig(mode="none"),
         )
         assert build_auth_headers(cfg, "anything") == {}
+
+
+class TestAuthSchemePrefix:
+    @pytest.mark.parametrize(
+        "api_key",
+        ["Bearer", "Bearer token", "  bearer\ttoken  "],
+    )
+    def test_detects_scheme_with_any_separator(self, api_key: str) -> None:
+        assert has_auth_scheme_prefix(api_key, "Bearer")
+
+    @pytest.mark.parametrize("api_key", ["", "token", "BearerToken"])
+    def test_does_not_match_raw_tokens(self, api_key: str) -> None:
+        assert not has_auth_scheme_prefix(api_key, "Bearer")
+
+    def test_uses_configured_scheme(self) -> None:
+        assert has_auth_scheme_prefix("token secret", "Token")
+        assert not has_auth_scheme_prefix("Bearer secret", "Token")
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        ("none", {}),
+        ("api_key", {"X-Auth": "secret"}),
+        ("raw_authorization", {"X-Auth": "secret"}),
+        ("bearer", {"X-Auth": "Token secret"}),
+    ],
+)
+def test_render_auth_headers(mode: str, expected: dict[str, str]) -> None:
+    assert (
+        render_auth_headers(
+            mode=mode,
+            header="X-Auth",
+            scheme="Token",
+            api_key="secret",
+        )
+        == expected
+    )
 
 
 class TestBuildStaticHeaders:

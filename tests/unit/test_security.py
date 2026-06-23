@@ -416,6 +416,42 @@ async def test_proxy_endpoints_build_protocol_specific_context(
     assert context.model_id == base_model
     assert context.provider_id == "opencode-go"
     assert context.client_ip == "203.0.113.7"
+    assert json.loads(context.upstream_body)["model"] == base_model
+
+
+@pytest.mark.parametrize(
+    ("app_factory", "path"),
+    [
+        (_make_real_chat_app, "/v1/chat/completions"),
+        (_make_real_messages_app, "/v1/messages"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_proxy_endpoints_forward_normalized_model_id(
+    app_factory: Callable[[], FastAPI],
+    path: str,
+) -> None:
+    """Routing normalization and the forwarded payload must not diverge."""
+    app = app_factory()
+    app.state.coordinator.execute = AsyncMock(
+        return_value=PreparedProxyResponse(
+            status_code=200,
+            headers=[("content-type", "application/json")],
+            body=b'{"ok":true}',
+        )
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            path,
+            json={"model": "  gpt-4  ", "messages": []},
+        )
+
+    assert response.status_code == 200
+    context = app.state.coordinator.execute.await_args.args[0]
+    assert context.model_id == "gpt-4"
+    assert json.loads(context.upstream_body)["model"] == "gpt-4"
 
 
 @pytest.mark.asyncio

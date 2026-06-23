@@ -29,6 +29,8 @@ from typing import Any, cast
 
 import httpx
 
+from eggpool.providers.auth import has_auth_scheme_prefix, render_auth_headers
+
 DEFAULT_TIMEOUT = 30.0
 
 OPENAI_FAMILY = "openai"
@@ -55,18 +57,6 @@ def _require_env(name: str) -> str:
         sys.stderr.write(f"Missing required environment variable: {name}\n")
         raise SystemExit(2)
     return value
-
-
-def _build_auth_headers(
-    mode: str, header: str, scheme: str, key: str
-) -> dict[str, str]:
-    """Build auth headers from contract config."""
-    if mode == "none":
-        return {}
-    if mode in ("api_key", "raw_authorization"):
-        return {header: key}
-    # bearer mode (default)
-    return {header: f"{scheme} {key}"}
 
 
 def _compose_url(base_url: str, path: str) -> str:
@@ -331,9 +321,9 @@ def _verify_config_provider(
     auth_header = auth_cfg.get("header", "Authorization")
     auth_scheme = auth_cfg.get("scheme", "Bearer")
 
-    # Reject keys that already include the Bearer scheme so the
+    # Reject keys that already include the configured scheme so the
     # operator gets an actionable error before any upstream call.
-    if auth_mode == "bearer" and api_key.strip().lower().startswith("bearer "):
+    if auth_mode == "bearer" and has_auth_scheme_prefix(api_key, str(auth_scheme)):
         return [
             _AuthCheckResult(
                 provider_id=provider_id,
@@ -345,13 +335,18 @@ def _verify_config_provider(
                 resolved_url="",
                 auth_shape=f"{auth_header}: {auth_scheme} ***",
                 detail=(
-                    "raw key must not include Bearer prefix; "
-                    "EggPool adds the Bearer scheme automatically"
+                    f"raw key must not include {auth_scheme} prefix; "
+                    f"EggPool adds the {auth_scheme} scheme automatically"
                 ),
             )
         ]
 
-    auth_headers = _build_auth_headers(auth_mode, auth_header, auth_scheme, api_key)
+    auth_headers = render_auth_headers(
+        mode=str(auth_mode),
+        header=str(auth_header),
+        scheme=str(auth_scheme),
+        api_key=api_key,
+    )
     static_headers, sensitive_headers = _build_static_headers(provider_cfg)
     contract_headers = {**static_headers, **auth_headers}
     if auth_mode != "none":

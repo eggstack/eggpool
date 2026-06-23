@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from eggpool.constants import DEFAULT_PROVIDER_ID
 
@@ -53,7 +53,7 @@ class ModelDescriptor(BaseModel):
     model_id: str
     display_name: str | None = None
     protocol: str = "openai"
-    capabilities: dict[str, object] = {}
-    source_metadata: dict[str, object] = {}
+    capabilities: dict[str, object] = Field(default_factory=dict)
+    source_metadata: dict[str, object] = Field(default_factory=dict)
     first_seen_at: datetime
     last_seen_at: datetime
