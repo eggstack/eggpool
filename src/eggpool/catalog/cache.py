@@ -102,21 +102,6 @@ class ModelCatalogCache:
         self._account_last_refresh[account_name] = now
 
     @staticmethod
-    def _effective_limits_dict(
-        limits: EffectiveModelLimits,
-    ) -> dict[str, Any]:
-        """Convert resolved limits into the cache's serializable shape."""
-        return {
-            "context_tokens": limits.context_tokens,
-            "input_tokens": limits.input_tokens,
-            "output_tokens": limits.output_tokens,
-            "enforce": limits.enforce,
-            "context_source": limits.context_source,
-            "input_source": limits.input_source,
-            "output_source": limits.output_source,
-        }
-
-    @staticmethod
     def _effective_limits_from_info(
         model_info: dict[str, Any] | None,
     ) -> EffectiveModelLimits | None:
@@ -213,7 +198,7 @@ class ModelCatalogCache:
     ) -> dict[str, Any] | None:
         """Merge per-provider effective limits across visible providers."""
         limits = self._merged_effective_limits_value(model_id, provider_ids)
-        return None if limits is None else self._effective_limits_dict(limits)
+        return None if limits is None else limits.as_dict()
 
     def _merged_effective_limits_value(
         self,

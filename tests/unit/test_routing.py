@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 
 import pytest
@@ -737,3 +738,31 @@ async def test_active_request_count_increments_and_returns_to_zero() -> None:
         assert state.active_request_count == 0
     finally:
         del os.environ["TEST_ROUTER_ACCT_KEY"]
+
+
+@pytest.mark.asyncio()
+async def test_active_request_count_updates_are_serialized() -> None:
+    """Concurrent lifecycle updates must leave the counter balanced."""
+    config = AppConfig.from_dict(
+        {"accounts": [{"name": "acct1", "api_key": "test-key"}]}
+    )
+    registry = AccountRegistry(config)
+    cache = ModelCatalogCache()
+
+    class MockCatalog:
+        @property
+        def cache(self) -> ModelCatalogCache:
+            return cache
+
+    router = Router(registry, MockCatalog())  # type: ignore[arg-type]
+
+    await asyncio.gather(
+        *(router.increment_active_request_count("acct1") for _ in range(100))
+    )
+    await asyncio.gather(
+        *(router.decrement_active_request_count("acct1") for _ in range(100))
+    )
+
+    state = registry.get_state("acct1")
+    assert state is not None
+    assert state.active_request_count == 0

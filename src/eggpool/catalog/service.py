@@ -366,15 +366,7 @@ class CatalogService:
                     "input_tokens": disc_inp,
                     "output_tokens": disc_out,
                 }
-                model["effective_limits"] = {
-                    "context_tokens": effective.context_tokens,
-                    "input_tokens": effective.input_tokens,
-                    "output_tokens": effective.output_tokens,
-                    "enforce": effective.enforce,
-                    "context_source": effective.context_source,
-                    "input_source": effective.input_source,
-                    "output_source": effective.output_source,
-                }
+                model["effective_limits"] = effective.as_dict()
 
             self._cache.update_from_account(account_name, provider_id, models)
             logger.debug(
@@ -462,15 +454,7 @@ class CatalogService:
                             "input_tokens": disc_inp,
                             "output_tokens": disc_out,
                         },
-                        "effective_limits": {
-                            "context_tokens": effective.context_tokens,
-                            "input_tokens": effective.input_tokens,
-                            "output_tokens": effective.output_tokens,
-                            "enforce": effective.enforce,
-                            "context_source": effective.context_source,
-                            "input_source": effective.input_source,
-                            "output_source": effective.output_source,
-                        },
+                        "effective_limits": effective.as_dict(),
                     },
                 )
 
@@ -526,15 +510,7 @@ class CatalogService:
                                     "input_tokens": disc_inp,
                                     "output_tokens": disc_out,
                                 }
-                                provider_entry["effective_limits"] = {
-                                    "context_tokens": effective.context_tokens,
-                                    "input_tokens": effective.input_tokens,
-                                    "output_tokens": effective.output_tokens,
-                                    "enforce": effective.enforce,
-                                    "context_source": effective.context_source,
-                                    "input_source": effective.input_source,
-                                    "output_source": effective.output_source,
-                                }
+                                provider_entry["effective_limits"] = effective.as_dict()
                                 self._cache.set_provider_model_entry(
                                     model_id, provider_id, provider_entry
                                 )

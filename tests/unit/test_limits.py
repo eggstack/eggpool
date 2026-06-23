@@ -131,6 +131,27 @@ class TestExtractUpstreamLimitsWithSource:
 
 
 class TestModelLimitResolver:
+    def test_result_serializes_to_catalog_shape(self) -> None:
+        result = EffectiveModelLimits(
+            context_tokens=200000,
+            input_tokens=180000,
+            output_tokens=16384,
+            enforce=False,
+            context_source="provider_override",
+            input_source="global_override",
+            output_source="upstream_metadata",
+        )
+
+        assert result.as_dict() == {
+            "context_tokens": 200000,
+            "input_tokens": 180000,
+            "output_tokens": 16384,
+            "enforce": False,
+            "context_source": "provider_override",
+            "input_source": "global_override",
+            "output_source": "upstream_metadata",
+        }
+
     def test_provider_override_beats_global(self) -> None:
         config = _make_config(
             global_overrides={

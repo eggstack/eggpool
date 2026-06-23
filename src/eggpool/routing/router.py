@@ -86,10 +86,10 @@ class Router:
         self._quota_estimator = quota_estimator or QuotaEstimator()
         self._health_manager = health_manager
         self._stale_after_s = stale_after_s
-        # Per-account locks for increment/decrement of active_request_count
-        # so concurrent coordinators for different accounts do not serialize.
-        self._active_count_locks: dict[str, asyncio.Lock] = {}
-        self._active_count_locks_lock = asyncio.Lock()
+        # Counter updates are tiny and infrequent compared with upstream I/O.
+        # One stable lock avoids lock-replacement races when a counter reaches
+        # zero while another coroutine is already waiting to increment it.
+        self._active_count_lock = asyncio.Lock()
         self._scorer = QuotaFairScorer(
             quota_estimator=self._quota_estimator,
             health_manager=self._health_manager,
@@ -315,43 +315,23 @@ class Router:
             offset_30d_microdollars=offset_30d_microdollars,
         )
 
-    async def _get_account_lock(self, account_name: str) -> asyncio.Lock:
-        """Get or create a per-account lock for active request counting."""
-        lock = self._active_count_locks.get(account_name)
-        if lock is not None:
-            return lock
-        async with self._active_count_locks_lock:
-            # Double-check after acquiring the creation lock
-            lock = self._active_count_locks.get(account_name)
-            if lock is None:
-                lock = asyncio.Lock()
-                self._active_count_locks[account_name] = lock
-            return lock
-
     async def increment_active_request_count(self, account_name: str) -> None:
         """Increment the active request count for an account."""
         state = self._registry.get_state(account_name)
         if state is not None:
-            lock = await self._get_account_lock(account_name)
-            async with lock:
+            async with self._active_count_lock:
                 state.active_request_count += 1
 
     async def decrement_active_request_count(self, account_name: str) -> None:
         """Decrement the active request count for an account.
 
-        Never allows the count to become negative. When the count
-        reaches zero, prune the per-account lock entry so the locks
-        dict does not grow monotonically across connect/logout cycles.
+        Never allows the count to become negative.
         """
         state = self._registry.get_state(account_name)
         if state is not None:
-            lock = await self._get_account_lock(account_name)
-            async with lock:
+            async with self._active_count_lock:
                 if state.active_request_count > 0:
                     state.active_request_count -= 1
-                    if state.active_request_count == 0:
-                        async with self._active_count_locks_lock:
-                            self._active_count_locks.pop(account_name, None)
 
     def has_eligible_pairing(
         self,

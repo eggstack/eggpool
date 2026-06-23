@@ -51,6 +51,18 @@ class EffectiveModelLimits:
     input_source: str | None
     output_source: str | None
 
+    def as_dict(self) -> dict[str, int | bool | str | None]:
+        """Return the stable serialized representation used by the catalog."""
+        return {
+            "context_tokens": self.context_tokens,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "enforce": self.enforce,
+            "context_source": self.context_source,
+            "input_source": self.input_source,
+            "output_source": self.output_source,
+        }
+
 
 _UNKNOWN = EffectiveModelLimits(
     context_tokens=None,
