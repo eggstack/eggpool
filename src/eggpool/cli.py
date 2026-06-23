@@ -7,7 +7,7 @@ import contextlib
 import os
 import sys
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NoReturn, cast
 
 import click
 
@@ -21,6 +21,11 @@ from eggpool.logging import configure_logging
 from eggpool.models.config import AppConfig
 from eggpool.providers.client_pool import ProviderClientPool
 from eggpool.providers.contract import PROVIDER_STATUS_SYMBOLS
+from eggpool.toml_edit import (
+    render_toml_string,
+    section_has_key,
+    update_section_value,
+)
 
 
 @click.group(invoke_without_command=True)
@@ -377,48 +382,29 @@ def _write_server_api_key(config_path: str, new_key: str) -> None:
 
     path = Path(config_path)
     lines = path.read_text(encoding="utf-8").splitlines()
-    new_lines: list[str] = []
-    in_server = False
-    found = False
-    has_api_key_env = False
+    has_api_key_env = section_has_key(lines, "server", "api_key_env")
+    result = update_section_value(
+        lines,
+        "server",
+        "api_key",
+        render_toml_string(new_key),
+        insert_missing_key=not has_api_key_env,
+    )
 
-    for line in lines:
-        stripped = line.strip()
-        if stripped == "[server]":
-            in_server = True
-            new_lines.append(line)
-            continue
-        if stripped.startswith("[") and stripped.endswith("]"):
-            in_server = False
-        if in_server and stripped.startswith("api_key ="):
-            new_lines.append(f'api_key = "{new_key}"')
-            found = True
-            continue
-        if in_server and stripped.startswith("api_key_env"):
-            has_api_key_env = True
-        new_lines.append(line)
-
-    if not found and not has_api_key_env:
-        # Insert after [server] header
-        for i, line in enumerate(new_lines):
-            if line.strip() == "[server]":
-                new_lines.insert(i + 1, f'api_key = "{new_key}"')
-                break
-        else:
-            click.echo(
-                "Warning: No [server] section found in config. "
-                "API key was not written.",
-                err=True,
-            )
-            return
-    elif not found and has_api_key_env:
+    if not result.section_found:
+        click.echo(
+            "Warning: No [server] section found in config. API key was not written.",
+            err=True,
+        )
+        return
+    if not result.key_found and has_api_key_env:
         click.echo(
             "Warning: [server] uses api_key_env; rotate the env-var "
             "to apply the new key.",
             err=True,
         )
 
-    path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    path.write_text("\n".join(result.lines) + "\n", encoding="utf-8")
 
 
 @cli.command()
@@ -888,37 +874,26 @@ def _update_server_config(config_path: str, key: str, value: str) -> None:
         click.echo(f"Config file not found: {config_path}", err=True)
         sys.exit(1)
 
-    # Write numeric values unquoted, strings quoted
-    try:
-        int(value)
-        toml_value = value
-    except ValueError:
-        toml_value = f'"{value}"'
-
     lines = path.read_text(encoding="utf-8").splitlines()
-    updated = False
-    in_server = False
-    new_lines: list[str] = []
+    if key == "port":
+        try:
+            parsed_port = int(value)
+        except ValueError:
+            click.echo(f"Invalid port: {value!r} is not an integer.", err=True)
+            sys.exit(1)
+        if not 0 <= parsed_port <= 65535:
+            click.echo("Invalid port: expected a value from 0 to 65535.", err=True)
+            sys.exit(1)
+        toml_value = str(parsed_port)
+    else:
+        toml_value = render_toml_string(value)
 
-    for line in lines:
-        stripped = line.strip()
-        if stripped == "[server]":
-            in_server = True
-            new_lines.append(line)
-            continue
-        if stripped.startswith("[") and stripped.endswith("]"):
-            in_server = False
-        if in_server and stripped.startswith(f"{key} ="):
-            new_lines.append(f"{key} = {toml_value}")
-            updated = True
-            continue
-        new_lines.append(line)
-
-    if not updated:
+    result = update_section_value(lines, "server", key, toml_value)
+    if not result.key_found:
         click.echo(f"Key '{key}' not found in [server] section.", err=True)
         sys.exit(1)
 
-    path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    path.write_text("\n".join(result.lines) + "\n", encoding="utf-8")
 
 
 @cli.command("set")
@@ -951,26 +926,21 @@ def dashboard() -> None:
 
 def _read_dashboard_public(config_path: str) -> bool:
     """Read the current dashboard.public value from config."""
+    import tomllib
     from pathlib import Path
 
     path = Path(config_path)
     if not path.exists():
         return True  # default
 
-    in_dashboard = False
-    for line in path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if stripped == "[dashboard]":
-            in_dashboard = True
-            continue
-        if stripped.startswith("[") and stripped.endswith("]"):
-            in_dashboard = False
-            continue
-        if in_dashboard and stripped.startswith("public ="):
-            parts = stripped.split("=", 1)
-            if len(parts) == 2:
-                return parts[1].strip().lower() == "true"
-    return True  # default
+    with path.open("rb") as config_file:
+        raw = tomllib.load(config_file)
+    dashboard_raw: object = raw.get("dashboard")
+    if not isinstance(dashboard_raw, dict):
+        return True
+    dashboard = cast("dict[str, object]", dashboard_raw)
+    public = dashboard.get("public", True)
+    return public if isinstance(public, bool) else True
 
 
 def _write_dashboard_public(config_path: str, public: bool) -> None:
@@ -983,36 +953,15 @@ def _write_dashboard_public(config_path: str, public: bool) -> None:
         sys.exit(1)
 
     lines = path.read_text(encoding="utf-8").splitlines()
-    updated = False
-    in_dashboard = False
-    new_lines: list[str] = []
-
-    for line in lines:
-        stripped = line.strip()
-        if stripped == "[dashboard]":
-            in_dashboard = True
-            new_lines.append(line)
-            continue
-        if stripped.startswith("[") and stripped.endswith("]"):
-            in_dashboard = False
-        if in_dashboard and stripped.startswith("public ="):
-            new_lines.append(f"public = {'true' if public else 'false'}")
-            updated = True
-            continue
-        new_lines.append(line)
-
-    if not updated:
-        # Insert public = ... after [dashboard] section
-        result: list[str] = []
-        inserted = False
-        for line in new_lines:
-            result.append(line)
-            if line.strip() == "[dashboard]" and not inserted:
-                result.append(f"public = {'true' if public else 'false'}")
-                inserted = True
-        new_lines = result
-
-    path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    result = update_section_value(
+        lines,
+        "dashboard",
+        "public",
+        "true" if public else "false",
+        insert_missing_key=True,
+        append_missing_section=True,
+    )
+    path.write_text("\n".join(result.lines) + "\n", encoding="utf-8")
 
 
 @dashboard.command("public")

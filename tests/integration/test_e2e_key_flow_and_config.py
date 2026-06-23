@@ -326,6 +326,28 @@ class TestSetConfig:
         config = AppConfig.from_toml(str(config_path))
         assert config.server.host == "0.0.0.0"
 
+    def test_update_server_config_escapes_host(self, tmp_path):
+        """Host values are escaped instead of corrupting the TOML file."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text('[server]\nport=8080\nhost="127.0.0.1"\n')
+
+        _update_server_config(str(config_path), "host", 'local"host\\name')
+
+        config = AppConfig.from_toml(str(config_path))
+        assert config.server.host == 'local"host\\name'
+
+    @pytest.mark.parametrize("port", ["not-a-port", "-1", "65536"])
+    def test_update_server_config_rejects_invalid_port(self, tmp_path, port):
+        """Invalid ports fail before the config file is mutated."""
+        config_path = tmp_path / "config.toml"
+        original = '[server]\nport = 8080\nhost = "127.0.0.1"\n'
+        config_path.write_text(original)
+
+        with pytest.raises(SystemExit):
+            _update_server_config(str(config_path), "port", port)
+
+        assert config_path.read_text() == original
+
     def test_set_config_signals_restart(self, tmp_path, monkeypatch):
         """set command writes config and restarts the running server."""
         config_path = tmp_path / "config.toml"

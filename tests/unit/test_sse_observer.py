@@ -100,6 +100,28 @@ class TestSSEEventAssembly:
         assert observer.usage.input_tokens == 10
         assert observer.usage.output_tokens == 5
 
+    def test_final_data_line_without_newline(self) -> None:
+        """EOF terminates the final SSE line and event."""
+        observer = IncrementalSSEObserver(protocol="openai")
+        payload = {"usage": {"prompt_tokens": 13, "completion_tokens": 8}}
+
+        observer.observe(f"data: {json.dumps(payload)}".encode())
+        observer.flush()
+
+        assert observer.usage.input_tokens == 13
+        assert observer.usage.output_tokens == 8
+
+    def test_final_multiline_data_line_without_newline(self) -> None:
+        """EOF processes an unterminated tail of a multiline SSE event."""
+        observer = IncrementalSSEObserver(protocol="openai")
+
+        observer.observe(b'data: {"usage": {"prompt_tokens": 21,\n')
+        observer.observe(b'data: "completion_tokens": 5}}')
+        observer.flush()
+
+        assert observer.usage.input_tokens == 21
+        assert observer.usage.output_tokens == 5
+
     def test_multiple_data_lines_joined(self) -> None:
         """Multiple data: lines before blank line are joined with \\n."""
         observer = IncrementalSSEObserver(protocol="openai")

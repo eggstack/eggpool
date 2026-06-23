@@ -62,7 +62,6 @@ class IncrementalSSEObserver:
         self._protocol = protocol
         self._buffer = ""
         self._bytes_emitted = 0
-        self._first_byte_ms: float = 0.0
         self._usage_result = StreamUsageResult()
         self._frame_count = 0
         self._error_count = 0
@@ -264,15 +263,15 @@ class IncrementalSSEObserver:
             self._buffer += "\n"
             self._pending_cr = False
 
-        # Process any remaining complete lines. If an oversized partial line
-        # was being discarded, none of its truncated contents are parseable.
+        # At EOF, the final partial line is complete even without a newline.
+        # If an oversized partial line was being discarded, none of its
+        # truncated contents are parseable.
         lines = [] if self._discarding_incomplete_line else self._buffer.split("\n")
         self._discarding_incomplete_line = False
         if not lines:
             self._flush_event()
             self._buffer = ""
             return
-        self._buffer = lines.pop()
         for line in lines:
             if not line:
                 self._flush_event()
