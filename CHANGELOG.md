@@ -5,6 +5,27 @@ All notable changes to EggPool are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-06-23
+
+### Fixed
+
+- Create minimal config when `config.toml` is missing during `eggpool
+  onboard`, so fresh installs no longer fail with "Failed to update config".
+- Fix `update` command misidentifying source installs as pipx (causing
+  wrong upgrade method).
+
+### Changed
+
+- Add `--install` flag to `deploy` subcommands for automated setup.
+- Rewrite deployment docs with personal-use and production sections.
+
+## [0.1.1] - 2026-06-23
+
+### Added
+
+- `eggpool deploy` subcommands: `systemd`, `logrotate`, `cron`, `all`.
+- Dynamic deploy snippets based on detected install paths.
+
 ## [0.1.0] - 2026-06-23
 
 ### Added
