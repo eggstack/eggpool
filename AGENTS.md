@@ -92,19 +92,23 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 
 | Command | Description |
 |---------|-------------|
+| `eggpool help` | Show help message and available commands |
+| `eggpool version` | Print the installed version |
 | `eggpool serve` | Start the aggregation proxy server (default command) |
 | `eggpool check-config` | Validate the configuration file |
 | `eggpool migrate` | Run database migrations |
-| `eggpool onboard` | Run the interactive onboarding setup |
+| `eggpool onboard` | Run the interactive onboarding setup (connect providers, start server) |
 | `eggpool connect` | Connect to a new provider interactively |
 | `eggpool connect list` | List available providers |
 | `eggpool logout` | Remove a configured provider account |
 | `eggpool rehash` | Restart to apply config changes |
+| `eggpool croncheck` | Lightweight check: exit 0 if server is running, exit 1 if not |
 | `eggpool models refresh` | Refresh model catalog from upstream |
 | `eggpool configsetup opencode` | Print OpenCode provider config JSON with model limits |
 | `eggpool db vacuum` | Reclaim SQLite space |
 
 All commands accept `--config /path/to/config.toml` (defaults to `config.toml`).
+Running `eggpool` with no arguments prints the help message.
 
 ## Git Workflow
 

@@ -31,7 +31,7 @@ behind one OpenAI/Anthropic-compatible endpoint.
 
 ```bash
 pipx install eggpool
-pipx run eggpool --help   # or just `eggpool --help` if PATH includes it
+eggpool help
 ```
 
 `pipx` installs `eggpool` into its own venv and exposes the
@@ -84,19 +84,20 @@ cp .env.example .env
 
 # Validate configuration
 set -a; source .env; set +a
-uv run eggpool --config config.toml check-config
+uv run eggpool check-config
 
 # Run database migrations
-uv run eggpool --config config.toml migrate
+uv run eggpool migrate
 
 # Start the server
-uv run eggpool --config config.toml serve
+uv run eggpool serve
 ```
 
 ### Option 4: Interactive setup
 
 ```bash
-# Run the interactive onboarding wizard
+# Run the interactive onboarding wizard — connects one or more
+# providers, validates configuration, and starts the server.
 uv run eggpool onboard
 
 # Or connect to a specific provider
@@ -108,10 +109,12 @@ uv run eggpool connect list
 
 | Command | Description |
 |---------|-------------|
+| `eggpool help` | Show help message and available commands |
+| `eggpool version` | Print the installed version |
 | `eggpool serve` | Start the aggregation proxy server (default command) |
 | `eggpool check-config` | Validate the configuration file |
 | `eggpool migrate` | Run database migrations |
-| `eggpool onboard` | Run the interactive onboarding setup |
+| `eggpool onboard` | Run the interactive onboarding setup (connect providers, start server) |
 | `eggpool connect` | Connect to a new provider interactively |
 | `eggpool connect list` | List available providers for connection |
 | `eggpool logout` | Remove a configured provider account |
@@ -126,6 +129,7 @@ uv run eggpool connect list
 | `eggpool configsetup opencode` | Print OpenCode provider config JSON with model limits |
 | `eggpool configsetup claude-code` | Print Claude Code config snippet |
 | `eggpool update` | Check for updates and reinstall if newer |
+| `eggpool croncheck` | Lightweight check: exit 0 if server is running, exit 1 if not |
 | `eggpool models refresh` | Refresh the model catalog from upstream |
 | `eggpool accounts status` | Show configured account status |
 | `eggpool accounts list` | List configured provider accounts |
@@ -138,6 +142,7 @@ uv run eggpool connect list
 | `eggpool deploy all` | Print every deployment snippet in sequence |
 
 All commands accept `--config /path/to/config.toml` (defaults to `config.toml`).
+Running `eggpool` with no arguments prints the help message.
 Configuration changes require a service restart; live reload is intentionally
 not supported.
 

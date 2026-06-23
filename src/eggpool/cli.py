@@ -41,6 +41,8 @@ def cli(ctx: click.Context, config_path: str) -> None:
     """EggPool - aggregate OpenCode Go subscriptions."""
     ctx.ensure_object(dict)
     ctx.obj["config_path"] = os.path.abspath(config_path)
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
 
 
 class _ConfigPathGroup(click.Group):
@@ -213,6 +215,8 @@ def logout(ctx: click.Context, target: str | None) -> None:
     If TARGET is given, matches by provider id, account name, env var,
     or API key.  If omitted, shows an interactive selection menu.
     """
+    from pathlib import Path
+
     from eggpool.providers.connect import (
         TerminalMenu,
         matching_logout_accounts,
@@ -222,6 +226,15 @@ def logout(ctx: click.Context, target: str | None) -> None:
     )
 
     config_path: str = ctx.obj["config_path"]
+
+    if not Path(config_path).exists():
+        click.echo(
+            f"Config file not found: {config_path}\n"
+            "  Run `eggpool onboard` to set up providers, or\n"
+            "  `eggpool connect` to add a provider account.",
+            err=True,
+        )
+        sys.exit(1)
 
     if target:
         try:
@@ -447,6 +460,39 @@ def newkey(ctx: click.Context) -> None:
 @click.pass_context
 def configsetup(ctx: click.Context) -> None:
     """Print configuration snippets for code editors."""
+
+
+def _detect_install_method() -> str:
+    """Detect how eggpool was installed: 'pipx', 'uv', 'source', or 'pip'."""
+    import shutil
+
+    # Check if running under pipx
+    if hasattr(sys, "real_prefix") or (
+        hasattr(sys, "base_prefix") and sys.base_prefix != sys.prefix
+    ):
+        return "pipx"
+
+    # Check if we're in a source checkout (pyproject.toml nearby)
+    cli_path = Path(__file__).resolve()
+    if (cli_path.parent.parent.parent / "pyproject.toml").exists():
+        return "source"
+
+    # Check if pipx is available and eggpool is installed via it
+    if shutil.which("pipx"):
+        return "pipx"
+
+    return "pip"
+
+
+def _print_install_hint() -> None:
+    """Print a hint about how to run eggpool based on the detected install method."""
+    method = _detect_install_method()
+    if method == "source":
+        click.echo("  (running from source: use 'uv run eggpool ...')", err=True)
+    elif method == "pipx":
+        click.echo("  (installed via pipx: use 'eggpool ...')", err=True)
+    else:
+        click.echo("  (use 'eggpool ...' or 'python -m eggpool ...')", err=True)
 
 
 def _copy_to_clipboard(text: str) -> bool:
@@ -677,6 +723,7 @@ def configsetup_opencode(ctx: click.Context) -> None:
             err=True,
         )
     click.echo("Paste into ~/.config/opencode/opencode.json.", err=True)
+    _print_install_hint()
 
 
 @configsetup.command("claude-code")
@@ -1473,6 +1520,52 @@ def init_config(ctx: click.Context, target: str | None, force: bool) -> None:
 
         shutil.copy2(source_path, target_path)
         click.echo(f"Config written to {target_path}")
+
+
+@cli.command("help")
+@click.pass_context
+def help_command(ctx: click.Context) -> None:
+    """Show this help message and exit."""
+    if ctx.parent is not None:
+        click.echo(ctx.parent.get_help())
+    else:
+        click.echo(ctx.get_help())
+
+
+@cli.command()
+@click.pass_context
+def version(ctx: click.Context) -> None:
+    """Print the installed version and exit."""
+    from importlib.metadata import version as get_version
+
+    try:
+        click.echo(get_version("eggpool"))
+    except Exception:
+        click.echo("unknown")
+
+
+@cli.command("croncheck")
+@click.pass_context
+def croncheck(ctx: click.Context) -> None:
+    """Lightweight check: exit 0 if server is running, exit 1 if not.
+
+    Designed for cron jobs that should restart a stopped server.
+    Uses only the PID file and a kill probe — no network I/O.
+    """
+    from eggpool.constants import PID_FILE
+
+    if not PID_FILE.exists():
+        sys.exit(1)
+
+    try:
+        pid = int(PID_FILE.read_text(encoding="utf-8").strip())
+    except (ValueError, OSError):
+        sys.exit(1)
+
+    if _is_process_running(pid):
+        sys.exit(0)
+    else:
+        sys.exit(1)
 
 
 def main() -> NoReturn:

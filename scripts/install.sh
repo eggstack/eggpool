@@ -32,11 +32,11 @@ fi
 # Save the scripts directory for install_prompt.py
 SCRIPTS_DIR="${SCRIPTS_DIR:-$(pwd)/scripts}"
 
-# Find the best available Python >= 3.12
+# Find the best available Python >= 3.11
 # Probes version-suffixed binaries (python3.15, python3.14, ...) for systems
 # where the default `python3` is an older system version.
 find_python() {
-    for minor in 15 14 13 12; do
+    for minor in 15 14 13 12 11; do
         local candidate="python3.${minor}"
         if command -v "$candidate" &> /dev/null; then
             local ver
@@ -44,7 +44,7 @@ find_python() {
             local maj min
             maj=$(echo "$ver" | cut -d. -f1)
             min=$(echo "$ver" | cut -d. -f2)
-            if [ "$maj" -ge 3 ] && [ "$min" -ge 12 ]; then
+            if [ "$maj" -ge 3 ] && [ "$min" -ge 11 ]; then
                 PYTHON="$candidate"
                 PYTHON_VERSION="$ver"
                 return 0
@@ -58,7 +58,7 @@ find_python() {
         local maj min
         maj=$(echo "$ver" | cut -d. -f1)
         min=$(echo "$ver" | cut -d. -f2)
-        if [ "$maj" -ge 3 ] && [ "$min" -ge 12 ]; then
+        if [ "$maj" -ge 3 ] && [ "$min" -ge 11 ]; then
             PYTHON="python3"
             PYTHON_VERSION="$ver"
             return 0
@@ -69,7 +69,7 @@ find_python() {
 
 echo "Checking Python version..."
 if ! find_python; then
-    echo "Error: Python 3.12 or later required."
+    echo "Error: Python 3.11 or later required."
     echo "Install Python from https://www.python.org/downloads/ or your package manager."
     exit 1
 fi

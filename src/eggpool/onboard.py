@@ -59,7 +59,7 @@ def run_onboarding(config_path: str, providers_path: str | None = None) -> None:
 
     1. Loop: connect a provider, ask if they want another
     2. Run check-config
-    3. Start the server
+    3. Start the server (if not already running)
     """
     sys.stdout.write("\n=== EggPool Onboarding ===\n\n")
 
@@ -102,6 +102,23 @@ def run_onboarding(config_path: str, providers_path: str | None = None) -> None:
             "\nConfiguration check failed. Fix errors and run 'eggpool check-config'.\n"
         )
         return
+
+    # Check if server is already running before starting
+    from eggpool.constants import PID_FILE
+
+    if PID_FILE.exists():
+        try:
+            pid = int(PID_FILE.read_text(encoding="utf-8").strip())
+            import os as _os
+
+            _os.kill(pid, 0)  # Check if process exists
+            sys.stdout.write(
+                "\nServer is already running. "
+                "Use 'eggpool restart' to apply configuration changes.\n"
+            )
+            return
+        except (ValueError, ProcessLookupError, PermissionError, OSError):
+            pass  # Stale PID file, continue to start
 
     # Start the server
     sys.stdout.write("\n--- Starting Server ---\n")
