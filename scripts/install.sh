@@ -32,11 +32,12 @@ fi
 # Save the scripts directory for install_prompt.py
 SCRIPTS_DIR="${SCRIPTS_DIR:-$(pwd)/scripts}"
 
-# Find the best available Python >= 3.11
-# Probes version-suffixed binaries (python3.15, python3.14, ...) for systems
+# Find the best available Python >= 3.11 and <= 3.14
+# Probes version-suffixed binaries (python3.14, python3.13, ...) for systems
 # where the default `python3` is an older system version.
+# Max is 3.14 because Pyo3 (used by Granian) does not yet support 3.15.
 find_python() {
-    for minor in 15 14 13 12 11; do
+    for minor in 14 13 12 11; do
         local candidate="python3.${minor}"
         if command -v "$candidate" &> /dev/null; then
             local ver
