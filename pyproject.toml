@@ -71,6 +71,7 @@ packages = ["src/eggpool"]
 [tool.hatch.build.targets.sdist]
 exclude = [
     ".opencode",
+    ".agents",
     ".venv",
     ".pytest_cache",
     ".ruff_cache",
