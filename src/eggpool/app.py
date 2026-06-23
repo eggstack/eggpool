@@ -8,6 +8,7 @@ import logging
 import os
 import time
 from contextlib import asynccontextmanager, suppress
+from importlib.metadata import version as _get_version
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -592,7 +593,7 @@ def create_app(
 
     app = FastAPI(
         title="EggPool",
-        version="0.1.2",
+        version=_get_version("eggpool"),
         docs_url=f"{API_V1_PREFIX}/docs",
         openapi_url=f"{API_V1_PREFIX}/openapi.json",
         lifespan=lifespan,
