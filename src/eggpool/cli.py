@@ -67,6 +67,17 @@ class _ConfigPathGroup(click.Group):
 # Re-apply the group class after the decorator
 cli.__class__ = _ConfigPathGroup
 
+# Module-level app reference for Granian's multiprocessing pickling.
+# Granian spawns worker processes via multiprocessing which requires
+# serializable target_loader callables. Local functions (closures) cannot
+# be pickled, so _app_loader must live at module level.
+_app: Any = None
+
+
+def _app_loader(_target: str) -> Any:  # noqa: ARG001
+    """Return the pre-built ASGI app for Granian workers."""
+    return _app
+
 
 @cli.command()
 @click.pass_context
@@ -101,12 +112,8 @@ def serve(ctx: click.Context) -> None:
 
     from eggpool.app import create_app
 
-    app = create_app(config, config_path=config_path)
-
-    # Granian requires a string target but we need the pre-built app.
-    # Use target_loader to inject our app, bypassing string resolution.
-    def _app_loader(_target: str) -> object:  # noqa: ARG001
-        return app
+    global _app  # noqa: PLW0603
+    _app = create_app(config, config_path=config_path)
 
     log_level = config.server.log_level.lower()
     Granian(
