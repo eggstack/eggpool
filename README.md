@@ -32,24 +32,15 @@ behind one OpenAI/Anthropic-compatible endpoint.
 ```bash
 pipx install eggpool
 eggpool help
+eggpool onboard
 ```
+
+`eggpool onboard` lets you add several providers at once, does a config check, then runs the server. You can also run `eggpool connect` for each provider you want to add and `eggpool serve` to start the server. 
+`eggpool configsetup` will help setup config for opencode. 
+
+To get the server to run on startup, see docs/deploymend.md. 
 
 `pipx` installs `eggpool` into its own venv and exposes the
-`eggpool` console script globally. The bundled themes and
-provider templates ship inside the package — no extra files
-required to start.
-
-Then copy and edit configuration:
-
-```bash
-cp /path/to/your/eggpool-venv/lib/python*/site-packages/eggpool/_share/config.example.toml ~/.config/eggpool/config.toml
-```
-
-Or use the built-in helper:
-
-```bash
-eggpool init-config
-```
 
 ### Option 2: Automated install
 
@@ -68,6 +59,10 @@ The script:
 
 Validation fails until `.env` contains real, non-placeholder keys. Edit
 `config.toml` and `.env`, then run the validation and migration commands below.
+
+The script will ask if you want to continue with onboarding. if you select no, make sure you `cd eggpool`, then you can run `uv run eggpool onboard` to get started. `uv run eggpool connect` for one off provider adds, `uv run eggpool serve` to start server. `uv run eggpool help` for other commands. 
+
+See docs/deployment.md for running on startup such as with systemd or cron.
 
 ### Option 3: Manual install
 
