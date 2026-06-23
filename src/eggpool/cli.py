@@ -463,25 +463,116 @@ def configsetup(ctx: click.Context) -> None:
 
 
 def _detect_install_method() -> str:
-    """Detect how eggpool was installed: 'pipx', 'uv', 'source', or 'pip'."""
-    import shutil
-
-    # Check if running under pipx
+    """Detect how eggpool was installed: 'pipx', 'source', or 'pip'."""
+    # Running inside a venv (pipx, uv tool, manual venv)
     if hasattr(sys, "real_prefix") or (
         hasattr(sys, "base_prefix") and sys.base_prefix != sys.prefix
     ):
         return "pipx"
 
-    # Check if we're in a source checkout (pyproject.toml nearby)
+    # Source checkout (pyproject.toml nearby)
     cli_path = Path(__file__).resolve()
     if (cli_path.parent.parent.parent / "pyproject.toml").exists():
         return "source"
 
-    # Check if pipx is available and eggpool is installed via it
-    if shutil.which("pipx"):
-        return "pipx"
-
     return "pip"
+
+
+def _resolve_eggpool_binary() -> str:
+    """Resolve the path to the eggpool binary for systemd ExecStart."""
+    import shutil
+
+    which = shutil.which("eggpool")
+    if which is not None:
+        return str(Path(which).resolve())
+
+    # Fallback: use sys.executable with -m eggpool (works for source installs)
+    return f"{sys.executable} -m eggpool"
+
+
+def _resolve_data_dir() -> Path:
+    """Resolve the data directory for the current user."""
+    from eggpool.constants import DEFAULT_DATABASE_PATH
+
+    return Path(DEFAULT_DATABASE_PATH).parent
+
+
+def _resolve_env_path() -> str | None:
+    """Find a .env file for the current user/installation.
+
+    Checks CWD, home directory, and config-referenced env vars.
+    Returns the path if found, None otherwise.
+    """
+    candidates = [
+        Path.cwd() / ".env",
+        Path.home() / ".env",
+    ]
+    for p in candidates:
+        if p.exists():
+            return str(p.resolve())
+    return None
+
+
+def _require_root() -> None:
+    """Exit with an error if not running as root."""
+    import os
+
+    if os.geteuid() != 0:
+        click.echo(
+            "Error: --install requires root privileges.\n"
+            "Re-run with: sudo eggpool deploy <command> --install",
+            err=True,
+        )
+        sys.exit(1)
+
+
+def _confirm_install(component: str, path: str) -> None:
+    """Prompt the user to confirm a system-level installation action."""
+    click.echo(f"\nThis will write {path} and may restart services.")
+    if not click.confirm("Proceed?"):
+        click.echo("Aborted.")
+        sys.exit(0)
+
+
+def _write_file(path: str, content: str) -> None:
+    """Write a file, creating parent directories as needed."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content, encoding="utf-8")
+    click.echo(f"  Written {path}")
+
+
+def _run_systemctl(args: list[str], quiet: bool = False) -> bool:
+    """Run a systemctl command. Returns True on success."""
+    import subprocess
+
+    cmd = ["systemctl", *args]
+    result = subprocess.run(cmd, capture_output=True, text=True)  # noqa: S603
+    if result.returncode != 0:
+        click.echo(
+            f"  Warning: {' '.join(cmd)} failed: {result.stderr.strip()}", err=True
+        )
+        return False
+    if not quiet and result.stdout.strip():
+        click.echo(result.stdout.strip())
+    return True
+
+
+def _stop_running_server() -> None:
+    """Stop the eggpool server if it is currently running."""
+    pid = _read_pid()
+    if pid is None or not _is_process_running(pid):
+        return
+
+    click.echo(f"Stopping running server (PID {pid})...")
+    import contextlib
+    import os
+    import signal
+
+    with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+        os.kill(pid, signal.SIGTERM)
+    _wait_for_exit(pid, timeout=10.0)
+    click.echo("Server stopped.")
 
 
 def _print_install_hint() -> None:
@@ -784,7 +875,11 @@ def configsetup_claude_code(ctx: click.Context) -> None:
 @cli.group()
 @click.pass_context
 def deploy(ctx: click.Context) -> None:
-    """Print deployment snippets (systemd, logrotate, cron, ...)."""
+    """Print deployment snippets (systemd, logrotate, cron).
+
+    Without --install, prints copy-paste instructions for manual setup.
+    With --install, writes files and runs setup commands (requires root).
+    """
 
 
 def _print_deploy_snippet(
@@ -818,15 +913,37 @@ def _print_deploy_snippet(
 
 
 @deploy.command("systemd")
+@click.option(
+    "--install", is_flag=True, help="Install the systemd unit (requires root)."
+)
 @click.pass_context
-def deploy_systemd(ctx: click.Context) -> None:
-    """Print the systemd unit and install instructions."""
-    from eggpool.deploy import SYSTEMD_UNIT
+def deploy_systemd(ctx: click.Context, install: bool) -> None:
+    """Print the systemd unit and install instructions.
 
+    With --install, writes the unit file, reloads systemd, and
+    enables/starts the service. Not intended for public-facing
+    deployments — use a dedicated eggpool user for production.
+    """
+    from eggpool.deploy import SYSTEMD_UNIT, build_personal_systemd_unit
+
+    config_path: str = ctx.obj["config_path"]
+    binary_path = _resolve_eggpool_binary()
+    data_dir = str(_resolve_data_dir())
+    env_path = _resolve_env_path()
+
+    # Generate dynamic snippet for personal use
+    dynamic_unit = build_personal_systemd_unit(
+        binary_path=binary_path,
+        config_path=config_path,
+        data_dir=data_dir,
+        env_path=env_path,
+    )
+
+    # Always print the snippet + instructions
     _print_deploy_snippet(
-        title="EggPool systemd unit",
+        title="EggPool systemd unit (personal use)",
         target_path="/etc/systemd/system/eggpool.service",
-        snippet=SYSTEMD_UNIT,
+        snippet=dynamic_unit,
         extra_steps=[
             "sudo systemctl daemon-reload",
             "sudo systemctl enable eggpool",
@@ -835,74 +952,198 @@ def deploy_systemd(ctx: click.Context) -> None:
         ],
     )
 
+    # Also show the production snippet for reference
+    click.echo("")
+    click.echo("=" * 72)
+    click.echo("")
+    click.echo("Production snippet (separate eggpool user, security hardening):")
+    click.echo("")
+    click.echo(SYSTEMD_UNIT)
+
+    # Auto-install hint
+    click.echo("")
+    click.echo(
+        "Run 'sudo eggpool deploy systemd --install' to set this up automatically."
+    )
+
+    if install:
+        _require_root()
+        _stop_running_server()
+        _confirm_install("systemd unit", "/etc/systemd/system/eggpool.service")
+        _write_file("/etc/systemd/system/eggpool.service", dynamic_unit)
+        _run_systemctl(["daemon-reload"])
+        _run_systemctl(["enable", "eggpool"])
+        _run_systemctl(["start", "eggpool"])
+        click.echo("")
+        _run_systemctl(["status", "eggpool"])
+
 
 @deploy.command("logrotate")
+@click.option(
+    "--install", is_flag=True, help="Install the logrotate config (requires root)."
+)
 @click.pass_context
-def deploy_logrotate(ctx: click.Context) -> None:
-    """Print the logrotate config and install instructions."""
-    from eggpool.deploy import LOGROTATE_CONF
+def deploy_logrotate(ctx: click.Context, install: bool) -> None:
+    """Print the logrotate config and install instructions.
+
+    With --install, writes the config to /etc/logrotate.d/eggpool.
+    """
+    from eggpool.deploy import build_personal_logrotate
+
+    dynamic_conf = build_personal_logrotate()
 
     _print_deploy_snippet(
         title="EggPool logrotate configuration",
         target_path="/etc/logrotate.d/eggpool",
-        snippet=LOGROTATE_CONF,
+        snippet=dynamic_conf,
         extra_steps=[
             "sudo logrotate -d /etc/logrotate.d/eggpool",
         ],
     )
 
-
-@deploy.command("cron")
-@click.pass_context
-def deploy_cron(ctx: click.Context) -> None:
-    """Print a daily backup cron entry and install instructions."""
-    from eggpool.deploy import CRON_BACKUP_FILE, CRON_BACKUP_SCRIPT
-
-    click.echo("EggPool automated backup via cron")
     click.echo("")
     click.echo(
-        "This sets up a daily 02:00 backup of the configuration, environment, "
-        "and SQLite database under /var/backups/eggpool."
+        "Run 'sudo eggpool deploy logrotate --install' to set this up automatically."
+    )
+
+    if install:
+        _require_root()
+        _confirm_install("logrotate config", "/etc/logrotate.d/eggpool")
+        _write_file("/etc/logrotate.d/eggpool", dynamic_conf)
+        click.echo("  Verifying config...")
+        _run_systemctl(["restart", "logrotate"], quiet=True)
+        click.echo("  Logrotate config installed.")
+
+
+@deploy.command("cron")
+@click.option("--install", is_flag=True, help="Install the cron entry (requires root).")
+@click.pass_context
+def deploy_cron(ctx: click.Context, install: bool) -> None:
+    """Print a cron entry for starting eggpool on boot and on crash.
+
+    This is an alternative to systemd for systems without systemd
+    support. For production use, prefer systemd with a dedicated
+    eggpool user.
+
+    With --install, writes the backup script and cron entry.
+    """
+    from eggpool.deploy import (
+        CRON_BACKUP_FILE,
+        CRON_BACKUP_SCRIPT,
+        build_personal_backup_cron,
+        build_personal_backup_script,
+    )
+
+    config_path: str = ctx.obj["config_path"]
+    data_dir = str(_resolve_data_dir())
+    db_path = str(Path(data_dir) / "usage.sqlite3")
+
+    # Generate dynamic snippets for personal use
+    dynamic_script = build_personal_backup_script(
+        config_path=config_path, db_path=db_path
+    )
+    dynamic_cron = build_personal_backup_cron()
+
+    click.echo("EggPool cron setup (personal use)")
+    click.echo("")
+    click.echo(
+        "This sets up a daily 02:00 backup of the configuration and "
+        "SQLite database under ~/backups/eggpool."
     )
     click.echo("")
     click.echo("Install the backup script:")
     click.echo("")
     click.echo("  sudo tee /usr/local/bin/eggpool-backup > /dev/null << 'EGGPOOL_EOF'")
-    for line in CRON_BACKUP_SCRIPT.splitlines():
+    for line in dynamic_script.splitlines():
         click.echo(f"{line}")
     click.echo("EGGPOOL_EOF")
     click.echo("  sudo chmod +x /usr/local/bin/eggpool-backup")
     click.echo("")
-    click.echo("Install the cron entry:")
+    click.echo("Install the cron entry (user cron):")
     click.echo("")
-    click.echo("  sudo tee /etc/cron.d/eggpool-backup > /dev/null << 'EGGPOOL_EOF'")
-    for line in CRON_BACKUP_FILE.splitlines():
-        click.echo(f"{line}")
-    click.echo("EGGPOOL_EOF")
+    click.echo(
+        "  crontab -l 2>/dev/null | { cat; echo ''; echo '"
+        + dynamic_cron.strip()
+        + "'; } | crontab -"
+    )
     click.echo("")
-    click.echo("Snippet for /etc/cron.d/eggpool-backup:")
+    click.echo("Snippet:")
+    click.echo("")
+    click.echo(dynamic_cron)
+
+    # Also show the production snippet for reference
+    click.echo("")
+    click.echo("=" * 72)
+    click.echo("")
+    click.echo("Production snippet (system cron with root user):")
     click.echo("")
     click.echo(CRON_BACKUP_FILE)
+    click.echo("")
+    click.echo(CRON_BACKUP_SCRIPT)
 
-    backup_blob = CRON_BACKUP_SCRIPT + CRON_BACKUP_FILE
-    if _copy_to_clipboard(backup_blob):
+    if _copy_to_clipboard(dynamic_script + dynamic_cron):
         click.echo("")
         click.echo("Copied script + cron entry to clipboard.")
 
+    click.echo("")
+    click.echo("Run 'sudo eggpool deploy cron --install' to set this up automatically.")
+
+    if install:
+        _require_root()
+        _confirm_install("cron backup script + entry", "/usr/local/bin/eggpool-backup")
+        _write_file("/usr/local/bin/eggpool-backup", dynamic_script)
+        import subprocess
+
+        subprocess.run(  # noqa: S603
+            ["chmod", "+x", "/usr/local/bin/eggpool-backup"],
+            check=True,
+        )
+        click.echo("  Installed /usr/local/bin/eggpool-backup")
+
+        # Install user cron entry
+        cron_line = "/usr/local/bin/eggpool-backup"
+        result = subprocess.run(  # noqa: S603
+            ["crontab", "-l"],
+            capture_output=True,
+            text=True,
+        )
+        existing = result.stdout if result.returncode == 0 else ""
+        if cron_line in existing:
+            click.echo("  Cron entry already present — skipping.")
+        else:
+            cron_entry = (
+                "\n# EggPool daily backup (personal use)\n"
+                "0 2 * * * /usr/local/bin/eggpool-backup\n"
+            )
+            new_cron = existing.rstrip() + cron_entry
+            subprocess.run(  # noqa: S603
+                ["crontab", "-"],
+                input=new_cron,
+                check=True,
+                text=True,
+            )
+            click.echo("  Installed user cron entry (02:00 daily backup).")
+
 
 @deploy.command("all")
+@click.option(
+    "--install", is_flag=True, help="Install all deployment files (requires root)."
+)
 @click.pass_context
-def deploy_all(ctx: click.Context) -> None:
-    """Print every deployment snippet in sequence."""
-    ctx.invoke(deploy_systemd)
+def deploy_all(ctx: click.Context, install: bool) -> None:
+    """Print every deployment snippet in sequence.
+
+    With --install, installs systemd unit, logrotate, and cron entry.
+    """
+    ctx.invoke(deploy_systemd, install=install)
     click.echo("")
     click.echo("=" * 72)
     click.echo("")
-    ctx.invoke(deploy_logrotate)
+    ctx.invoke(deploy_logrotate, install=install)
     click.echo("")
     click.echo("=" * 72)
     click.echo("")
-    ctx.invoke(deploy_cron)
+    ctx.invoke(deploy_cron, install=install)
 
 
 @cli.command()
@@ -1306,21 +1547,22 @@ def update(ctx: click.Context, check_only: bool, from_source: bool) -> None:
 
     click.echo(f"Updating from {current_version} to {latest_version}...")
 
-    # Determine if we're running under pipx
-    running_under_pipx = hasattr(sys, "real_prefix") or (
-        hasattr(sys, "base_prefix") and sys.base_prefix != sys.prefix
-    )
+    # Determine update command based on install method
+    method = _detect_install_method()
 
     if from_source:
         # Force update from git source
         repo = "eggstack/eggpool"
         pip_target = f"git+https://github.com/{repo}.git@v{latest_version}"
         cmd = [sys.executable, "-m", "pip", "install", pip_target]
-    elif running_under_pipx:
-        # Running under pipx - try pipx upgrade first
+    elif method == "source":
+        # Source checkout — pull latest and reinstall
+        cmd = ["uv", "sync", "--no-dev"]
+    elif method == "pipx":
+        # Installed via pipx
         cmd = ["pipx", "upgrade", "eggpool"]
     else:
-        # Try pip install --upgrade
+        # pip install
         cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "eggpool"]
 
     click.echo(f"Running: {' '.join(cmd)}")

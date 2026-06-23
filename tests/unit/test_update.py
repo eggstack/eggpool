@@ -65,3 +65,25 @@ class TestUpdateCommand:
                 assert "git+https://github.com/eggstack/eggpool.git@v0.2.0" in " ".join(
                     call_args
                 )
+
+    def test_update_source_install_uses_uv_sync(self) -> None:
+        """update on a source install runs uv sync --no-dev."""
+        runner = CliRunner()
+        with patch("httpx.get") as mock_get:
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {"info": {"version": "0.2.0"}}
+            mock_resp.raise_for_status = MagicMock()
+            mock_get.return_value = mock_resp
+
+            with (
+                patch("importlib.metadata.version", return_value="0.1.0"),
+                patch("eggpool.cli._detect_install_method", return_value="source"),
+                patch("subprocess.run") as mock_run,
+            ):
+                mock_run.return_value = MagicMock(returncode=0)
+                result = runner.invoke(cli, ["update"])
+
+                assert result.exit_code == 0
+                assert "Updating from 0.1.0 to 0.2.0" in result.output
+                call_args = mock_run.call_args[0][0]
+                assert call_args == ["uv", "sync", "--no-dev"]

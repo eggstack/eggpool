@@ -124,3 +124,108 @@ rm -rf "$BACKUP_PATH"
 # Prune old archives
 find "$BACKUP_DIR" -name "eggpool-*.tar.gz" -mtime +$KEEP_DAYS -delete
 """
+
+
+# ---------------------------------------------------------------------------
+# Dynamic snippet builders for personal-use `--install` mode.
+# These generate content tailored to the current user's system.
+# ---------------------------------------------------------------------------
+
+
+def build_personal_systemd_unit(
+    binary_path: str,
+    config_path: str,
+    data_dir: str,
+    env_path: str | None = None,
+) -> str:
+    """Generate a systemd unit for personal (single-user) use.
+
+    Unlike ``SYSTEMD_UNIT``, this omits the dedicated ``eggpool`` user,
+    security hardening directives, and production paths.  It targets
+    the invoking user's own environment and is not intended for
+    public-facing deployments.
+    """
+    env_line = f"\nEnvironmentFile={env_path}" if env_path else ""
+
+    return f"""\
+[Unit]
+Description=EggPool
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart={binary_path} --config {config_path} serve
+WorkingDirectory={data_dir}
+# Configuration changes require: systemctl restart eggpool
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGTERM{env_line}
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+
+def build_personal_backup_script(config_path: str, db_path: str) -> str:
+    """Generate a backup script for personal (single-user) use.
+
+    Unlike ``CRON_BACKUP_SCRIPT``, this runs as the current user without
+    ``sudo -u eggpool`` and uses the user's own config and database paths.
+    """
+    return f"""\
+#!/bin/bash
+#
+# EggPool daily backup script (personal use).
+# Installed by `eggpool deploy cron --install`.
+#
+# Snapshots configuration and SQLite database under
+# ~/backups/eggpool, retaining the last 30 days of archives.
+
+set -euo pipefail
+
+BACKUP_DIR="$HOME/backups/eggpool"
+KEEP_DAYS=30
+DB_PATH="{db_path}"
+CONFIG_PATH="{config_path}"
+
+mkdir -p "$BACKUP_DIR"
+
+BACKUP_NAME="eggpool-$(date +%Y%m%d-%H%M%S)"
+BACKUP_PATH="$BACKUP_DIR/$BACKUP_NAME"
+mkdir -p "$BACKUP_PATH"
+
+# Configuration
+cp "$CONFIG_PATH" "$BACKUP_PATH/"
+
+# Database snapshot via SQLite backup for consistency
+sqlite3 "$DB_PATH" ".backup '$BACKUP_PATH/usage.sqlite3'"
+
+# Archive and remove the working tree
+tar czf "$BACKUP_DIR/$BACKUP_NAME.tar.gz" -C "$BACKUP_DIR" "$BACKUP_NAME"
+rm -rf "$BACKUP_PATH"
+
+# Prune old archives
+find "$BACKUP_DIR" -name "eggpool-*.tar.gz" -mtime +$KEEP_DAYS -delete
+"""
+
+
+def build_personal_backup_cron() -> str:
+    """Generate a user cron entry for daily backup (personal use).
+
+    Unlike ``CRON_BACKUP_FILE``, this is a user cron entry (no ``root``
+    user field) targeting ``~/backups/eggpool``.
+    """
+    return """\
+# EggPool daily backup (personal use — user cron, not /etc/cron.d/)
+0 2 * * * /usr/local/bin/eggpool-backup
+"""
+
+
+def build_personal_logrotate() -> str:
+    """Generate a logrotate config for personal use.
+
+    Identical to ``LOGROTATE_CONF`` — the log path is the same.
+    """
+    return LOGROTATE_CONF

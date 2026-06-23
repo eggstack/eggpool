@@ -38,9 +38,9 @@ eggpool onboard
 `eggpool onboard` lets you add several providers at once, does a config check, then runs the server. You can also run `eggpool connect` for each provider you want to add and `eggpool serve` to start the server. 
 `eggpool configsetup` will help setup config for opencode. 
 
-To get the server to run on startup, see docs/deploymend.md. 
+To get the server to run on startup, run `eggpool deploy` for options, see docs/deployment.md for more info and configs.
 
-`pipx` installs `eggpool` into its own venv and exposes the
+`pipx` installs `eggpool` into its own venv and exposes the `eggpool` command on your PATH.
 
 ### Option 2: Automated install
 
@@ -57,12 +57,9 @@ The script:
 - Copies example configuration files
 - Attempts configuration validation
 
-Validation fails until `.env` contains real, non-placeholder keys. Edit
-`config.toml` and `.env`, then run the validation and migration commands below.
-
 The script will ask if you want to continue with onboarding. if you select no, make sure you `cd eggpool`, then you can run `uv run eggpool onboard` to get started. `uv run eggpool connect` for one off provider adds, `uv run eggpool serve` to start server. `uv run eggpool help` for other commands. 
 
-See docs/deployment.md for running on startup such as with systemd or cron.
+Run `uv run eggpool deploy` for options on running the server on startup. See docs/deployment.md for more info and configs.
 
 ### Option 3: Manual install
 
@@ -449,13 +446,27 @@ MIT
 
 ## Deployment
 
-See `docs/deployment.md` for production deployment instructions.
+See `docs/deployment.md` for full deployment instructions.
 
-For production (systemd):
+### Quick start (personal use)
 
 ```bash
-sudo systemctl enable --now eggpool
+pipx install eggpool
+eggpool onboard
+sudo eggpool deploy systemd --install
 ```
+
+The `--install` flag writes the systemd unit, enables the service,
+and starts it — all in one command. It detects your install method
+and config paths automatically.
+
+### Production (separate user, hardened)
+
+For public-facing deployments, see the Production Deployment section
+in `docs/deployment.md`. This creates a dedicated `eggpool` system
+user with proper file permissions.
+
+### Configuration changes
 
 Configuration changes require a service restart; the unit
 intentionally does not advertise any reload action:
