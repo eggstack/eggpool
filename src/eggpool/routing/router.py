@@ -166,6 +166,9 @@ class Router:
         using the per-account priority from the returned
         ``AccountRuntimeState``.
         """
+        if max_accounts <= 0:
+            return []
+
         candidates = self._selection_candidates(
             model_id, exclude_accounts, provider_id, protocol
         )

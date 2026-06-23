@@ -268,9 +268,38 @@ class TestMemoryBounds:
         huge_data = "x" * (MAX_INCOMPLETE_FRAME_BYTES + 1000)
         observer.observe(f"data: {huge_data}".encode())
 
-        # Buffer should be truncated
-        assert len(observer._buffer) <= MAX_INCOMPLETE_FRAME_BYTES
+        # The partial line is discarded until its delimiter arrives.
+        assert observer._buffer == ""
         assert observer.error_count >= 1
+
+        observer.observe(b"\n\n" + _sse_data({"usage": {"prompt_tokens": 11}}))
+        observer.flush()
+
+        assert observer.usage.input_tokens == 11
+
+    def test_incomplete_event_limit_counts_utf8_bytes(self) -> None:
+        """The partial-line limit is a byte limit for non-ASCII input too."""
+        from eggpool.proxy.sse_observer import MAX_INCOMPLETE_FRAME_BYTES
+
+        observer = IncrementalSSEObserver(protocol="openai")
+        observer.observe(("data: " + "😀" * MAX_INCOMPLETE_FRAME_BYTES).encode())
+
+        assert observer._buffer == ""
+        assert observer.error_count == 1
+
+    def test_multiline_event_is_bounded_and_observer_recovers(self) -> None:
+        """Complete data lines cannot accumulate an unbounded unterminated event."""
+        from eggpool.proxy.sse_observer import MAX_INCOMPLETE_FRAME_BYTES
+
+        observer = IncrementalSSEObserver(protocol="openai")
+        line = b"data: " + b"x" * (MAX_INCOMPLETE_FRAME_BYTES // 2) + b"\n"
+
+        observer.observe(line + line + b"\n")
+        observer.observe(_sse_data({"usage": {"prompt_tokens": 17}}))
+        observer.flush()
+
+        assert observer.error_count == 1
+        assert observer.usage.input_tokens == 17
 
     def test_no_error_for_normal_stream(self) -> None:
         """Normal SSE stream does not trigger memory bounds."""

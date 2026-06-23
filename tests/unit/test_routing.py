@@ -766,3 +766,22 @@ async def test_active_request_count_updates_are_serialized() -> None:
     state = registry.get_state("acct1")
     assert state is not None
     assert state.active_request_count == 0
+
+
+@pytest.mark.asyncio()
+async def test_failover_selection_honors_zero_limit() -> None:
+    """A zero-sized failover request must not return a candidate."""
+    config = AppConfig.from_dict(
+        {"accounts": [{"name": "acct1", "api_key": "test-key"}]}
+    )
+    registry = AccountRegistry(config)
+    cache = ModelCatalogCache()
+
+    class MockCatalog:
+        @property
+        def cache(self) -> ModelCatalogCache:
+            return cache
+
+    router = Router(registry, MockCatalog())  # type: ignore[arg-type]
+
+    assert await router.select_accounts_for_failover("gpt-4", max_accounts=0) == []

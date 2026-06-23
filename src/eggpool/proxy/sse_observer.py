@@ -20,7 +20,7 @@ from eggpool.proxy.usage import (
 
 logger = logging.getLogger(__name__)
 
-# Maximum bytes to buffer for an incomplete SSE frame
+# Maximum UTF-8 bytes to retain for an incomplete SSE line or event.
 MAX_INCOMPLETE_FRAME_BYTES = 64 * 1024  # 64KB
 
 
@@ -69,9 +69,12 @@ class IncrementalSSEObserver:
         # Telemetry must never terminate an otherwise valid byte stream.
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self._pending_cr = False
+        self._discarding_incomplete_line = False
 
         # Current event state (for assembling multi-line data)
         self._current_data_lines: list[str] = []
+        self._current_event_bytes = 0
+        self._discarding_event = False
 
         if protocol == "anthropic":
             self._extractor = AnthropicStreamUsageExtractor()
@@ -100,11 +103,17 @@ class IncrementalSSEObserver:
             self._pending_cr = True
         text = text.replace("\r\n", "\n").replace("\r", "\n")
         lines = (self._buffer + text).split("\n")
-        self._buffer = lines.pop()
+        incomplete_line = lines.pop()
 
         # Process complete lines in one linear pass. Repeatedly splitting the
         # remaining buffer copied the tail once per SSE line.
         for line in lines:
+            if self._discarding_incomplete_line:
+                # The beginning of this line was discarded after exceeding the
+                # memory limit. Ignore its remainder rather than interpreting a
+                # truncated suffix as a new SSE field.
+                self._discarding_incomplete_line = False
+                continue
             if not line:
                 # Blank line: terminate the current SSE event
                 self._flush_event()
@@ -112,42 +121,28 @@ class IncrementalSSEObserver:
 
             self._process_line(line)
 
-        # Bound the buffer to prevent memory growth
-        if len(self._buffer) > MAX_INCOMPLETE_FRAME_BYTES:
+        # While discarding an oversized line, retain nothing until its newline
+        # arrives. Otherwise retain the one incomplete line for the next chunk.
+        self._buffer = "" if self._discarding_incomplete_line else incomplete_line
+
+        # Bound by encoded bytes, not Python characters. A non-ASCII character
+        # can occupy up to four UTF-8 bytes.
+        if len(self._buffer.encode("utf-8")) > MAX_INCOMPLETE_FRAME_BYTES:
             logger.warning(
-                "SSE buffer exceeded %d bytes, discarding oldest data",
+                "SSE line exceeded %d bytes, discarding it",
                 MAX_INCOMPLETE_FRAME_BYTES,
             )
             self._error_count += 1
-            # Flush the decoder first so any incomplete multi-byte
-            # UTF-8 sequence it is holding is appended to the buffer
-            # before we truncate it. Otherwise resetting the decoder
-            # alone would drop the partial bytes silently.
-            try:
-                remainder = self._decoder.decode(b"", True)
-            except UnicodeDecodeError:
-                self._error_count += 1
-                logger.debug("Incremental decoder in error state at buffer truncation")
-                remainder = ""
-            if remainder:
-                self._buffer += remainder.replace("\r\n", "\n").replace("\r", "\n")
-            # Drop the oldest data from the front, advancing past the
-            # next newline so we never split a multi-byte UTF-8
-            # character at the new boundary. Reset the decoder so any
-            # UTF-8 sequence split by the boundary does not leave the
-            # decoder in an inconsistent state.
-            drop_at = self._buffer.find(
-                "\n", len(self._buffer) - MAX_INCOMPLETE_FRAME_BYTES
-            )
-            if drop_at != -1:
-                self._buffer = self._buffer[drop_at + 1 :]
-            else:
-                self._buffer = self._buffer[-MAX_INCOMPLETE_FRAME_BYTES:]
-            self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+            self._buffer = ""
+            self._discarding_incomplete_line = True
+            self._reset_event(discarding=True)
 
     def _process_line(self, line: str) -> None:
         """Process a single SSE line."""
         self._frame_count += 1
+
+        if self._discarding_event:
+            return
 
         # Ignore comments beginning with ':'
         if line.startswith(":"):
@@ -159,7 +154,22 @@ class IncrementalSSEObserver:
             # Accept both "data:value" and "data: value"
             value = value.lstrip(" ")
             if field_name == "data":
+                separator_bytes = 1 if self._current_data_lines else 0
+                event_bytes = (
+                    self._current_event_bytes
+                    + separator_bytes
+                    + len(value.encode("utf-8"))
+                )
+                if event_bytes > MAX_INCOMPLETE_FRAME_BYTES:
+                    logger.warning(
+                        "SSE event exceeded %d bytes, discarding telemetry",
+                        MAX_INCOMPLETE_FRAME_BYTES,
+                    )
+                    self._error_count += 1
+                    self._reset_event(discarding=True)
+                    return
                 self._current_data_lines.append(value)
+                self._current_event_bytes = event_bytes
             # Ignore unknown fields (id:, retry:, event:, etc.)
         else:
             # Line with no colon - treat as field with empty value
@@ -167,11 +177,14 @@ class IncrementalSSEObserver:
 
     def _flush_event(self) -> None:
         """Flush the current accumulated event for processing."""
+        if self._discarding_event:
+            self._reset_event()
+            return
         if not self._current_data_lines:
             return
 
         data = "\n".join(self._current_data_lines)
-        self._current_data_lines.clear()
+        self._reset_event()
 
         if data.strip() == "[DONE]":
             return
@@ -198,6 +211,12 @@ class IncrementalSSEObserver:
         except (json.JSONDecodeError, ValueError, TypeError, AttributeError):
             self._error_count += 1
             logger.debug("Malformed SSE data frame, ignoring")
+
+    def _reset_event(self, *, discarding: bool = False) -> None:
+        """Release accumulated event data and set its discard state."""
+        self._current_data_lines.clear()
+        self._current_event_bytes = 0
+        self._discarding_event = discarding
 
     def _merge_usage(self, incoming: StreamUsageResult) -> None:
         """Merge incoming usage into the accumulated result."""
@@ -245,8 +264,14 @@ class IncrementalSSEObserver:
             self._buffer += "\n"
             self._pending_cr = False
 
-        # Process any remaining complete lines
-        lines = self._buffer.split("\n")
+        # Process any remaining complete lines. If an oversized partial line
+        # was being discarded, none of its truncated contents are parseable.
+        lines = [] if self._discarding_incomplete_line else self._buffer.split("\n")
+        self._discarding_incomplete_line = False
+        if not lines:
+            self._flush_event()
+            self._buffer = ""
+            return
         self._buffer = lines.pop()
         for line in lines:
             if not line:
