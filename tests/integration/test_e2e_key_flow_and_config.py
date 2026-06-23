@@ -571,12 +571,122 @@ class TestConfigSetup:
         )
 
         assert result.exit_code == 0
-
         # stdout contains only the JSON snippet
         snippet = json.loads(result.stdout)
 
         assert snippet["provider"]["eggpool"]["options"]["apiKey"] == "ep_test_key"
         assert "11300" in snippet["provider"]["eggpool"]["options"]["baseURL"]
+
+    def test_configsetup_opencode_collapse_models_branch(self, tmp_path) -> None:
+        """``configsetup opencode`` branches on ``models.collapse_models``:
+
+        - When false (the default), the generated ``models`` map uses
+          provider-suffixed IDs (e.g. ``gpt-4/opencode-go``).
+        - When true, the generated ``models`` map uses unsuffixed IDs
+          (e.g. ``gpt-4``) sourced from the global ``models`` table.
+
+        Reproduces plan lines 121-128.
+        """
+        import asyncio
+        import json
+
+        from click.testing import CliRunner
+
+        from eggpool.db.connection import Database
+        from eggpool.db.migrations import MigrationRunner
+
+        db_path = tmp_path / "eggpool.db"
+
+        # Seed the on-disk database with the catalog rows that exercise
+        # both branches.
+        async def _seed() -> None:
+            db = Database(path=str(db_path))
+            await db.connect()
+            try:
+                migration_runner = MigrationRunner(db)
+                await migration_runner.run()
+                async with db.transaction():
+                    await db.execute_write(
+                        "INSERT INTO accounts (name, api_key_env, enabled, "
+                        "weight, provider_id) VALUES (?, ?, 1, 1.0, ?)",
+                        ("oc-acct", "OC_KEY", "opencode-go"),
+                    )
+                    await db.execute_write(
+                        "INSERT INTO accounts (name, api_key_env, enabled, "
+                        "weight, provider_id) VALUES (?, ?, 1, 1.0, ?)",
+                        ("mm-acct", "MM_KEY", "minimax"),
+                    )
+                    await db.execute_write(
+                        "INSERT OR IGNORE INTO models (model_id, protocol) "
+                        "VALUES (?, ?)",
+                        ("gpt-4", "openai"),
+                    )
+                    await db.execute_write(
+                        "INSERT OR IGNORE INTO provider_model_metadata "
+                        "(model_id, provider_id, protocol) VALUES (?, ?, ?)",
+                        ("gpt-4", "opencode-go", "openai"),
+                    )
+                    await db.execute_write(
+                        "INSERT OR IGNORE INTO provider_model_metadata "
+                        "(model_id, provider_id, protocol) VALUES (?, ?, ?)",
+                        ("gpt-4", "minimax", "openai"),
+                    )
+            finally:
+                await db.disconnect()
+
+        asyncio.run(_seed())
+
+        # collapse_models = false → suffixed IDs
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            textwrap.dedent(f"""\
+                [server]
+                api_key = "ep_test_key"
+                port = 11300
+
+                [models]
+                collapse_models = false
+
+                [database]
+                path = "{db_path}"
+            """)
+        )
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "configsetup", "opencode"],
+        )
+        assert result.exit_code == 0, result.stdout + result.stderr
+        snippet = json.loads(result.stdout)
+        models = snippet["provider"]["eggpool"]["models"]
+        assert "gpt-4/opencode-go" in models
+        assert "gpt-4/minimax" in models
+        assert "gpt-4" not in models
+
+        # collapse_models = true → unsuffixed IDs
+        config_path.write_text(
+            textwrap.dedent(f"""\
+                [server]
+                api_key = "ep_test_key"
+                port = 11300
+
+                [models]
+                collapse_models = true
+
+                [database]
+                path = "{db_path}"
+            """)
+        )
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "configsetup", "opencode"],
+        )
+        assert result.exit_code == 0, result.stdout + result.stderr
+        snippet = json.loads(result.stdout)
+        models = snippet["provider"]["eggpool"]["models"]
+        assert "gpt-4" in models
+        assert "gpt-4/opencode-go" not in models
+        assert "gpt-4/minimax" not in models
 
     def test_configsetup_claude_code_with_existing_key(self, tmp_path):
         """configsetup claude-code uses existing key and LAN IP.

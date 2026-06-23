@@ -839,6 +839,86 @@ class TestCliConnectList:
         assert "Available providers:" in result.stdout
         assert "opencode-go: OpenCode Go" in result.stdout
 
+    def test_connect_list_shows_priority_from_active_config(
+        self, tmp_path: Path
+    ) -> None:
+        """``connect list`` annotates each provider with its
+        ``routing_priority`` from the active config (plan line 255-265)."""
+        providers_toml = tmp_path / "providers.toml"
+        providers_toml.write_text(
+            textwrap.dedent("""\
+                [providers.opencode-go]
+                _display = "OpenCode Go"
+                base_url = "https://api.example.com"
+                protocols = ["openai"]
+                status = "verified"
+            """),
+            encoding="utf-8",
+        )
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            textwrap.dedent("""\
+                [providers.opencode-go]
+                id = "opencode-go"
+                base_url = "https://api.example.com"
+                protocols = ["openai"]
+                routing_priority = 5
+                [[providers.opencode-go.accounts]]
+                name = "default"
+                api_key = "sk-test"
+            """),
+            encoding="utf-8",
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--config",
+                str(config_path),
+                "connect",
+                "--providers",
+                str(providers_toml),
+                "list",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert "opencode-go: OpenCode Go" in result.stdout
+        assert "priority 5" in result.stdout
+
+    def test_connect_list_default_priority_when_no_config(self, tmp_path: Path) -> None:
+        """Verified templates with no active config show priority 0."""
+        providers_toml = tmp_path / "providers.toml"
+        providers_toml.write_text(
+            textwrap.dedent("""\
+                [providers.opencode-go]
+                _display = "OpenCode Go"
+                base_url = "https://api.example.com"
+                protocols = ["openai"]
+                status = "verified"
+            """),
+            encoding="utf-8",
+        )
+        # No config file exists — the CLI should still list providers
+        # with a default priority annotation.
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--config",
+                str(tmp_path / "missing.toml"),
+                "connect",
+                "--providers",
+                str(providers_toml),
+                "list",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert "opencode-go: OpenCode Go" in result.stdout
+        assert "priority 0" in result.stdout
+
 
 class TestTerminalMenu:
     """Deterministic tests for TerminalMenu display and interactive navigation."""

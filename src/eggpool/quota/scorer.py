@@ -37,6 +37,12 @@ class RoutingScore:
     inflight_penalty: float = 0.0
     health_penalty: float = 0.0
     random_tiebreaker: float = field(default_factory=random.random)
+    # Tier boundary marker from the provider's routing_priority. Higher
+    # tiers are preferred. Callers that want strict tier-bounded failover
+    # can compare adjacent scores' ``tier`` and short-circuit at the
+    # boundary. Zero means "no tier assigned" (e.g., synthesized
+    # elsewhere).
+    tier: int = 0
 
     @property
     def final_score(self) -> float:

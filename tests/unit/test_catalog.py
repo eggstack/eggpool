@@ -669,3 +669,118 @@ def test_stale_provider_removal_updates_conservative_limits() -> None:
     cache.mark_account_models_unavailable("acct1")
     result = cache.get_models_for_exposure("union", {"acct2"})
     assert result[0]["effective_limits"]["context_tokens"] == 500000
+
+
+# ── collapse_models / routing_priority extension catalog tests ──────────
+# These cover plan lines 386-391: catalog-layer behavior for
+# ``collapse_models`` switching and the new ``providers`` /
+# ``routing_priority_max`` extension fields on collapsed entries.
+
+
+def test_collapsed_entry_includes_providers_list() -> None:
+    """``get_models_for_exposure`` annotates each collapsed entry with
+    the sorted list of contributing provider IDs so the API layer can
+    surface ``eggpool.providers``."""
+    cache = ModelCatalogCache()
+    cache.update_from_account(
+        "a1",
+        "opencode-go",
+        [{"model_id": "gpt-4", "protocol": "openai"}],
+    )
+    cache.update_from_account(
+        "b1",
+        "minimax",
+        [{"model_id": "gpt-4", "protocol": "openai"}],
+    )
+    cache.update_from_account(
+        "c1",
+        "generalcompute",
+        [{"model_id": "gpt-4", "protocol": "openai"}],
+    )
+    result = cache.get_models_for_exposure("union", {"a1", "b1", "c1"})
+    assert len(result) == 1
+    # Providers list is sorted lexicographically for stable output.
+    assert result[0]["providers"] == ["generalcompute", "minimax", "opencode-go"]
+
+
+def test_collapsed_entry_providers_excludes_uneligible() -> None:
+    """``providers`` lists only those whose accounts are eligible."""
+    cache = ModelCatalogCache()
+    cache.update_from_account(
+        "a1",
+        "opencode-go",
+        [{"model_id": "gpt-4", "protocol": "openai"}],
+    )
+    cache.update_from_account(
+        "b1",
+        "minimax",
+        [{"model_id": "gpt-4", "protocol": "openai"}],
+    )
+    result = cache.get_models_for_exposure("union", {"a1"})
+    # Only opencode-go is eligible; minimax must not appear in providers.
+    assert result[0]["providers"] == ["opencode-go"]
+
+
+def test_expose_mode_intersection_with_collapsing() -> None:
+    """Plan line 391: ``expose_mode = intersection`` is still respected
+    under collapse. The collapsed entry only appears when every eligible
+    account supports the model."""
+    cache = ModelCatalogCache()
+    cache.update_from_account(
+        "a1",
+        "opencode-go",
+        [{"model_id": "gpt-4", "protocol": "openai"}],
+    )
+    # minimax only supports claude-3, not gpt-4
+    cache.update_from_account(
+        "b1",
+        "minimax",
+        [{"model_id": "claude-3", "protocol": "anthropic"}],
+    )
+    result = cache.get_models_for_exposure("intersection", {"a1", "b1"})
+    ids = {m["model_id"] for m in result}
+    # Neither model is supported by every eligible account.
+    assert "gpt-4" not in ids
+    assert "claude-3" not in ids
+
+
+def test_expose_mode_healthy_union_with_collapsing() -> None:
+    """Plan line 391: ``expose_mode = healthy_union`` still applies to
+    the collapsed entry (it is a union of all providers supporting the
+    model)."""
+    cache = ModelCatalogCache()
+    cache.update_from_account(
+        "a1",
+        "opencode-go",
+        [{"model_id": "gpt-4", "protocol": "openai"}],
+    )
+    cache.update_from_account(
+        "b1",
+        "minimax",
+        [{"model_id": "gpt-4", "protocol": "openai"}],
+    )
+    result = cache.get_models_for_exposure("healthy_union", {"a1", "b1"})
+    assert len(result) == 1
+    assert result[0]["model_id"] == "gpt-4"
+    assert set(result[0]["providers"]) == {"minimax", "opencode-go"}
+
+
+def test_suffixed_exposure_does_not_emit_providers_list() -> None:
+    """``get_provider_suffixed_models`` must not add a ``providers`` list
+    on suffixed entries; that field is only meaningful for collapsed
+    entries."""
+    cache = ModelCatalogCache()
+    cache.update_from_account(
+        "a1",
+        "opencode-go",
+        [{"model_id": "gpt-4", "protocol": "openai"}],
+    )
+    cache.update_from_account(
+        "b1",
+        "minimax",
+        [{"model_id": "gpt-4", "protocol": "openai"}],
+    )
+    result = cache.get_provider_suffixed_models("union", {"a1", "b1"})
+    assert len(result) == 2
+    for entry in result:
+        assert "providers" not in entry

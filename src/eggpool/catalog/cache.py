@@ -282,6 +282,9 @@ class ModelCatalogCache:
                 model_id=model_id,
                 available_accounts=visible_accounts,
             )
+            # Track contributing providers so /v1/models can surface
+            # routing priorities and provider list for collapsed entries.
+            model_info_copy["providers"] = list(provider_ids)
 
             merged_limits = self._merged_effective_limits(model_id, provider_ids)
             if merged_limits is not None:

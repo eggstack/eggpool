@@ -226,16 +226,26 @@ class Router:
         model_id: str,
         request_estimates: dict[str, int] | None,
     ) -> list[RoutingScore]:
-        """Score eligible states with their current active request counts."""
+        """Score eligible states with their current active request counts.
+
+        Annotates each returned score with the tier (``routing_priority``)
+        from the corresponding ``AccountRuntimeState`` so callers can
+        short-circuit at tier boundaries during failover.
+        """
         active_requests = {
             state.name: state.active_request_count for state in candidates.states
         }
-        return await self._scorer.score_accounts(
+        scores = await self._scorer.score_accounts(
             candidates.names,
             model_id,
             active_requests,
             request_estimates,
         )
+        for score in scores:
+            state = candidates.by_name.get(score.account_name)
+            if state is not None:
+                score.tier = state.routing_priority
+        return scores
 
     def record_usage(
         self,

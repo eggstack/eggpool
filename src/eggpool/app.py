@@ -833,7 +833,30 @@ def create_app(
                 provider_cfg = config.providers.get(provider_id)
                 if provider_cfg is not None:
                     routing_priority = provider_cfg.routing_priority
-            data.append(serialize_openai_model(m, routing_priority=routing_priority))
+            # Collapsed entries carry no provider_id; surface the
+            # contributing providers list and the max routing priority
+            # across them.
+            providers: list[str] | None = None
+            routing_priority_max: int | None = None
+            if provider_id is None:
+                collapsed_providers: list[str] = list(m.get("providers") or [])
+                providers = collapsed_providers
+                if providers:
+                    priorities = [
+                        cfg.routing_priority
+                        for pid in providers
+                        if (cfg := config.providers.get(pid)) is not None
+                    ]
+                    if priorities:
+                        routing_priority_max = max(priorities)
+            data.append(
+                serialize_openai_model(
+                    m,
+                    routing_priority=routing_priority,
+                    routing_priority_max=routing_priority_max,
+                    providers=providers,
+                )
+            )
 
         return {"object": "list", "data": data}
 

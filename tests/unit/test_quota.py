@@ -343,6 +343,16 @@ class TestQuotaFairScorer:
         assert ranked[1].account_name == "account3"
         assert ranked[2].account_name == "account2"
 
+    def test_routing_score_tier_default_zero(self) -> None:
+        """``RoutingScore.tier`` defaults to 0 (the standard base tier)."""
+        score = RoutingScore("a", 0.5, 1.0, True)
+        assert score.tier == 0
+
+    def test_routing_score_tier_set_explicitly(self) -> None:
+        """``RoutingScore.tier`` is settable as a constructor kwarg."""
+        score = RoutingScore("a", 0.5, 1.0, True, tier=5)
+        assert score.tier == 5
+
 
 class TestEstimateCostTierPriority:
     """Tests for the 5-tier cost estimation hierarchy in QuotaEstimator."""

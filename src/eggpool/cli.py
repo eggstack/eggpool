@@ -151,6 +151,19 @@ def connect_list(ctx: click.Context) -> None:
         click.echo("No provider templates found")
         return
 
+    # Read the active config so we can annotate each provider with its
+    # routing_priority. This is best-effort: if the config is missing or
+    # malformed we still list the templates without priorities.
+    config_path: str = ctx.obj.get("config_path", "config.toml")
+    priorities: dict[str, int] = {}
+    try:
+        config = AppConfig.from_toml(config_path)
+        priorities = {
+            pid: pcfg.routing_priority for pid, pcfg in config.providers.items()
+        }
+    except (FileNotFoundError, AggregatorError, Exception):
+        pass
+
     click.echo("Available providers:")
     for provider_id, tmpl in templates.items():
         status = tmpl.get("status", "unverified")
@@ -158,9 +171,16 @@ def connect_list(ctx: click.Context) -> None:
         marker = "*" if tmpl.get("recommended") else " "
         status_label = PROVIDER_STATUS_SYMBOLS.get(status, "?")
         note_str = f" — {notes}" if notes else ""
+        priority_str = ""
+        if provider_id in priorities:
+            priority_str = f" (priority {priorities[provider_id]})"
+        elif tmpl.get("status") in ("verified", "experimental"):
+            # Verified/experimental template with no config block: show
+            # the default priority so operators can see what they'd get.
+            priority_str = " (priority 0)"
         display_line = (
             f"  {marker} {provider_id}: {tmpl['display']}"
-            f" ({tmpl['url']}) [{status_label}]{note_str}"
+            f" ({tmpl['url']}) [{status_label}]{priority_str}{note_str}"
         )
         click.echo(display_line)
 

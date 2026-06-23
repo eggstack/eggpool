@@ -436,3 +436,51 @@ async def test_request_records_provider_id(
     )
     assert row is not None
     assert row["provider_id"] == "minimax"
+
+
+# ── Collapsed /v1/models shape ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_collapsed_models_endpoint_emits_providers_and_max_priority(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+) -> None:
+    """With ``collapse_models=true`` the endpoint emits ``providers`` and
+    ``routing_priority_max`` for each collapsed entry.
+
+    Reproduces the shape from ``plans/provider_priority.md`` lines 300-315.
+    """
+    config = app.state.config
+    new_config = config.model_copy(
+        update={
+            "models": config.models.model_copy(update={"collapse_models": True}),
+            "providers": {
+                **config.providers,
+                "opencode-go": config.providers["opencode-go"].model_copy(
+                    update={"routing_priority": 0}
+                ),
+                "minimax": config.providers["minimax"].model_copy(
+                    update={"routing_priority": 2}
+                ),
+            },
+        }
+    )
+    app.state.config = new_config
+    # Catalog service holds its own config reference; sync it so the
+    # new collapse_models flag takes effect.
+    app.state.catalog._config = new_config  # type: ignore[attr-defined]
+
+    response = await client.get("/v1/models", headers=auth_headers)
+    assert response.status_code == 200
+    body = response.json()
+    # Find the collapsed gpt-4 entry
+    gpt_entries = [m for m in body["data"] if m["id"] == "gpt-4"]
+    assert len(gpt_entries) == 1
+    gpt = gpt_entries[0]
+    assert gpt["eggpool"]["providers"] == ["minimax", "opencode-go"]
+    assert gpt["eggpool"]["routing_priority_max"] == 2
+    # No per-provider fields on a collapsed entry
+    assert "provider_id" not in gpt["eggpool"]
+    assert "routing_priority" not in gpt["eggpool"]

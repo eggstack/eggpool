@@ -988,3 +988,115 @@ class TestCollapseModels:
 
         with pytest.raises(ValidationError):
             ModelsConfig.model_validate({"collapse_models": [1, 2]})
+
+
+class TestProviderPriorityBackwardCompatibility:
+    """Regression tests for plan line 410-413.
+
+    Existing fixtures never set ``routing_priority`` or ``collapse_models``;
+    defaults must produce routing and exposure behavior identical to the
+    pre-feature behavior.
+    """
+
+    def test_legacy_config_defaults_equivalent_to_explicit_zeros(self):
+        """A config that omits the new fields parses with the same values
+        as a config that sets them to their defaults explicitly."""
+        from eggpool.models.config import AppConfig
+
+        legacy = AppConfig.model_validate(
+            {
+                "providers": {
+                    "p1": {
+                        "id": "p1",
+                        "base_url": "https://api.example.com/v1",
+                        "accounts": [{"name": "a", "api_key": "k"}],
+                    }
+                }
+            }
+        )
+        explicit = AppConfig.model_validate(
+            {
+                "models": {"collapse_models": False},
+                "providers": {
+                    "p1": {
+                        "id": "p1",
+                        "base_url": "https://api.example.com/v1",
+                        "routing_priority": 0,
+                        "accounts": [{"name": "a", "api_key": "k"}],
+                    }
+                },
+            }
+        )
+        assert (
+            legacy.providers["p1"].routing_priority
+            == explicit.providers["p1"].routing_priority
+            == 0
+        )
+        assert legacy.models.collapse_models == explicit.models.collapse_models is False
+
+    @pytest.mark.asyncio()
+    async def test_legacy_routing_priority_zero_load_balances_equally(self) -> None:
+        """Plan line 378: three providers all at priority 0 should
+        load balance roughly equally. This is the pre-feature baseline."""
+        import os
+
+        from eggpool.accounts.registry import AccountRegistry
+        from eggpool.catalog.cache import ModelCatalogCache
+        from eggpool.routing.router import Router
+
+        class _MockCatalog:
+            def __init__(self, cache: ModelCatalogCache) -> None:
+                self._cache = cache
+
+            @property
+            def cache(self) -> ModelCatalogCache:
+                return self._cache
+
+        os.environ["K_A"] = "k"
+        os.environ["K_B"] = "k"
+        os.environ["K_C"] = "k"
+        try:
+            config = AppConfig.model_validate(
+                {
+                    "providers": {
+                        "p1": {
+                            "id": "p1",
+                            "base_url": "https://api.example.com/v1",
+                            "accounts": [{"name": "a", "api_key_env": "K_A"}],
+                        },
+                        "p2": {
+                            "id": "p2",
+                            "base_url": "https://api.example.com/v2",
+                            "accounts": [{"name": "b", "api_key_env": "K_B"}],
+                        },
+                        "p3": {
+                            "id": "p3",
+                            "base_url": "https://api.example.com/v3",
+                            "accounts": [{"name": "c", "api_key_env": "K_C"}],
+                        },
+                    }
+                }
+            )
+            registry = AccountRegistry(config)
+            cache = ModelCatalogCache()
+            for acct, pid in [("a", "p1"), ("b", "p2"), ("c", "p3")]:
+                cache.update_from_account(
+                    acct, pid, [{"model_id": "gpt-4", "protocol": "openai"}]
+                )
+
+            router = Router(registry, _MockCatalog(cache))  # type: ignore[arg-type]
+
+            counts: dict[str, int] = {"a": 0, "b": 0, "c": 0}
+            for _ in range(150):
+                selected = await router.select_account("gpt-4")
+                assert selected is not None
+                counts[selected.name] += 1
+            # Each provider's single account should be selected ~50 times.
+            # Allow generous slack for ``randomize_near_ties`` and the
+            # plan's "roughly equally" language.
+            for name, count in counts.items():
+                assert 20 <= count <= 80, f"{name}={count} (expected ~50)"
+        finally:
+            del os.environ["K_A"]
+            del os.environ["K_B"]
+            del os.environ["K_C"]

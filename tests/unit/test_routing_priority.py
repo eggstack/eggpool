@@ -303,3 +303,57 @@ class TestRouterTieredSelection:
         finally:
             del os.environ["K_HIGH"]
             del os.environ["K_LOW"]
+
+    @pytest.mark.asyncio()
+    async def test_failover_scores_carry_tier_field(self) -> None:
+        """``select_accounts_for_failover`` annotates each ``RoutingScore``
+        with the tier from the corresponding ``AccountRuntimeState`` so
+        callers can short-circuit at tier boundaries."""
+        os.environ["K_A"] = "k"
+        os.environ["K_B"] = "k"
+        os.environ["K_C"] = "k"
+        try:
+            config = _build_config(
+                [
+                    {
+                        "id": "p-low",
+                        "base_url": "https://api.example.com/v1",
+                        "routing_priority": 0,
+                        "accounts": [{"name": "low_acct", "api_key_env": "K_A"}],
+                    },
+                    {
+                        "id": "p-high",
+                        "base_url": "https://api.example.com/v1",
+                        "routing_priority": 5,
+                        "accounts": [
+                            {"name": "high_acct", "api_key_env": "K_B"},
+                            {"name": "high_acct2", "api_key_env": "K_C"},
+                        ],
+                    },
+                ]
+            )
+            registry = AccountRegistry(config)
+            cache = ModelCatalogCache()
+            for acct in ("low_acct", "high_acct", "high_acct2"):
+                pid = "p-low" if acct == "low_acct" else "p-high"
+                cache.update_from_account(
+                    acct, pid, [{"model_id": "gpt-4", "protocol": "openai"}]
+                )
+            router = Router(registry, _MockCatalog(cache))  # type: ignore[arg-type]
+
+            ranked = await router.select_accounts_for_failover("gpt-4", max_accounts=10)
+            by_name = {state.name: score for state, score in ranked}
+            assert by_name["high_acct"].tier == 5
+            assert by_name["high_acct2"].tier == 5
+            assert by_name["low_acct"].tier == 0
+            # Strict tier-bounded failover: stop at the first boundary.
+            tier_seen: int | None = None
+            for _state, score in ranked:
+                if tier_seen is None:
+                    tier_seen = score.tier
+                elif score.tier != tier_seen:
+                    break
+        finally:
+            del os.environ["K_A"]
+            del os.environ["K_B"]
+            del os.environ["K_C"]

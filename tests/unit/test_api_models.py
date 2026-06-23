@@ -104,3 +104,50 @@ def test_routing_priority_omitted_when_none() -> None:
 
     explicit_none = serialize_openai_model(model)
     assert "eggpool" not in explicit_none
+
+
+def test_collapsed_entry_emits_providers_and_routing_priority_max() -> None:
+    """Collapsed (unsuffixed) entries carry providers and routing_priority_max."""
+    model = {
+        "model_id": "minimax-m2.7",
+        "display_name": "MiniMax M2.7",
+    }
+    result = serialize_openai_model(
+        model,
+        routing_priority_max=3,
+        providers=["generalcompute", "minimax", "opencode-go"],
+    )
+    assert result["id"] == "minimax-m2.7"
+    assert result["eggpool"]["providers"] == [
+        "generalcompute",
+        "minimax",
+        "opencode-go",
+    ]
+    assert result["eggpool"]["routing_priority_max"] == 3
+
+
+def test_collapsed_entry_omits_providers_when_none() -> None:
+    """A collapsed entry without providers list stays clean."""
+    model = {
+        "model_id": "minimax-m2.7",
+    }
+    result = serialize_openai_model(model)
+    assert "eggpool" not in result
+
+
+def test_suffixed_entry_omits_collapsed_fields() -> None:
+    """Provider-suffixed entries do not emit providers / routing_priority_max."""
+    model = {
+        "model_id": "minimax-m2.7/generalcompute",
+        "base_model_id": "minimax-m2.7",
+        "provider_id": "generalcompute",
+    }
+    result = serialize_openai_model(
+        model,
+        routing_priority=3,
+        routing_priority_max=99,
+        providers=["generalcompute", "minimax", "opencode-go"],
+    )
+    assert result["eggpool"]["routing_priority"] == 3
+    assert "routing_priority_max" not in result["eggpool"]
+    assert "providers" not in result["eggpool"]
