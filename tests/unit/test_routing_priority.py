@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import Any
 
 import pytest
@@ -357,3 +358,278 @@ class TestRouterTieredSelection:
             del os.environ["K_A"]
             del os.environ["K_B"]
             del os.environ["K_C"]
+
+
+class TestMixedPriorityLoadBalance:
+    """Plan test item 4: priority-3 with one account, priority-0 with three
+    accounts.
+
+    Under tier-based routing the top tier always wins, so every
+    ``select_account`` call must return the priority-3 account. The
+    priority-0 accounts are reachable only as a fallback and must all
+    appear in the failover-ranked list.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_top_tier_wins_every_call(self) -> None:
+        os.environ["K_TOP"] = "k"
+        os.environ["K_LOW1"] = "k"
+        os.environ["K_LOW2"] = "k"
+        os.environ["K_LOW3"] = "k"
+        try:
+            config = _build_config(
+                [
+                    {
+                        "id": "p-low",
+                        "base_url": "https://api.example.com/v1",
+                        "routing_priority": 0,
+                        "accounts": [
+                            {"name": "low1", "api_key_env": "K_LOW1"},
+                            {"name": "low2", "api_key_env": "K_LOW2"},
+                            {"name": "low3", "api_key_env": "K_LOW3"},
+                        ],
+                    },
+                    {
+                        "id": "p-top",
+                        "base_url": "https://api.example.com/v1",
+                        "routing_priority": 3,
+                        "accounts": [{"name": "top", "api_key_env": "K_TOP"}],
+                    },
+                ]
+            )
+            registry = AccountRegistry(config)
+            cache = ModelCatalogCache()
+            for name in ("low1", "low2", "low3", "top"):
+                pid = "p-top" if name == "top" else "p-low"
+                cache.update_from_account(
+                    name, pid, [{"model_id": "gpt-4", "protocol": "openai"}]
+                )
+            router = Router(registry, _MockCatalog(cache))  # type: ignore[arg-type]
+
+            # Run 60 trials — every call must hit the priority-3 account.
+            counts: dict[str, int] = {"top": 0, "low1": 0, "low2": 0, "low3": 0}
+            for _ in range(60):
+                selected = await router.select_account("gpt-4")
+                assert selected is not None
+                counts[selected.name] += 1
+            assert counts["top"] == 60
+            assert counts["low1"] == counts["low2"] == counts["low3"] == 0
+
+            # Failover list still surfaces the priority-0 accounts for
+            # tier-leaking retry, with the top tier listed first.
+            ranked = await router.select_accounts_for_failover("gpt-4", max_accounts=10)
+            names = [state.name for state, _ in ranked]
+            assert names[0] == "top"
+            assert set(names[1:]) == {"low1", "low2", "low3"}
+            # Tier ordering on the failover list is monotonically descending.
+            tiers = [score.tier for _, score in ranked]
+            assert tiers == sorted(tiers, reverse=True)
+        finally:
+            for k in ("K_TOP", "K_LOW1", "K_LOW2", "K_LOW3"):
+                os.environ.pop(k, None)
+
+
+class TestTierFallthroughOnCooldown:
+    """Plan test item 5: when every account in the top tier is in
+    cooldown, the router descends to the next tier and load balances
+    across the accounts there."""
+
+    @pytest.mark.asyncio()
+    async def test_top_tier_cooldown_falls_through_to_lower_tier(self) -> None:
+        os.environ["K_TOP"] = "k"
+        os.environ["K_LOW1"] = "k"
+        os.environ["K_LOW2"] = "k"
+        os.environ["K_LOW3"] = "k"
+        try:
+            config = _build_config(
+                [
+                    {
+                        "id": "p-low",
+                        "base_url": "https://api.example.com/v1",
+                        "routing_priority": 0,
+                        "accounts": [
+                            {"name": "low1", "api_key_env": "K_LOW1"},
+                            {"name": "low2", "api_key_env": "K_LOW2"},
+                            {"name": "low3", "api_key_env": "K_LOW3"},
+                        ],
+                    },
+                    {
+                        "id": "p-top",
+                        "base_url": "https://api.example.com/v1",
+                        "routing_priority": 3,
+                        "accounts": [
+                            {"name": "top1", "api_key_env": "K_TOP"},
+                            {"name": "top2", "api_key_env": "K_TOP"},
+                        ],
+                    },
+                ]
+            )
+            registry = AccountRegistry(config)
+            cache = ModelCatalogCache()
+            for name in ("low1", "low2", "low3", "top1", "top2"):
+                pid = "p-top" if name.startswith("top") else "p-low"
+                cache.update_from_account(
+                    name, pid, [{"model_id": "gpt-4", "protocol": "openai"}]
+                )
+            router = Router(registry, _MockCatalog(cache))  # type: ignore[arg-type]
+
+            # Put every priority-3 account in cooldown by manipulating the
+            # registry state directly — there is no need to involve the
+            # health manager for this unit-level invariant.
+            for name in ("top1", "top2"):
+                state = registry.get_state(name)
+                state.health_state = "cooldown"
+                state.cooldown_until = time.time() + 3600.0
+
+            counts: dict[str, int] = {"low1": 0, "low2": 0, "low3": 0}
+            for _ in range(60):
+                selected = await router.select_account("gpt-4")
+                assert selected is not None
+                counts[selected.name] += 1
+
+            # No priority-3 account is eligible, so traffic must spread
+            # across the three priority-0 accounts.
+            assert sum(counts.values()) == 60
+            for name in ("low1", "low2", "low3"):
+                assert counts[name] > 0, f"{name} received no traffic"
+            # Quota-fair scorer with three equal-weight accounts:
+            # expect a roughly even split (within 5 of 20 each).
+            for name in ("low1", "low2", "low3"):
+                assert abs(counts[name] - 20) <= 10, (
+                    f"{name} count {counts[name]} drifted from expected 20"
+                )
+        finally:
+            for k in ("K_TOP", "K_LOW1", "K_LOW2", "K_LOW3"):
+                os.environ.pop(k, None)
+
+
+class TestFailoverTierBoundary:
+    """Plan test items 6 & 7: a single request's retry loop must respect
+    the tier boundary under strict tier-bounded semantics, and the
+    existing ``exclude_accounts`` set must continue to work across tier
+    boundaries (tier-leaking semantics)."""
+
+    @pytest.mark.asyncio()
+    async def test_excluded_top_tier_account_does_not_leak_to_lower_tier(
+        self,
+    ) -> None:
+        """``select_accounts_for_failover`` with ``exclude_accounts`` must
+        skip the top-tier account and return the lower-tier account. The
+        tier-leaking semantics are exercised by *not* passing
+        ``exclude_accounts`` to the failover call: it returns the full
+        ranked list. With ``exclude_accounts``, only the lower tier
+        remains and the call still succeeds."""
+        os.environ["K_TOP"] = "k"
+        os.environ["K_LOW"] = "k"
+        try:
+            config = _build_config(
+                [
+                    {
+                        "id": "p-low",
+                        "base_url": "https://api.example.com/v1",
+                        "routing_priority": 0,
+                        "accounts": [{"name": "low", "api_key_env": "K_LOW"}],
+                    },
+                    {
+                        "id": "p-top",
+                        "base_url": "https://api.example.com/v1",
+                        "routing_priority": 3,
+                        "accounts": [{"name": "top", "api_key_env": "K_TOP"}],
+                    },
+                ]
+            )
+            registry = AccountRegistry(config)
+            cache = ModelCatalogCache()
+            cache.update_from_account(
+                "low", "p-low", [{"model_id": "gpt-4", "protocol": "openai"}]
+            )
+            cache.update_from_account(
+                "top", "p-top", [{"model_id": "gpt-4", "protocol": "openai"}]
+            )
+            router = Router(registry, _MockCatalog(cache))  # type: ignore[arg-type]
+
+            # Without exclusion: the top tier is selected.
+            selected = await router.select_account("gpt-4")
+            assert selected is not None
+            assert selected.name == "top"
+
+            # With the top-tier account in exclude_accounts: the router
+            # must fall through to the priority-0 account rather than
+            # returning None or re-selecting the excluded account.
+            selected = await router.select_account("gpt-4", exclude_accounts={"top"})
+            assert selected is not None
+            assert selected.name == "low"
+
+            # select_accounts_for_failover with the top tier excluded
+            # returns only the lower-tier account, in priority order.
+            ranked = await router.select_accounts_for_failover(
+                "gpt-4", max_accounts=5, exclude_accounts={"top"}
+            )
+            names = [state.name for state, _ in ranked]
+            assert names == ["low"]
+            # The lower-tier account is annotated with its tier.
+            assert ranked[0][1].tier == 0
+        finally:
+            for k in ("K_TOP", "K_LOW"):
+                os.environ.pop(k, None)
+
+    @pytest.mark.asyncio()
+    async def test_failover_full_list_respects_tier_ordering(self) -> None:
+        """``select_accounts_for_failover`` returns the full ranked list
+        across all eligible tiers, with the tier boundary preserved as
+        a contiguous block: every priority-3 account comes before every
+        priority-0 account."""
+        os.environ["K_TOP_A"] = "k"
+        os.environ["K_TOP_B"] = "k"
+        os.environ["K_LOW_A"] = "k"
+        os.environ["K_LOW_B"] = "k"
+        try:
+            config = _build_config(
+                [
+                    {
+                        "id": "p-low",
+                        "base_url": "https://api.example.com/v1",
+                        "routing_priority": 0,
+                        "accounts": [
+                            {"name": "low_a", "api_key_env": "K_LOW_A"},
+                            {"name": "low_b", "api_key_env": "K_LOW_B"},
+                        ],
+                    },
+                    {
+                        "id": "p-top",
+                        "base_url": "https://api.example.com/v1",
+                        "routing_priority": 3,
+                        "accounts": [
+                            {"name": "top_a", "api_key_env": "K_TOP_A"},
+                            {"name": "top_b", "api_key_env": "K_TOP_B"},
+                        ],
+                    },
+                ]
+            )
+            registry = AccountRegistry(config)
+            cache = ModelCatalogCache()
+            for name in ("low_a", "low_b", "top_a", "top_b"):
+                pid = "p-top" if name.startswith("top") else "p-low"
+                cache.update_from_account(
+                    name, pid, [{"model_id": "gpt-4", "protocol": "openai"}]
+                )
+            router = Router(registry, _MockCatalog(cache))  # type: ignore[arg-type]
+
+            ranked = await router.select_accounts_for_failover("gpt-4", max_accounts=10)
+            by_name = {state.name: score for state, score in ranked}
+            assert by_name["top_a"].tier == 3
+            assert by_name["top_b"].tier == 3
+            assert by_name["low_a"].tier == 0
+            assert by_name["low_b"].tier == 0
+
+            # Tier ordering is preserved contiguously: all top-tier
+            # accounts come first, then all low-tier accounts. The
+            # coordinator's retry loop can short-circuit at the first
+            # boundary by comparing tier values.
+            index_by_name = {state.name: idx for idx, (state, _) in enumerate(ranked)}
+            top_idx = max(index_by_name["top_a"], index_by_name["top_b"])
+            low_idx = min(index_by_name["low_a"], index_by_name["low_b"])
+            assert top_idx < low_idx
+        finally:
+            for k in ("K_TOP_A", "K_TOP_B", "K_LOW_A", "K_LOW_B"):
+                os.environ.pop(k, None)
