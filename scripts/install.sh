@@ -84,11 +84,11 @@ if command -v eggpool >/dev/null 2>&1; then
     exec eggpool accounts status
 fi
 
-# Check for pipx
+# Check for pipx (invoke via detected Python to ensure correct version)
 echo "Checking for pipx..."
-if command -v pipx >/dev/null 2>&1; then
-    echo "Installing eggpool via pipx..."
-    pipx install eggpool
+if "$PYTHON" -m pipx --version >/dev/null 2>&1; then
+    echo "Installing eggpool via pipx (Python $PYTHON_VERSION)..."
+    "$PYTHON" -m pipx install eggpool
     echo "Installation complete. Run 'eggpool onboard' to start."
     exec eggpool accounts status
 fi
