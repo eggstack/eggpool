@@ -31,7 +31,7 @@ sudo eggpool init-config /etc/eggpool/config.toml
 ## Prerequisites
 
 - Linux server (Debian/Ubuntu recommended)
-- Python 3.12+
+- Python 3.11+
 - `uv` package manager (for source installs) or `pipx` (for pip installs)
 - Root or sudo access (for systemd)
 

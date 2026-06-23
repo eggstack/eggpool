@@ -301,7 +301,7 @@ name = "eggpool"
 version = "0.1.0"
 description = "A lightweight proxy that aggregates multiple LLM provider accounts behind one OpenAI-compatible endpoint"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "David Bowman", email = "dbowman91@proton.me" }]
 keywords = [
@@ -322,7 +322,7 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3 :: Only",
     "Topic :: Internet :: Proxy/Mixin",
     "Topic :: System :: Monitoring",
@@ -425,7 +425,7 @@ Action:
 
   ```markdown
   [![PyPI version](https://badge.fury.io/py/eggpool.svg)](https://pypi.org/project/eggpool/)
-  [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
+  [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
   [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
   [![CI](https://github.com/eggstack/eggpool/actions/workflows/ci.yml/badge.svg)](https://github.com/eggstack/eggpool/actions/workflows/ci.yml)
   ```
@@ -744,7 +744,7 @@ test -d /tmp/sdist-final/eggpool-0.1.0/.opencode && echo FAIL || echo OK
 ls /tmp/sdist-final/eggpool-0.1.0
 
 # 7. Install in a clean venv
-python3.12 -m venv /tmp/eggpool-install
+python3.11 -m venv /tmp/eggpool-install
 /tmp/eggpool-install/bin/pip install --upgrade pip
 /tmp/eggpool-install/bin/pip install dist/eggpool-0.1.0-py3-none-any.whl
 /tmp/eggpool-install/bin/eggpool --version

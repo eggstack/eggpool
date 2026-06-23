@@ -1,5 +1,5 @@
 [![PyPI version](https://badge.fury.io/py/eggpool.svg)](https://pypi.org/project/eggpool/)
-[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![CI](https://github.com/eggstack/eggpool/actions/workflows/ci.yml/badge.svg)](https://github.com/eggstack/eggpool/actions/workflows/ci.yml)
 
@@ -22,7 +22,7 @@ behind one OpenAI/Anthropic-compatible endpoint.
 
 ## Requirements
 
-- Python 3.12+
+- Python 3.11+
 - [uv](https://docs.astral.sh/uv/) for dependency management
 
 ## Quick Start
@@ -61,7 +61,7 @@ The script:
 
 - Downloads the repository if not running from a clone
 - Installs `uv` if missing
-- Verifies Python 3.12+
+- Verifies Python 3.11+
 - Installs dependencies
 - Copies example configuration files
 - Attempts configuration validation

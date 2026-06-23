@@ -3,7 +3,7 @@ name = "eggpool"
 version = "0.1.0"
 description = "A lightweight proxy that aggregates multiple LLM provider accounts behind one OpenAI-compatible endpoint"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "David Bowman", email = "dbowman91@proton.me" }]
 keywords = [
@@ -24,6 +24,7 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3 :: Only",
     "Topic :: System :: Monitoring",
@@ -98,14 +99,14 @@ exclude-globs = [
 ]
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py311"
 line-length = 88
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "A", "SIM", "TCH"]
 
 [tool.pyright]
-pythonVersion = "3.12"
+pythonVersion = "3.11"
 typeCheckingMode = "strict"
 reportMissingTypeStubs = false
 include = ["src", "scripts"]

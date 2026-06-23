@@ -21,7 +21,7 @@ uv run pytest
 - **Ruff** for linting and formatting
 - Rules: E, F, W, I, N, UP, B, A, SIM, TCH
 - Line length: 88 characters
-- Target: Python 3.12+
+- Target: Python 3.11+
 
 ```bash
 # Check formatting
@@ -98,7 +98,7 @@ uv run pytest tests/unit/test_routing_priority.py -v
 
 ## Code Style
 
-- Python 3.12+ with `from __future__ import annotations` in all files
+- Python 3.11+ with `from __future__ import annotations` in all files
 - Type hints on all function signatures and return types
 - Use `NoReturn` for functions that never return (e.g., `sys.exit`)
 - Move type-only imports into `TYPE_CHECKING` blocks

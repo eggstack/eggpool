@@ -44,10 +44,10 @@ sudo apt update && sudo apt upgrade -y
 sudo apt install -y git curl build-essential
 ```
 
-### 3. Install Python 3.12+
+### 3. Install Python 3.11+
 
 ```bash
-sudo apt install -y python3.12 python3.12-venv python3.12-dev
+sudo apt install -y python3.11 python3.11-venv python3.11-dev
 ```
 
 ### 4. Install uv

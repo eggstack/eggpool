@@ -27,7 +27,7 @@ All four must pass with zero errors.
 
 ## Code Style
 
-- Python 3.12+ with `from __future__ import annotations` in ALL files
+- Python 3.11+ with `from __future__ import annotations` in ALL files
 - Type hints on all function signatures and return types
 - Ruff: E, F, W, I, N, UP, B, A, SIM, TCH rules
 - Pyright strict mode — covers `src/` AND `scripts/` (not tests)
