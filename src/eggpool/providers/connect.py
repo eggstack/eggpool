@@ -442,8 +442,22 @@ def merge_provider_into_config(
     Returns True if the config was modified.
     """
     path = Path(config_path)
+
+    # Create a minimal config if the file doesn't exist yet
     if not path.exists():
-        return False
+        minimal = (
+            "[server]\n"
+            'host = "0.0.0.0"\n'
+            "port = 11300\n"
+            'log_level = "INFO"\n'
+            "\n"
+            "[database]\n"
+            'path = "usage.sqlite3"\n'
+            "\n"
+            "[models]\n"
+            "refresh_interval_s = 300\n"
+        )
+        path.write_text(minimal, encoding="utf-8")
 
     content = path.read_text(encoding="utf-8")
     provider_id = provider_data.get("id", "unknown")

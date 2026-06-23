@@ -557,14 +557,19 @@ class TestMergeProviderIntoConfig:
         assert "port = 8080" in content
         assert 'path = "data.sqlite3"' in content
 
-    def test_returns_false_when_file_missing(self, tmp_path: Path) -> None:
-        """Returns False when config file doesn't exist."""
+    def test_creates_config_when_file_missing(self, tmp_path: Path) -> None:
+        """Creates a minimal config when the file doesn't exist."""
+        config_path = tmp_path / "nonexistent.toml"
         ok = merge_provider_into_config(
-            str(tmp_path / "nonexistent.toml"),
+            str(config_path),
             {"id": "test", "base_url": "https://test.example.com"},
             "KEY",
         )
-        assert ok is False
+        assert ok is True
+        assert config_path.exists()
+        content = config_path.read_text()
+        assert "[providers.test]" in content
+        assert "test.example.com" in content
 
 
 class TestCheckDuplicateApiKey:
