@@ -64,6 +64,21 @@ def _ts_to_unix(value: object) -> float:
             return 0.0
 
 
+def _unix_to_db_timestamp(value: object, *, fallback: float) -> str:
+    """Render an in-memory Unix timestamp for SQLite persistence.
+
+    Cache hydration normalizes timestamps to Unix floats.  Keeping the inverse
+    conversion at the persistence boundary prevents an unrelated catalog write
+    from marking entries that were not refreshed as newly seen.
+    """
+    timestamp = _ts_to_unix(value)
+    if timestamp <= 0:
+        timestamp = fallback
+    return _dt.datetime.fromtimestamp(timestamp, tz=_dt.UTC).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+
+
 def _parse_metadata_object(
     value: object,
     *,
@@ -538,9 +553,8 @@ class CatalogService:
 
     async def _persist_catalog(self) -> None:
         """Persist the in-memory catalog to the database."""
-        from datetime import UTC, datetime
-
-        now_iso = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
+        now = _dt.datetime.now(_dt.UTC).timestamp()
+        now_iso = _unix_to_db_timestamp(now, fallback=now)
 
         acct_rows = await self._db.fetch_all("SELECT id, name FROM accounts")
         existing_support_rows = await self._db.fetch_all(
@@ -570,8 +584,10 @@ class CatalogService:
                     model_info["protocol"],
                     json.dumps(model_info.get("capabilities", {})),
                     json.dumps(model_info.get("source_metadata", {})),
-                    now_iso,
-                    now_iso,
+                    _unix_to_db_timestamp(
+                        model_info.get("first_seen_at"), fallback=now
+                    ),
+                    _unix_to_db_timestamp(model_info.get("last_seen_at"), fallback=now),
                     protocol_source,
                 )
             )
@@ -601,8 +617,10 @@ class CatalogService:
                     json.dumps(model_info.get("capabilities", {})),
                     json.dumps(model_info.get("source_metadata", {})),
                     model_info.get("protocol_source"),
-                    now_iso,
-                    now_iso,
+                    _unix_to_db_timestamp(
+                        model_info.get("first_seen_at"), fallback=now
+                    ),
+                    _unix_to_db_timestamp(model_info.get("last_seen_at"), fallback=now),
                     "resolved" if model_info.get("protocol") else "unresolved",
                 )
             )

@@ -2,12 +2,47 @@
 
 from __future__ import annotations
 
+import time
+
 from eggpool.catalog.cache import ModelCatalogCache, parse_model_id
 from eggpool.catalog.normalizer import (
     normalize_anthropic_models,
     normalize_models,
     normalize_openai_models,
 )
+
+
+def test_hydrate_account_age_uses_its_provider_metadata() -> None:
+    """A fresh provider must not refresh another provider's account age."""
+    cache = ModelCatalogCache()
+    now = time.time()
+    cache.load_model(
+        "shared-model",
+        None,
+        "openai",
+        {},
+        {},
+        last_seen_at=now,
+    )
+    cache.set_provider_model_entry(
+        "shared-model",
+        "stale-provider",
+        {"protocol": "openai", "last_seen_at": now - 120},
+    )
+    cache.set_provider_model_entry(
+        "shared-model",
+        "fresh-provider",
+        {"protocol": "openai", "last_seen_at": now - 5},
+    )
+    cache.set_account_provider("stale-account", "stale-provider")
+    cache.set_account_provider("fresh-account", "fresh-provider")
+    cache.add_account_support("shared-model", "stale-account")
+    cache.add_account_support("shared-model", "fresh-account")
+
+    cache.hydrate_account_refresh_ages()
+
+    assert cache.is_account_stale("stale-account", 60)
+    assert not cache.is_account_stale("fresh-account", 60)
 
 
 def test_normalize_openai_models() -> None:

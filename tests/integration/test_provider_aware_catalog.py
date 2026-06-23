@@ -260,3 +260,59 @@ async def test_catalog_persists_only_provider_specific_pricing() -> None:
     finally:
         await client.aclose()
         await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_catalog_persistence_preserves_observation_timestamps() -> None:
+    """Persisting the catalog must not make unrefreshed entries look fresh."""
+    db = Database(path=":memory:")
+    await db.connect()
+    await MigrationRunner(db).run()
+    config = AppConfig.from_dict({"accounts": []})
+    client = httpx.AsyncClient()
+    try:
+        service = CatalogService(config, AccountRegistry(config), db, client)
+        first_seen = 1_577_836_800.0  # 2020-01-01 UTC
+        last_seen = 1_609_459_200.0  # 2021-01-01 UTC
+        service.cache.load_model(
+            "cached-model",
+            None,
+            "openai",
+            {},
+            {},
+            first_seen_at=first_seen,
+            last_seen_at=last_seen,
+        )
+        service.cache.set_provider_model_entry(
+            "cached-model",
+            "provider-a",
+            {
+                "model_id": "cached-model",
+                "protocol": "openai",
+                "capabilities": {},
+                "source_metadata": {},
+                "first_seen_at": first_seen,
+                "last_seen_at": last_seen,
+            },
+        )
+
+        await service._persist_catalog()  # pyright: ignore[reportPrivateUsage]
+
+        model = await db.fetch_one(
+            "SELECT first_seen_at, last_seen_at FROM models WHERE model_id = ?",
+            ("cached-model",),
+        )
+        provider_model = await db.fetch_one(
+            "SELECT first_seen_at, last_seen_at FROM provider_model_metadata "
+            "WHERE model_id = ? AND provider_id = ?",
+            ("cached-model", "provider-a"),
+        )
+        assert model is not None
+        assert provider_model is not None
+        assert model["first_seen_at"] == "2020-01-01 00:00:00"
+        assert model["last_seen_at"] == "2021-01-01 00:00:00"
+        assert provider_model["first_seen_at"] == "2020-01-01 00:00:00"
+        assert provider_model["last_seen_at"] == "2021-01-01 00:00:00"
+    finally:
+        await client.aclose()
+        await db.disconnect()

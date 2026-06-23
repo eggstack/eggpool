@@ -519,15 +519,26 @@ class ModelCatalogCache:
         Called after loading cached account-model relationships so that
         ``is_account_stale()`` does not reject every supporting account
         that lacks a prior in-memory refresh timestamp.
+
+        Prefer provider-specific metadata.  The global model entry may have
+        been refreshed by a different provider offering the same model ID,
+        which must not make this account's catalog data appear newer.
         """
         for model_id, accounts in self._account_support.items():
-            model_info = self._models.get(model_id)
-            if model_info is None:
-                continue
-            last_seen = model_info.get("last_seen_at", 0.0)
-            if last_seen <= 0:
-                continue
             for account_name in accounts:
+                provider_id = self._account_providers.get(account_name)
+                model_info = (
+                    self._provider_models.get((model_id, provider_id))
+                    if provider_id is not None
+                    else None
+                )
+                if model_info is None:
+                    model_info = self._models.get(model_id)
+                if model_info is None:
+                    continue
+                last_seen = model_info.get("last_seen_at", 0.0)
+                if not isinstance(last_seen, (int, float)) or last_seen <= 0:
+                    continue
                 existing = self._account_last_refresh.get(account_name, 0.0)
                 if last_seen > existing:
                     self._account_last_refresh[account_name] = last_seen
