@@ -542,7 +542,7 @@ Action:
   if command -v eggpool >/dev/null 2>&1; then
       echo "Existing eggpool install detected: $(command -v eggpool)"
       echo "Using existing install. Run 'eggpool update' to upgrade."
-      eggpool --version
+      eggpool version
       exec eggpool accounts status
   fi
 
@@ -747,7 +747,7 @@ ls /tmp/sdist-final/eggpool-0.1.0
 python3.11 -m venv /tmp/eggpool-install
 /tmp/eggpool-install/bin/pip install --upgrade pip
 /tmp/eggpool-install/bin/pip install dist/eggpool-0.1.0-py3-none-any.whl
-/tmp/eggpool-install/bin/eggpool --version
+/tmp/eggpool-install/bin/eggpool version
 /tmp/eggpool-install/bin/eggpool --help
 /tmp/eggpool-install/bin/eggpool connect list   # expects 9 providers
 /tmp/eggpool-install/bin/eggpool accounts status   # expects "no accounts configured" (clean install)
@@ -761,7 +761,7 @@ Expected:
 - `twine check` reports no errors.
 - Wheel contains `dashboard/themes/*.toml` and `providers/_templates.toml`.
 - Sdist is < 2M unpacked and has no `.opencode/` or `__pycache__/`.
-- `eggpool --version` prints `0.1.0`; `eggpool connect list` shows all
+- `eggpool version` prints `0.1.0`; `eggpool connect list` shows all
   nine providers; `eggpool accounts status` exits 0 with the
   "no accounts configured" message.
 

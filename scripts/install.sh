@@ -81,7 +81,7 @@ echo "Checking for existing eggpool install..."
 if command -v eggpool >/dev/null 2>&1; then
     echo "Existing eggpool install detected: $(command -v eggpool)"
     echo "Using existing install. Run 'eggpool update' to upgrade."
-    eggpool --version
+    eggpool version
 fi
 
 # Check for pipx (invoke via detected Python to ensure correct version)

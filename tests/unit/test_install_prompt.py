@@ -430,3 +430,70 @@ class TestInstallPromptBehavior:
 
         assert "eggpool --config" in source
         assert "uv run eggpool accounts" not in source
+
+    def test_install_script_uses_eggpool_version_not_dashdash(self) -> None:
+        """install.sh uses `eggpool version`, not `eggpool --version`."""
+        install_path = Path(__file__).parent.parent.parent / "scripts" / "install.sh"
+        source = install_path.read_text(encoding="utf-8")
+
+        assert "eggpool version" in source
+        assert "eggpool --version" not in source
+
+    def test_install_script_has_no_incorrect_dashdash_flags(self) -> None:
+        """install.sh does not use -- on any top-level eggpool subcommand."""
+        install_path = Path(__file__).parent.parent.parent / "scripts" / "install.sh"
+        source = install_path.read_text(encoding="utf-8")
+
+        # Top-level eggpool subcommands (not options) that should never
+        # be invoked with a leading --.  --config is a valid option;
+        # --help is handled by Click natively; --since is a journalctl
+        # flag and does not appear in install.sh.
+        bad_subcommands = [
+            "eggpool --version",
+            "eggpool --accounts",
+            "eggpool --connect",
+            "eggpool --deploy",
+            "eggpool --onboard",
+            "eggpool --serve",
+            "eggpool --migrate",
+            "eggpool --help",
+            "eggpool --stop",
+            "eggpool --restart",
+            "eggpool --newkey",
+            "eggpool --rehash",
+            "eggpool --croncheck",
+        ]
+        for bad in bad_subcommands:
+            assert bad not in source, f"install.sh contains incorrect invocation: {bad}"
+
+    def test_install_script_bash_syntax(self) -> None:
+        """install.sh parses without bash syntax errors."""
+        import subprocess
+
+        install_path = Path(__file__).parent.parent.parent / "scripts" / "install.sh"
+        result = subprocess.run(  # noqa: S603
+            ["bash", "-n", str(install_path)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0, (
+            f"install.sh has bash syntax errors:\n{result.stderr}"
+        )
+
+    def test_install_prompt_py_syntax(self) -> None:
+        """install_prompt.py parses without Python syntax errors."""
+        import subprocess
+
+        script_path = (
+            Path(__file__).parent.parent.parent / "scripts" / "install_prompt.py"
+        )
+        result = subprocess.run(  # noqa: S603
+            ["python3", "-c", f"import ast; ast.parse(open('{script_path}').read())"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0, (
+            f"install_prompt.py has syntax errors:\n{result.stderr}"
+        )
