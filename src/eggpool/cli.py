@@ -43,6 +43,13 @@ def cli(ctx: click.Context, config_path: str) -> None:
     ctx.obj["config_path"] = os.path.abspath(config_path)
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
+        return
+
+    _skip_ensure_config = {"help", "version", "init-config"}
+    if ctx.invoked_subcommand not in _skip_ensure_config:
+        from eggpool.config import ensure_config
+
+        ensure_config(ctx.obj["config_path"])
 
 
 class _ConfigPathGroup(click.Group):
@@ -86,15 +93,6 @@ def serve(ctx: click.Context) -> None:
     from granian import Granian  # type: ignore[import-untyped]
 
     config_path: str = ctx.obj["config_path"]
-
-    if not Path(config_path).exists():
-        click.echo(
-            f"Config file not found: {config_path}\n"
-            "  Run `eggpool onboard` to set up providers, or\n"
-            "  `eggpool connect` to add a provider account.",
-            err=True,
-        )
-        sys.exit(1)
 
     try:
         config = AppConfig.from_toml(config_path)
@@ -231,8 +229,6 @@ def logout(ctx: click.Context, target: str | None) -> None:
     If TARGET is given, matches by provider id, account name, env var,
     or API key.  If omitted, shows an interactive selection menu.
     """
-    from pathlib import Path
-
     from eggpool.providers.connect import (
         TerminalMenu,
         matching_logout_accounts,
@@ -242,15 +238,6 @@ def logout(ctx: click.Context, target: str | None) -> None:
     )
 
     config_path: str = ctx.obj["config_path"]
-
-    if not Path(config_path).exists():
-        click.echo(
-            f"Config file not found: {config_path}\n"
-            "  Run `eggpool onboard` to set up providers, or\n"
-            "  `eggpool connect` to add a provider account.",
-            err=True,
-        )
-        sys.exit(1)
 
     if target:
         try:
@@ -305,15 +292,6 @@ def logout(ctx: click.Context, target: str | None) -> None:
 def check_config(ctx: click.Context) -> None:
     """Validate the configuration file."""
     config_path: str = ctx.obj["config_path"]
-
-    if not Path(config_path).exists():
-        click.echo(
-            f"Config file not found: {config_path}\n"
-            "  Run `eggpool onboard` to set up providers, or\n"
-            "  `eggpool connect` to add a provider account.",
-            err=True,
-        )
-        sys.exit(1)
 
     try:
         config = AppConfig.from_toml(config_path)
@@ -488,12 +466,26 @@ def configsetup(ctx: click.Context) -> None:
 
 
 def _detect_install_method() -> str:
-    """Detect how eggpool was installed: 'pipx', 'source', or 'pip'."""
-    # Running inside a venv (pipx, uv tool, manual venv)
-    if hasattr(sys, "real_prefix") or (
+    """Detect how eggpool was installed: 'pipx', 'uv-tool', 'source', or 'pip'."""
+    in_venv = hasattr(sys, "real_prefix") or (
         hasattr(sys, "base_prefix") and sys.base_prefix != sys.prefix
-    ):
-        return "pipx"
+    )
+
+    if in_venv:
+        # Check for uv tool install: executable lives under uv tool directories
+        exe = Path(sys.executable).resolve()
+        parts = exe.parts
+        if "uv" in parts and "tools" in parts:
+            return "uv-tool"
+
+        # Check for pipx: pipx is available and executable is in a pipx-managed venv
+        import shutil
+
+        if shutil.which("pipx") is not None:
+            return "pipx"
+
+        # Generic venv (manual or unknown tool) — default to pip for upgrade
+        return "pip"
 
     # Source checkout (pyproject.toml nearby)
     cli_path = Path(__file__).resolve()
@@ -1183,9 +1175,6 @@ def _update_server_config(config_path: str, key: str, value: str) -> None:
     from pathlib import Path
 
     path = Path(config_path)
-    if not path.exists():
-        click.echo(f"Config file not found: {config_path}", err=True)
-        sys.exit(1)
 
     lines = path.read_text(encoding="utf-8").splitlines()
     if key == "port":
@@ -1261,9 +1250,6 @@ def _write_dashboard_public(config_path: str, public: bool) -> None:
     from pathlib import Path
 
     path = Path(config_path)
-    if not path.exists():
-        click.echo(f"Config file not found: {config_path}", err=True)
-        sys.exit(1)
 
     lines = path.read_text(encoding="utf-8").splitlines()
     result = update_section_value(
@@ -1574,20 +1560,28 @@ def update(ctx: click.Context, check_only: bool, from_source: bool) -> None:
 
     # Determine update command based on install method
     method = _detect_install_method()
+    repo = "eggstack/eggpool"
+    git_target = f"git+https://github.com/{repo}.git@v{latest_version}"
 
     if from_source:
-        # Force update from git source
-        repo = "eggstack/eggpool"
-        pip_target = f"git+https://github.com/{repo}.git@v{latest_version}"
-        cmd = [sys.executable, "-m", "pip", "install", pip_target]
+        # Force update from git source — use the method-appropriate installer
+        if method == "source":
+            cmd = ["uv", "sync", "--no-dev"]
+        elif method == "pipx":
+            cmd = ["pipx", "install", git_target]
+        elif method == "uv-tool":
+            cmd = ["uv", "tool", "install", git_target]
+        else:
+            cmd = [sys.executable, "-m", "pip", "install", git_target]
     elif method == "source":
-        # Source checkout — pull latest and reinstall
-        cmd = ["uv", "sync", "--no-dev"]
+        # Source checkout — find repo root and run uv sync
+        repo_root = Path(__file__).resolve().parent.parent.parent
+        cmd = ["uv", "sync", "--no-dev", "--directory", str(repo_root)]
     elif method == "pipx":
-        # Installed via pipx
         cmd = ["pipx", "upgrade", "eggpool"]
+    elif method == "uv-tool":
+        cmd = ["uv", "tool", "install", f"eggpool=={latest_version}"]
     else:
-        # pip install
         cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "eggpool"]
 
     click.echo(f"Running: {' '.join(cmd)}")

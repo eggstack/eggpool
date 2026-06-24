@@ -151,23 +151,23 @@ class TestOnboardFreshInstall:
     """Tests for fresh-install onboarding behavior."""
 
     def test_ensure_config_creates_minimal_config(self, tmp_path: Path) -> None:
-        """_ensure_config_with_api_key creates config if missing."""
-        from eggpool.onboard import _ensure_config_with_api_key
+        """ensure_config creates config from bundled template if missing."""
+        from eggpool.config import ensure_config
 
         config_path = str(tmp_path / "config.toml")
-        _ensure_config_with_api_key(config_path)
+        ensure_config(config_path)
 
         assert Path(config_path).exists()
         content = Path(config_path).read_text()
         assert "[server]" in content
-        assert "[database]" in content
-        assert "[models]" in content
 
     def test_ensure_config_generates_api_key(self, tmp_path: Path) -> None:
         """_ensure_config_with_api_key generates server API key if missing."""
+        from eggpool.config import ensure_config
         from eggpool.onboard import _ensure_config_with_api_key
 
         config_path = str(tmp_path / "config.toml")
+        ensure_config(config_path)
         _ensure_config_with_api_key(config_path)
 
         import tomllib

@@ -55,30 +55,14 @@ def _prompt_add_another() -> bool:
 
 
 def _ensure_config_with_api_key(config_path: str) -> None:
-    """Create config if missing and ensure a server API key exists.
+    """Ensure a server API key exists in the config file.
 
-    This is called at the start of onboarding so fresh installs get a
-    working config with a real API key before any provider is connected.
+    The config file itself is created by ``ensure_config()`` which runs
+    before any CLI subcommand.  This helper only handles API key generation.
     """
     from pathlib import Path
 
     path = Path(config_path)
-
-    if not path.exists():
-        minimal = (
-            "[server]\n"
-            'host = "0.0.0.0"\n'
-            "port = 11300\n"
-            'log_level = "INFO"\n'
-            "\n"
-            "[database]\n"
-            'path = "usage.sqlite3"\n'
-            "\n"
-            "[models]\n"
-            "refresh_interval_s = 300\n"
-        )
-        path.write_text(minimal, encoding="utf-8")
-        sys.stdout.write(f"  Created {config_path}\n")
 
     # Generate a server API key if one doesn't exist
     import tomllib
@@ -109,6 +93,9 @@ def run_onboarding(config_path: str, providers_path: str | None = None) -> None:
 
     # Ensure we have a config file with a server API key
     sys.stdout.write("--- Setting Up Configuration ---\n")
+    from eggpool.config import ensure_config
+
+    ensure_config(config_path)
     _ensure_config_with_api_key(config_path)
 
     from eggpool.providers.connect import connect as do_connect

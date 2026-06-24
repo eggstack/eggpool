@@ -82,7 +82,6 @@ if command -v eggpool >/dev/null 2>&1; then
     echo "Existing eggpool install detected: $(command -v eggpool)"
     echo "Using existing install. Run 'eggpool update' to upgrade."
     eggpool --version
-    exec eggpool accounts status
 fi
 
 # Check for pipx (invoke via detected Python to ensure correct version)
@@ -91,55 +90,54 @@ if "$PYTHON" -m pipx --version >/dev/null 2>&1; then
     echo "Installing eggpool via pipx (Python $PYTHON_VERSION)..."
     "$PYTHON" -m pipx install eggpool
     echo "Installation complete. Run 'eggpool onboard' to start."
-    exec eggpool accounts status
-fi
-
-# Check for uv
-echo "Checking uv package manager..."
-if ! command -v uv &> /dev/null; then
-    echo "Installing uv..."
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    # Ensure uv is on PATH for the rest of this script
-    export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
-    if ! command -v uv &> /dev/null; then
-        echo "Error: uv installation failed. Install manually:"
-        echo "  curl -LsSf https://astral.sh/uv/install.sh | sh"
-        exit 1
-    fi
-fi
-echo "  uv found"
-
-# Install dependencies
-echo ""
-echo "Installing dependencies..."
-# Pre-create the venv with -S to avoid loading broken system .pth files
-# (common on Debian where /usr/lib/python3/dist-packages/ has old .pth files
-# that are incompatible with Python 3.12+).
-PYTHONPATH= PYTHONNOUSERSITE=1 "$PYTHON" -S -m venv .venv 2>/dev/null || true
-uv sync --extra dev
-
-# Copy example configuration if it doesn't exist
-echo ""
-echo "Setting up configuration..."
-if [ ! -f config.toml ]; then
-    cp config.example.toml config.toml
-    echo "  Created config.toml from config.example.toml"
 else
-    echo "  config.toml already exists, skipping"
-fi
+    # Check for uv
+    echo "Checking uv package manager..."
+    if ! command -v uv &> /dev/null; then
+        echo "Installing uv..."
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        # Ensure uv is on PATH for the rest of this script
+        export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+        if ! command -v uv &> /dev/null; then
+            echo "Error: uv installation failed. Install manually:"
+            echo "  curl -LsSf https://astral.sh/uv/install.sh | sh"
+            exit 1
+        fi
+    fi
+    echo "  uv found"
 
-echo ""
-echo "Installation complete."
-echo ""
-echo "Other useful commands:"
-echo "  uv run eggpool accounts status   — show configured accounts"
-echo "  uv run eggpool newkey             — regenerate server API key"
-echo "  uv run eggpool rehash             — reload config in running server"
-echo "  uv run eggpool stop               — stop the server"
-echo "  uv run eggpool restart            — restart the server"
-echo ""
-echo "For production deployment, see docs/deployment.md"
-echo ""
+    # Install dependencies
+    echo ""
+    echo "Installing dependencies..."
+    # Pre-create the venv with -S to avoid loading broken system .pth files
+    # (common on Debian where /usr/lib/python3/dist-packages/ has old .pth files
+    # that are incompatible with Python 3.12+).
+    PYTHONPATH= PYTHONNOUSERSITE=1 "$PYTHON" -S -m venv .venv 2>/dev/null || true
+    uv sync --extra dev
+
+    # Copy example configuration if it doesn't exist
+    echo ""
+    echo "Setting up configuration..."
+    if [ ! -f config.toml ]; then
+        cp config.example.toml config.toml
+        echo "  Created config.toml from config.example.toml"
+    else
+        echo "  config.toml already exists, skipping"
+    fi
+
+    echo ""
+    echo "Installation complete."
+    echo ""
+    echo "Other useful commands:"
+    echo "  uv run eggpool accounts status   — show configured accounts"
+    echo "  uv run eggpool newkey             — regenerate server API key"
+    echo "  uv run eggpool rehash             — reload config in running server"
+    echo "  uv run eggpool stop               — stop the server"
+    echo "  uv run eggpool restart            — restart the server"
+    echo ""
+    echo "For production deployment, see docs/deployment.md"
+    echo ""
+fi
 
 # A curl-piped installer leaves stdin attached to the exhausted curl pipe.
 # Prefer stdin when it is already interactive; otherwise reconnect the prompt
