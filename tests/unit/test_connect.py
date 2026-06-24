@@ -1320,6 +1320,30 @@ class TestGranianServe:
 
         assert found_granian_import, "cli.py does not import Granian from granian"
 
+    def test_app_loader_builds_app_from_config_path(self, tmp_path: Path) -> None:
+        """``_app_loader`` must rebuild the FastAPI app from the config path.
+
+        Regression test for the bug where Granian workers received ``None``
+        as the ASGI callback because module-level state set in the parent
+        process is not inherited by spawn-based subprocess workers. The
+        loader must produce a real ``FastAPI`` instance from the config
+        path it receives so the worker can serve requests.
+        """
+        from fastapi import FastAPI
+
+        from eggpool.cli import _app_loader
+        from eggpool.models.config import AppConfig
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("", encoding="utf-8")
+
+        app = _app_loader(str(config_path))
+
+        assert app is not None
+        assert isinstance(app, FastAPI)
+        assert isinstance(app.state.config, AppConfig)
+        assert app.state.config_path == str(config_path)
+
 
 def test_config_refresh_command_removed() -> None:
     """Live config reload is unsupported; the CLI must not expose it."""

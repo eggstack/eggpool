@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-24
+
+### Fixed
+
+- `eggpool serve` returning 500 with `TypeError: 'NoneType' object is not
+  callable` on Python 3.14 / spawn-based multiprocessing start methods.
+  Granian workers re-import `eggpool.cli` in a fresh interpreter, so the
+  module-level `_app` set by the parent process was `None` in the worker
+  and the `target_loader` returned `None` as the ASGI callback. `_app_loader`
+  now rebuilds the `FastAPI` app from the config path inside each worker.
+  Follow-up to the [0.1.4] module-level loader fix.
+
 ## [0.2.0] - 2026-06-24
 
 ### Added

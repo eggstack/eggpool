@@ -91,16 +91,18 @@ class _ConfigPathGroup(click.Group):
 # Re-apply the group class after the decorator
 cli.__class__ = _ConfigPathGroup
 
-# Module-level app reference for Granian's multiprocessing pickling.
-# Granian spawns worker processes via multiprocessing which requires
-# serializable target_loader callables. Local functions (closures) cannot
-# be pickled, so _app_loader must live at module level.
-_app: Any = None
 
+def _app_loader(target: str) -> Any:
+    """Build the ASGI app for a Granian worker from the config-path target.
 
-def _app_loader(_target: str) -> Any:  # noqa: ARG001
-    """Return the pre-built ASGI app for Granian workers."""
-    return _app
+    Granian spawns worker subprocesses via multiprocessing, which produces
+    a fresh Python interpreter that re-imports ``eggpool.cli``. Module-level
+    mutable state set in the parent process is not inherited by the worker,
+    so the app must be reconstructed from the config path inside the worker.
+    """
+    from eggpool.app import create_app
+
+    return create_app(config_path=target)
 
 
 @cli.command()
@@ -132,23 +134,16 @@ def serve(ctx: click.Context) -> None:
 
     configure_logging(level=config.server.log_level)
 
-    from functools import partial
-
-    from eggpool.app import create_app
-
-    global _app  # noqa: PLW0603
-    _app = create_app(config, config_path=config_path)
-
     log_level = config.server.log_level.lower()
     Granian(
-        "unused",  # ignored when target_loader is provided
+        config_path,
         address=config.server.host,
         port=config.server.port,
         interface="asgi",  # type: ignore[reportArgumentType]
         workers=1,
         log_level=log_level,  # type: ignore[reportArgumentType]
         log_access=config.server.access_log,
-    ).serve(target_loader=partial(_app_loader))  # type: ignore[reportArgumentType]
+    ).serve(target_loader=_app_loader)  # type: ignore[reportArgumentType]
 
 
 @cli.group(invoke_without_command=True)
