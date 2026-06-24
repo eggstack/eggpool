@@ -176,9 +176,13 @@ def tomllib_load(blob: bytes) -> dict[str, object]:
 
 
 def _pipx_uninstall(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    """Run ``pipx uninstall eggpool`` in the detected Python."""
-    python = env.get("EGGPOOL_PYTHON") or sys.executable
-    cmd = [python, "-m", "pipx", "uninstall", "eggpool"]
+    """Run ``pipx uninstall eggpool`` using the correct interpreter.
+
+    pipx is not installed inside the eggpool venv that pipx itself
+    manages, so we cannot use ``sys.executable`` directly. See
+    :func:`_find_pipx_invocation` for resolution details.
+    """
+    cmd = _find_pipx_invocation(env)
     return subprocess.run(  # noqa: S603
         cmd,
         capture_output=True,
@@ -186,6 +190,66 @@ def _pipx_uninstall(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
         env=env,
         check=False,
     )
+
+
+def _find_pipx_invocation(env: dict[str, str]) -> list[str]:
+    """Resolve the command argv that runs ``pipx`` on this machine.
+
+    Resolution order:
+
+    1. The ``pipx`` binary on ``PATH`` (preferred — it has its own
+       shebang pointing at the Python pipx was installed under).
+    2. ``EGGPOOL_PYTHON`` env override (escape hatch for unusual setups).
+    3. A Python interpreter that has ``pipx`` importable, scanned from
+       common locations (``/usr/bin/python3``, ``/usr/local/bin/python3``,
+       then ``shutil.which`` fallbacks).
+    4. ``sys.executable`` as a last-resort fallback so we surface pipx's
+       own error instead of silently no-oping.
+    """
+    pipx_path = shutil.which("pipx")
+    if pipx_path:
+        return [pipx_path, "uninstall", "eggpool"]
+
+    override = env.get("EGGPOOL_PYTHON")
+    if override and Path(override).is_file():
+        return [override, "-m", "pipx", "uninstall", "eggpool"]
+
+    for candidate in _candidate_pythons():
+        if _python_has_pipx(candidate):
+            return [candidate, "-m", "pipx", "uninstall", "eggpool"]
+
+    return [sys.executable, "-m", "pipx", "uninstall", "eggpool"]
+
+
+def _candidate_pythons() -> list[str]:
+    """Return Python interpreters worth probing for a ``pipx`` install."""
+    found: list[str] = []
+    seen: set[str] = set()
+    for raw in ("/usr/bin/python3", "/usr/local/bin/python3"):
+        if Path(raw).is_file() and raw not in seen:
+            found.append(raw)
+            seen.add(raw)
+    for name in ("python3", "python"):
+        resolved = shutil.which(name)
+        if resolved and resolved not in seen:
+            found.append(resolved)
+            seen.add(resolved)
+    return found
+
+
+def _python_has_pipx(python: str) -> bool:
+    """Return True if ``python -m pipx --version`` exits 0."""
+    try:
+        proc = subprocess.run(  # noqa: S603
+            [python, "-m", "pipx", "--version"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
 
 
 def _uv_tool_uninstall(env: dict[str, str]) -> subprocess.CompletedProcess[str]:

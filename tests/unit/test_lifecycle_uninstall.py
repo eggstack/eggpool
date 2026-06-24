@@ -14,6 +14,8 @@ from eggpool.lifecycle.uninstall import (
     EGGPOOL_SHELL_MARKER,
     InstallMethod,
     UninstallPaths,
+    _find_pipx_invocation,
+    _pipx_uninstall,
     detect_install_method,
     pipx_uninstall,
     remove_eggpool_path_entries,
@@ -186,6 +188,150 @@ class TestPipxRunner:
 
         uv_tool_uninstall(runner=runner, env={"FOO": "bar"})
         assert calls and calls[0]["env"] == {"FOO": "bar"}
+
+
+# ---------------------------------------------------------------------------
+# _find_pipx_invocation / _pipx_uninstall (subprocess argv selection)
+# ---------------------------------------------------------------------------
+
+
+class TestFindPipxInvocation:
+    def test_prefers_bare_pipx_on_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Bare ``pipx`` on PATH wins over everything else."""
+        uninstall_mod = sys.modules["eggpool.lifecycle.uninstall"]
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda name: "/usr/local/bin/pipx" if name == "pipx" else None,
+        )
+        monkeypatch.setattr(uninstall_mod, "_candidate_pythons", list)
+        monkeypatch.setattr(uninstall_mod, "_python_has_pipx", lambda _p: True)
+        monkeypatch.setattr(sys, "executable", "/some/venv/bin/python")
+
+        assert _find_pipx_invocation(env={}) == [
+            "/usr/local/bin/pipx",
+            "uninstall",
+            "eggpool",
+        ]
+
+    def test_uses_eggpool_python_override(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """``EGGPOOL_PYTHON`` is honored when ``pipx`` is not on PATH."""
+        override = tmp_path / "custom-python"
+        override.write_text("", encoding="utf-8")
+        override.chmod(0o755)
+
+        monkeypatch.setattr("shutil.which", lambda _name: None)
+        monkeypatch.setattr(sys, "executable", "/some/venv/bin/python")
+
+        cmd = _find_pipx_invocation(env={"EGGPOOL_PYTHON": str(override)})
+
+        assert cmd == [str(override), "-m", "pipx", "uninstall", "eggpool"]
+
+    def test_falls_back_to_candidate_python_with_pipx(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Scans candidate Pythons and uses the first one with pipx."""
+        uninstall_mod = sys.modules["eggpool.lifecycle.uninstall"]
+        candidates = ["/usr/bin/python3", "/usr/local/bin/python3"]
+        monkeypatch.setattr("shutil.which", lambda _name: None)
+        monkeypatch.setattr(uninstall_mod, "_candidate_pythons", lambda: candidates)
+        monkeypatch.setattr(
+            uninstall_mod,
+            "_python_has_pipx",
+            lambda p: p == "/usr/local/bin/python3",
+        )
+        monkeypatch.setattr(sys, "executable", "/some/venv/bin/python")
+
+        assert _find_pipx_invocation(env={}) == [
+            "/usr/local/bin/python3",
+            "-m",
+            "pipx",
+            "uninstall",
+            "eggpool",
+        ]
+
+    def test_falls_back_to_sys_executable_when_nothing_found(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Last resort is ``sys.executable`` so pipx's own error surfaces."""
+        uninstall_mod = sys.modules["eggpool.lifecycle.uninstall"]
+        monkeypatch.setattr("shutil.which", lambda _name: None)
+        monkeypatch.setattr(uninstall_mod, "_candidate_pythons", list)
+        monkeypatch.setattr(uninstall_mod, "_python_has_pipx", lambda _p: False)
+        monkeypatch.setattr(sys, "executable", "/some/venv/bin/python")
+
+        assert _find_pipx_invocation(env={}) == [
+            "/some/venv/bin/python",
+            "-m",
+            "pipx",
+            "uninstall",
+            "eggpool",
+        ]
+
+
+class TestPipxUninstallInvocation:
+    def test_runs_bare_pipx_when_available(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_pipx_uninstall actually exec's the bare ``pipx`` command."""
+        uninstall_mod = sys.modules["eggpool.lifecycle.uninstall"]
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda name: "/usr/local/bin/pipx" if name == "pipx" else None,
+        )
+        captured: dict[str, Any] = {}
+
+        def fake_run(cmd, **kwargs):  # noqa: ANN001, ANN003
+            captured["cmd"] = cmd
+            captured["env"] = kwargs.get("env")
+            return _fake_result(returncode=0)
+
+        monkeypatch.setattr(uninstall_mod.subprocess, "run", fake_run)
+
+        result = _pipx_uninstall(env={"FOO": "bar"})
+
+        assert result.returncode == 0
+        assert captured["cmd"] == ["/usr/local/bin/pipx", "uninstall", "eggpool"]
+        assert captured["env"] == {"FOO": "bar"}
+
+    def test_does_not_use_eggpool_venv_python_when_pipx_missing(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Regression: the eggpool venv Python must not be invoked as pipx."""
+        uninstall_mod = sys.modules["eggpool.lifecycle.uninstall"]
+        # No bare pipx on PATH.
+        monkeypatch.setattr("shutil.which", lambda _name: None)
+        # No EGGPOOL_PYTHON override.
+        # A candidate Python *does* have pipx installed.
+        external = tmp_path / "system-python3"
+        external.write_text("", encoding="utf-8")
+        monkeypatch.setattr(
+            uninstall_mod, "_candidate_pythons", lambda: [str(external)]
+        )
+        monkeypatch.setattr(uninstall_mod, "_python_has_pipx", lambda _p: True)
+        # The eggpool venv Python (which is sys.executable).
+        monkeypatch.setattr(sys, "executable", "/some/venv/bin/python")
+
+        captured: dict[str, Any] = {}
+
+        def fake_run(cmd, **kwargs):  # noqa: ANN001, ANN003
+            captured["cmd"] = cmd
+            return _fake_result(returncode=0)
+
+        monkeypatch.setattr(uninstall_mod.subprocess, "run", fake_run)
+
+        _pipx_uninstall(env={})
+
+        # Crucially: the eggpool venv Python is NOT used.
+        assert captured["cmd"][0] != "/some/venv/bin/python"
+        assert captured["cmd"] == [
+            str(external),
+            "-m",
+            "pipx",
+            "uninstall",
+            "eggpool",
+        ]
 
 
 # ---------------------------------------------------------------------------
