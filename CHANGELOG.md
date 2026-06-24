@@ -5,6 +5,20 @@ All notable changes to EggPool are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - 2026-06-24
+
+### Changed
+
+- Install script fallback (no pipx) now uses `uv tool install .` instead
+  of `uv sync`, so `eggpool` works as a bare command from any directory
+  after install — matching the pipx experience. Adds `uv tool update-shell`
+  to persist `~/.local/bin` on PATH.
+- Post-install prompt (`install_prompt.py`) uses bare `eggpool --config`
+  when the command is on PATH; falls back to `uv run --directory` when
+  not yet available. Prints an actionable error when neither is present.
+- Install instructions (README, deployment docs) updated to reflect bare
+  `eggpool --config <path>` invocation pattern.
+
 ## [0.1.6] - 2026-06-23
 
 ### Fixed

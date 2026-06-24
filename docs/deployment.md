@@ -15,13 +15,22 @@ pipx install eggpool
 eggpool onboard
 ```
 
-Or from source:
+Or from source (no pipx):
 
 ```bash
 git clone https://github.com/eggstack/eggpool.git && cd eggpool
 uv sync --no-dev
-uv run eggpool onboard
+uv tool install .
+uv tool update-shell
+export PATH="$HOME/.local/bin:$PATH"
+eggpool --config config.toml onboard
 ```
+
+`uv tool install .` builds a wheel from the cloned source and installs it
+into an isolated venv at `~/.local/share/uv/tools/eggpool/`, then
+symlinks `eggpool` into `~/.local/bin/`. This is the same end state as
+`pipx install eggpool` — `eggpool` works as a bare command from any
+directory once `~/.local/bin` is on your PATH.
 
 ### 2. Start on boot
 

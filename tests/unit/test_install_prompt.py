@@ -57,6 +57,87 @@ class TestFindEggpoolDir:
         assert isinstance(result, str)
 
 
+class TestResolveEggpoolCmd:
+    """Tests for _resolve_eggpool_cmd — picks bare vs uv-run fallback."""
+
+    def test_prefers_bare_eggpool_when_on_path(self) -> None:
+        """When `eggpool` resolves on PATH, use it bare with --config."""
+        from scripts.install_prompt import _resolve_eggpool_cmd
+
+        with patch("scripts.install_prompt.shutil.which") as mock_which:
+            mock_which.side_effect = lambda name: (
+                "/usr/local/bin/eggpool" if name == "eggpool" else None
+            )
+            cmd, mode = _resolve_eggpool_cmd("/tmp/cfg.toml")
+
+        assert cmd == ["eggpool", "--config", "/tmp/cfg.toml"]
+        assert mode == "global"
+
+    def test_falls_back_to_uv_run_when_eggpool_missing(self, tmp_path: Path) -> None:
+        """When `eggpool` is not on PATH, fall back to `uv run` in the repo dir."""
+        from scripts.install_prompt import _resolve_eggpool_cmd
+
+        repo_dir = tmp_path / "eggpool"
+        repo_dir.mkdir()
+        (repo_dir / "pyproject.toml").write_text('name = "eggpool"\n')
+
+        with (
+            patch("scripts.install_prompt.shutil.which") as mock_which,
+            patch(
+                "scripts.install_prompt._find_eggpool_dir", return_value=str(repo_dir)
+            ),
+        ):
+            mock_which.side_effect = lambda name: (
+                "/usr/local/bin/uv" if name == "uv" else None
+            )
+            cmd, mode = _resolve_eggpool_cmd(str(repo_dir / "config.toml"))
+
+        assert mode == "uv-run"
+        assert cmd[0] == "uv"
+        assert cmd[1] == "run"
+        assert "--directory" in cmd
+        assert "eggpool" in cmd
+        assert cmd[-2:] == ["--config", str(repo_dir / "config.toml")]
+
+    def test_raises_when_neither_eggpool_nor_uv_available(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """No `eggpool` and no `uv` -> SystemExit with actionable stderr message."""
+        from scripts.install_prompt import _resolve_eggpool_cmd
+
+        with (
+            patch("scripts.install_prompt.shutil.which", return_value=None),
+            patch(
+                "scripts.install_prompt._find_eggpool_dir", return_value=str(tmp_path)
+            ),
+            pytest.raises(SystemExit) as exit_info,
+        ):
+            _resolve_eggpool_cmd(str(tmp_path / "config.toml"))
+
+        assert exit_info.value.code == 1
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "eggpool" in combined
+        assert "uv" in combined
+        assert "PATH" in combined
+
+    def test_uv_run_fallback_requires_pyproject(self, tmp_path: Path) -> None:
+        """uv-run fallback is rejected when no pyproject.toml is present."""
+        from scripts.install_prompt import _resolve_eggpool_cmd
+
+        with (
+            patch("scripts.install_prompt.shutil.which") as mock_which,
+            patch(
+                "scripts.install_prompt._find_eggpool_dir", return_value=str(tmp_path)
+            ),
+            pytest.raises(SystemExit),
+        ):
+            mock_which.side_effect = lambda name: (
+                "/usr/local/bin/uv" if name == "uv" else None
+            )
+            _resolve_eggpool_cmd(str(tmp_path / "config.toml"))
+
+
 class TestInstallPromptAST:
     """AST-based tests to verify install_prompt.py structure."""
 
@@ -86,6 +167,19 @@ class TestInstallPromptAST:
         ]
         assert "_find_eggpool_dir" in functions
 
+    def test_script_has_resolve_eggpool_cmd(self) -> None:
+        """The script defines _resolve_eggpool_cmd()."""
+        script_path = (
+            Path(__file__).parent.parent.parent / "scripts" / "install_prompt.py"
+        )
+        source = script_path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        functions = [
+            node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+        ]
+        assert "_resolve_eggpool_cmd" in functions
+
     def test_script_uses_input_function(self) -> None:
         """The script uses Python's input() for user prompt."""
         script_path = (
@@ -96,7 +190,7 @@ class TestInstallPromptAST:
         assert 'input("' in source
 
     def test_script_calls_onboard_command(self) -> None:
-        """The script runs 'eggpool onboard' when user says yes."""
+        """The script runs the onboard command when user says yes."""
         script_path = (
             Path(__file__).parent.parent.parent / "scripts" / "install_prompt.py"
         )
@@ -114,6 +208,16 @@ class TestInstallPromptAST:
                 break
 
         assert found_onboard, "Script should reference the onboard command"
+
+    def test_script_passes_config_flag(self) -> None:
+        """The script passes --config to the eggpool invocation."""
+        script_path = (
+            Path(__file__).parent.parent.parent / "scripts" / "install_prompt.py"
+        )
+        source = script_path.read_text(encoding="utf-8")
+
+        assert '"--config"' in source
+        assert "config_path" in source
 
     def test_script_has_if_name_main(self) -> None:
         """The script runs main() when executed directly."""
@@ -151,8 +255,8 @@ class TestInstallPromptAST:
 class TestInstallPromptBehavior:
     """Tests for install_prompt.py behavior."""
 
-    def test_yes_runs_onboarding_in_uv_environment(self) -> None:
-        """Answering 'y' runs EggPool from the uv-managed environment."""
+    def test_yes_runs_bare_eggpool_when_on_path(self) -> None:
+        """Answering 'y' invokes the bare `eggpool` command with --config."""
         from scripts.install_prompt import main
 
         eggpool_dir = "/tmp/eggpool"
@@ -161,7 +265,12 @@ class TestInstallPromptBehavior:
                 "scripts.install_prompt._find_eggpool_dir",
                 return_value=eggpool_dir,
             ),
-            patch("scripts.install_prompt.os.chdir"),
+            patch(
+                "scripts.install_prompt.shutil.which",
+                side_effect=lambda name: (
+                    "/usr/local/bin/eggpool" if name == "eggpool" else None
+                ),
+            ),
             patch("builtins.input", return_value="y"),
             patch("scripts.install_prompt.subprocess.run") as mock_run,
             pytest.raises(SystemExit) as exit_info,
@@ -169,11 +278,73 @@ class TestInstallPromptBehavior:
             mock_run.return_value.returncode = 0
             main()
 
-        mock_run.assert_called_once_with(
-            ["uv", "run", "eggpool", "onboard"],
-            cwd=eggpool_dir,
-        )
+        mock_run.assert_called_once()
+        actual_cmd = mock_run.call_args.args[0]
+        assert actual_cmd[0] == "eggpool"
+        assert "--config" in actual_cmd
+        assert f"{eggpool_dir}/config.toml" in actual_cmd
+        assert actual_cmd[-1] == "onboard"
         assert exit_info.value.code == 0
+
+    def test_yes_falls_back_to_uv_run_when_eggpool_missing(
+        self, tmp_path: Path
+    ) -> None:
+        """Answering 'y' falls back to `uv run eggpool` when bare cmd unavailable."""
+        from scripts.install_prompt import main
+
+        repo_dir = tmp_path / "eggpool"
+        repo_dir.mkdir()
+        (repo_dir / "pyproject.toml").write_text('name = "eggpool"\n')
+
+        with (
+            patch(
+                "scripts.install_prompt._find_eggpool_dir",
+                return_value=str(repo_dir),
+            ),
+            patch("scripts.install_prompt.shutil.which") as mock_which,
+            patch("builtins.input", return_value="y"),
+            patch("scripts.install_prompt.subprocess.run") as mock_run,
+            pytest.raises(SystemExit) as exit_info,
+        ):
+            mock_which.side_effect = lambda name: (
+                "/usr/local/bin/uv" if name == "uv" else None
+            )
+            mock_run.return_value.returncode = 0
+            main()
+
+        mock_run.assert_called_once()
+        actual_cmd = mock_run.call_args.args[0]
+        assert actual_cmd[:3] == ["uv", "run", "--directory"]
+        assert "eggpool" in actual_cmd
+        assert "--config" in actual_cmd
+        assert exit_info.value.code == 0
+
+    def test_yes_exits_helpfully_when_neither_eggpool_nor_uv(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """No `eggpool`, no `uv` -> SystemExit with remediation message."""
+        from scripts.install_prompt import main
+
+        repo_dir = tmp_path / "eggpool"
+        repo_dir.mkdir()
+        (repo_dir / "pyproject.toml").write_text('name = "eggpool"\n')
+
+        with (
+            patch(
+                "scripts.install_prompt._find_eggpool_dir",
+                return_value=str(repo_dir),
+            ),
+            patch("scripts.install_prompt.shutil.which", return_value=None),
+            patch("builtins.input", return_value="y"),
+            pytest.raises(SystemExit) as exit_info,
+        ):
+            main()
+
+        assert exit_info.value.code != 0
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "eggpool" in combined
+        assert "PATH" in combined
 
     def test_eof_on_input_shows_skip_message(self, tmp_path: Path) -> None:
         """EOF on input gracefully shows skip message instead of crashing."""
@@ -243,3 +414,19 @@ class TestInstallPromptBehavior:
 
         assert "exec 3</dev/tty" in source
         assert 'install_prompt.py" <&3' in source
+
+    def test_install_script_uses_uv_tool_install_in_fallback(self) -> None:
+        """install.sh's no-pipx fallback uses uv tool install."""
+        install_path = Path(__file__).parent.parent.parent / "scripts" / "install.sh"
+        source = install_path.read_text(encoding="utf-8")
+
+        assert "uv tool install" in source
+        assert "uv tool update-shell" in source
+
+    def test_install_script_fallback_prints_bare_eggpool_commands(self) -> None:
+        """install.sh's fallback path prints commands using bare `eggpool`."""
+        install_path = Path(__file__).parent.parent.parent / "scripts" / "install.sh"
+        source = install_path.read_text(encoding="utf-8")
+
+        assert "eggpool --config" in source
+        assert "uv run eggpool accounts" not in source

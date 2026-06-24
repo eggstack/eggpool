@@ -8,6 +8,7 @@ a provider. Uses Python's input() which handles terminal detection.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 
@@ -36,10 +37,48 @@ def _find_eggpool_dir() -> str:
     return os.getcwd()
 
 
+def _resolve_eggpool_cmd(config_path: str) -> tuple[list[str], str]:
+    """Pick the invocation that will run the eggpool CLI.
+
+    Prefers the bare ``eggpool`` command installed by ``pipx`` or
+    ``uv tool install``. Falls back to ``uv run eggpool`` from the
+    repo directory when the bare command isn't on PATH yet (e.g. the
+    install script ran but PATH wasn't refreshed in this shell).
+
+    Returns a tuple of (argv_prefix, mode) where ``argv_prefix`` ends
+    with ``--config <path>`` (callers append subcommands) and ``mode``
+    is one of:
+        - ``"global"`` — bare command, no CWD dependence
+        - ``"uv-run"`` — fallback via uv from the repo dir
+
+    Raises ``SystemExit`` with an actionable message when neither is
+    available.
+    """
+    if shutil.which("eggpool") is not None:
+        return (["eggpool", "--config", config_path], "global")
+
+    if shutil.which("uv") is not None and os.path.isfile(
+        os.path.join(_find_eggpool_dir(), "pyproject.toml")
+    ):
+        repo_dir = _find_eggpool_dir()
+        return (
+            ["uv", "run", "--directory", repo_dir, "eggpool", "--config", config_path],
+            "uv-run",
+        )
+
+    msg = (
+        "Error: could not find 'eggpool' on PATH and 'uv' is not installed.\n"
+        "Restart your shell so the freshly installed 'eggpool' command is on PATH,\n"
+        "or re-run scripts/install.sh."
+    )
+    print(msg, file=sys.stderr)
+    raise SystemExit(1)
+
+
 def main() -> None:
     """Run the post-install onboarding prompt."""
     eggpool_dir = _find_eggpool_dir()
-    os.chdir(eggpool_dir)
+    config_path = os.path.join(eggpool_dir, "config.toml")
 
     try:
         answer = (
@@ -50,14 +89,18 @@ def main() -> None:
 
     if answer in ("y", "yes"):
         print("\nStarting onboarding setup...")
-        result = subprocess.run(  # noqa: S603
-            ["uv", "run", "eggpool", "onboard"],  # noqa: S607
-            cwd=eggpool_dir,
-        )
+        prefix, mode = _resolve_eggpool_cmd(config_path)
+        if mode == "uv-run":
+            print(
+                "  Note: 'eggpool' not on PATH yet — using 'uv run' from the repo dir."
+            )
+            print("  Restart your shell afterwards for the bare 'eggpool' command.")
+        cmd = [*prefix, "onboard"]
+        result = subprocess.run(cmd)  # noqa: S603
         sys.exit(result.returncode)
     else:
         print("\nSkipping onboarding. You can run it later with:")
-        print("  uv run eggpool onboard")
+        print(f"  eggpool --config {config_path} onboard")
         sys.exit(0)
 
 

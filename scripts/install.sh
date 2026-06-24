@@ -106,14 +106,31 @@ else
     fi
     echo "  uv found"
 
-    # Install dependencies
+    # Install eggpool as a uv-managed tool. This mirrors `pipx install
+    # eggpool` end-to-end: an isolated venv is created under
+    # ~/.local/share/uv/tools/eggpool/ and `eggpool` is symlinked into
+    # ~/.local/bin/ (or the Windows equivalent) so it works as a bare
+    # command from any directory. `eggpool update` already detects this
+    # install method and routes upgrades via `uv tool install`.
     echo ""
-    echo "Installing dependencies..."
-    # Pre-create the venv with -S to avoid loading broken system .pth files
-    # (common on Debian where /usr/lib/python3/dist-packages/ has old .pth files
-    # that are incompatible with Python 3.12+).
-    PYTHONPATH= PYTHONNOUSERSITE=1 "$PYTHON" -S -m venv .venv 2>/dev/null || true
-    uv sync --extra dev
+    echo "Installing eggpool as a uv-managed tool..."
+    uv tool install "."
+
+    # Persist ~/.local/bin on PATH for future shells. Idempotent — exits
+    # non-zero if the user's shell can't be detected, which we treat as
+    # a soft failure (the export below covers the current shell).
+    uv tool update-shell >/dev/null 2>&1 || true
+
+    # Re-export PATH so the current script session can find the freshly
+    # installed `eggpool` binary, regardless of whether update-shell
+    # succeeded.
+    export PATH="$HOME/.local/bin:$PATH"
+    if command -v eggpool >/dev/null 2>&1; then
+        echo "  eggpool installed at: $(command -v eggpool)"
+    else
+        echo "  Warning: eggpool binary not on PATH yet."
+        echo "  Restart your shell or run: export PATH=\"\$HOME/.local/bin:\$PATH\""
+    fi
 
     # Copy example configuration if it doesn't exist
     echo ""
@@ -125,15 +142,22 @@ else
         echo "  config.toml already exists, skipping"
     fi
 
+    CONFIG_PATH="$PROJECT_DIR/config.toml"
     echo ""
     echo "Installation complete."
     echo ""
-    echo "Other useful commands:"
-    echo "  uv run eggpool accounts status   — show configured accounts"
-    echo "  uv run eggpool newkey             — regenerate server API key"
-    echo "  uv run eggpool rehash             — reload config in running server"
-    echo "  uv run eggpool stop               — stop the server"
-    echo "  uv run eggpool restart            — restart the server"
+    echo "Your config is at: $CONFIG_PATH"
+    echo ""
+    echo "Other useful commands (work from any directory):"
+    echo "  eggpool --config $CONFIG_PATH accounts status   — show configured accounts"
+    echo "  eggpool --config $CONFIG_PATH serve              — start the server"
+    echo "  eggpool --config $CONFIG_PATH newkey             — regenerate server API key"
+    echo "  eggpool --config $CONFIG_PATH rehash             — reload config in running server"
+    echo "  eggpool --config $CONFIG_PATH update             — upgrade eggpool"
+    echo ""
+    echo "Tip: drop the --config flag by exporting in your shell rc:"
+    echo "  export EGGPOOL_CONFIG=\"$CONFIG_PATH\""
+    echo "  (CLI support for EGGPOOL_CONFIG is tracked separately.)"
     echo ""
     echo "For production deployment, see docs/deployment.md"
     echo ""

@@ -53,19 +53,31 @@ The script:
 - Downloads the repository if not running from a clone
 - Installs `uv` if missing
 - Verifies Python 3.11+
-- Installs dependencies
+- Installs eggpool as a global command (`pipx install` if pipx is present, otherwise `uv tool install .`)
+- Persists `~/.local/bin` on PATH via `uv tool update-shell`
 - Copies example configuration files
 - Attempts configuration validation
 
-The script will ask if you want to continue with onboarding. if you select no, make sure you `cd eggpool`, then you can run `uv run eggpool onboard` to get started. `uv run eggpool connect` for one off provider adds, `uv run eggpool serve` to start server. `uv run eggpool help` for other commands. 
+The script will ask if you want to continue with onboarding. If you select no, you can run `eggpool --config ~/eggpool/config.toml onboard` later (replace the path with wherever the script cloned the repo). `eggpool connect` for one-off provider adds, `eggpool serve` to start the server, `eggpool help` for other commands.
 
-Run `uv run eggpool deploy` for options on running the server on startup. See docs/deployment.md for more info and configs.
+If `eggpool` is not on PATH after the script finishes, restart your shell or run:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Run `eggpool deploy` for options on running the server on startup. See docs/deployment.md for more info and configs.
 
 ### Option 3: Manual install
 
 ```bash
 # Install dependencies, including local development tools
 uv sync --extra dev
+
+# Install eggpool as a global command and expose it on PATH
+uv tool install .
+uv tool update-shell
+export PATH="$HOME/.local/bin:$PATH"
 
 # Copy and edit configuration
 cp config.example.toml config.toml
@@ -76,13 +88,13 @@ cp .env.example .env
 
 # Validate configuration
 set -a; source .env; set +a
-uv run eggpool check-config
+eggpool --config config.toml check-config
 
 # Run database migrations
-uv run eggpool migrate
+eggpool --config config.toml migrate
 
 # Start the server
-uv run eggpool serve
+eggpool --config config.toml serve
 ```
 
 ### Option 4: Interactive setup
