@@ -83,6 +83,45 @@ uv run python scripts/verify_upstream_auth.py \
 
 The verifier consumes `[providers.<id>.verify] probe_model` and `probe_protocol` when neither `--openai-model` nor `--anthropic-model` is supplied. CLI flags always win. Bearer-prefixed API keys (e.g., `Bearer sk-...`) are rejected before any network call so the operator gets an actionable error rather than a misleading upstream 401.
 
+## Lifecycle Commands
+
+### Backup
+
+```bash
+eggpool backup                          # Default: ~/backups/eggpool/
+eggpool backup --output-dir /var/backups/eggpool
+```
+
+Produces a timestamped `.zip` archive containing `config.toml`, `.env`
+(if present), and the SQLite database (with `-wal`/`-shm`).
+
+### Recover
+
+```bash
+eggpool recover                         # Interactive menu of backups
+eggpool recover /path/to/backup.zip     # Restore a specific archive
+```
+
+Stops the running server, stages restored files alongside the current
+ones, swaps them in, and restarts on success. Rolls back to
+`<data-dir>/rollback-<timestamp>/` on failure.
+
+### Uninstall
+
+```bash
+eggpool uninstall               # Interactive with confirmation prompts
+eggpool uninstall --yes         # Skip every prompt
+eggpool uninstall --keep-config # Keep config.toml and .env
+eggpool uninstall --keep-data   # Keep the SQLite database
+eggpool uninstall --keep-path   # Skip shell-rc cleanup
+```
+
+Detects the install method (`pipx` / `uv tool` / `source` / `manual`)
+and removes the binary, active config, `.env`, database, and shell
+PATH entries. After completion, prints the manual commands for
+removing systemd, logrotate, and cron artifacts (these are never
+removed automatically).
+
 ## Systemd Unit
 
 - Intentionally omits `ExecReload`; all config changes require `sudo systemctl restart eggpool`

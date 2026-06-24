@@ -106,6 +106,9 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 | `eggpool models refresh` | Refresh model catalog from upstream |
 | `eggpool configsetup opencode` | Print OpenCode provider config JSON with model limits |
 | `eggpool db vacuum` | Reclaim SQLite space |
+| `eggpool backup` | Create a timestamped `.zip` backup of config, `.env`, and database |
+| `eggpool recover [path]` | Restore from a backup archive (interactive menu if no path) |
+| `eggpool uninstall` | Remove binary, config, database, and shell PATH entries |
 
 All commands accept `--config /path/to/config.toml` (defaults to `config.toml`).
 Running `eggpool` with no arguments prints the help message.

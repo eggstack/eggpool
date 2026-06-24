@@ -5,6 +5,29 @@ All notable changes to EggPool are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.2.0] - 2026-06-24
+
+### Added
+
+- `eggpool backup` CLI command that bundles `config.toml`, `.env`, and the
+  SQLite database (with `-wal`/`-shm`) into a timestamped `.zip` archive.
+  Default location is `~/backups/eggpool/`; override with `--output-dir`.
+  Honor `XDG_BACKUP_HOME` for the default.
+- `eggpool recover [path]` CLI command that restores a backup archive. With
+  no path, opens an interactive `TerminalMenu` selector over the default
+  backup directory. Stages restored files alongside the current ones and
+  rolls back on failure.
+- `eggpool uninstall` CLI command that detects the install method
+  (`pipx` / `uv tool` / `source` / `manual`) and removes the binary,
+  active config, `.env`, database, and shell-rc entries. Supports
+  `--yes`, `--keep-config`, `--keep-data`, and `--keep-path`. Prints
+  instructions for manual removal of systemd, logrotate, and cron
+  artifacts (these are never removed automatically).
+- New `eggpool.lifecycle` module (`backup`, `uninstall`, `__init__`)
+  housing the lifecycle helpers.
+
 ## [0.1.7] - 2026-06-24
 
 ### Changed

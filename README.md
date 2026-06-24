@@ -68,6 +68,28 @@ export PATH="$HOME/.local/bin:$PATH"
 
 Run `eggpool deploy` for options on running the server on startup. See docs/deployment.md for more info and configs.
 
+### Backup and uninstall
+
+EggPool ships lifecycle commands that mirror the install flow:
+
+```bash
+# Backup config + .env + database to ~/backups/eggpool/
+eggpool backup
+
+# Restore from a specific archive (or omit the path for an interactive menu)
+eggpool recover ~/backups/eggpool/eggpool-backup-20260624-120000.zip
+
+# Uninstall: detects pipx / uv tool / source / manual and cleans up
+eggpool uninstall --yes
+```
+
+The uninstall command removes the binary, active config, `.env`,
+database, and `eggpool` shell-rc entries. It prints manual commands
+for removing systemd, logrotate, and cron artifacts but never removes
+them automatically. Existing backups under `~/backups/eggpool/` are
+left in place. See [docs/backup-restore.md](docs/backup-restore.md)
+for the full backup/restore workflow.
+
 ### Option 3: Manual install
 
 ```bash
@@ -144,6 +166,9 @@ uv run eggpool connect list
 | `eggpool deploy logrotate` | Print the logrotate config + install instructions |
 | `eggpool deploy cron` | Print the daily-backup cron entry + install instructions |
 | `eggpool deploy all` | Print every deployment snippet in sequence |
+| `eggpool backup` | Create a timestamped `.zip` backup (default `~/backups/eggpool/`) |
+| `eggpool recover [path]` | Restore from a backup archive (interactive if no path) |
+| `eggpool uninstall` | Remove binary, config, database, and shell PATH entries |
 
 All commands accept `--config /path/to/config.toml` (defaults to `config.toml`).
 Running `eggpool` with no arguments prints the help message.

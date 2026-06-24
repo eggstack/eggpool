@@ -241,4 +241,7 @@ sudo journalctl -u eggpool -n 50 --no-pager
 | `eggpool deploy cron --install` | Write backup script + cron entry |
 | `eggpool deploy all` | Print all snippets |
 | `eggpool deploy all --install` | Install everything |
+| `eggpool backup` | Create a timestamped backup archive |
+| `eggpool recover [path]` | Restore from a backup archive (interactive if no path) |
+| `eggpool uninstall` | Remove binary, config, database, and shell PATH entries |
 | `eggpool croncheck` | Check if server is running (exit 0/1) |

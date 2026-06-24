@@ -10,6 +10,35 @@
 
 ## Backup
 
+### Using the CLI (recommended)
+
+EggPool ships with `eggpool backup` that bundles `config.toml`, `.env`,
+and the SQLite database (plus `-wal`/`-shm` if present) into a single
+timestamped `.zip` archive.
+
+```bash
+# Default location: ~/backups/eggpool/
+eggpool backup
+
+# Custom location
+eggpool backup --output-dir /var/backups/eggpool
+
+# Override config path
+eggpool --config /etc/eggpool/config.toml backup
+```
+
+Output filenames follow `eggpool-backup-YYYYMMDD-HHMMSS.zip`. The
+active config file is used to discover the database path, so no extra
+flags are required in the common case. The archive layout is:
+
+```
+eggpool-backup-20260624-120000.zip
+├── META           (format version, install method, member list)
+├── config.toml
+├── usage.sqlite3
+└── .env           (if present)
+```
+
 ### Manual backup
 
 ```bash
@@ -51,24 +80,9 @@ KEEP_DAYS=30
 
 mkdir -p "$BACKUP_DIR"
 
-BACKUP_NAME="eggpool-$(date +%Y%m%d-%H%M%S)"
-BACKUP_PATH="$BACKUP_DIR/$BACKUP_NAME"
+/usr/local/bin/eggpool backup --output-dir "$BACKUP_DIR"
 
-mkdir -p "$BACKUP_PATH"
-
-# Backup config
-cp /etc/eggpool/config.toml "$BACKUP_PATH/"
-cp /etc/eggpool/env "$BACKUP_PATH/"
-
-# Backup database
-sudo -u eggpool sqlite3 /var/lib/eggpool/usage.sqlite3 ".backup '$BACKUP_PATH/usage.sqlite3'"
-
-# Archive
-tar czf "$BACKUP_DIR/$BACKUP_NAME.tar.gz" -C "$BACKUP_DIR" "$BACKUP_NAME"
-rm -rf "$BACKUP_PATH"
-
-# Cleanup old backups
-find "$BACKUP_DIR" -name "eggpool-*.tar.gz" -mtime +$KEEP_DAYS -delete
+find "$BACKUP_DIR" -name "eggpool-backup-*.zip" -mtime +$KEEP_DAYS -delete
 ```
 
 Make it executable:
@@ -79,13 +93,34 @@ sudo chmod +x /usr/local/bin/eggpool-backup
 
 ## Restore
 
-### Stop the service
+### Using the CLI (recommended)
+
+`eggpool recover` reads an archive produced by `eggpool backup` and
+restores its contents to the locations recorded in `META`.
+
+```bash
+# Interactive: pick from ~/backups/eggpool/
+eggpool recover
+
+# Explicit path
+eggpool recover ~/backups/eggpool/eggpool-backup-20260624-120000.zip
+```
+
+The CLI stops the running server (if any), stages the restored files
+alongside the current ones, swaps them into place, and restarts the
+server on success. If any restore step fails, the original files are
+preserved under `<data-dir>/rollback-<timestamp>/` and the server is
+left stopped so the operator can intervene.
+
+### Manual restore
+
+#### Stop the service
 
 ```bash
 sudo systemctl stop eggpool
 ```
 
-### Restore configuration
+#### Restore configuration
 
 ```bash
 sudo cp backup/config.toml /etc/eggpool/config.toml
@@ -94,7 +129,7 @@ sudo chown root:eggpool /etc/eggpool/config.toml /etc/eggpool/env
 sudo chmod 640 /etc/eggpool/config.toml /etc/eggpool/env
 ```
 
-### Restore database
+#### Restore database
 
 ```bash
 # Remove current database
@@ -105,7 +140,7 @@ sudo cp backup/usage.sqlite3 /var/lib/eggpool/usage.sqlite3
 sudo chown eggpool:eggpool /var/lib/eggpool/usage.sqlite3
 ```
 
-### Start the service
+#### Start the service
 
 ```bash
 sudo systemctl start eggpool
@@ -135,3 +170,52 @@ sudo systemctl start eggpool
 ```
 
 Migrations are idempotent and safe to run multiple times.
+
+## Uninstall
+
+To remove EggPool entirely, run:
+
+```bash
+eggpool uninstall
+```
+
+The command interactively confirms each removal step:
+
+1. Removes the binary via the install method that was detected
+   (`pipx uninstall eggpool`, `uv tool uninstall eggpool`, or local
+   cleanup for source/manual installs).
+2. Deletes the active `config.toml`, `.env`, and the SQLite database.
+3. Removes `eggpool` entries from the user's shell rc (`~/.zshrc`,
+   `~/.bashrc`, etc.), including the marker block installed by
+   `scripts/install.sh` and any `uv tool update-shell` lines.
+4. Leaves existing backups under `~/backups/eggpool/` in place.
+
+After uninstall completes, the CLI prints the commands needed to
+remove systemd, logrotate, and cron artifacts (these are **not**
+removed automatically):
+
+```bash
+sudo systemctl disable --now eggpool
+sudo rm -f /etc/systemd/system/eggpool.service
+sudo rm -f /etc/logrotate.d/eggpool
+crontab -l 2>/dev/null | grep -v 'eggpool' | crontab -
+```
+
+Flags:
+
+| Flag | Effect |
+|------|--------|
+| `--yes` | Skip every confirmation prompt |
+| `--keep-config` | Leave `config.toml` and `.env` in place |
+| `--keep-data` | Leave the SQLite database in place |
+| `--keep-path` | Skip the shell-rc cleanup step |
+
+Examples:
+
+```bash
+# Fully automated uninstall (no prompts)
+eggpool uninstall --yes
+
+# Keep backups and config, only remove the binary and shell PATH entries
+eggpool uninstall --keep-config --keep-data --yes
+```

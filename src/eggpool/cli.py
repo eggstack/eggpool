@@ -7,7 +7,10 @@ import contextlib
 import os
 import sys
 from pathlib import Path
-from typing import Any, NoReturn, cast
+from typing import TYPE_CHECKING, Any, NoReturn, cast
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 import click
 
@@ -17,6 +20,20 @@ from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
 from eggpool.db.repositories import AccountRepository, ProviderRepository
 from eggpool.errors import AggregatorError
+from eggpool.lifecycle import (
+    InstallMethod,
+    default_backup_dir,
+    list_backups,
+    read_backup_contents,
+    resolve_uninstall_paths,
+    restore_backup,
+    select_backup,
+    verify_binary_removed,
+)
+from eggpool.lifecycle import (
+    uninstall as do_uninstall,
+)
+from eggpool.lifecycle.backup import BackupContents, create_backup
 from eggpool.logging import configure_logging
 from eggpool.models.config import AppConfig
 from eggpool.providers.client_pool import ProviderClientPool
@@ -1834,6 +1851,272 @@ def croncheck(ctx: click.Context) -> None:
         sys.exit(0)
     else:
         sys.exit(1)
+
+
+@cli.command()
+@click.option(
+    "--output-dir",
+    "output_dir",
+    default=None,
+    help="Override the default backup directory.",
+    type=click.Path(file_okay=False, dir_okay=True),
+)
+@click.pass_context
+def backup(ctx: click.Context, output_dir: str | None) -> None:
+    """Create a timestamped zip backup of the config and database.
+
+    The backup includes the live config, the optional ``.env`` file next
+    to it, the SQLite database (with its WAL and SHM sidecars when
+    present), and a META block describing the archive's contents.
+
+    Backups are stored under ``$XDG_BACKUP_HOME/eggpool`` or, when that
+    variable is unset, ``$HOME/backups/eggpool``. The filename follows
+    the pattern ``eggpool-backup-YYYYMMDD-HHMMSS.zip`` so that
+    ``eggpool recover`` can list and select from them.
+    """
+    config_path: str = ctx.obj["config_path"]
+
+    try:
+        config = AppConfig.from_toml(config_path)
+    except AggregatorError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
+    env_path = Path(config_path).parent / ".env"
+    contents = BackupContents(
+        config_path=Path(config_path).resolve(),
+        db_path=Path(config.database.path).expanduser().resolve(),
+        env_path=env_path if env_path.exists() else None,
+        install_method=_detect_install_method(),
+    )
+
+    target_dir = Path(output_dir) if output_dir else default_backup_dir()
+
+    try:
+        archive = create_backup(contents, output_dir=target_dir)
+    except OSError as exc:
+        click.echo(f"Error: could not write backup: {exc}", err=True)
+        sys.exit(1)
+
+    click.echo(f"Wrote backup: {archive}")
+    if contents.env_path is not None:
+        click.echo(f"  included: env ({contents.env_path})")
+    for member in sorted(contents.member_names()):
+        if member == "env":
+            continue
+        click.echo(f"  included: {member}")
+
+
+@cli.group(invoke_without_command=True)
+@click.argument("source", required=False, type=click.Path())
+@click.pass_context
+def recover(ctx: click.Context, source: str | None) -> None:
+    """Restore a backup taken with ``eggpool backup``.
+
+    Without SOURCE, the command lists existing backups (newest first)
+    and lets the operator choose one through the same selector used by
+    ``eggpool connect`` / ``eggpool logout``.
+
+    With SOURCE, the command restores from the supplied path instead
+    of prompting. SOURCE can be either a full archive path or a
+    relative name resolved against the default backup directory.
+    """
+    archive: Path | None = None
+    if source is not None:
+        candidate = Path(source).expanduser()
+        if not candidate.is_absolute():
+            candidate = default_backup_dir() / candidate
+        if not candidate.exists():
+            click.echo(f"Error: backup not found: {candidate}", err=True)
+            sys.exit(1)
+        archive = candidate
+    else:
+        backups = list_backups()
+        if not backups:
+            click.echo("No backups found in the default backup directory.")
+            click.echo(f"  Default location: {Path.home() / 'backups' / 'eggpool'}")
+            click.echo("  Pass an explicit path: eggpool recover <path>")
+            return
+        try:
+            chosen = select_backup(backups)
+        except KeyboardInterrupt:
+            return
+        if chosen is None:
+            return
+        archive = chosen.path
+
+    try:
+        contents = read_backup_contents(archive)
+    except (OSError, ValueError) as exc:
+        click.echo(f"Error: could not read backup {archive}: {exc}", err=True)
+        sys.exit(1)
+
+    click.echo(f"Restoring from: {archive}")
+    click.echo(f"  config: {contents.config_path}")
+    if contents.env_path is not None:
+        click.echo(f"  env:    {contents.env_path}")
+    click.echo(f"  db:     {contents.db_path}")
+
+    if not click.confirm("Overwrite current configuration and database?"):
+        click.echo("Aborted.")
+        return
+
+    # Stop the running server before swapping files out from under it.
+    _stop_running_server()
+
+    try:
+        restore_backup(archive, contents=contents)
+    except (OSError, RuntimeError, ValueError) as exc:
+        click.echo(f"Error: restore failed: {exc}", err=True)
+        sys.exit(1)
+
+    click.echo("Restore complete. Restart the server to load the new config.")
+    _print_install_hint()
+
+
+def _prompt_yes_no(message: str, *, default: bool = False) -> bool:
+    """Prompt the user with a y/N question.
+
+    Reuses Click's :func:`click.confirm` but forces the answer to come
+    from the controlling terminal.  We don't pass ``default`` through
+    because uninstall is intentionally "no by default".
+    """
+    return bool(click.confirm(message, default=default))
+
+
+@cli.command()
+@click.option(
+    "--yes",
+    "assume_yes",
+    is_flag=True,
+    help="Skip the interactive confirmation prompts.",
+)
+@click.option(
+    "--keep-data",
+    is_flag=True,
+    help="Keep the XDG data directory (SQLite database, log files).",
+)
+@click.option(
+    "--keep-config",
+    is_flag=True,
+    help="Keep the configuration file (and adjacent .env if present).",
+)
+@click.option(
+    "--keep-path",
+    is_flag=True,
+    help="Skip PATH / shell-rc cleanup.",
+)
+@click.pass_context
+def uninstall(
+    ctx: click.Context,
+    assume_yes: bool,
+    keep_data: bool,
+    keep_config: bool,
+    keep_path: bool,
+) -> None:
+    """Uninstall EggPool from this machine.
+
+    The command detects the install method (pipx / uv tool / source /
+    manual), asks for confirmation, then reverses the install: it stops
+    any running server, removes the binary via the matching installer
+    (or directly, for source installs), deletes the configuration and
+    SQLite database, and scrubs eggpool-related PATH entries from the
+    user's shell rc files.
+
+    System-level deployment artifacts (systemd unit, logrotate config,
+    cron entry) are not touched automatically; the command prints the
+    manual commands for those at the end.
+    """
+    config_path: str = ctx.obj["config_path"]
+
+    paths = resolve_uninstall_paths(Path(config_path))
+
+    click.echo("EggPool uninstall plan:")
+    click.echo(f"  install method: {paths.install_method.value}")
+    click.echo(f"  config:         {paths.config_path}")
+    if paths.env_path is not None:
+        click.echo(f"  env:            {paths.env_path}")
+    click.echo(f"  database:       {paths.db_path}")
+    click.echo(f"  data dir:       {paths.data_dir}")
+    if paths.binary_path is not None:
+        click.echo(f"  binary:         {paths.binary_path}")
+    if paths.eggpool_dir is not None:
+        click.echo(f"  source dir:     {paths.eggpool_dir}")
+
+    if paths.install_method is InstallMethod.MANUAL and paths.binary_path is None:
+        click.echo(
+            "Error: cannot locate the eggpool binary on PATH, and the "
+            "install method is 'manual'. Run from inside a verified "
+            "eggpool checkout, or remove the binary by hand before "
+            "re-running.",
+            err=True,
+        )
+        sys.exit(1)
+    if paths.install_method is InstallMethod.SOURCE and paths.eggpool_dir is None:
+        click.echo(
+            "Error: source install detected, but the eggpool project root "
+            "could not be verified. Re-run from inside the cloned "
+            "checkout so verification can succeed.",
+            err=True,
+        )
+        sys.exit(1)
+
+    click.echo("")
+    click.echo(
+        "This will remove the eggpool binary, the configuration, "
+        "and the SQLite database."
+    )
+    click.echo("Existing backups under ~/backups/eggpool are NOT removed.")
+
+    if not assume_yes and not _prompt_yes_no(
+        "Continue with uninstall?",
+        default=False,
+    ):
+        click.echo("Aborted.")
+        return
+
+    def _auto_confirm(_msg: str) -> bool:
+        return True
+
+    confirm: Callable[[str], bool] = _auto_confirm if assume_yes else _prompt_yes_no
+
+    try:
+        do_uninstall(
+            paths=paths,
+            confirm=confirm,
+            cleanup_data=not keep_data,
+            cleanup_config=not keep_config,
+            cleanup_path=not keep_path,
+        )
+    except RuntimeError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
+    # Verify the binary is actually gone. Pipx and uv tool usually
+    # remove the symlink, but verify in case they fail silently.
+    leftover = verify_binary_removed()
+    if leftover:
+        click.echo(
+            "Warning: eggpool binary still reachable on PATH:",
+            err=True,
+        )
+        for path in leftover:
+            click.echo(f"  {path}", err=True)
+        click.echo(
+            "  Remove it manually if it was not created by pipx/uv tool.",
+            err=True,
+        )
+    else:
+        click.echo("Verified: eggpool binary is no longer on PATH.")
+
+    # Print cleanup instructions for system-level deploy artifacts.
+    click.echo("")
+    click.echo("To finish removing system-level deploy artifacts, run:")
+    click.echo("  sudo systemctl disable --now eggpool 2>/dev/null || true")
+    click.echo("  sudo rm -f /etc/systemd/system/eggpool.service")
+    click.echo("  sudo rm -f /etc/logrotate.d/eggpool")
+    click.echo("  crontab -l 2>/dev/null | grep -v 'eggpool' | crontab -")
+    click.echo("Existing backups under ~/backups/eggpool were preserved.")
 
 
 def main() -> NoReturn:
