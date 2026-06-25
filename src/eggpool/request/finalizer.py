@@ -66,6 +66,9 @@ class FinalizationData:
     error_class: str | None = None
     error_detail: str | None = None
     health_already_applied: bool = False
+    upstream_connect_ms: int | None = None
+    upstream_read_ms: int | None = None
+    coordinator_overhead_ms: int | None = None
 
 
 class RequestFinalizer:
@@ -214,6 +217,9 @@ class RequestFinalizer:
                 upstream_latency_ms=data.upstream_latency_ms
                 if data.upstream_latency_ms is not None
                 else 0,
+                upstream_connect_ms=data.upstream_connect_ms,
+                upstream_read_ms=data.upstream_read_ms,
+                coordinator_overhead_ms=data.coordinator_overhead_ms,
             )
 
             # 4. Finalize attempt only if request transitioned and attempt

@@ -16,12 +16,23 @@ from eggpool.stats import queries
 from eggpool.stats.queries import (
     fetch_account_id,
     fetch_active_reservations,
+    fetch_attempt_stats,
     fetch_bandwidth_timeseries,
     fetch_error_breakdown,
     fetch_ip_stats,
+    fetch_latency_phase_breakdown,
+    fetch_operational_event_summary,
     fetch_provider_model_ttft,
     fetch_provider_ttft_summary,
     fetch_recent_events,
+    fetch_recent_operational_events,
+    fetch_recent_requests,
+    fetch_request_trace,
+    fetch_retry_distribution,
+    fetch_routing_decisions_for_request,
+    fetch_routing_distribution,
+    fetch_routing_exclusion_breakdown,
+    fetch_routing_selection_breakdown,
     fetch_summary,
     fetch_timeseries,
 )
@@ -638,3 +649,180 @@ class StatsService:
         if use_cache:
             self._set_dashboard_cache(key, result)
         return result
+
+    async def get_attempt_stats(
+        self,
+        time_range: TimeRange,
+        *,
+        account_name: str | None = None,
+        model_id: str | None = None,
+        provider_id: str | None = None,
+        use_cache: bool = False,
+    ) -> dict[str, Any]:
+        """Aggregate per-attempt statistics for the given window.
+
+        Returns aggregate counts/latency/bytes plus retry rate, with
+        optional filters on account, model, and provider.  The
+        attempt-level view exposes retry pressure that request-level
+        aggregates hide because every request can produce multiple
+        attempt rows.
+        """
+        cache_parts: list[str] = [
+            account_name or "",
+            model_id or "",
+            provider_id or "",
+        ]
+        key = self._dashboard_cache_key("attempts", time_range, *cache_parts)
+        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
+            return cast("dict[str, Any]", cached)
+        account_id: int | None = None
+        if account_name:
+            account_id = await fetch_account_id(self._db, account_name)
+            if account_id is None:
+                account_id = -1
+        result = await fetch_attempt_stats(
+            self._db,
+            time_range.start_str(),
+            time_range.end_str(),
+            account_id=account_id,
+            model_id=model_id,
+            provider_id=provider_id,
+        )
+        if use_cache:
+            self._set_dashboard_cache(key, result)
+        return result
+
+    async def get_retry_distribution(
+        self, time_range: TimeRange, *, use_cache: bool = False
+    ) -> list[dict[str, Any]]:
+        """Return the distribution of attempts by retry_category."""
+        key = self._dashboard_cache_key("retries", time_range)
+        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
+            return cast("list[dict[str, Any]]", cached)
+        result = await fetch_retry_distribution(
+            self._db, time_range.start_str(), time_range.end_str()
+        )
+        if use_cache:
+            self._set_dashboard_cache(key, result)
+        return result
+
+    async def get_request_trace(self, request_id: int) -> dict[str, Any] | None:
+        """Return the parent request row plus its full attempt chain.
+
+        Returns ``None`` when no such request exists; otherwise returns
+        a dict with ``request`` and ``attempts``.  Intended for the
+        auth-gated per-request trace endpoint.
+        """
+        return await fetch_request_trace(self._db, request_id)
+
+    async def get_routing_decisions_for_request(
+        self, request_id: int
+    ) -> list[dict[str, Any]]:
+        """Return all routing decisions for a single request."""
+        return await fetch_routing_decisions_for_request(self._db, request_id)
+
+    async def get_routing_distribution(
+        self, time_range: TimeRange, *, use_cache: bool = False
+    ) -> list[dict[str, Any]]:
+        """Per-model routing distribution: how often each (model, provider)
+        was selected, average eligible/scored counts."""
+        key = self._dashboard_cache_key("routing", time_range)
+        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
+            return cast("list[dict[str, Any]]", cached)
+        result = await fetch_routing_distribution(
+            self._db, time_range.start_str(), time_range.end_str()
+        )
+        if use_cache:
+            self._set_dashboard_cache(key, result)
+        return result
+
+    async def get_routing_selection_breakdown(
+        self, time_range: TimeRange, *, use_cache: bool = False
+    ) -> list[dict[str, Any]]:
+        """Account-level selection counts derived from routing_decisions."""
+        key = self._dashboard_cache_key("routing_selections", time_range)
+        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
+            return cast("list[dict[str, Any]]", cached)
+        result = await fetch_routing_selection_breakdown(
+            self._db, time_range.start_str(), time_range.end_str()
+        )
+        if use_cache:
+            self._set_dashboard_cache(key, result)
+        return result
+
+    async def get_routing_exclusion_breakdown(
+        self, time_range: TimeRange, *, use_cache: bool = False
+    ) -> list[dict[str, Any]]:
+        """Distribution of (account, reason) exclusions."""
+        key = self._dashboard_cache_key("routing_exclusions", time_range)
+        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
+            return cast("list[dict[str, Any]]", cached)
+        result = await fetch_routing_exclusion_breakdown(
+            self._db, time_range.start_str(), time_range.end_str()
+        )
+        if use_cache:
+            self._set_dashboard_cache(key, result)
+        return result
+
+    async def get_operational_event_summary(
+        self, time_range: TimeRange, *, use_cache: bool = False
+    ) -> list[dict[str, Any]]:
+        """Per-event-type summary of operational_events rows.
+
+        Aggregates the JSON details blob so the dashboard can chart
+        safety-net activity without re-parsing every payload.
+        """
+        key = self._dashboard_cache_key("operational_summary", time_range)
+        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
+            return cast("list[dict[str, Any]]", cached)
+        result = await fetch_operational_event_summary(
+            self._db, time_range.start_str(), time_range.end_str()
+        )
+        if use_cache:
+            self._set_dashboard_cache(key, result)
+        return result
+
+    async def get_recent_operational_events(
+        self,
+        limit: int = 50,
+        event_type: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Most recent operational_events rows."""
+        return await fetch_recent_operational_events(
+            self._db, limit=limit, event_type=event_type
+        )
+
+    async def get_latency_phase_breakdown(
+        self, time_range: TimeRange, *, use_cache: bool = False
+    ) -> dict[str, Any]:
+        """Phase-decomposed latency: connect, read, coordinator overhead."""
+        key = self._dashboard_cache_key("latency_phases", time_range)
+        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
+            return cast("dict[str, Any]", cached)
+        result = await fetch_latency_phase_breakdown(
+            self._db, time_range.start_str(), time_range.end_str()
+        )
+        if use_cache:
+            self._set_dashboard_cache(key, result)
+        return result
+
+    async def get_recent_requests(
+        self,
+        *,
+        limit: int = 50,
+        account_id: int | None = None,
+        provider_id: str | None = None,
+        model_id: str | None = None,
+        status: str | None = None,
+        include_client_ip: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Recent request metadata rows for the auth-gated debug view."""
+        return await fetch_recent_requests(
+            self._db,
+            limit=limit,
+            account_id=account_id,
+            provider_id=provider_id,
+            model_id=model_id,
+            status=status,
+            include_client_ip=include_client_ip,
+        )

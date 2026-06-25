@@ -95,6 +95,30 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 - **Synthetic 503 vs 502**: `ModelUnavailableError` (503) is reserved for genuine pre-dispatch unavailability. `UpstreamExhaustedError` (502) is raised when every candidate account was attempted and exhausted mid-request. Single-account upstream errors pass through to the client rather than becoming synthetic 503s.
 - **Streaming finalizer shielding**: streaming `_build_stream_generator` finalization runs under `asyncio.shield(asyncio.wait_for(..., timeout=10))` so ASGI task cancellation cannot kill the finalizer while it holds the DB lock. Leaks that escape this path are caught by the periodic `stale_request_finalizer` background task (`app._finalize_stale_requests`, runs every 60s) which force-finalizes any request that has been `pending` longer than `upstream.read_timeout_s`.
 - **Startup crash recovery**: `_crash_recovery` runs at every startup and recovers ALL pending requests and ALL active reservations with no time threshold. A process restart is a definitive boundary, so leaked state from the previous process is unconditionally cleaned up. If `Crash recovery: marked N stale requests` appears in logs, the safety net caught leaks from the previous run.
+
+## Observability schema (migrations 0026–0029)
+
+Four migrations extend the request lifecycle with structured observability. Every persistence step runs inside the same transaction as the related state mutation, so the audit trail cannot diverge from durable state.
+
+- **0026_attempt_observability.sql** — extends `request_attempts` with `provider_id, model_id, protocol, retry_category, release_reason, bytes_received, latency_ms, streamed, is_retry_outcome`. Extends `requests` with `first_attempt_at, last_attempt_id`. `first_attempt_at` is set inside `AttemptRepository.create()` when `attempt_number == 1`; `last_attempt_id` is set inside `finalize_if_incomplete()` in the same DB transaction as the attempt terminal UPDATE. `retry_category` is populated by `_RetryableUpstreamError.retry_category` from both the non-streaming and streaming error-classification sites.
+- **0027_routing_decisions.sql** — new `routing_decisions` table (`request_id, attempt_number, model_id, provider_id, protocol, selected_account_*, eligible_count, scored_count, attempted_excluded_count, top_score, top_score_account_name, exclude_reasons_json, decision_made_at`). Persisted inside the same coordinator `async with db.transaction():` block as the `request_attempts` INSERT. Routing-distribution queries use `<=` for the end-filter to avoid dropping rows at exact-second boundaries.
+- **0028_operational_events.sql** — new `operational_events` table (`event_type, details_json, occurred_at`). Instrumented at: `_crash_recovery` (event_type `crash_recovery`), `_finalize_stale_requests_once` (event_type `stale_request_finalizer`), `reconcile_expired_reservations` (event_type `reservation_reconcile`). Each event is recorded inside the same transaction as the durable state mutation, so the audit trail cannot lag the rows it summarises.
+- **0029_latency_phases.sql** — extends `requests` with `upstream_connect_ms, upstream_read_ms, coordinator_overhead_ms` (all nullable for pre-migration rows). `upstream_connect_ms` is measured around `client.send()`; `upstream_read_ms = first_byte_ms - upstream_connect_ms`; `coordinator_overhead_ms = upstream_latency_ms - connect - read` (clamped at 0). All three phases are surfaced via `/api/stats/latency` under the `phases` key with per-phase `avg/p50/p99/sample_count`.
+
+## Observability API surface
+
+| Endpoint | Purpose | Auth |
+|---|---|---|
+| `GET /api/stats/attempts` | Per-attempt aggregates: total attempts, retry attempts, success attempts, latency p50/p99, byte totals, retry rate. Filterable by `account`, `provider`, `model`. | dashboard default |
+| `GET /api/stats/retries` | Distribution by `retry_category` (quota_exceeded, transient, auth_failure, …) | dashboard default |
+| `GET /api/stats/routing` | Per-`(model, provider)` decision aggregates: count, avg eligible/scored, avg selected score, distinct selected accounts | dashboard default |
+| `GET /api/stats/routing-selections` | Account-level selection counts | dashboard default |
+| `GET /api/stats/routing-exclusions` | Per-`(account, reason)` exclusion counts from `exclude_reasons_json` | dashboard default |
+| `GET /api/stats/operational` | `crash_recovery` / `stale_request_finalizer` / `reservation_reconcile` summary + recent | dashboard default |
+| `GET /api/stats/latency` (extended) | Adds `phases` key: connect/read/coordinator-overhead breakdown | dashboard default |
+| `GET /api/stats/recent/{request_id}` | Parent request + full attempt chain + routing decisions. Returns account name, model, protocol, status, error class (never raw `error_detail`). | **always auth-gated** |
+| `GET /api/stats/recent-requests` | Bounded recent-requests metadata list (no body, no auth headers, no error_detail, no client_ip by default). | **always auth-gated** |
+| `GET /api/stats/accounts` / `/api/stats/models` (extended) | Adds `exact_count/derived_count/estimated_count/unknown_count`, `estimated_cost_fraction`, `cache_read_ratio`, `cache_write_ratio`, `reasoning_output_ratio`, `avg_cost_per_request`, `avg_cost_per_1k_tokens` | dashboard default |
 - **Fast-path CLI imports**: fast-path commands (`croncheck`, `ensure-running`) import only `eggpool.runtime_paths` from the package; do not add transitive imports to `runtime_paths` or `fastcli` or you break the Raspberry Pi watchdog performance contract
 - **Config-path resolution**: `--config PATH` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`. The resolver lives in `eggpool.deploy_user.resolve_config_path()` and is the single source of truth for every CLI command.
 - **`eggpool deploy cron` is now the WATCHDOG** (not backup). It installs `eggpool ensure-running` entries (`@reboot` + `*/5 * * * *` by default) bracketed by `# BEGIN EggPool watchdog` / `# END EggPool watchdog` markers so uninstall only strips the eggpool-owned lines. Backups live under `eggpool deploy backup-cron`.

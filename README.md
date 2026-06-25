@@ -266,7 +266,47 @@ Static assets (CSS, JavaScript, favicon) are served from `/static/` with
 appropriate cache headers.
 
 JSON stats endpoints are available under `/api/stats/*`, including summary,
-accounts, models, timeseries, errors, latency, pings, bandwidth, and `/api/events`.
+accounts, models, timeseries, errors, latency, pings, bandwidth, attempts,
+retries, routing, routing-selections, routing-exclusions, operational,
+recent-requests, recent/{request_id}, and `/api/events`. The
+recent-requests and recent/{request_id} endpoints are always auth-gated
+(even when the dashboard is public) because they expose per-request
+metadata (model, prompt volume, error class). All other stats endpoints
+inherit the dashboard's public/auth setting.
+
+### Observability surfaces
+
+- **Attempt analytics** (`/api/stats/attempts`, `/api/stats/retries`): per-attempt
+  aggregates including latency percentiles, byte totals, retry rate, and the
+  `retry_category` distribution (quota_exceeded, transient, auth_failure,
+  etc.). Useful for distinguishing "did the retry fix it?" from "is the
+  retry happening too late?"
+- **Routing analytics** (`/api/stats/routing`, `/api/stats/routing-selections`,
+  `/api/stats/routing-exclusions`): per-`(model, provider)` decision aggregates,
+  account-level selection counts, and per-`(account, reason)` exclusion
+  counts parsed from the `exclude_reasons_json` array.
+- **Latency phases** (key `phases` in `/api/stats/latency`): decomposes each
+  request into `upstream_connect_ms` (DNS/TCP/TLS/send), `upstream_read_ms`
+  (TTFB minus connect), and `coordinator_overhead_ms` (routing, retry math,
+  DB writes, JSON encode, FastAPI plumbing). Lets you tell whether slowness
+  is in the network, the upstream, or EggPool itself.
+- **Operational health** (`/api/stats/operational`): summary and recent rows
+  for the `crash_recovery`, `stale_request_finalizer`, and
+  `reservation_reconcile` safety-net events. If you see "Crash recovery:
+  marked N stale requests" in logs, this endpoint reflects what was caught.
+- **Per-request trace** (`/api/stats/recent/{request_id}`): parent request row,
+  full attempt chain, and per-attempt routing decisions. Returns account name,
+  model, protocol, status, error class (never raw error_detail), and timing.
+  Auth-gated.
+- **Recent request metadata** (`/api/stats/recent-requests`): bounded list
+  of recent request rows with metadata only (no body, no auth headers,
+  no error_detail). Auth-gated.
+- **Cost/cache/reasoning exactness** (extended fields on `/api/stats/accounts`
+  and `/api/stats/models`): per-account and per-model `exact_count`,
+  `estimated_count`, `cache_read_ratio`, `cache_write_ratio`,
+  `reasoning_output_ratio`, `estimated_cost_fraction`, `avg_cost_per_request`,
+  `avg_cost_per_1k_tokens`. Lets you see which accounts/models/providers
+  report exact usage versus locally estimated cost.
 
 ## Configuration
 

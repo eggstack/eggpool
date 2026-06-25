@@ -9,6 +9,13 @@ Endpoints:
 - GET /api/stats/latency
 - GET /api/stats/pings
 - GET /api/stats/ips
+- GET /api/stats/attempts
+- GET /api/stats/retries
+- GET /api/stats/routing
+- GET /api/stats/routing-selections
+- GET /api/stats/routing-exclusions
+- GET /api/stats/operational
+- GET /api/stats/recent/{request_id}  (always auth-gated)
 - GET /api/events
 """
 
@@ -152,11 +159,13 @@ async def handle_latency(
     stats = request.app.state.stats
     provider_ttft = await stats.get_provider_ttft_summary(time_range)
     model_ttft = await stats.get_provider_model_ttft(time_range)
+    phases = await stats.get_latency_phase_breakdown(time_range)
     return JSONResponse(
         content={
             "period": time_range.label,
             "provider_ttft": provider_ttft,
             "model_ttft": model_ttft,
+            "phases": phases,
         }
     )
 
@@ -187,6 +196,199 @@ async def handle_ip_stats(request: Request, period: str | None = "24h") -> Respo
     stats = request.app.state.stats
     ip_stats = await stats.get_ip_stats(time_range)
     return JSONResponse(content={"period": time_range.label, "ips": ip_stats})
+
+
+async def handle_attempt_stats(
+    request: Request,
+    period: str | None = "24h",
+    account: str | None = None,
+    model: str | None = None,
+    provider: str | None = None,
+) -> Response:
+    """GET /api/stats/attempts.
+
+    Per-attempt aggregates: total attempts, retry attempts, success
+    attempts, latency percentiles, byte totals, retry rate.  Filters
+    on account, model, and provider are accepted as query params.
+    """
+    time_range = resolve_time_range(period)
+    stats = request.app.state.stats
+    attempts = await stats.get_attempt_stats(
+        time_range,
+        account_name=account or None,
+        model_id=model or None,
+        provider_id=provider or None,
+    )
+    return JSONResponse(
+        content={
+            "period": time_range.label,
+            "account_filter": account or None,
+            "model_filter": model or None,
+            "provider_filter": provider or None,
+            **attempts,
+        }
+    )
+
+
+async def handle_retry_distribution(
+    request: Request,
+    period: str | None = "24h",
+) -> Response:
+    """GET /api/stats/retries.
+
+    Distribution of attempts by ``retry_category`` (quota_exceeded,
+    temporary, transient, auth_failure, etc.).  Useful for "what
+    class of error is most common?" dashboards.
+    """
+    time_range = resolve_time_range(period)
+    stats = request.app.state.stats
+    rows = await stats.get_retry_distribution(time_range)
+    return JSONResponse(content={"period": time_range.label, "distribution": rows})
+
+
+async def handle_request_trace(request: Request, request_id: int) -> Response:
+    """GET /api/stats/recent/{request_id}.
+
+    Returns the parent request row plus its full attempt chain.
+    Always auth-gated: per-request traces expose model, prompt
+    volume, and error detail that operators consider sensitive.
+    """
+    stats = request.app.state.stats
+    trace = await stats.get_request_trace(request_id)
+    if trace is None:
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"Request {request_id} not found"},
+        )
+    decisions = await stats.get_routing_decisions_for_request(request_id)
+    trace["routing_decisions"] = decisions
+    return JSONResponse(content=trace)
+
+
+async def handle_routing_distribution(
+    request: Request, period: str | None = "24h"
+) -> Response:
+    """GET /api/stats/routing.
+
+    Per-(model, provider) routing decision aggregates: count, average
+    eligible/scored counts, average selected score, and the number
+    of distinct accounts that were selected.
+    """
+    time_range = resolve_time_range(period)
+    stats = request.app.state.stats
+    rows = await stats.get_routing_distribution(time_range)
+    return JSONResponse(content={"period": time_range.label, "distribution": rows})
+
+
+async def handle_routing_selection_breakdown(
+    request: Request, period: str | None = "24h"
+) -> Response:
+    """GET /api/stats/routing-selections.
+
+    Account-level selection counts derived from routing_decisions.
+    """
+    time_range = resolve_time_range(period)
+    stats = request.app.state.stats
+    rows = await stats.get_routing_selection_breakdown(time_range)
+    return JSONResponse(content={"period": time_range.label, "selections": rows})
+
+
+async def handle_routing_exclusion_breakdown(
+    request: Request, period: str | None = "24h"
+) -> Response:
+    """GET /api/stats/routing-exclusions.
+
+    Distribution of (account, reason) exclusions parsed from the
+    ``exclude_reasons_json`` JSON array stored on each
+    routing_decisions row.
+    """
+    time_range = resolve_time_range(period)
+    stats = request.app.state.stats
+    rows = await stats.get_routing_exclusion_breakdown(time_range)
+    return JSONResponse(content={"period": time_range.label, "exclusions": rows})
+
+
+async def handle_operational_health(
+    request: Request,
+    period: str | None = "24h",
+    limit: int = 50,
+    type_filter: str | None = None,
+) -> Response:
+    """GET /api/stats/operational.
+
+    Aggregated safety-net activity (crash recovery, stale-request
+    finalizer, reservation reconciliation) plus the most recent raw
+    events.  Mirrors the structure of ``/api/stats/pings`` (summary +
+    recent) for consistency.
+    """
+    time_range = resolve_time_range(period)
+    stats = request.app.state.stats
+    limit = max(1, min(limit, 200))
+    summary = await stats.get_operational_event_summary(time_range)
+    recent = await stats.get_recent_operational_events(
+        limit=limit, event_type=type_filter or None
+    )
+    return JSONResponse(
+        content={
+            "period": time_range.label,
+            "type_filter": type_filter,
+            "summary": summary,
+            "recent": recent,
+        }
+    )
+
+
+async def handle_recent_requests(
+    request: Request,
+    limit: int = 50,
+    account: str | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    status: str | None = None,
+) -> Response:
+    """GET /api/stats/recent-requests.
+
+    Auth-gated bounded debugging view.  Returns request metadata only
+    (no prompt, body, or auth headers).  Client IP is omitted by
+    default and is only included when the operator has explicitly
+    enabled IP stats on the dashboard.  Error class is returned but
+    the raw upstream error_detail is never sent to this endpoint.
+    """
+    stats = request.app.state.stats
+    account_id_value: int | None = None
+    if account:
+        from eggpool.stats.queries import fetch_account_id
+
+        account_id_value = await fetch_account_id(stats._db, account)
+        if account_id_value is None:
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"Account {account!r} not found"},
+            )
+    # Phase 6 safety default: never expose client_ip from this
+    # endpoint.  An operator can opt in via the existing dashboard
+    # config surface, but EggPool currently has no toggle for it, so
+    # the safe default applies.
+    include_client_ip = False
+    rows = await stats.get_recent_requests(
+        limit=limit,
+        account_id=account_id_value,
+        provider_id=provider or None,
+        model_id=model or None,
+        status=status or None,
+        include_client_ip=include_client_ip,
+    )
+    return JSONResponse(
+        content={
+            "limit": max(1, min(limit, 200)),
+            "account_filter": account,
+            "provider_filter": provider,
+            "model_filter": model,
+            "status_filter": status,
+            "include_client_ip": include_client_ip,
+            "requests": rows,
+        }
+    )
 
 
 def register_stats_routes(app: Any, require_auth: bool = False) -> None:
@@ -261,17 +463,83 @@ def register_stats_routes(app: Any, require_auth: bool = False) -> None:
         methods=["GET"],
         dependencies=dependencies,
     )
+    app.add_api_route(
+        path="/api/stats/attempts",
+        endpoint=handle_attempt_stats,
+        methods=["GET"],
+        dependencies=dependencies,
+    )
+    app.add_api_route(
+        path="/api/stats/retries",
+        endpoint=handle_retry_distribution,
+        methods=["GET"],
+        dependencies=dependencies,
+    )
+    app.add_api_route(
+        path="/api/stats/routing",
+        endpoint=handle_routing_distribution,
+        methods=["GET"],
+        dependencies=dependencies,
+    )
+    app.add_api_route(
+        path="/api/stats/routing-selections",
+        endpoint=handle_routing_selection_breakdown,
+        methods=["GET"],
+        dependencies=dependencies,
+    )
+    app.add_api_route(
+        path="/api/stats/routing-exclusions",
+        endpoint=handle_routing_exclusion_breakdown,
+        methods=["GET"],
+        dependencies=dependencies,
+    )
+    app.add_api_route(
+        path="/api/stats/operational",
+        endpoint=handle_operational_health,
+        methods=["GET"],
+        dependencies=dependencies,
+    )
+
+    # Per-request trace endpoint.  Per-request traces expose the
+    # selected model, prompt volume, and error detail that operators
+    # consider sensitive, so it is ALWAYS auth-gated even when the
+    # rest of /api/stats/* is public.
+    app.add_api_route(
+        path="/api/stats/recent/{request_id}",
+        endpoint=handle_request_trace,
+        methods=["GET"],
+        dependencies=[Depends(_require_auth)],
+    )
+
+    # Bounded recent-requests list.  Even though it does not return
+    # bodies or error_detail, the metadata still reveals model choice,
+    # token usage, and error class — sensitive enough to require auth
+    # regardless of dashboard.public.
+    app.add_api_route(
+        path="/api/stats/recent-requests",
+        endpoint=handle_recent_requests,
+        methods=["GET"],
+        dependencies=[Depends(_require_auth)],
+    )
 
 
 __all__ = [
     "handle_account_stats",
+    "handle_attempt_stats",
     "handle_bandwidth",
     "handle_errors",
     "handle_events",
     "handle_ip_stats",
     "handle_latency",
     "handle_model_stats",
+    "handle_operational_health",
     "handle_pings",
+    "handle_recent_requests",
+    "handle_request_trace",
+    "handle_retry_distribution",
+    "handle_routing_distribution",
+    "handle_routing_exclusion_breakdown",
+    "handle_routing_selection_breakdown",
     "handle_summary",
     "handle_timeseries",
     "register_stats_routes",

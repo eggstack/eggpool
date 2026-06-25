@@ -32,7 +32,11 @@ class AttemptFinalizationData:
     error_detail: str | None = None
     upstream_request_id: str | None = None
     bytes_emitted: int = 0
+    bytes_received: int = 0
+    latency_ms: int = 0
+    retry_category: str | None = None
     release_reason: str = "attempt_failed"
+    is_retry_outcome: bool = False
 
 
 @dataclass(frozen=True)
@@ -85,6 +89,7 @@ class AttemptFinalizer:
 
         transitioned = False
         reservation_released = False
+        retry_flag = 1 if data.is_retry_outcome else 0
         async with self._db.transaction():
             # 1. Mark attempt completed only if not already terminal
             transitioned = bool(
@@ -92,6 +97,9 @@ class AttemptFinalizer:
                     "UPDATE request_attempts SET "
                     "status_code = ?, error_class = ?, error_detail = ?, "
                     "upstream_request_id = ?, bytes_emitted = ?, "
+                    "bytes_received = ?, latency_ms = ?, "
+                    "retry_category = ?, release_reason = ?, "
+                    "is_retry_outcome = ?, "
                     "completed_at = CURRENT_TIMESTAMP "
                     "WHERE id = ? AND completed_at IS NULL",
                     (
@@ -100,6 +108,11 @@ class AttemptFinalizer:
                         error_detail,
                         data.upstream_request_id,
                         data.bytes_emitted,
+                        data.bytes_received,
+                        data.latency_ms,
+                        data.retry_category,
+                        data.release_reason,
+                        retry_flag,
                         attempt_id,
                     ),
                 )

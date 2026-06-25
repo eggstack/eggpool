@@ -341,6 +341,9 @@ class RequestRepository:
         upstream_latency_ms: float = 0,
         bytes_received: int = 0,
         bytes_emitted: int = 0,
+        upstream_connect_ms: int | None = None,
+        upstream_read_ms: int | None = None,
+        coordinator_overhead_ms: int | None = None,
     ) -> bool:
         """Finalize a request only if it is still pending.
 
@@ -356,7 +359,9 @@ class RequestRepository:
             "cache_read_tokens = ?, cache_write_tokens = ?, "
             "reasoning_tokens = ?, thinking_characters = ?, "
             "retry_count = ?, status_code = ?, upstream_latency_ms = ?, "
-            "bytes_received = ?, bytes_emitted = ? "
+            "bytes_received = ?, bytes_emitted = ?, "
+            "upstream_connect_ms = ?, upstream_read_ms = ?, "
+            "coordinator_overhead_ms = ? "
             "WHERE id = ? AND status = 'pending'",
             (
                 status,
@@ -377,6 +382,9 @@ class RequestRepository:
                 upstream_latency_ms,
                 bytes_received,
                 bytes_emitted,
+                upstream_connect_ms,
+                upstream_read_ms,
+                coordinator_overhead_ms,
                 request_id,
             ),
         )
@@ -494,14 +502,40 @@ class AttemptRepository:
         request_id: str,
         attempt_number: int,
         account_id: int,
+        provider_id: str | None = None,
+        model_id: str | None = None,
+        protocol: str | None = None,
+        streamed: bool = False,
     ) -> int:
-        """Create a new attempt row, return its id."""
-        return await self._db.execute_insert(
+        """Create a new attempt row, return its id.
+
+        On ``attempt_number == 1`` the parent request's
+        ``first_attempt_at`` column is also stamped with the current
+        timestamp. This anchors coordinator-overhead analytics without
+        requiring the coordinator to issue a second UPDATE.
+        """
+        attempt_id = await self._db.execute_insert(
             "INSERT INTO request_attempts "
-            "(request_id, attempt_number, account_id) "
-            "VALUES (?, ?, ?)",
-            (request_id, attempt_number, account_id),
+            "(request_id, attempt_number, account_id, "
+            "provider_id, model_id, protocol, streamed) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                request_id,
+                attempt_number,
+                account_id,
+                provider_id,
+                model_id,
+                protocol,
+                1 if streamed else 0,
+            ),
         )
+        if attempt_number == 1:
+            await self._db.execute_write(
+                "UPDATE requests SET first_attempt_at = CURRENT_TIMESTAMP "
+                "WHERE id = ? AND first_attempt_at IS NULL",
+                (request_id,),
+            )
+        return attempt_id
 
     async def update(
         self,
@@ -511,14 +545,28 @@ class AttemptRepository:
         error_detail: str | None = None,
         upstream_request_id: str | None = None,
         bytes_emitted: int = 0,
+        bytes_received: int = 0,
+        latency_ms: int = 0,
+        retry_category: str | None = None,
+        release_reason: str | None = None,
+        is_retry_outcome: bool = False,
         completed: bool = True,
     ) -> None:
-        """Update an attempt with outcome fields."""
+        """Update an attempt with outcome fields.
+
+        Also records the attempt as the parent request's
+        ``last_attempt_id`` so the trace endpoint can resolve the
+        winning attempt without re-scanning the attempts table.
+        """
+        retry_flag = 1 if is_retry_outcome else 0
         if completed:
             await self._db.execute_write(
                 "UPDATE request_attempts SET "
                 "status_code = ?, error_class = ?, error_detail = ?, "
                 "upstream_request_id = ?, bytes_emitted = ?, "
+                "bytes_received = ?, latency_ms = ?, "
+                "retry_category = ?, release_reason = ?, "
+                "is_retry_outcome = ?, "
                 "completed_at = CURRENT_TIMESTAMP "
                 "WHERE id = ?",
                 (
@@ -527,6 +575,11 @@ class AttemptRepository:
                     error_detail,
                     upstream_request_id,
                     bytes_emitted,
+                    bytes_received,
+                    latency_ms,
+                    retry_category,
+                    release_reason,
+                    retry_flag,
                     attempt_id,
                 ),
             )
@@ -535,6 +588,9 @@ class AttemptRepository:
                 "UPDATE request_attempts SET "
                 "status_code = ?, error_class = ?, error_detail = ?, "
                 "upstream_request_id = ?, bytes_emitted = ?, "
+                "bytes_received = ?, latency_ms = ?, "
+                "retry_category = ?, release_reason = ?, "
+                "is_retry_outcome = ?, "
                 "completed_at = NULL "
                 "WHERE id = ?",
                 (
@@ -543,6 +599,11 @@ class AttemptRepository:
                     error_detail,
                     upstream_request_id,
                     bytes_emitted,
+                    bytes_received,
+                    latency_ms,
+                    retry_category,
+                    release_reason,
+                    retry_flag,
                     attempt_id,
                 ),
             )
@@ -555,26 +616,51 @@ class AttemptRepository:
         error_detail: str | None = None,
         upstream_request_id: str | None = None,
         bytes_emitted: int = 0,
+        bytes_received: int = 0,
+        latency_ms: int = 0,
+        retry_category: str | None = None,
+        release_reason: str | None = None,
+        is_retry_outcome: bool = False,
     ) -> bool:
         """Finalize an attempt only if it is still incomplete.
 
         Returns True if the row was updated (transition performed).
+        When the transition occurs the attempt is also stamped as
+        the parent request's ``last_attempt_id`` so the trace
+        endpoint can resolve the winning attempt without scanning.
         """
-        rowcount = await self._db.execute_write(
-            "UPDATE request_attempts SET "
-            "status_code = ?, error_class = ?, error_detail = ?, "
-            "upstream_request_id = ?, bytes_emitted = ?, "
-            "completed_at = CURRENT_TIMESTAMP "
-            "WHERE id = ? AND completed_at IS NULL",
-            (
-                status_code,
-                error_class,
-                error_detail,
-                upstream_request_id,
-                bytes_emitted,
-                attempt_id,
-            ),
-        )
+        retry_flag = 1 if is_retry_outcome else 0
+        async with self._db.transaction():
+            rowcount = await self._db.execute_write(
+                "UPDATE request_attempts SET "
+                "status_code = ?, error_class = ?, error_detail = ?, "
+                "upstream_request_id = ?, bytes_emitted = ?, "
+                "bytes_received = ?, latency_ms = ?, "
+                "retry_category = ?, release_reason = ?, "
+                "is_retry_outcome = ?, "
+                "completed_at = CURRENT_TIMESTAMP "
+                "WHERE id = ? AND completed_at IS NULL",
+                (
+                    status_code,
+                    error_class,
+                    error_detail,
+                    upstream_request_id,
+                    bytes_emitted,
+                    bytes_received,
+                    latency_ms,
+                    retry_category,
+                    release_reason,
+                    retry_flag,
+                    attempt_id,
+                ),
+            )
+            if rowcount > 0:
+                await self._db.execute_write(
+                    "UPDATE requests SET last_attempt_id = ? "
+                    "WHERE id = (SELECT request_id FROM request_attempts "
+                    "WHERE id = ?)",
+                    (attempt_id, attempt_id),
+                )
         return rowcount > 0
 
     async def get_for_request(self, request_id: str) -> list[dict[str, Any]]:
@@ -585,6 +671,109 @@ class AttemptRepository:
             (request_id,),
         )
         return [dict(r) for r in rows]
+
+
+class OperationalEventRepository:
+    """CRUD operations for operational_events.
+
+    Records rows emitted by safety-net and periodic cleanup tasks
+    (crash recovery, stale-request finalizer, reservation reconcile,
+    streaming cancel-timeout fallback).  Each row carries an
+    ``event_type`` and a JSON ``details`` blob so the dashboard can
+    chart "how often is the safety net firing?" without instrumenting
+    every background task separately.
+    """
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def record(
+        self,
+        event_type: str,
+        details: dict[str, Any] | None = None,
+    ) -> int:
+        """Insert one operational event, return its id."""
+        import json
+
+        details_json = json.dumps(details or {})
+        return await self._db.execute_insert(
+            "INSERT INTO operational_events (event_type, details_json) VALUES (?, ?)",
+            (event_type, details_json),
+        )
+
+
+class RoutingDecisionRepository:
+    """CRUD operations for routing_decisions.
+
+    Each row captures one routing decision: which account was
+    chosen, how many candidates were considered, what scoring
+    tier the chosen account sat in, and which accounts were
+    excluded (with reason).  Persisted inside the same transaction
+    as the request_attempts INSERT so the trace and the attempt
+    can never disagree.
+    """
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def create(
+        self,
+        request_id: int,
+        attempt_number: int,
+        model_id: str,
+        *,
+        provider_id: str | None,
+        protocol: str | None,
+        selected_account_id: int | None,
+        selected_account_name: str | None,
+        selected_tier: int | None,
+        selected_score: float | None,
+        eligible_count: int,
+        scored_count: int,
+        attempted_excluded_count: int,
+        top_score: float | None,
+        top_score_account_name: str | None,
+        exclude_reasons_json: str,
+    ) -> int:
+        """Persist a routing decision row, return its id."""
+        return await self._db.execute_insert(
+            "INSERT INTO routing_decisions ("
+            "request_id, attempt_number, model_id, provider_id, protocol, "
+            "selected_account_id, selected_account_name, "
+            "selected_tier, selected_score, "
+            "eligible_count, scored_count, attempted_excluded_count, "
+            "top_score, top_score_account_name, "
+            "exclude_reasons_json"
+            ") VALUES ("
+            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?"
+            ")",
+            (
+                request_id,
+                attempt_number,
+                model_id,
+                provider_id,
+                protocol,
+                selected_account_id,
+                selected_account_name,
+                selected_tier,
+                selected_score,
+                eligible_count,
+                scored_count,
+                attempted_excluded_count,
+                top_score,
+                top_score_account_name,
+                exclude_reasons_json,
+            ),
+        )
+
+    async def get_for_request(self, request_id: int) -> list[dict[str, Any]]:
+        """Get all routing decisions for one request, ordered by attempt."""
+        rows = await self._db.fetch_all(
+            "SELECT * FROM routing_decisions "
+            "WHERE request_id = ? ORDER BY attempt_number",
+            (request_id,),
+        )
+        return [dict(row) for row in rows]
 
 
 class UsageWindowRepository:

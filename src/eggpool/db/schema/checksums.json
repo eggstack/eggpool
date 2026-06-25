@@ -24,6 +24,10 @@
         "0022_dashboard_indexes.sql": "3998c1f78699af8b71bb90eda959a53bc448442302b94a445a672e3f25931e69",
         "0023_deprecated_model_placeholder.sql": "f149d4ac7a1eea10c55e63ba45011b58ef411ba67f3ebc7f0d2e7f7dd5c4b796",
         "0024_account_backoffs.sql": "c4838b862787abffb3adce5d220bb24590e7b62cf1b189fc9a8739dce137e740",
-        "0025_stale_request_index.sql": "6f55ea5ea26521a71276a4cc461064bd472c9a0bb9f703873f4c294f9e1914d9"
+        "0025_stale_request_index.sql": "6f55ea5ea26521a71276a4cc461064bd472c9a0bb9f703873f4c294f9e1914d9",
+        "0026_attempt_observability.sql": "283dfa926ee5279187004dbad85db0e2f908319143497c2dc366954c67e8cc93",
+        "0027_routing_decisions.sql": "bb115e64f3eff3e119ffc26fad48d1335ce0bafa830c324aa4851cfe447c7067",
+        "0028_operational_events.sql": "e615ddb0c1fe664bb7d8f02ee720f6010b0ab01ff62cd2f30fe41e35adec68ec",
+        "0029_latency_phases.sql": "500c1a666bf42a26b20fbaaf91b71a54bf7f527dd31c627f7769703da220ba76"
     }
 }

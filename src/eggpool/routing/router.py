@@ -70,6 +70,50 @@ class RoutingCandidates:
         return [(tier[0].routing_priority, tier) for tier in tiers]
 
 
+@dataclass(frozen=True)
+class RoutingExclusion:
+    """Record of one account being excluded from a routing decision."""
+
+    account_name: str
+    reason: str  # e.g. "circuit_open", "circuit_half_open_full", "already_attempted"
+
+
+@dataclass(frozen=True)
+class RoutingDecisionTrace:
+    """Trace of one routing decision for observability.
+
+    Built by the coordinator after the selection step completes.
+    Persisted via :class:`RoutingDecisionRepository` inside the same
+    transaction as the request_attempts row so the trace and the
+    attempt can never disagree.
+    """
+
+    model_id: str
+    provider_id: str | None
+    protocol: str | None
+    selected_account_name: str | None
+    selected_account_id: int | None
+    selected_tier: int | None
+    selected_score: float | None
+    eligible_count: int
+    scored_count: int
+    attempted_excluded_count: int
+    top_score: float | None
+    top_score_account_name: str | None
+    exclusions: tuple[RoutingExclusion, ...] = ()
+
+    def to_exclude_reasons_json(self) -> str:
+        """Serialize exclusions to a JSON array string for persistence."""
+        import json
+
+        return json.dumps(
+            [
+                {"account": ex.account_name, "reason": ex.reason}
+                for ex in self.exclusions
+            ]
+        )
+
+
 class Router:
     """Selects an account for routing with quota-aware scoring."""
 

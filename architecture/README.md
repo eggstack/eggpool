@@ -52,6 +52,7 @@ Key invariants:
 - Every retryable failed attempt must reach terminal state before the next attempt
 - Each attempt reservation is released exactly once via `AttemptFinalizer`
 - The same URL composition rules apply to catalog fetch and chat dispatch
+- **Structured observability persistence (migrations 0026-0029)** every `request_attempts` row carries provider/model/protocol/retry_category/latency/bytes/streamed/is_retry_outcome; every routing decision is persisted to `routing_decisions` in the same transaction as the `request_attempts` INSERT; safety-net tasks (`_crash_recovery`, `_finalize_stale_requests_once`, `reconcile_expired_reservations`) record `operational_events` rows inside the same transaction as the durable state mutation; latency is decomposed into `upstream_connect_ms / upstream_read_ms / coordinator_overhead_ms` so the dashboard can distinguish network vs upstream vs eggpool-side bottlenecks
 
 ## Multi-Provider Architecture
 

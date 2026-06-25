@@ -110,7 +110,18 @@ async def fetch_account_stats(
     start: str,
     end: str,
 ) -> list[dict[str, Any]]:
-    """Get per-account statistics for a time window."""
+    """Get per-account statistics for a time window.
+
+    Extended with Phase 5 cost/cache/reasoning exactness metrics:
+        exact_count / derived_count / estimated_count / unknown_count
+        estimated_cost_fraction / unknown_cost_fraction
+        cache_read_tokens / cache_write_tokens / cache_read_ratio /
+            cache_write_ratio
+        reasoning_tokens / reasoning_output_ratio
+        avg_cost_per_request / avg_cost_per_1k_tokens
+    Ratios are NULL (not 0) when the denominator is zero so the dashboard
+    can distinguish "no usage" from "0.0 ratio on real usage".
+    """
     sql = """
     WITH period_stats AS (
         SELECT
@@ -127,7 +138,18 @@ async def fetch_account_stats(
             COALESCE(AVG(CASE WHEN r.streamed = 1 THEN r.first_byte_ms END), 0)
                 as avg_ttft_ms,
             COALESCE(SUM(CASE WHEN r.status != 'pending'
-                THEN r.upstream_latency_ms ELSE 0 END), 0) as sum_latency_ms
+                THEN r.upstream_latency_ms ELSE 0 END), 0) as sum_latency_ms,
+            COALESCE(SUM(r.cache_read_tokens), 0) as cache_read_tokens,
+            COALESCE(SUM(r.cache_write_tokens), 0) as cache_write_tokens,
+            COALESCE(SUM(r.reasoning_tokens), 0) as reasoning_tokens,
+            COALESCE(SUM(CASE WHEN r.exactness = 'exact' THEN 1 ELSE 0 END), 0)
+                as exact_count,
+            COALESCE(SUM(CASE WHEN r.exactness = 'derived' THEN 1 ELSE 0 END), 0)
+                as derived_count,
+            COALESCE(SUM(CASE WHEN r.exactness = 'estimated' THEN 1 ELSE 0 END), 0)
+                as estimated_count,
+            COALESCE(SUM(CASE WHEN r.exactness = 'unknown' OR r.exactness IS NULL
+                THEN 1 ELSE 0 END), 0) as unknown_count
         FROM requests r
         WHERE r.started_at >= ? AND r.started_at < ?
         GROUP BY r.account_id
@@ -173,7 +195,57 @@ async def fetch_account_stats(
                 + COALESCE(ps.output_tokens, 0) AS REAL) * 1000.0
                 / ps.sum_latency_ms
             ELSE 0
-        END as tokens_per_second
+        END as tokens_per_second,
+        COALESCE(ps.cache_read_tokens, 0) as cache_read_tokens,
+        COALESCE(ps.cache_write_tokens, 0) as cache_write_tokens,
+        COALESCE(ps.reasoning_tokens, 0) as reasoning_tokens,
+        COALESCE(ps.exact_count, 0) as exact_count,
+        COALESCE(ps.derived_count, 0) as derived_count,
+        COALESCE(ps.estimated_count, 0) as estimated_count,
+        COALESCE(ps.unknown_count, 0) as unknown_count,
+        CASE
+            WHEN COALESCE(ps.request_count, 0) > 0
+            THEN CAST(COALESCE(ps.estimated_count, 0) AS REAL)
+                / ps.request_count
+            ELSE 0
+        END as estimated_cost_fraction,
+        CASE
+            WHEN COALESCE(ps.request_count, 0) > 0
+            THEN CAST(COALESCE(ps.unknown_count, 0) AS REAL)
+                / ps.request_count
+            ELSE 0
+        END as unknown_cost_fraction,
+        CASE
+            WHEN COALESCE(ps.input_tokens, 0) > 0
+            THEN CAST(COALESCE(ps.cache_read_tokens, 0) AS REAL)
+                / ps.input_tokens
+            ELSE NULL
+        END as cache_read_ratio,
+        CASE
+            WHEN COALESCE(ps.input_tokens, 0) > 0
+            THEN CAST(COALESCE(ps.cache_write_tokens, 0) AS REAL)
+                / ps.input_tokens
+            ELSE NULL
+        END as cache_write_ratio,
+        CASE
+            WHEN COALESCE(ps.output_tokens, 0) > 0
+            THEN CAST(COALESCE(ps.reasoning_tokens, 0) AS REAL)
+                / ps.output_tokens
+            ELSE NULL
+        END as reasoning_output_ratio,
+        CASE
+            WHEN COALESCE(ps.request_count, 0) > 0
+            THEN CAST(COALESCE(ps.cost_microdollars, 0) AS REAL)
+                / ps.request_count
+            ELSE 0
+        END as avg_cost_per_request,
+        CASE
+            WHEN (COALESCE(ps.input_tokens, 0)
+                  + COALESCE(ps.output_tokens, 0)) > 0
+            THEN CAST(COALESCE(ps.cost_microdollars, 0) AS REAL) * 1000.0
+                / (ps.input_tokens + ps.output_tokens)
+            ELSE NULL
+        END as avg_cost_per_1k_tokens
     FROM accounts a
     LEFT JOIN period_stats ps ON ps.account_id = a.id
     LEFT JOIN rolling_stats rs ON rs.account_id = a.id
@@ -224,7 +296,62 @@ async def fetch_model_stats(
                 / SUM(CASE WHEN r.status != 'pending'
                     THEN r.upstream_latency_ms ELSE 0 END)
             ELSE 0
-        END as tokens_per_second
+        END as tokens_per_second,
+        COALESCE(SUM(r.cache_read_tokens), 0) as cache_read_tokens,
+        COALESCE(SUM(r.cache_write_tokens), 0) as cache_write_tokens,
+        COALESCE(SUM(r.reasoning_tokens), 0) as reasoning_tokens,
+        COALESCE(SUM(CASE WHEN r.exactness = 'exact' THEN 1 ELSE 0 END), 0)
+            as exact_count,
+        COALESCE(SUM(CASE WHEN r.exactness = 'derived' THEN 1 ELSE 0 END), 0)
+            as derived_count,
+        COALESCE(SUM(CASE WHEN r.exactness = 'estimated' THEN 1 ELSE 0 END), 0)
+            as estimated_count,
+        COALESCE(SUM(CASE WHEN r.exactness = 'unknown' OR r.exactness IS NULL
+            THEN 1 ELSE 0 END), 0) as unknown_count,
+        CASE
+            WHEN COUNT(*) > 0
+            THEN CAST(COALESCE(SUM(CASE WHEN r.exactness = 'estimated'
+                THEN 1 ELSE 0 END), 0) AS REAL) / COUNT(*)
+            ELSE 0
+        END as estimated_cost_fraction,
+        CASE
+            WHEN COUNT(*) > 0
+            THEN CAST(COALESCE(SUM(CASE WHEN r.exactness = 'unknown'
+                OR r.exactness IS NULL THEN 1 ELSE 0 END), 0) AS REAL)
+                / COUNT(*)
+            ELSE 0
+        END as unknown_cost_fraction,
+        CASE
+            WHEN COALESCE(SUM(r.input_tokens), 0) > 0
+            THEN CAST(COALESCE(SUM(r.cache_read_tokens), 0) AS REAL)
+                / SUM(r.input_tokens)
+            ELSE NULL
+        END as cache_read_ratio,
+        CASE
+            WHEN COALESCE(SUM(r.input_tokens), 0) > 0
+            THEN CAST(COALESCE(SUM(r.cache_write_tokens), 0) AS REAL)
+                / SUM(r.input_tokens)
+            ELSE NULL
+        END as cache_write_ratio,
+        CASE
+            WHEN COALESCE(SUM(r.output_tokens), 0) > 0
+            THEN CAST(COALESCE(SUM(r.reasoning_tokens), 0) AS REAL)
+                / SUM(r.output_tokens)
+            ELSE NULL
+        END as reasoning_output_ratio,
+        CASE
+            WHEN COUNT(*) > 0
+            THEN CAST(COALESCE(SUM(r.cost_microdollars), 0) AS REAL)
+                / COUNT(*)
+            ELSE 0
+        END as avg_cost_per_request,
+        CASE
+            WHEN (COALESCE(SUM(r.input_tokens), 0)
+                  + COALESCE(SUM(r.output_tokens), 0)) > 0
+            THEN CAST(COALESCE(SUM(r.cost_microdollars), 0) AS REAL) * 1000.0
+                / (SUM(r.input_tokens) + SUM(r.output_tokens))
+            ELSE NULL
+        END as avg_cost_per_1k_tokens
     FROM requests r
     WHERE r.started_at >= ? AND r.started_at < ?{account_filter}
     GROUP BY COALESCE(r.original_model_id, r.model_id), r.provider_id
@@ -630,6 +757,89 @@ async def fetch_provider_ttft_summary(
     return [dict(row) for row in rows]
 
 
+async def fetch_latency_phase_breakdown(
+    db: Database,
+    start: str,
+    end: str,
+) -> dict[str, Any]:
+    """Aggregate latency-phase decomposition across all requests.
+
+    Returns the four-corner phase totals:
+        - ``upstream_connect_ms`` (DNS/TCP/TLS/send)
+        - ``upstream_read_ms``    (TTFB minus connect)
+        - ``coordinator_overhead_ms`` (eggpool-side: routing, retry, encode)
+        - ``total_ms`` (sum of the three)
+
+    Each phase is returned with ``avg``, ``p50``, and ``p99`` computed
+    independently.  Phase values are NULL for rows that pre-date the
+    0029 migration; those rows are silently dropped from each phase
+    aggregate (the per-phase count is exposed so the dashboard can
+    warn when coverage is low).
+    """
+    phases = (
+        "upstream_connect_ms",
+        "upstream_read_ms",
+        "coordinator_overhead_ms",
+        "first_byte_ms",
+        "upstream_latency_ms",
+    )
+    result: dict[str, Any] = {
+        "phases": {},
+        "request_count": 0,
+        "window_start": start,
+        "window_end": end,
+    }
+    for phase in phases:
+        sql = f"""
+        WITH ranked AS (
+            SELECT
+                {phase} AS value,
+                ROW_NUMBER() OVER (ORDER BY {phase}) AS rn,
+                COUNT(*) OVER () AS group_count
+            FROM requests
+            WHERE started_at >= ? AND started_at <= ?
+              AND {phase} IS NOT NULL
+        )
+        SELECT
+            COUNT(*) AS sample_count,
+            COALESCE(AVG(value), 0) AS avg_ms,
+            COALESCE(AVG(CASE
+                WHEN rn IN (
+                    CAST((group_count + 1) / 2 AS INTEGER),
+                    CAST((group_count + 2) / 2 AS INTEGER)
+                )
+                THEN value END), 0) AS p50_ms,
+            COALESCE(MAX(CASE
+                WHEN rn = CAST(CEIL(0.99 * group_count) AS INTEGER)
+                THEN value END), 0) AS p99_ms
+        FROM ranked
+        """
+        rows = await db.fetch_all(sql, (_format_dt(start), _format_dt(end)))
+        if rows:
+            row = dict(rows[0])
+            result["phases"][phase] = {
+                "sample_count": int(row["sample_count"]),
+                "avg_ms": float(row["avg_ms"]),
+                "p50_ms": float(row["p50_ms"]),
+                "p99_ms": float(row["p99_ms"]),
+            }
+        else:
+            result["phases"][phase] = {
+                "sample_count": 0,
+                "avg_ms": 0.0,
+                "p50_ms": 0.0,
+                "p99_ms": 0.0,
+            }
+    # Overall request count for the window (regardless of phase coverage).
+    count_rows = await db.fetch_all(
+        "SELECT COUNT(*) AS c FROM requests WHERE started_at >= ? AND started_at <= ?",
+        (_format_dt(start), _format_dt(end)),
+    )
+    if count_rows:
+        result["request_count"] = int(count_rows[0]["c"])
+    return result
+
+
 async def fetch_ip_stats(
     db: Database,
     start: str,
@@ -657,4 +867,476 @@ async def fetch_ip_stats(
     ORDER BY request_count DESC
     """
     rows = await db.fetch_all(sql, (_format_dt(start), _format_dt(end)))
+    return [dict(row) for row in rows]
+
+
+async def fetch_attempt_stats(
+    db: Database,
+    start: str,
+    end: str,
+    *,
+    account_id: int | None = None,
+    model_id: str | None = None,
+    provider_id: str | None = None,
+) -> dict[str, Any]:
+    """Aggregate per-attempt statistics over a time window.
+
+    Returns a dict with total_attempts, retry_attempts, success_attempts,
+    avg_attempt_latency_ms, p50/p99 attempt latency, and totals for
+    bytes_received/bytes_emitted summed across all attempts.
+
+    Per-attempt analytics matter because the same logical request can
+    produce multiple attempt rows when failover fires.  Attempt-level
+    totals expose retry pressure that request-level aggregates hide.
+    """
+    filters = ["ra.started_at >= ?", "ra.started_at < ?"]
+    params: list[Any] = [_format_dt(start), _format_dt(end)]
+    if account_id is not None:
+        filters.append("ra.account_id = ?")
+        params.append(account_id)
+    if model_id is not None:
+        filters.append("(ra.model_id = ? OR ra.model_id IS NULL)")
+        params.append(model_id)
+    if provider_id is not None:
+        filters.append("ra.provider_id = ?")
+        params.append(provider_id)
+    where_clause = " AND ".join(filters)
+
+    aggregate_sql = f"""
+    SELECT
+        COUNT(*) as total_attempts,
+        COALESCE(SUM(CASE WHEN ra.is_retry_outcome = 1 THEN 1 ELSE 0 END), 0)
+            as retry_attempts,
+        COALESCE(SUM(CASE WHEN ra.status_code BETWEEN 200 AND 299 THEN 1 ELSE 0 END), 0)
+            as success_attempts,
+        COALESCE(SUM(CASE WHEN ra.status_code >= 400 OR ra.error_class IS NOT NULL
+            THEN 1 ELSE 0 END), 0) as failed_attempts,
+        COALESCE(AVG(ra.latency_ms), 0) as avg_attempt_latency_ms,
+        COALESCE(SUM(ra.bytes_received), 0) as total_attempt_bytes_received,
+        COALESCE(SUM(ra.bytes_emitted), 0) as total_attempt_bytes_emitted,
+        COALESCE(SUM(CASE WHEN ra.streamed = 1 THEN 1 ELSE 0 END), 0)
+            as streamed_attempts
+    FROM request_attempts ra
+    WHERE {where_clause}
+    """
+    aggregate_row = await db.fetch_one(aggregate_sql, tuple(params))
+    if aggregate_row is None:
+        return _empty_attempt_stats()
+
+    percentile_sql = f"""
+    SELECT
+        AVG(CASE WHEN sub.rn IN (
+                CAST((sub.total_count + 1) / 2 AS INTEGER),
+                CAST((sub.total_count + 2) / 2 AS INTEGER)
+            ) THEN sub.latency_ms END) as p50_attempt_latency_ms,
+        MAX(CASE WHEN sub.rn = sub.p99_idx THEN sub.latency_ms END)
+            as p99_attempt_latency_ms
+    FROM (
+        SELECT
+            ra.latency_ms,
+            ROW_NUMBER() OVER (ORDER BY ra.latency_ms) as rn,
+            COUNT(*) OVER () as total_count,
+            CAST(CEIL(0.99 * COUNT(*) OVER ()) AS INTEGER) as p99_idx
+        FROM request_attempts ra
+        WHERE ra.latency_ms > 0 AND {where_clause}
+    ) sub
+    WHERE sub.rn IN (
+            CAST((sub.total_count + 1) / 2 AS INTEGER),
+            CAST((sub.total_count + 2) / 2 AS INTEGER)
+        )
+       OR sub.rn = sub.p99_idx
+    """
+    percentile_row = await db.fetch_one(percentile_sql, tuple(params))
+    aggregate = dict(aggregate_row)
+    if percentile_row is not None:
+        pr = dict(percentile_row)
+        aggregate["p50_attempt_latency_ms"] = float(
+            pr.get("p50_attempt_latency_ms") or 0.0
+        )
+        aggregate["p99_attempt_latency_ms"] = float(
+            pr.get("p99_attempt_latency_ms") or 0.0
+        )
+    else:
+        aggregate["p50_attempt_latency_ms"] = 0.0
+        aggregate["p99_attempt_latency_ms"] = 0.0
+
+    aggregate["total_attempts"] = int(aggregate.get("total_attempts", 0) or 0)
+    aggregate["retry_attempts"] = int(aggregate.get("retry_attempts", 0) or 0)
+    aggregate["success_attempts"] = int(aggregate.get("success_attempts", 0) or 0)
+    aggregate["failed_attempts"] = int(aggregate.get("failed_attempts", 0) or 0)
+    aggregate["streamed_attempts"] = int(aggregate.get("streamed_attempts", 0) or 0)
+    aggregate["avg_attempt_latency_ms"] = float(
+        aggregate.get("avg_attempt_latency_ms", 0.0) or 0.0
+    )
+    aggregate["total_attempt_bytes_received"] = int(
+        aggregate.get("total_attempt_bytes_received", 0) or 0
+    )
+    aggregate["total_attempt_bytes_emitted"] = int(
+        aggregate.get("total_attempt_bytes_emitted", 0) or 0
+    )
+    if aggregate["total_attempts"] > 0:
+        aggregate["retry_rate"] = (
+            aggregate["retry_attempts"] / aggregate["total_attempts"]
+        )
+    else:
+        aggregate["retry_rate"] = 0.0
+    return aggregate
+
+
+def _empty_attempt_stats() -> dict[str, Any]:
+    """Zero-valued attempt stats."""
+    return {
+        "total_attempts": 0,
+        "retry_attempts": 0,
+        "success_attempts": 0,
+        "failed_attempts": 0,
+        "streamed_attempts": 0,
+        "avg_attempt_latency_ms": 0.0,
+        "p50_attempt_latency_ms": 0.0,
+        "p99_attempt_latency_ms": 0.0,
+        "retry_rate": 0.0,
+        "total_attempt_bytes_received": 0,
+        "total_attempt_bytes_emitted": 0,
+    }
+
+
+async def fetch_retry_distribution(
+    db: Database,
+    start: str,
+    end: str,
+) -> list[dict[str, Any]]:
+    """Distribution of attempts by retry_category.
+
+    Each row reports ``retry_category``, ``attempt_count``,
+    ``retry_outcome_count`` (attempts that were flagged as
+    triggering a retry), and ``avg_attempt_latency_ms``.  Useful for
+    "what kind of errors is the proxy hitting?" dashboards.
+    """
+    sql = """
+    SELECT
+        COALESCE(ra.retry_category, 'unclassified') as retry_category,
+        COUNT(*) as attempt_count,
+        COALESCE(SUM(CASE WHEN ra.is_retry_outcome = 1 THEN 1 ELSE 0 END), 0)
+            as retry_outcome_count,
+        COALESCE(AVG(ra.latency_ms), 0) as avg_attempt_latency_ms,
+        COALESCE(SUM(CASE WHEN ra.status_code BETWEEN 200 AND 299
+            THEN 1 ELSE 0 END), 0) as success_count,
+        COALESCE(SUM(CASE WHEN ra.status_code >= 400 OR ra.error_class IS NOT NULL
+            THEN 1 ELSE 0 END), 0) as failure_count
+    FROM request_attempts ra
+    WHERE ra.started_at >= ? AND ra.started_at < ?
+    GROUP BY COALESCE(ra.retry_category, 'unclassified')
+    ORDER BY attempt_count DESC
+    """
+    rows = await db.fetch_all(sql, (_format_dt(start), _format_dt(end)))
+    return [dict(row) for row in rows]
+
+
+async def fetch_request_attempts(
+    db: Database,
+    request_id: int,
+) -> list[dict[str, Any]]:
+    """Get the full attempt chain for one request.
+
+    Returns rows ordered by ``attempt_number`` ASC.  Used by the
+    /api/stats/recent/{request_id} trace endpoint and by the
+    dashboard's per-request drill-down.
+    """
+    rows = await db.fetch_all(
+        "SELECT "
+        "ra.id, ra.request_id, ra.attempt_number, ra.account_id, "
+        "a.name as account_name, ra.provider_id, ra.model_id, "
+        "ra.protocol, ra.started_at, ra.completed_at, "
+        "ra.status_code, ra.error_class, ra.error_detail, "
+        "ra.upstream_request_id, ra.bytes_received, ra.bytes_emitted, "
+        "ra.latency_ms, ra.streamed, ra.retry_category, "
+        "ra.release_reason, ra.is_retry_outcome "
+        "FROM request_attempts ra "
+        "LEFT JOIN accounts a ON a.id = ra.account_id "
+        "WHERE ra.request_id = ? "
+        "ORDER BY ra.attempt_number ASC",
+        (request_id,),
+    )
+    return [dict(row) for row in rows]
+
+
+async def fetch_request_trace(
+    db: Database,
+    request_id: int,
+) -> dict[str, Any] | None:
+    """Fetch the parent request row plus its full attempt chain.
+
+    Returns ``None`` when no such request exists; otherwise returns a
+    dict with ``request`` (the parent row) and ``attempts`` (the
+    attempt chain).  Used by the per-request trace endpoint.
+    """
+    request_row = await db.fetch_one(
+        "SELECT "
+        "r.*, "
+        "a.name as account_name, "
+        "COALESCE(r.original_model_id, r.model_id) as resolved_model_id "
+        "FROM requests r LEFT JOIN accounts a ON a.id = r.account_id "
+        "WHERE r.id = ?",
+        (request_id,),
+    )
+    if request_row is None:
+        return None
+    attempts = await fetch_request_attempts(db, request_id)
+    return {
+        "request": dict(request_row),
+        "attempts": attempts,
+    }
+
+
+async def fetch_routing_decisions_for_request(
+    db: Database,
+    request_id: int,
+) -> list[dict[str, Any]]:
+    """Return all routing decisions for one request, ordered by attempt."""
+    rows = await db.fetch_all(
+        "SELECT * FROM routing_decisions WHERE request_id = ? ORDER BY attempt_number",
+        (request_id,),
+    )
+    return [dict(row) for row in rows]
+
+
+async def fetch_routing_distribution(
+    db: Database,
+    start: str,
+    end: str,
+) -> list[dict[str, Any]]:
+    """Per-model routing distribution.
+
+    Each row reports ``model_id``, ``provider_id``, ``decision_count``,
+    average and p50/p99 ``eligible_count``, ``scored_count``, and
+    ``attempted_excluded_count`` plus a per-account histogram of how
+    often each account was selected.
+
+    Uses ``<=`` for the end filter so a row inserted in the same second
+    as the time-range boundary is included.  ``format_dt`` truncates
+    fractional seconds, so the request-side boundary string can match a
+    stored ``decision_made_at`` exactly; a strict ``<`` would drop that
+    row and the 1-second slop is harmless for dashboard analytics.
+    """
+    sql = """
+    SELECT
+        model_id,
+        provider_id,
+        COUNT(*) as decision_count,
+        COALESCE(AVG(eligible_count), 0) as avg_eligible_count,
+        COALESCE(AVG(scored_count), 0) as avg_scored_count,
+        COALESCE(AVG(attempted_excluded_count), 0)
+            as avg_attempted_excluded_count,
+        COALESCE(AVG(selected_score), 0) as avg_selected_score,
+        COUNT(DISTINCT selected_account_name) as distinct_selected_accounts
+    FROM routing_decisions
+    WHERE decision_made_at >= ? AND decision_made_at <= ?
+    GROUP BY model_id, provider_id
+    ORDER BY decision_count DESC
+    """
+    rows = await db.fetch_all(sql, (_format_dt(start), _format_dt(end)))
+    return [dict(row) for row in rows]
+
+
+async def fetch_routing_selection_breakdown(
+    db: Database,
+    start: str,
+    end: str,
+) -> list[dict[str, Any]]:
+    """Account-level selection counts from routing_decisions.
+
+    Useful for "how often does each account get selected?" charts.
+    Uses ``<=`` for the end filter (see fetch_routing_distribution).
+    """
+    sql = """
+    SELECT
+        COALESCE(selected_account_name, 'unknown') as account_name,
+        provider_id,
+        COUNT(*) as selection_count,
+        COALESCE(AVG(selected_tier), 0) as avg_selected_tier,
+        COALESCE(AVG(selected_score), 0) as avg_selected_score,
+        COALESCE(AVG(eligible_count), 0) as avg_eligible_count
+    FROM routing_decisions
+    WHERE decision_made_at >= ? AND decision_made_at <= ?
+    GROUP BY selected_account_name, provider_id
+    ORDER BY selection_count DESC
+    """
+    rows = await db.fetch_all(sql, (_format_dt(start), _format_dt(end)))
+    return [dict(row) for row in rows]
+
+
+async def fetch_routing_exclusion_breakdown(
+    db: Database,
+    start: str,
+    end: str,
+) -> list[dict[str, Any]]:
+    """Distribution of exclusion reasons parsed from ``exclude_reasons_json``.
+
+    Returns one row per ``(account_name, reason)`` with a count.  Rows
+    come from the JSON array in each routing_decisions row, so the
+    parser unpacks ``reason`` per element before aggregating.
+    Uses ``<=`` for the end filter (see fetch_routing_distribution).
+    """
+    sql = """
+    SELECT
+        json_extract(value, '$.account') as account_name,
+        json_extract(value, '$.reason') as reason,
+        COUNT(*) as exclusion_count,
+        MAX(rd.decision_made_at) as last_seen_at
+    FROM routing_decisions rd,
+         json_each(rd.exclude_reasons_json)
+    WHERE rd.decision_made_at >= ? AND rd.decision_made_at <= ?
+      AND json_array_length(rd.exclude_reasons_json) > 0
+    GROUP BY account_name, reason
+    ORDER BY exclusion_count DESC
+    """
+    rows = await db.fetch_all(sql, (_format_dt(start), _format_dt(end)))
+    return [dict(row) for row in rows]
+
+
+async def fetch_operational_event_summary(
+    db: Database,
+    start: str,
+    end: str,
+) -> list[dict[str, Any]]:
+    """Per-event-type summary of operational_events rows.
+
+    Returns one row per ``event_type`` with ``event_count`` and
+    ``last_occurred_at`` plus a numeric breakdown of the typical
+    payload keys (``interrupted_requests``, ``leaked_requests``,
+    ``released_reservations``, ``affected_accounts``,
+    ``expired_reservations``).  Missing JSON keys return 0.
+    """
+    sql = """
+    SELECT
+        event_type,
+        COUNT(*) as event_count,
+        MAX(occurred_at) as last_occurred_at,
+        COALESCE(
+            SUM(CAST(json_extract(details_json,
+                '$.interrupted_requests') AS INTEGER)),
+            0
+        ) as total_interrupted_requests,
+        COALESCE(
+            SUM(CAST(json_extract(details_json,
+                '$.leaked_requests') AS INTEGER)),
+            0
+        ) as total_leaked_requests,
+        COALESCE(
+            SUM(CAST(json_extract(details_json,
+                '$.released_reservations') AS INTEGER)),
+            0
+        ) as total_released_reservations,
+        COALESCE(
+            SUM(CAST(json_extract(details_json,
+                '$.affected_accounts') AS INTEGER)),
+            0
+        ) as total_affected_accounts,
+        COALESCE(
+            SUM(CAST(json_extract(details_json,
+                '$.expired_reservations') AS INTEGER)),
+            0
+        ) as total_expired_reservations
+    FROM operational_events
+    WHERE occurred_at >= ? AND occurred_at <= ?
+    GROUP BY event_type
+    ORDER BY event_count DESC
+    """
+    rows = await db.fetch_all(sql, (_format_dt(start), _format_dt(end)))
+    return [dict(row) for row in rows]
+
+
+async def fetch_recent_operational_events(
+    db: Database,
+    limit: int = 50,
+    event_type: str | None = None,
+) -> list[dict[str, Any]]:
+    """Most recent operational_events rows, optionally filtered by type."""
+    params: list[Any] = []
+    type_filter = ""
+    if event_type is not None:
+        type_filter = " WHERE event_type = ?"
+        params.append(event_type)
+    sql = f"""
+    SELECT id, event_type, details_json, occurred_at
+    FROM operational_events{type_filter}
+    ORDER BY occurred_at DESC
+    LIMIT ?
+    """
+    params.append(limit)
+    rows = await db.fetch_all(sql, tuple(params))
+    return [dict(row) for row in rows]
+
+
+async def fetch_recent_requests(
+    db: Database,
+    limit: int = 50,
+    account_id: int | None = None,
+    provider_id: str | None = None,
+    model_id: str | None = None,
+    status: str | None = None,
+    include_client_ip: bool = False,
+) -> list[dict[str, Any]]:
+    """Recent request rows for the bounded debugging view.
+
+    Returns metadata only — no prompt, body, error_detail, or auth
+    headers.  Error class is returned (not the raw upstream detail
+    string), and client_ip is omitted unless the operator has
+    explicitly enabled IP stats (``include_client_ip=True``).
+
+    Filters compose with AND.  ``limit`` is clamped to [1, 200].
+    """
+    limit = max(1, min(int(limit), 200))
+    conditions: list[str] = []
+    params: list[Any] = []
+    if account_id is not None:
+        conditions.append("r.account_id = ?")
+        params.append(int(account_id))
+    if provider_id is not None:
+        conditions.append("r.provider_id = ?")
+        params.append(provider_id)
+    if model_id is not None:
+        conditions.append("(r.model_id = ? OR r.original_model_id = ?)")
+        params.extend([model_id, model_id])
+    if status is not None:
+        conditions.append("r.status = ?")
+        params.append(status)
+    where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+    sql = f"""
+    SELECT
+        r.id as request_id,
+        r.proxy_request_id,
+        r.upstream_request_id,
+        r.started_at,
+        r.completed_at,
+        r.account_id,
+        (SELECT name FROM accounts WHERE id = r.account_id) AS account_name,
+        r.provider_id,
+        COALESCE(r.original_model_id, r.model_id) AS model_id,
+        r.protocol,
+        r.status,
+        r.status_code,
+        r.error_class,
+        r.input_tokens,
+        r.output_tokens,
+        r.cache_read_tokens,
+        r.cache_write_tokens,
+        r.reasoning_tokens,
+        r.thinking_characters,
+        r.cost_microdollars,
+        r.exactness,
+        r.first_byte_ms,
+        r.upstream_latency_ms,
+        r.retry_count,
+        r.bytes_received,
+        r.bytes_emitted,
+        r.streamed,
+        {"r.client_ip" if include_client_ip else "NULL"} AS client_ip
+    FROM requests r
+    {where_clause}
+    ORDER BY r.started_at DESC, r.id DESC
+    LIMIT ?
+    """
+    params.append(limit)
+    rows = await db.fetch_all(sql, tuple(params))
     return [dict(row) for row in rows]

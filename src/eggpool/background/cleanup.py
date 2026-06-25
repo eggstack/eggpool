@@ -153,6 +153,15 @@ async def reconcile_expired_reservations(
                 """,
             )
             transitioned_rows = [dict(row) for row in rows]
+            if transitioned_rows:
+                from eggpool.db.repositories import OperationalEventRepository
+
+                await OperationalEventRepository(db).record(
+                    event_type="reservation_reconcile",
+                    details={
+                        "expired_reservations": len(transitioned_rows),
+                    },
+                )
     except Exception:
         logger.exception("Failed to reconcile expired reservations")
         raise

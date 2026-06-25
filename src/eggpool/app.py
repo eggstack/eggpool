@@ -43,6 +43,7 @@ from eggpool.db.repositories import (
     AccountEventRepository,
     AccountRepository,
     AttemptRepository,
+    OperationalEventRepository,
     PingRepository,
     ProviderRepository,
     RequestRepository,
@@ -192,6 +193,19 @@ async def _crash_recovery(db: Database) -> None:
                     '"reason": "startup_recovery"}',
                 )
 
+        # Phase 3: emit a single operational event summarising the
+        # safety-net sweep so the dashboard can chart recovery
+        # activity without re-aggregating per-account event rows.
+        op_repo = OperationalEventRepository(db)
+        await op_repo.record(
+            event_type="crash_recovery",
+            details={
+                "interrupted_requests": int(stale_requests),
+                "released_reservations": int(stale_reservations),
+                "affected_accounts": len(affected_account_ids),
+            },
+        )
+
     if affected_account_ids:
         logger.info(
             "Crash recovery: marked %d stale requests, released %d reservations, "
@@ -323,6 +337,18 @@ async def _finalize_stale_requests_once(
                 f"  AND status = 'active'",
                 tuple(reservation_ids),
             )
+
+        # Phase 3: emit an operational event summarising the sweep.
+        # Recorded inside the same transaction so a crash between the
+        # finalizer and the event cannot leave durable state without
+        # its audit row.
+        await OperationalEventRepository(db).record(
+            event_type="stale_request_finalizer",
+            details={
+                "leaked_requests": len(transitioned),
+                "released_reservations": len(reservation_ids),
+            },
+        )
 
     # Post-commit: reconcile runtime state.  Iterate ``transitioned``
     # rather than re-querying so the same

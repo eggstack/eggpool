@@ -19,6 +19,7 @@ from eggpool.db.repositories import (
     AttemptRepository,
     RequestRepository,
     ReservationRepository,
+    RoutingDecisionRepository,
     UsageWindowRepository,
 )
 from eggpool.errors import (
@@ -60,6 +61,7 @@ from eggpool.request.finalizer import (
 )
 from eggpool.request.limits import estimate_reservation_tokens
 from eggpool.retry.classification import RetryCategory, RetryClassifier
+from eggpool.routing.router import RoutingDecisionTrace, RoutingExclusion
 from eggpool.security.redaction import redact_error_detail
 
 if TYPE_CHECKING:
@@ -127,6 +129,7 @@ class ProxyRequestContext:
     provider_id: str | None = None
     client_ip: str = ""
     upstream_body: bytes | None = None
+    upstream_connect_ms: int | None = None
 
     @property
     def body_for_upstream(self) -> bytes:
@@ -203,6 +206,7 @@ class RequestCoordinator:
         persist_error_detail: bool = False,
         config: AppConfig | None = None,
         account_backoff_repo: AccountBackoffRepository | None = None,
+        routing_decision_repo: RoutingDecisionRepository | None = None,
     ) -> None:
         self._registry = registry
         self._catalog = catalog
@@ -229,6 +233,11 @@ class RequestCoordinator:
         self._quota_exhausted_cooldown_seconds = quota_exhausted_cooldown_seconds
         self._persist_error_detail = persist_error_detail
         self._account_backoff_repo = account_backoff_repo
+        self._routing_decision_repo = (
+            routing_decision_repo
+            if routing_decision_repo is not None
+            else RoutingDecisionRepository(db)
+        )
 
         # Build the attempt finalizer with all dependencies
         self._attempt_finalizer = AttemptFinalizer(
@@ -365,6 +374,14 @@ class RequestCoordinator:
                         status_code=err.status_code,
                         error_class=err.error_class,
                         release_reason="attempt_retryable",
+                        retry_category=(
+                            err.retry_category.value
+                            if err.retry_category is not None
+                            else None
+                        ),
+                        bytes_received=len(context.original_body),
+                        latency_ms=self._elapsed_ms(context),
+                        is_retry_outcome=True,
                     ),
                 )
                 # Clean up in-memory state when the attempt transitioned
@@ -522,6 +539,9 @@ class RequestCoordinator:
                 set(context.attempted_accounts) if context.attempted_accounts else set()
             )
             selected_state = None
+            selected_score: float | None = None
+            selected_tier: int | None = None
+            exclusions: list[RoutingExclusion] = []
             ranked_candidates = await self._router.select_accounts_for_failover(
                 context.model_id,
                 max_accounts=len(eligible_account_names),
@@ -530,7 +550,7 @@ class RequestCoordinator:
                 provider_id=context.provider_id,
                 protocol=context.protocol,
             )
-            for candidate_state, _score in ranked_candidates:
+            for candidate_state, score in ranked_candidates:
                 # Acquire the circuit-breaker probe slot. If the
                 # breaker rejects this account (half-open slot
                 # consumed or still open), try the next ranked
@@ -542,8 +562,16 @@ class RequestCoordinator:
                         candidate_state.name, context.model_id
                     )
                 ):
+                    exclusions.append(
+                        RoutingExclusion(
+                            account_name=candidate_state.name,
+                            reason="circuit_breaker",
+                        )
+                    )
                     continue
                 selected_state = candidate_state
+                selected_score = float(score.final_score)
+                selected_tier = score.tier
                 break
 
             if selected_state is None and not ranked_candidates:
@@ -561,6 +589,12 @@ class RequestCoordinator:
                         selected_state.name, context.model_id
                     )
                 ):
+                    exclusions.append(
+                        RoutingExclusion(
+                            account_name=selected_state.name,
+                            reason="circuit_breaker",
+                        )
+                    )
                     selected_state = None
 
             if selected_state is None:
@@ -651,6 +685,52 @@ class RequestCoordinator:
                     request_id=db_request_id,
                     attempt_number=attempt_number,
                     account_id=account_id,
+                    provider_id=resolved_provider_id,
+                    model_id=context.model_id,
+                    protocol=context.protocol,
+                    streamed=context.streaming,
+                )
+
+                # 10a. Persist the routing-decision trace alongside the
+                # attempt so the dashboard can answer "why this account?"
+                # without rescoring from quota tables.
+                top_score_value: float | None = None
+                top_score_account_name: str | None = None
+                if ranked_candidates:
+                    top_state, top_score_obj = ranked_candidates[0]
+                    top_score_value = float(top_score_obj.final_score)
+                    top_score_account_name = top_state.name
+                trace = RoutingDecisionTrace(
+                    model_id=context.model_id,
+                    provider_id=resolved_provider_id,
+                    protocol=context.protocol,
+                    selected_account_name=account_name,
+                    selected_account_id=account_id,
+                    selected_tier=selected_tier,
+                    selected_score=selected_score,
+                    eligible_count=len(eligible_account_names),
+                    scored_count=len(ranked_candidates),
+                    attempted_excluded_count=len(exclude),
+                    top_score=top_score_value,
+                    top_score_account_name=top_score_account_name,
+                    exclusions=tuple(exclusions),
+                )
+                await self._routing_decision_repo.create(
+                    request_id=int(db_request_id),
+                    attempt_number=attempt_number,
+                    model_id=trace.model_id,
+                    provider_id=trace.provider_id,
+                    protocol=trace.protocol,
+                    selected_account_id=trace.selected_account_id,
+                    selected_account_name=trace.selected_account_name,
+                    selected_tier=trace.selected_tier,
+                    selected_score=trace.selected_score,
+                    eligible_count=trace.eligible_count,
+                    scored_count=trace.scored_count,
+                    attempted_excluded_count=trace.attempted_excluded_count,
+                    top_score=trace.top_score,
+                    top_score_account_name=trace.top_score_account_name,
+                    exclude_reasons_json=trace.to_exclude_reasons_json(),
                 )
 
                 # Retries select a new account and reservation estimate.
@@ -706,6 +786,10 @@ class RequestCoordinator:
                         status_code=None,
                         error_class="PostCommitInterrupted",
                         release_reason="post_commit_interrupted",
+                        retry_category=RetryCategory.NEVER.value,
+                        bytes_received=len(context.original_body),
+                        latency_ms=self._elapsed_ms(context),
+                        is_retry_outcome=False,
                     ),
                 )
             )
@@ -775,7 +859,14 @@ class RequestCoordinator:
                 headers=headers,
                 content=context.body_for_upstream,
             )
+            # Phase 4 (latency): record how long the connect+send round
+            # took.  ``client.send`` returns once the response headers
+            # are available, so this window includes DNS, TCP, TLS,
+            # and the upstream handler accept — everything before the
+            # upstream has produced any output.
+            connect_start = time.monotonic()
             response = await client.send(upstream_request, stream=True)
+            context.upstream_connect_ms = int((time.monotonic() - connect_start) * 1000)
             # Headers available immediately after send(); capture
             # first-byte time before reading the body.
             first_byte_ms = self._elapsed_ms(context)
@@ -831,6 +922,11 @@ class RequestCoordinator:
                             resp_headers,
                             resp_body,
                         ),
+                        retry_category=self._classifier.classify(
+                            response.status_code,
+                            {k.lower(): v for k, v in resp_headers},
+                            body=resp_body,
+                        ).category,
                     ) from error
 
                 # Non-retryable client error (400, 404) - finalize and pass through
@@ -859,7 +955,16 @@ class RequestCoordinator:
             upstream_req_id = self._get_header_value(
                 resp_headers, _UPSTREAM_REQUEST_ID_HEADERS
             )
-
+            upstream_connect_ms = cast("int | None", context.upstream_connect_ms)
+            if upstream_connect_ms is None:
+                upstream_read_ms: int | None = None
+                coordinator_overhead_ms: int | None = None
+            else:
+                upstream_read_ms = first_byte_ms
+                coordinator_overhead_ms = max(
+                    0,
+                    int(elapsed_ms) - upstream_connect_ms - first_byte_ms,
+                )
             # Finalize via RequestFinalizer
             await self._finalizer.finalize(
                 selected,
@@ -876,6 +981,9 @@ class RequestCoordinator:
                     upstream_latency_ms=elapsed_ms,
                     bytes_emitted=len(body),
                     upstream_request_id=upstream_req_id,
+                    upstream_connect_ms=upstream_connect_ms,
+                    upstream_read_ms=upstream_read_ms,
+                    coordinator_overhead_ms=coordinator_overhead_ms,
                     bytes_received=len(context.original_body),
                 ),
             )
@@ -1006,6 +1114,11 @@ class RequestCoordinator:
                             resp_headers,
                             resp_body,
                         ),
+                        retry_category=self._classifier.classify(
+                            response.status_code,
+                            {k.lower(): v for k, v in resp_headers},
+                            body=resp_body,
+                        ).category,
                     ) from error
 
                 # Non-retryable client error - finalize and raise for pass-through
@@ -1113,6 +1226,22 @@ class RequestCoordinator:
                 observer.flush()
                 usage_result = observer.usage
 
+                upstream_connect_ms_value = context.upstream_connect_ms
+                upstream_read_ms_value = (
+                    int(first_byte_ms)
+                    if first_byte_ms > 0 and upstream_connect_ms_value is not None
+                    else None
+                )
+                upstream_latency_total = int((time.monotonic() - reference) * 1000)
+                coordinator_overhead_ms_value: int | None = None
+                if upstream_connect_ms_value is not None:
+                    coordinator_overhead_ms_value = max(
+                        0,
+                        upstream_latency_total
+                        - upstream_connect_ms_value
+                        - (upstream_read_ms_value or 0),
+                    )
+
                 # Finalize via RequestFinalizer
                 await finalizer.finalize(
                     selected,
@@ -1126,12 +1255,15 @@ class RequestCoordinator:
                         reasoning_tokens=usage_result.reasoning_tokens,
                         thinking_characters=usage_result.thinking_characters,
                         first_byte_ms=int(first_byte_ms) if first_byte_ms > 0 else None,
-                        upstream_latency_ms=int((time.monotonic() - reference) * 1000),
+                        upstream_latency_ms=upstream_latency_total,
                         bytes_emitted=bytes_emitted,
                         upstream_request_id=self._get_header_value(
                             resp_headers, _UPSTREAM_REQUEST_ID_HEADERS
                         ),
                         bytes_received=len(context.original_body),
+                        upstream_connect_ms=upstream_connect_ms_value,
+                        upstream_read_ms=upstream_read_ms_value,
+                        coordinator_overhead_ms=coordinator_overhead_ms_value,
                     ),
                 )
 
@@ -1173,6 +1305,21 @@ class RequestCoordinator:
                 observer.flush()
                 usage_result = observer.usage
                 if not context.client_metadata.get("_cancelled_finalized"):
+                    cancel_connect_ms_value = context.upstream_connect_ms
+                    cancel_read_ms_value = (
+                        int(first_byte_ms)
+                        if first_byte_ms > 0 and cancel_connect_ms_value is not None
+                        else None
+                    )
+                    cancel_latency_total = int((time.monotonic() - reference) * 1000)
+                    cancel_overhead_ms_value: int | None = None
+                    if cancel_connect_ms_value is not None:
+                        cancel_overhead_ms_value = max(
+                            0,
+                            cancel_latency_total
+                            - cancel_connect_ms_value
+                            - (cancel_read_ms_value or 0),
+                        )
                     try:
                         await asyncio.wait_for(
                             asyncio.shield(
@@ -1185,9 +1332,7 @@ class RequestCoordinator:
                                             if first_byte_ms > 0
                                             else None
                                         ),
-                                        upstream_latency_ms=int(
-                                            (time.monotonic() - reference) * 1000
-                                        ),
+                                        upstream_latency_ms=cancel_latency_total,
                                         bytes_emitted=bytes_emitted,
                                         input_tokens=usage_result.input_tokens,
                                         output_tokens=usage_result.output_tokens,
@@ -1200,6 +1345,9 @@ class RequestCoordinator:
                                             usage_result.thinking_characters
                                         ),
                                         bytes_received=len(context.original_body),
+                                        upstream_connect_ms=cancel_connect_ms_value,
+                                        upstream_read_ms=cancel_read_ms_value,
+                                        coordinator_overhead_ms=cancel_overhead_ms_value,
                                     ),
                                 )
                             ),
@@ -1223,12 +1371,27 @@ class RequestCoordinator:
                 observer.flush()
                 usage_result = observer.usage
                 error_detail_value = _prepare_error_detail(exc, persist_error_detail)
+                mid_connect_ms_value = context.upstream_connect_ms
+                mid_read_ms_value = (
+                    int(first_byte_ms)
+                    if first_byte_ms > 0 and mid_connect_ms_value is not None
+                    else None
+                )
+                mid_latency_total = int((time.monotonic() - reference) * 1000)
+                mid_overhead_ms_value: int | None = None
+                if mid_connect_ms_value is not None:
+                    mid_overhead_ms_value = max(
+                        0,
+                        mid_latency_total
+                        - mid_connect_ms_value
+                        - (mid_read_ms_value or 0),
+                    )
                 await finalizer.finalize(
                     selected,
                     FinalizationData(
                         outcome=FinalizationOutcome.MIDSTREAM_ERROR,
                         first_byte_ms=int(first_byte_ms) if first_byte_ms > 0 else None,
-                        upstream_latency_ms=int((time.monotonic() - reference) * 1000),
+                        upstream_latency_ms=mid_latency_total,
                         bytes_emitted=bytes_emitted,
                         input_tokens=usage_result.input_tokens,
                         output_tokens=usage_result.output_tokens,
@@ -1239,6 +1402,9 @@ class RequestCoordinator:
                         error_class=type(exc).__name__,
                         error_detail=error_detail_value,
                         bytes_received=len(context.original_body),
+                        upstream_connect_ms=mid_connect_ms_value,
+                        upstream_read_ms=mid_read_ms_value,
+                        coordinator_overhead_ms=mid_overhead_ms_value,
                     ),
                 )
                 raise
@@ -1891,12 +2057,14 @@ class _RetryableUpstreamError(Exception):
         error_class: str | None = None,
         retry_after: float | None = None,
         upstream_response: tuple[int, list[tuple[str, str]], bytes] | None = None,
+        retry_category: RetryCategory | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.error_class = error_class
         self.retry_after = retry_after
         self.upstream_response = upstream_response
+        self.retry_category = retry_category
 
 
 class _NonRetryableUpstreamError(Exception):
