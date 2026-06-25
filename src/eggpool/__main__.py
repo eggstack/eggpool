@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 from eggpool.cli import main
 
-main()
+main(sys.argv[1:])

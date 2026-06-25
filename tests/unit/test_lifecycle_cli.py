@@ -50,7 +50,7 @@ class TestBackupCommand:
             backup_dir = Path("backups")
             backup_dir.mkdir()
 
-            with patch("eggpool.cli._detect_install_method", return_value="pipx"):
+            with patch("eggpool.cli_full._detect_install_method", return_value="pipx"):
                 result = runner.invoke(
                     cli,
                     [
@@ -78,7 +78,7 @@ class TestBackupCommand:
             Path("usage.sqlite3").write_bytes(b"db")
             Path(".env").write_text("API_KEY=secret")
 
-            with patch("eggpool.cli._detect_install_method", return_value="pipx"):
+            with patch("eggpool.cli_full._detect_install_method", return_value="pipx"):
                 result = runner.invoke(cli, ["backup"])
 
         assert result.exit_code == 0, result.output
@@ -91,7 +91,7 @@ class TestBackupCommand:
             Path("usage.sqlite3").write_bytes(b"db")
             custom = Path(fs) / "custom-backups"
 
-            with patch("eggpool.cli._detect_install_method", return_value="pipx"):
+            with patch("eggpool.cli_full._detect_install_method", return_value="pipx"):
                 result = runner.invoke(
                     cli,
                     ["backup", "--output-dir", str(custom)],
@@ -240,7 +240,7 @@ class TestRecoverCommand:
             )
 
             with patch(
-                "eggpool.cli.select_backup",
+                "eggpool.cli_full.select_backup",
                 return_value=MagicMock(path=archive.resolve()),
             ):
                 result = runner.invoke(cli, ["recover"], input="y\n")
@@ -288,15 +288,15 @@ class TestUninstallCommand:
 
             with (
                 patch(
-                    "eggpool.cli.resolve_uninstall_paths",
+                    "eggpool.cli_full.resolve_uninstall_paths",
                     return_value=fake_paths,
                 ),
                 patch(
-                    "eggpool.cli.do_uninstall",
+                    "eggpool.cli_full.do_uninstall",
                     return_value=fake_paths,
                 ) as mock_uninstall,
                 patch(
-                    "eggpool.cli.verify_binary_removed",
+                    "eggpool.cli_full.verify_binary_removed",
                     return_value=[],
                 ),
                 patch("subprocess.run") as mock_run,
@@ -330,15 +330,15 @@ class TestUninstallCommand:
 
             with (
                 patch(
-                    "eggpool.cli.resolve_uninstall_paths",
+                    "eggpool.cli_full.resolve_uninstall_paths",
                     return_value=fake_paths,
                 ),
                 patch(
-                    "eggpool.cli.do_uninstall",
+                    "eggpool.cli_full.do_uninstall",
                     return_value=fake_paths,
                 ) as mock_uninstall,
                 patch(
-                    "eggpool.cli.verify_binary_removed",
+                    "eggpool.cli_full.verify_binary_removed",
                     return_value=[],
                 ),
                 patch("subprocess.run") as mock_run,
@@ -379,7 +379,7 @@ class TestUninstallCommand:
             fake_paths.eggpool_dir = None
 
             with patch(
-                "eggpool.cli.resolve_uninstall_paths",
+                "eggpool.cli_full.resolve_uninstall_paths",
                 return_value=fake_paths,
             ):
                 result = runner.invoke(cli, ["uninstall", "--yes"])
@@ -405,7 +405,7 @@ class TestUninstallCommand:
             fake_paths.eggpool_dir = None
 
             with patch(
-                "eggpool.cli.resolve_uninstall_paths",
+                "eggpool.cli_full.resolve_uninstall_paths",
                 return_value=fake_paths,
             ):
                 result = runner.invoke(cli, ["uninstall", "--yes"])
@@ -432,10 +432,10 @@ class TestUninstallCommand:
 
             with (
                 patch(
-                    "eggpool.cli.resolve_uninstall_paths",
+                    "eggpool.cli_full.resolve_uninstall_paths",
                     return_value=fake_paths,
                 ),
-                patch("eggpool.cli.do_uninstall") as mock_uninstall,
+                patch("eggpool.cli_full.do_uninstall") as mock_uninstall,
                 patch("subprocess.run") as mock_run,
             ):
                 mock_run.return_value = MagicMock(returncode=0)
@@ -466,12 +466,12 @@ class TestUninstallCommand:
 
             with (
                 patch(
-                    "eggpool.cli.resolve_uninstall_paths",
+                    "eggpool.cli_full.resolve_uninstall_paths",
                     return_value=fake_paths,
                 ),
-                patch("eggpool.cli.do_uninstall", return_value=fake_paths),
+                patch("eggpool.cli_full.do_uninstall", return_value=fake_paths),
                 patch(
-                    "eggpool.cli.verify_binary_removed",
+                    "eggpool.cli_full.verify_binary_removed",
                     return_value=[leftover],
                 ),
                 patch("subprocess.run") as mock_run,
@@ -502,12 +502,12 @@ class TestUninstallCommand:
 
             with (
                 patch(
-                    "eggpool.cli.resolve_uninstall_paths",
+                    "eggpool.cli_full.resolve_uninstall_paths",
                     return_value=fake_paths,
                 ),
-                patch("eggpool.cli.do_uninstall", return_value=fake_paths),
+                patch("eggpool.cli_full.do_uninstall", return_value=fake_paths),
                 patch(
-                    "eggpool.cli.verify_binary_removed",
+                    "eggpool.cli_full.verify_binary_removed",
                     return_value=[],
                 ),
                 patch("subprocess.run") as mock_run,

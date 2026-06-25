@@ -1340,7 +1340,9 @@ class TestGranianServe:
         import ast
         from pathlib import Path
 
-        cli_path = Path(__file__).parent.parent.parent / "src" / "eggpool" / "cli.py"
+        cli_path = (
+            Path(__file__).parent.parent.parent / "src" / "eggpool" / "cli_full.py"
+        )
         source = cli_path.read_text(encoding="utf-8")
         tree = ast.parse(source)
 
@@ -1352,9 +1354,11 @@ class TestGranianServe:
                 ):
                     found_granian_import = True
                 if node.module == "granian.server":
-                    pytest.fail("cli.py imports from granian.server, should be granian")
+                    pytest.fail(
+                        "cli_full.py imports from granian.server, should be granian"
+                    )
 
-        assert found_granian_import, "cli.py does not import Granian from granian"
+        assert found_granian_import, "cli_full.py does not import Granian from granian"
 
     def test_app_loader_builds_app_from_config_path(self, tmp_path: Path) -> None:
         """``_app_loader`` must rebuild the FastAPI app from the config path.

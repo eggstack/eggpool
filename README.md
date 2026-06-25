@@ -158,6 +158,7 @@ uv run eggpool connect list
 | `eggpool configsetup claude-code` | Print Claude Code config snippet |
 | `eggpool update` | Check for updates and reinstall if newer |
 | `eggpool croncheck` | Lightweight check: exit 0 if server is running, exit 1 if not |
+| `eggpool ensure-running` | Repair: start the server if it is not running; no-op when already alive |
 | `eggpool models refresh` | Refresh the model catalog from upstream |
 | `eggpool accounts status` | Show configured account status |
 | `eggpool accounts list` | List configured provider accounts |
@@ -542,14 +543,40 @@ sudo systemctl status eggpool
 sudo journalctl -u eggpool -n 100 --no-pager
 ```
 
+### Watchdog (cron)
+
+For systems without systemd, install a personal crontab entry that
+calls the fast-path `ensure-running` command:
+
+```cron
+@reboot /home/user/.local/bin/eggpool --config /home/user/.config/eggpool/config.toml ensure-running >> /home/user/.local/state/eggpool/cron.log 2>&1
+*/5 * * * * /home/user/.local/bin/eggpool --config /home/user/.config/eggpool/config.toml ensure-running >> /home/user/.local/state/eggpool/cron.log 2>&1
+```
+
+Use absolute paths for the binary, config, and log file. `ensure-running`
+uses the stdlib-only fast-path CLI and does not import the heavy
+application graph on every cron tick, so a 5-minute cadence is cheap
+on Raspberry Pi-class hardware.
+
 ### Process model
 
 `eggpool serve` runs as a single supervisor process that launches a
 single Granian worker (`workers=1`) under the same canonical process
 name `eggpool`. You will see two `eggpool` entries in `ps` / `top` /
 `pgrep`: the supervisor and the worker. The supervisor owns the PID
-file (`/tmp/eggpool.pid` on macOS, `$XDG_RUNTIME_DIR/eggpool.pid` on
-Linux); the FastAPI lifespan does not.
+file; the FastAPI lifespan does not.
+
+The PID file path is resolved by `eggpool.runtime_paths.default_pid_file()` in this order:
+
+1. `$EGGPOOL_PID_FILE` (if set)
+2. `$XDG_RUNTIME_DIR/eggpool.pid` (if `XDG_RUNTIME_DIR` is set)
+3. `~/.local/state/eggpool/eggpool.pid` (parent auto-created)
+4. `/tmp/eggpool-<UID>.pid` UID-scoped fallback
+
+This is a behavior change for installations that previously wrote to
+`/tmp/eggpool.pid` without `XDG_RUNTIME_DIR` set; those will now write
+to `~/.local/state/eggpool/eggpool.pid` (when the state dir is
+writable) or to `/tmp/eggpool-<UID>.pid`.
 
 `eggpool serve` refuses to start a second instance: it first checks
 the PID file and then probes `GET /v1/healthz` over `127.0.0.1`. A
@@ -557,6 +584,11 @@ running instance (live PID or 200 from the probe) causes the new
 `serve` to exit non-zero so a stale PID file is never overwritten
 silently. Stale PID files (PID not running) are cleared automatically
 before startup.
+
+Cron watchdog entries should call `eggpool ensure-running`, which
+atomically checks-and-starts without ever spawning a duplicate
+instance. `croncheck` remains available as a pure status probe for
+monitoring and scripts.
 
 For low-resource devices, the Granian worker's event-loop thread
 count is the primary tuning knob. The default is one thread, which

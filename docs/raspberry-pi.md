@@ -77,12 +77,7 @@ genuinely needs more concurrency than a single event loop can deliver:
 threads = 2
 ```
 
-The PID file lives at `$XDG_RUNTIME_DIR/eggpool.pid` (or
-`/tmp/eggpool.pid` if `XDG_RUNTIME_DIR` is unset) and is owned by the
-supervisor. If `eggpool serve` ever exits non-zero with a message
-about an existing instance, that is the duplicate-instance guard
-catching a live PID or a successful `/v1/healthz` probe — check
-`pgrep -f eggpool` before retrying.
+The PID file path is resolved by `eggpool.runtime_paths.default_pid_file()` in this precedence: `$EGGPOOL_PID_FILE` → `$XDG_RUNTIME_DIR/eggpool.pid` → `~/.local/state/eggpool/eggpool.pid` → `/tmp/eggpool-<UID>.pid`, and is owned by the supervisor. If `eggpool serve` ever exits non-zero with a message about an existing instance, that is the duplicate-instance guard catching a live PID or a successful `/v1/healthz` probe — check `pgrep -f eggpool` before retrying.
 
 ## Reduce SD Card Wear
 

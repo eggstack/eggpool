@@ -28,10 +28,20 @@ See `architecture/README.md` for the full design overview.
 
 - `eggpool serve` is a single supervisor process that invokes `Granian` with `workers=1`; Granian spawns one worker, so exactly two processes run under the canonical name
 - The Granian worker is launched with `process_name="eggpool"`, so both supervisor and worker appear as `eggpool` in `ps` / `top` / `pgrep` (not as a generic `python` entry)
-- The supervisor owns the PID file (`PID_FILE = RUNTIME_DIR / "eggpool.pid"`; `/tmp/eggpool.pid` on macOS, `$XDG_RUNTIME_DIR/eggpool.pid` on Linux). The supervisor writes `os.getpid()` before `Granian.serve()` and clears it in a `finally` block; the FastAPI lifespan does not touch the PID file. This prevents the "kill worker leaves supervisor orphaned" failure mode
+- The supervisor owns the PID file. Path resolution lives in `eggpool.runtime_paths.default_pid_file()` and follows this precedence: `$EGGPOOL_PID_FILE` → `$XDG_RUNTIME_DIR/eggpool.pid` → `~/.local/state/eggpool/eggpool.pid` → `/tmp/eggpool-<UID>.pid`. The supervisor writes `os.getpid()` before `Granian.serve()` and clears it in a `finally` block; the FastAPI lifespan does not touch the PID file. This prevents the "kill worker leaves supervisor orphaned" failure mode
 - `eggpool serve` refuses to start a second instance: first checks `runtime.read_pid()` + `runtime.is_process_running()`; if no live PID, probes `GET /v1/healthz` via stdlib `urllib.request` (bind `0.0.0.0` / `::` is rewritten to `127.0.0.1`). A live PID or a 200 from the probe exits `1`. Stale PID files (PID not running) are cleared before starting
 - `[server].threads` (int, default `1`, min `1`, max `64`) controls Granian `runtime_threads` (the number of worker event-loop threads). Default `1` keeps process and thread counts minimal for SBC / Raspberry Pi; raise on capable hardware
 - `eggpool restart` no longer has inline subprocess logic; it delegates to `runtime.restart_server` which calls `runtime.send_sigterm` and `runtime.start_server` (which `subprocess.Popen`s a new supervisor)
+- `eggpool ensure-running` is the canonical cron watchdog — it atomically checks-and-starts without ever spawning a duplicate instance. Use it from `@reboot` and `*/5 * * * *` crontab lines instead of `croncheck || eggpool serve &`
+
+## Fast-Path CLI
+
+- The entry point `eggpool.cli:main` tries `fastcli.maybe_run_fast_command()` before importing Click
+- The fast path imports `eggpool.runtime_paths` and `eggpool.fastcli` only — both modules are stdlib-only
+- Recognized fast commands: `croncheck` (pure status probe) and `ensure-running` (check-and-spawn watchdog)
+- Everything else falls through to `eggpool.cli_full` (the heavy Click CLI)
+- Public symbol forwarding via PEP 562 `__getattr__` keeps `from eggpool.cli import cli` working for tests without forcing the heavy CLI graph to load at `eggpool.cli` import time
+- See `plans/lightweight-cli-watchdog.md` for the full design
 
 ## Database Invariants
 
@@ -171,3 +181,4 @@ API keys must be raw tokens; EggPool prepends the configured auth scheme automat
 ## CLI Commands
 
 - `models refresh` synchronizes configured accounts via `AccountRepository.sync_from_config` before refreshing the catalog, so cached account/model relationships match normal application startup
+- The CLI has a two-tier entry point: `eggpool.cli:main` is a tiny bootstrap that dispatches `croncheck` and `ensure-running` through the stdlib-only `eggpool.fastcli` fast path, then falls through to the heavy Click CLI in `eggpool.cli_full` for everything else. See **Fast-Path CLI** above

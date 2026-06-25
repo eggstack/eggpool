@@ -86,13 +86,19 @@ sudo journalctl -u eggpool -f
 
 ### Alternative: cron (no systemd)
 
-For systems without systemd, `deploy cron` sets up a user cron
-entry that checks if the server is running and restarts it:
+For systems without systemd, install a user crontab entry that calls
+the fast-path `ensure-running` command:
 
-```bash
-# Check every 5 minutes, restart if stopped
- eggpool croncheck || eggpool serve &
+```cron
+@reboot /home/user/.local/bin/eggpool --config /home/user/.config/eggpool/config.toml ensure-running >> /home/user/.local/state/eggpool/cron.log 2>&1
+*/5 * * * * /home/user/.local/bin/eggpool --config /home/user/.config/eggpool/config.toml ensure-running >> /home/user/.local/state/eggpool/cron.log 2>&1
 ```
+
+Use absolute paths for the binary, config, and log file. `ensure-running`
+atomically checks-and-starts without ever spawning a duplicate
+instance, and uses the stdlib-only fast-path CLI so the cron tick is
+cheap enough to run every five minutes on Raspberry Pi-class hardware.
+See `plans/lightweight-cli-watchdog.md` for the design rationale.
 
 This is a personal-use fallback — prefer systemd when available.
 
@@ -215,17 +221,18 @@ as `eggpool` in `ps` / `top` / `pgrep` rather than as a generic
 `python` entry. There is no multi-worker scaling — the knob operators
 tune is per-worker concurrency.
 
-The PID file is owned by the supervisor and lives at
-`$XDG_RUNTIME_DIR/eggpool.pid` on Linux (falling back to
-`/tmp/eggpool.pid`). The supervisor writes `os.getpid()` before
-`Granian.serve()` and clears the file in a `finally` block; the
-FastAPI lifespan does not touch it. `eggpool serve` also refuses to
-start a second instance: it checks the PID file and, if no live PID
-is recorded, probes `GET /v1/healthz` over `127.0.0.1` (the bind
-address `0.0.0.0` / `::` is rewritten to a loopback address for the
-probe). Either a live PID or a 200 from the probe causes the new
-`serve` to exit non-zero so a stale PID file is never silently
-overwritten.
+The PID file is owned by the supervisor and its path is resolved by
+`eggpool.runtime_paths.default_pid_file()` in this precedence:
+`$EGGPOOL_PID_FILE` → `$XDG_RUNTIME_DIR/eggpool.pid` →
+`~/.local/state/eggpool/eggpool.pid` → `/tmp/eggpool-<UID>.pid`. The
+supervisor writes `os.getpid()` before `Granian.serve()` and clears
+the file in a `finally` block; the FastAPI lifespan does not touch it.
+`eggpool serve` also refuses to start a second instance: it checks the
+PID file and, if no live PID is recorded, probes `GET /v1/healthz`
+over `127.0.0.1` (the bind address `0.0.0.0` / `::` is rewritten to a
+loopback address for the probe). Either a live PID or a 200 from the
+probe causes the new `serve` to exit non-zero so a stale PID file is
+never silently overwritten.
 
 The primary tuning knob is `[server].threads` (int, default `1`,
 min `1`, max `64`), which sets Granian `runtime_threads` — the
@@ -322,3 +329,4 @@ restart.  See `plans/eggpoolfix.md` for the full safety-net design.
 | `eggpool recover [path]` | Restore from a backup archive (interactive if no path) |
 | `eggpool uninstall` | Remove binary, config, database, and shell PATH entries |
 | `eggpool croncheck` | Check if server is running (exit 0/1) |
+| `eggpool ensure-running` | Repair: start the server if it is not running; no-op when already alive (fast-path) |

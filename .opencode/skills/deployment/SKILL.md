@@ -133,9 +133,10 @@ removed automatically).
 - Default: two processes — the `eggpool serve` supervisor plus one Granian worker. Both appear as `eggpool` in `ps` / `top` / `pgrep` (Granian is launched with `process_name="eggpool"`, not a generic `python` entry)
 - The Granian worker is launched with `workers=1`. Multi-worker scaling is intentionally not exposed; per-worker concurrency is the knob operators tune
 - `[server].threads` (int, default `1`, min `1`, max `64`) sets Granian `runtime_threads` — the number of event-loop threads in the worker. Default `1` is for SBC / Raspberry Pi; raise on capable hardware
-- PID file lives at `PID_FILE = RUNTIME_DIR / "eggpool.pid"` (`/tmp/eggpool.pid` on macOS, `$XDG_RUNTIME_DIR/eggpool.pid` on Linux) and is owned by the **supervisor**, not the FastAPI lifespan. The supervisor writes `os.getpid()` before `Granian.serve()` and clears the file in a `finally` block
+- PID file path is resolved by `eggpool.runtime_paths.default_pid_file()` in this precedence: `$EGGPOOL_PID_FILE` → `$XDG_RUNTIME_DIR/eggpool.pid` → `~/.local/state/eggpool/eggpool.pid` → `/tmp/eggpool-<UID>.pid`. The PID file is owned by the **supervisor**, not the FastAPI lifespan. The supervisor writes `os.getpid()` before `Granian.serve()` and clears the file in a `finally` block
 - `eggpool serve` refuses to start a second instance: it checks the PID file via `runtime.read_pid()` + `runtime.is_process_running()`, then probes `GET /v1/healthz` over `127.0.0.1` via stdlib `urllib.request` (bind `0.0.0.0` / `::` rewritten to `127.0.0.1`). A live PID or a 200 from the probe exits `1`; stale PID files are cleared before starting
 - `eggpool restart` delegates to `runtime.restart_server`, which calls `runtime.send_sigterm` and `runtime.start_server` (a `subprocess.Popen` of a new supervisor). There is no inline subprocess logic in the CLI command itself
+- Cron-driven watchdog entries should call `eggpool ensure-running` (not `croncheck || eggpool serve &`). `ensure-running` atomically checks-and-starts without ever spawning a duplicate instance and uses the stdlib-only fast-path CLI so the cron tick is cheap. See `plans/lightweight-cli-watchdog.md`
 
 ## Filesystem Layout
 
@@ -174,6 +175,12 @@ sudo -u eggpool /opt/eggpool/.venv/bin/eggpool check-config --config /etc/eggpoo
 1. Verify `server.host = "0.0.0.0"` in config
 2. Check firewall rules (see `docs/firewall.md`)
 3. Verify the port is listening: `ss -tlnp | grep 11300`
+
+### Service did not restart after crash
+
+- On systemd, `Restart=on-failure` (or similar) in `deploy/eggpool.service` causes systemd to restart the supervisor automatically; nothing extra is required.
+- On cron-driven deployments, the `*/5 * * * *` line in the user's crontab should call `eggpool ensure-running`, which both checks and restarts atomically without ever spawning duplicates.
+- The fast-path keeps this cheap enough to run every 5 minutes even on Raspberry Pi-class hardware — `ensure-running` exits almost immediately when the server is already alive.
 
 ## Security
 

@@ -42,7 +42,7 @@ def _invoke_update(
     with (
         patch("httpx.get", _fake_pypi(latest)),
         patch("importlib.metadata.version", return_value=current),
-        patch("eggpool.cli._detect_install_method", return_value=method),
+        patch("eggpool.cli_full._detect_install_method", return_value=method),
         patch("subprocess.run") as mock_run,
     ):
         mock_run.return_value = MagicMock(returncode=run_returncode, stderr=run_stderr)

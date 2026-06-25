@@ -95,15 +95,17 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 - **Synthetic 503 vs 502**: `ModelUnavailableError` (503) is reserved for genuine pre-dispatch unavailability. `UpstreamExhaustedError` (502) is raised when every candidate account was attempted and exhausted mid-request. Single-account upstream errors pass through to the client rather than becoming synthetic 503s.
 - **Streaming finalizer shielding**: streaming `_build_stream_generator` finalization runs under `asyncio.shield(asyncio.wait_for(..., timeout=10))` so ASGI task cancellation cannot kill the finalizer while it holds the DB lock. Leaks that escape this path are caught by the periodic `stale_request_finalizer` background task (`app._finalize_stale_requests`, runs every 60s) which force-finalizes any request that has been `pending` longer than `upstream.read_timeout_s`.
 - **Startup crash recovery**: `_crash_recovery` runs at every startup and recovers ALL pending requests and ALL active reservations with no time threshold. A process restart is a definitive boundary, so leaked state from the previous process is unconditionally cleaned up. If `Crash recovery: marked N stale requests` appears in logs, the safety net caught leaks from the previous run.
+- **Fast-path CLI imports**: fast-path commands (`croncheck`, `ensure-running`) import only `eggpool.runtime_paths` from the package; do not add transitive imports to `runtime_paths` or `fastcli` or you break the Raspberry Pi watchdog performance contract
 
 ## Process Model
 
 - `eggpool serve` runs as a single supervisor process that invokes `Granian` with `workers=1`; Granian spawns one worker process, so exactly **two** processes appear under the canonical name
 - The Granian worker is launched with `process_name="eggpool"`, so `ps` / `top` / `pgrep` show the canonical name for both supervisor and worker (not a generic `python` entry)
 - `[server].threads` (int, default `1`, min `1`, max `64`) controls Granian `runtime_threads` — the number of worker event-loop threads. Default is `1` for SBC / Raspberry Pi; raise on capable hardware
-- The PID file (`PID_FILE = RUNTIME_DIR / "eggpool.pid"`; `/tmp/eggpool.pid` on macOS, `$XDG_RUNTIME_DIR/eggpool.pid` on Linux) is owned by the **supervisor**, written before `Granian.serve()` and cleared in a `finally` block. The FastAPI lifespan no longer touches the PID file
+- PID path resolution lives in `eggpool.runtime_paths` and is the single source of truth (`default_pid_file()`). Precedence: `$EGGPOOL_PID_FILE` → `$XDG_RUNTIME_DIR/eggpool.pid` → `~/.local/state/eggpool/eggpool.pid` → `/tmp/eggpool-<UID>.pid`. The PID file is owned by the **supervisor**, written before `Granian.serve()` and cleared in a `finally` block. The FastAPI lifespan no longer touches the PID file
 - `eggpool serve` refuses to start a second instance: first checks `runtime.read_pid()` + `runtime.is_process_running()`; if no live PID, probes `GET /v1/healthz` via stdlib `urllib.request` (bind `0.0.0.0` / `::` is rewritten to `127.0.0.1`). A live PID or a 200 from the probe exits `1`. Stale PID files (PID not running) are cleared before starting
 - `eggpool restart` no longer has inline subprocess logic; it delegates to `runtime.restart_server` which calls `runtime.send_sigterm` and `runtime.start_server` (which `subprocess.Popen`s a new supervisor)
+- `eggpool ensure-running` is the canonical cron watchdog command — it atomically checks-and-starts without ever spawning a duplicate instance. Use it from `@reboot` and `*/5 * * * *` crontab lines, not `croncheck || eggpool serve &`
 
 ## CLI Commands
 
@@ -120,6 +122,7 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 | `eggpool logout` | Remove a configured provider account |
 | `eggpool rehash` | Restart to apply config changes |
 | `eggpool croncheck` | Lightweight check: exit 0 if server is running, exit 1 if not |
+| `eggpool ensure-running` | Repair: start the server if it is not running; no-op when alive. Fast-path. |
 | `eggpool models refresh` | Refresh model catalog from upstream |
 | `eggpool configsetup opencode` | Print OpenCode provider config JSON with model limits |
 | `eggpool db vacuum` | Reclaim SQLite space |
@@ -129,6 +132,14 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 
 All commands accept `--config /path/to/config.toml` (defaults to `config.toml`).
 Running `eggpool` with no arguments prints the help message.
+
+## Fast-Path CLI
+
+- `src/eggpool/cli.py` is a tiny bootstrap (74 lines)
+- `main()` calls `eggpool.fastcli.maybe_run_fast_command()` first; recognized fast commands (`croncheck`, `ensure-running`) are dispatched without importing Click
+- Unrecognized commands fall through to `eggpool.cli_full`, which holds the heavy Click CLI
+- Public symbols (`cli`, helpers used by tests) are lazily forwarded from `cli_full` via PEP 562 `__getattr__` — so `from eggpool.cli import cli` and existing test imports still work without loading the full graph
+- See `plans/lightweight-cli-watchdog.md` for the full design
 
 ## Git Workflow
 

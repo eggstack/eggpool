@@ -741,7 +741,7 @@ class TestConfigSetup:
             return True
 
         runner = CliRunner()
-        with patch("eggpool.cli._copy_to_clipboard", side_effect=fake_copy):
+        with patch("eggpool.cli_full._copy_to_clipboard", side_effect=fake_copy):
             result = runner.invoke(
                 cli,
                 ["--config", str(config_path), "configsetup", "claude-code"],
@@ -769,7 +769,7 @@ class TestConfigSetup:
             return True
 
         runner = CliRunner()
-        with patch("eggpool.cli._copy_to_clipboard", side_effect=fake_copy):
+        with patch("eggpool.cli_full._copy_to_clipboard", side_effect=fake_copy):
             result = runner.invoke(
                 cli,
                 ["--config", str(config_path), "configsetup", "claude-code"],
@@ -806,7 +806,7 @@ class TestConfigSetup:
             return True
 
         runner = CliRunner()
-        with patch("eggpool.cli._copy_to_clipboard", side_effect=fake_copy):
+        with patch("eggpool.cli_full._copy_to_clipboard", side_effect=fake_copy):
             result = runner.invoke(
                 cli,
                 ["--config", str(config_path), "configsetup", "claude-code"],

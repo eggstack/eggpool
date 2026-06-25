@@ -385,12 +385,10 @@ class TestVacuumAudit:
         tmp_path: Path,
     ) -> None:
         """The CLI must call ``db.vacuum()`` rather than direct connection use."""
-        cli_path = Path(__file__).parent.parent.parent / "src" / "eggpool" / "cli.py"
+        cli_path = (
+            Path(__file__).parent.parent.parent / "src" / "eggpool" / "cli_full.py"
+        )
         contents = cli_path.read_text(encoding="utf-8")
-        # No raw VACUUM SQL string in cli.py - it must go through the
-        # helper. We allow the bare keyword in docstrings/comments but
-        # forbid the SQL statement "VACUUM" inside a string literal or
-        # as a statement.
         forbidden_patterns = [
             'execute("VACUUM")',
             "execute('VACUUM')",
@@ -399,9 +397,9 @@ class TestVacuumAudit:
         ]
         for pattern in forbidden_patterns:
             assert pattern not in contents, (
-                f"cli.py must not use {pattern!r} for VACUUM; use db.vacuum() instead."
+                f"cli_full.py must not use {pattern!r} for VACUUM; "
+                "use db.vacuum() instead."
             )
-        # And it must call db.vacuum() in the db vacuum command.
         assert "db.vacuum()" in contents
 
 
