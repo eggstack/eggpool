@@ -32,7 +32,7 @@ classifiers = [
 ]
 dependencies = [
     "fastapi",
-    "granian",
+    "granian[pname]",
     "httpx",
     "aiosqlite",
     "pydantic>=2.0",
