@@ -87,7 +87,10 @@ class TestVacuumSucceeds:
 
             accounts = await db.fetch_all("SELECT name FROM accounts")
             assert [row["name"] for row in accounts] == ["vac-acct"]
-            models = await db.fetch_all("SELECT model_id FROM models ORDER BY model_id")
+            models = await db.fetch_all(
+                "SELECT model_id FROM models WHERE model_id <> ? ORDER BY model_id",
+                ("__deprecated__",),
+            )
             assert {row["model_id"] for row in models} == {"gpt-4", "claude-3"}
         finally:
             await db.disconnect()

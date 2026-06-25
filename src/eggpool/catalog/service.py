@@ -17,8 +17,12 @@ from eggpool.catalog.pricing import (
     parse_price_per_1k,
 )
 from eggpool.catalog.protocols import SUPPORTED_PROTOCOLS, ModelProtocolResolver
-from eggpool.constants import DEFAULT_PROVIDER_ID
-from eggpool.db.repositories import PingRepository, PriceSnapshotRepository
+from eggpool.constants import DEFAULT_PROVIDER_ID, DEPRECATED_MODEL_ID
+from eggpool.db.repositories import (
+    CatalogReconciliationRepository,
+    PingRepository,
+    PriceSnapshotRepository,
+)
 from eggpool.providers.client_pool import ProviderClientPool
 
 if TYPE_CHECKING:
@@ -399,7 +403,9 @@ class CatalogService:
             rows = await self._db.fetch_all(
                 "SELECT model_id, display_name, protocol, "
                 "capabilities, source_metadata, "
-                "first_seen_at, last_seen_at, protocol_source FROM models"
+                "first_seen_at, last_seen_at, protocol_source FROM models "
+                "WHERE model_id <> ?",
+                (DEPRECATED_MODEL_ID,),
             )
             for row in rows:
                 model_id = str(row["model_id"])
@@ -428,7 +434,9 @@ class CatalogService:
                 "SELECT model_id, provider_id, display_name, protocol, "
                 "capabilities, source_metadata, protocol_source, "
                 "first_seen_at, last_seen_at "
-                "FROM provider_model_metadata"
+                "FROM provider_model_metadata "
+                "WHERE model_id <> ?",
+                (DEPRECATED_MODEL_ID,),
             )
             for row in provider_rows:
                 provider_id = str(row["provider_id"])
@@ -555,6 +563,12 @@ class CatalogService:
         desired_support: set[tuple[int, str]] = set()
 
         for model_id, model_info in self._cache.get_all_models().items():
+            if model_id == DEPRECATED_MODEL_ID:
+                # The placeholder only exists in the durable layer so
+                # historical request rows can keep their FK after the
+                # upstream model is deleted. Never treat it as a live
+                # catalog entry.
+                continue
             protocol = model_info.get("protocol")
             if protocol not in SUPPORTED_PROTOCOLS:
                 if model_id in self._warned_unresolved_models:
@@ -695,6 +709,157 @@ class CatalogService:
                         provider_id=pid,
                         latest=latest_prices.get((pid_model_id, pid)),
                     )
+
+            # Reconcile the durable catalog with the live cache.
+            # Models and provider rows that are no longer advertised
+            # by any account are deleted; rows with historical
+            # request/reservation references are relinked to the
+            # placeholder so usage data is preserved.
+            await self._reconcile_catalog(persisted_model_ids)
+
+    async def _reconcile_catalog(self, live_model_ids: set[str]) -> None:
+        """Align the durable catalog tables with the live in-memory cache.
+
+        The caller's transaction is already open. Steps:
+
+        1. Ensure the placeholder ``models`` row exists.
+        2. Relink any durable model row that is not in the live
+           cache and that has historical ``requests`` or
+           ``reservations`` references. The original id is preserved
+           in ``original_model_id``; the FK pointer moves to
+           ``__deprecated__``.
+        3. Delete the (now-referenced-free) original ``models`` rows
+           and any ``provider_model_metadata`` rows that the live
+           cache no longer carries.
+        4. Delete ``account_models`` rows that are currently
+           disabled and have no recent ``requests`` activity so old
+           withdraw-enable toggles do not accumulate.
+
+        Errors during relink leave the durable state unchanged:
+        SQLite is the only place these rows are mutated, so the
+        catch-and-log branch is informational only.
+        """
+        reconciliation = CatalogReconciliationRepository(self._db)
+        await reconciliation.ensure_placeholder()
+
+        # Step 1: collect durable model ids that the live cache no
+        # longer carries. The placeholder must be excluded so it is
+        # never a candidate for relink or deletion.
+        durable_rows = await self._db.fetch_all(
+            "SELECT model_id FROM models WHERE model_id <> ?",
+            (DEPRECATED_MODEL_ID,),
+        )
+        durable_model_ids = {str(row["model_id"]) for row in durable_rows}
+        withdrawn_ids = durable_model_ids - live_model_ids
+
+        if not withdrawn_ids and not await self._has_orphan_provider_rows(
+            live_model_ids
+        ):
+            return
+
+        relinked_total = 0
+        deleted_models = 0
+        for withdrawn_id in sorted(withdrawn_ids):
+            try:
+                counts = await reconciliation.relink_model(withdrawn_id)
+            except Exception:
+                logger.exception(
+                    "Failed to relink withdrawn model %r; leaving row in place",
+                    withdrawn_id,
+                )
+                continue
+            if counts["requests"] or counts["reservations"]:
+                relinked_total += counts["requests"] + counts["reservations"]
+                logger.info(
+                    "Relinked withdrawn model %r: %d request(s), "
+                    "%d reservation(s) moved to %r",
+                    withdrawn_id,
+                    counts["requests"],
+                    counts["reservations"],
+                    DEPRECATED_MODEL_ID,
+                )
+            await self._db.execute_write(
+                "DELETE FROM account_models WHERE model_id = ?",
+                (withdrawn_id,),
+            )
+            await self._db.execute_write(
+                "DELETE FROM provider_model_metadata WHERE model_id = ?",
+                (withdrawn_id,),
+            )
+            await self._db.execute_write(
+                "DELETE FROM models WHERE model_id = ?",
+                (withdrawn_id,),
+            )
+            deleted_models += 1
+
+        deleted_provider_rows = await self._delete_orphan_provider_rows(live_model_ids)
+        deleted_account_links = await self._delete_stale_account_links()
+
+        if deleted_models or deleted_provider_rows or deleted_account_links:
+            logger.info(
+                "Catalog reconciliation: relinked=%d rows, "
+                "deleted_models=%d, deleted_provider_rows=%d, "
+                "deleted_account_links=%d",
+                relinked_total,
+                deleted_models,
+                deleted_provider_rows,
+                deleted_account_links,
+            )
+
+    async def _has_orphan_provider_rows(self, live_model_ids: set[str]) -> bool:
+        """Return whether durable provider rows reference a withdrawn model."""
+        rows = await self._db.fetch_all(
+            "SELECT model_id FROM provider_model_metadata WHERE model_id <> ?",
+            (DEPRECATED_MODEL_ID,),
+        )
+        durable = {str(r["model_id"]) for r in rows}
+        return bool(durable - live_model_ids)
+
+    async def _delete_orphan_provider_rows(self, live_model_ids: set[str]) -> int:
+        """Delete ``provider_model_metadata`` rows the live cache no longer carries."""
+        rows = await self._db.fetch_all(
+            "SELECT model_id, provider_id FROM provider_model_metadata "
+            "WHERE model_id <> ?",
+            (DEPRECATED_MODEL_ID,),
+        )
+        stale: list[tuple[Any, ...]] = []
+        for row in rows:
+            model_id = str(row["model_id"])
+            provider_id = str(row["provider_id"])
+            if model_id not in live_model_ids:
+                stale.append((model_id, provider_id))
+        if not stale:
+            return 0
+        await self._db.execute_many(
+            "DELETE FROM provider_model_metadata "
+            "WHERE model_id = ? AND provider_id = ?",
+            stale,
+        )
+        return len(stale)
+
+    async def _delete_stale_account_links(self) -> int:
+        """Delete ``account_models`` rows that are disabled and unused.
+
+        A row counts as unused when there are no ``requests`` rows
+        referencing the (account_id, model_id) pair within the
+        retention window.  Historical request activity still wins
+        because the durable ``requests`` table is the source of
+        truth for the dashboard.
+        """
+        rows = await self._db.fetch_all(
+            "SELECT am.account_id, am.model_id FROM account_models am "
+            "LEFT JOIN requests r ON r.account_id = am.account_id "
+            "  AND r.model_id = am.model_id "
+            "WHERE am.enabled = 0 AND r.id IS NULL"
+        )
+        if not rows:
+            return 0
+        targets = [(int(r["account_id"]), str(r["model_id"])) for r in rows]
+        await self._db.execute_many(
+            "DELETE FROM account_models WHERE account_id = ? AND model_id = ?",
+            targets,
+        )
+        return len(targets)
 
     async def _maybe_insert_price_snapshot(
         self,

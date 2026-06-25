@@ -9,7 +9,7 @@ from eggpool.catalog.pricing import (
     parse_microdollars_per_million,
     parse_price_per_1k,
 )
-from eggpool.constants import DEFAULT_PROVIDER_ID
+from eggpool.constants import DEFAULT_PROVIDER_ID, DEPRECATED_MODEL_ID
 
 if TYPE_CHECKING:
     from eggpool.db.connection import Database
@@ -987,3 +987,75 @@ class PingRepository:
                 retain_days,
             )
         return count
+
+
+class CatalogReconciliationRepository:
+    """Operations for aligning the durable catalog with the live cache.
+
+    When a provider drops a model, the live cache is pruned but the
+    durable ``models`` row may still be referenced by historical
+    ``requests`` and ``reservations``.  This repository relinks the
+    FK pointers to :data:`DEPRECATED_MODEL_ID` and preserves the
+    original id in ``original_model_id`` so stats queries can still
+    filter by the real model name.  Once the relink is complete the
+    original row can be deleted without losing usage history.
+    """
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def relink_model(self, model_id: str) -> dict[str, int]:
+        """Relink all FK references from ``model_id`` to the placeholder.
+
+        Idempotent. Returns the count of relinked rows so callers can
+        emit a diagnostic log line. Must run inside the caller's
+        transaction; the surrounding code holds the connection lock
+        so the relink is atomic with the subsequent DELETE.
+        """
+        requests_relinked = await self._db.execute_write(
+            """
+            UPDATE requests
+            SET original_model_id = COALESCE(original_model_id, model_id),
+                model_id = ?
+            WHERE model_id = ?
+              AND model_id <> ?
+            """,
+            (DEPRECATED_MODEL_ID, model_id, DEPRECATED_MODEL_ID),
+        )
+        reservations_relinked = await self._db.execute_write(
+            """
+            UPDATE reservations
+            SET original_model_id = COALESCE(original_model_id, model_id),
+                model_id = ?
+            WHERE model_id = ?
+              AND model_id <> ?
+            """,
+            (DEPRECATED_MODEL_ID, model_id, DEPRECATED_MODEL_ID),
+        )
+        return {
+            "requests": int(requests_relinked),
+            "reservations": int(reservations_relinked),
+        }
+
+    async def ensure_placeholder(self) -> None:
+        """Insert the placeholder ``models`` row if missing.
+
+        Migrations also do this, but a fresh server can race a
+        reconciliation pass before migrations are applied if the
+        cache was hydrated from a previous run. Idempotent.
+        """
+        await self._db.execute_write(
+            """
+            INSERT OR IGNORE INTO models (
+                model_id, display_name, protocol,
+                resolution_status, provider_id
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                DEPRECATED_MODEL_ID,
+                "Deprecated models",
+                "openai",
+                "resolved",
+                DEFAULT_PROVIDER_ID,
+            ),
+        )

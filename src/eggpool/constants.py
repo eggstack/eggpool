@@ -7,6 +7,12 @@ DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 11300
 DEFAULT_PROVIDER_ID = "opencode-go"
 
+# Synthetic model_id used to relink historical usage rows when a
+# model is withdrawn upstream.  The original id is preserved in
+# ``requests.original_model_id`` and ``reservations.original_model_id``
+# so stats queries can still filter by the real model name.
+DEPRECATED_MODEL_ID = "__deprecated__"
+
 # Use an absolute path so the database is not dependent on the process
 # working directory.  Follows XDG Base Directory conventions.
 _xdg_data = os.environ.get("XDG_DATA_HOME", "")

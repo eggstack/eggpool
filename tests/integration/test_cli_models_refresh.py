@@ -487,7 +487,10 @@ class TestModelsRefreshDisabledAccount:
                 assert by_name["acct-disabled"] is False
 
                 # Models still get persisted.
-                model_rows = await db.fetch_all("SELECT model_id FROM models")
+                model_rows = await db.fetch_all(
+                    "SELECT model_id FROM models WHERE model_id <> ?",
+                    ("__deprecated__",),
+                )
                 assert {r["model_id"] for r in model_rows} == {"gpt-4"}
 
                 # Only supported relationships need rows. Absence and

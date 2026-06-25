@@ -7,6 +7,7 @@ import time
 from typing import Any, cast
 
 from eggpool.catalog.limits import EffectiveModelLimits, conservative_limits
+from eggpool.constants import DEPRECATED_MODEL_ID
 from eggpool.routing.provider import parse_model_provider
 
 logger = logging.getLogger(__name__)
@@ -266,11 +267,15 @@ class ModelCatalogCache:
 
         Excludes models with unresolved protocol (None) since they
         cannot be routed to any endpoint.  When multiple providers
-        advertise the same model, uses per-provider metadata.
+        advertise the same model, uses per-provider metadata.  The
+        ``__deprecated__`` placeholder is also excluded; it only
+        exists in the durable layer for relinking historical usage.
         """
         result: list[dict[str, Any]] = []
 
         for model_id, _model_info in self._models.items():
+            if model_id == DEPRECATED_MODEL_ID:
+                continue
             accounts_supporting = self._account_support.get(model_id, set())
             visible_accounts = accounts_supporting & eligible_account_names
 
@@ -325,6 +330,8 @@ class ModelCatalogCache:
 
         result: list[dict[str, Any]] = []
         for model_id in self._models:
+            if model_id == DEPRECATED_MODEL_ID:
+                continue
             accounts_supporting = self._account_support.get(model_id, set())
 
             # Group supporting accounts by provider

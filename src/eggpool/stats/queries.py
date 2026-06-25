@@ -166,7 +166,12 @@ async def fetch_model_stats(
     end: str,
     account_id: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Get per-model statistics, optionally filtered by account."""
+    """Get per-model statistics, optionally filtered by account.
+
+    Rows whose ``model_id`` has been relinked to the deprecated
+    placeholder are reported under their ``original_model_id`` so
+    historical usage remains attributable to the real model name.
+    """
     params: list[Any] = [_format_dt(start), _format_dt(end)]
     account_filter = ""
     if account_id is not None:
@@ -175,7 +180,7 @@ async def fetch_model_stats(
 
     sql = f"""
     SELECT
-        r.model_id,
+        COALESCE(r.original_model_id, r.model_id) AS model_id,
         r.provider_id,
         COUNT(*) as request_count,
         COALESCE(SUM(r.input_tokens), 0) as input_tokens,
@@ -188,7 +193,7 @@ async def fetch_model_stats(
             as avg_ttft_ms
     FROM requests r
     WHERE r.started_at >= ? AND r.started_at < ?{account_filter}
-    GROUP BY r.model_id, r.provider_id
+    GROUP BY COALESCE(r.original_model_id, r.model_id), r.provider_id
     ORDER BY request_count DESC
     """
     rows = await db.fetch_all(sql, tuple(params))
@@ -216,10 +221,13 @@ async def fetch_timeseries(
     if account_id is not None:
         account_filter = " AND r.account_id = ?"
         params.append(account_id)
+    # A real model id can match both live rows and rows that were
+    # relinked to the deprecated placeholder after the model was
+    # withdrawn upstream. Match either the current or original id.
     model_filter = ""
     if model_id is not None:
-        model_filter = " AND r.model_id = ?"
-        params.append(model_id)
+        model_filter = " AND (r.model_id = ? OR r.original_model_id = ?)"
+        params.extend([model_id, model_id])
 
     sql = f"""
     SELECT
@@ -254,7 +262,7 @@ async def fetch_error_breakdown(
     SELECT
         r.error_class,
         r.error_detail,
-        r.model_id,
+        COALESCE(r.original_model_id, r.model_id) AS model_id,
         a.name as account_name,
         COUNT(*) as error_count,
         MAX(r.started_at) as last_occurred_at
@@ -263,7 +271,8 @@ async def fetch_error_breakdown(
     WHERE r.started_at >= ? AND r.started_at < ?
         AND r.status = 'error'
         AND r.error_class IS NOT NULL
-    GROUP BY r.error_class, r.error_detail, r.model_id, a.name
+    GROUP BY r.error_class, r.error_detail,
+        COALESCE(r.original_model_id, r.model_id), a.name
     ORDER BY error_count DESC
     LIMIT ?
     """
@@ -312,7 +321,7 @@ async def fetch_active_reservations(
         r.request_id,
         r.account_id,
         a.name as account_name,
-        r.model_id,
+        COALESCE(r.original_model_id, r.model_id) AS model_id,
         r.reserved_microdollars,
         r.created_at
     FROM reservations r
@@ -441,8 +450,10 @@ async def _fetch_ttft_percentiles(
         extra_filters += " AND provider_id = ?"
         params.append(provider_id)
     if model_id is not None:
-        extra_filters += " AND model_id = ?"
-        params.append(model_id)
+        # Real model id may have been relinked to the deprecated
+        # placeholder; match either side.
+        extra_filters += " AND (model_id = ? OR original_model_id = ?)"
+        params.extend([model_id, model_id])
     if account_id is not None:
         extra_filters += " AND account_id = ?"
         params.append(account_id)
@@ -488,19 +499,26 @@ async def fetch_provider_model_ttft(
     start: str,
     end: str,
 ) -> list[dict[str, Any]]:
-    """Per-provider, per-model TTFT breakdown (streamed requests only)."""
+    """Per-provider, per-model TTFT breakdown (streamed requests only).
+
+    Deprecated models that have been relinked to the placeholder are
+    reported under their ``original_model_id`` so the dashboard
+    shows historical usage under the real model name.
+    """
     sql = """
     WITH ranked AS (
         SELECT
             r.provider_id,
-            r.model_id,
+            COALESCE(r.original_model_id, r.model_id) AS model_id,
             r.first_byte_ms,
             ROW_NUMBER() OVER (
-                PARTITION BY r.provider_id, r.model_id
+                PARTITION BY r.provider_id,
+                    COALESCE(r.original_model_id, r.model_id)
                 ORDER BY r.first_byte_ms
             ) as rn,
             COUNT(*) OVER (
-                PARTITION BY r.provider_id, r.model_id
+                PARTITION BY r.provider_id,
+                    COALESCE(r.original_model_id, r.model_id)
             ) as group_count
         FROM requests r
         WHERE r.streamed = 1
