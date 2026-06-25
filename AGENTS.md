@@ -99,59 +99,35 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 - **`eggpool stats recompute-costs [--dry-run|--apply] [--limit N]`**: walks the requests table in started_at DESC order, recomputes cost from the current price snapshots, and reports / applies the change. Default is `--dry-run`. Use after upgrading the resolver to fix inflated totals on cached-token-heavy models (e.g. MiMo 2.5). Implemented in `src/eggpool/cost_recompute.py` and reuses the live `CostCalculator` so the new values match what the finalizer would write today.
 - **Migration 0030 (`model_pricing_aliases`) + 0031 (`price_snapshot_provenance`)**: 0030 introduces the alias registry that maps upstream model IDs (e.g. `mimo-v2.5`) onto external catalog IDs (e.g. `xiaomi/mimo-v2.5`) with an `exact`/`curated_alias`/`ambiguous_skip` confidence enum. 0031 adds `source_detail`, `source_confidence`, `catalog_source` columns to `model_price_snapshots` so the dashboard can attribute prices back to the resolver that produced them. Seed data lives in `seed_default_aliases()` (`src/eggpool/catalog/pricing_aliases.py`) and runs idempotently at startup via `CatalogService.attach_pricing_resolvers()`.
 
-## Observability schema (migrations 0026–0029)
+## Observability
 
-Four migrations extend the request lifecycle with structured observability. Every persistence step runs inside the same transaction as the related state mutation, so the audit trail cannot diverge from durable state.
+- **Attempt analytics**: per-attempt aggregates including latency percentiles, byte totals, retry rate, and the `retry_category` distribution. Every `request_attempts` row carries `provider_id/model_id/protocol/retry_category/release_reason/bytes_received/latency_ms/streamed/is_retry_outcome`
+- **Routing analytics**: per-`(model, provider)` decision aggregates, account-level selection counts, and per-`(account, reason)` exclusion counts. Every routing decision is persisted as a `routing_decisions` row inside the same transaction as the `request_attempts` INSERT
+- **Latency phases**: decomposes each request into `upstream_connect_ms`, `upstream_read_ms`, and `coordinator_overhead_ms`
+- **Operational health**: `crash_recovery`, `stale_request_finalizer`, and `reservation_reconcile` safety-net events are recorded as `operational_events` rows in the same transaction as the durable state mutation
+- **Pending health**: instantaneous snapshot of pending request count, oldest pending age, stale-pending count (>15 min), active reservations, total reserved microdollars, and oldest reservation age. Auth-gated
+- **Per-request trace**: parent request row, full attempt chain, and per-attempt routing decisions. Returns account name, model, protocol, status, error class (never raw error_detail), and timing. Auth-gated
+- **Recent request metadata**: bounded list of recent request rows with metadata only (no body, no auth headers, no error_detail). Auth-gated
+- **Cost/cache/reasoning exactness**: per-account and per-model `exact_count`, `partial_count`, `derived_count`, `estimated_count`, `cache_read_ratio`, `cache_write_ratio`, `reasoning_output_ratio`
+- Full API surface is documented in the `architecture` skill
 
-- **0026_attempt_observability.sql** — extends `request_attempts` with `provider_id, model_id, protocol, retry_category, release_reason, bytes_received, latency_ms, streamed, is_retry_outcome`. Extends `requests` with `first_attempt_at, last_attempt_id`. `first_attempt_at` is set inside `AttemptRepository.create()` when `attempt_number == 1`; `last_attempt_id` is set inside `finalize_if_incomplete()` in the same DB transaction as the attempt terminal UPDATE. `retry_category` is populated by `_RetryableUpstreamError.retry_category` from both the non-streaming and streaming error-classification sites.
-- **0027_routing_decisions.sql** — new `routing_decisions` table (`request_id, attempt_number, model_id, provider_id, protocol, selected_account_*, eligible_count, scored_count, attempted_excluded_count, top_score, top_score_account_name, exclude_reasons_json, decision_made_at`). Persisted inside the same coordinator `async with db.transaction():` block as the `request_attempts` INSERT. Routing-distribution queries use `<=` for the end-filter to avoid dropping rows at exact-second boundaries.
-- **0028_operational_events.sql** — new `operational_events` table (`event_type, details_json, occurred_at`). Instrumented at: `_crash_recovery` (event_type `crash_recovery`), `_finalize_stale_requests_once` (event_type `stale_request_finalizer`), `reconcile_expired_reservations` (event_type `reservation_reconcile`). Each event is recorded inside the same transaction as the durable state mutation, so the audit trail cannot lag the rows it summarises.
-- **0029_latency_phases.sql** — extends `requests` with `upstream_connect_ms, upstream_read_ms, coordinator_overhead_ms` (all nullable for pre-migration rows). `upstream_connect_ms` is measured around `client.send()`; `upstream_read_ms = first_byte_ms - upstream_connect_ms`; `coordinator_overhead_ms = upstream_latency_ms - connect - read` (clamped at 0). All three phases are surfaced via `/api/stats/latency` under the `phases` key with per-phase `avg/p50/p99/sample_count`.
+## Dashboard
 
-## Observability API surface
+- Server-rendered HTML pages in `src/eggpool/dashboard/render.py`
+- Overview page auto-refreshes in place (every `[dashboard].refresh_interval_s`); all other pages are static
+- Charts use bundled Chart.js v4 at `/static/chart.js` with `Cache-Control: public, max-age=86400`
+- New pages opt into Chart.js via `include_chart_js=True` in `_render_layout`
+- Frontend helpers in `src/eggpool/dashboard/static/dashboard.js` under `window.EggPoolDashboard`
+- Full page list and chart lifecycle details are in the `architecture` skill
 
-| Endpoint | Purpose | Auth |
-|---|---|---|
-| `GET /api/stats/attempts` | Per-attempt aggregates: total attempts, retry attempts, success attempts, latency p50/p99, byte totals, retry rate. Filterable by `account`, `provider`, `model`. | dashboard default |
-| `GET /api/stats/retries` | Distribution by `retry_category` (quota_exceeded, transient, auth_failure, …) | dashboard default |
-| `GET /api/stats/routing` | Per-`(model, provider)` decision aggregates: count, avg eligible/scored, avg selected score, distinct selected accounts | dashboard default |
-| `GET /api/stats/routing-selections` | Account-level selection counts | dashboard default |
-| `GET /api/stats/routing-exclusions` | Per-`(account, reason)` exclusion counts from `exclude_reasons_json` | dashboard default |
-| `GET /api/stats/operational` | `crash_recovery` / `stale_request_finalizer` / `reservation_reconcile` summary + recent | dashboard default |
-| `GET /api/stats/pending-health` | Instantaneous snapshot: pending count, oldest pending age, stale pending (>15m), active reservations, reserved microdollars, oldest reservation age | **always auth-gated** |
-| `GET /api/stats/latency` (extended) | Adds `phases` key: connect/read/coordinator-overhead breakdown | dashboard default |
-| `GET /api/stats/recent/{request_id}` | Parent request + full attempt chain + routing decisions. Returns account name, model, protocol, status, error class (never raw `error_detail`). | **always auth-gated** |
-| `GET /api/stats/recent-requests` | Bounded recent-requests metadata list (no body, no auth headers, no error_detail, no client_ip by default). | **always auth-gated** |
-| `GET /api/stats/accounts` / `/api/stats/models` (extended) | Adds `exact_count/derived_count/estimated_count/unknown_count`, `estimated_cost_fraction`, `cache_read_ratio`, `cache_write_ratio`, `reasoning_output_ratio`, `avg_cost_per_request`, `avg_cost_per_1k_tokens` | dashboard default |
-| `GET /api/stats/runtime` | Runtime/operations metrics: process topology, memory, background tasks, DB health, in-flight counts. Always auth-gated. | **always auth-gated** |
-| `GET /api/timeseries` | Legacy aggregate timeseries: one row per `(bucket)` with totals (kept for backward compatibility). | dashboard default |
-| `GET /api/timeseries/grouped` | Grouped usage timeseries for the `/timeseries` chart. Query params: `period`, `bucket` (`hour`/`day`), `group_by` (`provider_model`/`provider`/`model`/`account`), `metric`, `limit` (1-25), `account`, `model`. Returns `{bucket, group_by, metric, limit, series, buckets, bucket_totals, points}` — series outside `limit` fold into an `Other` series so bucket totals stay loss-less. | dashboard default |
+## Fast-Path CLI
 
-## Dashboard Pages
-
-Server-rendered HTML pages in `src/eggpool/dashboard/render.py`, all inheriting the dashboard's public/auth setting via the `require_auth` flag wired through `register_dashboard_routes`. Frontend helpers live in `src/eggpool/dashboard/static/dashboard.js` under `window.EggPoolDashboard` (`fetchStats`, `formatDurationMs`, `formatAgeSeconds`, `formatPercent`, `formatCount`, `formatBytes`, `formatMicrodollars`, `formatTokens`, `formatDollarsFromMicro`, `initGroupedTimeseriesCharts`, `reinitTimeseriesChart`).
-
-| Page | Route | Purpose | Chart.js |
-|---|---|---|---|
-| Overview | `/` | At-a-glance counters, bandwidth heatmap, request timeseries, System Health row (pending requests + reservations) | yes |
-| Reliability | `/reliability` | Attempt success/retry breakdown by `(provider, model)`, `retry_category` distribution, pending-health snapshot, operational events | yes |
-| Routing | `/routing` | Per-`(model, provider)` decision aggregates, account selection counts, exclusion taxonomy (suppressive vs advisory) | yes |
-| Traces | `/traces` | Recent request metadata (no `error_detail`, no `client_ip`). Auth-gated via shared `require_auth` flag | no |
-| Accounts | `/accounts` | Per-account stats with exactness, cache/reasoning ratios, cost-per-1k-tokens | no |
-| Models | `/models` | Per-model stats with the same exactness columns | no |
-| Latency | `/latency` | TTFT breakdown + connect/read/coordinator-overhead phases | yes |
-| Runtime | `/runtime` | Runtime health: process count, memory, background tasks, DB sizes | no |
-| Pings | `/pings` | Provider health/ping stats | no |
-| Events | `/events` | Recent events | no |
-| Timeseries | `/timeseries` | Stacked-bar grouped usage chart + controls (period, bucket, group_by, metric, limit) + grouped detail table | yes |
-| Bandwidth | `/bandwidth` | GitHub-style heatmap of daily bytes | no |
-
-The Overview page is the only page that auto-refreshes in place (every `[dashboard].refresh_interval_s`). All other pages are static unless the user navigates or hits refresh. Charts use the bundled Chart.js v4 served at `/static/chart.js` with `Cache-Control: public, max-age=86400`. New pages opt into Chart.js via `include_chart_js=True` in `_render_layout`.
-- **Fast-path CLI imports**: fast-path commands (`croncheck`, `ensure-running`) import only `eggpool.runtime_paths` from the package; do not add transitive imports to `runtime_paths` or `fastcli` or you break the Raspberry Pi watchdog performance contract
-- **Config-path resolution**: `--config PATH` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`. The resolver lives in `eggpool.deploy_user.resolve_config_path()` and is the single source of truth for every CLI command.
-- **`eggpool deploy cron` is now the WATCHDOG** (not backup). It installs `eggpool ensure-running` entries (`@reboot` + `*/5 * * * *` by default) bracketed by `# BEGIN EggPool watchdog` / `# END EggPool watchdog` markers so uninstall only strips the eggpool-owned lines. Backups live under `eggpool deploy backup-cron`.
-- **`eggpool deploy systemd --install`** defaults to **personal mode** (runs as the invoking user via `User=`/`Group=` in the generated unit). Use `--production` for the dedicated-system layout; use `--as-root` to permit a root-owned personal unit. Personal mode refuses direct-root without `--as-root` to prevent accidentally installing a personal unit as root.
-- **Top-level lifecycle commands** (`uninstall`, `recover`) skip `ensure_config` so they work even when the config is missing or corrupted. The CLI's main entry point exempts them from the auto-config-create guard.
+- `src/eggpool/cli.py` is a tiny bootstrap (74 lines)
+- `main()` calls `eggpool.fastcli.maybe_run_fast_command()` first; recognized fast commands (`croncheck`, `ensure-running`) are dispatched without importing Click
+- **Do not add transitive imports to `runtime_paths` or `fastcli`** — they are stdlib-only and must stay lightweight for the Raspberry Pi watchdog contract
+- Unrecognized commands fall through to `eggpool.cli_full`, which holds the heavy Click CLI
+- Public symbols (`cli`, helpers used by tests) are lazily forwarded from `cli_full` via PEP 562 `__getattr__` — so `from eggpool.cli import cli` and existing test imports still work without loading the full graph
+- See `plans/lightweight-cli-watchdog.md` for the full design
 
 ## Process Model
 
@@ -160,7 +136,7 @@ The Overview page is the only page that auto-refreshes in place (every `[dashboa
 - `[server].threads` (int, default `1`, min `1`, max `64`) controls Granian `runtime_threads` — the number of worker event-loop threads. Default is `1` for SBC / Raspberry Pi; raise on capable hardware
 - PID path resolution lives in `eggpool.runtime_paths` and is the single source of truth (`default_pid_file()`). Precedence: `$EGGPOOL_PID_FILE` → `$XDG_RUNTIME_DIR/eggpool.pid` → `~/.local/state/eggpool/eggpool.pid` → `/tmp/eggpool-<UID>.pid`. The PID file is owned by the **supervisor**, written before `Granian.serve()` and cleared in a `finally` block. The FastAPI lifespan no longer touches the PID file
 - `eggpool serve` refuses to start a second instance: first checks `runtime.read_pid()` + `runtime.is_process_running()`; if no live PID, probes `GET /v1/healthz` via stdlib `urllib.request` (bind `0.0.0.0` / `::` is rewritten to `127.0.0.1`). A live PID or a 200 from the probe exits `1`. Stale PID files (PID not running) are cleared before starting
-- `eggpool restart` no longer has inline subprocess logic; it delegates to `runtime.restart_server` which calls `runtime.send_sigterm` and `runtime.start_server` (which `subprocess.Popen`s a new supervisor)
+- `eggpool restart` delegates to `runtime.restart_server` which calls `runtime.send_sigterm` and `runtime.start_server` (which `subprocess.Popen`s a new supervisor)
 - `eggpool ensure-running` is the canonical cron watchdog command — it atomically checks-and-starts without ever spawning a duplicate instance. Use it from `@reboot` and `*/5 * * * *` crontab lines, not `croncheck || eggpool serve &`
 
 ### Daemon Mode
@@ -180,7 +156,7 @@ The Overview page is the only page that auto-refreshes in place (every `[dashboa
 |---------|-------------|
 | `eggpool help` | Show help message and available commands |
 | `eggpool version` | Print the installed version |
-| `eggpool serve` | Start the aggregation proxy server (default command). Flags: `--daemon`, `--log-file PATH`, `--quiet`, `--as-root` (see [Process Model / Daemon Mode](#daemon-mode)) |
+| `eggpool serve` | Start the aggregation proxy server (default command). Flags: `--daemon`, `--log-file PATH`, `--quiet`, `--as-root` |
 | `eggpool check-config` | Validate the configuration file |
 | `eggpool migrate` | Run database migrations |
 | `eggpool onboard` | Run the interactive onboarding setup (connect providers, start server) |
@@ -198,7 +174,7 @@ The Overview page is the only page that auto-refreshes in place (every `[dashboa
 | `eggpool deploy systemd` | Print systemd unit; `--install` writes it (personal by default; `--production` for the dedicated-system layout; `--as-root` for a root-owned personal unit) |
 | `eggpool deploy cron` | Print / install / uninstall the watchdog crontab (`@reboot` + `*/N * * * *` `eggpool ensure-running`). `--interval N` (1-59, default 5) |
 | `eggpool deploy backup-cron` | Print / install / uninstall the daily backup cron (personal user cron or production `/etc/cron.d/`) |
-| `eggpool deploy logrotate` | Print / install the logrotate config (validated via `logrotate -d`) |
+| `eggpool deploy logrotate` | Print / install / logrotate config (validated via `logrotate -d`) |
 | `eggpool deploy all` | Print / install systemd + logrotate + watchdog cron (backup-cron is separate) |
 | `eggpool backup` | Create a timestamped `.zip` backup of config, `.env`, and database |
 | `eggpool recover [path]` | Restore from a backup archive (interactive menu if no path) |
@@ -206,14 +182,6 @@ The Overview page is the only page that auto-refreshes in place (every `[dashboa
 
 All commands accept `--config /path/to/config.toml` (defaults to `config.toml`; resolution: `--config` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`).
 Running `eggpool` with no arguments prints the help message.
-
-## Fast-Path CLI
-
-- `src/eggpool/cli.py` is a tiny bootstrap (74 lines)
-- `main()` calls `eggpool.fastcli.maybe_run_fast_command()` first; recognized fast commands (`croncheck`, `ensure-running`) are dispatched without importing Click
-- Unrecognized commands fall through to `eggpool.cli_full`, which holds the heavy Click CLI
-- Public symbols (`cli`, helpers used by tests) are lazily forwarded from `cli_full` via PEP 562 `__getattr__` — so `from eggpool.cli import cli` and existing test imports still work without loading the full graph
-- See `plans/lightweight-cli-watchdog.md` for the full design
 
 ## Git Workflow
 
