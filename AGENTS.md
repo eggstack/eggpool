@@ -66,6 +66,9 @@ Key design rules that are easy to get wrong:
 - `base_url` ending `/v1` + path beginning `/v1/` is rejected (duplicate version prefix)
 - `auth.mode = "none"` sends no upstream auth (Ollama local)
 - All outbound dispatch paths use `compose_provider_url()` so providers cannot list at one host and dispatch to another
+- **`models_endpoint.method = "DISABLED"`** skips live model listing. Providers using this must declare `[[providers.<id>.static_models]]` rows; otherwise `eggpool check-config` warns and the catalog will be empty for the provider
+- **`static_models` lifecycle**: rows are seeded by `CatalogService._seed_static_models` BEFORE live fetch tasks run. Static-source fields (`protocol`, `protocol_source == "static_config"`, `supports_tools`, `supports_vision`) are preserved by `ModelCatalogCache._preserve_static_fields` when live rows arrive without them
+- **`eggpool check-config`** runs `_check_stale_contracts` after a successful load and emits advisory warnings for: `DISABLED` without static seeds, `DISABLED` with `require_models = true`, declared path fields ignored by protocol mismatch, duplicate `/v1` segments, `Authorization` in static headers when `auth.mode != "none"`, legacy `models_method`/`models_path` fields, and Anthropic providers using `auth.header = "Authorization"` instead of `x-api-key`. Warnings do not change the exit code
 
 ## Bearer-prefix Guard
 

@@ -291,6 +291,44 @@ class ProviderModelsEndpointConfig(BaseModel):
     required: bool = True
 
 
+class ProviderStaticModelConfig(BaseModel):
+    """Operator-supplied static model entry for a provider.
+
+    Providers whose upstream does not expose a usable ``/models`` listing
+    can declare model seeds in config so the catalog still has rows to
+    route against. Static rows participate in the same protocol, limit,
+    and exposure machinery as live-discovered entries, and live
+    refreshes may augment but must not erase explicit static fields.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    display_name: str | None = None
+    protocol: ProtocolName | None = None
+    max_context_tokens: int | None = Field(default=None, gt=0)
+    max_input_tokens: int | None = Field(default=None, gt=0)
+    max_output_tokens: int | None = Field(default=None, gt=0)
+    supports_tools: bool | None = None
+    supports_vision: bool | None = None
+    source_metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_limit_relationships(self) -> ProviderStaticModelConfig:
+        """Ensure field-specific limits do not exceed the context limit."""
+        context = self.max_context_tokens
+        if context is None:
+            return self
+        for field_name in ("max_input_tokens", "max_output_tokens"):
+            value = getattr(self, field_name)
+            if value is not None and value > context:
+                raise ConfigError(
+                    f"providers.{self.id!r}: {field_name} ({value}) exceeds "
+                    f"max_context_tokens ({context})"
+                )
+        return self
+
+
 class ProviderVerifyConfig(BaseModel):
     """Configuration for live verification of provider endpoints."""
 
@@ -329,6 +367,9 @@ class ProviderConfig(BaseModel):
         default_factory=list[ProviderStaticHeaderConfig]
     )
     models_endpoint: ProviderModelsEndpointConfig | None = None
+    static_models: list[ProviderStaticModelConfig] = Field(
+        default_factory=list[ProviderStaticModelConfig]
+    )
     verify: ProviderVerifyConfig = Field(default_factory=ProviderVerifyConfig)
 
     @field_validator("models_method", mode="before")
@@ -395,6 +436,19 @@ class ProviderConfig(BaseModel):
                 method=method,
                 path=self.models_path,
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_static_models(self) -> ProviderConfig:
+        """Reject duplicate static model IDs within a provider."""
+        seen: set[str] = set()
+        for static in self.static_models:
+            if static.id in seen:
+                raise ConfigError(
+                    f"Provider {self.id!r} declares duplicate static model "
+                    f"id {static.id!r}"
+                )
+            seen.add(static.id)
         return self
 
     @model_validator(mode="after")

@@ -58,7 +58,8 @@ See `architecture/README.md` for the full design overview.
 
 - Provider-suffixed model IDs: `model-id/provider-id` format
 - `ProviderClientPool` manages per-provider `httpx.AsyncClient` instances
-- Per-provider upstream paths: `openai_path`, `anthropic_path`, `models_path`
+- Per-provider upstream paths: `openai_path`, `anthropic_path`, `models_endpoint` (a `[providers.<id>.models_endpoint]` table with `method`, `path`, `query`, `body`, `required`; `method = "DISABLED"` skips live model listing). Legacy `models_path` / `models_method` scalars are auto-synthesized into a default `models_endpoint`.
+- **`static_models`** — providers may declare `[[providers.<id>.static_models]]` rows (`ProviderStaticModelConfig`) that seed the catalog at refresh time. Required when `models_endpoint.method = "DISABLED"`. Static rows participate in the same protocol/limit machinery as live rows; static-source fields (`protocol`, `protocol_source == "static_config"`, `supports_tools`, `supports_vision`) are preserved by `ModelCatalogCache._preserve_static_fields` when live rows arrive without them.
 - Legacy flat `[[accounts]]` auto-normalizes to default `opencode-go` provider
 - `parse_model_provider()` in `routing/provider.py` handles suffix parsing;
   `catalog/cache.py` retains a compatibility alias
@@ -91,12 +92,10 @@ present; only the no-config fallback returns bare paths.
 
 ### MiniMax Templates
 
-- `minimax` — international host `https://api.minimax.io/v1` (default for `minimax.io` keys)
-- `minimax-cn` — China host `https://api.minimaxi.com/v1`
+- `minimax` — international host `https://api.minimax.io/anthropic` (default for `minimax.io` token-plan keys). Uses the Anthropic-compatible transport (`x-api-key` header, `anthropic-version: 2023-06-01` static header). Model listing is `DISABLED`; the catalog is seeded from `[[providers.minimax.static_models]]`.
+- `minimax-cn` — China host `https://api.minimaxi.com/v1`. Plain OpenAI-compatible. Live verification is required before production use because the China endpoint family has not been confirmed against the Anthropic-compatible transport.
 
-Both are OpenAI-only and use `bearer` auth. API keys must be raw tokens;
-EggPool prepends `Bearer ` automatically. An optional
-`[providers.<id>.verify]` block controls live verification probes.
+API keys must be raw tokens; EggPool prepends the configured auth scheme automatically. An optional `[providers.<id>.verify]` block controls live verification probes.
 
 ## Model Context Limits
 

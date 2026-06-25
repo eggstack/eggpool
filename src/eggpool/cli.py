@@ -18,7 +18,7 @@ from eggpool.accounts.registry import account_config_rows
 from eggpool.auth import require_auth_at_startup
 from eggpool.db.migrations import MigrationRunner
 from eggpool.db.repositories import AccountRepository, ProviderRepository
-from eggpool.errors import AggregatorError
+from eggpool.errors import AggregatorError, ConfigError
 from eggpool.lifecycle import (
     InstallMethod,
     default_backup_dir,
@@ -36,7 +36,7 @@ from eggpool.lifecycle.backup import BackupContents, create_backup
 from eggpool.logging import configure_logging
 from eggpool.models.config import AppConfig
 from eggpool.providers.client_pool import ProviderClientPool
-from eggpool.providers.contract import PROVIDER_STATUS_SYMBOLS
+from eggpool.providers.contract import PROVIDER_STATUS_SYMBOLS, compose_provider_url
 from eggpool.toml_edit import (
     render_toml_string,
     section_has_key,
@@ -301,6 +301,106 @@ def logout(ctx: click.Context, target: str | None) -> None:
         click.echo("  Server is not running.")
 
 
+def _check_stale_contracts(config: AppConfig, config_path: str) -> list[str]:
+    """Return advisories for provider contract shapes that have grown stale.
+
+    These are warnings, not errors: the config may still load and run, but the
+    shape suggests the provider block was written for an older eggpool version
+    whose behavior has since changed. Each advisory is a single human-readable
+    line; the caller prints them and exits 0.
+
+    Inspects both the parsed ``AppConfig`` and the raw TOML so legacy
+    ``models_method``/``models_path`` keys (which the parser strips into a
+    synthesized ``models_endpoint`` table) can still be flagged for migration.
+    """
+    warnings: list[str] = []
+    raw = _load_raw_config(config_path)
+    raw_providers_section = _get_section(raw, "providers")
+    raw_providers: dict[str, object] = raw_providers_section
+
+    for provider in config.providers.values():
+        endpoint = provider.models_endpoint
+
+        if (
+            endpoint is not None
+            and endpoint.method == "DISABLED"
+            and not provider.static_models
+        ):
+            warnings.append(
+                f"[{provider.id}] models_endpoint is DISABLED but "
+                "static_models is empty; the catalog will not list any "
+                "models from this provider"
+            )
+
+        if (
+            endpoint is not None
+            and endpoint.method == "DISABLED"
+            and provider.verify.require_models
+        ):
+            warnings.append(
+                f"[{provider.id}] models_endpoint is DISABLED but "
+                "verify.require_models is true; the contract is contradictory"
+            )
+
+        if provider.anthropic_path and "anthropic" not in provider.protocols:
+            warnings.append(
+                f"[{provider.id}] anthropic_path is set but 'anthropic' is "
+                "not in protocols; the field will be ignored"
+            )
+
+        if provider.openai_path and "openai" not in provider.protocols:
+            warnings.append(
+                f"[{provider.id}] openai_path is set but 'openai' is not "
+                "in protocols; the field will be ignored"
+            )
+
+        if endpoint is not None:
+            try:
+                compose_provider_url(provider, endpoint.path)
+            except ConfigError:
+                warnings.append(
+                    f"[{provider.id}] base_url + models_endpoint.path "
+                    "produces a duplicate /v1 segment; see docs/providers.md"
+                )
+
+        if provider.auth.mode != "none":
+            for header in provider.headers:
+                if header.name.casefold() == "authorization":
+                    warnings.append(
+                        f"[{provider.id}] static header 'Authorization' is "
+                        f"set but auth.mode is '{provider.auth.mode}'; the "
+                        "auth header will be replaced"
+                    )
+                    break
+
+        if (
+            provider.auth.mode == "api_key"
+            and provider.auth.header == "Authorization"
+            and "anthropic" in provider.protocols
+        ):
+            warnings.append(
+                f"[{provider.id}] auth.mode='api_key' with "
+                "header='Authorization' looks wrong; Anthropic-compatible "
+                "providers typically use header='x-api-key'"
+            )
+
+        raw_section_obj = raw_providers.get(provider.id)
+        if isinstance(raw_section_obj, dict):
+            raw_section = cast("dict[str, object]", raw_section_obj)
+            has_legacy_key = (
+                "models_method" in raw_section or "models_path" in raw_section
+            )
+            has_endpoint_table = "models_endpoint" in raw_section
+            if has_legacy_key and not has_endpoint_table:
+                warnings.append(
+                    f"[{provider.id}] using legacy models_method/models_path; "
+                    f"consider migrating to "
+                    f"[[providers.{provider.id}.models_endpoint]]"
+                )
+
+    return warnings
+
+
 @cli.command("check-config")
 @click.pass_context
 def check_config(ctx: click.Context) -> None:
@@ -329,6 +429,12 @@ def check_config(ctx: click.Context) -> None:
     click.echo(f"  Server: {config.server.host}:{config.server.port}")
     click.echo(f"  Accounts: {len(config.all_accounts())}")
     click.echo(f"  Database: {config.database.path}")
+
+    stale_warnings = _check_stale_contracts(config, config_path)
+    for message in stale_warnings:
+        click.echo(f"  warning: {message}")
+    if stale_warnings:
+        click.echo(f"  {len(stale_warnings)} contract warning(s)")
 
 
 @cli.command()

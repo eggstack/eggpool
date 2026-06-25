@@ -163,12 +163,35 @@ class TestRegistryPydanticParsing:
         auth = entry.get("auth", {})
         assert auth.get("mode") == "none"
 
-    def test_generalcompute_uses_post_model_listing(
+    def test_generalcompute_uses_plain_openai_model_listing(
         self, provider_entries: dict[str, dict[str, Any]]
     ) -> None:
         entry = provider_entries["generalcompute"]
-        assert entry.get("models_method") == "POST"
-        assert entry.get("models_path") == "/models/list"
+        assert entry.get("models_method") == "GET"
+        assert entry.get("models_path") == "/models"
+        assert entry.get("openai_path") == "/chat/completions"
+
+    def test_minimax_uses_anthropic_compatible_contract(
+        self, provider_entries: dict[str, dict[str, Any]]
+    ) -> None:
+        entry = provider_entries["minimax"]
+        assert entry.get("base_url") == "https://api.minimax.io/anthropic"
+        assert entry.get("protocols") == ["anthropic"]
+        assert entry.get("anthropic_path") == "/v1/messages"
+        auth = entry.get("auth", {})
+        assert auth.get("mode") == "api_key"
+        assert auth.get("header") == "x-api-key"
+        headers = entry.get("headers", [])
+        assert any(
+            h.get("name") == "anthropic-version" and h.get("value") == "2023-06-01"
+            for h in headers
+        )
+        models_endpoint = entry.get("models_endpoint", {})
+        assert models_endpoint.get("method") == "DISABLED"
+        static_models = entry.get("static_models", [])
+        assert len(static_models) >= 1
+        ids = {sm.get("id") for sm in static_models}
+        assert "minimax/MiniMax-2.7" in ids
 
     def test_experimental_providers_not_recommended(
         self, provider_entries: dict[str, dict[str, Any]]

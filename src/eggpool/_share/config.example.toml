@@ -390,29 +390,64 @@ persist_redacted_error_detail = false
 #
 # # Live-verification-required: confirm base_url and endpoints before production use
 
-# MiniMax International — OpenAI compatible
+# MiniMax International — Anthropic-compatible endpoint for token-plan keys.
+# minimax.io token-plan keys use the Anthropic-compatible transport
+# (x-api-key + anthropic-version) at /anthropic/v1/messages, NOT the
+# OpenAI-compatible /v1/chat/completions surface. Static models are
+# required because the MiniMax Anthropic endpoint does not expose /models.
 # Status: live-verification-required; use for keys from minimax.io
 # [providers.minimax]
 # id = "minimax"
-# base_url = "https://api.minimax.io/v1"
-# protocols = ["openai"]
-# openai_path = "/chat/completions"
-# models_path = "/models"
+# base_url = "https://api.minimax.io/anthropic"
+# protocols = ["anthropic"]
+# anthropic_path = "/v1/messages"
 #
 # [[providers.minimax.accounts]]
 # name = "default"
 # api_key = "sk-your-minimax-key"
 #
 # [providers.minimax.auth]
-# mode = "bearer"
+# mode = "api_key"
+# header = "x-api-key"
 #
-# # Optional live-verification probe — the verifier uses this when neither
-# # --openai-model nor --anthropic-model is supplied.
+# [[providers.minimax.headers]]
+# name = "anthropic-version"
+# value = "2023-06-01"
+#
+# [providers.minimax.models_endpoint]
+# method = "DISABLED"
+# required = false
+#
 # # [providers.minimax.verify]
-# # probe_model = "MiniMax-M2.5"
-# # probe_protocol = "openai"
+# # probe_model = "minimax/MiniMax-2.7"
+# # probe_protocol = "anthropic"
+# # require_models = false
+#
+# # Static model seed: required because the MiniMax Anthropic endpoint
+# # does not advertise a /models listing. Override or extend this list
+# # to match the models your token-plan key actually supports.
+# [[providers.minimax.static_models]]
+# id = "minimax/MiniMax-2.7"
+# display_name = "minimax/MiniMax-2.7"
+# protocol = "anthropic"
+# max_context_tokens = 204800
+# max_output_tokens = 32000
+# supports_tools = true
+# supports_vision = false
+#
+# [[providers.minimax.static_models]]
+# id = "minimax/MiniMax-2.7-highspeed"
+# display_name = "minimax/MiniMax-2.7-highspeed"
+# protocol = "anthropic"
+# max_context_tokens = 204800
+# max_output_tokens = 32000
+# supports_tools = true
+# supports_vision = false
 
-# MiniMax China — OpenAI compatible
+# MiniMax China — live verification required before production use.
+# The China endpoint family and auth shape have not been confirmed against
+# api.minimaxi.com; do not assume parity with the international
+# Anthropic-compatible template without live testing.
 # Status: live-verification-required; use for keys from the China MiniMax console
 # [providers.minimax-cn]
 # id = "minimax-cn"
@@ -428,14 +463,18 @@ persist_redacted_error_detail = false
 # [providers.minimax-cn.auth]
 # mode = "bearer"
 
-# GeneralCompute — OpenAI compatible (uses POST for model listing)
-# Status: unverified — base_url path composition was corrected; run verifier before use
+# GeneralCompute — plain OpenAI-compatible PAYG.
+# Default to the standard OpenAI surface (GET /models, POST /chat/completions,
+# Bearer auth). The previously-suspected POST /models/list endpoint is not
+# required for the known-working PAYG flow.
+# Status: live-verification-required; run verifier before production use
 # [providers.generalcompute]
 # id = "generalcompute"
 # base_url = "https://api.generalcompute.com/v1"
 # protocols = ["openai"]
-# models_method = "POST"
-# models_path = "/models/list"
+# openai_path = "/chat/completions"
+# models_method = "GET"
+# models_path = "/models"
 #
 # [[providers.generalcompute.accounts]]
 # name = "default"

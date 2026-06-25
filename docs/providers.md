@@ -45,9 +45,9 @@ uv run python scripts/verify_upstream_auth.py --config config.toml --provider <p
 |----------|----|----------|-----------|-------|
 | Z.AI (ZhipuAI) | `zai` | `https://api.z.ai/api/paas/v4` | OpenAI | Confirm base URL and model listing |
 | Novita AI | `novita` | `https://api.novita.ai/openai` | OpenAI | Base URL may need correction |
-| MiniMax International | `minimax` | `https://api.minimax.io/v1` | OpenAI | 401 observed; auth needs correction |
-| MiniMax China | `minimax-cn` | `https://api.minimaxi.com/v1` | OpenAI | 401 observed; auth needs correction |
-| GeneralCompute | `generalcompute` | `https://api.generalcompute.com/v1` | OpenAI | Uses POST for model listing |
+| MiniMax International | `minimax` | `https://api.minimax.io/anthropic` | Anthropic | Anthropic-compatible endpoint for token-plan keys; static model seed required |
+| MiniMax China | `minimax-cn` | `https://api.minimaxi.com/v1` | OpenAI | Live verification required before production use |
+| GeneralCompute | `generalcompute` | `https://api.generalcompute.com/v1` | OpenAI | Plain OpenAI-compatible PAYG; verify `/models` and chat live |
 | NeuralWatt | `neuralwatt` | `https://api.neuralwatt.com/v1` | OpenAI | Energy-based pricing; verify endpoints |
 | Ollama (cloud) | `ollama-cloud` | `https://ollama.com/v1` | OpenAI | Confirm cloud auth and model listing |
 | Cerebras | `cerebras` | `https://api.cerebras.ai/v1` | OpenAI | Fast inference; verify model listing |
@@ -118,6 +118,112 @@ header = "x-api-key"
 name = "anthropic-version"
 value = "2023-06-01"
 ```
+
+### MiniMax International (Anthropic-Compatible Token-Plan Endpoint)
+
+Token-plan API keys from `minimax.io` are valid for the MiniMax
+Anthropic-compatible surface, **not** the OpenAI-compatible
+`/v1/chat/completions` endpoint. The bundled `minimax` template configures
+the Anthropic-compatible contract by default:
+
+```toml
+[providers.minimax]
+id = "minimax"
+base_url = "https://api.minimax.io/anthropic"
+protocols = ["anthropic"]
+anthropic_path = "/v1/messages"
+
+[[providers.minimax.accounts]]
+name = "default"
+api_key = "sk-your-minimax-key"
+
+[providers.minimax.auth]
+mode = "api_key"
+header = "x-api-key"
+
+[[providers.minimax.headers]]
+name = "anthropic-version"
+value = "2023-06-01"
+
+[providers.minimax.models_endpoint]
+method = "DISABLED"
+required = false
+
+# Static model seed: required because the MiniMax Anthropic endpoint
+# does not expose a /models listing. Override or extend this list to
+# match the models your token-plan key actually supports.
+[[providers.minimax.static_models]]
+id = "minimax/MiniMax-2.7"
+display_name = "minimax/MiniMax-2.7"
+protocol = "anthropic"
+max_context_tokens = 204800
+max_output_tokens = 32000
+supports_tools = true
+supports_vision = false
+```
+
+The composed upstream URL is
+`https://api.minimax.io/anthropic/v1/messages`, sent with
+`x-api-key: <token-plan-key>` and `anthropic-version: 2023-06-01`.
+
+`minimax-cn` (China console) is intentionally still configured as plain
+OpenAI-compatible in the bundled template because the China endpoint
+family and auth shape have not been confirmed against `api.minimaxi.com`.
+Do not assume parity with the international Anthropic-compatible
+template without live testing.
+
+### GeneralCompute PAYG (Plain OpenAI-Compatible)
+
+GeneralCompute PAYG is treated as a standard OpenAI-compatible provider.
+The bundled `generalcompute` template uses `GET /models` and
+`POST /chat/completions` with Bearer auth:
+
+```toml
+[providers.generalcompute]
+id = "generalcompute"
+base_url = "https://api.generalcompute.com/v1"
+protocols = ["openai"]
+openai_path = "/chat/completions"
+models_method = "GET"
+models_path = "/models"
+
+[[providers.generalcompute.accounts]]
+name = "default"
+api_key = "sk-your-generalcompute-key"
+
+[providers.generalcompute.auth]
+mode = "bearer"
+```
+
+A previous default of `POST /models/list` was suspected of causing
+catalog 404s and is no longer wired into the bundled template. If live
+provider docs later prove `POST /models/list` is required for some
+account type, implement it as an opt-in alternate template (for example
+`generalcompute-models-list`) rather than as the default PAYG behavior.
+
+### Static Model Seeds
+
+Some providers do not expose a usable `/models` listing (for example,
+the MiniMax Anthropic-compatible endpoint). For those providers,
+declare a static model seed under `[[providers.<id>.static_models]]`:
+
+```toml
+[[providers.minimax.static_models]]
+id = "minimax/MiniMax-2.7"
+display_name = "minimax/MiniMax-2.7"
+protocol = "anthropic"
+max_context_tokens = 204800
+max_output_tokens = 32000
+supports_tools = true
+supports_vision = false
+```
+
+Static rows participate in the same protocol, limit, and exposure
+machinery as live-discovered entries. When the provider's
+`models_endpoint.method = "DISABLED"` (or when live refresh returns no
+rows), static entries still populate the catalog so routes can dispatch.
+Live refreshes may augment static rows but must not erase explicit
+static `protocol`, `supports_tools`, or `supports_vision` fields.
 
 ## Routing Priority and Model Collapse
 
@@ -255,6 +361,30 @@ uv run python scripts/verify_upstream_auth.py --config config.toml --provider gr
 
 - Model listing may not map cleanly to OpenAI `/models`. Start with `require_models = false`.
 - Uses `x-api-key` header for auth, not `Authorization: Bearer`.
+
+## Troubleshooting
+
+### MiniMax 401 on `/v1/chat/completions`
+
+A 401 against `https://api.minimax.io/v1/chat/completions` with the
+bundled template's old contract usually means the wrong endpoint family
+or auth header was used. Token-plan keys from `minimax.io` are valid
+for the Anthropic-compatible transport at
+`https://api.minimax.io/anthropic/v1/messages` with `x-api-key` (not
+`Authorization: Bearer`) and the `anthropic-version: 2023-06-01` header.
+Update `base_url` to `https://api.minimax.io/anthropic`, `protocols`
+to `["anthropic"]`, `auth.mode` to `api_key`, `auth.header` to
+`x-api-key`, `anthropic_path` to `/v1/messages`, and add the
+`anthropic-version` static header. Also add `[[providers.minimax.static_models]]`
+entries because the MiniMax Anthropic endpoint does not advertise a
+`/models` listing.
+
+### GeneralCompute 404 on `/models/list`
+
+A 404 against `https://api.generalcompute.com/v1/models/list` means the
+non-default `POST /models/list` catalog endpoint was configured. PAYG
+should be tested first as plain OpenAI-compatible with `GET /models`
+and `POST /chat/completions` (the bundled template's default).
 
 ## OAuth / Consumer Subscription Exclusion
 

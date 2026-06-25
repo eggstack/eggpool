@@ -100,6 +100,7 @@ class ModelCatalogCache:
                 "discovered_limits": model.get("discovered_limits", {}),
                 "effective_limits": model.get("effective_limits", {}),
             }
+            self._preserve_static_fields(provider_key, model_info)
             self._provider_models[provider_key] = dict(model_info)
 
             # Global entry: only set on first encounter; never overwrite
@@ -141,6 +142,49 @@ class ModelCatalogCache:
             input_source=raw_limits.get("input_source"),
             output_source=raw_limits.get("output_source"),
         )
+
+    def _preserve_static_fields(
+        self,
+        provider_key: tuple[str, str],
+        model_info: dict[str, Any],
+    ) -> None:
+        """Preserve static_config-sourced fields against a live merge.
+
+        When a live row arrives for a model that already has a
+        ``static_config``-sourced provider entry, explicit static
+        protocol and capability fields win over a live row that did not
+        bring its own resolution. The merge mutates *model_info* in
+        place so callers can write the merged value into the cache.
+        """
+        existing = self._provider_models.get(provider_key)
+        if existing is None:
+            return
+        if existing.get("protocol_source") != "static_config":
+            return
+        new_protocol_source = model_info.get("protocol_source")
+        if new_protocol_source in {"config", "static_config"}:
+            return
+        model_info["protocol"] = existing.get("protocol")
+        model_info["protocol_source"] = existing.get("protocol_source")
+        existing_caps_raw = existing.get("capabilities", {})
+        new_caps_raw = model_info.get("capabilities", {})
+        if not isinstance(existing_caps_raw, dict) or not isinstance(
+            new_caps_raw, dict
+        ):
+            return
+        existing_caps = cast("dict[str, Any]", existing_caps_raw)
+        new_caps = cast("dict[str, Any]", new_caps_raw)
+        if (
+            existing_caps.get("supports_tools") is not None
+            and new_caps.get("supports_tools") is None
+        ):
+            new_caps["supports_tools"] = existing_caps["supports_tools"]
+        if (
+            existing_caps.get("supports_vision") is not None
+            and new_caps.get("supports_vision") is None
+        ):
+            new_caps["supports_vision"] = existing_caps["supports_vision"]
+        model_info["capabilities"] = new_caps
 
     def _visible_provider_ids(
         self,

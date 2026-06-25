@@ -417,6 +417,35 @@ class TestFormatProviderBlock:
         cfg = AppConfig.from_toml(str(config_file))
         assert cfg.providers["existing"].routing_priority == 0
 
+    def test_minimax_template_round_trips_with_static_seeds(self, tmp_path) -> None:
+        """Anthropic-compatible providers with static_models + headers round-trip."""
+        from eggpool.models.config import AppConfig
+
+        data = load_provider_templates()["minimax"]["data"]
+        block = _format_provider_block(
+            "minimax", data, "MINIMAX_TOKEN-PLAN-KEY", "minimax-0001"
+        )
+
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(block, encoding="utf-8")
+
+        cfg = AppConfig.from_toml(str(config_file))
+        provider = cfg.providers["minimax"]
+        assert provider.protocols == ["anthropic"]
+        assert provider.auth.mode == "api_key"
+        assert provider.auth.header == "x-api-key"
+        assert provider.models_endpoint.method == "DISABLED"
+        assert len(provider.static_models) == 6
+        assert any(sm.id == "minimax/MiniMax-2.7" for sm in provider.static_models)
+        header_names = {h.name for h in provider.headers}
+        assert "anthropic-version" in header_names
+        provider_level_metadata = [
+            line
+            for line in block.split("\n")
+            if line.startswith("display_name") or line.startswith("status =")
+        ]
+        assert provider_level_metadata == []
+
 
 class TestMergeProviderIntoConfig:
     """Tests for merging providers into config files."""

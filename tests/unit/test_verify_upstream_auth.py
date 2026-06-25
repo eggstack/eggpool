@@ -988,3 +988,316 @@ mode = "none"
     assert verify_upstream_auth.main() == 0
     assert "authorization" not in state.get("models")["headers"]
     assert "auth=none" in capsys.readouterr().out
+
+
+class TestDisabledAndRequireModels:
+    """Honoring ``models_endpoint.method=DISABLED`` and ``verify.require_models``."""
+
+    def test_disabled_models_endpoint_with_require_models_false_reports_skip(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        state = _capture_transport()
+        _install_mock_client(monkeypatch, state)
+        client = verify_upstream_auth._make_client()
+        try:
+            results = verify_upstream_auth._verify_config_provider(
+                client,
+                {
+                    "id": "minimax",
+                    "base_url": "https://api.minimax.io/anthropic",
+                    "models_endpoint": {
+                        "method": "DISABLED",
+                        "path": "/models",
+                        "required": False,
+                    },
+                    "auth": {"mode": "api_key", "header": "x-api-key"},
+                    "headers": [
+                        {"name": "anthropic-version", "value": "2023-06-01"},
+                    ],
+                    "verify": {
+                        "probe_protocol": "anthropic",
+                        "require_models": False,
+                    },
+                },
+                UPSTREAM_KEY,
+                "default",
+                None,
+                None,
+                True,
+            )
+        finally:
+            client.close()
+
+        assert "models" not in state.captured, (
+            "DISABLED + require_models=False must not hit the network"
+        )
+        models_results = [r for r in results if r.family == "models"]
+        assert all(r.ok for r in models_results), (
+            "DISABLED + require_models=False must produce no FAIL models result"
+        )
+        captured = capsys.readouterr()
+        assert "models_endpoint=DISABLED" in captured.out
+
+    def test_require_models_false_passes_when_models_fails_but_chat_works(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        cfg_path = tmp_path / "config.toml"
+        cfg_path.write_text(
+            f"""\
+[providers.minimax]
+id = "minimax"
+base_url = "https://api.minimax.io/v1"
+protocols = ["openai"]
+openai_path = "/chat/completions"
+models_path = "/models"
+
+[[providers.minimax.accounts]]
+name = "default"
+api_key = "{UPSTREAM_KEY}"
+
+[providers.minimax.auth]
+mode = "bearer"
+
+[providers.minimax.verify]
+probe_model = "MiniMax-M2.5"
+probe_protocol = "openai"
+require_models = false
+"""
+        )
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            path = request.url.path
+            if path.endswith("/models"):
+                return httpx.Response(500, content=b"upstream models failure")
+            if path.endswith("/chat/completions"):
+                body = json.loads(request.content) if request.content else {}
+                is_stream = body.get("stream", False)
+                content = (
+                    b'data: {"id":"x","choices":[],"object":"chat.completion.chunk"}\n'
+                    b"data: [DONE]\n"
+                    if is_stream
+                    else b'{"id":"x","choices":[]}'
+                )
+                return httpx.Response(
+                    200,
+                    headers={"x-request-id": "openai-req-1"},
+                    content=content,
+                )
+            return httpx.Response(599, content=b"unrouted")
+
+        def _factory() -> httpx.Client:
+            return httpx.Client(transport=httpx.MockTransport(_handler), timeout=5.0)
+
+        monkeypatch.setattr(verify_upstream_auth, "_make_client", _factory)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "verify_upstream_auth",
+                "--config",
+                str(cfg_path),
+                "--provider",
+                "minimax",
+            ],
+        )
+
+        assert verify_upstream_auth.main() == 0
+
+    def test_disabled_with_require_models_true_emits_stderr_warn(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        state = _capture_transport()
+        _install_mock_client(monkeypatch, state)
+        client = verify_upstream_auth._make_client()
+        try:
+            verify_upstream_auth._verify_config_provider(
+                client,
+                {
+                    "id": "minimax",
+                    "base_url": "https://api.minimax.io/anthropic",
+                    "models_endpoint": {
+                        "method": "DISABLED",
+                        "path": "/models",
+                        "required": False,
+                    },
+                    "auth": {"mode": "api_key", "header": "x-api-key"},
+                    "verify": {
+                        "probe_protocol": "anthropic",
+                        "require_models": True,
+                    },
+                },
+                UPSTREAM_KEY,
+                "default",
+                None,
+                None,
+                False,
+            )
+        finally:
+            client.close()
+
+        captured = capsys.readouterr()
+        assert "[WARN]" in captured.err
+        assert "models_endpoint.method=DISABLED" in captured.err
+        assert "require_models=true" in captured.err
+
+
+def test_compose_provider_url_rejects_duplicate_v1_segments() -> None:
+    from eggpool.errors import ConfigError
+    from eggpool.models.config import ProviderConfig
+    from eggpool.providers.contract import compose_provider_url
+
+    cfg = ProviderConfig(id="dup", base_url="https://api.example.com/v1")
+    with pytest.raises(ConfigError, match="duplicate version"):
+        compose_provider_url(cfg, "/v1/chat/completions")
+
+
+class TestVerboseFamilyDiagnostics:
+    """Verbose mode prints a diagnostic block before each check family."""
+
+    def _write_normal_provider(self, tmp_path: Path) -> Path:
+        cfg_path = tmp_path / "config.toml"
+        cfg_path.write_text(
+            f"""\
+[providers.normal]
+id = "normal"
+base_url = "https://api.normal.io/v1"
+protocols = ["openai"]
+openai_path = "/chat/completions"
+models_path = "/models"
+
+[[providers.normal.accounts]]
+name = "default"
+api_key = "{UPSTREAM_KEY}"
+
+[providers.normal.auth]
+mode = "bearer"
+
+[providers.normal.verify]
+probe_model = "normal-model"
+probe_protocol = "openai"
+"""
+        )
+        return cfg_path
+
+    def test_verbose_output_includes_models_endpoint_get_models_required_true(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        cfg_path = self._write_normal_provider(tmp_path)
+        state = _capture_transport()
+        _install_mock_client(monkeypatch, state)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "verify_upstream_auth",
+                "--config",
+                str(cfg_path),
+                "--provider",
+                "normal",
+                "--verbose",
+            ],
+        )
+
+        rc = verify_upstream_auth.main()
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "models_endpoint=GET /models required=True" in captured.out
+
+    def test_verbose_family_block_includes_base_url_and_auth(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        cfg_path = self._write_normal_provider(tmp_path)
+        state = _capture_transport()
+        _install_mock_client(monkeypatch, state)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "verify_upstream_auth",
+                "--config",
+                str(cfg_path),
+                "--provider",
+                "normal",
+                "--verbose",
+            ],
+        )
+
+        rc = verify_upstream_auth.main()
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "base_url=https://api.normal.io/v1" in captured.out
+        assert "auth=Authorization: Bearer ***" in captured.out
+        assert "static_models=0" in captured.out
+
+    def test_verbose_family_block_redacts_static_header_values(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        static_secret = "provider-static-secret-value"
+        cfg_path = tmp_path / "config.toml"
+        cfg_path.write_text(
+            f"""\
+[providers.normal]
+id = "normal"
+base_url = "https://api.normal.io/v1"
+protocols = ["openai"]
+openai_path = "/chat/completions"
+models_path = "/models"
+
+[[providers.normal.accounts]]
+name = "default"
+api_key = "{UPSTREAM_KEY}"
+
+[providers.normal.auth]
+mode = "bearer"
+
+[[providers.normal.headers]]
+name = "X-Inline"
+value = "inline-secret"
+
+[[providers.normal.headers]]
+name = "X-Env-Secret"
+value_env = "NORMAL_VERIFIER_SECRET"
+
+[providers.normal.verify]
+probe_model = "normal-model"
+probe_protocol = "openai"
+"""
+        )
+        monkeypatch.setenv("NORMAL_VERIFIER_SECRET", static_secret)
+        state = _capture_transport()
+        _install_mock_client(monkeypatch, state)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "verify_upstream_auth",
+                "--config",
+                str(cfg_path),
+                "--provider",
+                "normal",
+                "--verbose",
+            ],
+        )
+
+        rc = verify_upstream_auth.main()
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "X-Inline: ***" in captured.out
+        assert "X-Env-Secret: ***" in captured.out
+        assert "inline-secret" not in captured.out
+        assert static_secret not in captured.out

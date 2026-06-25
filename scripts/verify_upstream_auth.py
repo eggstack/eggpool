@@ -28,8 +28,12 @@ from dataclasses import dataclass, field
 from typing import Any, cast
 
 import httpx
+from pydantic import ValidationError
 
+from eggpool.errors import ConfigError
+from eggpool.models.config import ProviderConfig
 from eggpool.providers.auth import has_auth_scheme_prefix, render_auth_headers
+from eggpool.providers.contract import compose_provider_url
 
 DEFAULT_TIMEOUT = 30.0
 
@@ -57,11 +61,6 @@ def _require_env(name: str) -> str:
         sys.stderr.write(f"Missing required environment variable: {name}\n")
         raise SystemExit(2)
     return value
-
-
-def _compose_url(base_url: str, path: str) -> str:
-    """Compose absolute URL from base and path."""
-    return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
 
 
 def _extract_request_id(headers: httpx.Headers) -> str | None:
@@ -303,6 +302,32 @@ def _run_stream_check(
     )
 
 
+def _emit_family_diagnostic(
+    provider_id: str,
+    account_name: str,
+    family: str,
+    base_url: str,
+    auth_shape: str,
+    models_method: str,
+    models_path: str,
+    models_required: bool,
+    provider_config_obj: ProviderConfig,
+) -> None:
+    """Print a verbose-mode diagnostic block before a check family."""
+    static_header_names = ", ".join(
+        f"{header.name}: ***" for header in provider_config_obj.headers
+    )
+    sys.stdout.write(f"  [{provider_id}/{account_name}] family={family}\n")
+    sys.stdout.write(f"    base_url={base_url}\n")
+    sys.stdout.write(f"    auth={auth_shape}\n")
+    sys.stdout.write(
+        f"    models_endpoint={models_method} {models_path} "
+        f"required={models_required}\n"
+    )
+    sys.stdout.write(f"    static_headers=[{static_header_names}]\n")
+    sys.stdout.write(f"    static_models={len(provider_config_obj.static_models)}\n")
+
+
 def _verify_config_provider(
     client: httpx.Client,
     provider_cfg: dict[str, Any],
@@ -320,6 +345,13 @@ def _verify_config_provider(
     auth_header = auth_cfg.get("header", "Authorization")
     auth_scheme = auth_cfg.get("scheme", "Bearer")
 
+    if auth_mode == "none":
+        auth_shape = "none"
+    elif auth_mode == "bearer":
+        auth_shape = f"{auth_header}: {auth_scheme} ***"
+    else:
+        auth_shape = f"{auth_header}: ***"
+
     # Reject keys that already include the configured scheme so the
     # operator gets an actionable error before any upstream call.
     if auth_mode == "bearer" and has_auth_scheme_prefix(api_key, str(auth_scheme)):
@@ -332,11 +364,33 @@ def _verify_config_provider(
                 status_code=None,
                 request_id=None,
                 resolved_url="",
-                auth_shape=f"{auth_header}: {auth_scheme} ***",
+                auth_shape=auth_shape,
                 detail=(
                     f"raw key must not include {auth_scheme} prefix; "
                     f"EggPool adds the {auth_scheme} scheme automatically"
                 ),
+            )
+        ]
+
+    # Build a validated provider config so compose_provider_url() is the
+    # single source of truth for URL composition and duplicate-version
+    # rejection.
+    try:
+        provider_config_obj = ProviderConfig.model_validate(provider_cfg)
+    except ValidationError as exc:
+        message = "; ".join(err.get("msg", "") for err in exc.errors())
+        return [
+            _AuthCheckResult(
+                provider_id=provider_id,
+                account_name=account_name,
+                family="config",
+                ok=False,
+                status_code=None,
+                request_id=None,
+                resolved_url="",
+                auth_shape=auth_shape,
+                detail=f"config_invalid: {message}",
+                failure_class="config_invalid",
             )
         ]
 
@@ -350,12 +404,6 @@ def _verify_config_provider(
     contract_headers = {**static_headers, **auth_headers}
     if auth_mode != "none":
         sensitive_headers.add(auth_header.casefold())
-    if auth_mode == "none":
-        auth_shape = "none"
-    elif auth_mode == "bearer":
-        auth_shape = f"{auth_header}: {auth_scheme} ***"
-    else:
-        auth_shape = f"{auth_header}: ***"
 
     results: list[_AuthCheckResult] = []
 
@@ -366,6 +414,7 @@ def _verify_config_provider(
     verify_cfg: dict[str, Any] = provider_cfg.get("verify", {}) or {}
     probe_model = verify_cfg.get("probe_model")
     probe_protocol = verify_cfg.get("probe_protocol", "openai")
+    require_models = bool(verify_cfg.get("require_models", True))
 
     resolved_openai_model = openai_model
     resolved_anthropic_model = anthropic_model
@@ -376,59 +425,238 @@ def _verify_config_provider(
             resolved_openai_model = probe_model
 
     # Verify model listing endpoint
-    models_cfg_raw = provider_cfg.get("models_endpoint")
-    models_cfg = (
-        cast("dict[str, Any]", models_cfg_raw)
-        if isinstance(models_cfg_raw, dict)
-        else {}
+    models_endpoint_cfg = provider_config_obj.models_endpoint
+    models_method = models_endpoint_cfg.method if models_endpoint_cfg else "GET"
+    models_path = (
+        models_endpoint_cfg.path
+        if models_endpoint_cfg
+        else (provider_config_obj.models_path or "/models")
     )
-    if isinstance(models_cfg_raw, dict):
-        models_method = str(models_cfg.get("method", "GET"))
-        models_path = str(models_cfg.get("path", "/models"))
-    else:
-        models_method = str(provider_cfg.get("models_method", "GET"))
-        models_path = str(provider_cfg.get("models_path", "/models"))
+    models_required = models_endpoint_cfg.required if models_endpoint_cfg else True
 
-    if models_method.upper() != "DISABLED" and models_path:
-        models_url = _compose_url(base_url, models_path)
-        models_query_raw = models_cfg.get("query")
-        models_query = (
-            cast("dict[str, str]", models_query_raw)
-            if isinstance(models_query_raw, dict)
-            else {}
+    if models_method.upper() == "DISABLED":
+        if require_models:
+            sys.stderr.write(
+                f"  [WARN] {provider_id}/{account_name}: "
+                "models_endpoint.method=DISABLED conflicts with "
+                "verify.require_models=true; skipping network call.\n"
+            )
+        results.append(
+            _AuthCheckResult(
+                provider_id=provider_id,
+                account_name=account_name,
+                family="models",
+                ok=True,
+                status_code=None,
+                request_id=None,
+                resolved_url="",
+                auth_shape=auth_shape,
+                detail="SKIP: models_endpoint.method=DISABLED",
+            )
         )
-        if models_query:
-            url_obj = httpx.URL(models_url).copy_merge_params(models_query)
-            models_url = str(url_obj)
-        diagnostic_models_url = _redact_url_query(models_url)
-        headers = {"Accept": "application/json", **contract_headers}
+        if verbose:
+            _emit_family_diagnostic(
+                provider_id=provider_id,
+                account_name=account_name,
+                family="models",
+                base_url=base_url,
+                auth_shape=auth_shape,
+                models_method=models_method,
+                models_path=models_path,
+                models_required=models_required,
+                provider_config_obj=provider_config_obj,
+            )
+            sys.stdout.write(
+                f"  [SKIP] {provider_id}/{account_name} models: "
+                "models_endpoint.method=DISABLED\n"
+            )
+    elif models_path:
+        if verbose:
+            _emit_family_diagnostic(
+                provider_id=provider_id,
+                account_name=account_name,
+                family="models",
+                base_url=base_url,
+                auth_shape=auth_shape,
+                models_method=models_method,
+                models_path=models_path,
+                models_required=models_required,
+                provider_config_obj=provider_config_obj,
+            )
         try:
-            if models_method.upper() == "POST":
-                models_body_raw = models_cfg.get("body")
-                models_body = (
-                    cast("dict[str, Any]", models_body_raw)
-                    if isinstance(models_body_raw, dict)
-                    else {}
+            models_url = compose_provider_url(provider_config_obj, models_path)
+        except ConfigError as exc:
+            results.append(
+                _AuthCheckResult(
+                    provider_id=provider_id,
+                    account_name=account_name,
+                    family="models",
+                    ok=False,
+                    status_code=None,
+                    request_id=None,
+                    resolved_url="",
+                    auth_shape=auth_shape,
+                    detail=f"config_invalid: {exc}",
+                    failure_class="config_invalid",
                 )
-                req = httpx.Request(
-                    "POST", models_url, headers=headers, json=models_body
+            )
+            models_url = ""
+        if models_url:
+            models_query: dict[str, str] = (
+                models_endpoint_cfg.query if models_endpoint_cfg else {}
+            )
+            if models_query:
+                url_obj = httpx.URL(models_url).copy_merge_params(models_query)
+                models_url = str(url_obj)
+            diagnostic_models_url = _redact_url_query(models_url)
+            headers = {"Accept": "application/json", **contract_headers}
+            try:
+                if models_method.upper() == "POST":
+                    models_body: dict[str, Any] = (
+                        models_endpoint_cfg.body
+                        if models_endpoint_cfg and models_endpoint_cfg.body
+                        else {}
+                    )
+                    req = httpx.Request(
+                        "POST", models_url, headers=headers, json=models_body
+                    )
+                else:
+                    req = httpx.Request("GET", models_url, headers=headers)
+                result = _run_single_check(
+                    client,
+                    provider_id,
+                    account_name,
+                    "models",
+                    req,
+                    diagnostic_models_url,
+                    auth_shape,
                 )
-            else:
-                req = httpx.Request("GET", models_url, headers=headers)
+                # When verify.require_models=false a failed models listing is
+                # treated as a non-fatal SKIP so the overall verification can
+                # still pass based on the chat probes.
+                if not result.ok and not require_models:
+                    result = _AuthCheckResult(
+                        provider_id=result.provider_id,
+                        account_name=result.account_name,
+                        family=result.family,
+                        ok=True,
+                        status_code=result.status_code,
+                        request_id=result.request_id,
+                        resolved_url=result.resolved_url,
+                        auth_shape=result.auth_shape,
+                        detail=(
+                            f"SKIP: models listing failed ({result.detail}) "
+                            "but require_models=false"
+                        ),
+                    )
+                results.append(result)
+                if verbose:
+                    marker = "OK" if result.ok else "FAIL"
+                    sys.stdout.write(
+                        f"  [{marker}] {provider_id}/{account_name} models: "
+                        f"{result.detail}\n"
+                    )
+                    sys.stdout.write(f"    resolved_url={result.resolved_url}\n")
+                    sys.stdout.write(f"    auth={result.auth_shape}\n")
+                    sys.stdout.write(
+                        f"    headers="
+                        f"{_redact_headers(dict(req.headers), sensitive_headers)}\n"
+                    )
+            except Exception as exc:
+                error_result = _AuthCheckResult(
+                    provider_id=provider_id,
+                    account_name=account_name,
+                    family="models",
+                    ok=False,
+                    status_code=None,
+                    request_id=None,
+                    resolved_url=diagnostic_models_url,
+                    auth_shape=auth_shape,
+                    # Provider header values may be secrets. Exception
+                    # messages from HTTP clients can echo invalid values.
+                    detail=f"error: {type(exc).__name__}",
+                )
+                if not require_models:
+                    error_result = _AuthCheckResult(
+                        provider_id=error_result.provider_id,
+                        account_name=error_result.account_name,
+                        family=error_result.family,
+                        ok=True,
+                        status_code=error_result.status_code,
+                        request_id=error_result.request_id,
+                        resolved_url=error_result.resolved_url,
+                        auth_shape=error_result.auth_shape,
+                        detail=(
+                            f"SKIP: models listing failed "
+                            f"({error_result.detail}) but require_models=false"
+                        ),
+                    )
+                results.append(error_result)
+                if verbose:
+                    marker = "OK" if error_result.ok else "FAIL"
+                    sys.stdout.write(
+                        f"  [{marker}] {provider_id}/{account_name} models: "
+                        f"{error_result.detail}\n"
+                    )
+                    sys.stdout.write(f"    resolved_url={error_result.resolved_url}\n")
+                    sys.stdout.write(f"    auth={error_result.auth_shape}\n")
+
+    # Verify OpenAI chat endpoint
+    openai_path = provider_config_obj.openai_path
+    if openai_path and resolved_openai_model:
+        if verbose:
+            _emit_family_diagnostic(
+                provider_id=provider_id,
+                account_name=account_name,
+                family=OPENAI_FAMILY,
+                base_url=base_url,
+                auth_shape=auth_shape,
+                models_method=models_method,
+                models_path=models_path,
+                models_required=models_required,
+                provider_config_obj=provider_config_obj,
+            )
+        try:
+            chat_url = compose_provider_url(provider_config_obj, openai_path)
+        except ConfigError as exc:
+            results.append(
+                _AuthCheckResult(
+                    provider_id=provider_id,
+                    account_name=account_name,
+                    family=OPENAI_FAMILY,
+                    ok=False,
+                    status_code=None,
+                    request_id=None,
+                    resolved_url="",
+                    auth_shape=auth_shape,
+                    detail=f"config_invalid: {exc}",
+                    failure_class="config_invalid",
+                )
+            )
+            chat_url = ""
+        if chat_url:
+            headers = {"Content-Type": "application/json", **contract_headers}
+            payload = {
+                "model": resolved_openai_model,
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "ping"}],
+            }
+            req = httpx.Request("POST", chat_url, headers=headers, json=payload)
+            diagnostic_chat_url = _redact_url_query(chat_url)
             result = _run_single_check(
                 client,
                 provider_id,
                 account_name,
-                "models",
+                OPENAI_FAMILY,
                 req,
-                diagnostic_models_url,
+                diagnostic_chat_url,
                 auth_shape,
             )
             results.append(result)
             if verbose:
                 marker = "OK" if result.ok else "FAIL"
                 sys.stdout.write(
-                    f"  [{marker}] {provider_id}/{account_name} models: "
+                    f"  [{marker}] {provider_id}/{account_name} openai: "
                     f"{result.detail}\n"
                 )
                 sys.stdout.write(f"    resolved_url={result.resolved_url}\n")
@@ -437,155 +665,131 @@ def _verify_config_provider(
                     f"    headers="
                     f"{_redact_headers(dict(req.headers), sensitive_headers)}\n"
                 )
-        except Exception as exc:
-            error_result = _AuthCheckResult(
-                provider_id=provider_id,
-                account_name=account_name,
-                family="models",
-                ok=False,
-                status_code=None,
-                request_id=None,
-                resolved_url=diagnostic_models_url,
-                auth_shape=auth_shape,
-                # Provider header values may be secrets. Exception
-                # messages from HTTP clients can echo invalid values.
-                detail=f"error: {type(exc).__name__}",
+
+            # Streaming probe
+            stream_payload = {**payload, "stream": True}
+            stream_req = httpx.Request(
+                "POST", chat_url, headers=headers, json=stream_payload
             )
-            results.append(error_result)
+            stream_result = _run_stream_check(
+                client,
+                provider_id,
+                account_name,
+                OPENAI_FAMILY,
+                stream_req,
+                diagnostic_chat_url,
+                auth_shape,
+            )
+            results.append(stream_result)
             if verbose:
+                marker = "OK" if stream_result.ok else "FAIL"
                 sys.stdout.write(
-                    f"  [FAIL] {provider_id}/{account_name} models: "
-                    f"{error_result.detail}\n"
+                    f"  [{marker}] {provider_id}/{account_name} stream_openai: "
+                    f"{stream_result.detail}\n"
                 )
-                sys.stdout.write(f"    resolved_url={error_result.resolved_url}\n")
-                sys.stdout.write(f"    auth={error_result.auth_shape}\n")
-
-    # Verify OpenAI chat endpoint
-    openai_path = provider_cfg.get("openai_path")
-    if openai_path and resolved_openai_model:
-        chat_url = _compose_url(base_url, openai_path)
-        headers = {"Content-Type": "application/json", **contract_headers}
-        payload = {
-            "model": resolved_openai_model,
-            "max_tokens": 1,
-            "messages": [{"role": "user", "content": "ping"}],
-        }
-        req = httpx.Request("POST", chat_url, headers=headers, json=payload)
-        diagnostic_chat_url = _redact_url_query(chat_url)
-        result = _run_single_check(
-            client,
-            provider_id,
-            account_name,
-            OPENAI_FAMILY,
-            req,
-            diagnostic_chat_url,
-            auth_shape,
-        )
-        results.append(result)
-        if verbose:
-            marker = "OK" if result.ok else "FAIL"
-            sys.stdout.write(
-                f"  [{marker}] {provider_id}/{account_name} openai: {result.detail}\n"
-            )
-            sys.stdout.write(f"    resolved_url={result.resolved_url}\n")
-            sys.stdout.write(f"    auth={result.auth_shape}\n")
-            sys.stdout.write(
-                f"    headers={_redact_headers(dict(req.headers), sensitive_headers)}\n"
-            )
-
-        # Streaming probe
-        stream_payload = {**payload, "stream": True}
-        stream_req = httpx.Request(
-            "POST", chat_url, headers=headers, json=stream_payload
-        )
-        stream_result = _run_stream_check(
-            client,
-            provider_id,
-            account_name,
-            OPENAI_FAMILY,
-            stream_req,
-            diagnostic_chat_url,
-            auth_shape,
-        )
-        results.append(stream_result)
-        if verbose:
-            marker = "OK" if stream_result.ok else "FAIL"
-            sys.stdout.write(
-                f"  [{marker}] {provider_id}/{account_name} stream_openai: "
-                f"{stream_result.detail}\n"
-            )
-            sys.stdout.write(f"    resolved_url={stream_result.resolved_url}\n")
-            sys.stdout.write(f"    auth={stream_result.auth_shape}\n")
-            sys.stdout.write(
-                f"    headers="
-                f"{_redact_headers(dict(stream_req.headers), sensitive_headers)}\n"
-            )
+                sys.stdout.write(f"    resolved_url={stream_result.resolved_url}\n")
+                sys.stdout.write(f"    auth={stream_result.auth_shape}\n")
+                sys.stdout.write(
+                    f"    headers="
+                    f"{_redact_headers(dict(stream_req.headers), sensitive_headers)}\n"
+                )
 
     # Verify Anthropic messages endpoint
-    anthropic_path = provider_cfg.get("anthropic_path")
+    anthropic_path = provider_config_obj.anthropic_path
     if anthropic_path and resolved_anthropic_model:
-        msg_url = _compose_url(base_url, anthropic_path)
-        headers = {
-            "Content-Type": "application/json",
-            "anthropic-version": "2023-06-01",
-            **contract_headers,
-        }
-        payload = {
-            "model": resolved_anthropic_model,
-            "max_tokens": 1,
-            "messages": [{"role": "user", "content": "ping"}],
-        }
-        req = httpx.Request("POST", msg_url, headers=headers, json=payload)
-        diagnostic_msg_url = _redact_url_query(msg_url)
-        result = _run_single_check(
-            client,
-            provider_id,
-            account_name,
-            ANTHROPIC_FAMILY,
-            req,
-            diagnostic_msg_url,
-            auth_shape,
-        )
-        results.append(result)
         if verbose:
-            marker = "OK" if result.ok else "FAIL"
-            sys.stdout.write(
-                f"  [{marker}] {provider_id}/{account_name} anthropic: "
-                f"{result.detail}\n"
+            _emit_family_diagnostic(
+                provider_id=provider_id,
+                account_name=account_name,
+                family=ANTHROPIC_FAMILY,
+                base_url=base_url,
+                auth_shape=auth_shape,
+                models_method=models_method,
+                models_path=models_path,
+                models_required=models_required,
+                provider_config_obj=provider_config_obj,
             )
-            sys.stdout.write(f"    resolved_url={result.resolved_url}\n")
-            sys.stdout.write(f"    auth={result.auth_shape}\n")
-            sys.stdout.write(
-                f"    headers={_redact_headers(dict(req.headers), sensitive_headers)}\n"
+        try:
+            msg_url = compose_provider_url(provider_config_obj, anthropic_path)
+        except ConfigError as exc:
+            results.append(
+                _AuthCheckResult(
+                    provider_id=provider_id,
+                    account_name=account_name,
+                    family=ANTHROPIC_FAMILY,
+                    ok=False,
+                    status_code=None,
+                    request_id=None,
+                    resolved_url="",
+                    auth_shape=auth_shape,
+                    detail=f"config_invalid: {exc}",
+                    failure_class="config_invalid",
+                )
             )
+            msg_url = ""
+        if msg_url:
+            headers = {
+                "Content-Type": "application/json",
+                "anthropic-version": "2023-06-01",
+                **contract_headers,
+            }
+            payload = {
+                "model": resolved_anthropic_model,
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "ping"}],
+            }
+            req = httpx.Request("POST", msg_url, headers=headers, json=payload)
+            diagnostic_msg_url = _redact_url_query(msg_url)
+            result = _run_single_check(
+                client,
+                provider_id,
+                account_name,
+                ANTHROPIC_FAMILY,
+                req,
+                diagnostic_msg_url,
+                auth_shape,
+            )
+            results.append(result)
+            if verbose:
+                marker = "OK" if result.ok else "FAIL"
+                sys.stdout.write(
+                    f"  [{marker}] {provider_id}/{account_name} anthropic: "
+                    f"{result.detail}\n"
+                )
+                sys.stdout.write(f"    resolved_url={result.resolved_url}\n")
+                sys.stdout.write(f"    auth={result.auth_shape}\n")
+                sys.stdout.write(
+                    f"    headers="
+                    f"{_redact_headers(dict(req.headers), sensitive_headers)}\n"
+                )
 
-        # Streaming probe
-        stream_payload = {**payload, "stream": True}
-        stream_req = httpx.Request(
-            "POST", msg_url, headers=headers, json=stream_payload
-        )
-        stream_result = _run_stream_check(
-            client,
-            provider_id,
-            account_name,
-            ANTHROPIC_FAMILY,
-            stream_req,
-            diagnostic_msg_url,
-            auth_shape,
-        )
-        results.append(stream_result)
-        if verbose:
-            marker = "OK" if stream_result.ok else "FAIL"
-            sys.stdout.write(
-                f"  [{marker}] {provider_id}/{account_name} stream_anthropic: "
-                f"{stream_result.detail}\n"
+            # Streaming probe
+            stream_payload = {**payload, "stream": True}
+            stream_req = httpx.Request(
+                "POST", msg_url, headers=headers, json=stream_payload
             )
-            sys.stdout.write(f"    resolved_url={stream_result.resolved_url}\n")
-            sys.stdout.write(f"    auth={stream_result.auth_shape}\n")
-            sys.stdout.write(
-                f"    headers="
-                f"{_redact_headers(dict(stream_req.headers), sensitive_headers)}\n"
+            stream_result = _run_stream_check(
+                client,
+                provider_id,
+                account_name,
+                ANTHROPIC_FAMILY,
+                stream_req,
+                diagnostic_msg_url,
+                auth_shape,
             )
+            results.append(stream_result)
+            if verbose:
+                marker = "OK" if stream_result.ok else "FAIL"
+                sys.stdout.write(
+                    f"  [{marker}] {provider_id}/{account_name} stream_anthropic: "
+                    f"{stream_result.detail}\n"
+                )
+                sys.stdout.write(f"    resolved_url={stream_result.resolved_url}\n")
+                sys.stdout.write(f"    auth={stream_result.auth_shape}\n")
+                sys.stdout.write(
+                    f"    headers="
+                    f"{_redact_headers(dict(stream_req.headers), sensitive_headers)}\n"
+                )
 
     return results
 

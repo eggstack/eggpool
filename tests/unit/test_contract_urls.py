@@ -82,26 +82,22 @@ class TestProviderUrlComposition:
             id="generalcompute",
             base_url="https://api.generalcompute.com/v1",
             openai_path="/chat/completions",
-            models_path="/models/list",
-        )
-        url = compose_provider_url(cfg, cfg.models_path)
-        assert url == "https://api.generalcompute.com/v1/models/list"
-        assert url.count("/v1/") == 1, f"Duplicate /v1 in URL: {url}"
-
-    def test_minimax_international_url(self):
-        cfg = ProviderConfig(
-            id="minimax",
-            base_url="https://api.minimax.io/v1",
-            openai_path="/chat/completions",
             models_path="/models",
         )
-        assert compose_provider_url(cfg, cfg.openai_path) == (
-            "https://api.minimax.io/v1/chat/completions"
+        url = compose_provider_url(cfg, cfg.models_path)
+        assert url == "https://api.generalcompute.com/v1/models"
+        assert url.count("/v1/") == 1, f"Duplicate /v1 in URL: {url}"
+
+    def test_minimax_anthropic_messages_url(self):
+        cfg = ProviderConfig(
+            id="minimax",
+            base_url="https://api.minimax.io/anthropic",
+            anthropic_path="/v1/messages",
         )
-        assert compose_provider_url(cfg, cfg.models_path) == (
-            "https://api.minimax.io/v1/models"
+        assert compose_provider_url(cfg, cfg.anthropic_path) == (
+            "https://api.minimax.io/anthropic/v1/messages"
         )
-        assert "/v1/v1" not in compose_provider_url(cfg, cfg.openai_path)
+        assert "/v1/v1" not in compose_provider_url(cfg, cfg.anthropic_path)
 
     def test_minimax_china_url(self):
         cfg = ProviderConfig(
@@ -344,11 +340,28 @@ _TEMPLATE_PROVIDERS: dict[str, dict] = {
     },
     "minimax": {
         "id": "minimax",
-        "base_url": "https://api.minimax.io/v1",
-        "protocols": ["openai"],
+        "base_url": "https://api.minimax.io/anthropic",
+        "protocols": ["anthropic"],
         "openai_path": "/chat/completions",
+        "anthropic_path": "/v1/messages",
+        "models_method": "GET",
         "models_path": "/models",
-        "auth": {"mode": "bearer"},
+        "auth": {"mode": "api_key", "header": "x-api-key"},
+        "headers": [
+            {"name": "anthropic-version", "value": "2023-06-01"},
+        ],
+        "models_endpoint": {"method": "DISABLED", "path": "/models", "required": False},
+        "static_models": [
+            {
+                "id": "minimax/MiniMax-2.7",
+                "display_name": "minimax/MiniMax-2.7",
+                "protocol": "anthropic",
+                "max_context_tokens": 204800,
+                "max_output_tokens": 32000,
+                "supports_tools": True,
+                "supports_vision": False,
+            },
+        ],
     },
     "minimax-cn": {
         "id": "minimax-cn",
@@ -363,8 +376,8 @@ _TEMPLATE_PROVIDERS: dict[str, dict] = {
         "base_url": "https://api.generalcompute.com/v1",
         "protocols": ["openai"],
         "openai_path": "/chat/completions",
-        "models_method": "POST",
-        "models_path": "/models/list",
+        "models_method": "GET",
+        "models_path": "/models",
         "auth": {"mode": "bearer"},
     },
     "neuralwatt": {
@@ -620,15 +633,15 @@ class TestTemplateLinter:
 
     def test_generalcompute_models_url_single_v1(self):
         cfg = _get_provider_configs()["generalcompute"]
-        url = compose_provider_url(cfg, cfg.models_path or "/models/list")
-        assert url == "https://api.generalcompute.com/v1/models/list"
+        url = compose_provider_url(cfg, cfg.models_path or "/models")
+        assert url == "https://api.generalcompute.com/v1/models"
 
     def test_minimax_international_default_url(self):
         cfg = _get_provider_configs()["minimax"]
-        assert cfg.base_url == "https://api.minimax.io/v1"
-        assert cfg.openai_path == "/chat/completions"
-        url = compose_provider_url(cfg, cfg.openai_path)
-        assert url == "https://api.minimax.io/v1/chat/completions"
+        assert cfg.base_url == "https://api.minimax.io/anthropic"
+        assert cfg.anthropic_path == "/v1/messages"
+        url = compose_provider_url(cfg, cfg.anthropic_path)
+        assert url == "https://api.minimax.io/anthropic/v1/messages"
 
     def test_minimax_china_default_url(self):
         cfg = _get_provider_configs()["minimax-cn"]

@@ -29,30 +29,98 @@ probe_protocol = "openai"
 require_models = true
 
 [providers.minimax]
-# MiniMax International — OpenAI compatible
+# MiniMax International — Anthropic-compatible endpoint for token-plan keys.
+# Token-plan keys from minimax.io use the Anthropic-compatible transport
+# (x-api-key + anthropic-version) at /anthropic/v1/messages, not the
+# legacy OpenAI-compatible /v1/chat/completions surface.
 id = "minimax"
-base_url = "https://api.minimax.io/v1"
-protocols = ["openai"]
-openai_path = "/chat/completions"
-models_path = "/models"
+base_url = "https://api.minimax.io/anthropic"
+protocols = ["anthropic"]
+anthropic_path = "/v1/messages"
 api_key_env = "API_KEY"
 display_name = "MiniMax International"
 status = "experimental"
 category = "direct"
 region = "global"
 recommended = false
-notes = "401 auth issue unresolved; verify before use"
+notes = "Uses MiniMax Anthropic-compatible endpoint for minimax.io token-plan keys; static model seed required"
 
 [providers.minimax.auth]
-mode = "bearer"
+mode = "api_key"
+header = "x-api-key"
+
+[[providers.minimax.headers]]
+name = "anthropic-version"
+value = "2023-06-01"
+
+[providers.minimax.models_endpoint]
+method = "DISABLED"
+required = false
 
 [providers.minimax.verify]
-probe_model = "MiniMax-M2.5"
-probe_protocol = "openai"
+probe_model = "minimax/MiniMax-2.7"
+probe_protocol = "anthropic"
 require_models = false
 
+[[providers.minimax.static_models]]
+id = "minimax/MiniMax-2.7"
+display_name = "minimax/MiniMax-2.7"
+protocol = "anthropic"
+max_context_tokens = 204800
+max_output_tokens = 32000
+supports_tools = true
+supports_vision = false
+
+[[providers.minimax.static_models]]
+id = "minimax/MiniMax-2.7-highspeed"
+display_name = "minimax/MiniMax-2.7-highspeed"
+protocol = "anthropic"
+max_context_tokens = 204800
+max_output_tokens = 32000
+supports_tools = true
+supports_vision = false
+
+[[providers.minimax.static_models]]
+id = "minimax/MiniMax-2.5"
+display_name = "minimax/MiniMax-2.5"
+protocol = "anthropic"
+max_context_tokens = 204800
+max_output_tokens = 32000
+supports_tools = true
+supports_vision = false
+
+[[providers.minimax.static_models]]
+id = "minimax/MiniMax-2.5-highspeed"
+display_name = "minimax/MiniMax-2.5-highspeed"
+protocol = "anthropic"
+max_context_tokens = 204800
+max_output_tokens = 32000
+supports_tools = true
+supports_vision = false
+
+[[providers.minimax.static_models]]
+id = "minimax/MiniMax-2.1"
+display_name = "minimax/MiniMax-2.1"
+protocol = "anthropic"
+max_context_tokens = 204800
+max_output_tokens = 32000
+supports_tools = true
+supports_vision = false
+
+[[providers.minimax.static_models]]
+id = "minimax/MiniMax-2.1-highspeed"
+display_name = "minimax/MiniMax-2.1-highspeed"
+protocol = "anthropic"
+max_context_tokens = 204800
+max_output_tokens = 32000
+supports_tools = true
+supports_vision = false
+
 [providers.minimax-cn]
-# MiniMax China — OpenAI compatible
+# MiniMax China — live verification required before production use.
+# Endpoint family and auth shape have not been confirmed against
+# api.minimaxi.com; do not assume parity with the international
+# Anthropic-compatible template without live testing.
 id = "minimax-cn"
 base_url = "https://api.minimaxi.com/v1"
 protocols = ["openai"]
@@ -64,7 +132,7 @@ status = "experimental"
 category = "direct"
 region = "CN"
 recommended = false
-notes = "China endpoint; same auth issue as minimax"
+notes = "China endpoint; live verification required before production use"
 
 [providers.minimax-cn.auth]
 mode = "bearer"
@@ -75,20 +143,22 @@ probe_protocol = "openai"
 require_models = false
 
 [providers.generalcompute]
-# GeneralCompute — OpenAI compatible (POST /v1/models/list)
-# base_url already includes /v1, so paths must NOT repeat the prefix.
+# GeneralCompute — plain OpenAI-compatible PAYG.
+# Treat as standard OpenAI surface (GET /models, POST /chat/completions,
+# Bearer auth). Codegg's known-working construction matches this contract.
 id = "generalcompute"
 base_url = "https://api.generalcompute.com/v1"
 protocols = ["openai"]
-models_method = "POST"
-models_path = "/models/list"
+openai_path = "/chat/completions"
+models_method = "GET"
+models_path = "/models"
 api_key_env = "API_KEY"
 display_name = "GeneralCompute"
 status = "experimental"
 category = "direct"
 region = "US"
 recommended = false
-notes = "POST model listing; confirm /models/list body"
+notes = "Plain OpenAI-compatible PAYG endpoint; verify /models and chat completions live"
 
 [providers.generalcompute.auth]
 mode = "bearer"

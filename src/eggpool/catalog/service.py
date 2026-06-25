@@ -186,7 +186,8 @@ class CatalogService:
                 return
 
             # Fetch concurrently for each account
-            tasks: list[asyncio.Task[None]] = []
+            static_tasks: list[asyncio.Task[None]] = []
+            live_tasks: list[asyncio.Task[None]] = []
             for state in enabled_accounts:
                 api_key = self._registry.get_api_key(state.name)
                 provider_id = self._registry.get_provider_for_account(state.name)
@@ -223,7 +224,22 @@ class CatalogService:
                     models_method = provider_cfg.models_method
                     models_path = provider_cfg.models_path
 
-                tasks.append(
+                # Static seeds must be ingested before the live fetch so a
+                # provider with ``models_endpoint.method = "DISABLED"`` still
+                # has routable rows in the cache even though the live fetch
+                # returns an empty response.
+                if provider_cfg is not None and provider_cfg.static_models:
+                    static_tasks.append(
+                        asyncio.create_task(
+                            self._seed_static_models(
+                                state.name,
+                                provider_id,
+                                provider_cfg,
+                            )
+                        )
+                    )
+
+                live_tasks.append(
                     asyncio.create_task(
                         self._fetch_and_process_account(
                             state.name,
@@ -237,8 +253,10 @@ class CatalogService:
                     )
                 )
 
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
+            if static_tasks:
+                await asyncio.gather(*static_tasks, return_exceptions=True)
+            if live_tasks:
+                await asyncio.gather(*live_tasks, return_exceptions=True)
 
             # Drop models no longer referenced by any account or provider
             # so the in-memory cache converges with the live catalog and
@@ -255,6 +273,92 @@ class CatalogService:
                 self._cache.model_count,
                 len(enabled_accounts),
             )
+
+    def _build_static_models(
+        self,
+        provider_cfg: ProviderConfig,
+        account_name: str,
+    ) -> list[dict[str, Any]]:
+        """Return normalized model dicts for the provider's static seeds.
+
+        The output shape matches what ``ModelCatalogCache.update_from_account``
+        expects, so static rows go through the same ingest path as live
+        rows. ``account_name`` is retained for symmetry with
+        ``_seed_static_models`` and for log correlation; the static seed
+        itself is provider-wide.
+        """
+        del account_name
+        if not provider_cfg.static_models:
+            return []
+        models: list[dict[str, Any]] = []
+        for static in provider_cfg.static_models:
+            capabilities: dict[str, Any] = {}
+            if static.supports_tools is not None:
+                capabilities["supports_tools"] = static.supports_tools
+            if static.supports_vision is not None:
+                capabilities["supports_vision"] = static.supports_vision
+            if static.max_context_tokens is not None:
+                capabilities["max_context_tokens"] = static.max_context_tokens
+            if static.max_input_tokens is not None:
+                capabilities["max_input_tokens"] = static.max_input_tokens
+            if static.max_output_tokens is not None:
+                capabilities["max_output_tokens"] = static.max_output_tokens
+            source_metadata: dict[str, Any] = {
+                **static.source_metadata,
+                "source": "static_config",
+            }
+            effective = self._limit_resolver.resolve(
+                provider_id=provider_cfg.id,
+                model_id=static.id,
+                capabilities=capabilities,
+                source_metadata=source_metadata,
+            )
+            models.append(
+                {
+                    "model_id": static.id,
+                    "display_name": static.display_name or static.id,
+                    "protocol": static.protocol,
+                    "protocol_source": "static_config" if static.protocol else None,
+                    "capabilities": capabilities,
+                    "source_metadata": source_metadata,
+                    "discovered_limits": {
+                        "context_tokens": static.max_context_tokens,
+                        "input_tokens": static.max_input_tokens,
+                        "output_tokens": static.max_output_tokens,
+                    },
+                    "effective_limits": effective.as_dict(),
+                }
+            )
+        return models
+
+    async def _seed_static_models(
+        self,
+        account_name: str,
+        provider_id: str,
+        provider_cfg: ProviderConfig,
+    ) -> None:
+        """Seed the catalog cache with the provider's static models.
+
+        Static rows populate the cache before the live fetch so providers
+        whose ``models_endpoint`` is ``DISABLED`` still have routable
+        models. When the live fetch later arrives for the same account
+        and model, the cache preserves explicit static
+        ``protocol_source == "static_config"`` fields via
+        ``ModelCatalogCache._preserve_static_fields``.
+        """
+        if not provider_cfg.static_models:
+            return
+        models = self._build_static_models(provider_cfg, account_name)
+        if not models:
+            return
+        self._cache.set_account_provider(account_name, provider_id)
+        self._cache.update_from_account(account_name, provider_id, models)
+        logger.debug(
+            "Seeded %d static model(s) for account %r on provider %r",
+            len(models),
+            account_name,
+            provider_id,
+        )
 
     async def _fetch_and_process_account(
         self,

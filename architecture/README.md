@@ -59,10 +59,10 @@ EggPool supports 27+ upstream providers (OpenCode Go, OpenAI, Anthropic, Groq, D
 
 ### MiniMax templates
 
-- **`minimax`** — international host `https://api.minimax.io/v1` with `/chat/completions` and `/models` paths. Default for keys from `minimax.io`.
-- **`minimax-cn`** — China host `https://api.minimaxi.com/v1` with the same paths. For keys from the China console.
+- **`minimax`** — international host `https://api.minimax.io/anthropic`. Anthropic-compatible transport (key sent as `x-api-key` plus `anthropic-version: 2023-06-01`). Model listing is `DISABLED` (the Anthropic-compatible host does not expose `/models`), so the catalog is seeded from a static `[[providers.minimax.static_models]]` table covering the current `MiniMax-*` token-plan lineup. Default for keys from `minimax.io`.
+- **`minimax-cn`** — China host `https://api.minimaxi.com/v1` with the same OpenAI paths as a standard provider. Live verification is required because the China endpoint family has not been confirmed against EggPool's Anthropic-compatible transport.
 
-Both are OpenAI-only and use `bearer` auth. A stored key must be the raw token; EggPool prepends `Bearer ` automatically. An optional `[providers.minimax.verify]` block lets the verifier know which model to probe when neither `--openai-model` nor `--anthropic-model` is passed on the CLI.
+The stored key must be the raw token; EggPool prepends the configured auth scheme automatically. An optional `[providers.<id>.verify]` block lets the verifier know which model to probe when neither `--openai-model` nor `--anthropic-model` is passed on the CLI.
 
 ### Provider Configuration
 
@@ -94,8 +94,8 @@ Models are exposed with provider-suffixed IDs: `model-id/provider-id` (e.g., `cl
 Each provider can configure custom upstream paths:
 - `openai_path` (default: `/chat/completions`)
 - `anthropic_path` (default: `/messages`)
-- `models_path` (default: `/models`)
-- `models_method` (default: `GET`, some providers use `POST`)
+- `models_endpoint` — `[providers.<id>.models_endpoint]` table with `method`, `path`, `query`, `body`, `required`. Use `method = "DISABLED"` for providers that do not expose a live model listing (catalog is then populated from `static_models`).
+- `models_method` / `models_path` — legacy scalar fields still accepted; auto-synthesized into a default `models_endpoint` table on parse.
 
 ### Provider Contracts
 
