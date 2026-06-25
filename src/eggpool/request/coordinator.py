@@ -1037,10 +1037,24 @@ class RequestCoordinator:
             )
             generator_created = True
         finally:
+            # Close the upstream response when we are NOT handing the
+            # stream off to the generator.  When ``generator_created``
+            # is True, the generator's own ``finally`` block closes
+            # the response after the stream is fully consumed (or
+            # cancelled) - closing it here would eagerly tear down the
+            # stream and break the lazy ``aiter_bytes`` consumer.  The
+            # ``response.status_code >= 400`` branch covers upstream
+            # error responses (already read into memory above) and
+            # ``not generator_created`` covers construction failures
+            # so the upstream connection is never leaked in those
+            # paths.
             if response is not None and (
                 response.status_code >= 400 or not generator_created
             ):
-                await response.aclose()
+                try:
+                    await response.aclose()
+                except Exception:
+                    logger.debug("Error closing upstream response", exc_info=True)
 
         if response is None:
             raise DatabaseError("Upstream response is None")
@@ -1144,29 +1158,65 @@ class RequestCoordinator:
                 # Client cancellation - finalize but don't penalize health.
                 # Skip if _execute_upstream already finalized (the CancelledError
                 # propagates here after the outer handler runs).
+                #
+                # Shield the finalizer from ASGI task cancellation and
+                # cap the wait with a short timeout.  When the client
+                # disconnects mid-stream the generator is cancelled;
+                # without shielding, the finalizer task is killed
+                # while waiting on the SQLite connection lock and the
+                # request leaks as ``pending`` with an active
+                # reservation.  The 10 s ceiling guarantees we do not
+                # block the event loop indefinitely even if the lock
+                # is heavily contended; the periodic stale-request
+                # finalizer in ``app._finalize_stale_requests`` is the
+                # outer safety net for anything that escapes this path.
                 observer.flush()
                 usage_result = observer.usage
                 if not context.client_metadata.get("_cancelled_finalized"):
-                    await finalizer.finalize(
-                        selected,
-                        FinalizationData(
-                            outcome=FinalizationOutcome.CLIENT_CANCELLED,
-                            first_byte_ms=(
-                                int(first_byte_ms) if first_byte_ms > 0 else None
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.shield(
+                                finalizer.finalize(
+                                    selected,
+                                    FinalizationData(
+                                        outcome=FinalizationOutcome.CLIENT_CANCELLED,
+                                        first_byte_ms=(
+                                            int(first_byte_ms)
+                                            if first_byte_ms > 0
+                                            else None
+                                        ),
+                                        upstream_latency_ms=int(
+                                            (time.monotonic() - reference) * 1000
+                                        ),
+                                        bytes_emitted=bytes_emitted,
+                                        input_tokens=usage_result.input_tokens,
+                                        output_tokens=usage_result.output_tokens,
+                                        cache_read_tokens=usage_result.cache_read_tokens,
+                                        cache_write_tokens=(
+                                            usage_result.cache_creation_tokens
+                                        ),
+                                        reasoning_tokens=usage_result.reasoning_tokens,
+                                        thinking_characters=(
+                                            usage_result.thinking_characters
+                                        ),
+                                        bytes_received=len(context.original_body),
+                                    ),
+                                )
                             ),
-                            upstream_latency_ms=int(
-                                (time.monotonic() - reference) * 1000
-                            ),
-                            bytes_emitted=bytes_emitted,
-                            input_tokens=usage_result.input_tokens,
-                            output_tokens=usage_result.output_tokens,
-                            cache_read_tokens=usage_result.cache_read_tokens,
-                            cache_write_tokens=usage_result.cache_creation_tokens,
-                            reasoning_tokens=usage_result.reasoning_tokens,
-                            thinking_characters=usage_result.thinking_characters,
-                            bytes_received=len(context.original_body),
-                        ),
-                    )
+                            timeout=10.0,
+                        )
+                    except TimeoutError:
+                        logger.error(
+                            "Finalizer timed out for cancelled stream %s; "
+                            "request %s may leak as pending",
+                            context.request_id,
+                            selected.db_request_id,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Finalizer failed for cancelled stream %s",
+                            context.request_id,
+                        )
                 raise
             except Exception as exc:
                 # Midstream error - finalize, no retry

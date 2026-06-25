@@ -18,6 +18,8 @@ behind one OpenAI/Anthropic-compatible endpoint.
 - Tracks request, token, model, latency, error, and estimated-cost statistics in SQLite
 - Multi-page dashboard with overview, accounts, models, latency, pings, events, timeseries, and bandwidth views
 - 50+ themes from [Halloy](https://github.com/squidowl/halloy) and [Chart.js](https://www.chartjs.org/) v4 (MIT) for dashboard charts
+- Streaming finalizer is shielded from ASGI cancellation so client disconnects do not leak requests as `pending`
+- Periodic stale-request finalizer background task force-finalizes requests whose finalizer never ran, preventing 503 saturation from leaked state
 - Designed for lightweight deployments such as Raspberry Pis
 
 ## Requirements

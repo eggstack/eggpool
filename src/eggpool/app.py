@@ -71,6 +71,8 @@ if TYPE_CHECKING:
 
     from starlette.requests import Request as StarletteRequest
 
+    from eggpool.quota.estimation import QuotaEstimator
+
 logger = logging.getLogger(__name__)
 
 
@@ -136,45 +138,46 @@ class _HeaderRedactionMiddleware(BaseHTTPMiddleware):
 
 
 async def _crash_recovery(db: Database) -> None:
-    """Mark stale pending requests as interrupted, release their reservations."""
-    # 5 minutes covers the typical read_timeout (300 s) plus a small
-    # grace period. The previous 10-minute threshold left long-running
-    # streams "pending" long after the process was killed.
-    threshold_arg = "-5 minutes"
+    """Mark stale pending requests as interrupted, release their reservations.
+
+    A process restart is a hard boundary: any request that was still
+    ``pending`` in the previous process is definitively dead.  We do
+    NOT time-gate this recovery so that leaked requests from the
+    previous run are cleaned up regardless of how recently they were
+    created.  The previous 5/10-minute thresholds left long-running
+    streams ``pending`` long after the process was killed and
+    reintroduced the leak whenever restart coincided with a high
+    pending count.
+    """
     # Collect affected account_ids before recovery
     affected = await db.fetch_all(
-        "SELECT DISTINCT account_id FROM requests "
-        "WHERE status = 'pending' "
-        "AND started_at < datetime('now', ?) "
+        "SELECT DISTINCT account_id FROM requests WHERE status = 'pending' "
         "UNION "
-        "SELECT DISTINCT account_id FROM reservations "
-        "WHERE status = 'active' "
-        "AND created_at < datetime('now', ?)",
-        (threshold_arg, threshold_arg),
+        "SELECT DISTINCT account_id FROM reservations WHERE status = 'active'"
     )
     affected_account_ids = [int(row["account_id"]) for row in affected]
 
     async with db.transaction():
+        # Recover ALL pending requests (no time threshold)
         stale_requests = await db.execute_write(
             "UPDATE requests SET status = 'interrupted', "
             "completed_at = CURRENT_TIMESTAMP "
-            "WHERE status = 'pending' "
-            "AND started_at < datetime('now', ?)",
-            (threshold_arg,),
+            "WHERE status = 'pending'",
+            (),
         )
+        # Release ALL active reservations (no time threshold)
         stale_reservations = await db.execute_write(
             "UPDATE reservations SET status = 'released', "
             "released_at = CURRENT_TIMESTAMP, release_reason = 'crash_recovery' "
-            "WHERE status = 'active' "
-            "AND created_at < datetime('now', ?)",
-            (threshold_arg,),
+            "WHERE status = 'active'",
+            (),
         )
+        # Finalize ALL incomplete attempts (no time threshold)
         await db.execute_write(
             "UPDATE request_attempts SET "
             "completed_at = CURRENT_TIMESTAMP, error_class = 'process_interrupted' "
-            "WHERE completed_at IS NULL "
-            "AND started_at < datetime('now', ?)",
-            (threshold_arg,),
+            "WHERE completed_at IS NULL",
+            (),
         )
 
         # Record recovery events in the same transaction so a crash
@@ -200,6 +203,158 @@ async def _crash_recovery(db: Database) -> None:
         )
     else:
         logger.info("Crash recovery: no stale requests found")
+
+
+async def _finalize_stale_requests(
+    db: Database,
+    router: Router,
+    quota_estimator: QuotaEstimator,
+    max_pending_seconds: float = 300.0,
+    cycle_interval_s: float = 60.0,
+) -> None:
+    """Periodic safety net for leaked streaming requests.
+
+    Streaming request finalization can fail under client-disconnect +
+    DB-lock-contention: when the ASGI task is cancelled while the
+    finalizer is waiting on the connection lock, the in-flight request
+    never reaches terminal state and stays ``pending`` with an active
+    reservation.  Accumulated leaks slow down cleanup queries and
+    saturate the single SQLite connection lock — producing 503s after
+    several minutes of load.
+
+    This background task force-finalizes any request that has been
+    ``pending`` longer than ``max_pending_seconds`` (default matches
+    the upstream ``read_timeout_s`` so legitimate long-running requests
+    are never touched).  It transitions leaked requests to
+    ``interrupted`` and releases their reservations in a single
+    transaction, then reconciles the in-memory active-count and
+    quota-reservation caches so routing decisions observe the cleaned
+    state immediately.
+
+    Args:
+        db: The primary (write) database connection.
+        router: For decrementing active request counts.
+        quota_estimator: For removing in-memory reservation tracking.
+        max_pending_seconds: How long a request may stay pending
+            before it is considered leaked.  Defaults to 300 s, which
+            matches the upstream ``read_timeout_s``.
+        cycle_interval_s: How long to wait between sweeps.  Defaults
+            to 60 s in production; tests pass a smaller value to avoid
+            the 60-second wait.
+    """
+    while True:
+        await asyncio.sleep(cycle_interval_s)
+        try:
+            await _finalize_stale_requests_once(
+                db=db,
+                router=router,
+                quota_estimator=quota_estimator,
+                max_pending_seconds=max_pending_seconds,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Stale request finalizer failed")
+
+
+async def _finalize_stale_requests_once(
+    db: Database,
+    router: Router,
+    quota_estimator: QuotaEstimator | None,
+    max_pending_seconds: float,
+) -> int:
+    """Run a single sweep of the stale-request finalizer.
+
+    Returns the number of leaked requests that were transitioned.
+    Split out from :func:`_finalize_stale_requests` so tests and
+    one-off operators can invoke the sweep directly without waiting
+    for the periodic loop.
+    """
+    threshold = f"-{int(max_pending_seconds)} seconds"
+    async with db.transaction():
+        # Find leaked pending requests.  The JOINs keep the
+        # accounting logic local to one query so a separate sweep is
+        # not needed to map accounts to names.
+        rows = await db.execute_returning(
+            "SELECT r.id, r.account_id, a.name AS account_name, "
+            "       res.id AS reservation_id, "
+            "       res.reserved_microdollars "
+            "FROM requests r "
+            "JOIN accounts a ON a.id = r.account_id "
+            "LEFT JOIN reservations res "
+            "    ON res.request_id = r.id AND res.status = 'active' "
+            "WHERE r.status = 'pending' "
+            "  AND r.started_at < datetime('now', ?)",
+            (threshold,),
+        )
+        transitioned = [dict(row) for row in rows]
+        if not transitioned:
+            return 0
+
+        request_ids = [r["id"] for r in transitioned]
+        reservation_ids = [
+            r["reservation_id"] for r in transitioned if r["reservation_id"] is not None
+        ]
+
+        # Mark requests interrupted.  Re-checking ``status = 'pending'``
+        # inside the UPDATE guards against a concurrent legitimate
+        # finalizer that finalized one of the rows between the SELECT
+        # and the UPDATE.
+        req_placeholders = ",".join("?" * len(request_ids))
+        await db.execute_write(
+            f"UPDATE requests "
+            f"SET status = 'interrupted', "
+            f"    completed_at = CURRENT_TIMESTAMP, "
+            f"    error_class = 'StaleRequestFinalizer' "
+            f"WHERE id IN ({req_placeholders}) "
+            f"  AND status = 'pending'",
+            tuple(request_ids),
+        )
+
+        # Release associated reservations.  Same ``status`` guard so
+        # a legitimate finalizer is not raced.
+        if reservation_ids:
+            res_placeholders = ",".join("?" * len(reservation_ids))
+            await db.execute_write(
+                f"UPDATE reservations "
+                f"SET status = 'released', "
+                f"    released_at = CURRENT_TIMESTAMP, "
+                f"    release_reason = 'stale_request' "
+                f"WHERE id IN ({res_placeholders}) "
+                f"  AND status = 'active'",
+                tuple(reservation_ids),
+            )
+
+    # Post-commit: reconcile runtime state.  Iterate ``transitioned``
+    # rather than re-querying so the same
+    # ``(account_name, reserved_microdollars)`` rows we just finalized
+    # drive the cleanup.  ``decrement_active_request_count`` is
+    # deduplicated per account because the count is per-account, but
+    # ``remove_reservation`` MUST be called once per leaked row to
+    # keep the in-memory reservation total consistent with the
+    # released reservations in SQLite.
+    seen_accounts: set[str] = set()
+    for row in transitioned:
+        account_name = row.get("account_name")
+        if not account_name:
+            continue
+        if account_name not in seen_accounts:
+            seen_accounts.add(account_name)
+            # Decrement active request count (idempotent if already 0)
+            await router.decrement_active_request_count(account_name)
+
+        # Remove in-memory reservation tracking.  The exact reserved
+        # amount must be removed so a future cost accounting run does
+        # not double-count the leaked estimate.
+        reserved = row.get("reserved_microdollars") or 0
+        if reserved and quota_estimator is not None:
+            await quota_estimator.remove_reservation(account_name, int(reserved))
+
+    logger.info(
+        "Stale request finalizer: cleaned up %d leaked requests",
+        len(transitioned),
+    )
+    return len(transitioned)
 
 
 def _write_pid_file() -> None:
@@ -597,6 +752,22 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
                 logger.exception("Failed to refresh usage windows")
 
     supervisor.register("usage_window_refresh", _refresh_usage_windows)
+
+    # Register stale request finalizer (runs every 60s).  Default
+    # threshold matches the upstream read_timeout so legitimate
+    # long-running requests are never touched; the safety net only
+    # catches leaked requests whose finalizer never ran (client
+    # disconnect + cancellation timeout killed the generator task
+    # before finalize() could acquire the DB lock).
+    async def _stale_request_loop() -> None:
+        await _finalize_stale_requests(
+            db=db,
+            router=router,
+            quota_estimator=router.quota_estimator,
+            max_pending_seconds=config.upstream.read_timeout_s,
+        )
+
+    supervisor.register("stale_request_finalizer", _stale_request_loop)
 
     # 21. Start background tasks
     await supervisor.start_all()

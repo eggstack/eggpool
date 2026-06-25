@@ -21,6 +21,8 @@ See `architecture/README.md` for the full design overview.
 - Pre-body failures can retry; no retry after first downstream byte emitted
 - Every retryable failed attempt must reach terminal state before the next attempt
 - Each attempt reservation is released exactly once via `AttemptFinalizer`
+- Streaming cancellation finalization is wrapped in `asyncio.shield(asyncio.wait_for(..., timeout=10))` so ASGI task cancellation cannot kill the finalizer while it holds the DB lock; the outer `Stale request finalizer` background task (`app._finalize_stale_requests`) is the safety net for anything that escapes this path
+- `_crash_recovery` runs at every startup and recovers ALL pending requests and active reservations (no time threshold); a process restart is a definitive boundary, so leaked state from the previous process is unconditionally cleaned up
 
 ## Database Invariants
 

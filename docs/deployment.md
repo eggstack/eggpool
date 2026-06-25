@@ -229,6 +229,45 @@ sudo journalctl -u eggpool -n 50 --no-pager
 2. Check firewall: `ss -tlnp | grep 11300`
 3. See `docs/firewall.md`
 
+### Leaked request detection
+
+If the proxy starts returning 503s after running successfully for
+several minutes, check for leaked pending requests:
+
+```bash
+sqlite3 ~/.eggpool/usage.sqlite3 "SELECT COUNT(*) FROM requests WHERE status = 'pending';"
+sqlite3 ~/.eggpool/usage.sqlite3 "SELECT COUNT(*) FROM reservations WHERE status = 'active';"
+```
+
+Non-zero counts that grow over time indicate finalization failures.
+The stale-request finalizer background task (runs every 60s) should
+automatically clean these up.  If it is not keeping up, check the
+logs for `Stale request finalizer` messages.
+
+### Tuning the stale-request finalizer
+
+The finalizer uses the upstream `read_timeout_s` (default 300s) as the
+pending-request threshold.  You can override this in `config.toml`:
+
+```toml
+[upstream]
+read_timeout_s = 300  # seconds; also used as stale-request threshold
+```
+
+Lowering this value makes the finalizer more aggressive but increases
+the risk of interrupting legitimate slow requests.  The default matches
+the upstream timeout so no request that is still making progress
+should be touched.
+
+### Startup crash recovery
+
+A process restart is a definitive boundary: any request that was still
+`pending` in the previous process is marked `interrupted` and its
+active reservations are released, regardless of how recently they were
+created.  Check the startup log for `Crash recovery: marked N stale
+requests` to confirm a clean recovery after a crash or forced
+restart.  See `plans/eggpoolfix.md` for the full safety-net design.
+
 ### Deploy commands reference
 
 | Command | Description |

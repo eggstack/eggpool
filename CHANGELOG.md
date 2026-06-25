@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- 503 saturation after several minutes of streaming load. Streaming
+  request finalization is now wrapped in `asyncio.shield(asyncio.wait_for(..., timeout=10))`
+  so ASGI task cancellation cannot kill the finalizer while it holds
+  the SQLite connection lock. A periodic `stale_request_finalizer`
+  background task force-finalizes any request that has been `pending`
+  longer than `upstream.read_timeout_s` and reconciles the in-memory
+  active-count and quota-reservation caches. Startup `_crash_recovery`
+  no longer time-gates its sweep — a process restart is treated as a
+  definitive boundary, so every leaked pending request and every active
+  reservation from the previous process is recovered on boot.
+
+### Added
+
+- `app._finalize_stale_requests_once()` exposed for one-off operator
+  invocations and tests; the periodic `_finalize_stale_requests()`
+  loop schedules it every 60 seconds. New migration `0025_stale_request_index.sql`
+  documents the `idx_requests_status_started` index anchor for the
+  safety-net sweep (the index itself was created by migration 0004).
+
 ## [0.2.2] - 2026-06-25
 
 ### Fixed
