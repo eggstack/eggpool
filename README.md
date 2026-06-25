@@ -253,7 +253,7 @@ The dashboard includes:
 - Latency metrics including time-to-first-token (TTFT) and connect/read/coordinator-overhead phase breakdown
 - Provider health monitoring with ping statistics
 - Bandwidth heatmap (GitHub-style contribution graph)
-- Timeseries charts with auto-refresh
+- Timeseries page (`/timeseries`) with a stacked-bar grouped usage chart (default `provider_model`, configurable to `provider`/`model`/`account`), per-bucket detail table, and a controls form for period, bucket, group_by, metric, and top-N limit. Backed by `/api/timeseries/grouped`. Top-N series beyond the limit fold into an `Other` bucket so bucket totals stay loss-less
 - Interactive theme selector with 50+ [Halloy](https://themes.halloy.chat/) themes
 
 ### Dashboard Tooltips
@@ -279,7 +279,10 @@ and runtime endpoints are always auth-gated (even when the dashboard is
 public) because they expose per-request metadata (model, prompt volume,
 error class), operational state (pending reservations, reserved cost),
 or process-level details (PID, memory, DB path, background task names).
-All other stats endpoints inherit the dashboard's public/auth setting.
+The `/api/timeseries/grouped` endpoint backs the `/timeseries` chart and
+returns the documented grouped-usage payload (`series`, `buckets`,
+`bucket_totals`, `points`). All other stats endpoints inherit the
+dashboard's public/auth setting.
 
 ### Observability surfaces
 

@@ -536,6 +536,473 @@ async def fetch_bandwidth_timeseries(
     return [dict(row) for row in rows]
 
 
+# Group expressions for fetch_grouped_timeseries.  Each entry maps the
+# public ``group_by`` enum to (raw_series_key_expr, raw_series_label_expr).
+# The key is what we fold against; the label is what we render.  All four
+# expressions project ``provider_id`` / ``model_id`` / ``account_name``
+# columns so downstream rendering can still disambiguate even when the
+# chosen group_by collapses one of those dimensions.
+_GROUP_EXPRESSIONS: dict[str, tuple[str, str]] = {
+    "provider": (
+        "r.provider_id",
+        "r.provider_id",
+    ),
+    "model": (
+        "COALESCE(r.original_model_id, r.model_id)",
+        "COALESCE(r.original_model_id, r.model_id)",
+    ),
+    "provider_model": (
+        "r.provider_id || ':' || COALESCE(r.original_model_id, r.model_id)",
+        "r.provider_id || ' / ' || COALESCE(r.original_model_id, r.model_id)",
+    ),
+    "account": (
+        "a.name",
+        "a.name",
+    ),
+}
+
+
+def _resolve_group_exprs(group_by: str) -> tuple[str, str]:
+    """Return (raw_series_key_expr, raw_series_label_expr) for a group_by value.
+
+    Unknown values fall back to ``provider_model`` so a typo in a query
+    string never yields a SQL fragment with empty alias semantics.
+    """
+    if group_by not in _GROUP_EXPRESSIONS:
+        return _GROUP_EXPRESSIONS["provider_model"]
+    return _GROUP_EXPRESSIONS[group_by]
+
+
+def _empty_grouped_timeseries(bucket: str, group_by: str, limit: int) -> dict[str, Any]:
+    """Return a zero-valued grouped timeseries payload."""
+    return {
+        "bucket": bucket,
+        "group_by": group_by,
+        "metric": "requests",
+        "limit": limit,
+        "series": [],
+        "buckets": [],
+        "bucket_totals": [],
+        "points": [],
+    }
+
+
+async def fetch_grouped_timeseries(
+    db: Database,
+    start: str,
+    end: str,
+    *,
+    bucket: str = "hour",
+    group_by: str = "provider_model",
+    limit: int = 12,
+    account_id: int | None = None,
+    model_id: str | None = None,
+) -> dict[str, Any]:
+    """Get time-bucketed time series grouped by a chosen dimension.
+
+    Returns a stable dashboard contract with the following keys:
+
+    - ``bucket``            : ``"hour"`` or ``"day"``
+    - ``group_by``          : the resolved grouping key
+    - ``metric``            : always ``"requests"`` in this implementation;
+      preserved as a stable field for future ranking dimensions.
+    - ``limit``             : the resolved top-N limit
+    - ``series``            : summary metadata per top-N series (+ ``Other``
+      when the dataset contains more distinct keys than ``limit``).
+    - ``buckets``           : sorted list of unique bucket labels.
+    - ``bucket_totals``     : one entry per bucket with totals across all
+      series (including ``Other``).
+    - ``points``            : one row per ``(bucket, series_key)`` pair.
+
+    Allowed ``bucket`` values: ``"hour"``, ``"day"``.  Any other value
+    falls back to ``"hour"`` silently.  Allowed ``group_by`` values:
+    ``"provider"``, ``"model"``, ``"provider_model"``, ``"account"``.
+    Unknown values fall back to ``"provider_model"``.  Top-N is selected
+    by descending ``request_count`` and rows outside the top-N are folded
+    into a single ``__other__`` series per bucket so totals remain
+    loss-less.
+
+    ``account_id`` and ``model_id`` are optional exact filters; ``model_id``
+    matches either the current ``model_id`` or the ``original_model_id``
+    so relinked deprecated-model rows still appear under their original
+    model name.
+    """
+    if bucket not in ("hour", "day"):
+        bucket = "hour"
+    resolved_group_by = group_by if group_by in _GROUP_EXPRESSIONS else "provider_model"
+
+    fmt = "%Y-%m-%d %H:00:00" if bucket == "hour" else "%Y-%m-%d 00:00:00"
+    key_expr, label_expr = _resolve_group_exprs(resolved_group_by)
+
+    params: list[Any] = [_format_dt(start), _format_dt(end)]
+    account_filter = ""
+    if account_id is not None:
+        account_filter = " AND r.account_id = ?"
+        params.append(account_id)
+    model_filter = ""
+    if model_id is not None:
+        model_filter = " AND (r.model_id = ? OR r.original_model_id = ?)"
+        params.extend([model_id, model_id])
+
+    sql = f"""
+    SELECT
+        strftime('{fmt}', r.started_at) as bucket,
+        {key_expr} as raw_series_key,
+        {label_expr} as raw_series_label,
+        r.provider_id as provider_id,
+        COALESCE(r.original_model_id, r.model_id) as model_id,
+        a.name as account_name,
+        COUNT(*) as request_count,
+        COALESCE(SUM(CASE WHEN r.status = 'error' THEN 1 ELSE 0 END), 0)
+            as error_count,
+        COALESCE(SUM(r.input_tokens), 0) as input_tokens,
+        COALESCE(SUM(r.output_tokens), 0) as output_tokens,
+        COALESCE(SUM(r.cache_read_tokens), 0) as cache_read_tokens,
+        COALESCE(SUM(r.cache_write_tokens), 0) as cache_write_tokens,
+        COALESCE(SUM(r.reasoning_tokens), 0) as reasoning_tokens,
+        COALESCE(SUM(r.input_tokens), 0) + COALESCE(SUM(r.output_tokens), 0)
+            as total_tokens,
+        COALESCE(SUM(r.cost_microdollars), 0) as cost_microdollars,
+        COALESCE(SUM(r.bytes_received), 0) as bytes_received,
+        COALESCE(SUM(r.bytes_emitted), 0) as bytes_emitted,
+        COALESCE(AVG(r.upstream_latency_ms), 0) as avg_latency_ms,
+        COALESCE(AVG(CASE WHEN r.streamed = 1 THEN r.first_byte_ms END), 0)
+            as avg_ttft_ms
+    FROM requests r
+    JOIN accounts a ON a.id = r.account_id
+    WHERE r.started_at >= ? AND r.started_at < ?
+        {account_filter}{model_filter}
+    GROUP BY bucket, raw_series_key, raw_series_label, r.provider_id,
+        COALESCE(r.original_model_id, r.model_id), a.name
+    ORDER BY bucket, raw_series_label ASC
+    """
+    rows = await db.fetch_all(sql, tuple(params))
+
+    if not rows:
+        return _empty_grouped_timeseries(bucket, resolved_group_by, limit)
+
+    raw_rows: list[dict[str, Any]] = [dict(row) for row in rows]
+
+    # Rank series by total request_count across all buckets.  Other
+    # metrics may join the contract later; ``request_count`` is the
+    # only ranking dimension in this implementation pass.
+    series_totals: dict[str, int] = {}
+    for row in raw_rows:
+        key = str(row["raw_series_key"])
+        series_totals[key] = series_totals.get(key, 0) + int(row["request_count"])
+
+    ranked_keys = sorted(
+        series_totals.keys(),
+        key=lambda k: (-series_totals[k], k),
+    )
+    top_keys = set(ranked_keys[:limit])
+
+    other_keys = [k for k in ranked_keys if k not in top_keys]
+    include_other = bool(other_keys)
+    other_total_requests = sum(series_totals[k] for k in other_keys)
+
+    # Build raw row summaries keyed by (bucket, series_key) so multiple
+    # raw rows that fold into the same ``Other`` bucket can be merged
+    # in a single pass.
+    bucket_set: set[str] = set()
+    fold: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in raw_rows:
+        bucket_label = str(row["bucket"])
+        bucket_set.add(bucket_label)
+        raw_key = str(row["raw_series_key"])
+        is_other_row = raw_key not in top_keys
+        if is_other_row:
+            series_key = "__other__"
+            label = "Other"
+            provider_id: str | None = None
+            model_id_value: str | None = None
+            account_name_value: str | None = None
+        else:
+            series_key = raw_key
+            label = str(row["raw_series_label"])
+            provider_id = str(row["provider_id"])
+            model_id_value = str(row["model_id"])
+            account_name_value = str(row["account_name"])
+        bucket_total = int(row["request_count"])
+        fold_key = (bucket_label, series_key)
+        existing = fold.get(fold_key)
+        if existing is None:
+            new_entry: dict[str, Any] = {
+                "bucket": bucket_label,
+                "series_key": series_key,
+                "label": label,
+                "provider_id": provider_id,
+                "model_id": model_id_value,
+                "account_name": account_name_value,
+                "is_other": is_other_row,
+                "request_count": 0,
+                "error_count": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_read_tokens": 0,
+                "cache_write_tokens": 0,
+                "reasoning_tokens": 0,
+                "total_tokens": 0,
+                "cost_microdollars": 0,
+                "bytes_received": 0,
+                "bytes_emitted": 0,
+                "_weighted_latency_num": 0.0,
+                "_weighted_ttft_num": 0.0,
+            }
+            fold[fold_key] = new_entry
+            entry = new_entry
+        else:
+            entry = existing
+        entry["request_count"] = int(entry["request_count"]) + int(row["request_count"])
+        entry["error_count"] = int(entry["error_count"]) + int(row["error_count"])
+        entry["input_tokens"] = int(entry["input_tokens"]) + int(row["input_tokens"])
+        entry["output_tokens"] = int(entry["output_tokens"]) + int(row["output_tokens"])
+        entry["cache_read_tokens"] = int(entry["cache_read_tokens"]) + int(
+            row["cache_read_tokens"]
+        )
+        entry["cache_write_tokens"] = int(entry["cache_write_tokens"]) + int(
+            row["cache_write_tokens"]
+        )
+        entry["reasoning_tokens"] = int(entry["reasoning_tokens"]) + int(
+            row["reasoning_tokens"]
+        )
+        entry["total_tokens"] = int(entry["total_tokens"]) + int(row["total_tokens"])
+        entry["cost_microdollars"] = int(entry["cost_microdollars"]) + int(
+            row["cost_microdollars"]
+        )
+        entry["bytes_received"] = int(entry["bytes_received"]) + int(
+            row["bytes_received"]
+        )
+        entry["bytes_emitted"] = int(entry["bytes_emitted"]) + int(row["bytes_emitted"])
+        avg_lat = float(row["avg_latency_ms"])
+        avg_ttft = float(row["avg_ttft_ms"])
+        if bucket_total > 0:
+            entry["_weighted_latency_num"] = float(entry["_weighted_latency_num"]) + (
+                avg_lat * bucket_total
+            )
+            entry["_weighted_ttft_num"] = float(entry["_weighted_ttft_num"]) + (
+                avg_ttft * bucket_total
+            )
+
+    # Resolve weighted averages and drop scratch fields.
+    points: list[dict[str, Any]] = []
+    for entry in fold.values():
+        request_count = int(entry["request_count"])
+        if request_count > 0:
+            entry["avg_latency_ms"] = (
+                float(entry["_weighted_latency_num"]) / request_count
+            )
+            entry["avg_ttft_ms"] = float(entry["_weighted_ttft_num"]) / request_count
+        else:
+            entry["avg_latency_ms"] = 0.0
+            entry["avg_ttft_ms"] = 0.0
+        del entry["_weighted_latency_num"]
+        del entry["_weighted_ttft_num"]
+        points.append(entry)
+
+    # Build the per-series summary aggregates.
+    series_summary: dict[str, dict[str, Any]] = {}
+    for key in top_keys:
+        series_summary[key] = {
+            "key": key,
+            "label": "",
+            "provider_id": None,
+            "model_id": None,
+            "account_name": None,
+            "is_other": False,
+            "total_requests": 0,
+            "error_count": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "reasoning_tokens": 0,
+            "total_tokens": 0,
+            "cost_microdollars": 0,
+            "bytes_received": 0,
+            "bytes_emitted": 0,
+            "_weighted_latency_num": 0.0,
+            "_weighted_ttft_num": 0.0,
+        }
+    if include_other:
+        series_summary["__other__"] = {
+            "key": "__other__",
+            "label": "Other",
+            "provider_id": None,
+            "model_id": None,
+            "account_name": None,
+            "is_other": True,
+            "total_requests": 0,
+            "error_count": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "reasoning_tokens": 0,
+            "total_tokens": 0,
+            "cost_microdollars": 0,
+            "bytes_received": 0,
+            "bytes_emitted": 0,
+            "_weighted_latency_num": 0.0,
+            "_weighted_ttft_num": 0.0,
+        }
+
+    for point in points:
+        summary = series_summary.get(point["series_key"])
+        if summary is None:
+            continue
+        bucket_total = int(point["request_count"])
+        summary["total_requests"] += int(point["request_count"])
+        summary["error_count"] += int(point["error_count"])
+        summary["input_tokens"] += int(point["input_tokens"])
+        summary["output_tokens"] += int(point["output_tokens"])
+        summary["cache_read_tokens"] += int(point["cache_read_tokens"])
+        summary["cache_write_tokens"] += int(point["cache_write_tokens"])
+        summary["reasoning_tokens"] += int(point["reasoning_tokens"])
+        summary["total_tokens"] += int(point["total_tokens"])
+        summary["cost_microdollars"] += int(point["cost_microdollars"])
+        summary["bytes_received"] += int(point["bytes_received"])
+        summary["bytes_emitted"] += int(point["bytes_emitted"])
+        if bucket_total > 0:
+            summary["_weighted_latency_num"] += (
+                float(point["avg_latency_ms"]) * bucket_total
+            )
+            summary["_weighted_ttft_num"] += float(point["avg_ttft_ms"]) * bucket_total
+        if not summary["is_other"]:
+            if not summary["label"] and point["label"]:
+                summary["label"] = point["label"]
+            if summary["provider_id"] is None and point["provider_id"] is not None:
+                summary["provider_id"] = point["provider_id"]
+            if summary["model_id"] is None and point["model_id"] is not None:
+                summary["model_id"] = point["model_id"]
+            if summary["account_name"] is None and point["account_name"] is not None:
+                summary["account_name"] = point["account_name"]
+
+    series_out: list[dict[str, Any]] = []
+    for key in ranked_keys:
+        if key not in top_keys:
+            continue
+        summary = series_summary[key]
+        total_requests = int(summary["total_requests"])
+        if total_requests > 0:
+            summary["avg_latency_ms"] = (
+                float(summary["_weighted_latency_num"]) / total_requests
+            )
+            summary["avg_ttft_ms"] = (
+                float(summary["_weighted_ttft_num"]) / total_requests
+            )
+        else:
+            summary["avg_latency_ms"] = 0.0
+            summary["avg_ttft_ms"] = 0.0
+        del summary["_weighted_latency_num"]
+        del summary["_weighted_ttft_num"]
+        series_out.append(summary)
+    if include_other:
+        summary = series_summary["__other__"]
+        # ``other_total_requests`` is the global total across all folded
+        # series, which is the same weight used for the weighted-average
+        # computation; recomputing from ``_weighted_*_num`` would also
+        # work but using the pre-computed total keeps the weighted
+        # average consistent with the per-series ranking.
+        del summary["_weighted_latency_num"]
+        del summary["_weighted_ttft_num"]
+        if other_total_requests > 0:
+            # Use the points' weighted sums since each ``Other`` point's
+            # weighted numerator already accounts for its bucket size.
+            total_other_points_requests = sum(
+                int(p["request_count"])
+                for p in points
+                if p["series_key"] == "__other__"
+            )
+            if total_other_points_requests > 0:
+                weighted_latency = sum(
+                    float(p["avg_latency_ms"]) * int(p["request_count"])
+                    for p in points
+                    if p["series_key"] == "__other__"
+                )
+                weighted_ttft = sum(
+                    float(p["avg_ttft_ms"]) * int(p["request_count"])
+                    for p in points
+                    if p["series_key"] == "__other__"
+                )
+                summary["avg_latency_ms"] = (
+                    weighted_latency / total_other_points_requests
+                )
+                summary["avg_ttft_ms"] = weighted_ttft / total_other_points_requests
+            else:
+                summary["avg_latency_ms"] = 0.0
+                summary["avg_ttft_ms"] = 0.0
+        else:
+            summary["avg_latency_ms"] = 0.0
+            summary["avg_ttft_ms"] = 0.0
+        series_out.append(summary)
+
+    # Bucket totals — sum across all folded points so they include Other.
+    bucket_totals_out: list[dict[str, Any]] = []
+    for bucket_label in sorted(bucket_set):
+        bucket_points = [p for p in points if p["bucket"] == bucket_label]
+        request_count = sum(int(p["request_count"]) for p in bucket_points)
+        error_count = sum(int(p["error_count"]) for p in bucket_points)
+        input_tokens = sum(int(p["input_tokens"]) for p in bucket_points)
+        output_tokens = sum(int(p["output_tokens"]) for p in bucket_points)
+        cache_read_tokens = sum(int(p["cache_read_tokens"]) for p in bucket_points)
+        cache_write_tokens = sum(int(p["cache_write_tokens"]) for p in bucket_points)
+        reasoning_tokens = sum(int(p["reasoning_tokens"]) for p in bucket_points)
+        total_tokens = sum(int(p["total_tokens"]) for p in bucket_points)
+        cost_microdollars = sum(int(p["cost_microdollars"]) for p in bucket_points)
+        bytes_received = sum(int(p["bytes_received"]) for p in bucket_points)
+        bytes_emitted = sum(int(p["bytes_emitted"]) for p in bucket_points)
+        weighted_latency_num = sum(
+            float(p["avg_latency_ms"]) * int(p["request_count"]) for p in bucket_points
+        )
+        weighted_ttft_num = sum(
+            float(p["avg_ttft_ms"]) * int(p["request_count"]) for p in bucket_points
+        )
+        avg_latency_ms = (
+            weighted_latency_num / request_count if request_count > 0 else 0.0
+        )
+        avg_ttft_ms = weighted_ttft_num / request_count if request_count > 0 else 0.0
+        bucket_totals_out.append(
+            {
+                "bucket": bucket_label,
+                "request_count": request_count,
+                "error_count": error_count,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cache_read_tokens": cache_read_tokens,
+                "cache_write_tokens": cache_write_tokens,
+                "reasoning_tokens": reasoning_tokens,
+                "total_tokens": total_tokens,
+                "cost_microdollars": cost_microdollars,
+                "bytes_received": bytes_received,
+                "bytes_emitted": bytes_emitted,
+                "avg_latency_ms": avg_latency_ms,
+                "avg_ttft_ms": avg_ttft_ms,
+            }
+        )
+
+    # Sort points deterministically: bucket ASC, then non-other series
+    # before Other, then label ASC.
+    points.sort(
+        key=lambda p: (
+            p["bucket"],
+            1 if p["is_other"] else 0,
+            p["label"],
+        )
+    )
+
+    return {
+        "bucket": bucket,
+        "group_by": resolved_group_by,
+        "metric": "requests",
+        "limit": limit,
+        "series": series_out,
+        "buckets": sorted(bucket_set),
+        "bucket_totals": bucket_totals_out,
+        "points": points,
+    }
+
+
 def _build_summary(row: dict[str, Any]) -> dict[str, Any]:
     """Build a summary dict from a SQL row."""
     total = int(row.get("total_requests", 0))

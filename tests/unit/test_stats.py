@@ -1349,3 +1349,695 @@ class TestTTFTStatsService:
         assert "p50_ttft_ms" in summary
         assert "p99_ttft_ms" in summary
         assert float(summary["avg_ttft_ms"]) == pytest.approx(300.0)
+
+
+# ===================================================================
+# Grouped timeseries dashboard tests
+# ===================================================================
+
+
+async def _seed_request(
+    db: Database,
+    *,
+    account_id: int,
+    model_id: str,
+    provider_id: str,
+    status: str = "completed",
+    started_at: str = "2024-01-01 12:00:00",
+    input_tokens: int = 100,
+    output_tokens: int = 200,
+    cost_microdollars: int = 1000,
+    original_model_id: str | None = None,
+    error_class: str | None = None,
+    error_detail: str | None = None,
+    bytes_received: int = 0,
+    bytes_emitted: int = 0,
+    upstream_latency_ms: float = 100.0,
+    first_byte_ms: int | None = None,
+    streamed: int = 0,
+) -> None:
+    """Insert a single request row with explicit provider/original_model_id.
+
+    Mirrors the shape the production coordinator writes so the query layer
+    sees the same column surface used in real traffic.
+    """
+    async with db.transaction():
+        await db.execute_write(
+            """
+            INSERT INTO requests (
+                account_id, model_id, provider_id, started_at, completed_at,
+                status, input_tokens, output_tokens, cost_microdollars,
+                upstream_latency_ms, bytes_received, bytes_emitted,
+                streamed, first_byte_ms, error_class, error_detail,
+                original_model_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                account_id,
+                model_id,
+                provider_id,
+                started_at,
+                started_at,
+                status,
+                input_tokens,
+                output_tokens,
+                cost_microdollars,
+                upstream_latency_ms,
+                bytes_received,
+                bytes_emitted,
+                streamed,
+                first_byte_ms,
+                error_class,
+                error_detail,
+                original_model_id,
+            ),
+        )
+
+
+@pytest_asyncio.fixture()
+async def grouped_db(db: Database) -> Database:
+    """Seed a database with two providers, two models, and two accounts.
+
+    Each account is bound to a distinct provider_id so the grouped
+    timeseries query can exercise the provider_model dimension.
+    """
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled, provider_id) "
+            "VALUES (?, ?, 1, ?)",
+            ("acct_a", "ENV_A", "prov_one"),
+        )
+        await db.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled, provider_id) "
+            "VALUES (?, ?, 1, ?)",
+            ("acct_b", "ENV_B", "prov_two"),
+        )
+        await db.execute_write(
+            "INSERT INTO models (model_id, protocol) VALUES (?, ?)",
+            ("model_x", "openai"),
+        )
+        await db.execute_write(
+            "INSERT INTO models (model_id, protocol) VALUES (?, ?)",
+            ("model_y", "anthropic"),
+        )
+        await db.execute_write(
+            "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+            ("__deprecated__", "openai"),
+        )
+    return db
+
+
+async def _account_id(db: Database, name: str) -> int:
+    """Resolve an account name to its primary key id."""
+    row = await db.fetch_one("SELECT id FROM accounts WHERE name = ?", (name,))
+    assert row is not None
+    return int(row["id"])
+
+
+class TestFetchGroupedTimeseries:
+    """Tests for ``queries.fetch_grouped_timeseries``."""
+
+    @pytest.mark.asyncio()
+    async def test_empty_db_returns_stable_payload(self, db: Database) -> None:
+        """No data yields the documented empty payload shape."""
+        result = await queries.fetch_grouped_timeseries(
+            db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+        expected_keys = {
+            "bucket",
+            "group_by",
+            "metric",
+            "limit",
+            "series",
+            "buckets",
+            "bucket_totals",
+            "points",
+        }
+        assert set(result.keys()) == expected_keys
+        assert result["series"] == []
+        assert result["buckets"] == []
+        assert result["bucket_totals"] == []
+        assert result["points"] == []
+        assert result["group_by"] == "provider_model"
+        assert result["metric"] == "requests"
+        assert result["bucket"] == "hour"
+
+    @pytest.mark.asyncio()
+    async def test_distinct_series_per_provider_model(
+        self, grouped_db: Database
+    ) -> None:
+        """Each (provider_id, model_id) pair becomes a distinct series."""
+        a_id = await _account_id(grouped_db, "acct_a")
+        b_id = await _account_id(grouped_db, "acct_b")
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_x",
+            provider_id="prov_one",
+        )
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_y",
+            provider_id="prov_one",
+        )
+        await _seed_request(
+            grouped_db,
+            account_id=b_id,
+            model_id="model_x",
+            provider_id="prov_two",
+        )
+        await _seed_request(
+            grouped_db,
+            account_id=b_id,
+            model_id="model_y",
+            provider_id="prov_two",
+        )
+
+        result = await queries.fetch_grouped_timeseries(
+            grouped_db,
+            "2000-01-01 00:00:00",
+            "2099-12-31 23:59:59",
+            group_by="provider_model",
+        )
+        keys = {s["key"] for s in result["series"]}
+        labels = {s["label"] for s in result["series"]}
+        assert keys == {
+            "prov_one:model_x",
+            "prov_one:model_y",
+            "prov_two:model_x",
+            "prov_two:model_y",
+        }
+        assert labels == {
+            "prov_one / model_x",
+            "prov_one / model_y",
+            "prov_two / model_x",
+            "prov_two / model_y",
+        }
+        # Each series should carry the right provider/model pair.
+        for series in result["series"]:
+            assert series["provider_id"] is not None
+            assert series["model_id"] is not None
+
+    @pytest.mark.asyncio()
+    async def test_two_buckets_one_point_each(self, grouped_db: Database) -> None:
+        """Requests across two distinct hours surface as two buckets."""
+        a_id = await _account_id(grouped_db, "acct_a")
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_x",
+            provider_id="prov_one",
+            started_at="2024-01-01 12:15:00",
+        )
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_x",
+            provider_id="prov_one",
+            started_at="2024-01-01 13:45:00",
+        )
+
+        result = await queries.fetch_grouped_timeseries(
+            grouped_db, "2024-01-01 00:00:00", "2024-01-02 00:00:00"
+        )
+        assert result["buckets"] == ["2024-01-01 12:00:00", "2024-01-01 13:00:00"]
+        assert len(result["bucket_totals"]) == 2
+        # Each bucket holds exactly one request.
+        totals_by_bucket = {
+            t["bucket"]: int(t["request_count"]) for t in result["bucket_totals"]
+        }
+        assert totals_by_bucket == {
+            "2024-01-01 12:00:00": 1,
+            "2024-01-01 13:00:00": 1,
+        }
+        # And the per-(bucket, series) points sum to two entries.
+        assert sum(int(p["request_count"]) for p in result["points"]) == 2
+
+    @pytest.mark.asyncio()
+    async def test_top_n_folding_creates_other_series(
+        self, grouped_db: Database
+    ) -> None:
+        """Series beyond ``limit`` collapse into a single ``__other__``."""
+        a_id = await _account_id(grouped_db, "acct_a")
+        # Five distinct (provider, model) series with a small number of
+        # requests each so a low limit triggers the fold.
+        seeds = [
+            ("prov_one", "model_x"),
+            ("prov_one", "model_y"),
+            ("prov_two", "model_x"),
+            ("prov_two", "model_y"),
+            ("prov_three", "model_x"),
+        ]
+        for prov, model in seeds:
+            await _seed_request(
+                grouped_db,
+                account_id=a_id,
+                model_id=model,
+                provider_id=prov,
+            )
+
+        result = await queries.fetch_grouped_timeseries(
+            grouped_db,
+            "2000-01-01 00:00:00",
+            "2099-12-31 23:59:59",
+            group_by="provider_model",
+            limit=2,
+        )
+        # Exactly one ``Other`` series at the tail.
+        other_series = [s for s in result["series"] if s["is_other"]]
+        assert len(other_series) == 1
+        assert other_series[0]["key"] == "__other__"
+        assert other_series[0]["label"] == "Other"
+        assert other_series[0]["provider_id"] is None
+        assert other_series[0]["model_id"] is None
+        # Only the top-2 ranked series (plus Other) appear in ``series``.
+        non_other = [s for s in result["series"] if not s["is_other"]]
+        assert len(non_other) == 2
+        # Bucket totals equal the sum of folded points (including Other).
+        for total in result["bucket_totals"]:
+            assert int(total["request_count"]) == 5
+
+    @pytest.mark.asyncio()
+    async def test_original_model_id_relinks_series_key(
+        self, grouped_db: Database
+    ) -> None:
+        """Rows with ``original_model_id`` group under the original id."""
+        a_id = await _account_id(grouped_db, "acct_a")
+        # A row whose live model_id is the deprecated placeholder but whose
+        # ``original_model_id`` is preserved must appear under the
+        # original name in the series key.
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="__deprecated__",
+            provider_id="prov_one",
+            original_model_id="old-model",
+        )
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_x",
+            provider_id="prov_one",
+        )
+
+        result = await queries.fetch_grouped_timeseries(
+            grouped_db,
+            "2000-01-01 00:00:00",
+            "2099-12-31 23:59:59",
+            group_by="provider_model",
+        )
+        keys = {s["key"] for s in result["series"]}
+        assert "prov_one:old-model" in keys
+        assert "prov_one:__deprecated__" not in keys
+
+    @pytest.mark.asyncio()
+    async def test_account_id_filter(self, grouped_db: Database) -> None:
+        """``account_id`` filter narrows results to one account."""
+        a_id = await _account_id(grouped_db, "acct_a")
+        b_id = await _account_id(grouped_db, "acct_b")
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_x",
+            provider_id="prov_one",
+        )
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_y",
+            provider_id="prov_one",
+        )
+        await _seed_request(
+            grouped_db,
+            account_id=b_id,
+            model_id="model_x",
+            provider_id="prov_two",
+        )
+
+        result = await queries.fetch_grouped_timeseries(
+            grouped_db,
+            "2000-01-01 00:00:00",
+            "2099-12-31 23:59:59",
+            group_by="provider_model",
+            account_id=a_id,
+        )
+        # Only the prov_one series survive.
+        assert {s["provider_id"] for s in result["series"]} == {"prov_one"}
+        # And every point should carry an ``acct_a`` account name.
+        for point in result["points"]:
+            assert point["account_name"] == "acct_a"
+
+    @pytest.mark.asyncio()
+    async def test_model_id_filter_matches_current_and_original(
+        self, grouped_db: Database
+    ) -> None:
+        """``model_id`` filter accepts relinked (original_model_id) rows."""
+        a_id = await _account_id(grouped_db, "acct_a")
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_x",
+            provider_id="prov_one",
+        )
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_y",
+            provider_id="prov_one",
+        )
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="__deprecated__",
+            provider_id="prov_one",
+            original_model_id="model_x",
+        )
+
+        result = await queries.fetch_grouped_timeseries(
+            grouped_db,
+            "2000-01-01 00:00:00",
+            "2099-12-31 23:59:59",
+            group_by="provider_model",
+            model_id="model_x",
+        )
+        # Only prov_one:model_x survives; the relinked row counts.
+        assert sum(int(p["request_count"]) for p in result["points"]) == 2
+        for series in result["series"]:
+            assert series["model_id"] == "model_x"
+
+    @pytest.mark.asyncio()
+    async def test_invalid_bucket_falls_back_to_hour(
+        self, grouped_db: Database
+    ) -> None:
+        """Unknown bucket values are silently coerced to ``"hour"``."""
+        a_id = await _account_id(grouped_db, "acct_a")
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_x",
+            provider_id="prov_one",
+        )
+
+        result = await queries.fetch_grouped_timeseries(
+            grouped_db,
+            "2000-01-01 00:00:00",
+            "2099-12-31 23:59:59",
+            bucket="bogus",
+        )
+        assert result["bucket"] == "hour"
+        # Hour-shaped bucket label, not day-shaped.
+        assert all(
+            ":" in b and len(b) == len("2024-01-01 12:00:00") for b in result["buckets"]
+        )
+
+    @pytest.mark.asyncio()
+    async def test_invalid_group_by_falls_back_to_provider_model(
+        self, grouped_db: Database
+    ) -> None:
+        """Unknown ``group_by`` values default to provider_model semantics."""
+        a_id = await _account_id(grouped_db, "acct_a")
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_x",
+            provider_id="prov_one",
+        )
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_y",
+            provider_id="prov_one",
+        )
+
+        result = await queries.fetch_grouped_timeseries(
+            grouped_db,
+            "2000-01-01 00:00:00",
+            "2099-12-31 23:59:59",
+            group_by="garbage",
+        )
+        assert result["group_by"] == "provider_model"
+        assert len(result["series"]) == 2
+        # Keys must combine provider and model.
+        for series in result["series"]:
+            assert ":" in series["key"]
+
+    @pytest.mark.asyncio()
+    async def test_group_by_provider_only(self, grouped_db: Database) -> None:
+        """``provider`` grouping collapses across models on the same provider."""
+        a_id = await _account_id(grouped_db, "acct_a")
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_x",
+            provider_id="prov_one",
+        )
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_y",
+            provider_id="prov_one",
+        )
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_x",
+            provider_id="prov_two",
+        )
+
+        result = await queries.fetch_grouped_timeseries(
+            grouped_db,
+            "2000-01-01 00:00:00",
+            "2099-12-31 23:59:59",
+            group_by="provider",
+        )
+        keys = {s["key"] for s in result["series"]}
+        assert keys == {"prov_one", "prov_two"}
+        # Series keys must be just provider ids (no model suffix).
+        for series in result["series"]:
+            assert ":" not in series["key"]
+
+    @pytest.mark.asyncio()
+    async def test_group_by_model_collapses_across_providers(
+        self, grouped_db: Database
+    ) -> None:
+        """``model`` grouping merges traffic for the same model across providers."""
+        a_id = await _account_id(grouped_db, "acct_a")
+        b_id = await _account_id(grouped_db, "acct_b")
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_x",
+            provider_id="prov_one",
+        )
+        await _seed_request(
+            grouped_db,
+            account_id=b_id,
+            model_id="model_x",
+            provider_id="prov_two",
+        )
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_y",
+            provider_id="prov_one",
+        )
+
+        result = await queries.fetch_grouped_timeseries(
+            grouped_db,
+            "2000-01-01 00:00:00",
+            "2099-12-31 23:59:59",
+            group_by="model",
+        )
+        keys = {s["key"] for s in result["series"]}
+        assert keys == {"model_x", "model_y"}
+        # Total requests for model_x collapses across both providers.
+        by_key = {s["key"]: s for s in result["series"]}
+        assert by_key["model_x"]["total_requests"] == 2
+
+    @pytest.mark.asyncio()
+    async def test_group_by_account_uses_account_name(
+        self, grouped_db: Database
+    ) -> None:
+        """``account`` grouping keys by account name, not id."""
+        a_id = await _account_id(grouped_db, "acct_a")
+        b_id = await _account_id(grouped_db, "acct_b")
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_x",
+            provider_id="prov_one",
+        )
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_y",
+            provider_id="prov_one",
+        )
+        await _seed_request(
+            grouped_db,
+            account_id=b_id,
+            model_id="model_x",
+            provider_id="prov_two",
+        )
+
+        result = await queries.fetch_grouped_timeseries(
+            grouped_db,
+            "2000-01-01 00:00:00",
+            "2099-12-31 23:59:59",
+            group_by="account",
+        )
+        keys = {s["key"] for s in result["series"]}
+        labels = {s["label"] for s in result["series"]}
+        assert keys == {"acct_a", "acct_b"}
+        assert labels == {"acct_a", "acct_b"}
+        # And the per-series account_name projection matches.
+        by_key = {s["key"]: s for s in result["series"]}
+        assert by_key["acct_a"]["account_name"] == "acct_a"
+        assert by_key["acct_b"]["account_name"] == "acct_b"
+
+
+class TestStatsServiceGroupedTimeseries:
+    """Tests for ``StatsService.get_grouped_timeseries``."""
+
+    @pytest.mark.asyncio()
+    async def test_unknown_account_returns_empty_payload(
+        self, grouped_db: Database
+    ) -> None:
+        """Unknown account must not raise; the payload stays stable."""
+        a_id = await _account_id(grouped_db, "acct_a")
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_x",
+            provider_id="prov_one",
+        )
+
+        service = StatsService(grouped_db)
+        time_range = TimeRange(
+            start=__import__("datetime").datetime.fromisoformat("2000-01-01"),
+            end=__import__("datetime").datetime.fromisoformat("2099-12-31"),
+            label="custom",
+        )
+        result = await service.get_grouped_timeseries(
+            time_range, account_name="nonexistent"
+        )
+        assert result is not None
+        assert result["series"] == []
+        assert result["buckets"] == []
+        assert result["bucket_totals"] == []
+        assert result["points"] == []
+        assert result["group_by"] == "provider_model"
+
+    @pytest.mark.asyncio()
+    async def test_invalid_arguments_normalize_safely(
+        self, grouped_db: Database
+    ) -> None:
+        """Garbage bucket/group_by/limit values are coerced without raising."""
+        a_id = await _account_id(grouped_db, "acct_a")
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_x",
+            provider_id="prov_one",
+        )
+
+        service = StatsService(grouped_db)
+        time_range = TimeRange(
+            start=__import__("datetime").datetime.fromisoformat("2000-01-01"),
+            end=__import__("datetime").datetime.fromisoformat("2099-12-31"),
+            label="custom",
+        )
+        result = await service.get_grouped_timeseries(
+            time_range,
+            bucket="garbage",
+            group_by="nope",
+            limit=9999,
+        )
+        # Bucket, group_by, and limit were all normalized.
+        assert result["bucket"] == "hour"
+        assert result["group_by"] == "provider_model"
+        assert result["limit"] == 25
+
+    @pytest.mark.asyncio()
+    async def test_cache_reuses_same_reference(self, grouped_db: Database) -> None:
+        """``use_cache=True`` returns the same dict object on a hit."""
+        a_id = await _account_id(grouped_db, "acct_a")
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_x",
+            provider_id="prov_one",
+        )
+
+        service = StatsService(grouped_db)
+        time_range = TimeRange(
+            start=__import__("datetime").datetime.fromisoformat("2000-01-01"),
+            end=__import__("datetime").datetime.fromisoformat("2099-12-31"),
+            label="custom",
+        )
+        first = await service.get_grouped_timeseries(time_range, use_cache=True)
+        second = await service.get_grouped_timeseries(time_range, use_cache=True)
+        assert second is first
+
+    @pytest.mark.asyncio()
+    async def test_cache_keys_differ_by_group_by(self, grouped_db: Database) -> None:
+        """Different ``group_by`` values must not share cache entries."""
+        a_id = await _account_id(grouped_db, "acct_a")
+        b_id = await _account_id(grouped_db, "acct_b")
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_x",
+            provider_id="prov_one",
+        )
+        await _seed_request(
+            grouped_db,
+            account_id=b_id,
+            model_id="model_x",
+            provider_id="prov_two",
+        )
+
+        service = StatsService(grouped_db)
+        time_range = TimeRange(
+            start=__import__("datetime").datetime.fromisoformat("2000-01-01"),
+            end=__import__("datetime").datetime.fromisoformat("2099-12-31"),
+            label="custom",
+        )
+        by_provider = await service.get_grouped_timeseries(
+            time_range, group_by="provider", use_cache=True
+        )
+        by_model = await service.get_grouped_timeseries(
+            time_range, group_by="model", use_cache=True
+        )
+        assert by_provider is not by_model
+        # The shape should reflect the different grouping dimensions.
+        assert {s["key"] for s in by_provider["series"]} == {"prov_one", "prov_two"}
+        assert {s["key"] for s in by_model["series"]} == {"model_x"}
+
+    @pytest.mark.asyncio()
+    async def test_empty_time_range_returns_empty_payload(
+        self, grouped_db: Database
+    ) -> None:
+        """A window with no traffic yields the stable empty payload."""
+        a_id = await _account_id(grouped_db, "acct_a")
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_x",
+            provider_id="prov_one",
+        )
+
+        service = StatsService(grouped_db)
+        # Narrow window that doesn't include the seeded request.
+        time_range = TimeRange(
+            start=__import__("datetime").datetime.fromisoformat("2099-01-01"),
+            end=__import__("datetime").datetime.fromisoformat("2099-01-02"),
+            label="custom",
+        )
+        result = await service.get_grouped_timeseries(time_range)
+        assert result is not None
+        assert result["series"] == []
+        assert result["buckets"] == []
+        assert result["bucket_totals"] == []
+        assert result["points"] == []

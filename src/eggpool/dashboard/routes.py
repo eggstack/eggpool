@@ -401,6 +401,9 @@ async def handle_timeseries(
     bucket: str = "hour",
     account: str | None = None,
     model: str | None = None,
+    group_by: str = "provider_model",
+    metric: str = "requests",
+    limit: int = 12,
     theme: str | None = None,
 ) -> Response:
     """Render the timeseries page."""
@@ -408,12 +411,29 @@ async def handle_timeseries(
     time_range = resolve_time_range(period)
     if bucket not in ("hour", "day"):
         bucket = "hour"
+    if group_by not in ("provider", "model", "provider_model", "account"):
+        group_by = "provider_model"
+    bounded_limit = max(1, min(int(limit), 25))
     stats = request.app.state.stats
-    series = await stats.get_timeseries(
-        time_range,
-        bucket=bucket,
-        account_name=account or None,
-        model_id=model or None,
+    series, grouped = cast(
+        "tuple[list[dict[str, Any]] | None, dict[str, Any]]",
+        await asyncio.gather(
+            stats.get_timeseries(
+                time_range,
+                bucket=bucket,
+                account_name=account or None,
+                model_id=model or None,
+            ),
+            stats.get_grouped_timeseries(
+                time_range,
+                bucket=bucket,
+                group_by=group_by,
+                limit=bounded_limit,
+                account_name=account or None,
+                model_id=model or None,
+                use_cache=True,
+            ),
+        ),
     )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
     return HTMLResponse(
@@ -424,6 +444,12 @@ async def handle_timeseries(
             theme_css=theme_css,
             available_themes=available,
             current_theme=current_theme,
+            grouped=grouped,
+            group_by=group_by,
+            metric=metric,
+            limit=bounded_limit,
+            account_filter=account or "",
+            model_filter=model or "",
         )
     )
 
@@ -489,6 +515,43 @@ async def handle_timeseries_json(
         model_id=model or None,
     )
     return JSONResponse(content=series or [])
+
+
+async def handle_grouped_timeseries_json(
+    request: Request,
+    period: str | None = "24h",
+    bucket: str = "hour",
+    account: str | None = None,
+    model: str | None = None,
+    group_by: str = "provider_model",
+    metric: str = "requests",
+    limit: int = 12,
+) -> Response:
+    """Return grouped timeseries data as JSON.
+
+    The ``metric`` parameter is accepted for API stability but unused in
+    this pass; the dashboard contract always ranks series by
+    ``request_count``.  ``limit`` is clamped to ``1..25`` and ``bucket``
+    is normalized to ``"hour"`` or ``"day"``.
+    """
+    _get_dashboard_config(request)
+    time_range = resolve_time_range(period)
+    if bucket not in ("hour", "day"):
+        bucket = "hour"
+    if group_by not in ("provider", "model", "provider_model", "account"):
+        group_by = "provider_model"
+    bounded_limit = max(1, min(int(limit), 25))
+    stats = request.app.state.stats
+    payload = await stats.get_grouped_timeseries(
+        time_range,
+        bucket=bucket,
+        group_by=group_by,
+        limit=bounded_limit,
+        account_name=account or None,
+        model_id=model or None,
+        use_cache=True,
+    )
+    return JSONResponse(content=payload)
 
 
 async def handle_runtime(request: Request, theme: str | None = None) -> Response:
@@ -610,12 +673,20 @@ def register_dashboard_routes(app: Any, require_auth: bool = False) -> None:
         response_class=JSONResponse,
         dependencies=dependencies,
     )
+    app.add_api_route(
+        path="/api/timeseries/grouped",
+        endpoint=handle_grouped_timeseries_json,
+        methods=["GET"],
+        response_class=JSONResponse,
+        dependencies=dependencies,
+    )
 
 
 __all__ = [
     "handle_accounts",
     "handle_bandwidth",
     "handle_events",
+    "handle_grouped_timeseries_json",
     "handle_latency",
     "handle_models",
     "handle_overview",

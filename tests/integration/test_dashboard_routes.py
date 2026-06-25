@@ -273,3 +273,180 @@ async def test_available_themes_is_cached_across_requests(
     assert render_module._THEMES_LIST_CACHE, (
         "expected the available-themes list to populate the cache"
     )
+
+
+@pytest.mark.asyncio()
+async def test_grouped_timeseries_json_returns_stable_shape(
+    migrated_app: FastAPI,
+) -> None:
+    """``GET /api/timeseries/grouped`` returns the documented contract."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    response = client.get("/api/timeseries/grouped")
+    assert response.status_code == 200
+    payload = response.json()
+    expected_keys = {
+        "bucket",
+        "group_by",
+        "metric",
+        "limit",
+        "series",
+        "buckets",
+        "bucket_totals",
+        "points",
+    }
+    assert set(payload.keys()) == expected_keys
+    assert payload["series"] == []
+    assert payload["buckets"] == []
+    assert payload["bucket_totals"] == []
+    assert payload["points"] == []
+    assert payload["group_by"] == "provider_model"
+    assert payload["metric"] == "requests"
+    assert payload["bucket"] == "hour"
+
+
+@pytest.mark.asyncio()
+async def test_grouped_timeseries_json_accepts_bucket_query(
+    migrated_app: FastAPI,
+) -> None:
+    """``bucket=day`` is reflected in the payload."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    response = client.get("/api/timeseries/grouped?bucket=day")
+    assert response.status_code == 200
+    assert response.json()["bucket"] == "day"
+
+
+@pytest.mark.asyncio()
+async def test_grouped_timeseries_json_accepts_group_by_query(
+    migrated_app: FastAPI,
+) -> None:
+    """``group_by=provider`` is reflected in the payload."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    response = client.get("/api/timeseries/grouped?group_by=provider")
+    assert response.status_code == 200
+    assert response.json()["group_by"] == "provider"
+
+
+@pytest.mark.asyncio()
+async def test_grouped_timeseries_json_accepts_limit_query(
+    migrated_app: FastAPI,
+) -> None:
+    """``limit`` is clamped and reflected in the payload."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    response = client.get("/api/timeseries/grouped?limit=5")
+    assert response.status_code == 200
+    assert response.json()["limit"] == 5
+    # Out-of-range limit clamps to 25
+    response = client.get("/api/timeseries/grouped?limit=999")
+    assert response.status_code == 200
+    assert response.json()["limit"] == 25
+
+
+@pytest.mark.asyncio()
+async def test_grouped_timeseries_json_unknown_account_returns_empty(
+    migrated_app: FastAPI,
+) -> None:
+    """Unknown ``account`` filter yields a stable empty payload."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    response = client.get("/api/timeseries/grouped?account=does-not-exist")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["series"] == []
+    assert payload["buckets"] == []
+    assert payload["bucket_totals"] == []
+    assert payload["points"] == []
+
+
+@pytest.mark.asyncio()
+async def test_grouped_timeseries_json_invalid_group_by_falls_back(
+    migrated_app: FastAPI,
+) -> None:
+    """Invalid ``group_by`` falls back to ``provider_model``."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    response = client.get("/api/timeseries/grouped?group_by=garbage")
+    assert response.status_code == 200
+    assert response.json()["group_by"] == "provider_model"
+
+
+@pytest.mark.asyncio()
+async def test_timeseries_page_loads_with_grouped_chart(
+    migrated_app: FastAPI,
+) -> None:
+    """``/timeseries`` renders the controls form and either the chart or empty state."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    response = client.get("/timeseries")
+    assert response.status_code == 200
+    body = response.text
+    # New controls form with bucket / group_by / metric / limit fields
+    assert 'name="bucket"' in body
+    assert 'name="group_by"' in body
+    assert 'name="metric"' in body
+    assert 'name="limit"' in body
+    # Chart.js + dashboard.js are now both loaded by the layout
+    assert '<script defer src="/static/chart.js"></script>' in body
+    assert '<script defer src="/static/dashboard.js"></script>' in body
+    # With an empty database we render the empty-state placeholder;
+    # otherwise the grouped chart canvas + JSON data island appear.
+    assert (
+        'class="grouped-timeseries-chart"' in body
+        or "No requests in this window" in body
+    )
+
+
+@pytest.mark.asyncio()
+async def test_timeseries_page_with_group_by_query(
+    migrated_app: FastAPI,
+) -> None:
+    """``/timeseries?group_by=provider&limit=8`` renders with those controls."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    response = client.get("/timeseries?group_by=provider&limit=8")
+    assert response.status_code == 200
+    body = response.text
+    assert 'value="provider" selected' in body
+    assert 'value="8" selected' in body
+
+
+@pytest.mark.asyncio()
+async def test_overview_loads_dashboard_js_with_defer(
+    migrated_app: FastAPI,
+) -> None:
+    """The overview page now also loads dashboard.js for chart reinit."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    response = client.get("/")
+    assert response.status_code == 200
+    body = response.text
+    assert '<script defer src="/static/chart.js"></script>' in body
+    assert '<script defer src="/static/dashboard.js"></script>' in body
+
+
+@pytest.mark.asyncio()
+async def test_overview_auto_refresh_reinitializes_charts(
+    migrated_app: FastAPI,
+) -> None:
+    """The auto-refresh hook re-initializes charts after innerHTML swap."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    response = client.get("/")
+    assert response.status_code == 200
+    body = response.text
+    # The auto-refresh hook should call into dashboard.js for reinit.
+    assert "initGroupedTimeseriesCharts" in body
+    assert "reinitTimeseriesChart" in body

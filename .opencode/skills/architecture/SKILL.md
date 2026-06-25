@@ -147,11 +147,35 @@ API keys must be raw tokens; EggPool prepends the configured auth scheme automat
 - Server-rendered HTML pages in `src/eggpool/dashboard/render.py`, all using the existing `_render_layout(title, body, active_nav, period, refresh_interval_s, theme_css, available_themes, current_theme, auto_refresh, include_chart_js)` wrapper — no Jinja, no template engine
 - Routes registered through `register_dashboard_routes(app, require_auth=...)` in `src/eggpool/dashboard/routes.py`; the `require_auth` flag is computed from `config.dashboard.public` once at startup and shared across every dashboard page
 - Backend handlers fan out independent `StatsService` calls through `asyncio.gather` so page loads are bounded by the slowest query, not the sum of sequential round trips (the shared connection lock serializes per-query execution regardless)
-- Frontend helpers live in `src/eggpool/dashboard/static/dashboard.js` under the `window.EggPoolDashboard` namespace (`fetchStats`, `formatDurationMs`, `formatAgeSeconds`, `formatPercent`, `formatCount`) — small, opt-in, no framework
-- Chart.js v4 (MIT, bundled) is served at `/static/chart.js` with `Cache-Control: public, max-age=86400`; pages opt in via `include_chart_js=True` in `_render_layout`
+- Frontend helpers live in `src/eggpool/dashboard/static/dashboard.js` under the `window.EggPoolDashboard` namespace (`fetchStats`, `formatDurationMs`, `formatAgeSeconds`, `formatPercent`, `formatCount`, `formatBytes`, `formatMicrodollars`, `formatTokens`, `formatDollarsFromMicro`, `initGroupedTimeseriesCharts`, `reinitTimeseriesChart`) — small, opt-in, no framework
+- Chart.js v4 (MIT, bundled) is served at `/static/chart.js` with `Cache-Control: public, max-age=86400`; pages opt in via `include_chart_js=True` in `_render_layout`. When `include_chart_js=True`, the layout also loads `/static/dashboard.js` (the chart lifecycle helpers) in document order, both via `defer`
 - Static assets (CSS, JS, favicon) are served via `app.py` handlers with appropriate `Cache-Control` headers
 - Every free-text field on every page goes through `escape()` or `escape_attr()` from `src/eggpool/dashboard/escape.py`; never interpolate raw upstream or model data
 - Format helpers in `escape.py` (`format_duration_ms`, `format_age_seconds`, `format_percent100`, `format_percent01`, `format_int`, `format_count_or_dash`, `short_id`) are shared by every renderer; do not redefine per-page
+
+### Chart lifecycle
+
+The previous inline `<script>` chart pattern ran before Chart.js had loaded (because `<script defer>` on Chart.js hadn't executed yet) and broke on overview auto-refresh because `innerHTML` replacement does not re-execute scripts. The current contract:
+
+- Page renderers never emit inline JavaScript that calls `new Chart(...)`. They emit a `<canvas class="grouped-timeseries-chart">` plus a sibling `<script type="application/json" class="grouped-timeseries-data">` data island
+- `window.EggPoolDashboard.initGroupedTimeseriesCharts()` (called from `DOMContentLoaded` and after every auto-refresh swap) reads each data island, destroys any prior `canvas.__eggpoolChart` instance, builds Chart.js datasets, and renders
+- `window.EggPoolDashboard.reinitTimeseriesChart()` rebuilds the legacy overview line chart by refetching `/api/timeseries` and rebinding the canvas after the auto-refresh `innerHTML` swap. The legacy overview line chart keeps its 60s in-page refresh interval for in-place updates
+- `_render_auto_refresh_script()` invokes both helpers after `content.innerHTML = next.innerHTML;` so overview auto-refresh preserves both the legacy line chart and any grouped chart
+- Pages that do not render a chart must not include `/static/chart.js` or `/static/dashboard.js` (`include_chart_js=False`)
+
+### Grouped Timeseries
+
+The `/timeseries` page replaces the old "table of bucket counts" with a stacked-bar grouped chart plus a grouped detail table:
+
+- **Data contract**: `/api/timeseries/grouped` returns `{bucket, group_by, metric, limit, series, buckets, bucket_totals, points}`. Each `point` is one `(bucket, series_key)` row carrying per-bucket counters (request_count, error_count, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, total_tokens, cost_microdollars, bytes_received, bytes_emitted, avg_latency_ms, avg_ttft_ms). Each `bucket_totals` entry aggregates across all series (including the folded `Other` bucket) so totals stay loss-less
+- **Group dimensions**: `provider_model` (default — `provider_id:model_id` key, `provider_id / model_id` label), `provider`, `model` (uses `COALESCE(original_model_id, model_id)` so deprecated-model relinking still appears under the original id), `account`
+- **Top-N + Other**: rows outside the top-N (`limit`, clamped 1..25) fold into a single `__other__` series with `is_other: true`. The fold is Python-side after the raw grouped SQL query (the SQL group-by keys are stable; folding by a Python `set` of top keys is easier to test and avoids SQL alias fragility). `bucket_totals` includes the `Other` rows so the bucket total stays equal to the sum of all points
+- **Metric dimension**: in the first pass, the backend always ranks series by `request_count`. The frontend hides latency/TTFT from the metric dropdown and renders them in tooltips / detail rows only (averages are not additive and would mislead stacked bars). The `metric` field is preserved in the response for API stability
+- **Caching**: `StatsService.get_grouped_timeseries(...)` participates in the 30s dashboard cache (TTL + 32-entry cap, same as `get_bandwidth_timeseries`). Cache key incorporates `bucket`, `group_by`, `limit`, `account_name`, `model_id`
+- **Validation**: invalid `bucket` → `"hour"`, invalid `group_by` → `"provider_model"`, `limit` → `1..25`. Unknown `account_name` returns the empty stable payload (not `None`, not an exception) so the renderer never has to special-case it
+- **Renderer**: `_render_grouped_timeseries_chart()` emits the canvas + JSON data island + `data-*` attributes; `_render_grouped_timeseries_table()` emits the 17-column grouped detail table (Account column conditionally shown); `_render_timeseries_controls()` emits the period/bucket/group_by/metric/limit/account/model form
+- **Legacy compatibility**: `/api/timeseries` (the old aggregate endpoint) and the overview's `_render_timeseries_chart()` (line chart) remain unchanged for backward compatibility. The overview auto-refresh now correctly re-binds the legacy line chart via `reinitTimeseriesChart()` after every `innerHTML` swap
+- **Empty state**: empty database / filtered-out time window renders `<p class="empty">No requests in this window.</p>` instead of a chart, without JavaScript errors
 
 ### Tooltip System
 

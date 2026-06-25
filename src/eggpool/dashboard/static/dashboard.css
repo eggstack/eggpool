@@ -271,6 +271,43 @@ td.no { color: var(--color-error); font-weight: 600; }
   margin: 0 0 1rem;
 }
 
+.timeseries-chart-panel {
+  /* Inherits .panel styling; height comes from .chart-container. */
+}
+
+.chart-container {
+  position: relative;
+  height: 360px;
+  width: 100%;
+  max-width: 100%;
+}
+
+.chart-container-compact {
+  position: relative;
+  height: 280px;
+  width: 100%;
+  max-width: 100%;
+}
+
+.timeseries-controls {
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: flex-end;
+  margin: 0 0 1rem;
+}
+
+.timeseries-controls label {
+  display: inline-flex;
+  flex-direction: column;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.timeseries-controls label > select,
+.timeseries-controls label > input {
+  margin-top: 0.25rem;
+}
+
 .period-selector select,
 .filter-form input,
 .filter-form button {
@@ -368,6 +405,10 @@ td.no { color: var(--color-error); font-weight: 600; }
   .overview-grid {
     grid-template-columns: 1fr;
   }
+
+  .chart-container { height: 280px; }
+  .chart-container-compact { height: 220px; }
+  .timeseries-controls label { flex: 1 1 calc(50% - 0.5rem); }
 
   main {
     padding: 1rem;

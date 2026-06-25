@@ -254,7 +254,10 @@ def _render_layout(
         _render_auto_refresh_script(refresh_interval_s) if auto_refresh else ""
     )
     chart_script = (
-        '<script defer src="/static/chart.js"></script>' if include_chart_js else ""
+        '<script defer src="/static/chart.js"></script>'
+        '<script defer src="/static/dashboard.js"></script>'
+        if include_chart_js
+        else ""
     )
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -328,6 +331,15 @@ def _render_auto_refresh_script(refresh_interval_s: int) -> str:
       if (next) {{
         content.innerHTML = next.innerHTML;
         updated.textContent = new Date().toLocaleTimeString();
+        if (window.EggPoolDashboard) {{
+          const dash = window.EggPoolDashboard;
+          if (typeof dash.initGroupedTimeseriesCharts === "function") {{
+            dash.initGroupedTimeseriesCharts();
+          }}
+          if (typeof dash.reinitTimeseriesChart === "function") {{
+            dash.reinitTimeseriesChart();
+          }}
+        }}
       }}
     }} catch (_err) {{
       updated.textContent = "stale";
@@ -1540,6 +1552,253 @@ def render_events(
     )
 
 
+def _render_aggregate_timeseries_table(series: list[dict[str, Any]]) -> str:
+    """Render the legacy aggregate per-bucket timeseries table."""
+    if not series:
+        return '<p class="empty">No requests in this window.</p>'
+    parts = [
+        '<table class="data">',
+        "<thead><tr>",
+        "<th>Bucket</th>",
+        "<th>Requests</th>",
+        "<th>Errors</th>",
+        "<th>Input tokens</th>",
+        "<th>Output tokens</th>",
+        "<th>Total tokens</th>",
+        "<th>Cost</th>",
+        "<th>BW received</th>",
+        "<th>BW emitted</th>",
+        "</tr></thead><tbody>",
+    ]
+    for row in series:
+        cost = format_microdollars(row.get("cost_microdollars", 0))
+        in_tok = format_tokens(row.get("input_tokens", 0))
+        out_tok = format_tokens(row.get("output_tokens", 0))
+        total_tok = format_tokens(row.get("total_tokens", 0))
+        parts.append(
+            f"<tr>"
+            f"<td>{escape(row.get('bucket', ''))}</td>"
+            f"<td>{int(row.get('request_count', 0)):,}</td>"
+            f"<td>{int(row.get('error_count', 0)):,}</td>"
+            f"<td>{in_tok}</td>"
+            f"<td>{out_tok}</td>"
+            f"<td>{total_tok}</td>"
+            f"<td>{cost}</td>"
+            f"<td>{format_bytes(row.get('bytes_received', 0))}</td>"
+            f"<td>{format_bytes(row.get('bytes_emitted', 0))}</td>"
+            f"</tr>"
+        )
+    parts.append("</tbody></table>")
+    return "".join(parts)
+
+
+def _render_grouped_timeseries_chart(
+    grouped: dict[str, Any],
+    *,
+    period: str,
+    bucket: str,
+    group_by: str,
+    metric: str,
+    limit: int,
+    account_filter: str = "",
+    model_filter: str = "",
+    compact: bool = False,
+) -> str:
+    """Render the grouped timeseries chart panel with sibling JSON data island.
+
+    The chart is rendered server-side as a ``<canvas>`` plus a sibling
+    ``<script type="application/json">`` data island.  Initialisation is
+    intentionally not done inline so that Chart.js loads (deferred) before
+    the canvas is touched, and so that ``_render_auto_refresh_script``
+    can call ``initGroupedTimeseriesCharts`` after the dashboard content
+    is replaced without re-executing inline scripts.
+    """
+    points = list(grouped.get("points") or [])
+    buckets = list(grouped.get("buckets") or [])
+    has_data = bool(points) and bool(buckets)
+    chart_id = (
+        "grouped-timeseries-chart-compact" if compact else "grouped-timeseries-chart"
+    )
+    container_class = "chart-container-compact" if compact else "chart-container"
+    period_attr = escape_attr(period)
+    bucket_attr = escape_attr(bucket)
+    group_by_attr = escape_attr(group_by)
+    metric_attr = escape_attr(metric)
+    limit_attr = escape_attr(str(limit))
+    account_attr = escape_attr(account_filter)
+    model_attr = escape_attr(model_filter)
+    payload_json = json.dumps(grouped)
+    if not has_data:
+        return (
+            '<section class="panel timeseries-chart-panel">'
+            "<h3>Usage breakdown</h3>"
+            '<p class="empty">No requests in this window.</p>'
+            "</section>"
+        )
+    return f"""
+<section class="panel timeseries-chart-panel">
+  <h3>Usage breakdown</h3>
+  <div class="{container_class}">
+    <canvas class="grouped-timeseries-chart"
+            data-chart-id="{chart_id}"
+            data-period="{period_attr}"
+            data-bucket="{bucket_attr}"
+            data-group-by="{group_by_attr}"
+            data-metric="{metric_attr}"
+            data-limit="{limit_attr}"
+            data-account="{account_attr}"
+            data-model="{model_attr}"></canvas>
+  </div>
+  <script type="application/json" class="grouped-timeseries-data"
+          data-chart-id="{chart_id}">{payload_json}</script>
+</section>
+"""
+
+
+def _render_grouped_timeseries_table(grouped: dict[str, Any]) -> str:
+    """Render the grouped detail table below the chart."""
+    points = list(grouped.get("points") or [])
+    buckets = list(grouped.get("buckets") or [])
+    if not points or not buckets:
+        return '<p class="empty">No requests in this window.</p>'
+    include_account = str(grouped.get("group_by") or "") == "account" or any(
+        row.get("account_name") for row in points
+    )
+    header_cells = [
+        "<th>Bucket</th>",
+        "<th>Series</th>",
+        "<th>Provider</th>",
+        "<th>Model</th>",
+    ]
+    if include_account:
+        header_cells.append("<th>Account</th>")
+    header_cells.extend(
+        [
+            "<th>Requests</th>",
+            "<th>Errors</th>",
+            "<th>Input tokens</th>",
+            "<th>Output tokens</th>",
+            "<th>Cache read</th>",
+            "<th>Cache write</th>",
+            "<th>Reasoning</th>",
+            "<th>Total tokens</th>",
+            "<th>Cost</th>",
+            "<th>BW received</th>",
+            "<th>BW emitted</th>",
+            "<th>Avg latency</th>",
+            "<th>Avg TTFT</th>",
+        ]
+    )
+    parts = [
+        '<table class="data">',
+        "<thead><tr>",
+        *header_cells,
+        "</tr></thead><tbody>",
+    ]
+    for row in points:
+        cells = [
+            f"<td>{escape(row.get('bucket', ''))}</td>",
+            f"<td>{escape(row.get('label', ''))}</td>",
+            f"<td>{escape(row.get('provider_id') or '')}</td>",
+            f"<td>{escape(row.get('model_id') or '')}</td>",
+        ]
+        if include_account:
+            cells.append(f"<td>{escape(row.get('account_name') or '')}</td>")
+        cells.extend(
+            [
+                f"<td>{format_int(row.get('request_count', 0))}</td>",
+                f"<td>{format_int(row.get('error_count', 0))}</td>",
+                f"<td>{format_tokens(row.get('input_tokens', 0))}</td>",
+                f"<td>{format_tokens(row.get('output_tokens', 0))}</td>",
+                f"<td>{format_tokens(row.get('cache_read_tokens', 0))}</td>",
+                f"<td>{format_tokens(row.get('cache_write_tokens', 0))}</td>",
+                f"<td>{format_tokens(row.get('reasoning_tokens', 0))}</td>",
+                f"<td>{format_tokens(row.get('total_tokens', 0))}</td>",
+                f"<td>{format_microdollars(row.get('cost_microdollars', 0))}</td>",
+                f"<td>{format_bytes(row.get('bytes_received', 0))}</td>",
+                f"<td>{format_bytes(row.get('bytes_emitted', 0))}</td>",
+                f"<td>{format_latency(row.get('avg_latency_ms', 0.0))}</td>",
+                f"<td>{format_latency(row.get('avg_ttft_ms', 0.0))}</td>",
+            ]
+        )
+        parts.append(f"<tr>{''.join(cells)}</tr>")
+    parts.append("</tbody></table>")
+    return "".join(parts)
+
+
+def _render_timeseries_controls(
+    *,
+    period: str,
+    bucket: str,
+    group_by: str,
+    metric: str,
+    limit: int,
+    account_filter: str,
+    model_filter: str,
+    current_theme: str,
+) -> str:
+    """Render the timeseries filter form with period, bucket, group, etc."""
+
+    def _select(name: str, current: str, options: list[tuple[str, str]]) -> str:
+        items: list[str] = []
+        for value, label in options:
+            sel = " selected" if value == current else ""
+            items.append(
+                f'<option value="{escape_attr(value)}"{sel}>{escape(label)}</option>'
+            )
+        return f'<select name="{name}">{"".join(items)}</select>'
+
+    period_options: list[tuple[str, str]] = [
+        ("1h", "Last hour"),
+        ("24h", "Last 24 hours"),
+        ("7d", "Last 7 days"),
+        ("30d", "Last 30 days"),
+    ]
+    bucket_options: list[tuple[str, str]] = [
+        ("hour", "Hour"),
+        ("day", "Day"),
+    ]
+    group_options: list[tuple[str, str]] = [
+        ("provider_model", "Provider / model"),
+        ("provider", "Provider"),
+        ("model", "Model"),
+        ("account", "Account"),
+    ]
+    metric_options: list[tuple[str, str]] = [
+        ("requests", "Requests"),
+        ("tokens", "Tokens"),
+        ("cost", "Cost"),
+        ("errors", "Errors"),
+        ("bytes", "Bandwidth"),
+        ("latency", "Avg latency"),
+        ("ttft", "Avg TTFT"),
+    ]
+    limit_options: list[tuple[str, str]] = [
+        (str(n), f"Top {n}") for n in (6, 8, 12, 16, 20, 25)
+    ]
+    selected_limit = str(limit if limit in {int(v) for v, _ in limit_options} else 12)
+    return f"""
+<form method="get" class="filter-form timeseries-controls"
+      aria-label="Timeseries filters">
+  <label>Period: {_select("period", period, period_options)}</label>
+  <label>Bucket: {_select("bucket", bucket, bucket_options)}</label>
+  <label>Group by: {_select("group_by", group_by, group_options)}</label>
+  <label>Metric: {_select("metric", metric, metric_options)}</label>
+  <label>Limit: {_select("limit", selected_limit, limit_options)}</label>
+  <label>Account:
+    <input type="text" name="account" value="{escape_attr(account_filter)}"
+           placeholder="(any)">
+  </label>
+  <label>Model:
+    <input type="text" name="model" value="{escape_attr(model_filter)}"
+           placeholder="(any)">
+  </label>
+  <input type="hidden" name="theme" value="{escape_attr(current_theme)}">
+  <button type="submit">Apply</button>
+</form>
+"""
+
+
 def render_timeseries(
     series: list[dict[str, Any]],
     bucket: str,
@@ -1547,51 +1806,60 @@ def render_timeseries(
     theme_css: str = "",
     available_themes: list[str] | None = None,
     current_theme: str = "",
+    *,
+    grouped: dict[str, Any] | None = None,
+    group_by: str = "provider_model",
+    metric: str = "requests",
+    limit: int = 12,
+    account_filter: str = "",
+    model_filter: str = "",
 ) -> str:
-    """Render the timeseries page."""
-    if not series:
-        rows_html = '<p class="empty">No requests in this window.</p>'
-    else:
-        parts = [
-            '<table class="data">',
-            "<thead><tr>",
-            "<th>Bucket</th>",
-            "<th>Requests</th>",
-            "<th>Errors</th>",
-            "<th>Input tokens</th>",
-            "<th>Output tokens</th>",
-            "<th>Total tokens</th>",
-            "<th>Cost</th>",
-            "<th>BW received</th>",
-            "<th>BW emitted</th>",
-            "</tr></thead><tbody>",
-        ]
-        for row in series:
-            cost = format_microdollars(row.get("cost_microdollars", 0))
-            in_tok = format_tokens(row.get("input_tokens", 0))
-            out_tok = format_tokens(row.get("output_tokens", 0))
-            total_tok = format_tokens(row.get("total_tokens", 0))
-            parts.append(
-                f"<tr>"
-                f"<td>{escape(row.get('bucket', ''))}</td>"
-                f"<td>{int(row.get('request_count', 0)):,}</td>"
-                f"<td>{int(row.get('error_count', 0)):,}</td>"
-                f"<td>{in_tok}</td>"
-                f"<td>{out_tok}</td>"
-                f"<td>{total_tok}</td>"
-                f"<td>{cost}</td>"
-                f"<td>{format_bytes(row.get('bytes_received', 0))}</td>"
-                f"<td>{format_bytes(row.get('bytes_emitted', 0))}</td>"
-                f"</tr>"
-            )
-        parts.append("</tbody></table>")
-        rows_html = "".join(parts)
+    """Render the timeseries page.
+
+    The page renders the period selector at the top, then a filter form
+    for bucket/group/metric/limit/account/model, then the grouped chart
+    panel and the grouped detail table.  The legacy aggregate per-bucket
+    table remains below as a secondary reference for operators who want
+    the older single-bucket totals view.
+    """
+    controls = _render_timeseries_controls(
+        period=period,
+        bucket=bucket,
+        group_by=group_by,
+        metric=metric,
+        limit=limit,
+        account_filter=account_filter,
+        model_filter=model_filter,
+        current_theme=current_theme,
+    )
+    chart_panel = _render_grouped_timeseries_chart(
+        grouped or {},
+        period=period,
+        bucket=bucket,
+        group_by=group_by,
+        metric=metric,
+        limit=limit,
+        account_filter=account_filter,
+        model_filter=model_filter,
+    )
+    detail_table = _render_grouped_timeseries_table(grouped or {})
+    aggregate_table = _render_aggregate_timeseries_table(series)
 
     body = f"""
-<h2>Timeseries ({escape(bucket)} buckets)</h2>
+<h2>Timeseries ({escape(bucket)} buckets, group by {escape(group_by)})</h2>
 {_render_period_selector(period, current_theme)}
+{controls}
+
+{chart_panel}
+
 <section class="panel">
-  {rows_html}
+  <h3>Usage breakdown</h3>
+  {detail_table}
+</section>
+
+<section class="panel">
+  <h3>Aggregate per bucket</h3>
+  {aggregate_table}
 </section>
 """
     return _render_layout(
@@ -1602,6 +1870,7 @@ def render_timeseries(
         theme_css=theme_css,
         available_themes=available_themes,
         current_theme=current_theme,
+        include_chart_js=True,
     )
 
 

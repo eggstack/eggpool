@@ -19,6 +19,7 @@ from eggpool.stats.queries import (
     fetch_attempt_stats,
     fetch_bandwidth_timeseries,
     fetch_error_breakdown,
+    fetch_grouped_timeseries,
     fetch_ip_stats,
     fetch_latency_phase_breakdown,
     fetch_operational_event_summary,
@@ -480,6 +481,72 @@ class StatsService:
         )
         if use_cache:
             self._set_dashboard_cache(key, result)
+        return result
+
+    async def get_grouped_timeseries(
+        self,
+        time_range: TimeRange,
+        *,
+        bucket: str = "hour",
+        group_by: str = "provider_model",
+        limit: int = 12,
+        account_name: str | None = None,
+        model_id: str | None = None,
+        use_cache: bool = False,
+    ) -> dict[str, Any]:
+        """Get time-bucketed time series grouped by a chosen dimension.
+
+        ``bucket`` is normalized to ``"hour"`` for unknown values;
+        ``group_by`` is normalized to ``"provider_model"``.  ``limit`` is
+        clamped to ``1..25``.  An unknown ``account_name`` returns the
+        empty stable payload rather than ``None`` so the renderer can
+        rely on a consistent shape.
+        """
+        if bucket not in ("hour", "day"):
+            bucket = "hour"
+        if group_by not in ("provider", "model", "provider_model", "account"):
+            group_by = "provider_model"
+        bounded_limit = max(1, min(int(limit), 25))
+
+        account_id: int | None = None
+        if account_name is not None and account_name != "":
+            account_id = await fetch_account_id(self._db, account_name)
+            if account_id is None:
+                return {
+                    "bucket": bucket,
+                    "group_by": group_by,
+                    "metric": "requests",
+                    "limit": bounded_limit,
+                    "series": [],
+                    "buckets": [],
+                    "bucket_totals": [],
+                    "points": [],
+                }
+
+        cache_key = self._dashboard_cache_key(
+            "grouped_timeseries",
+            time_range,
+            bucket,
+            group_by,
+            str(bounded_limit),
+            account_name or "",
+            model_id or "",
+        )
+        if use_cache and (cached := self._get_dashboard_cache(cache_key)) is not None:
+            return cast("dict[str, Any]", cached)
+        model_filter: str | None = model_id if model_id else None
+        result = await fetch_grouped_timeseries(
+            self._db,
+            time_range.start_str(),
+            time_range.end_str(),
+            bucket=bucket,
+            group_by=group_by,
+            limit=bounded_limit,
+            account_id=account_id,
+            model_id=model_filter,
+        )
+        if use_cache:
+            self._set_dashboard_cache(cache_key, result)
         return result
 
     async def get_error_breakdown(

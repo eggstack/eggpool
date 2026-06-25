@@ -121,10 +121,12 @@ Four migrations extend the request lifecycle with structured observability. Ever
 | `GET /api/stats/recent-requests` | Bounded recent-requests metadata list (no body, no auth headers, no error_detail, no client_ip by default). | **always auth-gated** |
 | `GET /api/stats/accounts` / `/api/stats/models` (extended) | Adds `exact_count/derived_count/estimated_count/unknown_count`, `estimated_cost_fraction`, `cache_read_ratio`, `cache_write_ratio`, `reasoning_output_ratio`, `avg_cost_per_request`, `avg_cost_per_1k_tokens` | dashboard default |
 | `GET /api/stats/runtime` | Runtime/operations metrics: process topology, memory, background tasks, DB health, in-flight counts. Always auth-gated. | **always auth-gated** |
+| `GET /api/timeseries` | Legacy aggregate timeseries: one row per `(bucket)` with totals (kept for backward compatibility). | dashboard default |
+| `GET /api/timeseries/grouped` | Grouped usage timeseries for the `/timeseries` chart. Query params: `period`, `bucket` (`hour`/`day`), `group_by` (`provider_model`/`provider`/`model`/`account`), `metric`, `limit` (1-25), `account`, `model`. Returns `{bucket, group_by, metric, limit, series, buckets, bucket_totals, points}` — series outside `limit` fold into an `Other` series so bucket totals stay loss-less. | dashboard default |
 
 ## Dashboard Pages
 
-Server-rendered HTML pages in `src/eggpool/dashboard/render.py`, all inheriting the dashboard's public/auth setting via the `require_auth` flag wired through `register_dashboard_routes`. Frontend helpers live in `src/eggpool/dashboard/static/dashboard.js` under `window.EggPoolDashboard` (`fetchStats`, `formatDurationMs`, `formatAgeSeconds`, `formatPercent`, `formatCount`).
+Server-rendered HTML pages in `src/eggpool/dashboard/render.py`, all inheriting the dashboard's public/auth setting via the `require_auth` flag wired through `register_dashboard_routes`. Frontend helpers live in `src/eggpool/dashboard/static/dashboard.js` under `window.EggPoolDashboard` (`fetchStats`, `formatDurationMs`, `formatAgeSeconds`, `formatPercent`, `formatCount`, `formatBytes`, `formatMicrodollars`, `formatTokens`, `formatDollarsFromMicro`, `initGroupedTimeseriesCharts`, `reinitTimeseriesChart`).
 
 | Page | Route | Purpose | Chart.js |
 |---|---|---|---|
@@ -138,7 +140,7 @@ Server-rendered HTML pages in `src/eggpool/dashboard/render.py`, all inheriting 
 | Runtime | `/runtime` | Runtime health: process count, memory, background tasks, DB sizes | no |
 | Pings | `/pings` | Provider health/ping stats | no |
 | Events | `/events` | Recent events | no |
-| Timeseries | `/timeseries` | Time-bucketed request counts | yes |
+| Timeseries | `/timeseries` | Stacked-bar grouped usage chart + controls (period, bucket, group_by, metric, limit) + grouped detail table | yes |
 | Bandwidth | `/bandwidth` | GitHub-style heatmap of daily bytes | no |
 
 The Overview page is the only page that auto-refreshes in place (every `[dashboard].refresh_interval_s`). All other pages are static unless the user navigates or hits refresh. Charts use the bundled Chart.js v4 served at `/static/chart.js` with `Cache-Control: public, max-age=86400`. New pages opt into Chart.js via `include_chart_js=True` in `_render_layout`.
