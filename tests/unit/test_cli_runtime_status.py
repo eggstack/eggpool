@@ -345,6 +345,54 @@ def test_runtime_status_prints_summary_on_success() -> None:
             assert "EggPool Runtime Status" in result.output
 
 
+def test_runtime_status_json_output() -> None:
+    """Command outputs raw JSON when --json is passed."""
+    from eggpool.cli import cli
+
+    response_data = {
+        "server": {
+            "pid": 42,
+            "ppid": 1,
+            "uptime_seconds": 60.0,
+            "python_version": "3.12.0",
+            "configured_server_threads": 1,
+        },
+        "memory": {"rss_bytes": 1048576, "vms_bytes": 2097152},
+        "processes": {
+            "eggpool_process_count": 2,
+            "expected_worker_process_count": 2,
+            "process_count_warning": False,
+        },
+        "background_tasks": [],
+        "db": {"path": "/tmp/test.db", "is_memory_db": False},
+        "routing_runtime": {},
+        "probe_errors": [],
+    }
+
+    mock_response = MagicMock()
+    mock_response.read.return_value = json.dumps(response_data).encode()
+    mock_response.__enter__ = lambda s: s
+    mock_response.__exit__ = MagicMock(return_value=False)
+
+    runner = CliRunner()
+    with patch("eggpool.cli_full.AppConfig.from_toml") as mock_config:
+        mock_config.return_value = MagicMock(
+            server=MagicMock(host="127.0.0.1", port=1, resolved_api_key=None)
+        )
+        with (
+            patch("urllib.request.urlopen", return_value=mock_response),
+            patch(
+                "eggpool.deploy_user.resolve_config_path",
+                return_value="/tmp/fake-config.toml",
+            ),
+        ):
+            result = runner.invoke(cli, ["runtime-status", "--json"])
+            assert result.exit_code == 0
+            parsed = json.loads(result.output)
+            assert parsed["server"]["pid"] == 42
+            assert "EggPool Runtime Status" not in result.output
+
+
 def test_runtime_status_normalizes_bind_address() -> None:
     """Command normalizes 0.0.0.0 to 127.0.0.1 for the localhost probe."""
     from eggpool.cli import cli

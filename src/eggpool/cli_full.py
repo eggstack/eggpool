@@ -2921,13 +2921,21 @@ def ensure_running(ctx: click.Context) -> None:
 
 
 @cli.command("runtime-status")
+@click.option(
+    "--json",
+    "output_json",
+    is_flag=True,
+    help="Output raw JSON instead of a formatted summary.",
+)
 @click.pass_context
-def runtime_status(ctx: click.Context) -> None:
+def runtime_status(ctx: click.Context, output_json: bool) -> None:
     """Print a compact runtime health summary from the running server.
 
     Calls the local ``/api/stats/runtime`` endpoint and displays
     process, memory, background-task, and database status.  Requires
     the server to be running; exits non-zero otherwise.
+
+    Use ``--json`` for machine-readable output.
     """
     import json
     import urllib.error
@@ -2964,7 +2972,10 @@ def runtime_status(ctx: click.Context) -> None:
         click.echo(f"Cannot reach server at {url}: {exc}", err=True)
         sys.exit(1)
 
-    _print_runtime_status(data)
+    if output_json:
+        click.echo(json.dumps(data, indent=2))
+    else:
+        _print_runtime_status(data)
 
 
 def _print_runtime_status(data: dict[str, Any]) -> None:
