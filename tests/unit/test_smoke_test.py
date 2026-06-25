@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import io
 import json
-import time
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -813,25 +812,6 @@ class TestContentPrivacy:
             "private stream content": b"data: private stream content\n\n",
             "another secret value": b"data: another secret value\n\n",
         }
-        captured: dict[str, Any] = {}
-
-        def _capture_chunk(
-            response: httpx.Response,
-            state: smoke_test._StreamCheckState,
-            *,
-            required_marker: bytes,
-            required_terminal: tuple[bytes, ...] = (),
-        ) -> smoke_test.CheckResult:
-            for chunk in response.iter_bytes():
-                state.chunk_count += 1
-                if chunk and state.first_chunk_at is None:
-                    state.first_chunk_at = time.time()
-            captured.setdefault("chunks", []).append(chunk)
-            return smoke_test.CheckResult(
-                "openai_stream",
-                True,
-                f"status={response.status_code} chunks={state.chunk_count}",
-            )
 
         monkeypatch.setattr(
             smoke_test,

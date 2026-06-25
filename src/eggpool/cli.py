@@ -2,21 +2,20 @@
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import os
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Coroutine
+
+    from eggpool.db.connection import Database
 
 import click
 
 from eggpool.accounts.registry import account_config_rows
 from eggpool.auth import require_auth_at_startup
-from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
 from eggpool.db.repositories import AccountRepository, ProviderRepository
 from eggpool.errors import AggregatorError
@@ -45,7 +44,33 @@ from eggpool.toml_edit import (
 )
 
 
-@click.group(invoke_without_command=True)
+class _ConfigPathGroup(click.Group):
+    """Click group that shows the resolved config path in help output."""
+
+    def format_help(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
+        super().format_help(ctx, formatter)
+        # Resolve the config path from Click's parsed context instead of
+        # re-parsing sys.argv manually. ``ctx.params`` is populated by
+        # Click's own argument parser, so this honors --config regardless
+        # of where on the command line it appears.
+        config_path_raw = ctx.params.get("config_path") or "config.toml"
+        config_path = (
+            config_path_raw if isinstance(config_path_raw, str) else "config.toml"
+        )
+        # Prefer the resolved absolute path stored on the parent context
+        # when the group callback has already run.
+        parent_obj = ctx.parent.obj if ctx.parent is not None else None
+        if isinstance(parent_obj, dict):
+            stored_raw: object = cast("dict[str, object]", parent_obj).get(
+                "config_path", config_path
+            )
+            if isinstance(stored_raw, str):
+                config_path = stored_raw
+        resolved = os.path.abspath(config_path)
+        formatter.write(f"\nConfig file: {resolved}\n")
+
+
+@click.group(cls=_ConfigPathGroup, invoke_without_command=True)
 @click.option(
     "--config",
     "config_path",
@@ -67,29 +92,6 @@ def cli(ctx: click.Context, config_path: str) -> None:
         from eggpool.config import ensure_config
 
         ensure_config(ctx.obj["config_path"])
-
-
-class _ConfigPathGroup(click.Group):
-    """Click group that shows the resolved config path in help output."""
-
-    def format_help(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
-        super().format_help(ctx, formatter)
-        # Parse --config from the original command line args
-        config_path = "config.toml"
-        args = sys.argv[1:] if hasattr(sys, "argv") else []
-        for i, arg in enumerate(args):
-            if arg == "--config" and i + 1 < len(args):
-                config_path = args[i + 1]
-                break
-            elif arg.startswith("--config="):
-                config_path = arg.split("=", 1)[1]
-                break
-        resolved = os.path.abspath(config_path)
-        formatter.write(f"\nConfig file: {resolved}\n")
-
-
-# Re-apply the group class after the decorator
-cli.__class__ = _ConfigPathGroup
 
 
 def _app_loader(target: str) -> Any:
@@ -356,34 +358,63 @@ def generate_api_key() -> str:
     return f"ep_{secrets.token_hex(32)}"
 
 
-def _read_server_api_key(config_path: str) -> str:
-    """Read the current server API key from config without full validation."""
+def _redact_key(key: str) -> str:
+    """Return a short, non-secret fingerprint of an API key for display."""
+    if not key:
+        return ""
+    if len(key) <= 8:
+        return "***"
+    return f"{key[:4]}...{key[-4:]}"
+
+
+def _load_raw_config(config_path: str) -> dict[str, object]:
+    """Load the raw TOML config as a nested dict without Pydantic validation.
+
+    Returns an empty dict if the file is missing or unparseable. Used by
+    CLI commands that only need a few scalar fields (api_key, port,
+    dashboard.public) and want to avoid the cost of full ``AppConfig``
+    validation.
+    """
     import tomllib
     from pathlib import Path
 
     path = Path(config_path)
     if not path.exists():
-        return ""
-    with open(path, "rb") as f:
-        raw = tomllib.load(f)
-    server = raw.get("server", {})
-    return server.get("api_key", "") or ""
+        return {}
+    try:
+        with open(path, "rb") as f:
+            raw = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}
+    # tomllib.load returns Mapping[str, Any] at the top level; the cast
+    # narrows it for downstream helpers that consume ``dict[str, object]``.
+    return cast("dict[str, object]", raw)
+
+
+def _get_section(raw: dict[str, object], name: str) -> dict[str, object]:
+    """Return a top-level TOML section as a dict, or empty dict."""
+    section = raw.get(name)
+    if isinstance(section, dict):
+        return cast("dict[str, object]", section)
+    return {}
+
+
+def _read_server_api_key(config_path: str) -> str:
+    """Read the current server API key from config without full validation."""
+    raw = _load_raw_config(config_path)
+    server = _get_section(raw, "server")
+    value = server.get("api_key", "")
+    return value if isinstance(value, str) else ""
 
 
 def _read_server_port(config_path: str) -> int:
     """Read the server port from config without full validation."""
-    import tomllib
-    from pathlib import Path
-
     from eggpool.constants import DEFAULT_PORT
 
-    path = Path(config_path)
-    if not path.exists():
-        return DEFAULT_PORT
-    with open(path, "rb") as f:
-        raw = tomllib.load(f)
-    server = raw.get("server", {})
-    return server.get("port", DEFAULT_PORT)
+    raw = _load_raw_config(config_path)
+    server = _get_section(raw, "server")
+    value = server.get("port", DEFAULT_PORT)
+    return value if isinstance(value, int) else DEFAULT_PORT
 
 
 def _detect_lan_ip() -> str:
@@ -451,8 +482,15 @@ def getkey(ctx: click.Context) -> None:
 
 
 @cli.command()
+@click.option(
+    "--show-old",
+    is_flag=True,
+    help="Print the full previous key to stdout. Disabled by default to "
+    "avoid leaking a key that may have just been rotated for security "
+    "reasons.",
+)
 @click.pass_context
-def newkey(ctx: click.Context) -> None:
+def newkey(ctx: click.Context, show_old: bool) -> None:
     """Generate a new server API key, overwriting the old one."""
     from eggpool.providers.connect import restart_server
 
@@ -462,7 +500,10 @@ def newkey(ctx: click.Context) -> None:
     write_server_api_key(config_path, new_key)
 
     if old_key:
-        click.echo(f"Old key (expired): {old_key}")
+        if show_old:
+            click.echo(f"Old key (expired): {old_key}")
+        else:
+            click.echo(f"Old key (expired, redacted): {_redact_key(old_key)}")
     click.echo(f"New key (use this): {new_key}")
 
     if restart_server(config_path):
@@ -571,6 +612,47 @@ def _write_file(path: str, content: str) -> None:
     click.echo(f"  Written {path}")
 
 
+def _run_with_database(
+    config: AppConfig,
+    operation: Callable[[Database], Coroutine[object, object, object] | object],
+) -> None:
+    """Connect a :class:`Database`, run ``operation(db)``, disconnect.
+
+    Centralizes the connect/try/finally/disconnect boilerplate used by
+    ``migrate``, ``db vacuum``, and ``models refresh`` so the commands
+    stay focused on their actual work.
+
+    ``operation`` may be either an awaitable coroutine ``op(db)`` or a
+    sync function returning a value. ``AggregatorError`` raised by the
+    operation is converted into a non-zero exit.
+    """
+    import asyncio
+
+    from eggpool.db.connection import Database
+
+    async def _runner() -> object:
+        db = Database(
+            path=config.database.path,
+            busy_timeout_ms=config.database.busy_timeout_ms,
+            wal=config.database.wal,
+            synchronous=config.database.synchronous,
+        )
+        await db.connect()
+        try:
+            result = operation(db)
+            if asyncio.iscoroutine(result):
+                return await cast("Coroutine[object, object, object]", result)
+            return result
+        finally:
+            await db.disconnect()
+
+    try:
+        asyncio.run(_runner())
+    except AggregatorError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
+
 def _run_systemctl(args: list[str], quiet: bool = False) -> bool:
     """Run a systemctl command. Returns True on success."""
     import subprocess
@@ -587,21 +669,31 @@ def _run_systemctl(args: list[str], quiet: bool = False) -> bool:
     return True
 
 
-def _stop_running_server() -> None:
-    """Stop the eggpool server if it is currently running."""
+def _stop_running_server() -> bool:
+    """Stop the eggpool server if it is currently running.
+
+    Returns True if the server is confirmed stopped, False if it was
+    not running or did not exit within the timeout window.
+    """
     pid = _read_pid()
     if pid is None or not _is_process_running(pid):
-        return
+        return False
 
     click.echo(f"Stopping running server (PID {pid})...")
-    import contextlib
-    import os
-    import signal
+    from eggpool import runtime
 
-    with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
-        os.kill(pid, signal.SIGTERM)
-    _wait_for_exit(pid, timeout=10.0)
-    click.echo("Server stopped.")
+    if not runtime.send_sigterm(pid):
+        click.echo("  Warning: failed to send SIGTERM.", err=True)
+    stopped = _wait_for_exit(pid, timeout=10.0)
+    if stopped:
+        click.echo("Server stopped.")
+    else:
+        click.echo(
+            f"Server (PID {pid}) did not stop within 10s; "
+            "it may be stuck. Continuing anyway.",
+            err=True,
+        )
+    return stopped
 
 
 def _print_install_hint() -> None:
@@ -1130,20 +1222,21 @@ def deploy_cron(ctx: click.Context, install: bool) -> None:
         click.echo("  Installed /usr/local/bin/eggpool-backup")
 
         # Install user cron entry
-        cron_line = "/usr/local/bin/eggpool-backup"
+        cron_line = "0 2 * * * /usr/local/bin/eggpool-backup"
         result = subprocess.run(  # noqa: S603
             ["crontab", "-l"],
             capture_output=True,
             text=True,
         )
         existing = result.stdout if result.returncode == 0 else ""
-        if cron_line in existing:
+        # Match the full schedule + command so unrelated cron entries that
+        # merely reference the same binary (e.g. a monitoring probe) do
+        # not falsely satisfy this check.
+        existing_lines = {line.strip() for line in existing.splitlines()}
+        if cron_line in existing_lines:
             click.echo("  Cron entry already present — skipping.")
         else:
-            cron_entry = (
-                "\n# EggPool daily backup (personal use)\n"
-                "0 2 * * * /usr/local/bin/eggpool-backup\n"
-            )
+            cron_entry = f"\n# EggPool daily backup (personal use)\n{cron_line}\n"
             new_cron = existing.rstrip() + cron_entry
             subprocess.run(  # noqa: S603
                 ["crontab", "-"],
@@ -1240,19 +1333,8 @@ def dashboard() -> None:
 
 def _read_dashboard_public(config_path: str) -> bool:
     """Read the current dashboard.public value from config."""
-    import tomllib
-    from pathlib import Path
-
-    path = Path(config_path)
-    if not path.exists():
-        return True  # default
-
-    with path.open("rb") as config_file:
-        raw = tomllib.load(config_file)
-    dashboard_raw: object = raw.get("dashboard")
-    if not isinstance(dashboard_raw, dict):
-        return True
-    dashboard = cast("dict[str, object]", dashboard_raw)
+    raw = _load_raw_config(config_path)
+    dashboard = _get_section(raw, "dashboard")
     public = dashboard.get("public", True)
     return public if isinstance(public, bool) else True
 
@@ -1277,19 +1359,13 @@ def _write_dashboard_public(config_path: str, public: bool) -> None:
 
 @dashboard.command("public")
 @click.option(
-    "--on",
+    "--on/--off",
     "set_public",
-    flag_value="true",
-    help="Allow public dashboard access (no API key required).",
-)
-@click.option(
-    "--off",
-    "set_public",
-    flag_value="false",
-    help="Require API key for dashboard access.",
+    default=None,
+    help="Set dashboard public access explicitly (omit to toggle).",
 )
 @click.pass_context
-def dashboard_public(ctx: click.Context, set_public: str | None) -> None:
+def dashboard_public(ctx: click.Context, set_public: bool | None) -> None:
     """Toggle dashboard public access.
 
     Without options, shows the current setting and toggles it.
@@ -1300,7 +1376,7 @@ def dashboard_public(ctx: click.Context, set_public: str | None) -> None:
     config_path: str = ctx.obj["config_path"]
     current = _read_dashboard_public(config_path)
 
-    new_value = not current if set_public is None else set_public == "true"
+    new_value = (not current) if set_public is None else set_public
 
     _write_dashboard_public(config_path, new_value)
 
@@ -1327,26 +1403,12 @@ def migrate(ctx: click.Context) -> None:
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)
 
-    async def _run() -> None:
-        db = Database(
-            path=config.database.path,
-            busy_timeout_ms=config.database.busy_timeout_ms,
-            wal=config.database.wal,
-            synchronous=config.database.synchronous,
-        )
-        await db.connect()
-        try:
-            runner = MigrationRunner(db)
-            await runner.run()
-            click.echo("Migrations completed successfully")
-        finally:
-            await db.disconnect()
+    async def _run_migrations(db: Database) -> None:
+        runner = MigrationRunner(db)
+        await runner.run()
+        click.echo("Migrations completed successfully")
 
-    try:
-        asyncio.run(_run())
-    except AggregatorError as exc:
-        click.echo(f"Error: {exc}", err=True)
-        sys.exit(1)
+    _run_with_database(config, _run_migrations)
 
 
 @cli.group()
@@ -1375,45 +1437,31 @@ def models_refresh(ctx: click.Context) -> None:
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)
 
-    async def _run() -> None:
-        db = Database(
-            path=config.database.path,
-            busy_timeout_ms=config.database.busy_timeout_ms,
-            wal=config.database.wal,
-            synchronous=config.database.synchronous,
-        )
-        await db.connect()
+    async def _run_models_refresh(db: Database) -> None:
+        runner = MigrationRunner(db)
+        await runner.run()
+
+        provider_repo = ProviderRepository(db)
+        configured_providers = {
+            pid: {"base_url": pcfg.base_url, "protocols": pcfg.protocols}
+            for pid, pcfg in config.providers.items()
+        }
+        await provider_repo.sync_from_config(configured_providers)
+
+        account_repo = AccountRepository(db)
+        await account_repo.sync_from_config(account_config_rows(config))
+
+        registry = AccountRegistry(config)
+        client_pool = ProviderClientPool.from_app_config(config)
         try:
-            runner = MigrationRunner(db)
-            await runner.run()
-
-            provider_repo = ProviderRepository(db)
-            configured_providers = {
-                pid: {"base_url": pcfg.base_url, "protocols": pcfg.protocols}
-                for pid, pcfg in config.providers.items()
-            }
-            await provider_repo.sync_from_config(configured_providers)
-
-            account_repo = AccountRepository(db)
-            await account_repo.sync_from_config(account_config_rows(config))
-
-            registry = AccountRegistry(config)
-            client_pool = ProviderClientPool.from_app_config(config)
-            try:
-                catalog = CatalogService(config, registry, db, client_pool)
-                await catalog.refresh()
-                count = catalog.cache.model_count
-                click.echo(f"Refreshed catalog: {count} models found")
-            finally:
-                await client_pool.close()
+            catalog = CatalogService(config, registry, db, client_pool)
+            await catalog.refresh()
+            count = catalog.cache.model_count
+            click.echo(f"Refreshed catalog: {count} models found")
         finally:
-            await db.disconnect()
+            await client_pool.close()
 
-    try:
-        asyncio.run(_run())
-    except AggregatorError as exc:
-        click.echo(f"Error: {exc}", err=True)
-        sys.exit(1)
+    _run_with_database(config, _run_models_refresh)
 
 
 @cli.group()
@@ -1499,25 +1547,11 @@ def db_vacuum(ctx: click.Context) -> None:
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)
 
-    async def _run() -> None:
-        db = Database(
-            path=config.database.path,
-            busy_timeout_ms=config.database.busy_timeout_ms,
-            wal=config.database.wal,
-            synchronous=config.database.synchronous,
-        )
-        await db.connect()
-        try:
-            await db.vacuum()
-            click.echo("Database vacuum completed successfully")
-        finally:
-            await db.disconnect()
+    async def _run_vacuum(db: Database) -> None:
+        await db.vacuum()
+        click.echo("Database vacuum completed successfully")
 
-    try:
-        asyncio.run(_run())
-    except AggregatorError as exc:
-        click.echo(f"Error: {exc}", err=True)
-        sys.exit(1)
+    _run_with_database(config, _run_vacuum)
 
 
 @cli.command()
@@ -1641,38 +1675,23 @@ def onboard(ctx: click.Context, providers_path: str | None) -> None:
 
 def _read_pid() -> int | None:
     """Read the PID from the PID file. Returns None if not found or invalid."""
-    from eggpool.constants import PID_FILE
+    from eggpool import runtime
 
-    if not PID_FILE.exists():
-        return None
-
-    try:
-        return int(PID_FILE.read_text(encoding="utf-8").strip())
-    except (ValueError, OSError):
-        return None
+    return runtime.read_pid()
 
 
 def _is_process_running(pid: int) -> bool:
     """Check if a process with the given PID is running."""
-    import os
+    from eggpool import runtime
 
-    try:
-        os.kill(pid, 0)
-        return True
-    except (ProcessLookupError, PermissionError, OSError):
-        return False
+    return runtime.is_process_running(pid)
 
 
 def _wait_for_exit(pid: int, timeout: float = 10.0) -> bool:
     """Wait for a process to exit. Returns True if exited, False on timeout."""
-    import time
+    from eggpool import runtime
 
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if not _is_process_running(pid):
-            return True
-        time.sleep(0.1)
-    return False
+    return runtime.wait_for_exit(pid, timeout)
 
 
 @cli.command()
@@ -1680,10 +1699,7 @@ def _wait_for_exit(pid: int, timeout: float = 10.0) -> bool:
 @click.pass_context
 def stop(ctx: click.Context, timeout: float) -> None:
     """Stop the running server."""
-    import os
-    import signal
-
-    from eggpool.constants import PID_FILE
+    from eggpool import runtime
 
     pid = _read_pid()
     if pid is None:
@@ -1692,21 +1708,18 @@ def stop(ctx: click.Context, timeout: float) -> None:
 
     if not _is_process_running(pid):
         click.echo("Server is not running (stale PID file).")
-        with contextlib.suppress(OSError):
-            PID_FILE.unlink(missing_ok=True)
+        runtime.clear_pid_file()
         return
 
     click.echo(f"Stopping server (PID {pid})...")
 
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except (ProcessLookupError, PermissionError, OSError) as exc:
-        click.echo(f"Error sending signal: {exc}", err=True)
-        with contextlib.suppress(OSError):
-            PID_FILE.unlink(missing_ok=True)
+    if not runtime.send_sigterm(pid):
+        click.echo("Error sending signal.", err=True)
+        runtime.clear_pid_file()
         return
 
     if _wait_for_exit(pid, timeout):
+        runtime.clear_pid_file()
         click.echo("Server stopped.")
     else:
         click.echo(
@@ -1724,22 +1737,14 @@ def restart(ctx: click.Context, timeout: float) -> None:
     This stops the current process and starts a fresh one.
     The legacy 'eggpool rehash' command delegates to this full restart path.
     """
-    import contextlib
-    import os
-    import signal
-    import subprocess
-    import sys as _sys
-
-    from eggpool.constants import PID_FILE
+    from eggpool import runtime
 
     config_path: str = ctx.obj["config_path"]
 
     pid = _read_pid()
     if pid is not None and _is_process_running(pid):
         click.echo(f"Stopping server (PID {pid})...")
-        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
-            os.kill(pid, signal.SIGTERM)
-
+        runtime.send_sigterm(pid)
         if not _wait_for_exit(pid, timeout):
             click.echo(
                 f"Server did not stop within {timeout}s. "
@@ -1747,21 +1752,11 @@ def restart(ctx: click.Context, timeout: float) -> None:
                 err=True,
             )
             return
-
         click.echo("Server stopped.")
 
-    # Clean up stale PID file
-    with contextlib.suppress(OSError):
-        PID_FILE.unlink(missing_ok=True)
-
+    runtime.clear_pid_file()
     click.echo("Starting server...")
-
-    # Start the server as a subprocess
-    subprocess.Popen(  # noqa: S603
-        [_sys.executable, "-m", "eggpool", "--config", config_path, "serve"],
-        cwd=os.getcwd(),
-        start_new_session=True,
-    )
+    runtime.start_server(config_path)
 
     click.echo("Server started.")
 
@@ -1972,9 +1967,9 @@ def recover(ctx: click.Context, source: str | None) -> None:
 def _prompt_yes_no(message: str, *, default: bool = False) -> bool:
     """Prompt the user with a y/N question.
 
-    Reuses Click's :func:`click.confirm` but forces the answer to come
-    from the controlling terminal.  We don't pass ``default`` through
-    because uninstall is intentionally "no by default".
+    Thin wrapper around :func:`click.confirm` so call sites can pass an
+    explicit ``default`` (e.g. the uninstall flow wants a ``False``
+    default for safety). Click handles the controlling-terminal checks.
     """
     return bool(click.confirm(message, default=default))
 

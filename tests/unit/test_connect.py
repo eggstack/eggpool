@@ -39,7 +39,7 @@ class TestRestartServer:
     def test_stops_and_starts_with_resolved_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from eggpool.providers import connect as connect_module
+        from eggpool import runtime as runtime_module
 
         pid_file = tmp_path / "eggpool.pid"
         pid_file.write_text("42", encoding="utf-8")
@@ -60,12 +60,19 @@ class TestRestartServer:
             popen_calls.append(command)
             return object()
 
-        monkeypatch.setattr(connect_module.os, "kill", fake_kill)
-        monkeypatch.setattr(connect_module.subprocess, "Popen", fake_popen)
+        monkeypatch.setattr(runtime_module.os, "kill", fake_kill)
+        monkeypatch.setattr(runtime_module.subprocess, "Popen", fake_popen)
 
         assert restart_server(str(config_path), timeout=1.0) is True
-        assert kill_calls[:2] == [(42, 0), (42, connect_module.signal.SIGTERM)]
-        assert popen_calls[0][-3:] == ["--config", str(config_path.resolve()), "serve"]
+        assert kill_calls[:2] == [
+            (42, 0),
+            (42, runtime_module.signal.SIGTERM),
+        ]
+        assert popen_calls[0][-3:] == [
+            "--config",
+            str(config_path.resolve()),
+            "serve",
+        ]
         assert not pid_file.exists()
 
 

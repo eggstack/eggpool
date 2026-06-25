@@ -438,7 +438,12 @@ class TestNewkeySignalsRestart:
     """Verify newkey generates key, saves it, and requests a restart."""
 
     def test_newkey_signals_restart(self, tmp_path, monkeypatch):
-        """newkey writes the new key and requests a restart."""
+        """newkey writes the new key and requests a restart.
+
+        The previous key is only printed in full when ``--show-old`` is
+        passed; the default output redacts it to avoid leaking a key
+        that may have just been rotated for security reasons.
+        """
         config_path = tmp_path / "config.toml"
         config_path.write_text('[server]\napi_key = "ep_old_key_12345"\nport = 8080\n')
 
@@ -459,7 +464,9 @@ class TestNewkeySignalsRestart:
         )
 
         assert result.exit_code == 0
-        assert "Old key (expired): ep_old_key_12345" in result.output
+        # Full previous key is redacted by default.
+        assert "ep_old_key_12345" not in result.output
+        assert "Old key (expired, redacted):" in result.output
         assert "New key (use this): ep_" in result.output
         assert "Server restarted" in result.output
         assert signaled == ["restart"]

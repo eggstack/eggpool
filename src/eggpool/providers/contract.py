@@ -32,11 +32,32 @@ def compose_provider_url(provider: ProviderConfig, endpoint_path: str) -> str:
     Strips trailing slashes from base_url and leading slashes from
     endpoint_path, then joins them with a single slash. A trailing slash on
     endpoint_path is preserved because it may be semantically significant.
+
+    Raises :class:`ConfigError` if joining would produce a duplicate
+    version prefix (e.g. ``base_url=https://api.example.com/v1`` with
+    ``endpoint_path=/v1/chat/completions``), since that is always a
+    configuration error regardless of which validator caught it first.
     """
     base = provider.base_url.rstrip("/")
     # A trailing slash can be semantically significant (especially for POST
     # endpoints), so remove only the leading separators needed for joining.
     path = endpoint_path.lstrip("/")
+    # Defense in depth: refuse to assemble duplicate version prefixes
+    # (``/v1/v1/...``, ``/api/v1/api/v1/...``) at the URL layer so any
+    # caller — including ones that bypass the upstream validators —
+    # cannot silently produce broken URLs.
+    base_lower = base.lower()
+    versioned_suffixes = ("/v1", "/api/v1", "/compatible-mode/v1")
+    for suffix in versioned_suffixes:
+        if base_lower.endswith(suffix) and path.lower().startswith(
+            suffix.lstrip("/") + "/"
+        ):
+            raise ConfigError(
+                f"Provider {provider.id!r} base_url ends with {suffix!r} but "
+                f"endpoint_path {endpoint_path!r} starts with the same "
+                f"version prefix; the composed URL would contain a duplicate "
+                f"version segment."
+            )
     return f"{base}/{path}"
 
 

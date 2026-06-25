@@ -149,7 +149,6 @@ def _run_single_check(
     )
 
 
-_STREAM_TIMEOUT = 15.0
 _DEFAULT_SENSITIVE_HEADERS = frozenset({"authorization", "x-api-key", "x-goog-api-key"})
 
 
@@ -809,24 +808,15 @@ def main() -> int:
         failed = [r for r in all_results if not r.ok]
         if not args.verbose:
             for r in all_results:
-                if r.failure_class == "usage_missing":
-                    marker = "\u26a0\ufe0f"
-                elif r.ok:
-                    marker = "OK"
-                else:
-                    marker = "FAIL"
+                marker = "OK" if r.ok else "FAIL"
                 sys.stdout.write(
                     f"  [{marker}] {r.provider_id}/{r.account_name} "
                     f"{r.family}: {r.detail}\n"
                 )
 
         if failed:
-            non_usage = [r for r in failed if r.failure_class != "usage_missing"]
-            if non_usage:
-                sys.stdout.write(
-                    f"\n{len(non_usage)}/{len(all_results)} checks failed\n"
-                )
-                return 1
+            sys.stdout.write(f"\n{len(failed)}/{len(all_results)} checks failed\n")
+            return 1
         sys.stdout.write(f"\nAll {len(all_results)} checks passed\n")
         return 0
 

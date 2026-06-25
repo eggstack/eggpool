@@ -250,14 +250,18 @@ class Router:
                 score.tier = state.routing_priority
         return scores
 
-    def record_usage(
+    async def record_usage(
         self,
         account_name: str,
         tokens: int,
         cost_microdollars: int,
     ) -> None:
-        """Record usage for quota tracking."""
-        self._quota_estimator.record_usage(account_name, tokens, cost_microdollars)
+        """Record usage for quota tracking via the underlying estimator."""
+        await self._quota_estimator.record_usage_and_snapshot(
+            account_name,
+            tokens=tokens,
+            cost_microdollars=cost_microdollars,
+        )
 
     @property
     def quota_estimator(self) -> QuotaEstimator:

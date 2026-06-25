@@ -37,6 +37,12 @@ from eggpool.health.health_manager import (
     classify_failure_category,
 )
 from eggpool.providers.client_pool import ProviderClientPool
+from eggpool.providers.contract import (
+    build_auth_headers,
+    build_static_headers,
+    build_upstream_headers,
+    compose_provider_url,
+)
 from eggpool.proxy.client import filter_response_headers
 from eggpool.proxy.sse_observer import IncrementalSSEObserver
 from eggpool.proxy.usage import StreamUsageResult, safe_dict
@@ -1260,8 +1266,6 @@ class RequestCoordinator:
         if provider_id and self._config is not None:
             provider_cfg = self._config.providers.get(provider_id)
             if provider_cfg is not None:
-                from eggpool.providers.contract import compose_provider_url
-
                 path = (
                     provider_cfg.anthropic_path
                     if protocol == "anthropic"
@@ -1278,11 +1282,6 @@ class RequestCoordinator:
         selected: SelectedAttempt,
     ) -> dict[str, str]:
         """Build upstream headers using provider contract when available."""
-        from eggpool.providers.contract import (
-            build_auth_headers,
-            build_static_headers,
-            build_upstream_headers,
-        )
         from eggpool.proxy.client import sanitize_request_headers
 
         sanitized = sanitize_request_headers(dict(context.incoming_headers))

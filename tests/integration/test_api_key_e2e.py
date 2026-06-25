@@ -319,7 +319,12 @@ class TestGetkeyNewkey:
         assert result.output == SERVER_KEY
 
     def test_newkey_generates_and_prints(self, tmp_path: Path) -> None:
-        """newkey generates a new key, prints old and new."""
+        """newkey generates a new key, prints old (redacted) and new.
+
+        The previous key is only printed in full when ``--show-old`` is
+        passed, to avoid leaking a key that may have just been rotated
+        for security reasons.
+        """
         config_path = tmp_path / "config.toml"
         config_path.write_text(
             textwrap.dedent(f"""\
@@ -338,13 +343,38 @@ class TestGetkeyNewkey:
         )
 
         assert result.exit_code == 0
-        assert SERVER_KEY in result.output
+        # Old key is redacted by default - the full secret must not
+        # appear in stdout.
+        assert SERVER_KEY not in result.output
+        assert "Old key (expired, redacted):" in result.output
 
         # The new key should be different and saved to config
         new_key = _read_server_api_key(str(config_path))
         assert new_key != SERVER_KEY
         assert new_key.startswith("ep_")
         assert new_key in result.output
+
+    def test_newkey_show_old_prints_full_previous_key(self, tmp_path: Path) -> None:
+        """``--show-old`` prints the full previous key for confirmation."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            textwrap.dedent(f"""\
+                [server]
+                api_key = "{SERVER_KEY}"
+                port = 11300
+            """)
+        )
+
+        from click.testing import CliRunner
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "newkey", "--show-old"],
+        )
+
+        assert result.exit_code == 0
+        assert SERVER_KEY in result.output
 
     def test_generate_api_key_format(self) -> None:
         """Generated keys have the expected format."""

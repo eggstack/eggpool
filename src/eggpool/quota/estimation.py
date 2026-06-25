@@ -499,25 +499,6 @@ class QuotaEstimator:
         quota.weekly_offset = offset_7d_microdollars
         quota.monthly_offset = offset_30d_microdollars
 
-    def apply_manual_offset(
-        self,
-        account_name: str,
-        tokens: int,
-        cost_microdollars: int,
-        reason: str = "",
-    ) -> None:
-        """Apply manual offset to an account's quota.
-
-        .. deprecated::
-            The scorer does not read manual_offset. Use per-window explicit
-            offsets (five_hour_offset, weekly_offset, monthly_offset) instead.
-        """
-        raise NotImplementedError(
-            "QuotaEstimator.apply_manual_offset is deprecated; use per-window "
-            "explicit offsets (five_hour_offset, weekly_offset, monthly_offset) "
-            "via configure_account_policy instead."
-        )
-
     def set_model_override(
         self, model_id: str, input_price: float, output_price: float
     ) -> None:
@@ -561,9 +542,27 @@ class QuotaEstimator:
                     quota.reserved_cost = self._account_reserved_cost[account_name]
 
     async def get_account_reserved_cost(self, account_name: str) -> int:
-        """Get total reserved cost for an account from active reservations."""
+        """Get total reserved cost for a single account.
+
+        Prefer :meth:`get_account_reserved_costs` when scoring many
+        accounts in a row to avoid one lock acquisition per name.
+        """
         async with self._snapshot_lock:
             return self._account_reserved_cost.get(account_name, 0)
+
+    async def get_account_reserved_costs(
+        self, account_names: list[str]
+    ) -> dict[str, int]:
+        """Snapshot reserved costs for ``account_names`` in one lock acquisition.
+
+        Names with no recorded reservation map to ``0``. Used by the
+        scorer to avoid serializing on the snapshot lock when scoring
+        large account lists.
+        """
+        async with self._snapshot_lock:
+            return {
+                name: self._account_reserved_cost.get(name, 0) for name in account_names
+            }
 
     async def load_persisted_windows(
         self, offsets: dict[str, dict[str, int]] | None = None

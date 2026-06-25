@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import contextlib
 import os
 import select
-import signal
-import subprocess
 import sys
 import termios
-import time
 import tomllib
 import tty
 from dataclasses import dataclass
@@ -18,6 +14,7 @@ from typing import Any, cast
 
 from eggpool.constants import DEFAULT_PROVIDER_ID
 from eggpool.providers.contract import PROVIDER_STATUS_SYMBOLS
+from eggpool.runtime import restart_server as _restart_server
 from eggpool.toml_edit import render_toml_value
 
 _REGISTRY_METADATA_FIELDS = frozenset(
@@ -33,39 +30,12 @@ _REGISTRY_METADATA_FIELDS = frozenset(
 
 
 def restart_server(config_path: str, timeout: float = 10.0) -> bool:
-    """Stop a running standalone server and start it with fresh configuration."""
-    from eggpool.constants import PID_FILE
+    """Stop a running standalone server and start it with fresh configuration.
 
-    if not PID_FILE.exists():
-        return False
-    try:
-        pid = int(PID_FILE.read_text(encoding="utf-8").strip())
-        os.kill(pid, 0)
-        os.kill(pid, signal.SIGTERM)
-    except (ValueError, ProcessLookupError, PermissionError, OSError):
-        return False
-
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            break
-        except (PermissionError, OSError):
-            return False
-        time.sleep(0.1)
-    else:
-        return False
-
-    with contextlib.suppress(OSError):
-        PID_FILE.unlink(missing_ok=True)
-    resolved_config = str(Path(config_path).resolve())
-    subprocess.Popen(  # noqa: S603
-        [sys.executable, "-m", "eggpool", "--config", resolved_config, "serve"],
-        cwd=os.getcwd(),
-        start_new_session=True,
-    )
-    return True
+    Thin wrapper around :func:`eggpool.runtime.restart_server` so the
+    connect flow and CLI share a single implementation.
+    """
+    return _restart_server(config_path, timeout)
 
 
 @dataclass(frozen=True)

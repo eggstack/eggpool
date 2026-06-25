@@ -37,10 +37,14 @@ def _prompt_yn(message: str) -> bool:
                 sys.stdout.write("y\r\n")
                 sys.stdout.flush()
                 return True
-            if ch in ("n", "N", "\x03", "\x1b", "\x04"):
+            if ch in ("n", "N", "\x03", "\x1b", "\x04", "q", "Q"):
                 sys.stdout.write("n\r\n")
                 sys.stdout.flush()
                 return False
+            # Ignore other characters (e.g. arrow keys, space, tab)
+            # and keep reading so we don't spin the CPU.
+            sys.stdout.write(ch)
+            sys.stdout.flush()
     finally:
         if old_settings is not None:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)

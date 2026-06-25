@@ -255,9 +255,16 @@ class TestStopRestartAST:
     """AST-based tests to verify stop and restart command structure."""
 
     def test_stop_command_uses_signal_term(self) -> None:
-        """The stop command sends SIGTERM (not SIGKILL)."""
-        cli_path = Path(__file__).parent.parent.parent / "src" / "eggpool" / "cli.py"
-        source = cli_path.read_text(encoding="utf-8")
+        """The stop command sends SIGTERM (not SIGKILL).
+
+        The signal constant lives in :mod:`eggpool.runtime` after the
+        refactor; we verify it is referenced from there rather than the
+        (now-thin) CLI module.
+        """
+        runtime_path = (
+            Path(__file__).parent.parent.parent / "src" / "eggpool" / "runtime.py"
+        )
+        source = runtime_path.read_text(encoding="utf-8")
         tree = ast.parse(source)
 
         found_sigterm = False
@@ -266,12 +273,17 @@ class TestStopRestartAST:
                 found_sigterm = True
                 break
 
-        assert found_sigterm, "stop/restart commands should use SIGTERM"
+        assert found_sigterm, "runtime module should use SIGTERM"
 
     def test_restart_uses_popen(self) -> None:
-        """The restart command uses subprocess.Popen to start new server."""
-        cli_path = Path(__file__).parent.parent.parent / "src" / "eggpool" / "cli.py"
-        source = cli_path.read_text(encoding="utf-8")
+        """The restart command uses subprocess.Popen to start new server.
+
+        Like ``SIGTERM``, ``Popen`` now lives in :mod:`eggpool.runtime`.
+        """
+        runtime_path = (
+            Path(__file__).parent.parent.parent / "src" / "eggpool" / "runtime.py"
+        )
+        source = runtime_path.read_text(encoding="utf-8")
         tree = ast.parse(source)
 
         found_popen = False
@@ -280,7 +292,7 @@ class TestStopRestartAST:
                 found_popen = True
                 break
 
-        assert found_popen, "restart command should use subprocess.Popen"
+        assert found_popen, "runtime module should use subprocess.Popen"
 
     def test_stop_does_not_use_os_exec(self) -> None:
         """The stop command does not use os.exec (that's for serve)."""

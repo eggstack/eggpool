@@ -89,6 +89,10 @@ echo "Checking for pipx..."
 if "$PYTHON" -m pipx --version >/dev/null 2>&1; then
     echo "Installing eggpool via pipx (Python $PYTHON_VERSION)..."
     "$PYTHON" -m pipx install eggpool
+    # Ensure ~/.local/bin is on PATH so subsequent shell invocations
+    # (and any helpers invoked below) can find the freshly-installed
+    # `eggpool` binary.
+    export PATH="$HOME/.local/bin:$PATH"
     echo "Installation complete. Run 'eggpool onboard' to start."
 else
     # Check for uv

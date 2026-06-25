@@ -79,6 +79,15 @@ class QuotaFairScorer:
         estimates = request_estimates or {}
         scores: list[RoutingScore] = []
 
+        # Snapshot reserved costs in a single lock acquisition rather
+        # than awaiting the lock once per account.
+        if self.quota_estimator:
+            reserved_by_name = await self.quota_estimator.get_account_reserved_costs(
+                account_names
+            )
+        else:
+            reserved_by_name = {}
+
         for name in account_names:
             weight = 0.0
             is_eligible = True
@@ -100,10 +109,9 @@ class QuotaFairScorer:
                     cost_7d = quota.get_persisted_cost_7d()
                     cost_30d = quota.get_persisted_cost_30d()
 
-                    # Get reserved cost from estimator
-                    reserved = await self.quota_estimator.get_account_reserved_cost(
-                        name
-                    )
+                    # Reserved cost was snapshotted above so this loop
+                    # does not serialize on the snapshot lock.
+                    reserved = reserved_by_name.get(name, 0)
 
                     # Get projected request estimate for this account
                     request_estimate = estimates.get(name, 0)
