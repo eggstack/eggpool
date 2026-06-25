@@ -128,6 +128,35 @@ class TestFetchSummary:
         assert result["error_rate"] == pytest.approx(0.4)
         assert result["total_providers"] >= 1
 
+    @pytest.mark.asyncio()
+    async def test_summary_total_tokens_aggregate(self, seeded_db: Database) -> None:
+        result = await queries.fetch_summary(
+            seeded_db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+        expected = 3 * (100 + 200) + 2 * (50 + 75)
+        assert result["total_tokens"] == expected
+
+    @pytest.mark.asyncio()
+    async def test_summary_tokens_per_second_aggregate(
+        self, seeded_db: Database
+    ) -> None:
+        result = await queries.fetch_summary(
+            seeded_db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+        total_tokens = 3 * (100 + 200) + 2 * (50 + 75)
+        total_latency_ms = 3 * 150.0 + 2 * 300.0
+        expected = total_tokens * 1000.0 / total_latency_ms
+        assert result["tokens_per_second"] == pytest.approx(expected)
+
+    @pytest.mark.asyncio()
+    async def test_summary_tokens_per_second_zero_when_no_traffic(
+        self, db: Database
+    ) -> None:
+        result = await queries.fetch_summary(
+            db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+        assert result["tokens_per_second"] == 0.0
+
 
 class TestFetchAccountStats:
     """Tests for fetch_account_stats."""
@@ -166,6 +195,27 @@ class TestFetchAccountStats:
         assert by_name["acct_a"]["request_count"] == 3
         assert by_name["acct_b"]["request_count"] == 2
         assert by_name["acct_b"]["error_count"] == 2
+
+    @pytest.mark.asyncio()
+    async def test_account_total_tokens_and_tps(self, seeded_db: Database) -> None:
+        rows = await queries.fetch_account_stats(
+            seeded_db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+        by_name = {r["account_name"]: r for r in rows}
+        # acct_a: 3 completed, 100 in / 200 out, 150ms latency each
+        a_total = 3 * (100 + 200)
+        a_latency_ms = 3 * 150.0
+        assert by_name["acct_a"]["total_tokens"] == a_total
+        assert by_name["acct_a"]["tokens_per_second"] == pytest.approx(
+            a_total * 1000.0 / a_latency_ms
+        )
+        # acct_b: 2 error, 50 in / 75 out, 300ms latency each
+        b_total = 2 * (50 + 75)
+        b_latency_ms = 2 * 300.0
+        assert by_name["acct_b"]["total_tokens"] == b_total
+        assert by_name["acct_b"]["tokens_per_second"] == pytest.approx(
+            b_total * 1000.0 / b_latency_ms
+        )
 
     @pytest.mark.asyncio()
     async def test_cancelled_requests_count_in_usage_windows(
@@ -224,6 +274,25 @@ class TestFetchModelStats:
         for r in rows:
             assert r["model_id"] == "model_x"
 
+    @pytest.mark.asyncio()
+    async def test_model_total_tokens_and_tps(self, seeded_db: Database) -> None:
+        rows = await queries.fetch_model_stats(
+            seeded_db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+        by_model = {r["model_id"]: r for r in rows}
+        x_total = 3 * (100 + 200)
+        x_latency = 3 * 150.0
+        assert by_model["model_x"]["total_tokens"] == x_total
+        assert by_model["model_x"]["tokens_per_second"] == pytest.approx(
+            x_total * 1000.0 / x_latency
+        )
+        y_total = 2 * (50 + 75)
+        y_latency = 2 * 300.0
+        assert by_model["model_y"]["total_tokens"] == y_total
+        assert by_model["model_y"]["tokens_per_second"] == pytest.approx(
+            y_total * 1000.0 / y_latency
+        )
+
 
 class TestFetchTimeseries:
     """Tests for fetch_timeseries."""
@@ -250,6 +319,21 @@ class TestFetchTimeseries:
             bucket="bogus",
         )
         assert len(rows) > 0
+
+    @pytest.mark.asyncio()
+    async def test_buckets_include_total_tokens(self, seeded_db: Database) -> None:
+        rows = await queries.fetch_timeseries(
+            seeded_db,
+            "2000-01-01 00:00:00",
+            "2099-12-31 23:59:59",
+            bucket="hour",
+        )
+        # All requests fall into a single hour bucket in the seeded data
+        # (inserted via datetime('now', '-1 hour')), so the bucket total
+        # equals the global total_tokens for the seeded traffic.
+        total = sum(r["total_tokens"] for r in rows)
+        expected = 3 * (100 + 200) + 2 * (50 + 75)
+        assert total == expected
 
 
 class TestFetchErrorBreakdown:
@@ -722,13 +806,15 @@ class TestBandwidthQueries:
                 """
                 INSERT INTO requests (
                     account_id, model_id, started_at, completed_at,
-                    status, bytes_received, bytes_emitted
+                    status, bytes_received, bytes_emitted,
+                    input_tokens, output_tokens
                 ) VALUES (
                     (SELECT id FROM accounts WHERE name = 'acct_bw2'),
                     'model_bw2',
                     datetime('now', '-1 day'),
                     datetime('now', '-1 day'),
-                    'completed', 10000, 5000
+                    'completed', 10000, 5000,
+                    100, 200
                 )
                 """
             )
@@ -740,7 +826,9 @@ class TestBandwidthQueries:
         assert "day" in rows[0]
         assert "bytes_received" in rows[0]
         assert "bytes_emitted" in rows[0]
+        assert "total_tokens" in rows[0]
         assert "request_count" in rows[0]
+        assert rows[0]["total_tokens"] == 300
 
     @pytest.mark.asyncio()
     async def test_fetch_bandwidth_timeseries_with_account_filter(
@@ -760,13 +848,15 @@ class TestBandwidthQueries:
                 """
                 INSERT INTO requests (
                     account_id, model_id, started_at, completed_at,
-                    status, bytes_received, bytes_emitted
+                    status, bytes_received, bytes_emitted,
+                    input_tokens, output_tokens
                 ) VALUES (
                     (SELECT id FROM accounts WHERE name = 'acct_bw3'),
                     'model_bw3',
                     datetime('now', '-1 day'),
                     datetime('now', '-1 day'),
-                    'completed', 10000, 5000
+                    'completed', 10000, 5000,
+                    7, 11
                 )
                 """
             )
@@ -783,6 +873,46 @@ class TestBandwidthQueries:
         assert len(rows) >= 1
         assert rows[0]["bytes_received"] == 10000
         assert rows[0]["bytes_emitted"] == 5000
+        assert rows[0]["total_tokens"] == 18
+
+
+class TestFetchIpStats:
+    """Tests for fetch_ip_stats."""
+
+    @pytest.mark.asyncio()
+    async def test_ip_total_tokens(self, db: Database) -> None:
+        async with db.transaction():
+            await db.execute_write(
+                "INSERT INTO accounts (name, api_key_env, enabled) VALUES (?, ?, ?)",
+                ("acct_ip", "ENV_IP", 1),
+            )
+            await db.execute_write(
+                "INSERT INTO models (model_id, protocol) VALUES (?, ?)",
+                ("model_ip", "openai"),
+            )
+            await db.execute_write(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, started_at, completed_at,
+                    status, client_ip, input_tokens, output_tokens
+                ) VALUES (
+                    (SELECT id FROM accounts WHERE name = 'acct_ip'),
+                    'model_ip',
+                    datetime('now', '-1 hour'),
+                    datetime('now', '-1 hour'),
+                    'completed', '10.0.0.1', 11, 22
+                )
+                """
+            )
+
+        rows = await queries.fetch_ip_stats(
+            db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+        assert len(rows) == 1
+        assert rows[0]["client_ip"] == "10.0.0.1"
+        assert rows[0]["input_tokens"] == 11
+        assert rows[0]["output_tokens"] == 22
+        assert rows[0]["total_tokens"] == 33
 
 
 class TestStatsServiceBandwidth:

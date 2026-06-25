@@ -20,6 +20,7 @@ from eggpool.dashboard.escape import (
     format_percent,
     format_timestamp,
     format_tokens,
+    format_tokens_per_second,
     sanitize_class_name,
     truncate,
 )
@@ -361,6 +362,7 @@ def _render_ip_stats(ip_stats: list[dict[str, Any]]) -> str:
         req_count = int(row.get("request_count", 0))
         in_tok = format_tokens(row.get("input_tokens", 0))
         out_tok = format_tokens(row.get("output_tokens", 0))
+        total_tok = format_tokens(row.get("total_tokens", 0))
         cost = format_microdollars(row.get("cost_microdollars", 0))
         avg_lat = format_latency(row.get("avg_latency_ms", 0.0))
         error_count = int(row.get("error_count", 0))
@@ -371,6 +373,7 @@ def _render_ip_stats(ip_stats: list[dict[str, Any]]) -> str:
             f"<td>{req_count:,}</td>"
             f"<td>{in_tok}</td>"
             f"<td>{out_tok}</td>"
+            f"<td>{total_tok}</td>"
             f"<td>{cost}</td>"
             f"<td>{avg_lat}</td>"
             f"<td>{error_count:,}</td>"
@@ -386,6 +389,7 @@ def _render_ip_stats(ip_stats: list[dict[str, Any]]) -> str:
         "<th>Requests</th>"
         "<th>Input tokens</th>"
         "<th>Output tokens</th>"
+        "<th>Total tokens</th>"
         "<th>Cost</th>"
         "<th>Avg latency</th>"
         "<th>Errors</th>"
@@ -493,12 +497,14 @@ def _render_model_glance(models: list[dict[str, Any]]) -> str:
         return '<p class="empty">No model activity in this period.</p>'
     rows: list[str] = []
     for row in models[:10]:
+        total_tok = format_tokens(row.get("total_tokens", 0))
         rows.append(
             f"<tr>"
             f"<td>{escape(row.get('model_id', ''))}</td>"
             f"<td>{escape(row.get('provider_id', ''))}</td>"
             f"<td>{int(row.get('request_count', 0)):,}</td>"
             f"<td>{int(row.get('error_count', 0)):,}</td>"
+            f"<td>{total_tok}</td>"
             f"<td>{format_microdollars(row.get('cost_microdollars', 0))}</td>"
             f"<td>{format_latency(row.get('avg_latency_ms', 0.0))}</td>"
             f"</tr>"
@@ -510,6 +516,7 @@ def _render_model_glance(models: list[dict[str, Any]]) -> str:
         "<th>Provider</th>"
         "<th>Reqs</th>"
         "<th>Errs</th>"
+        "<th>Total tokens</th>"
         "<th>Cost</th>"
         "<th>Latency</th>"
         "</tr></thead><tbody>"
@@ -551,17 +558,34 @@ def _render_bandwidth_heatmap(
     daily_data: list[dict[str, Any]],
     title: str = "Bandwidth activity (last 90 days)",
     heatmap_colors: list[str] | None = None,
+    value_field: str = "bytes",
 ) -> str:
-    """Render a GitHub-style contribution heatmap as inline SVG."""
-    if not daily_data:
-        return '<p class="empty">No bandwidth data available.</p>'
+    """Render a GitHub-style contribution heatmap as inline SVG.
 
-    # Build day -> bytes_emitted lookup
-    day_values: dict[str, int] = {}
-    for row in daily_data:
-        day_str = str(row.get("day", ""))
-        val = int(row.get("bytes_emitted", 0)) + int(row.get("bytes_received", 0))
-        day_values[day_str] = val
+    ``value_field`` selects which per-day value to plot.  ``"bytes"`` is
+    the default (sums ``bytes_emitted`` + ``bytes_received`` per day) and
+    keeps the dedicated ``/bandwidth`` page working unchanged.  Pass
+    ``"total_tokens"`` to render the overview's token-activity heatmap.
+    """
+    if not daily_data:
+        return '<p class="empty">No activity data available.</p>'
+
+    # Build day -> aggregated-value lookup.
+    if value_field == "bytes":
+        day_values: dict[str, int] = {}
+        for row in daily_data:
+            day_str = str(row.get("day", ""))
+            val = int(row.get("bytes_emitted", 0)) + int(row.get("bytes_received", 0))
+            day_values[day_str] = val
+        formatter: Any = format_bytes
+    elif value_field == "total_tokens":
+        day_values = {
+            str(row.get("day", "")): int(row.get("total_tokens", 0))
+            for row in daily_data
+        }
+        formatter = format_tokens
+    else:
+        raise ValueError(f"unsupported heatmap value_field: {value_field!r}")
 
     # Date range: last 90 days ending today
     today = date.today()
@@ -650,7 +674,7 @@ def _render_bandwidth_heatmap(
             color = _get_color(value)
             x = left_margin + week * step
             y = top_margin + day_of_week * step
-            tooltip = f"{day_str}: {format_bytes(value)}"
+            tooltip = f"{day_str}: {formatter(value)}"
             cells.append(
                 f'<rect x="{x}" y="{y}" width="{cell_size}" '
                 f'height="{cell_size}" rx="2" fill="{color}" '
@@ -696,6 +720,7 @@ def render_overview(
     error_rate = float(summary.get("error_rate", 0.0))
     in_tok = format_tokens(summary.get("total_input_tokens", 0))
     out_tok = format_tokens(summary.get("total_output_tokens", 0))
+    total_tok = format_tokens(summary.get("total_tokens", 0))
     latency = format_latency(summary.get("avg_latency_ms", 0.0))
     imb_pct = format_percent(float(imbalance.get("imbalance_ratio", 0.0)))
 
@@ -714,6 +739,7 @@ def render_overview(
     avg_ttft = format_latency(summary.get("avg_ttft_ms", 0.0))
     p50_ttft = format_latency(summary.get("p50_ttft_ms", 0.0))
     p99_ttft = format_latency(summary.get("p99_ttft_ms", 0.0))
+    throughput = format_tokens_per_second(summary.get("tokens_per_second", 0.0))
 
     most: dict[str, Any] = imbalance.get("most_used") or {}
     least: dict[str, Any] = imbalance.get("least_used") or {}
@@ -736,7 +762,7 @@ def render_overview(
   <div class="card">
     <h3>Total cost</h3>
     <p class="metric">{cost}</p>
-    <p class="sub">in {in_tok} · out {out_tok}</p>
+    <p class="sub">in {in_tok} · out {out_tok} · total {total_tok}</p>
   </div>
   <div class="card">
     <h3>Utilization imbalance</h3>
@@ -755,6 +781,11 @@ def render_overview(
     <h3>Reasoning tokens</h3>
     <p class="metric">{reasoning}</p>
     <p class="sub">extended thinking</p>
+  </div>
+  <div class="card">
+    <h3>Throughput</h3>
+    <p class="metric">{throughput}</p>
+    <p class="sub">aggregate Σtokens / Σlatency</p>
   </div>
   <div class="card">
     <h3>Streaming</h3>
@@ -819,8 +850,15 @@ def render_overview(
 {_render_ip_stats(ip_stats or [])}
 
 <section class="panel">
-  <h3>Bandwidth activity</h3>
-  {_render_bandwidth_heatmap(bandwidth_daily or [], heatmap_colors=heatmap_colors)}
+  <h3>Token activity (last 90 days)</h3>
+  {
+        _render_bandwidth_heatmap(
+            bandwidth_daily or [],
+            title="Token activity (last 90 days)",
+            heatmap_colors=heatmap_colors,
+            value_field="total_tokens",
+        )
+    }
 </section>
 
 {_render_provider_health(ping_summary or [])}
@@ -854,8 +892,10 @@ def _render_account_table(accounts: list[dict[str, Any]]) -> str:
         "<th>Errors</th>",
         "<th>Input tokens</th>",
         "<th>Output tokens</th>",
+        "<th>Total tokens</th>",
         "<th>Cost</th>",
         "<th>Avg latency</th>",
+        "<th>TPS</th>",
         "<th>Reserved</th>",
         "<th>Resv.</th>",
         "<th>5h rate</th>",
@@ -874,6 +914,8 @@ def _render_account_table(accounts: list[dict[str, Any]]) -> str:
         reserved = format_microdollars(row.get("reserved_microdollars", 0))
         in_tok = format_tokens(row.get("input_tokens", 0))
         out_tok = format_tokens(row.get("output_tokens", 0))
+        total_tok = format_tokens(row.get("total_tokens", 0))
+        tps = format_tokens_per_second(row.get("tokens_per_second", 0.0))
         health = str(row.get("health_state", "unknown"))
         active_resv = int(row.get("active_reservations", 0))
         util_5h = format_microdollars(row.get("utilization_5h", 0))
@@ -890,8 +932,10 @@ def _render_account_table(accounts: list[dict[str, Any]]) -> str:
             f"<td>{int(row.get('error_count', 0)):,}</td>"
             f"<td>{in_tok}</td>"
             f"<td>{out_tok}</td>"
+            f"<td>{total_tok}</td>"
             f"<td>{cost}</td>"
             f"<td>{latency}</td>"
+            f"<td>{tps}</td>"
             f"<td>{reserved}</td>"
             f"<td>{active_resv}</td>"
             f"<td>{util_5h}</td>"
@@ -952,9 +996,11 @@ def render_models(
             "<th>Errors</th>",
             "<th>Input tokens</th>",
             "<th>Output tokens</th>",
+            "<th>Total tokens</th>",
             "<th>Cost</th>",
             "<th>Avg latency</th>",
             "<th>Avg TTFT</th>",
+            "<th>TPS</th>",
             "</tr></thead><tbody>",
         ]
         for row in models:
@@ -963,6 +1009,8 @@ def render_models(
             ttft = format_latency(row.get("avg_ttft_ms", 0.0))
             in_tok = format_tokens(row.get("input_tokens", 0))
             out_tok = format_tokens(row.get("output_tokens", 0))
+            total_tok = format_tokens(row.get("total_tokens", 0))
+            tps = format_tokens_per_second(row.get("tokens_per_second", 0.0))
             provider = escape(row.get("provider_id", ""))
             parts.append(
                 f"<tr>"
@@ -972,9 +1020,11 @@ def render_models(
                 f"<td>{int(row.get('error_count', 0)):,}</td>"
                 f"<td>{in_tok}</td>"
                 f"<td>{out_tok}</td>"
+                f"<td>{total_tok}</td>"
                 f"<td>{cost}</td>"
                 f"<td>{latency}</td>"
                 f"<td>{ttft}</td>"
+                f"<td>{tps}</td>"
                 f"</tr>"
             )
         parts.append("</tbody></table>")
@@ -1100,6 +1150,7 @@ def render_timeseries(
             "<th>Errors</th>",
             "<th>Input tokens</th>",
             "<th>Output tokens</th>",
+            "<th>Total tokens</th>",
             "<th>Cost</th>",
             "<th>BW received</th>",
             "<th>BW emitted</th>",
@@ -1109,6 +1160,7 @@ def render_timeseries(
             cost = format_microdollars(row.get("cost_microdollars", 0))
             in_tok = format_tokens(row.get("input_tokens", 0))
             out_tok = format_tokens(row.get("output_tokens", 0))
+            total_tok = format_tokens(row.get("total_tokens", 0))
             parts.append(
                 f"<tr>"
                 f"<td>{escape(row.get('bucket', ''))}</td>"
@@ -1116,6 +1168,7 @@ def render_timeseries(
                 f"<td>{int(row.get('error_count', 0)):,}</td>"
                 f"<td>{in_tok}</td>"
                 f"<td>{out_tok}</td>"
+                f"<td>{total_tok}</td>"
                 f"<td>{cost}</td>"
                 f"<td>{format_bytes(row.get('bytes_received', 0))}</td>"
                 f"<td>{format_bytes(row.get('bytes_emitted', 0))}</td>"

@@ -48,6 +48,9 @@ async def fetch_summary(
         COUNT(*) as total_requests,
         COALESCE(SUM(input_tokens), 0) as total_input_tokens,
         COALESCE(SUM(output_tokens), 0) as total_output_tokens,
+        COALESCE(SUM(CASE WHEN status != 'pending'
+            THEN input_tokens + output_tokens ELSE 0 END), 0)
+            as total_tokens,
         COALESCE(SUM(cost_microdollars), 0) as total_cost_microdollars,
         COALESCE(AVG(upstream_latency_ms), 0) as avg_latency_ms,
         COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0)
@@ -76,7 +79,16 @@ async def fetch_summary(
         COALESCE(SUM(bytes_emitted), 0) as total_bytes_emitted,
         (SELECT COUNT(DISTINCT provider_id) FROM accounts) as total_providers,
         COALESCE(AVG(CASE WHEN streamed = 1 THEN first_byte_ms END), 0)
-            as avg_ttft_ms
+            as avg_ttft_ms,
+        CASE
+            WHEN COALESCE(SUM(CASE WHEN status != 'pending'
+                THEN upstream_latency_ms ELSE 0 END), 0) > 0
+            THEN CAST(SUM(CASE WHEN status != 'pending'
+                THEN input_tokens + output_tokens ELSE 0 END) AS REAL) * 1000.0
+                / SUM(CASE WHEN status != 'pending'
+                    THEN upstream_latency_ms ELSE 0 END)
+            ELSE 0
+        END as tokens_per_second
     FROM requests
     WHERE started_at >= ? AND started_at < ?{account_filter}
     """
@@ -113,7 +125,9 @@ async def fetch_account_stats(
             COALESCE(SUM(r.bytes_received), 0) as bytes_received,
             COALESCE(SUM(r.bytes_emitted), 0) as bytes_emitted,
             COALESCE(AVG(CASE WHEN r.streamed = 1 THEN r.first_byte_ms END), 0)
-                as avg_ttft_ms
+                as avg_ttft_ms,
+            COALESCE(SUM(CASE WHEN r.status != 'pending'
+                THEN r.upstream_latency_ms ELSE 0 END), 0) as sum_latency_ms
         FROM requests r
         WHERE r.started_at >= ? AND r.started_at < ?
         GROUP BY r.account_id
@@ -142,6 +156,8 @@ async def fetch_account_stats(
         COALESCE(ps.request_count, 0) as request_count,
         COALESCE(ps.input_tokens, 0) as input_tokens,
         COALESCE(ps.output_tokens, 0) as output_tokens,
+        COALESCE(ps.input_tokens, 0) + COALESCE(ps.output_tokens, 0)
+            as total_tokens,
         COALESCE(ps.cost_microdollars, 0) as cost_microdollars,
         COALESCE(ps.avg_latency_ms, 0) as avg_latency_ms,
         COALESCE(ps.error_count, 0) as error_count,
@@ -150,7 +166,14 @@ async def fetch_account_stats(
         COALESCE(rs.cost_30d, 0) as cost_30d,
         COALESCE(ps.bytes_received, 0) as bytes_received,
         COALESCE(ps.bytes_emitted, 0) as bytes_emitted,
-        COALESCE(ps.avg_ttft_ms, 0) as avg_ttft_ms
+        COALESCE(ps.avg_ttft_ms, 0) as avg_ttft_ms,
+        CASE
+            WHEN COALESCE(ps.sum_latency_ms, 0) > 0
+            THEN CAST(COALESCE(ps.input_tokens, 0)
+                + COALESCE(ps.output_tokens, 0) AS REAL) * 1000.0
+                / ps.sum_latency_ms
+            ELSE 0
+        END as tokens_per_second
     FROM accounts a
     LEFT JOIN period_stats ps ON ps.account_id = a.id
     LEFT JOIN rolling_stats rs ON rs.account_id = a.id
@@ -185,12 +208,23 @@ async def fetch_model_stats(
         COUNT(*) as request_count,
         COALESCE(SUM(r.input_tokens), 0) as input_tokens,
         COALESCE(SUM(r.output_tokens), 0) as output_tokens,
+        COALESCE(SUM(r.input_tokens), 0) + COALESCE(SUM(r.output_tokens), 0)
+            as total_tokens,
         COALESCE(SUM(r.cost_microdollars), 0) as cost_microdollars,
         COALESCE(AVG(r.upstream_latency_ms), 0) as avg_latency_ms,
         COALESCE(SUM(CASE WHEN r.status = 'error' THEN 1 ELSE 0 END), 0)
             as error_count,
         COALESCE(AVG(CASE WHEN r.streamed = 1 THEN r.first_byte_ms END), 0)
-            as avg_ttft_ms
+            as avg_ttft_ms,
+        CASE
+            WHEN COALESCE(SUM(CASE WHEN r.status != 'pending'
+                THEN r.upstream_latency_ms ELSE 0 END), 0) > 0
+            THEN CAST(COALESCE(SUM(r.input_tokens), 0)
+                + COALESCE(SUM(r.output_tokens), 0) AS REAL) * 1000.0
+                / SUM(CASE WHEN r.status != 'pending'
+                    THEN r.upstream_latency_ms ELSE 0 END)
+            ELSE 0
+        END as tokens_per_second
     FROM requests r
     WHERE r.started_at >= ? AND r.started_at < ?{account_filter}
     GROUP BY COALESCE(r.original_model_id, r.model_id), r.provider_id
@@ -235,6 +269,8 @@ async def fetch_timeseries(
         COUNT(*) as request_count,
         COALESCE(SUM(r.input_tokens), 0) as input_tokens,
         COALESCE(SUM(r.output_tokens), 0) as output_tokens,
+        COALESCE(SUM(r.input_tokens), 0) + COALESCE(SUM(r.output_tokens), 0)
+            as total_tokens,
         COALESCE(SUM(r.cost_microdollars), 0) as cost_microdollars,
         COALESCE(SUM(CASE WHEN r.status = 'error' THEN 1 ELSE 0 END), 0)
             as error_count,
@@ -359,6 +395,8 @@ async def fetch_bandwidth_timeseries(
         strftime('%Y-%m-%d', r.started_at) as day,
         COALESCE(SUM(r.bytes_received), 0) as bytes_received,
         COALESCE(SUM(r.bytes_emitted), 0) as bytes_emitted,
+        COALESCE(SUM(r.input_tokens), 0) + COALESCE(SUM(r.output_tokens), 0)
+            as total_tokens,
         COUNT(*) as request_count
     FROM requests r
     WHERE r.started_at >= ? AND r.started_at < ?
@@ -383,6 +421,7 @@ def _build_summary(row: dict[str, Any]) -> dict[str, Any]:
         "error_rate": error_rate,
         "total_input_tokens": int(row.get("total_input_tokens", 0)),
         "total_output_tokens": int(row.get("total_output_tokens", 0)),
+        "total_tokens": int(row.get("total_tokens", 0)),
         "total_cost_microdollars": int(row.get("total_cost_microdollars", 0)),
         "avg_latency_ms": float(row.get("avg_latency_ms", 0.0)),
         "total_cache_read_tokens": int(row.get("total_cache_read_tokens", 0)),
@@ -398,6 +437,7 @@ def _build_summary(row: dict[str, Any]) -> dict[str, Any]:
         "total_bytes_emitted": int(row.get("total_bytes_emitted", 0)),
         "total_providers": int(row.get("total_providers", 0)),
         "avg_ttft_ms": float(row.get("avg_ttft_ms", 0.0)),
+        "tokens_per_second": float(row.get("tokens_per_second", 0.0)),
     }
 
 
@@ -410,6 +450,7 @@ def _empty_summary() -> dict[str, Any]:
         "error_rate": 0.0,
         "total_input_tokens": 0,
         "total_output_tokens": 0,
+        "total_tokens": 0,
         "total_cost_microdollars": 0,
         "avg_latency_ms": 0.0,
         "total_cache_read_tokens": 0,
@@ -425,6 +466,7 @@ def _empty_summary() -> dict[str, Any]:
         "total_bytes_emitted": 0,
         "total_providers": 0,
         "avg_ttft_ms": 0.0,
+        "tokens_per_second": 0.0,
         "p50_ttft_ms": 0.0,
         "p99_ttft_ms": 0.0,
     }
@@ -600,6 +642,8 @@ async def fetch_ip_stats(
         COUNT(*) as request_count,
         COALESCE(SUM(input_tokens), 0) as input_tokens,
         COALESCE(SUM(output_tokens), 0) as output_tokens,
+        COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0)
+            as total_tokens,
         COALESCE(SUM(cost_microdollars), 0) as cost_microdollars,
         COALESCE(AVG(upstream_latency_ms), 0) as avg_latency_ms,
         COALESCE(SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END), 0)

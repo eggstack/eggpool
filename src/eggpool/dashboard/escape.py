@@ -45,6 +45,21 @@ def format_tokens(value: int | None) -> str:
     return f"{int(value):,}"
 
 
+def format_tokens_per_second(value: float | None) -> str:
+    """Format a throughput value as a 'tok/s' string.
+
+    Returns ``"—"`` for ``None`` and for non-positive values so empty
+    groups don't render as noisy zeros.  Positive values render with one
+    decimal place which keeps both small (<10) and large (>1000)
+    throughputs readable at a glance.
+    """
+    if value is None:
+        return "—"
+    if float(value) <= 0:
+        return "—"
+    return f"{float(value):.1f} tok/s"
+
+
 def format_percent(value: float | None, digits: int = 2) -> str:
     """Format a fraction as a percentage."""
     if value is None:

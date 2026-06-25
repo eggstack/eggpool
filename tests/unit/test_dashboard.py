@@ -12,6 +12,7 @@ from eggpool.dashboard.escape import (
     format_microdollars,
     format_percent,
     format_tokens,
+    format_tokens_per_second,
     sanitize_class_name,
     truncate,
 )
@@ -76,6 +77,13 @@ class TestEscape:
     def test_format_tokens(self) -> None:
         assert format_tokens(1_000_000) == "1,000,000"
         assert format_tokens(0) == "0"
+
+    def test_format_tokens_per_second(self) -> None:
+        assert format_tokens_per_second(12.345) == "12.3 tok/s"
+        assert format_tokens_per_second(1234.5) == "1234.5 tok/s"
+        assert format_tokens_per_second(0) == "—"
+        assert format_tokens_per_second(-1.0) == "—"
+        assert format_tokens_per_second(None) == "—"
 
     def test_format_percent(self) -> None:
         assert format_percent(0.5) == "50.00%"
@@ -539,6 +547,54 @@ class TestRenderAccounts:
         html = render_accounts(accounts=[], period="24h")
         assert "/static/chart.js" not in html
 
+    def test_total_tokens_and_tps_columns_present(self) -> None:
+        accounts = [
+            {
+                "account_name": "acct_a",
+                "account_enabled": 1,
+                "request_count": 5,
+                "error_count": 1,
+                "input_tokens": 100,
+                "output_tokens": 250,
+                "total_tokens": 350,
+                "tokens_per_second": 70.0,
+                "cost_microdollars": 1_000_000,
+                "avg_latency_ms": 200.0,
+                "reserved_microdollars": 0,
+                "bytes_received": 0,
+                "bytes_emitted": 0,
+                "health_state": "healthy",
+            }
+        ]
+        html = render_accounts(accounts=accounts, period="24h")
+        assert "<th>Total tokens</th>" in html
+        assert "<th>TPS</th>" in html
+        assert "350" in html  # total_tokens rendered
+        assert "70.0 tok/s" in html
+
+    def test_tps_dash_when_zero(self) -> None:
+        accounts = [
+            {
+                "account_name": "cold_acct",
+                "account_enabled": 1,
+                "request_count": 0,
+                "error_count": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "tokens_per_second": 0.0,
+                "cost_microdollars": 0,
+                "avg_latency_ms": 0.0,
+                "reserved_microdollars": 0,
+                "bytes_received": 0,
+                "bytes_emitted": 0,
+                "health_state": "healthy",
+            }
+        ]
+        html = render_accounts(accounts=accounts, period="24h")
+        assert "0.0 tok/s" not in html
+        assert "—" in html  # the dash placeholder rendered for cold accounts
+
 
 class TestRenderModels:
     """Tests for the models page renderer."""
@@ -555,13 +611,20 @@ class TestRenderModels:
                 "error_count": 1,
                 "input_tokens": 100,
                 "output_tokens": 200,
+                "total_tokens": 300,
+                "tokens_per_second": 25.0,
                 "cost_microdollars": 1_000_000,
                 "avg_latency_ms": 200.0,
+                "avg_ttft_ms": 50.0,
             }
         ]
         html = render_models(models=models, period="24h")
         assert "gpt-x" in html
         assert "$1.000000" in html
+        assert "<th>Total tokens</th>" in html
+        assert "<th>TPS</th>" in html
+        assert "300" in html
+        assert "25.0 tok/s" in html
 
     def test_account_filter_shown(self) -> None:
         html = render_models(models=[], account_filter="acct_a", period="24h")
@@ -617,11 +680,14 @@ class TestRenderTimeseries:
                 "error_count": 1,
                 "input_tokens": 100,
                 "output_tokens": 200,
+                "total_tokens": 300,
                 "cost_microdollars": 500_000,
             }
         ]
         html = render_timeseries(series=series, bucket="hour", period="24h")
         assert "2024-01-01 12:00:00" in html
+        assert "<th>Total tokens</th>" in html
+        assert "300" in html
 
 
 class TestHtmlParseability:
@@ -735,7 +801,7 @@ class TestRenderBandwidthHeatmap:
 
     def test_empty_data(self) -> None:
         html = _render_bandwidth_heatmap([])
-        assert "No bandwidth data" in html
+        assert "No activity data" in html
 
     def test_renders_svg(self) -> None:
         daily = [
@@ -760,6 +826,27 @@ class TestRenderBandwidthHeatmap:
         ]
         html = _render_bandwidth_heatmap(daily)
         assert "<svg" in html
+
+    def test_total_tokens_value_field(self) -> None:
+        from datetime import date as _date
+
+        today = _date.today().isoformat()
+        daily = [{"day": today, "total_tokens": 4242}]
+        html = _render_bandwidth_heatmap(daily, value_field="total_tokens")
+        assert "<svg" in html
+        assert "4,242" in html  # token-formatted tooltip
+
+    def test_total_tokens_empty_data(self) -> None:
+        html = _render_bandwidth_heatmap([], value_field="total_tokens")
+        assert "No activity data" in html
+
+    def test_invalid_value_field_raises(self) -> None:
+        import pytest
+
+        with pytest.raises(ValueError, match="unsupported heatmap value_field"):
+            _render_bandwidth_heatmap(
+                [{"day": "2024-06-01", "x": 1}], value_field="nope"
+            )
 
 
 class TestRenderBandwidthPage:
@@ -869,7 +956,10 @@ class TestRenderOverviewBandwidth:
         assert "5.0 MB" in html
         assert "2.5 MB" in html
 
-    def test_bandwidth_heatmap_section(self) -> None:
+    def test_token_activity_heatmap_section(self) -> None:
+        from datetime import date as _date
+
+        today = _date.today().isoformat()
         html = render_overview(
             overview={
                 "summary": {
@@ -894,11 +984,12 @@ class TestRenderOverviewBandwidth:
             },
             accounts=[],
             bandwidth_daily=[
-                {"day": "2024-06-01", "bytes_received": 1000, "bytes_emitted": 500},
+                {"day": today, "total_tokens": 1500},
             ],
         )
-        assert "Bandwidth activity" in html
+        assert "Token activity" in html
         assert "<svg" in html
+        assert "1,500" in html  # token-formatted tooltip
 
     def test_account_table_has_bw_columns(self) -> None:
         accounts = [
@@ -944,6 +1035,63 @@ class TestRenderOverviewBandwidth:
         assert "BW emitted" in html
         assert "3.0 MB" in html
         assert "1.5 MB" in html
+
+    def test_cost_card_subtext_shows_total_tokens(self) -> None:
+        html = render_overview(
+            overview={
+                "summary": {
+                    "total_requests": 10,
+                    "successful_requests": 10,
+                    "error_requests": 0,
+                    "error_rate": 0.0,
+                    "total_input_tokens": 100,
+                    "total_output_tokens": 200,
+                    "total_tokens": 300,
+                    "total_cost_microdollars": 0,
+                    "avg_latency_ms": 0.0,
+                },
+                "imbalance": {"imbalance_ratio": 0.0},
+            },
+            accounts=[],
+        )
+        assert "in 100" in html
+        assert "out 200" in html
+        assert "total 300" in html
+
+    def test_throughput_card_present(self) -> None:
+        html = render_overview(
+            overview={
+                "summary": {
+                    "total_requests": 1,
+                    "total_input_tokens": 100,
+                    "total_output_tokens": 100,
+                    "total_tokens": 200,
+                    "tokens_per_second": 40.0,
+                    "total_cost_microdollars": 0,
+                    "avg_latency_ms": 0.0,
+                },
+                "imbalance": {"imbalance_ratio": 0.0},
+            },
+            accounts=[],
+        )
+        assert "Throughput" in html
+        assert "40.0 tok/s" in html
+
+    def test_throughput_card_dash_when_zero(self) -> None:
+        html = render_overview(
+            overview={
+                "summary": {
+                    "total_requests": 0,
+                    "tokens_per_second": 0.0,
+                    "total_cost_microdollars": 0,
+                },
+                "imbalance": {"imbalance_ratio": 0.0},
+            },
+            accounts=[],
+        )
+        assert "Throughput" in html
+        # The metric slot itself should hold the dash rather than "0.0 tok/s".
+        assert "0.0 tok/s" not in html
 
 
 class TestRenderLatency:
