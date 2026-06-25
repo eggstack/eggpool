@@ -164,13 +164,26 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 | `eggpool connect list` | List available providers |
 | `eggpool logout` | Remove a configured provider account |
 | `eggpool rehash` | Restart to apply config changes |
+| `eggpool restart` | Fully restart the server (stop then start) |
+| `eggpool stop` | Stop the running server |
+| `eggpool set` | Set a server configuration value and restart |
+| `eggpool getkey` | Print the current server API key |
+| `eggpool newkey` | Generate a new server API key |
+| `eggpool edit` | Open the configuration file in the default editor |
+| `eggpool configsetup` | Print configuration snippets for code editors |
+| `eggpool configsetup opencode` | Print OpenCode provider config JSON with model limits |
+| `eggpool configsetup claude-code` | Print Claude Code config snippet |
+| `eggpool update` | Check for updates and reinstall if newer |
 | `eggpool croncheck` | Lightweight check: exit 0 if server is running, exit 1 if not |
 | `eggpool ensure-running` | Repair: start the server if it is not running; no-op when alive. Fast-path. |
-| `eggpool models refresh` | Refresh model catalog from upstream |
-| `eggpool stats recompute-costs [--dry-run\|--apply] [--limit N]` | Recompute historical `cost_microdollars` from current price snapshots. Default `--dry-run`. |
-| `eggpool configsetup opencode` | Print OpenCode provider config JSON with model limits |
 | `eggpool runtime-status` | Print compact runtime health summary from running server |
+| `eggpool models refresh` | Refresh model catalog from upstream |
+| `eggpool accounts status` | Show configured account status |
+| `eggpool accounts list` | List configured provider accounts |
+| `eggpool dashboard public` | Toggle dashboard public access |
 | `eggpool db vacuum` | Reclaim SQLite space |
+| `eggpool init-config` | Write bundled config.example.toml to current directory or TARGET |
+| `eggpool stats recompute-costs [--dry-run\|--apply] [--limit N]` | Recompute historical `cost_microdollars` from current price snapshots. Default `--dry-run`. |
 | `eggpool deploy systemd` | Print systemd unit; `--install` writes it (personal by default; `--production` for the dedicated-system layout; `--as-root` for a root-owned personal unit) |
 | `eggpool deploy cron` | Print / install / uninstall the watchdog crontab (`@reboot` + `*/N * * * *` `eggpool ensure-running`). `--interval N` (1-59, default 5) |
 | `eggpool deploy backup-cron` | Print / install / uninstall the daily backup cron (personal user cron or production `/etc/cron.d/`) |

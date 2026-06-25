@@ -129,7 +129,7 @@ SQLite via aiosqlite with WAL mode. Single-connection serialization via a lock +
 
 ### Schema Migrations
 
-Ordered SQL migrations in `db/schema/` (0001 through 0020). Checksums tracked in `checksums.json`.
+Ordered SQL migrations in `db/schema/` (0001 through 0031). Checksums tracked in `checksums.json`.
 
 ### Repositories
 
