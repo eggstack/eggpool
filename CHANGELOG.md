@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-06-25
+
+### Fixed
+
+- Catalog no longer accumulates orphans when an upstream provider
+  withdraws a model. `ModelCatalogCache.update_from_account` now
+  records the per-account `(model_id, provider_id)` keys it
+  advertises and clears stale per-provider rows on the next
+  refresh; `prune_unused()` drops entries from `_models` and
+  `_account_support` that have no remaining reference, and
+  `CatalogService.refresh()` calls it after every per-account
+  gather. The "Skipping unresolved model during catalog
+  persistence" warning now fires once per model id per process
+  and is demoted to DEBUG on subsequent cycles, so a persistent
+  unresolved upstream name no longer spams the log.
+- A new reconciliation pass runs at the end of
+  `_persist_catalog` to align the durable catalog with the live
+  cache. Models that are no longer advertised by any account are
+  deleted; rows with historical request or reservation history
+  are relinked to a shared `__deprecated__` placeholder while
+  the original id is preserved in the new
+  `requests.original_model_id` and `reservations.original_model_id`
+  columns. Orphan `provider_model_metadata` rows and disabled
+  `account_models` rows with no request history are also
+  removed. Migration `0023_deprecated_model_placeholder.sql`
+  inserts the placeholder and adds the two new columns.
+  Stats queries use `COALESCE(original_model_id, model_id)` so
+  dashboard widgets continue to attribute historical usage to
+  the real model name.
+
 ## [0.2.1] - 2026-06-24
 
 ### Fixed
