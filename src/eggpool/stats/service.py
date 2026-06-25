@@ -826,3 +826,109 @@ class StatsService:
             status=status,
             include_client_ip=include_client_ip,
         )
+
+    async def get_pending_health_snapshot(
+        self, *, use_cache: bool = False
+    ) -> dict[str, Any]:
+        """Return an instantaneous pending-reservation health snapshot.
+
+        Combines the ``requests`` and ``reservations`` tables to surface
+        the current number of pending requests, the age of the oldest
+        pending request, the active reservation count, the reserved
+        microdollar total, and the age of the oldest active reservation.
+
+        Used by the Reliability page and the Overview System Health
+        row to expose leak-style failures (pending requests surviving
+        past their reservation TTL, orphaned active reservations).
+        """
+        from eggpool.quota.audit import (
+            active_reservations_summary,
+            stale_pending_requests,
+        )
+
+        key = ("pending_health",)
+        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
+            return cast("dict[str, Any]", cached)
+        pending_row = await self._db.fetch_one(
+            """
+            SELECT
+                COUNT(*) AS pending_count,
+                MIN(started_at) AS oldest_pending_at
+            FROM requests
+            WHERE status = 'pending'
+            """
+        )
+        if pending_row is None:
+            pending_count = 0
+            oldest_pending_at = None
+        else:
+            pending_count = int(pending_row["pending_count"] or 0)
+            oldest_pending_at = pending_row["oldest_pending_at"]
+        now = datetime.now(UTC)
+        oldest_pending_age_seconds: float | None = None
+        if oldest_pending_at and pending_count > 0:
+            parsed = _parse_dt(str(oldest_pending_at))
+            if parsed is not None:
+                oldest_pending_age_seconds = max(0.0, (now - parsed).total_seconds())
+
+        stale_pending = await stale_pending_requests(self._db, threshold_seconds=900)
+
+        reservations = await active_reservations_summary(self._db)
+        active_reservation_count = sum(
+            int(r.get("active_reservations", 0)) for r in reservations
+        )
+        active_reserved_microdollars = sum(
+            int(r.get("active_reserved_microdollars", 0)) for r in reservations
+        )
+        oldest_reservation_age_seconds: float | None = None
+        oldest_at_values = [
+            r.get("oldest_reservation_at")
+            for r in reservations
+            if r.get("oldest_reservation_at")
+        ]
+        if oldest_at_values:
+            parsed = min(
+                (_parse_dt(str(v)) for v in oldest_at_values),
+                key=lambda dt: dt or now,
+                default=None,
+            )
+            if parsed is not None:
+                oldest_reservation_age_seconds = max(
+                    0.0, (now - parsed).total_seconds()
+                )
+
+        result = {
+            "pending_count": pending_count,
+            "oldest_pending_age_seconds": oldest_pending_age_seconds,
+            "stale_pending_count": int(stale_pending or 0),
+            "active_reservation_count": active_reservation_count,
+            "active_reserved_microdollars": active_reserved_microdollars,
+            "oldest_reservation_age_seconds": oldest_reservation_age_seconds,
+            "as_of": now.isoformat(),
+        }
+        if use_cache:
+            self._set_dashboard_cache(key, result)
+        return result
+
+
+def _parse_dt(value: str) -> datetime | None:
+    """Best-effort parse for SQLite-formatted datetime strings."""
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if "T" in text:
+        text = text.replace("T", " ")
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S.%f",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d",
+    ):
+        try:
+            parsed = datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+        return parsed.replace(tzinfo=UTC)
+    return None

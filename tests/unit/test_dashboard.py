@@ -20,6 +20,7 @@ from eggpool.dashboard.render import (
     _format_tooltip_date,
     _render_bandwidth_heatmap,
     _render_nav,
+    _render_system_health,
     render_accounts,
     render_bandwidth,
     render_events,
@@ -27,7 +28,10 @@ from eggpool.dashboard.render import (
     render_models,
     render_overview,
     render_pings,
+    render_reliability,
+    render_routing,
     render_timeseries,
+    render_traces,
 )
 
 
@@ -1793,3 +1797,510 @@ class TestTooltipStylesheet:
     def test_tooltip_pointer_events_none(self) -> None:
         css = self._load_css()
         assert "pointer-events: none" in css
+
+
+class TestRenderReliability:
+    """Tests for the Reliability page renderer."""
+
+    def test_renders_empty_state(self) -> None:
+        html = render_reliability(
+            period="24h",
+            attempt_stats=None,
+            retry_distribution=[],
+            pending_health=None,
+            operational_summary=[],
+            recent_operational_events=[],
+            timeseries=[],
+        )
+        assert "Reliability" in html
+        assert "/static/chart.js" in html
+        assert "Attempts by provider" in html
+        assert "No attempt data" in html
+
+    def test_renders_attempt_summary_cards(self) -> None:
+        html = render_reliability(
+            period="24h",
+            attempt_stats={
+                "total_attempts": 100,
+                "success_attempts": 80,
+                "retry_attempts": 15,
+                "failed_attempts": 5,
+                "retry_rate": 0.15,
+                "avg_attempt_latency_ms": 250.0,
+            },
+            retry_distribution=[
+                {
+                    "retry_category": "transient",
+                    "attempt_count": 20,
+                    "retry_outcome_count": 10,
+                    "success_count": 15,
+                    "failure_count": 5,
+                    "avg_attempt_latency_ms": 200.0,
+                }
+            ],
+            pending_health={
+                "pending_count": 3,
+                "oldest_pending_age_seconds": 42,
+                "stale_pending_count": 0,
+                "active_reservation_count": 1,
+                "active_reserved_microdollars": 100_000,
+                "oldest_reservation_age_seconds": 12,
+            },
+            operational_summary=[
+                {
+                    "event_type": "stale_request_finalizer",
+                    "event_count": 4,
+                    "last_occurred_at": "2024-01-01 12:00:00",
+                    "total_interrupted_requests": 4,
+                    "total_released_reservations": 0,
+                }
+            ],
+            recent_operational_events=[
+                {
+                    "event_type": "crash_recovery",
+                    "details_json": '{"leaked_requests": 2}',
+                    "occurred_at": "2024-01-01 12:00:00",
+                }
+            ],
+            timeseries=[],
+        )
+        assert "Total attempts" in html
+        assert "100" in html
+        assert "Retry attempts" in html
+        assert "Pending requests" in html
+        assert "Operational events" in html
+        assert "crash_recovery" in html
+        assert "Transient upstream" in html
+
+    def test_pending_health_warning_when_stale(self) -> None:
+        html = render_reliability(
+            period="24h",
+            attempt_stats=None,
+            retry_distribution=[],
+            pending_health={
+                "pending_count": 5,
+                "oldest_pending_age_seconds": 1800,
+                "stale_pending_count": 3,
+                "active_reservation_count": 0,
+                "active_reserved_microdollars": 0,
+            },
+            operational_summary=[],
+            recent_operational_events=[],
+            timeseries=[],
+        )
+        assert 'class="card warning"' in html
+
+
+class TestRenderRouting:
+    """Tests for the Routing page renderer."""
+
+    def test_renders_empty_state(self) -> None:
+        html = render_routing(
+            period="24h",
+            routing_distribution=[],
+            routing_selection_breakdown=[],
+            routing_exclusion_breakdown=[],
+        )
+        assert "Routing" in html
+        assert "/static/chart.js" in html
+        assert "No routing decisions" in html
+
+    def test_renders_populated(self) -> None:
+        html = render_routing(
+            period="24h",
+            routing_distribution=[
+                {
+                    "model_id": "gpt-x",
+                    "provider_id": "opencode-go",
+                    "decision_count": 50,
+                    "avg_eligible_count": 2.5,
+                    "avg_scored_count": 2.0,
+                    "avg_attempted_excluded_count": 0.5,
+                    "avg_selected_score": 0.95,
+                    "distinct_selected_accounts": 3,
+                }
+            ],
+            routing_selection_breakdown=[
+                {
+                    "account_name": "alpha",
+                    "provider_id": "opencode-go",
+                    "selection_count": 30,
+                    "avg_selected_tier": 1.0,
+                    "avg_selected_score": 0.97,
+                    "avg_eligible_count": 2.5,
+                }
+            ],
+            routing_exclusion_breakdown=[
+                {
+                    "account_name": "alpha",
+                    "reason": "quota_exhausted_backoff",
+                    "exclusion_count": 7,
+                    "last_seen_at": "2024-01-01 12:00:00",
+                },
+                {
+                    "account_name": "beta",
+                    "reason": "active_reservation_pressure",
+                    "exclusion_count": 3,
+                    "last_seen_at": "2024-01-01 12:00:00",
+                },
+            ],
+        )
+        assert "Routing decisions" in html
+        assert "gpt-x" in html
+        assert "opencode-go" in html
+        assert "alpha" in html
+        assert "quota_exhausted_backoff" in html
+        assert "suppressive" in html
+        assert "advisory" in html
+
+    def test_exclusion_category_coloring(self) -> None:
+        html = render_routing(
+            period="24h",
+            routing_distribution=[],
+            routing_selection_breakdown=[],
+            routing_exclusion_breakdown=[
+                {
+                    "account_name": "alpha",
+                    "reason": "rate_limit_backoff",
+                    "exclusion_count": 5,
+                },
+                {
+                    "account_name": "beta",
+                    "reason": "low_provider_priority",
+                    "exclusion_count": 2,
+                },
+                {
+                    "account_name": "gamma",
+                    "reason": "unknown_reason",
+                    "exclusion_count": 1,
+                },
+            ],
+        )
+        assert "suppressive" in html
+        assert "advisory" in html
+        assert "unknown" in html
+
+
+class TestRenderTraces:
+    """Tests for the Traces page renderer."""
+
+    def test_renders_empty(self) -> None:
+        html = render_traces(
+            period="recent",
+            limit=50,
+            recent_requests=[],
+        )
+        assert "Traces" in html
+        assert "No recent requests" in html
+        assert "Auth-gated" in html
+
+    def test_renders_request_row_without_sensitive_fields(self) -> None:
+        html = render_traces(
+            period="recent",
+            limit=50,
+            recent_requests=[
+                {
+                    "started_at": "2024-01-01 12:00:00",
+                    "account_name": "alpha",
+                    "provider_id": "opencode-go",
+                    "model_id": "gpt-x",
+                    "protocol": "openai",
+                    "status": "completed",
+                    "status_code": 200,
+                    "error_class": None,
+                    "input_tokens": 100,
+                    "output_tokens": 200,
+                    "upstream_latency_ms": 250.0,
+                    "proxy_request_id": "abcdef1234567890",
+                    "client_ip": "1.2.3.4",
+                    "error_detail": "secret upstream detail",
+                }
+            ],
+        )
+        assert "alpha" in html
+        assert "opencode-go" in html
+        assert "completed (200)" in html
+        assert "gpt-x" in html
+        assert "abcdef12" in html
+        # Never leak client_ip or error_detail
+        assert "1.2.3.4" not in html
+        assert "secret upstream detail" not in html
+
+    def test_renders_error_class_only(self) -> None:
+        html = render_traces(
+            period="recent",
+            limit=50,
+            recent_requests=[
+                {
+                    "started_at": "2024-01-01 12:00:00",
+                    "account_name": "alpha",
+                    "provider_id": "opencode-go",
+                    "model_id": "gpt-x",
+                    "protocol": "openai",
+                    "status": "error",
+                    "status_code": 429,
+                    "error_class": "RateLimitError",
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "upstream_latency_ms": 0.0,
+                }
+            ],
+        )
+        assert "RateLimitError" in html
+        assert "error (429)" in html
+
+    def test_does_not_load_chart_js(self) -> None:
+        html = render_traces(
+            period="recent",
+            limit=50,
+            recent_requests=[],
+        )
+        assert "/static/chart.js" not in html
+
+
+class TestRenderLatencyExtension:
+    """Tests for the new latency-phases feature on the latency page."""
+
+    def test_renders_phases_chart_when_data(self) -> None:
+        html = render_latency(
+            provider_ttft=[],
+            model_ttft=[],
+            period="24h",
+            phases={
+                "phases": {
+                    "upstream_connect_ms": {
+                        "sample_count": 5,
+                        "avg_ms": 50.0,
+                        "p50_ms": 40.0,
+                        "p99_ms": 90.0,
+                    },
+                    "upstream_read_ms": {
+                        "sample_count": 5,
+                        "avg_ms": 200.0,
+                        "p50_ms": 180.0,
+                        "p99_ms": 400.0,
+                    },
+                    "coordinator_overhead_ms": {
+                        "sample_count": 5,
+                        "avg_ms": 25.0,
+                        "p50_ms": 20.0,
+                        "p99_ms": 50.0,
+                    },
+                }
+            },
+        )
+        assert "latency-phases" in html
+        assert "Latency phases" in html
+        assert "/static/chart.js" in html
+
+    def test_no_chart_when_phases_empty(self) -> None:
+        html = render_latency(
+            provider_ttft=[],
+            model_ttft=[],
+            period="24h",
+            phases={"phases": {}},
+        )
+        assert "latency-phases" not in html
+        assert "/static/chart.js" not in html
+
+    def test_no_chart_when_phases_missing(self) -> None:
+        html = render_latency(
+            provider_ttft=[],
+            model_ttft=[],
+            period="24h",
+        )
+        assert "latency-phases" not in html
+        assert "/static/chart.js" not in html
+
+    def test_phases_column_in_model_table(self) -> None:
+        html = render_latency(
+            provider_ttft=[],
+            model_ttft=[
+                {
+                    "provider_id": "opencode-go",
+                    "model_id": "gpt-x",
+                    "request_count": 10,
+                    "avg_ttft_ms": 200.0,
+                    "p50_ttft_ms": 150.0,
+                    "p99_ttft_ms": 700.0,
+                    "phase_connect_ms": 30.0,
+                    "phase_read_ms": 200.0,
+                    "phase_overhead_ms": 25.0,
+                }
+            ],
+            period="24h",
+            phases={
+                "phases": {"upstream_connect_ms": {"sample_count": 1, "avg_ms": 30.0}}
+            },
+        )
+        assert "<th>Phases ms (c/r/o)</th>" in html
+        assert "30/200/25" in html
+
+
+class TestRenderAccountsExtension:
+    """Tests for the new exactness columns on the accounts page."""
+
+    def test_exactness_columns_rendered(self) -> None:
+        accounts = [
+            {
+                "account_name": "alpha",
+                "account_enabled": 1,
+                "provider_id": "opencode-go",
+                "request_count": 10,
+                "error_count": 0,
+                "input_tokens": 100,
+                "output_tokens": 200,
+                "total_tokens": 300,
+                "cost_microdollars": 1_000_000,
+                "avg_latency_ms": 100.0,
+                "reserved_microdollars": 0,
+                "exact_count": 5,
+                "derived_count": 2,
+                "estimated_count": 1,
+                "unknown_count": 2,
+                "estimated_cost_fraction": 0.1,
+                "cache_read_ratio": 0.25,
+                "cache_write_ratio": 0.05,
+                "reasoning_output_ratio": 0.1,
+                "avg_cost_per_request": 100_000,
+                "avg_cost_per_1k_tokens": 333.0,
+            }
+        ]
+        html = render_accounts(accounts=accounts, period="24h")
+        assert "<th>Exactness</th>" in html
+        assert "5/2/1/2" in html
+        assert "<th>Est. cost</th>" in html
+        assert "<th>Cache R</th>" in html
+        assert "<th>Cache W</th>" in html
+        assert "<th>Reasoning</th>" in html
+        assert "<th>Avg cost/req</th>" in html
+        assert "<th>Avg cost/1k tok</th>" in html
+        assert "25.0%" in html  # cache_read_ratio
+        assert "5.0%" in html  # cache_write_ratio
+
+    def test_exactness_columns_dash_when_missing(self) -> None:
+        accounts = [
+            {
+                "account_name": "alpha",
+                "account_enabled": 1,
+                "provider_id": "opencode-go",
+                "request_count": 0,
+                "error_count": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "cost_microdollars": 0,
+                "avg_latency_ms": 0.0,
+                "reserved_microdollars": 0,
+            }
+        ]
+        html = render_accounts(accounts=accounts, period="24h")
+        assert "0/0/0/0" in html
+        assert "—" in html  # placeholder for missing ratios
+
+
+class TestRenderModelsExtension:
+    """Tests for the new exactness columns on the models page."""
+
+    def test_exactness_columns_rendered(self) -> None:
+        models = [
+            {
+                "model_id": "gpt-x",
+                "provider_id": "opencode-go",
+                "request_count": 5,
+                "error_count": 0,
+                "input_tokens": 100,
+                "output_tokens": 200,
+                "total_tokens": 300,
+                "cost_microdollars": 1_000_000,
+                "avg_latency_ms": 200.0,
+                "avg_ttft_ms": 50.0,
+                "tokens_per_second": 50.0,
+                "exact_count": 3,
+                "derived_count": 1,
+                "estimated_count": 1,
+                "unknown_count": 0,
+                "estimated_cost_fraction": 0.2,
+                "cache_read_ratio": 0.4,
+                "cache_write_ratio": 0.1,
+                "reasoning_output_ratio": 0.0,
+                "avg_cost_per_request": 200_000,
+                "avg_cost_per_1k_tokens": 500.0,
+            }
+        ]
+        html = render_models(models=models, period="24h")
+        assert "<th>Exactness</th>" in html
+        assert "3/1/1/0" in html
+        assert "40.0%" in html
+        assert "10.0%" in html
+
+
+class TestRenderOverviewSystemHealth:
+    """Tests for the overview System Health row."""
+
+    def test_renders_when_data_present(self) -> None:
+        html = _render_system_health(
+            pending_health={
+                "pending_count": 2,
+                "oldest_pending_age_seconds": 30,
+                "stale_pending_count": 0,
+                "active_reservation_count": 1,
+                "active_reserved_microdollars": 50_000,
+            },
+            attempt_stats={
+                "total_attempts": 100,
+                "success_attempts": 95,
+                "retry_rate": 0.05,
+            },
+            operational_summary=[
+                {
+                    "event_type": "stale_request_finalizer",
+                    "event_count": 2,
+                }
+            ],
+        )
+        assert "System Health" not in html  # the title is in section.cards
+        assert "Pending requests" in html
+        assert "Active reservations" in html
+        assert "Finalizer" in html
+
+    def test_warning_when_stale_pending(self) -> None:
+        html = _render_system_health(
+            pending_health={
+                "pending_count": 3,
+                "oldest_pending_age_seconds": 1800,
+                "stale_pending_count": 2,
+                "active_reservation_count": 0,
+                "active_reserved_microdollars": 0,
+            },
+            attempt_stats=None,
+            operational_summary=None,
+        )
+        assert 'class="card warning"' in html
+
+    def test_empty_returns_empty(self) -> None:
+        assert _render_system_health(None, None, None) == ""
+
+
+class TestRenderNavUpdated:
+    """Tests for the new reliability/routing/traces nav entries."""
+
+    def test_reliability_link_present(self) -> None:
+        html = _render_nav("overview", "24h")
+        assert "/reliability" in html
+        assert "Reliability" in html
+
+    def test_routing_link_present(self) -> None:
+        html = _render_nav("overview", "24h")
+        assert "/routing" in html
+        assert "Routing" in html
+
+    def test_traces_link_present(self) -> None:
+        html = _render_nav("overview", "24h")
+        assert "/traces" in html
+        assert "Traces" in html
+
+    def test_active_routing_highlighted(self) -> None:
+        html = _render_nav("routing", "24h")
+        assert html.count('class="active"') == 1
+        assert 'href="/routing' in html

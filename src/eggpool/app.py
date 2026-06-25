@@ -926,6 +926,17 @@ def create_app(
                 headers={"Cache-Control": "public, max-age=86400"},
             )
 
+        @app.get("/static/dashboard.js")
+        async def dashboard_js() -> Response:  # pyright: ignore[reportUnusedFunction]
+            js_path: Path = (
+                Path(__file__).parent / "dashboard" / "static" / "dashboard.js"
+            )
+            return FileResponse(
+                path=str(js_path),
+                media_type="application/javascript",
+                headers={"Cache-Control": "public, max-age=86400"},
+            )
+
         # LRU cache for theme CSS: keeps last 3 used themes, TTL 300s for non-active
         class _ThemeCssCache:
             def __init__(self, max_size: int = 3, ttl_s: int = 300) -> None:

@@ -9,12 +9,14 @@ from __future__ import annotations
 import json
 from datetime import date, datetime, timedelta
 from html import escape as _html_escape
-from typing import Any
+from typing import Any, cast
 
 from eggpool.dashboard.escape import (
     escape,
     escape_attr,
+    format_age_seconds,
     format_bytes,
+    format_int,
     format_latency,
     format_microdollars,
     format_percent,
@@ -22,6 +24,7 @@ from eggpool.dashboard.escape import (
     format_tokens,
     format_tokens_per_second,
     sanitize_class_name,
+    short_id,
     truncate,
 )
 from eggpool.dashboard.theme import (
@@ -56,6 +59,70 @@ _STATUS_BADGE_TOOLTIPS: dict[str, str] = {
     "reservation_recovered": "Reservation recovered after restart",
     "catalog_refresh_failed": "Catalog refresh failed; using stale data",
 }
+
+# Routing exclusion taxonomy: which reasons remove an account from
+# selection (suppressive — driven by upstream failures or operator
+# action) versus which only deprioritize it (advisory — local scoring
+# signals).  This split lets the dashboard verify the design rule that
+# upstream-observed failures control exclusion while local accounting
+# only influences priority.
+SUPPRESSIVE_EXCLUSION_REASONS: frozenset[str] = frozenset(
+    {
+        "authentication_failed",
+        "auth_failed",
+        "quota_exhausted_backoff",
+        "quota_exhausted",
+        "rate_limit_backoff",
+        "rate_limited",
+        "model_unavailable",
+        "operator_disabled",
+        "account_disabled",
+        "protocol_mismatch",
+        "circuit_open",
+    }
+)
+
+ADVISORY_EXCLUSION_REASONS: frozenset[str] = frozenset(
+    {
+        "high_local_quota_estimate",
+        "active_reservation_pressure",
+        "active_inflight_penalty",
+        "low_provider_priority",
+        "health_penalty_below_threshold",
+    }
+)
+
+# Error taxonomy buckets surfaced to operators on the Reliability page.
+# Mirrors the retry_category values that the stats endpoints return,
+# but groups them into operator-friendly labels.
+_ERROR_CATEGORY_LABELS: dict[str, str] = {
+    "quota_exceeded": "Quota exceeded",
+    "temporary": "Temporary upstream",
+    "transient": "Transient upstream",
+    "auth_failure": "Auth failure",
+    "rate_limited": "Rate limited",
+    "model_unavailable": "Model unavailable",
+    "bad_request": "Bad request",
+    "never": "No retry",
+    "fatal": "Fatal error",
+    "unclassified": "Other",
+}
+
+
+def _error_category_label(category: str) -> str:
+    """Return a human label for a retry_category value."""
+    return _ERROR_CATEGORY_LABELS.get(str(category or ""), str(category or "Other"))
+
+
+def _classify_exclusion(reason: str) -> str:
+    """Classify an exclusion reason as suppressive/advisory/unknown."""
+    if not reason:
+        return "unknown"
+    if reason in SUPPRESSIVE_EXCLUSION_REASONS:
+        return "suppressive"
+    if reason in ADVISORY_EXCLUSION_REASONS:
+        return "advisory"
+    return "unknown"
 
 
 def _status_badge_tooltip(name: str) -> str | None:
@@ -280,11 +347,14 @@ def _render_nav(
     """Render the top navigation bar with theme selector."""
     items = [
         ("overview", "/", "Overview"),
+        ("reliability", "/reliability", "Reliability"),
+        ("routing", "/routing", "Routing"),
         ("accounts", "/accounts", "Accounts"),
         ("models", "/models", "Models"),
         ("latency", "/latency", "Latency"),
         ("pings", "/pings", "Pings"),
         ("bandwidth", "/bandwidth", "Bandwidth"),
+        ("traces", "/traces", "Traces"),
         ("events", "/events", "Events"),
         ("timeseries", "/timeseries", "Timeseries"),
     ]
@@ -399,6 +469,89 @@ def _render_provider_health(ping_summary: list[dict[str, Any]]) -> str:
         "</tbody></table>"
         "</section>"
     )
+
+
+def _render_system_health(
+    pending_health: dict[str, Any] | None,
+    attempt_stats: dict[str, Any] | None,
+    operational_summary: list[dict[str, Any]] | None,
+) -> str:
+    """Render the System Health row for the overview page.
+
+    Shows: pending request count + oldest pending age, active reservation
+    count + reserved cost, stale finalizer cleaned count over 24h,
+    finalizer timeout count over 24h, retry rate over the selected
+    period, and first-attempt success rate over the selected period.
+
+    Empty pending_health / attempt_stats / operational_summary produce a
+    zero-valued rendering so the layout is stable across empty states.
+    Returns the empty string when none of the inputs provide data, so
+    pages without health data don't render a meaningless row.
+    """
+    pending = pending_health or {}
+    attempts = attempt_stats or {}
+    summary_rows = operational_summary or []
+
+    pending_count = int(pending.get("pending_count", 0))
+    pending_age = format_age_seconds(pending.get("oldest_pending_age_seconds"))
+    reservation_count = int(pending.get("active_reservation_count", 0))
+    reserved_cost = format_microdollars(pending.get("active_reserved_microdollars", 0))
+    stale_pending_count = int(pending.get("stale_pending_count", 0))
+
+    retry_rate = float(attempts.get("retry_rate", 0.0) or 0.0)
+    total_attempts = int(attempts.get("total_attempts", 0) or 0)
+    success_attempts = int(attempts.get("success_attempts", 0) or 0)
+    first_attempt_success_rate = (
+        success_attempts / total_attempts if total_attempts > 0 else 0.0
+    )
+
+    stale_finalizer_cleaned = 0
+    finalizer_timeout = 0
+    crash_recovery = 0
+    for row in summary_rows:
+        event_type = str(row.get("event_type", ""))
+        event_count = int(row.get("event_count", 0) or 0)
+        if event_type == "stale_request_finalizer":
+            stale_finalizer_cleaned += event_count
+        elif event_type == "stale_request_cancel_timeout":
+            finalizer_timeout += event_count
+        elif event_type == "crash_recovery":
+            crash_recovery += event_count
+
+    has_data = bool(pending_health) or bool(attempt_stats) or bool(operational_summary)
+    if not has_data:
+        return ""
+
+    pending_warn = pending_count > 0 and stale_pending_count > 0
+    return f"""
+<section class="cards system-health">
+  <div class="card{" warning" if pending_warn else ""}">
+    <h3>Pending requests</h3>
+    <p class="metric">{pending_count:,}</p>
+    <p class="sub">oldest {pending_age} · stale {stale_pending_count}</p>
+  </div>
+  <div class="card">
+    <h3>Active reservations</h3>
+    <p class="metric">{reservation_count:,}</p>
+    <p class="sub">reserved {reserved_cost}</p>
+  </div>
+  <div class="card{" warning" if finalizer_timeout > 0 else ""}">
+    <h3>Finalizer (24h)</h3>
+    <p class="metric">{format_int(stale_finalizer_cleaned)}</p>
+    <p class="sub">cleaned · {finalizer_timeout} timeout · {crash_recovery} recovery</p>
+  </div>
+  <div class="card">
+    <h3>Retry rate</h3>
+    <p class="metric">{format_percent(retry_rate, digits=1)}</p>
+    <p class="sub">of {format_int(total_attempts)} attempts</p>
+  </div>
+  <div class="card">
+    <h3>First-attempt success</h3>
+    <p class="metric">{format_percent(first_attempt_success_rate, digits=1)}</p>
+    <p class="sub">no retry needed</p>
+  </div>
+</section>
+"""
 
 
 def _render_ip_stats(ip_stats: list[dict[str, Any]]) -> str:
@@ -805,6 +958,9 @@ def render_overview(
     current_theme: str = "",
     ip_stats: list[dict[str, Any]] | None = None,
     timeseries: list[dict[str, Any]] | None = None,
+    pending_health: dict[str, Any] | None = None,
+    attempt_stats: dict[str, Any] | None = None,
+    operational_summary: list[dict[str, Any]] | None = None,
 ) -> str:
     """Render the overview dashboard page."""
     summary = overview.get("summary", {})
@@ -844,6 +1000,8 @@ def render_overview(
     body = f"""
 <h2>Overview</h2>
 {_render_period_selector(period, current_theme)}
+
+{_render_system_health(pending_health, attempt_stats, operational_summary)}
 
 <section class="cards">
   <div class="card">
@@ -1006,6 +1164,13 @@ def _render_account_table(accounts: list[dict[str, Any]]) -> str:
         "<th>Failures</th>",
         "<th>Auth fail</th>",
         "<th>Disabled</th>",
+        "<th>Exactness</th>",
+        "<th>Est. cost</th>",
+        "<th>Cache R</th>",
+        "<th>Cache W</th>",
+        "<th>Reasoning</th>",
+        "<th>Avg cost/req</th>",
+        "<th>Avg cost/1k tok</th>",
         "</tr></thead><tbody>",
     ]
     for row in accounts:
@@ -1035,6 +1200,45 @@ def _render_account_table(accounts: list[dict[str, Any]]) -> str:
         consecutive_failures = int(row.get("consecutive_upstream_failures", 0))
         auth_failed = bool(row.get("authentication_failed", False))
         operator_disabled = bool(row.get("operator_disabled", False))
+        exact = int(row.get("exact_count", 0) or 0)
+        derived = int(row.get("derived_count", 0) or 0)
+        estimated = int(row.get("estimated_count", 0) or 0)
+        unknown_exc = int(row.get("unknown_count", 0) or 0)
+        exactness = f"{exact:,}/{derived:,}/{estimated:,}/{unknown_exc:,}"
+        est_cost_fraction = row.get("estimated_cost_fraction")
+        est_cost_pct = (
+            _format_percent_unit(est_cost_fraction, digits=1)
+            if est_cost_fraction is not None
+            else "—"
+        )
+        cache_read_ratio = row.get("cache_read_ratio")
+        cache_write_ratio = row.get("cache_write_ratio")
+        reasoning_ratio = row.get("reasoning_output_ratio")
+        cache_read_str = (
+            _format_percent_unit(cache_read_ratio, digits=1)
+            if cache_read_ratio is not None
+            else "—"
+        )
+        cache_write_str = (
+            _format_percent_unit(cache_write_ratio, digits=1)
+            if cache_write_ratio is not None
+            else "—"
+        )
+        reasoning_str = (
+            _format_percent_unit(reasoning_ratio, digits=1)
+            if reasoning_ratio is not None
+            else "—"
+        )
+        avg_cost_per_req_microdollars = row.get("avg_cost_per_request")
+        if avg_cost_per_req_microdollars is None:
+            avg_cost_per_req = "—"
+        else:
+            avg_cost_per_req = format_microdollars(avg_cost_per_req_microdollars)
+        avg_cost_per_1k_microdollars = row.get("avg_cost_per_1k_tokens")
+        if avg_cost_per_1k_microdollars is None:
+            avg_cost_per_1k = "—"
+        else:
+            avg_cost_per_1k = format_microdollars(avg_cost_per_1k_microdollars * 1000)
         parts.append(
             f"<tr>"
             f"<td>{name}</td>"
@@ -1066,6 +1270,13 @@ def _render_account_table(accounts: list[dict[str, Any]]) -> str:
             f"{'yes' if auth_failed else 'no'}</td>"
             f'<td class="{"yes" if operator_disabled else "no"}">'
             f"{'yes' if operator_disabled else 'no'}</td>"
+            f"<td>{exactness}</td>"
+            f"<td>{est_cost_pct}</td>"
+            f"<td>{cache_read_str}</td>"
+            f"<td>{cache_write_str}</td>"
+            f"<td>{reasoning_str}</td>"
+            f"<td>{avg_cost_per_req}</td>"
+            f"<td>{avg_cost_per_1k}</td>"
             f"</tr>"
         )
     parts.append("</tbody></table>")
@@ -1135,6 +1346,13 @@ def render_models(
             "<th>Avg latency</th>",
             "<th>Avg TTFT</th>",
             "<th>TPS</th>",
+            "<th>Exactness</th>",
+            "<th>Est. cost</th>",
+            "<th>Cache R</th>",
+            "<th>Cache W</th>",
+            "<th>Reasoning</th>",
+            "<th>Avg cost/req</th>",
+            "<th>Avg cost/1k tok</th>",
             "</tr></thead><tbody>",
         ]
         for row in models:
@@ -1146,6 +1364,47 @@ def render_models(
             total_tok = format_tokens(row.get("total_tokens", 0))
             tps = format_tokens_per_second(row.get("tokens_per_second", 0.0))
             provider = escape(row.get("provider_id", ""))
+            exact = int(row.get("exact_count", 0) or 0)
+            derived = int(row.get("derived_count", 0) or 0)
+            estimated = int(row.get("estimated_count", 0) or 0)
+            unknown_exc = int(row.get("unknown_count", 0) or 0)
+            exactness = f"{exact:,}/{derived:,}/{estimated:,}/{unknown_exc:,}"
+            est_cost_fraction = row.get("estimated_cost_fraction")
+            est_cost_pct = (
+                _format_percent_unit(est_cost_fraction, digits=1)
+                if est_cost_fraction is not None
+                else "—"
+            )
+            cache_read_ratio = row.get("cache_read_ratio")
+            cache_write_ratio = row.get("cache_write_ratio")
+            reasoning_ratio = row.get("reasoning_output_ratio")
+            cache_read_str = (
+                _format_percent_unit(cache_read_ratio, digits=1)
+                if cache_read_ratio is not None
+                else "—"
+            )
+            cache_write_str = (
+                _format_percent_unit(cache_write_ratio, digits=1)
+                if cache_write_ratio is not None
+                else "—"
+            )
+            reasoning_str = (
+                _format_percent_unit(reasoning_ratio, digits=1)
+                if reasoning_ratio is not None
+                else "—"
+            )
+            avg_cost_per_req_microdollars = row.get("avg_cost_per_request")
+            if avg_cost_per_req_microdollars is None:
+                avg_cost_per_req = "—"
+            else:
+                avg_cost_per_req = format_microdollars(avg_cost_per_req_microdollars)
+            avg_cost_per_1k_microdollars = row.get("avg_cost_per_1k_tokens")
+            if avg_cost_per_1k_microdollars is None:
+                avg_cost_per_1k = "—"
+            else:
+                avg_cost_per_1k = format_microdollars(
+                    avg_cost_per_1k_microdollars * 1000
+                )
             parts.append(
                 f"<tr>"
                 f"<td>{escape(row.get('model_id', ''))}</td>"
@@ -1159,6 +1418,13 @@ def render_models(
                 f"<td>{latency}</td>"
                 f"<td>{ttft}</td>"
                 f"<td>{tps}</td>"
+                f"<td>{exactness}</td>"
+                f"<td>{est_cost_pct}</td>"
+                f"<td>{cache_read_str}</td>"
+                f"<td>{cache_write_str}</td>"
+                f"<td>{reasoning_str}</td>"
+                f"<td>{avg_cost_per_req}</td>"
+                f"<td>{avg_cost_per_1k}</td>"
                 f"</tr>"
             )
         parts.append("</tbody></table>")
@@ -1434,99 +1700,6 @@ def render_bandwidth(
     )
 
 
-def render_latency(
-    provider_ttft: list[dict[str, Any]],
-    model_ttft: list[dict[str, Any]],
-    period: str = "24h",
-    theme_css: str = "",
-    available_themes: list[str] | None = None,
-    current_theme: str = "",
-) -> str:
-    """Render the latency breakdown page."""
-    # Provider summary cards
-    provider_cards = ""
-    if provider_ttft:
-        cards: list[str] = []
-        for row in provider_ttft:
-            pid = escape(str(row.get("provider_id", "")))
-            avg = format_latency(row.get("avg_ttft_ms", 0.0))
-            p50 = format_latency(row.get("p50_ttft_ms", 0.0))
-            p99 = format_latency(row.get("p99_ttft_ms", 0.0))
-            count = int(row.get("request_count", 0))
-            cards.append(
-                f'<div class="card">'
-                f"<h3>{pid}</h3>"
-                f'<p class="metric">{avg}</p>'
-                f'<p class="sub">P50 {p50} · P99 {p99} · {count:,} reqs</p>'
-                f"</div>"
-            )
-        provider_cards = f'<section class="cards">{"".join(cards)}</section>'
-    else:
-        provider_cards = '<p class="empty">No TTFT data for this period.</p>'
-
-    # Per-provider/model breakdown table
-    if model_ttft:
-        model_parts = [
-            '<table class="data">',
-            "<thead><tr>",
-            "<th>Provider</th>",
-            "<th>Model</th>",
-            "<th>Requests</th>",
-            "<th>Avg TTFT</th>",
-            "<th>P50 TTFT</th>",
-            "<th>P99 TTFT</th>",
-            "</tr></thead><tbody>",
-        ]
-        for row in model_ttft:
-            pid = escape(str(row.get("provider_id", "")))
-            mid = escape(str(row.get("model_id", "")))
-            avg = format_latency(row.get("avg_ttft_ms", 0.0))
-            p50 = format_latency(row.get("p50_ttft_ms", 0.0))
-            p99 = format_latency(row.get("p99_ttft_ms", 0.0))
-            count = int(row.get("request_count", 0))
-            model_parts.append(
-                f"<tr>"
-                f"<td>{pid}</td>"
-                f"<td>{mid}</td>"
-                f"<td>{count:,}</td>"
-                f"<td>{avg}</td>"
-                f"<td>{p50}</td>"
-                f"<td>{p99}</td>"
-                f"</tr>"
-            )
-        model_parts.append("</tbody></table>")
-        model_table = (
-            '<section class="panel">'
-            "<h3>Per-model breakdown</h3>"
-            f"{''.join(model_parts)}</section>"
-        )
-    else:
-        model_table = (
-            '<section class="panel">'
-            "<h3>Per-model breakdown</h3>"
-            '<p class="empty">No model data for this period.</p>'
-            "</section>"
-        )
-
-    body = f"""
-<h2>Latency</h2>
-{_render_period_selector(period, current_theme)}
-
-{provider_cards}
-
-{model_table}
-"""
-    return _render_layout(
-        title="Latency",
-        body=body,
-        active_nav="latency",
-        period=period,
-        theme_css=theme_css,
-        available_themes=available_themes,
-        current_theme=current_theme,
-    )
-
-
 def render_pings(
     ping_summary: list[dict[str, Any]],
     recent_pings: list[dict[str, Any]],
@@ -1632,6 +1805,966 @@ def render_pings(
     )
 
 
+def _render_chart_canvas(
+    canvas_id: str,
+    chart_type: str,
+    labels_json: str,
+    datasets_json: str,
+    options_json: str = "{}",
+    *,
+    include_chart_js: bool = True,
+    height_px: int = 280,
+) -> str:
+    """Render a Chart.js canvas with an inline initialisation script.
+
+    ``include_chart_js`` mirrors the page-level helper flag; the helper
+    always emits the inline script (so the chart renders on first
+    paint), but the caller still decides whether the page's layout
+    pulls in the Chart.js library itself.
+    """
+    del include_chart_js
+    canvas_id_json = json.dumps(canvas_id)
+    chart_type_json = json.dumps(chart_type)
+    return f"""
+<div style="height: {height_px}px; position: relative;">
+  <canvas id="{canvas_id}"></canvas>
+</div>
+<script>
+(() => {{
+  const ctx = document.getElementById({canvas_id_json});
+  if (!ctx) return;
+  new Chart(ctx, {{
+    type: {chart_type_json},
+    data: {{
+      labels: {labels_json},
+      datasets: {datasets_json},
+    }},
+    options: {options_json}
+  }});
+}})();
+</script>
+"""
+
+
+def _format_int(value: Any) -> str:
+    """Format an integer with thousands separators (zero-tolerant helper)."""
+    if value is None:
+        return "—"
+    try:
+        return f"{int(value):,}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _format_percent_unit(value: Any, *, fraction: bool = True, digits: int = 1) -> str:
+    """Format a value that may be a fraction (0..1) or already a percent."""
+    if value is None:
+        return "—"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if not fraction:
+        return f"{number:.{digits}f}%"
+    return f"{number * 100:.{digits}f}%"
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    """Coerce ``value`` to a dict, returning ``{}`` when not a mapping."""
+    if not isinstance(value, dict):
+        return {}
+    return cast("dict[str, Any]", value)
+
+
+def render_reliability(
+    *,
+    period: str,
+    attempt_stats: dict[str, Any] | None,
+    retry_distribution: list[dict[str, Any]],
+    pending_health: dict[str, Any] | None,
+    operational_summary: list[dict[str, Any]],
+    recent_operational_events: list[dict[str, Any]],
+    timeseries: list[dict[str, Any]],
+    theme_css: str = "",
+    available_themes: list[str] | None = None,
+    current_theme: str = "",
+) -> str:
+    """Render the Reliability page.
+
+    Shows attempt stats (total, success, retry, failure), the
+    attempts-by-provider chart, the pending / finalizer health card,
+    the retry-category distribution, and the recent operational
+    events table.
+    """
+    attempts = attempt_stats or {}
+    total_attempts = int(attempts.get("total_attempts", 0) or 0)
+    success_attempts = int(attempts.get("success_attempts", 0) or 0)
+    retry_attempts = int(attempts.get("retry_attempts", 0) or 0)
+    failed_attempts = int(attempts.get("failed_attempts", 0) or 0)
+    retry_rate = float(attempts.get("retry_rate", 0.0) or 0.0)
+    avg_attempt_latency = float(attempts.get("avg_attempt_latency_ms", 0.0) or 0.0)
+    first_attempt_success_rate = (
+        success_attempts / total_attempts if total_attempts > 0 else 0.0
+    )
+    first_attempt_pct = _format_percent_unit(first_attempt_success_rate, digits=1)
+
+    summary_cards = f"""
+<section class="cards">
+  <div class="card">
+    <h3>Total attempts</h3>
+    <p class="metric">{_format_int(total_attempts)}</p>
+    <p class="sub">{period}</p>
+  </div>
+  <div class="card">
+    <h3>Success attempts</h3>
+    <p class="metric">{_format_int(success_attempts)}</p>
+    <p class="sub">first-attempt success rate {first_attempt_pct}</p>
+  </div>
+  <div class="card">
+    <h3>Retry attempts</h3>
+    <p class="metric">{_format_int(retry_attempts)}</p>
+    <p class="sub">retry rate {_format_percent_unit(retry_rate, digits=1)}</p>
+  </div>
+  <div class="card">
+    <h3>Failed attempts</h3>
+    <p class="metric">{_format_int(failed_attempts)}</p>
+    <p class="sub">avg attempt latency {avg_attempt_latency:.1f} ms</p>
+  </div>
+</section>
+"""
+
+    attempts_chart = _render_attempts_by_provider_chart(attempt_stats, period)
+    pending_table = _render_pending_health_table(pending_health)
+    operational_table = _render_operational_events_table(
+        recent_operational_events, operational_summary
+    )
+
+    body = f"""
+<h2>Reliability</h2>
+{_render_period_selector(period, current_theme)}
+
+{summary_cards}
+
+<section class="panel">
+  <h3>Attempts by provider (aggregated)</h3>
+  {attempts_chart}
+</section>
+
+{pending_table}
+
+<section class="panel">
+  <h3>Retry distribution</h3>
+  {_render_retry_distribution_table(retry_distribution)}
+</section>
+
+{operational_table}
+"""
+    return _render_layout(
+        title="Reliability",
+        body=body,
+        active_nav="reliability",
+        period=period,
+        theme_css=theme_css,
+        available_themes=available_themes,
+        current_theme=current_theme,
+        include_chart_js=True,
+    )
+
+
+def _render_attempts_by_provider_chart(
+    attempt_stats: dict[str, Any] | None,
+    period: str,
+) -> str:
+    """Render the bar chart of attempts by provider.
+
+    The attempt_stats dict doesn't carry per-provider model data
+    (only aggregate), so we render a single grouped bar showing the
+    aggregate success / retry / failed attempt counts. This still
+    answers "what fraction of attempts succeed vs retry vs fail?"
+    for the selected period.
+    """
+    del period
+    attempts = attempt_stats or {}
+    success = int(attempts.get("success_attempts", 0) or 0)
+    retry = int(attempts.get("retry_attempts", 0) or 0)
+    failed = int(attempts.get("failed_attempts", 0) or 0)
+    labels = json.dumps(["Success", "Retry", "Failed"])
+    datasets = json.dumps(
+        [
+            {
+                "label": "Attempts",
+                "data": [success, retry, failed],
+                "backgroundColor": [
+                    "rgba(75, 192, 120, 0.7)",
+                    "rgba(255, 159, 64, 0.7)",
+                    "rgba(255, 99, 132, 0.7)",
+                ],
+            }
+        ]
+    )
+    options = json.dumps(
+        {
+            "responsive": True,
+            "maintainAspectRatio": False,
+            "plugins": {"legend": {"display": False}},
+            "scales": {
+                "y": {"beginAtZero": True, "title": {"display": True, "text": "Count"}}
+            },
+        }
+    )
+    return _render_chart_canvas(
+        "reliability-attempts-by-provider",
+        "bar",
+        labels,
+        datasets,
+        options,
+    )
+
+
+def _render_pending_health_table(pending_health: dict[str, Any] | None) -> str:
+    """Render the pending / reservation health card."""
+    snapshot = pending_health or {}
+    pending_count = int(snapshot.get("pending_count", 0) or 0)
+    oldest_pending_age = format_age_seconds(snapshot.get("oldest_pending_age_seconds"))
+    stale_pending = int(snapshot.get("stale_pending_count", 0) or 0)
+    active_reservation_count = int(snapshot.get("active_reservation_count", 0) or 0)
+    active_reserved = format_microdollars(
+        snapshot.get("active_reserved_microdollars", 0)
+    )
+    oldest_reservation_age = format_age_seconds(
+        snapshot.get("oldest_reservation_age_seconds")
+    )
+    pending_warn = pending_count > 0 and stale_pending > 0
+    return f"""
+<section class="cards system-health">
+  <div class="card{" warning" if pending_warn else ""}">
+    <h3>Pending requests</h3>
+    <p class="metric">{pending_count:,}</p>
+    <p class="sub">oldest {oldest_pending_age} · stale {stale_pending}</p>
+  </div>
+  <div class="card">
+    <h3>Active reservations</h3>
+    <p class="metric">{active_reservation_count:,}</p>
+    <p class="sub">reserved {active_reserved} · oldest {oldest_reservation_age}</p>
+  </div>
+  <div class="card">
+    <h3>Pending window</h3>
+    <p class="sub">stale &gt; 15 minutes are flagged for cleanup</p>
+    <p class="sub">snapshot is instantaneous; reload to refresh</p>
+  </div>
+</section>
+"""
+
+
+def _render_retry_distribution_table(
+    distribution: list[dict[str, Any]],
+) -> str:
+    """Render the retry-category breakdown table."""
+    if not distribution:
+        return '<p class="empty">No attempt data for this period.</p>'
+    rows: list[str] = []
+    for row in distribution:
+        category = str(row.get("retry_category", "unclassified"))
+        attempt_count = int(row.get("attempt_count", 0) or 0)
+        retry_outcome_count = int(row.get("retry_outcome_count", 0) or 0)
+        success_count = int(row.get("success_count", 0) or 0)
+        failure_count = int(row.get("failure_count", 0) or 0)
+        avg_lat = float(row.get("avg_attempt_latency_ms", 0.0) or 0.0)
+        rows.append(
+            f"<tr>"
+            f"<td>{escape(_error_category_label(category))}</td>"
+            f"<td>{attempt_count:,}</td>"
+            f"<td>{retry_outcome_count:,}</td>"
+            f"<td>{success_count:,}</td>"
+            f"<td>{failure_count:,}</td>"
+            f"<td>{avg_lat:.1f} ms</td>"
+            f"</tr>"
+        )
+    return (
+        '<table class="data">'
+        "<thead><tr>"
+        "<th>Category</th>"
+        "<th>Attempts</th>"
+        "<th>Retry outcomes</th>"
+        "<th>Successes</th>"
+        "<th>Failures</th>"
+        "<th>Avg attempt latency</th>"
+        "</tr></thead><tbody>"
+        f"{''.join(rows)}"
+        "</tbody></table>"
+    )
+
+
+def _render_operational_events_table(
+    events: list[dict[str, Any]],
+    summary: list[dict[str, Any]],
+) -> str:
+    """Render the recent operational events table.
+
+    Combines a small per-event-type summary with the most recent raw
+    events. The ``details_json`` blob is escaped and shown verbatim so
+    operators can correlate ``crash_recovery`` and
+    ``reservation_reconcile`` payloads without leaving the page.
+    """
+    summary_rows: list[str] = []
+    for row in summary or []:
+        event_type = str(row.get("event_type", ""))
+        event_count = int(row.get("event_count", 0) or 0)
+        last_at = str(row.get("last_occurred_at", "") or "")
+        interrupted = int(row.get("total_interrupted_requests", 0) or 0)
+        released = int(row.get("total_released_reservations", 0) or 0)
+        summary_rows.append(
+            f"<tr>"
+            f"<td>{escape(event_type)}</td>"
+            f"<td>{event_count:,}</td>"
+            f"<td>{escape(last_at)}</td>"
+            f"<td>{interrupted:,}</td>"
+            f"<td>{released:,}</td>"
+            f"</tr>"
+        )
+    summary_table = (
+        '<table class="data compact">'
+        "<thead><tr>"
+        "<th>Event type</th>"
+        "<th>Count</th>"
+        "<th>Last seen</th>"
+        "<th>Interrupted</th>"
+        "<th>Released</th>"
+        "</tr></thead><tbody>"
+        f"{''.join(summary_rows)}"
+        "</tbody></table>"
+    )
+    if not summary_rows:
+        summary_table = '<p class="empty">No operational events in this window.</p>'
+
+    if not events:
+        recent_table = '<p class="empty">No recent operational events.</p>'
+    else:
+        recent_rows: list[str] = []
+        for row in events[:25]:
+            event_type = str(row.get("event_type", ""))
+            details_raw = row.get("details_json", "") or ""
+            if isinstance(details_raw, bytes):
+                details_text = details_raw.decode("utf-8", errors="replace")
+            else:
+                details_text = str(details_raw)
+            truncated_details = truncate(details_text, 200)
+            recent_rows.append(
+                f"<tr>"
+                f"<td>{escape(str(row.get('occurred_at', '')))}</td>"
+                f"<td>{escape(event_type)}</td>"
+                f"<td>{truncated_details}</td>"
+                f"</tr>"
+            )
+        recent_table = (
+            '<table class="data compact">'
+            "<thead><tr>"
+            "<th>When</th>"
+            "<th>Type</th>"
+            "<th>Details</th>"
+            "</tr></thead><tbody>"
+            f"{''.join(recent_rows)}"
+            "</tbody></table>"
+        )
+
+    return f"""
+<section class="panel">
+  <h3>Operational events (summary)</h3>
+  {summary_table}
+</section>
+
+<section class="panel">
+  <h3>Operational events (recent)</h3>
+  {recent_table}
+</section>
+"""
+
+
+def render_routing(
+    *,
+    period: str,
+    routing_distribution: list[dict[str, Any]],
+    routing_selection_breakdown: list[dict[str, Any]],
+    routing_exclusion_breakdown: list[dict[str, Any]],
+    theme_css: str = "",
+    available_themes: list[str] | None = None,
+    current_theme: str = "",
+) -> str:
+    """Render the Routing page.
+
+    Visualises how the router distributes requests across
+    (model, provider) combinations, which accounts get selected, and
+    why accounts are excluded. The exclusion table is grouped by the
+    suppressive/advisory taxonomy so operators can verify that local
+    scoring only influences priority while upstream failures control
+    exclusion.
+    """
+    total_decisions = sum(
+        int(row.get("decision_count", 0) or 0) for row in routing_distribution or []
+    )
+    avg_eligible = (
+        sum(
+            float(row.get("avg_eligible_count", 0.0) or 0.0)
+            for row in routing_distribution or []
+        )
+        / len(routing_distribution)
+        if routing_distribution
+        else 0.0
+    )
+    distinct_accounts = sum(
+        int(row.get("distinct_selected_accounts", 0) or 0)
+        for row in routing_distribution or []
+    )
+
+    summary_cards = f"""
+<section class="cards">
+  <div class="card">
+    <h3>Routing decisions</h3>
+    <p class="metric">{_format_int(total_decisions)}</p>
+    <p class="sub">in selected period</p>
+  </div>
+  <div class="card">
+    <h3>Avg eligible / decision</h3>
+    <p class="metric">{avg_eligible:.2f}</p>
+    <p class="sub">candidate accounts per decision</p>
+  </div>
+  <div class="card">
+    <h3>Distinct selected accounts</h3>
+    <p class="metric">{_format_int(distinct_accounts)}</p>
+    <p class="sub">across all (model, provider) groups</p>
+  </div>
+</section>
+"""
+
+    exclusion_chart = _render_exclusion_taxonomy_chart(routing_exclusion_breakdown)
+    distribution_table = _render_routing_distribution_table(routing_distribution)
+    selection_table = _render_selection_breakdown_table(routing_selection_breakdown)
+    exclusion_table = _render_exclusion_table(routing_exclusion_breakdown)
+
+    body = f"""
+<h2>Routing</h2>
+{_render_period_selector(period, current_theme)}
+
+{summary_cards}
+
+<section class="panel">
+  <h3>Exclusion taxonomy</h3>
+  {exclusion_chart}
+</section>
+
+<section class="panel">
+  <h3>Routing distribution</h3>
+  {distribution_table}
+</section>
+
+<section class="panel">
+  <h3>Account selection breakdown</h3>
+  {selection_table}
+</section>
+
+<section class="panel">
+  <h3>Account exclusions</h3>
+  {exclusion_table}
+</section>
+"""
+    return _render_layout(
+        title="Routing",
+        body=body,
+        active_nav="routing",
+        period=period,
+        theme_css=theme_css,
+        available_themes=available_themes,
+        current_theme=current_theme,
+        include_chart_js=True,
+    )
+
+
+def _render_exclusion_taxonomy_chart(
+    exclusion_breakdown: list[dict[str, Any]],
+) -> str:
+    """Render a doughnut chart of exclusion counts by category."""
+    category_totals: dict[str, int] = {
+        "suppressive": 0,
+        "advisory": 0,
+        "unknown": 0,
+    }
+    for row in exclusion_breakdown or []:
+        reason = str(row.get("reason", ""))
+        count = int(row.get("exclusion_count", 0) or 0)
+        category = _classify_exclusion(reason)
+        category_totals[category] = category_totals.get(category, 0) + count
+
+    labels = json.dumps(["Suppressive", "Advisory", "Unknown"])
+    datasets = json.dumps(
+        [
+            {
+                "label": "Exclusions",
+                "data": [
+                    category_totals["suppressive"],
+                    category_totals["advisory"],
+                    category_totals["unknown"],
+                ],
+                "backgroundColor": [
+                    "rgba(255, 99, 132, 0.7)",
+                    "rgba(255, 206, 86, 0.7)",
+                    "rgba(201, 203, 207, 0.7)",
+                ],
+            }
+        ]
+    )
+    options = json.dumps(
+        {
+            "responsive": True,
+            "maintainAspectRatio": False,
+            "plugins": {"legend": {"position": "right"}},
+        }
+    )
+    return _render_chart_canvas(
+        "routing-exclusion-taxonomy",
+        "doughnut",
+        labels,
+        datasets,
+        options,
+    )
+
+
+def _render_routing_distribution_table(
+    distribution: list[dict[str, Any]],
+) -> str:
+    """Render per-(model, provider) routing distribution."""
+    if not distribution:
+        return '<p class="empty">No routing decisions in this period.</p>'
+    rows: list[str] = []
+    for row in distribution:
+        model_id = escape(str(row.get("model_id", "")))
+        provider_id = escape(str(row.get("provider_id", "")))
+        decision_count = int(row.get("decision_count", 0) or 0)
+        avg_eligible = float(row.get("avg_eligible_count", 0.0) or 0.0)
+        avg_scored = float(row.get("avg_scored_count", 0.0) or 0.0)
+        avg_excluded = float(row.get("avg_attempted_excluded_count", 0.0) or 0.0)
+        avg_selected_score = float(row.get("avg_selected_score", 0.0) or 0.0)
+        distinct_accounts = int(row.get("distinct_selected_accounts", 0) or 0)
+        rows.append(
+            f"<tr>"
+            f"<td>{model_id}</td>"
+            f"<td>{provider_id}</td>"
+            f"<td>{decision_count:,}</td>"
+            f"<td>{avg_eligible:.2f}</td>"
+            f"<td>{avg_scored:.2f}</td>"
+            f"<td>{avg_excluded:.2f}</td>"
+            f"<td>{avg_selected_score:.3f}</td>"
+            f"<td>{distinct_accounts}</td>"
+            f"</tr>"
+        )
+    return (
+        '<table class="data">'
+        "<thead><tr>"
+        "<th>Model</th>"
+        "<th>Provider</th>"
+        "<th>Decisions</th>"
+        "<th>Avg eligible</th>"
+        "<th>Avg scored</th>"
+        "<th>Avg excluded</th>"
+        "<th>Avg score</th>"
+        "<th>Distinct accounts</th>"
+        "</tr></thead><tbody>"
+        f"{''.join(rows)}"
+        "</tbody></table>"
+    )
+
+
+def _render_selection_breakdown_table(
+    selection_breakdown: list[dict[str, Any]],
+) -> str:
+    """Render the account-level selection counts."""
+    if not selection_breakdown:
+        return '<p class="empty">No selection data in this period.</p>'
+    rows: list[str] = []
+    for row in selection_breakdown:
+        account_name = escape(str(row.get("account_name", "unknown")))
+        provider_id = escape(str(row.get("provider_id", "")))
+        selection_count = int(row.get("selection_count", 0) or 0)
+        avg_tier = float(row.get("avg_selected_tier", 0.0) or 0.0)
+        avg_score = float(row.get("avg_selected_score", 0.0) or 0.0)
+        avg_eligible = float(row.get("avg_eligible_count", 0.0) or 0.0)
+        rows.append(
+            f"<tr>"
+            f"<td>{account_name}</td>"
+            f"<td>{provider_id}</td>"
+            f"<td>{selection_count:,}</td>"
+            f"<td>{avg_tier:.2f}</td>"
+            f"<td>{avg_score:.3f}</td>"
+            f"<td>{avg_eligible:.2f}</td>"
+            f"</tr>"
+        )
+    return (
+        '<table class="data">'
+        "<thead><tr>"
+        "<th>Account</th>"
+        "<th>Provider</th>"
+        "<th>Selections</th>"
+        "<th>Avg tier</th>"
+        "<th>Avg score</th>"
+        "<th>Avg eligible</th>"
+        "</tr></thead><tbody>"
+        f"{''.join(rows)}"
+        "</tbody></table>"
+    )
+
+
+def _render_exclusion_table(exclusion_breakdown: list[dict[str, Any]]) -> str:
+    """Render the per-(account, reason) exclusion table grouped by category."""
+    if not exclusion_breakdown:
+        return '<p class="empty">No exclusion data in this period.</p>'
+    rows: list[str] = []
+    for row in exclusion_breakdown:
+        account_name = escape(str(row.get("account_name", "unknown")))
+        reason = escape(str(row.get("reason", "")))
+        count = int(row.get("exclusion_count", 0) or 0)
+        category = _classify_exclusion(str(row.get("reason", "")))
+        rows.append(
+            f"<tr>"
+            f'<td class="{sanitize_class_name(category)}">{escape(category)}</td>'
+            f"<td>{account_name}</td>"
+            f"<td>{reason}</td>"
+            f"<td>{count:,}</td>"
+            f"</tr>"
+        )
+    return (
+        '<table class="data">'
+        "<thead><tr>"
+        "<th>Category</th>"
+        "<th>Account</th>"
+        "<th>Reason</th>"
+        "<th>Count</th>"
+        "</tr></thead><tbody>"
+        f"{''.join(rows)}"
+        "</tbody></table>"
+    )
+
+
+def render_traces(
+    *,
+    period: str,
+    limit: int,
+    recent_requests: list[dict[str, Any]],
+    theme_css: str = "",
+    available_themes: list[str] | None = None,
+    current_theme: str = "",
+) -> str:
+    """Render the recent-request trace table.
+
+    The trace view is auth-gated and never exposes ``error_detail`` or
+    ``client_ip``.  It surfaces only what an operator needs to debug
+    upstream or routing behaviour without leaking prompt content.
+    """
+    limit_label = format_int(limit)
+    if not recent_requests:
+        rows_html = '<p class="empty">No recent requests.</p>'
+    else:
+        parts = [
+            '<table class="data">',
+            "<thead><tr>",
+            "<th>Time</th>",
+            "<th>Account</th>",
+            "<th>Provider</th>",
+            "<th>Model</th>",
+            "<th>Protocol</th>",
+            "<th>Status</th>",
+            "<th>Error class</th>",
+            "<th>In</th>",
+            "<th>Out</th>",
+            "<th>Latency</th>",
+            "<th>ID</th>",
+            "</tr></thead><tbody>",
+        ]
+        for row in recent_requests:
+            ts = escape(str(row.get("started_at", "")))
+            account = escape(str(row.get("account_name", "")))
+            provider = escape(str(row.get("provider_id", "")))
+            model = escape(str(row.get("model_id", "")))
+            protocol = escape(str(row.get("protocol", "")))
+            status = escape(str(row.get("status", "")))
+            status_code = row.get("status_code")
+            status_str = f"{status} ({status_code})" if status_code else status
+            error_class = escape(str(row.get("error_class") or "—"))
+            in_tok = format_tokens(row.get("input_tokens", 0))
+            out_tok = format_tokens(row.get("output_tokens", 0))
+            latency_ms = row.get("upstream_latency_ms")
+            latency_str = (
+                f"{float(latency_ms):.1f} ms"
+                if latency_ms is not None and float(latency_ms) > 0
+                else "—"
+            )
+            proxy_id = short_id(str(row.get("proxy_request_id", "") or ""))
+            parts.append(
+                f"<tr>"
+                f"<td>{ts}</td>"
+                f"<td>{account}</td>"
+                f"<td>{provider}</td>"
+                f"<td>{model}</td>"
+                f"<td>{protocol}</td>"
+                f"<td>{escape(status_str)}</td>"
+                f"<td>{error_class}</td>"
+                f"<td>{in_tok}</td>"
+                f"<td>{out_tok}</td>"
+                f"<td>{latency_str}</td>"
+                f"<td>{proxy_id}</td>"
+                f"</tr>"
+            )
+        parts.append("</tbody></table>")
+        rows_html = "".join(parts)
+
+    filter_form = f"""
+<form method="get" class="filter-form">
+  <label>Limit:
+    <input type="number" name="limit" value="{escape_attr(limit_label)}"
+           min="10" max="500">
+  </label>
+  <input type="hidden" name="period" value="{escape_attr(period)}">
+  <input type="hidden" name="theme" value="{escape_attr(current_theme)}">
+  <button type="submit">Apply</button>
+</form>
+"""
+
+    body = f"""
+<h2>Traces</h2>
+<p class="sub">
+  Auth-gated; does not include error_detail or client_ip;
+  for incident debugging only.
+</p>
+{filter_form}
+{_render_period_selector(period, current_theme)}
+<section class="panel">
+  {rows_html}
+</section>
+"""
+    return _render_layout(
+        title="Traces",
+        body=body,
+        active_nav="traces",
+        period=period,
+        theme_css=theme_css,
+        available_themes=available_themes,
+        current_theme=current_theme,
+    )
+
+
+def render_latency(
+    provider_ttft: list[dict[str, Any]],
+    model_ttft: list[dict[str, Any]],
+    period: str = "24h",
+    theme_css: str = "",
+    available_themes: list[str] | None = None,
+    current_theme: str = "",
+    *,
+    phases: dict[str, Any] | None = None,
+) -> str:
+    """Render the latency breakdown page.
+
+    When ``phases`` is provided, a phase-decomposition chart is
+    rendered alongside the per-provider / per-model TTFT tables, and
+    the per-model table gains a ``phases_ms`` column showing the
+    connect / read / coordinator overhead breakdown.
+    """
+    # Provider summary cards
+    provider_cards = ""
+    if provider_ttft:
+        cards: list[str] = []
+        for row in provider_ttft:
+            pid = escape(str(row.get("provider_id", "")))
+            avg = format_latency(row.get("avg_ttft_ms", 0.0))
+            p50 = format_latency(row.get("p50_ttft_ms", 0.0))
+            p99 = format_latency(row.get("p99_ttft_ms", 0.0))
+            count = int(row.get("request_count", 0))
+            cards.append(
+                f'<div class="card">'
+                f"<h3>{pid}</h3>"
+                f'<p class="metric">{avg}</p>'
+                f'<p class="sub">P50 {p50} · P99 {p99} · {count:,} reqs</p>'
+                f"</div>"
+            )
+        provider_cards = f'<section class="cards">{"".join(cards)}</section>'
+    else:
+        provider_cards = '<p class="empty">No TTFT data for this period.</p>'
+
+    phase_section = _render_latency_phases(phases)
+
+    # Per-provider/model breakdown table
+    if model_ttft:
+        model_parts = [
+            '<table class="data">',
+            "<thead><tr>",
+            "<th>Provider</th>",
+            "<th>Model</th>",
+            "<th>Requests</th>",
+            "<th>Avg TTFT</th>",
+            "<th>P50 TTFT</th>",
+            "<th>P99 TTFT</th>",
+        ]
+        if phases:
+            model_parts.append("<th>Phases ms (c/r/o)</th>")
+        model_parts.append("</tr></thead><tbody>")
+        for row in model_ttft:
+            pid = escape(str(row.get("provider_id", "")))
+            mid = escape(str(row.get("model_id", "")))
+            avg = format_latency(row.get("avg_ttft_ms", 0.0))
+            p50 = format_latency(row.get("p50_ttft_ms", 0.0))
+            p99 = format_latency(row.get("p99_ttft_ms", 0.0))
+            count = int(row.get("request_count", 0))
+            tr = (
+                f"<tr>"
+                f"<td>{pid}</td>"
+                f"<td>{mid}</td>"
+                f"<td>{count:,}</td>"
+                f"<td>{avg}</td>"
+                f"<td>{p50}</td>"
+                f"<td>{p99}</td>"
+            )
+            if phases:
+                tr += f"<td>{_format_phase_cell(row)}</td>"
+            tr += "</tr>"
+            model_parts.append(tr)
+        model_parts.append("</tbody></table>")
+        model_table = (
+            '<section class="panel">'
+            "<h3>Per-model breakdown</h3>"
+            f"{''.join(model_parts)}</section>"
+        )
+    else:
+        model_table = (
+            '<section class="panel">'
+            "<h3>Per-model breakdown</h3>"
+            '<p class="empty">No model data for this period.</p>'
+            "</section>"
+        )
+
+    body = f"""
+<h2>Latency</h2>
+{_render_period_selector(period, current_theme)}
+
+{provider_cards}
+
+{phase_section}
+
+{model_table}
+"""
+    include_chart_js = bool(phase_section)
+    return _render_layout(
+        title="Latency",
+        body=body,
+        active_nav="latency",
+        period=period,
+        theme_css=theme_css,
+        available_themes=available_themes,
+        current_theme=current_theme,
+        include_chart_js=include_chart_js,
+    )
+
+
+def _render_latency_phases(phases: dict[str, Any] | None) -> str:
+    """Render the latency phase decomposition chart."""
+    if not phases:
+        return ""
+    inner: dict[str, Any] = _as_dict(phases.get("phases")) if phases else {}
+    if not inner:
+        return ""
+    connect: dict[str, Any] = _as_dict(inner.get("upstream_connect_ms"))
+    read_phase: dict[str, Any] = _as_dict(inner.get("upstream_read_ms"))
+    overhead: dict[str, Any] = _as_dict(inner.get("coordinator_overhead_ms"))
+    sample_count = (
+        int(connect.get("sample_count", 0) or 0)
+        + int(read_phase.get("sample_count", 0) or 0)
+        + int(overhead.get("sample_count", 0) or 0)
+    )
+    if sample_count <= 0:
+        return ""
+
+    labels = json.dumps(["Connect", "Read", "Coordinator overhead"])
+    datasets = json.dumps(
+        [
+            {
+                "label": "avg",
+                "data": [
+                    float(connect.get("avg_ms", 0.0) or 0.0),
+                    float(read_phase.get("avg_ms", 0.0) or 0.0),
+                    float(overhead.get("avg_ms", 0.0) or 0.0),
+                ],
+                "backgroundColor": "rgba(75, 192, 192, 0.7)",
+            },
+            {
+                "label": "p50",
+                "data": [
+                    float(connect.get("p50_ms", 0.0) or 0.0),
+                    float(read_phase.get("p50_ms", 0.0) or 0.0),
+                    float(overhead.get("p50_ms", 0.0) or 0.0),
+                ],
+                "backgroundColor": "rgba(54, 162, 235, 0.7)",
+            },
+            {
+                "label": "p99",
+                "data": [
+                    float(connect.get("p99_ms", 0.0) or 0.0),
+                    float(read_phase.get("p99_ms", 0.0) or 0.0),
+                    float(overhead.get("p99_ms", 0.0) or 0.0),
+                ],
+                "backgroundColor": "rgba(255, 99, 132, 0.7)",
+            },
+        ]
+    )
+    options = json.dumps(
+        {
+            "responsive": True,
+            "maintainAspectRatio": False,
+            "scales": {
+                "y": {"beginAtZero": True, "title": {"display": True, "text": "ms"}}
+            },
+        }
+    )
+    chart = _render_chart_canvas(
+        "latency-phases",
+        "bar",
+        labels,
+        datasets,
+        options,
+    )
+    return f"""
+<section class="panel">
+  <h3>Latency phases</h3>
+  <p class="sub">
+    connect = DNS/TCP/TLS/send; read = TTFB minus connect;
+    coordinator overhead = eggpool-side routing/retry/encode.
+  </p>
+  {chart}
+</section>
+"""
+
+
+def _format_phase_cell(row: dict[str, Any]) -> str:
+    """Format a model_ttft row's phases into a compact c/r/o string.
+
+    Per-model phase data is not currently aggregated in
+    ``fetch_provider_model_ttft``, so this helper reports dashes when
+    the row lacks ``phase_connect_ms`` etc. The ``connect/read/overhead``
+    column header makes the order obvious.
+    """
+    connect = row.get("phase_connect_ms")
+    read_phase = row.get("phase_read_ms")
+    overhead = row.get("phase_overhead_ms")
+    if connect is None and read_phase is None and overhead is None:
+        return "—"
+
+    def _v(value: Any) -> str:
+        if value is None:
+            return "—"
+        try:
+            return f"{float(value):.0f}"
+        except (TypeError, ValueError):
+            return str(value)
+
+    return f"{_v(connect)}/{_v(read_phase)}/{_v(overhead)}"
+
+
 __all__ = [
     "render_accounts",
     "render_bandwidth",
@@ -1640,5 +2773,8 @@ __all__ = [
     "render_models",
     "render_overview",
     "render_pings",
+    "render_reliability",
+    "render_routing",
     "render_timeseries",
+    "render_traces",
 ]

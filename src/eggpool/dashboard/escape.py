@@ -99,6 +99,124 @@ def format_timestamp(value: Any) -> str:
     return str(value)
 
 
+def format_duration_ms(value: float | int | None) -> str:
+    """Format a millisecond duration as a human-readable short string.
+
+    Buckets: ``<1s`` shows ms, ``<60s`` shows seconds with one decimal,
+    ``<1h`` shows ``MmSs``, ``<1d`` shows ``HhMm``, otherwise days.
+    Returns ``"—"`` for ``None`` or negative values.
+    """
+    if value is None:
+        return "—"
+    ms = float(value)
+    if ms < 0:
+        return "—"
+    if ms < 1000:
+        return f"{ms:.0f} ms"
+    seconds = ms / 1000.0
+    if seconds < 60:
+        return f"{seconds:.1f} s"
+    minutes, sec = divmod(int(seconds), 60)
+    if minutes < 60:
+        return f"{minutes}m{sec}s"
+    hours, mins = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours}h{mins}m"
+    days, hrs = divmod(hours, 24)
+    return f"{days}d{hrs}h"
+
+
+def format_age_seconds(value: float | int | None) -> str:
+    """Format an age in seconds as a human-readable string.
+
+    Returns ``"—"`` for ``None`` or negative values.  Suitable for
+    "oldest pending age" cards where operators want a quick sense of
+    scale.
+    """
+    if value is None:
+        return "—"
+    seconds = float(value)
+    if seconds < 0:
+        return "—"
+    if seconds < 1:
+        return "<1s"
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    minutes, sec = divmod(int(seconds), 60)
+    if minutes < 60:
+        return f"{minutes}m{sec}s"
+    hours, mins = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours}h{mins}m"
+    days, hrs = divmod(hours, 24)
+    return f"{days}d{hrs}h"
+
+
+def format_percent100(value: float | int | None, digits: int = 1) -> str:
+    """Format a percentage value that is already in 0–100 scale.
+
+    Many stats endpoints expose cost-fractions and ratios as percentages
+    directly (0..100) rather than fractions (0..1).  This helper handles
+    the percent convention; use :func:`format_percent` for fractions.
+    """
+    if value is None:
+        value = 0.0
+    return f"{float(value):.{digits}f}%"
+
+
+def format_percent01(value: float | int | None, digits: int = 2) -> str:
+    """Alias for :func:`format_percent` for explicit ratio convention.
+
+    Provided so call sites can document which convention they expect
+    from upstream (ratio vs percent) without ambiguity.
+    """
+    return format_percent(value, digits)  # type: ignore[arg-type]
+
+
+def format_int(value: int | None) -> str:
+    """Format an integer with thousands separators.
+
+    Returns ``"—"`` for ``None`` so empty groups don't render as ``0``
+    and confuse the operator.  Zero still renders as ``"0"`` because it
+    is a real value.
+    """
+    if value is None:
+        return "—"
+    return f"{int(value):,}"
+
+
+def format_count_or_dash(value: int | float | None) -> str:
+    """Format a numeric count, rendering ``—`` for ``None``.
+
+    Distinct from :func:`format_int` in that it accepts floats so it
+    can be used for aggregated counts that may come back as floats
+    (e.g., counts averaged across providers).
+    """
+    if value is None:
+        return "—"
+    if isinstance(value, float) and not value.is_integer():
+        return f"{value:.2f}"
+    return f"{int(value):,}"
+
+
+def short_id(value: str | None, length: int = 8) -> str:
+    """Return a short prefix of an identifier for compact table display.
+
+    Long hex/UUID prefixes are common in proxy_request_id and
+    upstream_request_id.  Showing only the leading ``length`` chars
+    keeps tables compact while still letting operators correlate
+    against log lines.
+
+    Returns ``"—"`` for ``None`` or empty input.
+    """
+    if not value:
+        return "—"
+    text = str(value)
+    if len(text) <= length:
+        return text
+    return text[:length]
+
+
 def truncate(value: Any, max_length: int = 80) -> str:
     """Truncate a string to a maximum length, escaping the result."""
     escaped = escape(value)

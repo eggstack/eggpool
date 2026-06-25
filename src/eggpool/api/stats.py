@@ -15,7 +15,9 @@ Endpoints:
 - GET /api/stats/routing-selections
 - GET /api/stats/routing-exclusions
 - GET /api/stats/operational
+- GET /api/stats/pending-health
 - GET /api/stats/recent/{request_id}  (always auth-gated)
+- GET /api/stats/recent-requests  (always auth-gated)
 - GET /api/events
 """
 
@@ -338,6 +340,19 @@ async def handle_operational_health(
     )
 
 
+async def handle_pending_health(request: Request) -> Response:
+    """GET /api/stats/pending-health.
+
+    Instantaneous snapshot of pending requests and active reservations.
+    Used by the dashboard System Health cards and the Reliability page
+    to surface leak-style failures (pending requests surviving past
+    their reservation TTL, orphaned active reservations).
+    """
+    stats = request.app.state.stats
+    snapshot = await stats.get_pending_health_snapshot()
+    return JSONResponse(content=snapshot)
+
+
 async def handle_recent_requests(
     request: Request,
     limit: int = 50,
@@ -499,6 +514,12 @@ def register_stats_routes(app: Any, require_auth: bool = False) -> None:
         methods=["GET"],
         dependencies=dependencies,
     )
+    app.add_api_route(
+        path="/api/stats/pending-health",
+        endpoint=handle_pending_health,
+        methods=["GET"],
+        dependencies=dependencies,
+    )
 
     # Per-request trace endpoint.  Per-request traces expose the
     # selected model, prompt volume, and error detail that operators
@@ -533,6 +554,7 @@ __all__ = [
     "handle_latency",
     "handle_model_stats",
     "handle_operational_health",
+    "handle_pending_health",
     "handle_pings",
     "handle_recent_requests",
     "handle_request_trace",

@@ -139,6 +139,70 @@ async def test_overview_loads_chart_js_with_defer(
 
 
 @pytest.mark.asyncio()
+async def test_reliability_route_loads(migrated_app: FastAPI) -> None:
+    """The Reliability page returns 200 and pulls in Chart.js."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    response = client.get("/reliability")
+    assert response.status_code == 200
+    assert '<script defer src="/static/chart.js"></script>' in response.text
+    assert "reliability-attempts-by-provider" in response.text
+
+
+@pytest.mark.asyncio()
+async def test_routing_route_loads(migrated_app: FastAPI) -> None:
+    """The Routing page returns 200 and pulls in Chart.js."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    response = client.get("/routing")
+    assert response.status_code == 200
+    assert '<script defer src="/static/chart.js"></script>' in response.text
+    assert "routing-exclusion-taxonomy" in response.text
+
+
+@pytest.mark.asyncio()
+async def test_traces_route_loads(migrated_app: FastAPI) -> None:
+    """The Traces page returns 200 and does not pull in Chart.js."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    response = client.get("/traces")
+    assert response.status_code == 200
+    assert "/static/chart.js" not in response.text
+    assert "Auth-gated" in response.text
+
+
+@pytest.mark.asyncio()
+async def test_pending_health_endpoint(migrated_app: FastAPI) -> None:
+    """``/api/stats/pending-health`` returns the expected JSON shape."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    response = client.get("/api/stats/pending-health")
+    assert response.status_code == 200
+    payload = response.json()
+    for key in (
+        "pending_count",
+        "oldest_pending_age_seconds",
+        "stale_pending_count",
+        "active_reservation_count",
+        "active_reserved_microdollars",
+        "oldest_reservation_age_seconds",
+        "as_of",
+    ):
+        assert key in payload, key
+
+
+def test_dashboard_js_is_long_cached(client: TestClient) -> None:
+    """``/static/dashboard.js`` advertises a long cache lifetime."""
+    response = client.get("/static/dashboard.js")
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "public, max-age=86400"
+
+
+@pytest.mark.asyncio()
 async def test_non_overview_pages_skip_chart_js(
     migrated_app: FastAPI,
 ) -> None:

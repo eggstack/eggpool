@@ -141,6 +141,17 @@ API keys must be raw tokens; EggPool prepends the configured auth scheme automat
 
 ## Dashboard
 
+### Page Architecture
+
+- Server-rendered HTML pages in `src/eggpool/dashboard/render.py`, all using the existing `_render_layout(title, body, active_nav, period, refresh_interval_s, theme_css, available_themes, current_theme, auto_refresh, include_chart_js)` wrapper — no Jinja, no template engine
+- Routes registered through `register_dashboard_routes(app, require_auth=...)` in `src/eggpool/dashboard/routes.py`; the `require_auth` flag is computed from `config.dashboard.public` once at startup and shared across every dashboard page
+- Backend handlers fan out independent `StatsService` calls through `asyncio.gather` so page loads are bounded by the slowest query, not the sum of sequential round trips (the shared connection lock serializes per-query execution regardless)
+- Frontend helpers live in `src/eggpool/dashboard/static/dashboard.js` under the `window.EggPoolDashboard` namespace (`fetchStats`, `formatDurationMs`, `formatAgeSeconds`, `formatPercent`, `formatCount`) — small, opt-in, no framework
+- Chart.js v4 (MIT, bundled) is served at `/static/chart.js` with `Cache-Control: public, max-age=86400`; pages opt in via `include_chart_js=True` in `_render_layout`
+- Static assets (CSS, JS, favicon) are served via `app.py` handlers with appropriate `Cache-Control` headers
+- Every free-text field on every page goes through `escape()` or `escape_attr()` from `src/eggpool/dashboard/escape.py`; never interpolate raw upstream or model data
+- Format helpers in `escape.py` (`format_duration_ms`, `format_age_seconds`, `format_percent100`, `format_percent01`, `format_int`, `format_count_or_dash`, `short_id`) are shared by every renderer; do not redefine per-page
+
 ### Tooltip System
 
 - Pure CSS only — declared at the bottom of `src/eggpool/dashboard/static/dashboard.css`. No JavaScript listeners, no per-site CSS, no new dependencies

@@ -115,10 +115,31 @@ Four migrations extend the request lifecycle with structured observability. Ever
 | `GET /api/stats/routing-selections` | Account-level selection counts | dashboard default |
 | `GET /api/stats/routing-exclusions` | Per-`(account, reason)` exclusion counts from `exclude_reasons_json` | dashboard default |
 | `GET /api/stats/operational` | `crash_recovery` / `stale_request_finalizer` / `reservation_reconcile` summary + recent | dashboard default |
+| `GET /api/stats/pending-health` | Instantaneous snapshot: pending count, oldest pending age, stale pending (>15m), active reservations, reserved microdollars, oldest reservation age | **always auth-gated** |
 | `GET /api/stats/latency` (extended) | Adds `phases` key: connect/read/coordinator-overhead breakdown | dashboard default |
 | `GET /api/stats/recent/{request_id}` | Parent request + full attempt chain + routing decisions. Returns account name, model, protocol, status, error class (never raw `error_detail`). | **always auth-gated** |
 | `GET /api/stats/recent-requests` | Bounded recent-requests metadata list (no body, no auth headers, no error_detail, no client_ip by default). | **always auth-gated** |
 | `GET /api/stats/accounts` / `/api/stats/models` (extended) | Adds `exact_count/derived_count/estimated_count/unknown_count`, `estimated_cost_fraction`, `cache_read_ratio`, `cache_write_ratio`, `reasoning_output_ratio`, `avg_cost_per_request`, `avg_cost_per_1k_tokens` | dashboard default |
+
+## Dashboard Pages
+
+Server-rendered HTML pages in `src/eggpool/dashboard/render.py`, all inheriting the dashboard's public/auth setting via the `require_auth` flag wired through `register_dashboard_routes`. Frontend helpers live in `src/eggpool/dashboard/static/dashboard.js` under `window.EggPoolDashboard` (`fetchStats`, `formatDurationMs`, `formatAgeSeconds`, `formatPercent`, `formatCount`).
+
+| Page | Route | Purpose | Chart.js |
+|---|---|---|---|
+| Overview | `/` | At-a-glance counters, bandwidth heatmap, request timeseries, System Health row (pending requests + reservations) | yes |
+| Reliability | `/reliability` | Attempt success/retry breakdown by `(provider, model)`, `retry_category` distribution, pending-health snapshot, operational events | yes |
+| Routing | `/routing` | Per-`(model, provider)` decision aggregates, account selection counts, exclusion taxonomy (suppressive vs advisory) | yes |
+| Traces | `/traces` | Recent request metadata (no `error_detail`, no `client_ip`). Auth-gated via shared `require_auth` flag | no |
+| Accounts | `/accounts` | Per-account stats with exactness, cache/reasoning ratios, cost-per-1k-tokens | no |
+| Models | `/models` | Per-model stats with the same exactness columns | no |
+| Latency | `/latency` | TTFT breakdown + connect/read/coordinator-overhead phases | yes |
+| Pings | `/pings` | Provider health/ping stats | no |
+| Events | `/events` | Recent events | no |
+| Timeseries | `/timeseries` | Time-bucketed request counts | yes |
+| Bandwidth | `/bandwidth` | GitHub-style heatmap of daily bytes | no |
+
+The Overview page is the only page that auto-refreshes in place (every `[dashboard].refresh_interval_s`). All other pages are static unless the user navigates or hits refresh. Charts use the bundled Chart.js v4 served at `/static/chart.js` with `Cache-Control: public, max-age=86400`. New pages opt into Chart.js via `include_chart_js=True` in `_render_layout`.
 - **Fast-path CLI imports**: fast-path commands (`croncheck`, `ensure-running`) import only `eggpool.runtime_paths` from the package; do not add transitive imports to `runtime_paths` or `fastcli` or you break the Raspberry Pi watchdog performance contract
 - **Config-path resolution**: `--config PATH` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`. The resolver lives in `eggpool.deploy_user.resolve_config_path()` and is the single source of truth for every CLI command.
 - **`eggpool deploy cron` is now the WATCHDOG** (not backup). It installs `eggpool ensure-running` entries (`@reboot` + `*/5 * * * *` by default) bracketed by `# BEGIN EggPool watchdog` / `# END EggPool watchdog` markers so uninstall only strips the eggpool-owned lines. Backups live under `eggpool deploy backup-cron`.

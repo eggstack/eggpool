@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import Request  # noqa: TCH002 — FastAPI needs runtime access
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -23,13 +23,30 @@ from eggpool.dashboard.render import (
     render_models,
     render_overview,
     render_pings,
+    render_reliability,
+    render_routing,
     render_timeseries,
+    render_traces,
 )
 from eggpool.errors import ConfigError
 from eggpool.stats import TimeRange, resolve_time_range
 
 if TYPE_CHECKING:
-    from fastapi.responses import Response
+    from fastapi.responses import Response  # noqa: TCH004
+
+_ReliabilityPayload = tuple[
+    dict[str, Any],
+    list[dict[str, Any]],
+    dict[str, Any],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]
+_RoutingPayload = tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]
 
 
 DEFAULT_REFRESH_S = 15
@@ -106,6 +123,9 @@ async def handle_overview(
         ping_summary,
         ip_stats,
         timeseries,
+        attempt_stats,
+        operational_summary,
+        pending_health,
     ) = await asyncio.gather(
         stats.get_account_stats(time_range, use_cache=True),
         stats.get_model_stats(time_range, use_cache=True),
@@ -114,6 +134,9 @@ async def handle_overview(
         stats.get_ping_summary(time_range, use_cache=True),
         stats.get_ip_stats(time_range, use_cache=True),
         stats.get_timeseries(time_range, bucket="hour"),
+        stats.get_attempt_stats(time_range),
+        stats.get_operational_event_summary(time_range),
+        stats.get_pending_health_snapshot(),
     )
 
     # ``get_dashboard_overview`` is derived from ``accounts`` and the
@@ -141,6 +164,9 @@ async def handle_overview(
         current_theme=current_theme,
         ip_stats=ip_stats,
         timeseries=timeseries or [],
+        pending_health=pending_health,
+        attempt_stats=attempt_stats,
+        operational_summary=operational_summary,
     )
     return HTMLResponse(content=html)
 
@@ -198,14 +224,124 @@ async def handle_latency(
     _get_dashboard_config(request)
     time_range = resolve_time_range(period)
     stats = request.app.state.stats
-    provider_ttft = await stats.get_provider_ttft_summary(time_range)
-    model_ttft = await stats.get_provider_model_ttft(time_range)
+    provider_ttft, model_ttft, phases = cast(
+        "tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any] | None]",
+        await asyncio.gather(
+            stats.get_provider_ttft_summary(time_range),
+            stats.get_provider_model_ttft(time_range),
+            stats.get_latency_phase_breakdown(time_range),
+        ),
+    )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
     return HTMLResponse(
         content=render_latency(
             provider_ttft,
             model_ttft,
             period=time_range.label,
+            theme_css=theme_css,
+            available_themes=available,
+            current_theme=current_theme,
+            phases=phases,
+        )
+    )
+
+
+async def handle_reliability(
+    request: Request, period: str | None = "24h", theme: str | None = None
+) -> Response:
+    """Render the Reliability page."""
+    _get_dashboard_config(request)
+    time_range = resolve_time_range(period)
+    stats = request.app.state.stats
+    (
+        attempt_stats,
+        retry_distribution,
+        pending_health,
+        operational_summary,
+        recent_operational_events,
+        timeseries,
+    ) = cast(
+        _ReliabilityPayload,  # noqa: TC006 — pyright needs the TypeAlias to propagate through gather()
+        await asyncio.gather(
+            stats.get_attempt_stats(time_range),
+            stats.get_retry_distribution(time_range),
+            stats.get_pending_health_snapshot(),
+            stats.get_operational_event_summary(time_range),
+            stats.get_recent_operational_events(limit=25),
+            stats.get_timeseries(time_range, bucket="hour"),
+        ),
+    )
+    theme_css, _, current_theme, available = _get_theme_data(request, theme)
+    return HTMLResponse(
+        content=render_reliability(
+            period=time_range.label,
+            attempt_stats=attempt_stats,
+            retry_distribution=retry_distribution or [],
+            pending_health=pending_health,
+            operational_summary=operational_summary or [],
+            recent_operational_events=recent_operational_events or [],
+            timeseries=timeseries or [],
+            theme_css=theme_css,
+            available_themes=available,
+            current_theme=current_theme,
+        )
+    )
+
+
+async def handle_routing(
+    request: Request, period: str | None = "24h", theme: str | None = None
+) -> Response:
+    """Render the Routing page."""
+    _get_dashboard_config(request)
+    time_range = resolve_time_range(period)
+    stats = request.app.state.stats
+    (
+        routing_distribution,
+        routing_selection_breakdown,
+        routing_exclusion_breakdown,
+    ) = cast(
+        _RoutingPayload,  # noqa: TC006 — pyright needs the TypeAlias to propagate through gather()
+        await asyncio.gather(
+            stats.get_routing_distribution(time_range),
+            stats.get_routing_selection_breakdown(time_range),
+            stats.get_routing_exclusion_breakdown(time_range),
+        ),
+    )
+    theme_css, _, current_theme, available = _get_theme_data(request, theme)
+    return HTMLResponse(
+        content=render_routing(
+            period=time_range.label,
+            routing_distribution=routing_distribution or [],
+            routing_selection_breakdown=routing_selection_breakdown or [],
+            routing_exclusion_breakdown=routing_exclusion_breakdown or [],
+            theme_css=theme_css,
+            available_themes=available,
+            current_theme=current_theme,
+        )
+    )
+
+
+async def handle_traces(
+    request: Request,
+    period: str | None = "24h",
+    limit: int = 50,
+    theme: str | None = None,
+) -> Response:
+    """Render the recent-request trace page.
+
+    Auth-gated, bounded at ``limit`` (10..500, default 50).  Returns
+    request metadata only — never ``error_detail`` or ``client_ip``.
+    """
+    _get_dashboard_config(request)
+    bounded_limit = max(10, min(int(limit), 500))
+    stats = request.app.state.stats
+    recent_requests = await stats.get_recent_requests(limit=bounded_limit)
+    theme_css, _, current_theme, available = _get_theme_data(request, theme)
+    return HTMLResponse(
+        content=render_traces(
+            period="recent",
+            limit=bounded_limit,
+            recent_requests=recent_requests or [],
             theme_css=theme_css,
             available_themes=available,
             current_theme=current_theme,
@@ -423,6 +559,27 @@ def register_dashboard_routes(app: Any, require_auth: bool = False) -> None:
         dependencies=dependencies,
     )
     app.add_api_route(
+        path="/reliability",
+        endpoint=handle_reliability,
+        methods=["GET"],
+        response_class=HTMLResponse,
+        dependencies=dependencies,
+    )
+    app.add_api_route(
+        path="/routing",
+        endpoint=handle_routing,
+        methods=["GET"],
+        response_class=HTMLResponse,
+        dependencies=dependencies,
+    )
+    app.add_api_route(
+        path="/traces",
+        endpoint=handle_traces,
+        methods=["GET"],
+        response_class=HTMLResponse,
+        dependencies=dependencies,
+    )
+    app.add_api_route(
         path="/api/timeseries",
         endpoint=handle_timeseries_json,
         methods=["GET"],
@@ -439,7 +596,10 @@ __all__ = [
     "handle_models",
     "handle_overview",
     "handle_pings",
+    "handle_reliability",
+    "handle_routing",
     "handle_timeseries",
     "handle_timeseries_json",
+    "handle_traces",
     "register_dashboard_routes",
 ]

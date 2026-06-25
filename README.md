@@ -243,9 +243,12 @@ to the bundled `Cyber Red` theme and refreshes visible data in place using the
 configured `[dashboard].refresh_interval_s`.
 
 The dashboard includes:
-- Overview with request counts, error rates, costs, and token usage
-- Account and model breakdowns with filtering
-- Latency metrics including time-to-first-token (TTFT)
+- Overview with request counts, error rates, costs, token usage, and a System Health row surfacing pending-request and reservation leaks
+- Reliability page (`/reliability`) with attempt success/retry breakdown, `retry_category` distribution, pending health, and operational events
+- Routing page (`/routing`) with per-`(model, provider)` decision aggregates, account selection counts, and exclusion taxonomy (suppressive vs advisory)
+- Traces page (`/traces`) with auth-gated recent request metadata (no error_detail, no client_ip)
+- Account and model breakdowns with filtering, exactness columns, cache/reasoning ratios, and cost-per-1k-tokens
+- Latency metrics including time-to-first-token (TTFT) and connect/read/coordinator-overhead phase breakdown
 - Provider health monitoring with ping statistics
 - Bandwidth heatmap (GitHub-style contribution graph)
 - Timeseries charts with auto-refresh
@@ -268,10 +271,11 @@ appropriate cache headers.
 JSON stats endpoints are available under `/api/stats/*`, including summary,
 accounts, models, timeseries, errors, latency, pings, bandwidth, attempts,
 retries, routing, routing-selections, routing-exclusions, operational,
-recent-requests, recent/{request_id}, and `/api/events`. The
-recent-requests and recent/{request_id} endpoints are always auth-gated
-(even when the dashboard is public) because they expose per-request
-metadata (model, prompt volume, error class). All other stats endpoints
+pending-health, recent-requests, recent/{request_id}, and `/api/events`. The
+recent-requests, recent/{request_id}, and pending-health endpoints are always
+auth-gated (even when the dashboard is public) because they expose
+per-request metadata (model, prompt volume, error class) or operational
+state (pending reservations, reserved cost). All other stats endpoints
 inherit the dashboard's public/auth setting.
 
 ### Observability surfaces
@@ -294,6 +298,11 @@ inherit the dashboard's public/auth setting.
   for the `crash_recovery`, `stale_request_finalizer`, and
   `reservation_reconcile` safety-net events. If you see "Crash recovery:
   marked N stale requests" in logs, this endpoint reflects what was caught.
+- **Pending health** (`/api/stats/pending-health`): instantaneous snapshot of
+  pending request count, oldest pending age, stale-pending count (>15 min),
+  active reservations, total reserved microdollars, and oldest reservation
+  age. Powers the Overview System Health row and the Reliability page.
+  Auth-gated.
 - **Per-request trace** (`/api/stats/recent/{request_id}`): parent request row,
   full attempt chain, and per-attempt routing decisions. Returns account name,
   model, protocol, status, error class (never raw error_detail), and timing.
