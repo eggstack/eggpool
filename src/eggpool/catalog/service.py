@@ -148,6 +148,12 @@ class CatalogService:
         self._protocol_resolver = ModelProtocolResolver(config)
         self._limit_resolver = ModelLimitResolver(config)
         self._price_change_callback: Callable[[str, str | None], None] | None = None
+        # Track model_ids that have already produced an unresolved-protocol
+        # warning during persistence. A persistent unresolved model would
+        # otherwise spam the log every refresh cycle; the warning is the
+        # signal that an upstream name needs a TOML override or family
+        # mapping, not a per-cycle event.
+        self._warned_unresolved_models: set[str] = set()
 
     def set_price_change_callback(
         self, callback: Callable[[str, str | None], None]
@@ -229,6 +235,13 @@ class CatalogService:
 
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Drop models no longer referenced by any account or provider
+            # so the in-memory cache converges with the live catalog and
+            # downstream persistence no longer needs to skip them.
+            pruned = self._cache.prune_unused()
+            if pruned:
+                logger.info("Pruned %d stale model(s) from catalog cache", pruned)
 
             # Persist the updated catalog
             await self._persist_catalog()
@@ -544,10 +557,17 @@ class CatalogService:
         for model_id, model_info in self._cache.get_all_models().items():
             protocol = model_info.get("protocol")
             if protocol not in SUPPORTED_PROTOCOLS:
-                logger.warning(
-                    "Skipping unresolved model during catalog persistence: %s",
-                    model_id,
-                )
+                if model_id in self._warned_unresolved_models:
+                    logger.debug(
+                        "Skipping unresolved model during catalog persistence: %s",
+                        model_id,
+                    )
+                else:
+                    logger.warning(
+                        "Skipping unresolved model during catalog persistence: %s",
+                        model_id,
+                    )
+                    self._warned_unresolved_models.add(model_id)
                 continue
 
             protocol_source = model_info.get("protocol_source")

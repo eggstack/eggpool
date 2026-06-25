@@ -39,6 +39,12 @@ class ModelCatalogCache:
         self._last_refresh: float = 0.0
         # Per-account last successful refresh timestamp
         self._account_last_refresh: dict[str, float] = {}
+        # Per-account set of (model_id, provider_id) keys the account
+        # currently advertises.  Used by ``update_from_account`` to
+        # drop stale ``_provider_models`` rows when an upstream removes
+        # a model from a single account, so the in-memory cache can
+        # converge with the live catalog.
+        self._account_provider_keys: dict[str, set[tuple[str, str]]] = {}
 
     def update_from_account(
         self,
@@ -54,6 +60,27 @@ class ModelCatalogCache:
         # exposed or routed for this account while other accounts'
         # support remains intact.
         self.mark_account_models_unavailable(account_name)
+
+        # Drop any per-provider rows this account used to advertise
+        # but the new response no longer includes.  A row survives when
+        # at least one other account on the same provider still
+        # publishes it; otherwise it is removed so the in-memory cache
+        # converges with the live catalog.
+        new_keys: set[tuple[str, str]] = set()
+        for model in models:
+            new_keys.add((model["model_id"], provider_id))
+        prior_keys = self._account_provider_keys.get(account_name, set())
+        if prior_keys - new_keys:
+            surviving: set[tuple[str, str]] = set()
+            for other_acct, other_keys in self._account_provider_keys.items():
+                if other_acct == account_name:
+                    continue
+                surviving |= other_keys
+            for stale_key in prior_keys - new_keys:
+                if stale_key not in surviving:
+                    self._provider_models.pop(stale_key, None)
+        self._account_provider_keys[account_name] = new_keys
+
         for model in models:
             model_id = model["model_id"]
             provider_key = (model_id, provider_id)
@@ -634,3 +661,29 @@ class ModelCatalogCache:
     ) -> None:
         """Set a per-provider model entry."""
         self._provider_models[(model_id, provider_id)] = model_info
+
+    def prune_unused(self) -> int:
+        """Drop cache entries no longer referenced by any account or provider.
+
+        A model is removed from ``_models`` only when both:
+
+        * its ``_account_support`` set is empty (no live account can route
+          the model), and
+        * no ``_provider_models`` row exists for any provider.
+
+        Returns the number of models removed. The returned count is
+        intended for log diagnostics; tests assert on it to prove that
+        withdraw-from-every-account actually clears the in-memory state.
+        """
+        referenced: set[str] = set()
+        for model_id in self._account_support:
+            if self._account_support[model_id]:
+                referenced.add(model_id)
+        for model_id, _provider_id in self._provider_models:
+            referenced.add(model_id)
+
+        stale = [model_id for model_id in self._models if model_id not in referenced]
+        for model_id in stale:
+            del self._models[model_id]
+            self._account_support.pop(model_id, None)
+        return len(stale)

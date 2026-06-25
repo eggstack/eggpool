@@ -819,3 +819,83 @@ def test_suffixed_exposure_does_not_emit_providers_list() -> None:
     assert len(result) == 2
     for entry in result:
         assert "providers" not in entry
+
+
+# ---------------------------------------------------------------------------
+# Cache prune tests
+# ---------------------------------------------------------------------------
+
+
+def test_prune_unused_drops_orphan_models() -> None:
+    """A model supported by no account and no provider must be removed."""
+    cache = ModelCatalogCache()
+    cache.update_from_account(
+        "acct1",
+        "provider-a",
+        [
+            {"model_id": "gpt-4", "protocol": "openai"},
+            {"model_id": "withdrawn", "protocol": "openai"},
+        ],
+    )
+    # Simulate the model being withdrawn upstream: re-refresh with empty list
+    cache.update_from_account("acct1", "provider-a", [])
+
+    pruned = cache.prune_unused()
+
+    # Both models lose their only account and their only provider row,
+    # so both must be pruned.
+    assert pruned == 2
+    assert cache.get_model("withdrawn") is None
+    assert cache.get_supporting_accounts_for_model("withdrawn") == set()
+    assert cache.get_model("gpt-4") is None
+    assert cache.get_supporting_accounts_for_model("gpt-4") == set()
+
+
+def test_prune_unused_keeps_models_with_remaining_support() -> None:
+    """A model with at least one supporting account is not pruned."""
+    cache = ModelCatalogCache()
+    cache.update_from_account(
+        "acct1",
+        "provider-a",
+        [{"model_id": "shared", "protocol": "openai"}],
+    )
+    cache.update_from_account(
+        "acct2",
+        "provider-b",
+        [{"model_id": "shared", "protocol": "openai"}],
+    )
+    cache.update_from_account("acct1", "provider-a", [])
+
+    pruned = cache.prune_unused()
+
+    assert pruned == 0
+    assert cache.has_model("shared")
+    assert cache.get_supporting_accounts_for_model("shared") == {"acct2"}
+
+
+def test_prune_unused_keeps_models_with_provider_entries() -> None:
+    """A model with an active per-provider row is preserved."""
+    cache = ModelCatalogCache()
+    cache.update_from_account(
+        "acct1",
+        "provider-a",
+        [{"model_id": "shared", "protocol": "openai"}],
+    )
+    # Manually mark the account as unref'd but leave the provider row.
+    cache.mark_account_models_unavailable("acct1")
+    cache.set_provider_model_entry(
+        "shared",
+        "provider-a",
+        {"protocol": "openai", "last_seen_at": 0.0},
+    )
+
+    pruned = cache.prune_unused()
+
+    assert pruned == 0
+    assert cache.has_model("shared")
+
+
+def test_prune_unused_noop_when_cache_empty() -> None:
+    """Pruning an empty cache returns 0 and is safe."""
+    cache = ModelCatalogCache()
+    assert cache.prune_unused() == 0

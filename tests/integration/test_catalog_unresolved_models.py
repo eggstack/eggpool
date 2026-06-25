@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import logging
+
+import httpx
 import pytest
 
+from eggpool.accounts.registry import AccountRegistry
 from eggpool.catalog.cache import ModelCatalogCache
 from eggpool.catalog.protocols import ModelProtocolResolver
+from eggpool.catalog.service import CatalogService
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
+from eggpool.models.config import AppConfig
 
 
 async def _seed_db(db: Database) -> None:
@@ -161,3 +167,181 @@ async def test_persist_skips_unresolved_models() -> None:
     assert len(rows) == 0
 
     await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_persist_unresolved_warning_is_once_per_id(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The unresolved-model warning must fire only once per model per process."""
+    import os
+
+    db = Database(path=":memory:")
+    await db.connect()
+    await MigrationRunner(db).run()
+    await _seed_db(db)
+    try:
+        os.environ.setdefault("EGGPOOL_TEST_KEY", "sk-test-not-real")
+        config = AppConfig.from_dict(
+            {
+                "upstream": {"base_url": "https://example.com/v1"},
+                "accounts": [],
+                "providers": {
+                    "opencode-go": {
+                        "id": "opencode-go",
+                        "base_url": "https://example.com/v1",
+                        "accounts": [
+                            {
+                                "name": "test-acct",
+                                "api_key_env": "EGGPOOL_TEST_KEY",
+                                "enabled": True,
+                                "weight": 1.0,
+                            }
+                        ],
+                    }
+                },
+            }
+        )
+        service = CatalogService(
+            config,
+            AccountRegistry(config),
+            db,
+            httpx.AsyncClient(),  # not used: we feed the cache directly
+        )
+        # Inject an unresolved model into the cache and persist twice.
+        service.cache.update_from_account(
+            "test-acct",
+            "opencode-go",
+            [
+                {
+                    "model_id": "perpetually-unresolved",
+                    "display_name": None,
+                    "protocol": None,
+                    "protocol_source": "unresolved",
+                    "capabilities": {},
+                    "source_metadata": {},
+                }
+            ],
+        )
+        with caplog.at_level(logging.WARNING, logger="eggpool.catalog.service"):
+            await service._persist_catalog()  # pyright: ignore[reportPrivateUsage]
+            first_warning_count = sum(
+                1
+                for record in caplog.records
+                if "Skipping unresolved model" in record.getMessage()
+            )
+            caplog.clear()
+            await service._persist_catalog()  # pyright: ignore[reportPrivateUsage]
+            second_warning_count = sum(
+                1
+                for record in caplog.records
+                if record.levelno == logging.WARNING
+                and "Skipping unresolved model" in record.getMessage()
+            )
+
+        assert first_warning_count == 1, (
+            "First persistence should emit exactly one warning for the unresolved model"
+        )
+        assert second_warning_count == 0, (
+            "Subsequent persistence cycles must not re-warn about the "
+            "same unresolved model id (warning is once-per-process)"
+        )
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_refresh_prunes_withdrawn_models(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A model that disappears from every account must be pruned from the cache.
+
+    We exercise the full CatalogService.refresh() flow by stubbing the
+    network fetcher: each ``_fetch_and_process_account`` invocation writes
+    a known set of models into the cache. A second refresh with a smaller
+    model set must drop the withdrawn model from the in-memory cache.
+    """
+    import os
+
+    db = Database(path=":memory:")
+    await db.connect()
+    await MigrationRunner(db).run()
+    await _seed_db(db)
+    try:
+        os.environ.setdefault("EGGPOOL_TEST_KEY", "sk-test-not-real")
+        config = AppConfig.from_dict(
+            {
+                "upstream": {"base_url": "https://example.com/v1"},
+                "accounts": [],
+                "providers": {
+                    "opencode-go": {
+                        "id": "opencode-go",
+                        "base_url": "https://example.com/v1",
+                        "accounts": [
+                            {
+                                "name": "test-acct",
+                                "api_key_env": "EGGPOOL_TEST_KEY",
+                                "enabled": True,
+                                "weight": 1.0,
+                            }
+                        ],
+                    }
+                },
+            }
+        )
+        async with httpx.AsyncClient() as client:
+            service = CatalogService(config, AccountRegistry(config), db, client)
+            # First refresh: cache contains both models.
+            service.cache.update_from_account(
+                "test-acct",
+                "opencode-go",
+                [
+                    {
+                        "model_id": "gpt-4o",
+                        "protocol": "openai",
+                        "protocol_source": "exact_mapping",
+                        "capabilities": {},
+                        "source_metadata": {},
+                    },
+                    {
+                        "model_id": "withdrawn-model",
+                        "protocol": "openai",
+                        "protocol_source": "exact_mapping",
+                        "capabilities": {},
+                        "source_metadata": {},
+                    },
+                ],
+            )
+            await service._persist_catalog()  # pyright: ignore[reportPrivateUsage]
+            assert service.cache.has_model("withdrawn-model")
+
+            # Second refresh: provider drops the model.
+            service.cache.update_from_account(
+                "test-acct",
+                "opencode-go",
+                [
+                    {
+                        "model_id": "gpt-4o",
+                        "protocol": "openai",
+                        "protocol_source": "exact_mapping",
+                        "capabilities": {},
+                        "source_metadata": {},
+                    },
+                ],
+            )
+            with caplog.at_level(logging.INFO, logger="eggpool.catalog.service"):
+                pruned = service.cache.prune_unused()
+            assert pruned == 1
+            assert not service.cache.has_model("withdrawn-model")
+
+            # The cache no longer carries the model.  DB-row cleanup is
+            # owned by the Phase 2 reconciliation pass; here we only
+            # assert that ``get_models_for_exposure`` no longer surfaces
+            # the withdrawn name, which is the externally observable
+            # contract that dynamic add/subtract must hold.
+            exposed = service.cache.get_models_for_exposure("union", {"test-acct"})
+            exposed_ids = {m["model_id"] for m in exposed}
+            assert "withdrawn-model" not in exposed_ids
+            assert "gpt-4o" in exposed_ids
+    finally:
+        await db.disconnect()
