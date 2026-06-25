@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from eggpool.background import TaskSupervisor
+    from eggpool.background import BackgroundTaskMonitor, TaskSupervisor
     from eggpool.db.connection import Database
     from eggpool.health.health_manager import HealthManager
     from eggpool.models.config import AppConfig
@@ -67,6 +67,7 @@ class RuntimeMetricsService:
         db: Database,
         stats_db: Database | None,
         supervisor: TaskSupervisor | None,
+        task_monitor: BackgroundTaskMonitor | None,
         router: Router | None,
         health_manager: HealthManager | None,
         started_monotonic: float,
@@ -76,6 +77,7 @@ class RuntimeMetricsService:
         self._db = db
         self._stats_db = stats_db
         self._supervisor = supervisor
+        self._task_monitor = task_monitor
         self._router = router
         self._health_manager = health_manager
         self._started_monotonic = started_monotonic
@@ -290,6 +292,13 @@ class RuntimeMetricsService:
     def _snapshot_background_tasks(
         self, probe_errors: list[str]
     ) -> list[dict[str, Any]]:
+        if self._task_monitor is not None:
+            try:
+                return self._task_monitor.snapshot()
+            except Exception as exc:  # noqa: BLE001
+                probe_errors.append(
+                    _truncate_probe_error(f"Task monitor snapshot failed: {exc}")
+                )
         if self._supervisor is None:
             return []
 
@@ -376,6 +385,7 @@ class RuntimeMetricsService:
             "file_size_bytes": file_size_bytes,
             "wal_size_bytes": wal_size_bytes,
             "shm_size_bytes": shm_size_bytes,
+            "contention": self._db.contention_snapshot(),
         }
 
     # -- Routing / in-flight ------------------------------------------------

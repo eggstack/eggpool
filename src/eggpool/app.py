@@ -723,6 +723,12 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     supervisor = TaskSupervisor()
     app.state.supervisor = supervisor
 
+    # 20a. Background task monitor for runtime metrics
+    from eggpool.background import BackgroundTaskMonitor
+
+    task_monitor = BackgroundTaskMonitor(supervisor)
+    app.state.task_monitor = task_monitor
+
     # 20b. Runtime metrics service (for /api/stats/runtime)
     from eggpool.runtime_metrics import RuntimeMetricsService
 
@@ -731,6 +737,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         db=db,
         stats_db=stats_db,
         supervisor=supervisor,
+        task_monitor=task_monitor,
         router=router,
         health_manager=health_manager,
         started_monotonic=app.state.started_monotonic,

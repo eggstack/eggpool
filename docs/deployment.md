@@ -412,6 +412,46 @@ is bracketed by `# BEGIN EggPool watchdog` / `# END EggPool watchdog`
 markers so uninstall only strips the eggpool-owned lines and leaves
 unrelated cron entries untouched.
 
+---
+
+## Runtime diagnostics
+
+```bash
+eggpool runtime-status                 # compact terminal summary
+eggpool runtime-status --json          # machine-readable JSON
+```
+
+`eggpool runtime-status` calls the local `/api/stats/runtime` endpoint
+(via `urllib.request`, no heavy imports) and prints a one-page overview
+of the running process.  It is intended for operators debugging
+systemd, cron, or daemon deployments.
+
+When the server is not running the command exits non-zero with a clear
+message.  It does not start the server.
+
+The output covers:
+
+- **Server** — PID, PPID, uptime, Python version, platform, configured threads.
+- **Processes** — observed EggPool process count vs expected; a warning
+  is printed when the observed count exceeds expected by more than one.
+- **Memory** — RSS, VMS, open FD count, thread count.
+- **Background tasks** — per-task running/done/cancelled state,
+  iteration count, restart count, last error class and timestamp.
+- **Database** — path, WAL mode, file/WAL/SHM sizes, contention
+  counters (cumulative lock wait, max lock wait, write/read ops).
+- **Routing** — active requests, pending count, active reservations,
+  reserved microdollars, health states, active backoff rows.
+
+All probes are best-effort; failed probes return `null` rather than
+causing the command to fail.
+
+### Checking from cron
+
+The watchdog cron uses `eggpool ensure-running`, which is a separate
+fast-path command.  Do not use `eggpool runtime-status` in cron
+entries — it imports more of the stack and is not designed for
+high-frequency polling.
+
 Backup cron is a separate command (`eggpool deploy backup-cron`) —
 do not mix the two.
 
@@ -481,6 +521,52 @@ The stale-request finalizer background task (runs every 60s) should
 automatically clean these up.  If it is not keeping up, check the
 logs for `Stale request finalizer` messages.
 
+You can also use `eggpool runtime-status` to see the pending count and
+oldest pending request age without querying SQLite directly.
+
+### Unexpected process count
+
+`eggpool runtime-status` reports `eggpool_process_count` and
+`expected_worker_process_count`.  On a standard deployment the expected
+count is 2 (one Granian supervisor + one worker).
+
+If the observed count exceeds expected:
+
+1. Check for leftover processes from a previous crash:
+   `pgrep -af eggpool`
+2. Kill orphaned processes manually if confirmed stale.
+3. Ensure only one `eggpool serve` or systemd unit is active.
+
+### High RSS memory
+
+Memory usage is visible in `eggpool runtime-status` under the Memory
+section.  On Linux the snapshot reads current RSS from
+`/proc/self/stat`; on macOS it falls back to `ru_maxrss` (a
+high-water mark).
+
+If RSS grows continuously:
+
+1. Check for leaked pending requests (see above).
+2. Verify WAL checkpointing is working: `PRAGMA wal_checkpoint(PASSIVE)`.
+3. Consider restarting the process to reclaim memory — the database
+   file itself does not grow from in-memory leaks.
+
+### WAL file growth
+
+The WAL (`-wal`) and SHM (`-shm`) file sizes are reported by
+`eggpool runtime-status` under the Database section.
+
+A WAL file that grows without bound indicates checkpoints are not
+keeping up:
+
+1. Ensure `PRAGMA journal_mode = WAL` is active (shown in runtime
+   status under `wal_mode_live`).
+2. Check that `busy_timeout_ms` is sufficient (default 5000ms; raise
+   to 10000ms on Raspberry Pi).
+3. Run `PRAGMA wal_checkpoint(TRUNCATE)` manually to reclaim space.
+4. If WAL growth is persistent, consider increasing
+   `server.threads` to reduce write contention.
+
 ### Tuning the stale-request finalizer
 
 The finalizer uses the upstream `read_timeout_s` (default 300s) as the
@@ -524,6 +610,8 @@ restart.  See `plans/eggpoolfix.md` for the full safety-net design.
 | `eggpool deploy backup-cron --install --production` | Install production backup (`/etc/cron.d/eggpool-backup` + `/var/backups/eggpool`) |
 | `eggpool deploy all` | Print systemd + logrotate + watchdog cron snippets |
 | `eggpool deploy all --install` | Install systemd + logrotate + watchdog cron (backup-cron is separate) |
+| `eggpool runtime-status` | Print compact runtime health summary from the running server |
+| `eggpool runtime-status --json` | Print machine-readable JSON for scripting/monitoring |
 | `eggpool backup` | Create a timestamped `.zip` backup archive (default `~/backups/eggpool/`) |
 | `eggpool recover [path]` | Restore from a backup archive (interactive menu if no path) |
 | `eggpool uninstall` | Detect install method, preview PATH edits, remove binary + config + data + shell-rc entries |

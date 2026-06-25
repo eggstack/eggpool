@@ -59,6 +59,7 @@ def _make_service(
     config: AppConfig | None = None,
     stats_db: Database | None = None,
     supervisor: Any = None,
+    task_monitor: Any = None,
     router: Any = None,
     health_manager: Any = None,
     started_monotonic: float | None = None,
@@ -75,6 +76,7 @@ def _make_service(
         db=db,
         stats_db=stats_db,
         supervisor=supervisor,
+        task_monitor=task_monitor,
         router=router,
         health_manager=health_manager,
         started_monotonic=started_monotonic,
@@ -461,3 +463,176 @@ async def test_snapshot_returns_stable_keys(db: Database) -> None:
     assert set(snap1["memory"].keys()) == set(snap2["memory"].keys())
     assert set(snap1["db"].keys()) == set(snap2["db"].keys())
     assert set(snap1["routing_runtime"].keys()) == set(snap2["routing_runtime"].keys())
+
+
+# -- BackgroundTaskMonitor --------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_background_tasks_with_task_monitor(db: Database) -> None:
+    from eggpool.background import BackgroundTaskMonitor, TaskSupervisor
+
+    supervisor = TaskSupervisor()
+
+    async def dummy() -> None:
+        await asyncio.sleep(3600)
+
+    supervisor.register("monitored-task", dummy, max_restarts=5)
+    monitor = BackgroundTaskMonitor(supervisor)
+
+    service = _make_service(db, supervisor=supervisor, task_monitor=monitor)
+    snapshot = await service.snapshot()
+    tasks = snapshot["background_tasks"]
+    assert len(tasks) == 1
+    task = tasks[0]
+    assert task["name"] == "monitored-task"
+    assert task["registered"] is True
+    assert task["max_restarts"] == 5
+    assert "iteration_count" in task
+    assert "last_started_at" in task
+    assert "last_completed_at" in task
+    assert "last_error_at" in task
+    assert "last_error_class" in task
+
+
+@pytest.mark.asyncio
+async def test_task_monitor_heartbeat_fields(db: Database) -> None:
+    from eggpool.background import BackgroundTaskMonitor, TaskSupervisor
+
+    supervisor = TaskSupervisor()
+
+    async def quick() -> None:
+        return
+
+    supervisor.register("heartbeat-test", quick)
+    monitor = BackgroundTaskMonitor(supervisor)
+
+    service = _make_service(db, supervisor=supervisor, task_monitor=monitor)
+    snapshot = await service.snapshot()
+    task = snapshot["background_tasks"][0]
+    # Not started yet — all heartbeat timestamps should be None
+    assert task["last_started_at"] is None
+    assert task["last_completed_at"] is None
+    assert task["last_error_at"] is None
+    assert task["last_error_class"] is None
+    assert task["iteration_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_task_monitor_tracks_iteration(db: Database) -> None:
+    from eggpool.background import BackgroundTaskMonitor, TaskSupervisor
+
+    supervisor = TaskSupervisor()
+    iteration_count = 0
+
+    async def counting_task() -> None:
+        nonlocal iteration_count
+        iteration_count += 1
+        if iteration_count < 3:
+            return  # completes "unexpectedly", supervisor restarts
+        await asyncio.sleep(3600)  # stay running after 3 iterations
+
+    supervisor.register("counter", counting_task)
+    monitor = BackgroundTaskMonitor(supervisor)
+
+    service = _make_service(db, supervisor=supervisor, task_monitor=monitor)
+    # Give the task loop time to run a few iterations
+    await supervisor.start_all()
+    await asyncio.sleep(0.1)
+    snapshot = await service.snapshot()
+    await supervisor.stop_all()
+
+    task = snapshot["background_tasks"][0]
+    assert task["iteration_count"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_task_monitor_handles_exception_class(db: Database) -> None:
+    from eggpool.background import BackgroundTaskMonitor, TaskSupervisor
+
+    supervisor = TaskSupervisor()
+
+    async def failing_task() -> None:
+        raise ValueError("boom")
+
+    supervisor.register("failer", failing_task, max_restarts=1)
+    monitor = BackgroundTaskMonitor(supervisor)
+
+    service = _make_service(db, supervisor=supervisor, task_monitor=monitor)
+    await supervisor.start_all()
+    # Give the task loop time to fail
+    await asyncio.sleep(0.2)
+    await supervisor.stop_all()
+
+    snapshot = await service.snapshot()
+    task = snapshot["background_tasks"][0]
+    assert task["last_error_class"] == "ValueError"
+    assert task["last_error_at"] is not None
+
+
+# -- Database contention counters -------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_db_contention_snapshot_fields(db: Database) -> None:
+    service = _make_service(db)
+    snapshot = await service.snapshot()
+    contention = snapshot["db"]["contention"]
+    assert "write_ops" in contention
+    assert "read_ops" in contention
+    assert "total_transactions" in contention
+    assert "last_operation_error_class" in contention
+    assert "cumulative_lock_wait_s" in contention
+    assert "max_lock_wait_s" in contention
+    assert isinstance(contention["write_ops"], int)
+    assert isinstance(contention["read_ops"], int)
+    assert isinstance(contention["total_transactions"], int)
+    assert contention["last_operation_error_class"] is None
+
+
+@pytest.mark.asyncio
+async def test_db_contention_increments_on_write(db: Database) -> None:
+    """Write ops counter should increment after a write operation."""
+    service = _make_service(db)
+    snap_before = await service.snapshot()
+    write_ops_before = snap_before["db"]["contention"]["write_ops"]
+
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT INTO health_probe (probe_at) VALUES (CURRENT_TIMESTAMP)"
+        )
+
+    snap_after = await service.snapshot()
+    write_ops_after = snap_after["db"]["contention"]["write_ops"]
+    assert write_ops_after > write_ops_before
+
+
+@pytest.mark.asyncio
+async def test_db_contention_increments_on_read(db: Database) -> None:
+    """Read ops counter should increment after a read operation."""
+    service = _make_service(db)
+    snap_before = await service.snapshot()
+    read_ops_before = snap_before["db"]["contention"]["read_ops"]
+
+    await db.fetch_one("SELECT 1")
+
+    snap_after = await service.snapshot()
+    read_ops_after = snap_after["db"]["contention"]["read_ops"]
+    assert read_ops_after > read_ops_before
+
+
+@pytest.mark.asyncio
+async def test_db_contention_transactions_increment(db: Database) -> None:
+    """Total transactions counter should increment."""
+    service = _make_service(db)
+    snap_before = await service.snapshot()
+    txn_before = snap_before["db"]["contention"]["total_transactions"]
+
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT INTO health_probe (probe_at) VALUES (CURRENT_TIMESTAMP)"
+        )
+
+    snap_after = await service.snapshot()
+    txn_after = snap_after["db"]["contention"]["total_transactions"]
+    assert txn_after > txn_before

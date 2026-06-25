@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
@@ -51,6 +52,13 @@ class Database:
             "database_transaction_owner",
             default=None,
         )
+        # Contention counters (in-memory only, never persisted)
+        self._write_ops: int = 0
+        self._read_ops: int = 0
+        self._total_transactions: int = 0
+        self._last_operation_error_class: str | None = None
+        self._cumulative_lock_wait_s: float = 0.0
+        self._max_lock_wait_s: float = 0.0
 
     @property
     def read_only(self) -> bool:
@@ -155,12 +163,20 @@ class Database:
         If the current task already owns a transaction, the lock is
         already held and this is a no-op.  Otherwise the lock is
         acquired for the duration of the ``yield``.
+
+        Lock wait time is tracked in contention counters for
+        runtime diagnostics.
         """
         if self._current_task_owns_transaction():
             yield
             return
 
+        t0 = time.monotonic()
         async with self._connection_lock:
+            elapsed = time.monotonic() - t0
+            self._cumulative_lock_wait_s += elapsed
+            if elapsed > self._max_lock_wait_s:
+                self._max_lock_wait_s = elapsed
             yield
 
     async def probe_writable(self) -> bool:
@@ -216,8 +232,10 @@ class Database:
         try:
             cursor = await self.connection.execute(sql, params)  # type: ignore[union-attr]
             rowcount = cursor.rowcount
+            self._write_ops += 1
             return int(rowcount) if rowcount >= 0 else 0
         except Exception as exc:
+            self._last_operation_error_class = type(exc).__qualname__
             raise DatabaseError(f"Execute write failed: {exc}") from exc
 
     async def execute_many(
@@ -237,8 +255,10 @@ class Database:
         try:
             cursor = await self.connection.executemany(sql, params)  # type: ignore[union-attr]
             rowcount = cursor.rowcount
+            self._write_ops += len(params)
             return int(rowcount) if rowcount >= 0 else 0
         except Exception as exc:
+            self._last_operation_error_class = type(exc).__qualname__
             raise DatabaseError(f"Execute many failed: {exc}") from exc
 
     async def execute_insert(
@@ -259,10 +279,12 @@ class Database:
             last_id = cursor.lastrowid
             if last_id is None:
                 raise DatabaseError("INSERT did not return lastrowid")
+            self._write_ops += 1
             return int(last_id)
         except DatabaseError:
             raise
         except Exception as exc:
+            self._last_operation_error_class = type(exc).__qualname__
             raise DatabaseError(f"Execute insert failed: {exc}") from exc
 
     async def execute_returning(
@@ -280,10 +302,16 @@ class Database:
         """
         self._require_transaction_owner()
         try:
+            upper = sql.lstrip().upper()
             cursor = await self.connection.execute(sql, params)  # type: ignore[union-attr]
             rows = await cursor.fetchall()
+            if upper.startswith("SELECT"):
+                self._read_ops += 1
+            else:
+                self._write_ops += 1
             return list(rows)  # type: ignore[arg-type]
         except Exception as exc:
+            self._last_operation_error_class = type(exc).__qualname__
             raise DatabaseError(f"Execute returning failed: {exc}") from exc
 
     async def vacuum(self) -> None:
@@ -334,6 +362,21 @@ class Database:
             except Exception as exc:
                 raise DatabaseError(f"Execute pragma failed: {exc}") from exc
 
+    def contention_snapshot(self) -> dict[str, Any]:
+        """Return in-memory contention counters.
+
+        Counters are best-effort and reset on process restart.  They
+        are intended for runtime diagnostics, not billing or alerting.
+        """
+        return {
+            "write_ops": self._write_ops,
+            "read_ops": self._read_ops,
+            "total_transactions": self._total_transactions,
+            "last_operation_error_class": self._last_operation_error_class,
+            "cumulative_lock_wait_s": round(self._cumulative_lock_wait_s, 4),
+            "max_lock_wait_s": round(self._max_lock_wait_s, 4),
+        }
+
     async def fetch_all(
         self, sql: str, params: Sequence[Any] = ()
     ) -> list[aiosqlite.Row]:
@@ -342,8 +385,10 @@ class Database:
             try:
                 cursor = await self.connection.execute(sql, params)  # type: ignore[union-attr]
                 rows = await cursor.fetchall()
+                self._read_ops += 1
                 return list(rows)  # type: ignore[arg-type]
             except Exception as exc:
+                self._last_operation_error_class = type(exc).__qualname__
                 raise DatabaseError(f"Fetch all failed: {exc}") from exc
 
     async def fetch_one(
@@ -354,8 +399,10 @@ class Database:
             try:
                 cursor = await self.connection.execute(sql, params)  # type: ignore[union-attr]
                 row = await cursor.fetchone()
+                self._read_ops += 1
                 return row  # type: ignore[return-value]
             except Exception as exc:
+                self._last_operation_error_class = type(exc).__qualname__
                 raise DatabaseError(f"Fetch one failed: {exc}") from exc
 
     @asynccontextmanager
@@ -387,6 +434,7 @@ class Database:
         async with self._connection_lock:
             depth_token = self._transaction_depth.set(1)
             owner_token = self._transaction_owner.set(owner)
+            self._total_transactions += 1
             try:
                 await self.connection.execute("BEGIN IMMEDIATE")
                 try:

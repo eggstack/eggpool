@@ -28,6 +28,12 @@ class SupervisedTask:
     _max_delay: float = 300.0
     _last_failure: float = 0.0
     _running: bool = False
+    # Heartbeat tracking (in-memory only, never persisted)
+    _last_started_at: float = 0.0
+    _last_completed_at: float = 0.0
+    _last_error_at: float = 0.0
+    _last_error_class: str | None = None
+    _iteration_count: int = 0
 
     async def start(self) -> None:
         """Start the supervised task."""
@@ -55,13 +61,18 @@ class SupervisedTask:
         """Run the task, restarting on failure with backoff."""
         try:
             while self._running:
+                self._last_started_at = time.time()
                 try:
                     await self._coro_factory()
                 except asyncio.CancelledError:
                     break
-                except Exception:
+                except Exception as exc:
+                    self._last_error_at = time.time()
+                    self._last_error_class = type(exc).__qualname__
                     logger.exception("Supervised task %r failed", self.name)
                 else:
+                    self._last_completed_at = time.time()
+                    self._iteration_count += 1
                     if not self._running:
                         break
                     logger.warning(
@@ -145,3 +156,63 @@ class TaskSupervisor:
         if not self._tasks:
             return False
         return all(t.is_running for t in self._tasks.values())
+
+
+class BackgroundTaskMonitor:
+    """Read-only heartbeat snapshot for background tasks.
+
+    Stores a reference to the :class:`TaskSupervisor` and exposes a
+    :meth:`snapshot` method that collects per-task heartbeat data
+    without touching SQLite.  Designed to live on ``app.state`` and be
+    consumed by :class:`~eggpool.runtime_metrics.RuntimeMetricsService`.
+    """
+
+    def __init__(self, supervisor: TaskSupervisor) -> None:
+        self._supervisor = supervisor
+
+    def snapshot(self) -> list[dict[str, Any]]:
+        """Return per-task heartbeat data from the supervisor.
+
+        Each entry mirrors the :class:`SupervisedTask` fields plus the
+        heartbeat timestamps added during ``_run_loop``.  Failed probes
+        never raise — malformed tasks are silently skipped.
+        """
+        tasks: list[dict[str, Any]] = []
+        for name, supervised in self._supervisor._tasks.items():  # pyright: ignore[reportPrivateUsage]
+            with contextlib.suppress(Exception):
+                tasks.append(
+                    {
+                        "name": name,
+                        "registered": True,
+                        "running": supervised.is_running,
+                        "done": (
+                            supervised._task is not None  # pyright: ignore[reportPrivateUsage]
+                            and supervised._task.done()  # pyright: ignore[reportPrivateUsage]
+                        ),
+                        "cancelled": (
+                            supervised._task is not None  # pyright: ignore[reportPrivateUsage]
+                            and supervised._task.cancelled()  # pyright: ignore[reportPrivateUsage]
+                        ),
+                        "iteration_count": supervised._iteration_count,  # pyright: ignore[reportPrivateUsage]
+                        "restart_count": supervised._restart_count,  # pyright: ignore[reportPrivateUsage]
+                        "max_restarts": supervised._max_restarts,  # pyright: ignore[reportPrivateUsage]
+                        "last_started_at": (
+                            supervised._last_started_at  # pyright: ignore[reportPrivateUsage]
+                            or None
+                        ),
+                        "last_completed_at": (
+                            supervised._last_completed_at  # pyright: ignore[reportPrivateUsage]
+                            or None
+                        ),
+                        "last_failure_at": (
+                            supervised._last_failure  # pyright: ignore[reportPrivateUsage]
+                            or None
+                        ),
+                        "last_error_at": (
+                            supervised._last_error_at  # pyright: ignore[reportPrivateUsage]
+                            or None
+                        ),
+                        "last_error_class": supervised._last_error_class,  # pyright: ignore[reportPrivateUsage]
+                    }
+                )
+        return tasks
