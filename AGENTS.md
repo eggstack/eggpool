@@ -96,6 +96,10 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 - **Streaming finalizer shielding**: streaming `_build_stream_generator` finalization runs under `asyncio.shield(asyncio.wait_for(..., timeout=10))` so ASGI task cancellation cannot kill the finalizer while it holds the DB lock. Leaks that escape this path are caught by the periodic `stale_request_finalizer` background task (`app._finalize_stale_requests`, runs every 60s) which force-finalizes any request that has been `pending` longer than `upstream.read_timeout_s`.
 - **Startup crash recovery**: `_crash_recovery` runs at every startup and recovers ALL pending requests and ALL active reservations with no time threshold. A process restart is a definitive boundary, so leaked state from the previous process is unconditionally cleaned up. If `Crash recovery: marked N stale requests` appears in logs, the safety net caught leaks from the previous run.
 - **Fast-path CLI imports**: fast-path commands (`croncheck`, `ensure-running`) import only `eggpool.runtime_paths` from the package; do not add transitive imports to `runtime_paths` or `fastcli` or you break the Raspberry Pi watchdog performance contract
+- **Config-path resolution**: `--config PATH` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`. The resolver lives in `eggpool.deploy_user.resolve_config_path()` and is the single source of truth for every CLI command.
+- **`eggpool deploy cron` is now the WATCHDOG** (not backup). It installs `eggpool ensure-running` entries (`@reboot` + `*/5 * * * *` by default) bracketed by `# BEGIN EggPool watchdog` / `# END EggPool watchdog` markers so uninstall only strips the eggpool-owned lines. Backups live under `eggpool deploy backup-cron`.
+- **`eggpool deploy systemd --install`** defaults to **personal mode** (runs as the invoking user via `User=`/`Group=` in the generated unit). Use `--production` for the dedicated-system layout; use `--as-root` to permit a root-owned personal unit. Personal mode refuses direct-root without `--as-root` to prevent accidentally installing a personal unit as root.
+- **Top-level lifecycle commands** (`uninstall`, `recover`) skip `ensure_config` so they work even when the config is missing or corrupted. The CLI's main entry point exempts them from the auto-config-create guard.
 
 ## Process Model
 
@@ -137,11 +141,16 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 | `eggpool models refresh` | Refresh model catalog from upstream |
 | `eggpool configsetup opencode` | Print OpenCode provider config JSON with model limits |
 | `eggpool db vacuum` | Reclaim SQLite space |
+| `eggpool deploy systemd` | Print systemd unit; `--install` writes it (personal by default; `--production` for the dedicated-system layout; `--as-root` for a root-owned personal unit) |
+| `eggpool deploy cron` | Print / install / uninstall the watchdog crontab (`@reboot` + `*/N * * * *` `eggpool ensure-running`). `--interval N` (1-59, default 5) |
+| `eggpool deploy backup-cron` | Print / install / uninstall the daily backup cron (personal user cron or production `/etc/cron.d/`) |
+| `eggpool deploy logrotate` | Print / install the logrotate config (validated via `logrotate -d`) |
+| `eggpool deploy all` | Print / install systemd + logrotate + watchdog cron (backup-cron is separate) |
 | `eggpool backup` | Create a timestamped `.zip` backup of config, `.env`, and database |
 | `eggpool recover [path]` | Restore from a backup archive (interactive menu if no path) |
-| `eggpool uninstall` | Remove binary, config, database, and shell PATH entries |
+| `eggpool uninstall` | Remove binary, config, database, and shell PATH entries; `--deploy-artifacts` also removes the systemd unit, logrotate config, watchdog + backup cron blocks, and backup script |
 
-All commands accept `--config /path/to/config.toml` (defaults to `config.toml`).
+All commands accept `--config /path/to/config.toml` (defaults to `config.toml`; resolution: `--config` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`).
 Running `eggpool` with no arguments prints the help message.
 
 ## Fast-Path CLI

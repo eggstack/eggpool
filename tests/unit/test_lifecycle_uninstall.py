@@ -60,13 +60,15 @@ def _fake_result(returncode: int = 0, stderr: str = "") -> MagicMock:
 
 class TestDetectInstallMethod:
     def test_detects_pipx_in_venv(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """In a venv with pipx on PATH, returns pipx."""
+        """eggpool binary under pipx/venvs -> pipx."""
         monkeypatch.setattr(sys, "base_prefix", "/usr")
         monkeypatch.setattr(sys, "prefix", "/some/venv")
         if hasattr(sys, "real_prefix"):
             monkeypatch.delattr(sys, "real_prefix")
+        pipx_eggpool = "/home/test/.local/pipx/venvs/eggpool/bin/eggpool"
         monkeypatch.setattr(
-            "shutil.which", lambda name: "/usr/bin/pipx" if name == "pipx" else None
+            "shutil.which",
+            lambda name: pipx_eggpool if name == "eggpool" else None,
         )
         assert detect_install_method() == InstallMethod.PIPX
 
@@ -105,6 +107,8 @@ class TestDetectInstallMethod:
         monkeypatch.setattr(sys, "base_prefix", sys.prefix)
         if hasattr(sys, "real_prefix"):
             monkeypatch.delattr(sys, "real_prefix")
+        # Pretend no eggpool binary on PATH (use a marker-free path)
+        monkeypatch.setattr("shutil.which", lambda _name: None)
         # The test runner is inside a real source checkout, so this
         # should resolve to SOURCE without further monkey-patching.
         assert detect_install_method() == InstallMethod.SOURCE

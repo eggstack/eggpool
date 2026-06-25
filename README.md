@@ -29,46 +29,77 @@ behind one OpenAI/Anthropic-compatible endpoint.
 
 ## Quick Start
 
-### Option 1: pipx install (recommended)
-
-```bash
-pipx install eggpool
-eggpool help
-eggpool onboard
-```
-
-`eggpool onboard` lets you add several providers at once, does a config check, then runs the server. You can also run `eggpool connect` for each provider you want to add and `eggpool serve` to start the server. 
-`eggpool configsetup` will help setup config for opencode. 
-
-To get the server to run on startup, run `eggpool deploy` for options, see docs/deployment.md for more info and configs.
-
-`pipx` installs `eggpool` into its own venv and exposes the `eggpool` command on your PATH.
-
-### Option 2: Automated install
+### Option 1: One-shot install (recommended for personal use)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/eggstack/eggpool/main/scripts/install.sh | bash
+eggpool onboard
+sudo env "PATH=$PATH" "$(command -v eggpool)" deploy systemd --install
 ```
 
-The script:
+The installer script:
 
-- Downloads the repository if not running from a clone
-- Installs `uv` if missing
-- Verifies Python 3.11+
-- Installs eggpool as a global command (`pipx install` if pipx is present, otherwise `uv tool install .`)
+- Clones the repo to `~/eggpool` (or uses an existing clone) and resets `PROJECT_DIR` to the actual install location
+- Installs `uv` if missing and finds a Python 3.11+ interpreter
+- Detects an existing `eggpool` on PATH and refuses to silently reinstall — pass `--force` or `--upgrade` for intentional updates
+- Installs `eggpool` as a global command (`pipx install` if pipx is present, otherwise `uv tool install .`)
 - Persists `~/.local/bin` on PATH via `uv tool update-shell`
-- Copies example configuration files
-- Attempts configuration validation
+- Seeds `~/.config/eggpool/config.toml` from the example template without overwriting an existing file
+- Prints the resolved config path, validates the configuration, and offers to run onboarding
 
-The script will ask if you want to continue with onboarding. If you select no, you can run `eggpool --config ~/eggpool/config.toml onboard` later (replace the path with wherever the script cloned the repo). `eggpool connect` for one-off provider adds, `eggpool serve` to start the server, `eggpool help` for other commands.
+After install, the watchdog path (systemd unit, crontab entry, or `eggpool serve --daemon`) keeps the server alive across reboots. Use `sudo` only for the deploy step so the unit runs as your user, not as root.
 
-If `eggpool` is not on PATH after the script finishes, restart your shell or run:
+### Option 2: pipx install
+
+```bash
+pipx install eggpool
+eggpool onboard
+sudo env "PATH=$PATH" "$(command -v eggpool)" deploy systemd --install
+```
+
+`pipx` installs `eggpool` into its own venv and exposes the `eggpool` command on your PATH. This produces the same end state as Option 1 minus the bundled config seeding.
+
+If `eggpool` is not on PATH after the install, restart your shell or run:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Run `eggpool deploy` for options on running the server on startup. See docs/deployment.md for more info and configs.
+### Option 3: Manual install (from a clone)
+
+```bash
+git clone https://github.com/eggstack/eggpool.git && cd eggpool
+uv sync --extra dev
+uv tool install .
+uv tool update-shell
+export PATH="$HOME/.local/bin:$PATH"
+
+cp config.example.toml config.toml
+cp .env.example .env
+
+# Edit config.toml for providers/accounts and .env for keys.
+# check-config rejects placeholder values such as "your-api-key".
+set -a; source .env; set +a
+eggpool check-config
+eggpool migrate
+eggpool serve
+```
+
+### Option 4: Interactive setup (developer workflow)
+
+```bash
+uv run eggpool onboard        # wizard: connect providers, validate, start
+uv run eggpool connect        # add a single provider
+uv run eggpool connect list   # list supported providers
+```
+
+### Cron fallback for non-systemd systems
+
+```bash
+eggpool deploy cron --install
+```
+
+This writes a `@reboot` + `*/5 * * * *` `eggpool ensure-running` block to the invoking user's crontab (or `SUDO_USER`'s crontab under sudo). Use `--interval N` to change the poll cadence. The block is bracketed by `# BEGIN EggPool watchdog` / `# END EggPool watchdog` markers so uninstall only strips the eggpool-owned lines. See [docs/deployment.md](docs/deployment.md) for the full design.
 
 ### Backup and uninstall
 
@@ -83,55 +114,12 @@ eggpool recover ~/backups/eggpool/eggpool-backup-20260624-120000.zip
 
 # Uninstall: detects pipx / uv tool / source / manual and cleans up
 eggpool uninstall --yes
+
+# Also remove systemd unit, logrotate config, and cron blocks
+eggpool uninstall --yes --deploy-artifacts
 ```
 
-The uninstall command removes the binary, active config, `.env`,
-database, and `eggpool` shell-rc entries. It prints manual commands
-for removing systemd, logrotate, and cron artifacts but never removes
-them automatically. Existing backups under `~/backups/eggpool/` are
-left in place. See [docs/backup-restore.md](docs/backup-restore.md)
-for the full backup/restore workflow.
-
-### Option 3: Manual install
-
-```bash
-# Install dependencies, including local development tools
-uv sync --extra dev
-
-# Install eggpool as a global command and expose it on PATH
-uv tool install .
-uv tool update-shell
-export PATH="$HOME/.local/bin:$PATH"
-
-# Copy and edit configuration
-cp config.example.toml config.toml
-cp .env.example .env
-
-# Edit config.toml for providers/accounts and .env for keys.
-# check-config rejects placeholder values such as "your-api-key".
-
-# Validate configuration
-set -a; source .env; set +a
-eggpool --config config.toml check-config
-
-# Run database migrations
-eggpool --config config.toml migrate
-
-# Start the server
-eggpool --config config.toml serve
-```
-
-### Option 4: Interactive setup
-
-```bash
-# Run the interactive onboarding wizard — connects one or more
-# providers, validates configuration, and starts the server.
-uv run eggpool onboard
-
-# Or connect to a specific provider
-uv run eggpool connect
-uv run eggpool connect list
-```
+The uninstall command removes the binary, active config, `.env`, database, and `eggpool` shell-rc entries. Pass `--deploy-artifacts` to also remove the systemd unit, logrotate config, watchdog + backup cron blocks, and the personal backup script. Existing backups under `~/backups/eggpool/` are always left in place. See [docs/backup-restore.md](docs/backup-restore.md) for the full backup/restore workflow.
 
 ## CLI Commands
 
@@ -165,15 +153,16 @@ uv run eggpool connect list
 | `eggpool dashboard public` | Toggle dashboard public access |
 | `eggpool db vacuum` | Vacuum the database to reclaim space |
 | `eggpool init-config` | Write bundled config.example.toml to current directory or TARGET |
-| `eggpool deploy systemd` | Print the systemd unit + install instructions |
-| `eggpool deploy logrotate` | Print the logrotate config + install instructions |
-| `eggpool deploy cron` | Print the daily-backup cron entry + install instructions |
-| `eggpool deploy all` | Print every deployment snippet in sequence |
+| `eggpool deploy systemd` | Print systemd unit; `--install` writes it (personal by default; `--production` for the dedicated-system layout; `--as-root` for a root-owned personal unit) |
+| `eggpool deploy cron` | Print / install / uninstall the **watchdog** crontab (`@reboot` + `*/N * * * *` `ensure-running`). `--interval N` (1-59, default 5) |
+| `eggpool deploy backup-cron` | Print / install / uninstall the daily backup cron (personal user cron or production `/etc/cron.d/`) |
+| `eggpool deploy logrotate` | Print / install the logrotate config (validated via `logrotate -d`) |
+| `eggpool deploy all` | Print / install systemd + logrotate + watchdog cron (backup-cron is separate) |
 | `eggpool backup` | Create a timestamped `.zip` backup (default `~/backups/eggpool/`) |
 | `eggpool recover [path]` | Restore from a backup archive (interactive if no path) |
-| `eggpool uninstall` | Remove binary, config, database, and shell PATH entries |
+| `eggpool uninstall` | Remove binary, config, database, and shell PATH entries; `--deploy-artifacts` also removes the systemd unit, logrotate config, watchdog + backup cron blocks, and backup script |
 
-All commands accept `--config /path/to/config.toml` (defaults to `config.toml`).
+All commands accept `--config /path/to/config.toml` (resolution: `--config` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`).
 Running `eggpool` with no arguments prints the help message.
 Configuration changes require a service restart; live reload is intentionally
 not supported.
@@ -554,20 +543,69 @@ See `docs/deployment.md` for full deployment instructions.
 ### Quick start (personal use)
 
 ```bash
-pipx install eggpool
+curl -fsSL https://raw.githubusercontent.com/eggstack/eggpool/main/scripts/install.sh | bash
 eggpool onboard
-sudo eggpool deploy systemd --install
+sudo env "PATH=$PATH" "$(command -v eggpool)" deploy systemd --install
 ```
 
-The `--install` flag writes the systemd unit, enables the service,
-and starts it — all in one command. It detects your install method
-and config paths automatically.
+The systemd unit runs as the invoking user (resolved from `SUDO_USER`
+under sudo), not as root. The `--install` flag writes the unit,
+enables the service, and starts it — all in one command. It detects
+your install method and config paths automatically.
+
+For systems without systemd, use the cron watchdog instead:
+
+```bash
+eggpool deploy cron --install
+```
+
+`eggpool deploy cron` is the **watchdog** (not the backup); backups
+live under `eggpool deploy backup-cron`.
+
+### Configuration path resolution
+
+Every CLI command resolves `--config` against this precedence (single
+source of truth: `eggpool.deploy_user.resolve_config_path()`):
+
+1. `--config PATH` (highest)
+2. `$EGGPOOL_CONFIG` environment variable
+3. `~/.config/eggpool/config.toml` (XDG default for installed copies)
+4. `./config.toml` (CWD fallback for source checkouts)
+
+After install the print-out always names the resolved path, so you can
+drop `--config` once you've exported `$EGGPOOL_CONFIG` in your shell rc.
+
+### Filesystem Layout (Personal Use)
+
+For personal installations the default locations follow the XDG Base
+Directory specification (overridable via `$XDG_CONFIG_HOME`,
+`$XDG_DATA_HOME`, `$XDG_STATE_HOME`):
+
+```
+~/.config/eggpool/
+├── config.toml          # Main configuration
+└── .env                 # Environment variables (optional)
+
+~/.local/share/eggpool/
+└── usage.sqlite3        # SQLite database (+ -wal / -shm)
+
+~/.local/state/eggpool/
+├── eggpool.pid          # Live PID (owner: supervisor)
+├── eggpool.log          # Daemon log (serve --daemon default destination)
+└── cron.log             # Watchdog cron log
+```
+
+The path resolvers (`default_config_dir()`, `default_data_dir()`,
+`default_state_dir()`, `default_config_path()`, `default_env_path()`)
+live in `src/eggpool/deploy_user.py` and are the single source of truth.
 
 ### Production (separate user, hardened)
 
 For public-facing deployments, see the Production Deployment section
-in `docs/deployment.md`. This creates a dedicated `eggpool` system
-user with proper file permissions.
+in `docs/deployment.md`. `eggpool deploy systemd --install --production`
+automates the full system layout (dedicated `eggpool` user, `/etc/eggpool`
+config dir, `/var/lib/eggpool` data dir, hardened systemd unit).
+Without `--production` the systemd installer runs as your personal user.
 
 ### Configuration changes
 
@@ -580,20 +618,35 @@ sudo systemctl status eggpool
 sudo journalctl -u eggpool -n 100 --no-pager
 ```
 
-### Watchdog (cron)
+### Watchdog cron
 
-For systems without systemd, install a personal crontab entry that
-calls the fast-path `ensure-running` command:
+For systems without systemd, install the watchdog (not the backup)
+into the invoking user's crontab:
 
-```cron
-@reboot /home/user/.local/bin/eggpool --config /home/user/.config/eggpool/config.toml ensure-running >> /home/user/.local/state/eggpool/cron.log 2>&1
-*/5 * * * * /home/user/.local/bin/eggpool --config /home/user/.config/eggpool/config.toml ensure-running >> /home/user/.local/state/eggpool/cron.log 2>&1
+```bash
+eggpool deploy cron --install               # default 5-minute interval
+eggpool deploy cron --install --interval 10 # change the poll cadence
+eggpool deploy cron --uninstall             # remove the BEGIN/END-marked block
 ```
 
-Use absolute paths for the binary, config, and log file. `ensure-running`
-uses the stdlib-only fast-path CLI and does not import the heavy
-application graph on every cron tick, so a 5-minute cadence is cheap
-on Raspberry Pi-class hardware.
+The generated block uses absolute binary, config, and log paths so it
+does not depend on cron PATH. `ensure-running` is the stdlib-only
+fast-path CLI and does not import the heavy application graph on every
+cron tick, so a 5-minute cadence is cheap on Raspberry Pi-class
+hardware. Backups are a separate command: `eggpool deploy backup-cron --install`.
+
+### Cleanup
+
+```bash
+eggpool uninstall --yes                       # binary, config, data, PATH
+eggpool uninstall --yes --deploy-artifacts    # also systemd, logrotate, cron
+```
+
+`--deploy-artifacts` walks the install method (pipx / uv tool /
+source / manual), previews PATH edits before writing them, and only
+removes system-level deploy artifacts you confirm: the systemd unit,
+the logrotate config, the watchdog and backup cron blocks, and the
+personal backup script.
 
 ### Process model
 

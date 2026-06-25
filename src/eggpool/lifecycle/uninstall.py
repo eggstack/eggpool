@@ -57,25 +57,56 @@ class UninstallPaths:
     eggpool_dir: Path | None
 
 
+@dataclass(frozen=True)
+class RcFileChange:
+    """One rc-file edit planned by :func:`preview_eggpool_path_changes`.
+
+    ``original`` and ``new_text`` are full file contents; ``removed_lines``
+    lists the lines that would disappear so the CLI can show a focused
+    diff. ``changed`` is ``False`` when the file would not be touched,
+    which lets callers filter the preview list cheaply.
+    """
+
+    path: Path
+    original: str
+    new_text: str
+    removed_lines: tuple[str, ...]
+    changed: bool
+
+
 def detect_install_method() -> InstallMethod:
     """Determine how the running Python was installed.
 
     Mirrors :func:`eggpool.cli._detect_install_method` but returns the
     strongly-typed :class:`InstallMethod` enum used by the lifecycle
     module so callers can switch on it without string-matching.
+
+    Detection works by inspecting the resolved ``eggpool`` binary path
+    (not just ``sys.executable``) against the canonical tool layouts.
+    ``pipx`` is detected when the binary lives under a ``pipx/venvs``
+    or ``pipx/shared`` directory; ``uv-tool`` when it lives under a
+    ``uv/tools`` directory. A bare ``pipx`` on PATH does **not** by
+    itself justify a pipx classification — that produced false
+    positives on dev machines where pipx happens to be installed for
+    unrelated work.
     """
     in_venv = hasattr(sys, "real_prefix") or (
         hasattr(sys, "base_prefix") and sys.base_prefix != sys.prefix
     )
 
     if in_venv:
-        exe = Path(sys.executable).resolve()
-        parts = exe.parts
-        if "uv" in parts and "tools" in parts:
-            return InstallMethod.UV_TOOL
+        eggpool_exe = shutil.which("eggpool")
+        candidates: list[Path] = []
+        if eggpool_exe is not None:
+            candidates.append(Path(eggpool_exe).resolve())
+        candidates.append(Path(sys.executable).resolve())
 
-        if shutil.which("pipx") is not None:
-            return InstallMethod.PIPX
+        for exe in candidates:
+            parts = exe.parts
+            if "uv" in parts and "tools" in parts:
+                return InstallMethod.UV_TOOL
+            if "pipx" in parts and ("venvs" in parts or "shared" in parts):
+                return InstallMethod.PIPX
 
         return InstallMethod.MANUAL
 
@@ -325,35 +356,80 @@ def remove_eggpool_path_entries(
     happen to live in ``~/.local/bin``.
 
     Returns the list of files that were actually modified.
+
+    For an interactive flow, prefer :func:`preview_eggpool_path_changes`
+    followed by :func:`apply_eggpool_path_changes` so the user can
+    confirm the diff before it is written.
     """
-    modified: list[Path] = []
+    previews = preview_eggpool_path_changes(rc_files, marker=marker)
+    if not any(p.changed for p in previews):
+        return []
+    return apply_eggpool_path_changes(previews)
+
+
+def preview_eggpool_path_changes(
+    rc_files: Sequence[Path],
+    *,
+    marker: str = EGGPOOL_SHELL_MARKER,
+) -> list[RcFileChange]:
+    """Compute the would-be edits without touching disk.
+
+    The returned list contains one :class:`RcFileChange` per existing
+    rc file so the caller can show a diff or print the list of files
+    that would change before confirming the write.
+    """
+    previews: list[RcFileChange] = []
     for rc in rc_files:
         if not rc.exists():
             continue
         original = rc.read_text(encoding="utf-8")
-        lines = original.splitlines()
-        kept: list[str] = []
-        skip_block = False
-        changed = False
-        for line in lines:
-            if marker in line:
-                changed = True
-                skip_block = True
-                continue
-            if skip_block:
-                if line.strip() == "":
-                    skip_block = False
-                else:
-                    continue
-            if _is_eggpool_path_line(line):
-                changed = True
-                continue
-            kept.append(line)
-        if not changed:
+        kept = _filter_eggpool_lines(original.splitlines(), marker=marker)
+        new_text = "\n".join(kept) + ("\n" if original.endswith("\n") else "")
+        changed = new_text != original
+        removed = [line for line in original.splitlines() if line not in kept]
+        previews.append(
+            RcFileChange(
+                path=rc,
+                original=original,
+                new_text=new_text,
+                removed_lines=tuple(removed),
+                changed=changed,
+            )
+        )
+    return previews
+
+
+def apply_eggpool_path_changes(previews: Sequence[RcFileChange]) -> list[Path]:
+    """Persist the edits planned by :func:`preview_eggpool_path_changes`.
+
+    Returns the list of files that were actually modified.
+    """
+    modified: list[Path] = []
+    for preview in previews:
+        if not preview.changed:
             continue
-        rc.write_text("\n".join(kept) + "\n", encoding="utf-8")
-        modified.append(rc)
+        preview.path.write_text(preview.new_text, encoding="utf-8")
+        modified.append(preview.path)
     return modified
+
+
+def _filter_eggpool_lines(lines: Sequence[str], *, marker: str) -> list[str]:
+    """Return *lines* with EggPool-attributable entries removed."""
+    kept: list[str] = []
+    skip_block = False
+    for line in lines:
+        if marker in line:
+            skip_block = True
+            continue
+        if skip_block:
+            if line.strip() == "":
+                skip_block = False
+            else:
+                continue
+        if _is_eggpool_path_line(line):
+            continue
+        kept.append(line)
+    return kept
 
 
 def _is_eggpool_path_line(line: str) -> bool:
@@ -435,8 +511,7 @@ def uninstall(
         if paths.binary_path is None or not paths.binary_path.exists():
             raise RuntimeError(
                 "Cannot locate the eggpool binary for this manual install. "
-                "Remove it by hand, then re-run with --keep-binary to skip "
-                "this check."
+                "Remove it by hand, then re-run --yes after the binary is gone."
             )
         _assert_safe_path(paths.binary_path, label="binary")
         confirmed = confirm(f"Delete the eggpool binary at {paths.binary_path}?")
@@ -464,15 +539,31 @@ def uninstall(
         _safe_rm_tree(paths.data_dir)
 
     if cleanup_path:
-        files = rc_files if rc_files is not None else _default_rc_files()
-        modified = remove_eggpool_path_entries(files)
-        if modified and not confirm(
-            f"Removed eggpool PATH entries from: "
-            f"{', '.join(str(p) for p in modified)}. Proceed?"
-        ):
-            raise RuntimeError("Uninstall aborted during PATH cleanup.")
+        files = list(rc_files) if rc_files is not None else _default_rc_files()
+        previews = preview_eggpool_path_changes(files)
+        changeable = [p for p in previews if p.changed]
+        if changeable:
+            _render_rc_preview(changeable)
+            if not confirm("Apply the PATH cleanup shown above?"):
+                raise RuntimeError("Uninstall aborted during PATH cleanup.")
+            apply_eggpool_path_changes(changeable)
 
     return paths
+
+
+def _render_rc_preview(changeable: Sequence[RcFileChange]) -> None:
+    """Print the planned edits for each rc file to stderr.
+
+    The CLI surfaces these via :func:`preview_eggpool_path_changes` so
+    the operator can read the diff before confirming. Intended for
+    stderr output so the dry-run command line flow still works.
+    """
+    import sys  # noqa: PLC0415
+
+    for preview in changeable:
+        print(f"  {preview.path}:", file=sys.stderr)
+        for line in preview.removed_lines:
+            print(f"    - {line}", file=sys.stderr)
 
 
 def resolve_uninstall_paths(

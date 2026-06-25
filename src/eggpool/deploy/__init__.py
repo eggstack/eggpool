@@ -9,6 +9,8 @@ content. To update any snippet, edit it here AND in ``deploy/``.
 
 from __future__ import annotations
 
+from typing import Any
+
 SYSTEMD_UNIT = """\
 [Unit]
 Description=EggPool
@@ -137,14 +139,24 @@ def build_personal_systemd_unit(
     config_path: str,
     data_dir: str,
     env_path: str | None = None,
+    *,
+    user: str | None = None,
+    group: str | None = None,
 ) -> str:
     """Generate a systemd unit for personal (single-user) use.
 
-    Unlike ``SYSTEMD_UNIT``, this omits the dedicated ``eggpool`` user,
-    security hardening directives, and production paths.  It targets
-    the invoking user's own environment and is not intended for
-    public-facing deployments.
+    Unlike :data:`SYSTEMD_UNIT`, this omits the dedicated ``eggpool``
+    user, security hardening directives, and production paths. It
+    targets the invoking user's own environment and is not intended
+    for public-facing deployments.
+
+    ``user`` and ``group`` set the systemd ``User=`` and ``Group=``
+    directives. They default to the invoking user's identity so the
+    service runs as the operator rather than root. Pass ``user="root"``
+    and ``group="root"`` to install a root-owned personal unit.
     """
+    resolved_user = user if user else "eggpool-user"
+    resolved_group = group if group else resolved_user
     env_line = f"\nEnvironmentFile={env_path}" if env_path else ""
 
     return f"""\
@@ -155,8 +167,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+User={resolved_user}
+Group={resolved_group}
 ExecStart={binary_path} --config {config_path} serve
 WorkingDirectory={data_dir}
+Environment=EGGPOOL_CONFIG={config_path}
 # Configuration changes require: systemctl restart eggpool
 Restart=on-failure
 RestartSec=5
@@ -221,6 +236,141 @@ def build_personal_backup_cron() -> str:
 # EggPool daily backup (personal use — user cron, not /etc/cron.d/)
 0 2 * * * /usr/local/bin/eggpool-backup
 """
+
+
+def build_personal_watchdog_cron(
+    binary_path: str,
+    config_path: str,
+    log_path: str,
+    interval_minutes: int = 5,
+) -> str:
+    """Generate a user crontab fragment for the EggPool watchdog.
+
+    The fragment contains two ``eggpool ensure-running`` lines bracketed
+    by ``BEGIN EggPool watchdog`` / ``END EggPool watchdog`` markers so
+    uninstall can strip them without disturbing unrelated cron entries.
+    The ``@reboot`` line is the immediate startup trigger and the
+    ``*/N * * * *`` line is the periodic poll.
+
+    ``interval_minutes`` must be in 1-59 (a cron ``*/N`` expression does
+    not support zero and 60+ would alias every hour, not every minute).
+    """
+    if not 1 <= interval_minutes <= 59:
+        raise ValueError(f"interval_minutes must be 1-59, got {interval_minutes}")
+
+    cmd = f"{binary_path} --config {config_path} ensure-running"
+    log_target = f"{log_path} 2>&1"
+    return f"""\
+# BEGIN EggPool watchdog (managed by eggpool deploy cron)
+@reboot {cmd} >> {log_target}
+*/{interval_minutes} * * * * {cmd} >> {log_target}
+# END EggPool watchdog
+"""
+
+
+def build_personal_backup_block(binary_path: str) -> str:
+    """Generate the user crontab fragment for the daily backup.
+
+    Returned as a BEGIN/END-marked block so :func:`uninstall_cron_block`
+    can remove only the eggpool-attributable lines without disturbing
+    unrelated user cron entries.
+    """
+    return f"""\
+# BEGIN EggPool backup (managed by eggpool deploy backup-cron)
+0 2 * * * {binary_path}
+# END EggPool backup
+"""
+
+
+def strip_managed_cron_blocks(text: str) -> str:
+    """Remove EggPool-managed crontab blocks from ``text``.
+
+    Strips lines inside any ``# BEGIN EggPool ...`` / ``# END EggPool ...``
+    block (watchdog, backup, or future variants). Other lines are
+    preserved verbatim. The function is intentionally tolerant: missing
+    markers are no-ops, and partial markers leave the text unchanged.
+    """
+    out: list[str] = []
+    inside_block = False
+    block_was_open = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("# BEGIN EggPool"):
+            inside_block = True
+            block_was_open = True
+            continue
+        if inside_block and stripped.startswith("# END EggPool"):
+            inside_block = False
+            continue
+        if inside_block:
+            continue
+        out.append(line)
+    if block_was_open and inside_block:
+        return text
+    return "\n".join(out) + ("\n" if text.endswith("\n") else "")
+
+
+def install_cron_block(
+    block: str,
+    *,
+    user: str | None = None,
+    runner: Any | None = None,
+) -> None:
+    """Install a BEGIN/END-marked cron block into the user's crontab.
+
+    The runner is injectable for tests; default behaviour reads the
+    current crontab via ``crontab -l`` (or ``crontab -u <user> -l`` when
+    ``user`` is set), appends the block, and writes it back via
+    ``crontab -`` (or ``crontab -u <user> -``). Pre-existing identical
+    blocks are not duplicated.
+    """
+    import subprocess  # noqa: PLC0415
+
+    run = runner if runner is not None else subprocess.run
+
+    list_cmd = ["crontab", "-l"] if user is None else ["crontab", "-u", user, "-l"]
+    list_result = run(list_cmd, capture_output=True, text=True, check=False)
+    existing = list_result.stdout if list_result.returncode == 0 else ""
+
+    if strip_managed_cron_blocks(existing).strip() == block.strip():
+        return
+
+    stripped_existing = strip_managed_cron_blocks(existing).rstrip()
+    if stripped_existing and not stripped_existing.endswith("\n"):
+        new_cron = stripped_existing + "\n\n" + block
+    elif stripped_existing:
+        new_cron = stripped_existing + "\n" + block
+    else:
+        new_cron = block
+
+    set_cmd = ["crontab", "-"] if user is None else ["crontab", "-u", user, "-"]
+    run(set_cmd, input=new_cron, text=True, check=True)
+
+
+def remove_cron_block(
+    *,
+    user: str | None = None,
+    runner: Any | None = None,
+) -> str:
+    """Remove every EggPool-managed crontab block and write the result back.
+
+    Returns the new crontab text (post-strip) so tests can assert on it.
+    """
+    import subprocess  # noqa: PLC0415
+
+    run = runner if runner is not None else subprocess.run
+
+    list_cmd = ["crontab", "-l"] if user is None else ["crontab", "-u", user, "-l"]
+    list_result = run(list_cmd, capture_output=True, text=True, check=False)
+    existing = list_result.stdout if list_result.returncode == 0 else ""
+
+    new_cron = strip_managed_cron_blocks(existing)
+    if new_cron == existing:
+        return existing
+
+    set_cmd = ["crontab", "-"] if user is None else ["crontab", "-u", user, "-"]
+    run(set_cmd, input=new_cron, text=True, check=True)
+    return new_cron
 
 
 def build_personal_logrotate() -> str:

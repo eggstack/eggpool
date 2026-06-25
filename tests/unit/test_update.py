@@ -87,10 +87,13 @@ class TestDetectInstallMethod:
                     sys.real_prefix = type(sys.prefix)()  # type: ignore[attr-defined]
 
     def test_venv_with_pipx_returns_pipx(self) -> None:
-        """Returns 'pipx' when in a venv and pipx is on PATH."""
+        """Returns 'pipx' when eggpool binary path is under pipx/venvs."""
         with (
             patch.object(sys, "base_prefix", "/different/prefix"),
-            patch("shutil.which", return_value="/usr/bin/pipx"),
+            patch(
+                "shutil.which",
+                return_value="/home/user/.local/pipx/venvs/eggpool/bin/eggpool",
+            ),
         ):
             had = hasattr(sys, "real_prefix")
             if had:
@@ -144,7 +147,10 @@ class TestDetectInstallMethod:
             patch.object(
                 sys, "executable", "/home/user/.local/pipx/venvs/eggpool/bin/python"
             ),
-            patch("shutil.which", return_value="/usr/bin/pipx"),
+            patch(
+                "shutil.which",
+                return_value="/home/user/.local/pipx/venvs/eggpool/bin/eggpool",
+            ),
         ):
             had = hasattr(sys, "real_prefix")
             if had:

@@ -159,9 +159,9 @@ class TestDeployLogrotate:
 
 
 class TestDeployCron:
-    """Verify ``deploy cron`` CLI output."""
+    """Verify ``deploy cron`` CLI output (watchdog, not backup)."""
 
-    def test_prints_dynamic_script_and_hint(self, tmp_path: Path) -> None:
+    def test_prints_watchdog_fragment_and_install_hint(self, tmp_path: Path) -> None:
         config_path = tmp_path / "config.toml"
         config_path.write_text('[server]\napi_key = "ep_test"\nport = 8080\n')
 
@@ -169,16 +169,29 @@ class TestDeployCron:
         result = runner.invoke(cli, ["--config", str(config_path), "deploy", "cron"])
 
         assert result.exit_code == 0, result.output
-        # Personal-use header
-        assert "EggPool cron setup (personal use)" in result.output
-        # Dynamic content: config path should appear in the script
+        # Watchdog header
+        assert "EggPool watchdog" in result.output
+        # Crontab fragment with @reboot and the default */5 interval
+        assert "@reboot" in result.output
+        assert "ensure-running" in result.output
+        assert "*/5 * * * *" in result.output
+        # Config path is embedded in the cron line
         assert str(config_path) in result.output
-        # Production snippets also shown
-        assert "Production snippet" in result.output
-        assert CRON_BACKUP_SCRIPT in result.output
-        assert CRON_BACKUP_FILE in result.output
         # Install hint
         assert "eggpool deploy cron --install" in result.output
+
+    def test_watchdog_with_custom_interval(self, tmp_path: Path) -> None:
+        config_path = tmp_path / "config.toml"
+        config_path.write_text('[server]\napi_key = "ep_test"\nport = 8080\n')
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "deploy", "cron", "--interval", "10"],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "*/10 * * * *" in result.output
 
 
 class TestDeployAll:
@@ -195,12 +208,12 @@ class TestDeployAll:
         # Each subsection header must appear
         assert "EggPool systemd unit (personal use)" in result.output
         assert "EggPool logrotate configuration" in result.output
-        assert "EggPool cron setup (personal use)" in result.output
+        assert "EggPool watchdog" in result.output
+        # Reference to backup-cron (now a separate command)
+        assert "deploy backup-cron" in result.output
         # Production snippets
         assert SYSTEMD_UNIT in result.output
         assert LOGROTATE_CONF in result.output
-        assert CRON_BACKUP_SCRIPT in result.output
-        assert CRON_BACKUP_FILE in result.output
 
     def test_does_not_overwrite_config(self, tmp_path: Path) -> None:
         """deploy all must not modify the user's config file."""
@@ -247,7 +260,23 @@ class TestDynamicSnippets:
         assert expected_exec in unit
         assert "WorkingDirectory=/home/test/.local/share/eggpool" in unit
         assert "EnvironmentFile=/home/test/.env" in unit
-        assert "User=" not in unit
+        assert "Environment=EGGPOOL_CONFIG=/home/test/config.toml" in unit
+        assert "User=eggpool-user" in unit
+        assert "Group=eggpool-user" in unit
+
+    def test_systemd_unit_accepts_user_override(self) -> None:
+        from eggpool.deploy import build_personal_systemd_unit
+
+        unit = build_personal_systemd_unit(
+            binary_path="/home/alice/.local/bin/eggpool",
+            config_path="/home/alice/config.toml",
+            data_dir="/home/alice/.local/share/eggpool",
+            env_path="/home/alice/.env",
+            user="alice",
+            group="alice",
+        )
+        assert "User=alice" in unit
+        assert "Group=alice" in unit
 
     def test_systemd_unit_without_env(self) -> None:
         from eggpool.deploy import build_personal_systemd_unit

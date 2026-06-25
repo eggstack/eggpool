@@ -46,6 +46,16 @@ See `architecture/README.md` for the full design overview.
 - `runtime.start_server()` signature: `start_server(config_path, *, cwd=None, daemon=True, log_path=None, quiet=True, verify=False, verify_timeout_s=3.0)`. `runtime.restart_server()` accepts the same `daemon`, `log_path`, and `quiet` options. The CLI flags `eggpool serve --daemon`, `--log-file PATH`, `--quiet`, and `--as-root` map directly to these parameters
 - See `plans/daemon-and-runtime.md` for the full design
 
+## Installation and Deployment
+
+- `eggpool.deploy_user` — `DeployUser`, `resolve_deploy_user()` (handles normal, `SUDO_USER`, and direct-root cases), `resolve_config_path()` (single source of truth for `--config` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`), `resolve_env_path()`, and XDG default helpers (`default_config_dir()` / `default_data_dir()` / `default_state_dir()` / `default_config_path()` / `default_env_path()`)
+- `eggpool.deploy` — bundled constants (`SYSTEMD_UNIT`, `LOGROTATE_CONF`, `CRON_BACKUP_FILE`, `CRON_BACKUP_SCRIPT`) + personal builders (`build_personal_systemd_unit`, `build_personal_watchdog_cron`, `build_personal_backup_block`, `build_personal_logrotate`) + cron block management (`install_cron_block`, `remove_cron_block`, `strip_managed_cron_blocks`). Every cron block is bracketed by `# BEGIN EggPool ...` / `# END EggPool ...` markers so uninstall only strips eggpool-owned lines
+- `eggpool.cli_full.deploy_*` — Click commands: `deploy systemd [--install|--production|--as-root]`, `deploy cron [--install|--uninstall|--interval N]` (the **watchdog**, not the backup), `deploy backup-cron` (the actual backup), `deploy logrotate [--install]` (validates via `logrotate -d`), `deploy all`
+- `eggpool.cli_full.uninstall [--deploy-artifacts]` — detects the install method, previews PATH edits via `preview_eggpool_path_changes()` + `RcFileChange` before writing, and removes the binary, config, data, and shell-rc entries. `--deploy-artifacts` extends this to systemd / logrotate / cron / backup-script cleanup
+- Production systemd unit (`SYSTEMD_UNIT` constant) is the source of truth; `deploy/eggpool.service` is kept byte-for-byte identical
+- `eggpool.deploy_user.resolve_config_path()` is the single source of truth for every CLI command's config-path resolution
+- `eggpool deploy cron` is the **watchdog**; `eggpool deploy backup-cron` is the **backup**. The two are intentionally separate commands so a missing backup never blocks the watchdog and vice versa
+
 ## Fast-Path CLI
 
 - The entry point `eggpool.cli:main` tries `fastcli.maybe_run_fast_command()` before importing Click

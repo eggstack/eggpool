@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 import sys
+from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -18,6 +21,14 @@ from eggpool.accounts.registry import account_config_rows
 from eggpool.auth import require_auth_at_startup
 from eggpool.db.migrations import MigrationRunner
 from eggpool.db.repositories import AccountRepository, ProviderRepository
+from eggpool.deploy_user import (
+    DeployUser,
+    default_config_dir,
+    default_data_dir,
+    default_state_dir,
+    resolve_deploy_user,
+    resolve_env_path,
+)
 from eggpool.errors import AggregatorError, ConfigError
 from eggpool.lifecycle import (
     InstallMethod,
@@ -74,20 +85,25 @@ class _ConfigPathGroup(click.Group):
 @click.option(
     "--config",
     "config_path",
-    default="config.toml",
-    help="Path to the TOML configuration file.",
+    default=None,
+    help="Path to the TOML configuration file. Falls back to $EGGPOOL_CONFIG, "
+    "then ~/.config/eggpool/config.toml, then ./config.toml.",
     type=click.Path(),
 )
 @click.pass_context
-def cli(ctx: click.Context, config_path: str) -> None:
+def cli(ctx: click.Context, config_path: str | None) -> None:
     """EggPool - aggregate OpenCode Go subscriptions."""
     ctx.ensure_object(dict)
-    ctx.obj["config_path"] = os.path.abspath(config_path)
+    from eggpool.deploy_user import resolve_config_path
+
+    resolved = resolve_config_path(cli_value=config_path)
+    ctx.obj["config_path"] = str(resolved)
+    ctx.obj["config_path_resolved"] = True
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
         return
 
-    _skip_ensure_config = {"help", "version", "init-config"}
+    _skip_ensure_config = {"help", "version", "init-config", "uninstall", "recover"}
     if ctx.invoked_subcommand not in _skip_ensure_config:
         from eggpool.config import ensure_config
 
@@ -820,19 +836,26 @@ def _detect_install_method() -> str:
     )
 
     if in_venv:
-        # Check for uv tool install: executable lives under uv tool directories
-        exe = Path(sys.executable).resolve()
-        parts = exe.parts
-        if "uv" in parts and "tools" in parts:
-            return "uv-tool"
+        # Check the resolved eggpool binary (not the running Python)
+        # against the canonical tool layout. Detecting the Python is
+        # not enough: pipx and uv-tool both create a venv, but only the
+        # binary path matches the tool's directory conventions.
+        eggpool_exe = shutil.which("eggpool")
+        candidates: list[Path] = []
+        if eggpool_exe is not None:
+            candidates.append(Path(eggpool_exe).resolve())
+        candidates.append(Path(sys.executable).resolve())
 
-        # Check for pipx: pipx is available and executable is in a pipx-managed venv
-        import shutil
+        for exe in candidates:
+            parts = exe.parts
+            if "uv" in parts and "tools" in parts:
+                return "uv-tool"
+            if "pipx" in parts and ("venvs" in parts or "shared" in parts):
+                return "pipx"
 
-        if shutil.which("pipx") is not None:
-            return "pipx"
-
-        # Generic venv (manual or unknown tool) — default to pip for upgrade
+        # Fallback: generic venv (manual or unknown tool). We do not
+        # classify as pipx just because pipx is on PATH; that produces
+        # false positives on dev machines.
         return "pip"
 
     # Source checkout (pyproject.toml nearby)
@@ -843,16 +866,21 @@ def _detect_install_method() -> str:
     return "pip"
 
 
-def _resolve_eggpool_binary() -> str:
-    """Resolve the path to the eggpool binary for systemd ExecStart."""
+def _resolve_eggpool_binary() -> str | None:
+    """Resolve the path to the eggpool binary for systemd ExecStart.
+
+    Returns ``None`` when no eggpool binary is on PATH and the
+    ``--install`` action cannot proceed. Callers that only need a
+    best-effort value should pass the result through ``or
+    "<fallback>"`` to fall back to ``sys.executable -m eggpool`` for
+    source installs.
+    """
     import shutil
 
     which = shutil.which("eggpool")
     if which is not None:
         return str(Path(which).resolve())
-
-    # Fallback: use sys.executable with -m eggpool (works for source installs)
-    return f"{sys.executable} -m eggpool"
+    return None
 
 
 def _resolve_data_dir() -> Path:
@@ -860,43 +888,6 @@ def _resolve_data_dir() -> Path:
     from eggpool.constants import DEFAULT_DATABASE_PATH
 
     return Path(DEFAULT_DATABASE_PATH).parent
-
-
-def _resolve_env_path() -> str | None:
-    """Find a .env file for the current user/installation.
-
-    Checks CWD, home directory, and config-referenced env vars.
-    Returns the path if found, None otherwise.
-    """
-    candidates = [
-        Path.cwd() / ".env",
-        Path.home() / ".env",
-    ]
-    for p in candidates:
-        if p.exists():
-            return str(p.resolve())
-    return None
-
-
-def _require_root() -> None:
-    """Exit with an error if not running as root."""
-    import os
-
-    if os.geteuid() != 0:
-        click.echo(
-            "Error: --install requires root privileges.\n"
-            "Re-run with: sudo eggpool deploy <command> --install",
-            err=True,
-        )
-        sys.exit(1)
-
-
-def _confirm_install(component: str, path: str) -> None:
-    """Prompt the user to confirm a system-level installation action."""
-    click.echo(f"\nThis will write {path} and may restart services.")
-    if not click.confirm("Proceed?"):
-        click.echo("Aborted.")
-        sys.exit(0)
 
 
 def _write_file(path: str, content: str) -> None:
@@ -948,20 +939,41 @@ def _run_with_database(
         sys.exit(1)
 
 
-def _run_systemctl(args: list[str], quiet: bool = False) -> bool:
-    """Run a systemctl command. Returns True on success."""
-    import subprocess
+def _run_systemctl(
+    args: list[str], quiet: bool = False
+) -> subprocess.CompletedProcess[str]:
+    """Run a systemctl command and return the completed process.
 
+    Never raises for a non-zero return code; the caller decides what to
+    do with the result. When ``quiet`` is false and the command wrote
+    stdout, the captured output is echoed to the terminal.
+    """
     cmd = ["systemctl", *args]
-    result = subprocess.run(cmd, capture_output=True, text=True)  # noqa: S603
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)  # noqa: S603
+    if result.returncode != 0:
+        err_msg = result.stderr.strip() or "unknown error"
+        click.echo(f"  Warning: {' '.join(cmd)} failed: {err_msg}", err=True)
+    elif not quiet and result.stdout.strip():
+        click.echo(result.stdout.strip())
+    return result
+
+
+def _run_systemctl_required(args: list[str]) -> subprocess.CompletedProcess[str]:
+    """Run a systemctl command and exit non-zero on failure.
+
+    Unlike :func:`_run_systemctl`, this helper is for steps that must
+    succeed for the deploy to be considered complete. The captured
+    stderr is printed before the process exits so the operator can see
+    why the install aborted.
+    """
+    result = _run_systemctl(args)
     if result.returncode != 0:
         click.echo(
-            f"  Warning: {' '.join(cmd)} failed: {result.stderr.strip()}", err=True
+            f"Error: {' '.join(['systemctl', *args])} failed.",
+            err=True,
         )
-        return False
-    if not quiet and result.stdout.strip():
-        click.echo(result.stdout.strip())
-    return True
+        sys.exit(1)
+    return result
 
 
 def _stop_running_server() -> bool:
@@ -1330,32 +1342,87 @@ def _print_deploy_snippet(
 
 @deploy.command("systemd")
 @click.option(
-    "--install", is_flag=True, help="Install the systemd unit (requires root)."
+    "--install",
+    is_flag=True,
+    help="Install the systemd unit. Personal mode refuses direct-root "
+    "without --as-root; production mode is opt-in via --production.",
+)
+@click.option(
+    "--production",
+    is_flag=True,
+    help="Production mode: create a dedicated system user and install "
+    "to /etc/eggpool and /var/lib/eggpool. Requires root.",
+)
+@click.option(
+    "--as-root",
+    "as_root",
+    is_flag=True,
+    help="Allow personal --install to run as direct root. Refused by "
+    "default to prevent an accidental root-owned personal deployment.",
 )
 @click.pass_context
-def deploy_systemd(ctx: click.Context, install: bool) -> None:
+def deploy_systemd(
+    ctx: click.Context, install: bool, production: bool, as_root: bool
+) -> None:
     """Print the systemd unit and install instructions.
 
-    With --install, writes the unit file, reloads systemd, and
-    enables/starts the service. Not intended for public-facing
-    deployments — use a dedicated eggpool user for production.
+    With --install, writes the unit file, reloads systemd, and enables
+    and starts the service. Default mode targets the *invoking* user
+    so the unit never runs as root unless --as-root is passed.
+
+    Production mode (--production) automates the documented system
+    layout: dedicated ``eggpool`` user, ``/etc/eggpool`` config dir,
+    ``/var/lib/eggpool`` data dir, ``/var/log/eggpool`` log dir,
+    ``/var/backups/eggpool`` backup dir, and the hardened
+    :data:`eggpool.deploy.SYSTEMD_UNIT` constant.
     """
     from eggpool.deploy import SYSTEMD_UNIT, build_personal_systemd_unit
 
     config_path: str = ctx.obj["config_path"]
     binary_path = _resolve_eggpool_binary()
-    data_dir = str(_resolve_data_dir())
-    env_path = _resolve_env_path()
 
-    # Generate dynamic snippet for personal use
+    if install and binary_path is None:
+        click.echo(
+            "Error: cannot locate the eggpool binary on PATH.\n"
+            "  Install EggPool first (e.g. `uv tool install eggpool`).",
+            err=True,
+        )
+        sys.exit(1)
+
+    if production:
+        _deploy_systemd_production(binary_path=binary_path, install=install)
+        return
+
+    # Personal mode path.
+    deploy_user = resolve_deploy_user()
+    if install and deploy_user.is_root and not as_root:
+        click.echo(
+            "Error: refusing to install a personal systemd unit as direct root.\n"
+            "  Re-run with --as-root for a root-owned personal unit,\n"
+            "  or with --production for the dedicated-system layout.\n"
+            "  For a sudo-driven install, re-run via:\n"
+            '    sudo env "PATH=$PATH" "$(command -v eggpool)" '
+            "deploy systemd --install",
+            err=True,
+        )
+        sys.exit(1)
+
+    config_path_resolved = str(Path(config_path).expanduser().resolve())
+    data_dir = str(default_data_dir())
+    env_path_obj = resolve_env_path(config_path=Path(config_path_resolved))
+    env_path = str(env_path_obj) if env_path_obj is not None else None
+
+    user = deploy_user.user
+    group = deploy_user.primary_group
     dynamic_unit = build_personal_systemd_unit(
-        binary_path=binary_path,
-        config_path=config_path,
+        binary_path=binary_path or "eggpool",
+        config_path=config_path_resolved,
         data_dir=data_dir,
         env_path=env_path,
+        user=user,
+        group=group,
     )
 
-    # Always print the snippet + instructions
     _print_deploy_snippet(
         title="EggPool systemd unit (personal use)",
         target_path="/etc/systemd/system/eggpool.service",
@@ -1368,7 +1435,6 @@ def deploy_systemd(ctx: click.Context, install: bool) -> None:
         ],
     )
 
-    # Also show the production snippet for reference
     click.echo("")
     click.echo("=" * 72)
     click.echo("")
@@ -1376,22 +1442,410 @@ def deploy_systemd(ctx: click.Context, install: bool) -> None:
     click.echo("")
     click.echo(SYSTEMD_UNIT)
 
-    # Auto-install hint
     click.echo("")
     click.echo(
-        "Run 'sudo eggpool deploy systemd --install' to set this up automatically."
+        "Run 'sudo eggpool deploy systemd --install' (personal) or "
+        "'sudo eggpool deploy systemd --install --production' for the "
+        "dedicated-system layout."
     )
 
-    if install:
-        _require_root()
-        _stop_running_server()
-        _confirm_install("systemd unit", "/etc/systemd/system/eggpool.service")
-        _write_file("/etc/systemd/system/eggpool.service", dynamic_unit)
-        _run_systemctl(["daemon-reload"])
-        _run_systemctl(["enable", "eggpool"])
-        _run_systemctl(["start", "eggpool"])
+    if not install:
+        return
+
+    _install_personal_systemd(
+        deploy_user=deploy_user,
+        unit=dynamic_unit,
+        binary_path=binary_path or "eggpool",
+        config_path=config_path_resolved,
+        data_dir=data_dir,
+        env_path=env_path,
+    )
+
+
+def _install_personal_systemd(
+    *,
+    deploy_user: DeployUser,
+    unit: str,
+    binary_path: str,
+    config_path: str,
+    data_dir: str,
+    env_path: str | None,
+) -> None:
+    """Run the personal ``deploy systemd --install`` flow.
+
+    Validates config readiness, prepares filesystem state, writes the
+    unit, and runs ``systemctl daemon-reload`` / ``enable`` / ``start``.
+    Any failure exits non-zero so the caller can surface a clear error.
+    """
+    if os.geteuid() != 0 and not deploy_user.is_sudo:
+        click.echo(
+            "Error: --install requires root or sudo.\n"
+            "  Re-run via: sudo eggpool deploy systemd --install",
+            err=True,
+        )
+        sys.exit(1)
+
+    _stop_running_server()
+
+    if not _confirm_action(
+        f"Install systemd unit to /etc/systemd/system/eggpool.service "
+        f"running as {deploy_user.user}?"
+    ):
+        click.echo("Aborted.")
+        return
+
+    _prepare_user_dirs(deploy_user)
+    _ensure_personal_config_ready(config_path)
+
+    target = "/etc/systemd/system/eggpool.service"
+    _write_file(target, unit)
+    _chown_to_user(Path(target), deploy_user)
+
+    try:
+        _run_systemctl_required(["daemon-reload"])
+        _run_systemctl_required(["enable", "eggpool"])
+        _run_systemctl_required(["start", "eggpool"])
+    except SystemExit:
+        raise
+
+    click.echo("")
+    _run_systemctl(["status", "eggpool"])
+
+
+def _deploy_systemd_production(*, binary_path: str | None, install: bool) -> None:
+    """Run the production ``deploy systemd --production`` flow."""
+    if install and os.geteuid() != 0:
+        click.echo(
+            "Error: --production --install requires root privileges.",
+            err=True,
+        )
+        sys.exit(1)
+
+    from eggpool.deploy import SYSTEMD_UNIT
+
+    click.echo("EggPool production systemd layout:")
+    click.echo("  config:    /etc/eggpool/config.toml")
+    click.echo("  env:       /etc/eggpool/env")
+    click.echo("  data:      /var/lib/eggpool")
+    click.echo("  log:       /var/log/eggpool")
+    click.echo("  backups:   /var/backups/eggpool")
+    click.echo("  user:      eggpool (system)")
+    click.echo("")
+    click.echo(SYSTEMD_UNIT)
+
+    if not install:
         click.echo("")
-        _run_systemctl(["status", "eggpool"])
+        click.echo(
+            "Run 'sudo eggpool deploy systemd --install --production' to "
+            "perform the install automatically."
+        )
+        return
+
+    if binary_path is None:
+        click.echo(
+            "Error: cannot locate the eggpool binary on PATH.\n"
+            "  The production unit hard-codes the binary path; install "
+            "eggpool first (e.g. `uv tool install eggpool`).",
+            err=True,
+        )
+        sys.exit(1)
+
+    _stop_running_server()
+
+    if not _confirm_action(
+        "Provision the production layout under /etc/eggpool and "
+        "/var/lib/eggpool and start the eggpool service?"
+    ):
+        click.echo("Aborted.")
+        return
+
+    _provision_production_system_user()
+    _provision_production_directories()
+    _seed_production_config_if_missing()
+    _seed_production_env_if_missing()
+    _write_file("/etc/systemd/system/eggpool.service", SYSTEMD_UNIT)
+
+    _run_production_validation()
+
+    _run_systemctl_required(["daemon-reload"])
+    _run_systemctl_required(["enable", "eggpool"])
+    _run_systemctl_required(["start", "eggpool"])
+
+    click.echo("")
+    _run_systemctl(["status", "eggpool"])
+
+
+def _provision_production_system_user() -> None:
+    """Create the dedicated ``eggpool`` system user if missing."""
+    import pwd  # noqa: PLC0415
+
+    try:
+        pwd.getpwnam("eggpool")
+        click.echo("  System user 'eggpool' already exists.")
+        return
+    except KeyError:
+        pass
+
+    result = subprocess.run(  # noqa: S603
+        [
+            "useradd",
+            "-r",
+            "-s",
+            "/usr/sbin/nologin",
+            "-d",
+            "/var/lib/eggpool",
+            "eggpool",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        click.echo(
+            f"Error: failed to create system user 'eggpool': {result.stderr.strip()}",
+            err=True,
+        )
+        sys.exit(1)
+    click.echo("  Created system user 'eggpool'.")
+
+
+def _provision_production_directories() -> None:
+    """Create and permission the production filesystem layout."""
+    dirs: list[tuple[Path, str, str]] = [
+        (Path("/var/lib/eggpool"), "eggpool:eggpool", "750"),
+        (Path("/var/log/eggpool"), "eggpool:eggpool", "750"),
+        (Path("/var/backups/eggpool"), "eggpool:eggpool", "750"),
+        (Path("/etc/eggpool"), "root:eggpool", "755"),
+    ]
+    for path, _owner, mode in dirs:
+        if not path.exists():
+            path.mkdir(parents=True)
+            click.echo(f"  Created {path}")
+        _chown(path, "eggpool" if path != Path("/etc/eggpool") else "root")
+        _chmod(path, mode)
+
+    for fname, mode in (
+        ("config.toml", "640"),
+        ("env", "640"),
+    ):
+        target = Path("/etc/eggpool") / fname
+        if target.exists():
+            _chown(target, "root")
+            _chmod(target, mode)
+
+
+def _seed_production_config_if_missing() -> None:
+    """Copy the bundled config.example.toml to /etc/eggpool/config.toml."""
+    from importlib.resources import as_file, files  # noqa: PLC0415
+
+    target = Path("/etc/eggpool/config.toml")
+    if target.exists():
+        click.echo(f"  {target} already exists; leaving as-is.")
+        return
+
+    try:
+        ref = files("eggpool._share").joinpath("config.example.toml")
+        with as_file(ref) as source:
+            if source.exists():
+                import shutil  # noqa: PLC0415
+
+                shutil.copy2(source, target)
+                _chown(target, "root")
+                _chmod(target, "640")
+                click.echo(f"  Seeded {target} from bundled template.")
+                return
+    except (OSError, ModuleNotFoundError):
+        pass
+
+    click.echo(
+        f"  Warning: {target} not seeded (bundled template unavailable).",
+        err=True,
+    )
+
+
+def _seed_production_env_if_missing() -> None:
+    """Copy the bundled deploy/env.example to /etc/eggpool/env if missing."""
+    target = Path("/etc/eggpool/env")
+    if target.exists():
+        click.echo(f"  {target} already exists; leaving as-is.")
+        return
+
+    source = Path(__file__).resolve().parents[2] / "deploy" / "env.example"
+    if not source.exists():
+        click.echo(
+            f"  Warning: {source} not found; please create {target} manually.",
+            err=True,
+        )
+        return
+    import shutil  # noqa: PLC0415
+
+    shutil.copy2(source, target)
+    _chown(target, "root")
+    _chmod(target, "640")
+    click.echo(f"  Seeded {target} from {source}.")
+
+
+def _run_production_validation() -> None:
+    """Validate the seeded config and run migrations as the eggpool user."""
+    config_path = "/etc/eggpool/config.toml"
+    env_path = "/etc/eggpool/env"
+
+    check_cmd = [
+        "sudo",
+        "-u",
+        "eggpool",
+        "env",
+        f"EGGPOOL_CONFIG={config_path}",
+        f"EGGPOOL_ENV={env_path}",
+        binary_path_for_validation(),
+        "check-config",
+        "--config",
+        config_path,
+    ]
+    migrate_cmd = [
+        "sudo",
+        "-u",
+        "eggpool",
+        "env",
+        f"EGGPOOL_CONFIG={config_path}",
+        f"EGGPOOL_ENV={env_path}",
+        binary_path_for_validation(),
+        "migrate",
+        "--config",
+        config_path,
+    ]
+
+    click.echo("  Running eggpool check-config as eggpool user...")
+    check_result = subprocess.run(  # noqa: S603
+        check_cmd, capture_output=True, text=True, check=False
+    )
+    if check_result.returncode != 0:
+        if _looks_like_placeholder_credentials(
+            check_result.stdout + check_result.stderr
+        ):
+            click.echo(
+                "Configuration is not ready. Run `eggpool onboard` or "
+                "`eggpool connect` first.",
+                err=True,
+            )
+        else:
+            click.echo(
+                f"Error: check-config failed: {check_result.stderr.strip()}",
+                err=True,
+            )
+        sys.exit(1)
+
+    click.echo("  Running eggpool migrate as eggpool user...")
+    migrate_result = subprocess.run(  # noqa: S603
+        migrate_cmd, capture_output=True, text=True, check=False
+    )
+    if migrate_result.returncode != 0:
+        click.echo(
+            f"Error: migrate failed: {migrate_result.stderr.strip()}",
+            err=True,
+        )
+        sys.exit(1)
+
+
+def _looks_like_placeholder_credentials(text: str) -> bool:
+    """Return True if a check-config failure looks like placeholder credentials."""
+    lowered = text.lower()
+    return any(
+        marker in lowered
+        for marker in ("replace-me", "your-", "placeholder", "not set")
+    )
+
+
+def binary_path_for_validation() -> str:
+    """Return the absolute eggpool binary path for production validation."""
+    import shutil  # noqa: PLC0415
+
+    resolved = shutil.which("eggpool")
+    if resolved is None:
+        return "eggpool"
+    return str(Path(resolved).resolve())
+
+
+def _prepare_user_dirs(deploy_user: DeployUser) -> None:
+    """Create the personal config / data / state directories as the user."""
+    target_dirs = [
+        default_config_dir(),
+        default_data_dir(),
+        default_state_dir(),
+    ]
+    for d in target_dirs:
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            click.echo(f"  Prepared {d}")
+        except OSError as exc:
+            click.echo(f"  Warning: could not create {d}: {exc}", err=True)
+        _chown_to_user(d, deploy_user)
+
+
+def _ensure_personal_config_ready(config_path: str) -> None:
+    """Refuse --install unless the config has real credentials."""
+    from eggpool.config import ensure_config  # noqa: PLC0415
+
+    ensure_config(config_path)
+
+    try:
+        config = AppConfig.from_toml(config_path)
+    except AggregatorError as exc:
+        click.echo(
+            f"Error: could not load {config_path}: {exc}",
+            err=True,
+        )
+        sys.exit(1)
+
+    try:
+        config.validate_account_credentials()
+    except AggregatorError as exc:
+        click.echo(
+            f"Error: {exc}\n"
+            "  Configuration is not ready. Run `eggpool onboard` or "
+            "`eggpool connect` first.",
+            err=True,
+        )
+        sys.exit(1)
+
+
+def _chown_to_user(path: Path, deploy_user: DeployUser) -> None:
+    """Best-effort chown of *path* to the resolved deploy user."""
+    if os.geteuid() != 0:
+        return
+    try:
+        os.chown(path, deploy_user.uid, deploy_user.gid)
+    except (OSError, PermissionError) as exc:
+        click.echo(f"  Warning: chown {path} failed: {exc}", err=True)
+
+
+def _chown(path: Path, owner: str) -> None:
+    """Best-effort chown by ``owner:owner`` (POSIX) or fallback."""
+    import pwd  # noqa: PLC0415
+
+    try:
+        user_name, _, group_name = owner.partition(":")
+        user_pw = pwd.getpwnam(user_name)
+        group_pw = pwd.getpwnam(group_name or user_name)
+    except KeyError:
+        return
+
+    with suppress(OSError, PermissionError):
+        os.chown(path, user_pw.pw_uid, group_pw.pw_gid)
+
+
+def _chmod(path: Path, mode: str) -> None:
+    """Best-effort chmod by string mode."""
+    try:
+        path.chmod(int(mode, 8))
+    except (OSError, PermissionError, ValueError) as exc:
+        click.echo(f"  Warning: chmod {path} {mode} failed: {exc}", err=True)
+
+
+def _confirm_action(message: str) -> bool:
+    """Ask the user to confirm an action; ``y`` proceeds, anything else aborts."""
+    click.echo(message)
+    return bool(click.confirm("Proceed?", default=False))
 
 
 @deploy.command("logrotate")
@@ -1402,7 +1856,11 @@ def deploy_systemd(ctx: click.Context, install: bool) -> None:
 def deploy_logrotate(ctx: click.Context, install: bool) -> None:
     """Print the logrotate config and install instructions.
 
-    With --install, writes the config to /etc/logrotate.d/eggpool.
+    With --install, writes the config to /etc/logrotate.d/eggpool and
+    validates it via ``logrotate -d``. Many distributions run
+    logrotate from cron or a systemd timer rather than a
+    ``logrotate.service``; the new flow no longer attempts to restart
+    a possibly-missing service unit.
     """
     from eggpool.deploy import build_personal_logrotate
 
@@ -1422,31 +1880,262 @@ def deploy_logrotate(ctx: click.Context, install: bool) -> None:
         "Run 'sudo eggpool deploy logrotate --install' to set this up automatically."
     )
 
-    if install:
-        _require_root()
-        _confirm_install("logrotate config", "/etc/logrotate.d/eggpool")
-        _write_file("/etc/logrotate.d/eggpool", dynamic_conf)
-        click.echo("  Verifying config...")
-        _run_systemctl(["restart", "logrotate"], quiet=True)
-        click.echo("  Logrotate config installed.")
+    if not install:
+        return
+
+    if os.geteuid() != 0:
+        click.echo(
+            "Error: --install requires root privileges.\n"
+            "  Re-run with: sudo eggpool deploy logrotate --install",
+            err=True,
+        )
+        sys.exit(1)
+
+    if not _confirm_action("Install logrotate config to /etc/logrotate.d/eggpool?"):
+        click.echo("Aborted.")
+        return
+
+    _write_file("/etc/logrotate.d/eggpool", dynamic_conf)
+    _validate_logrotate_config("/etc/logrotate.d/eggpool")
+
+
+def _validate_logrotate_config(path: str) -> None:
+    """Best-effort ``logrotate -d`` syntax check for ``path``.
+
+    Prints a warning (no abort) when ``logrotate`` is not on PATH so
+    sandboxed installs still succeed. Exits non-zero only when
+    ``logrotate -d`` actually reports a config error.
+    """
+    import shutil  # noqa: PLC0415
+
+    if shutil.which("logrotate") is None:
+        click.echo(
+            "Warning: logrotate not found; config written but not validated.",
+            err=True,
+        )
+        return
+
+    click.echo("  Verifying config with `logrotate -d`...")
+    result = subprocess.run(  # noqa: S603
+        ["logrotate", "-d", path],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        click.echo(
+            f"Error: logrotate -d reported a problem:\n{result.stderr.strip()}",
+            err=True,
+        )
+        sys.exit(1)
+    click.echo("  Logrotate config installed.")
 
 
 @deploy.command("cron")
-@click.option("--install", is_flag=True, help="Install the cron entry (requires root).")
+@click.option(
+    "--install",
+    is_flag=True,
+    help="Install the watchdog cron entries into the user's crontab.",
+)
+@click.option(
+    "--uninstall",
+    is_flag=True,
+    help="Remove EggPool watchdog cron entries from the user's crontab.",
+)
+@click.option(
+    "--interval",
+    "interval_minutes",
+    default=5,
+    type=click.IntRange(1, 59),
+    help="Watchdog poll interval in minutes (1-59, default 5).",
+)
+@click.option(
+    "--user",
+    "cron_user",
+    default=None,
+    help="Target a specific user's crontab (defaults to the invoking user).",
+)
 @click.pass_context
-def deploy_cron(ctx: click.Context, install: bool) -> None:
-    """Print a cron entry for starting eggpool on boot and on crash.
+def deploy_cron(
+    ctx: click.Context,
+    install: bool,
+    uninstall: bool,
+    interval_minutes: int,
+    cron_user: str | None,
+) -> None:
+    """Install the EggPool watchdog into the user's crontab.
 
-    This is an alternative to systemd for systems without systemd
-    support. For production use, prefer systemd with a dedicated
-    eggpool user.
+    The watchdog runs ``eggpool ensure-running`` on every reboot and
+    every ``--interval`` minutes so the server stays up on systems
+    without systemd. Backups are installed separately via
+    ``eggpool deploy backup-cron``.
 
-    With --install, writes the backup script and cron entry.
+    With --install the watchdog is appended to the user's crontab.
+    Under sudo (``SUDO_USER`` set) the install targets the *invoking*
+    user's crontab instead of root's, so the personal deployment does
+    not depend on root cron. With --uninstall the marked block is
+    stripped from the same crontab.
+    """
+    from eggpool.deploy import build_personal_watchdog_cron
+    from eggpool.runtime_paths import default_log_file
+
+    config_path: str = ctx.obj["config_path"]
+    binary_path = _resolve_eggpool_binary()
+    if binary_path is None:
+        click.echo(
+            "Error: cannot locate the eggpool binary on PATH.\n"
+            "  Install EggPool first (e.g. `uv tool install eggpool`).",
+            err=True,
+        )
+        sys.exit(1)
+
+    config_path_resolved = str(Path(config_path).expanduser().resolve())
+    log_path = str(default_log_file())
+
+    cron_user = _resolve_cron_user(cron_user)
+    block = build_personal_watchdog_cron(
+        binary_path=binary_path,
+        config_path=config_path_resolved,
+        log_path=log_path,
+        interval_minutes=interval_minutes,
+    )
+
+    if install:
+        _install_cron_block_for_user(
+            block=block,
+            cron_user=cron_user,
+            description=(
+                f"watchdog ({interval_minutes}-minute interval) for {cron_user}"
+            ),
+        )
+        click.echo(f"  Watchdog cron installed for user {cron_user}. Logs: {log_path}")
+        return
+
+    if uninstall:
+        _remove_cron_block_for_user(cron_user=cron_user, description="watchdog")
+        click.echo(f"  Watchdog cron removed for user {cron_user}.")
+        return
+
+    click.echo("EggPool watchdog (cron fallback for non-systemd systems)")
+    click.echo("")
+    click.echo("Generated crontab fragment:")
+    click.echo("")
+    click.echo(block)
+    click.echo("Install with:")
+    click.echo("  eggpool deploy cron --install")
+    click.echo("")
+    click.echo("Remove with:")
+    click.echo("  eggpool deploy cron --uninstall")
+
+
+def _resolve_cron_user(explicit: str | None) -> str:
+    """Resolve which user's crontab to target.
+
+    Defaults to the invoking user when no ``--user`` is passed; under
+    sudo, defaults to ``SUDO_USER`` so the install does not land in
+    root's crontab for a personal deployment.
+    """
+    if explicit is not None:
+        return explicit
+    sudo_user = os.environ.get("SUDO_USER", "").strip()
+    if sudo_user:
+        return sudo_user
+    import pwd  # noqa: PLC0415
+
+    return pwd.getpwuid(os.getuid()).pw_name
+
+
+def _install_cron_block_for_user(
+    *, block: str, cron_user: str, description: str
+) -> None:
+    """Install a crontab block for *cron_user*.
+
+    Direct root without a ``SUDO_USER`` is rejected because a root
+    crontab does not help a personal deployment. Operators are
+    instructed to use ``sudo -u <you>`` instead.
+    """
+    sudo_user = os.environ.get("SUDO_USER", "").strip()
+    if os.geteuid() == 0 and not sudo_user and cron_user != "root":
+        click.echo(
+            "Error: refusing to install a personal cron entry into root's "
+            "crontab.\n"
+            f"  Re-run via: sudo -u {os.environ.get('USER', '<you>')} "
+            "eggpool deploy cron --install",
+            err=True,
+        )
+        sys.exit(1)
+
+    from eggpool.deploy import install_cron_block  # noqa: PLC0415
+
+    install_cron_block(block, user=cron_user)
+    click.echo(f"  Installed {description}.")
+
+
+def _remove_cron_block_for_user(*, cron_user: str, description: str) -> None:
+    """Strip EggPool cron blocks from *cron_user*'s crontab."""
+    sudo_user = os.environ.get("SUDO_USER", "").strip()
+    if os.geteuid() == 0 and not sudo_user and cron_user != "root":
+        click.echo(
+            "Error: refusing to remove cron entries from root's crontab.\n"
+            f"  Re-run via: sudo -u {os.environ.get('USER', '<you>')} "
+            "eggpool deploy cron --uninstall",
+            err=True,
+        )
+        sys.exit(1)
+
+    from eggpool.deploy import remove_cron_block  # noqa: PLC0415
+
+    remove_cron_block(user=cron_user)
+    click.echo(f"  Removed {description} entries from {cron_user}'s crontab.")
+
+
+@deploy.command("backup-cron")
+@click.option(
+    "--install",
+    is_flag=True,
+    help="Install the daily backup script and cron entry.",
+)
+@click.option(
+    "--uninstall",
+    is_flag=True,
+    help="Remove the daily backup cron entry and script.",
+)
+@click.option(
+    "--production",
+    is_flag=True,
+    help="Production mode: install /etc/cron.d/eggpool-backup owned by root.",
+)
+@click.option(
+    "--user",
+    "cron_user",
+    default=None,
+    help="Target a specific user's crontab (defaults to the invoking user).",
+)
+@click.pass_context
+def deploy_backup_cron(
+    ctx: click.Context,
+    install: bool,
+    uninstall: bool,
+    production: bool,
+    cron_user: str | None,
+) -> None:
+    """Install the EggPool daily backup as a cron job.
+
+    In personal mode the script and a user-crontab entry are added so
+    daily snapshots land under ``~/backups/eggpool``. In production
+    mode the script lives at ``/usr/local/bin/eggpool-backup`` and the
+    cron entry at ``/etc/cron.d/eggpool-backup`` writing to
+    ``/var/backups/eggpool``.
+
+    The personal backup script requires ``sqlite3`` on PATH. ``deploy
+    backup-cron --install`` warns (does not abort) if the binary is
+    missing because some operators may want to schedule the cron entry
+    even before ``sqlite3`` is installed.
     """
     from eggpool.deploy import (
         CRON_BACKUP_FILE,
         CRON_BACKUP_SCRIPT,
-        build_personal_backup_cron,
+        build_personal_backup_block,
         build_personal_backup_script,
     )
 
@@ -1454,92 +2143,150 @@ def deploy_cron(ctx: click.Context, install: bool) -> None:
     data_dir = str(_resolve_data_dir())
     db_path = str(Path(data_dir) / "usage.sqlite3")
 
-    # Generate dynamic snippets for personal use
     dynamic_script = build_personal_backup_script(
         config_path=config_path, db_path=db_path
     )
-    dynamic_cron = build_personal_backup_cron()
 
-    click.echo("EggPool cron setup (personal use)")
-    click.echo("")
-    click.echo(
-        "This sets up a daily 02:00 backup of the configuration and "
-        "SQLite database under ~/backups/eggpool."
-    )
-    click.echo("")
-    click.echo("Install the backup script:")
-    click.echo("")
-    click.echo("  sudo tee /usr/local/bin/eggpool-backup > /dev/null << 'EGGPOOL_EOF'")
-    for line in dynamic_script.splitlines():
-        click.echo(f"{line}")
-    click.echo("EGGPOOL_EOF")
-    click.echo("  sudo chmod +x /usr/local/bin/eggpool-backup")
-    click.echo("")
-    click.echo("Install the cron entry (user cron):")
-    click.echo("")
-    click.echo(
-        "  crontab -l 2>/dev/null | { cat; echo ''; echo '"
-        + dynamic_cron.strip()
-        + "'; } | crontab -"
-    )
-    click.echo("")
-    click.echo("Snippet:")
-    click.echo("")
-    click.echo(dynamic_cron)
-
-    # Also show the production snippet for reference
-    click.echo("")
-    click.echo("=" * 72)
-    click.echo("")
-    click.echo("Production snippet (system cron with root user):")
-    click.echo("")
-    click.echo(CRON_BACKUP_FILE)
-    click.echo("")
-    click.echo(CRON_BACKUP_SCRIPT)
-
-    if _copy_to_clipboard(dynamic_script + dynamic_cron):
-        click.echo("")
-        click.echo("Copied script + cron entry to clipboard.")
-
-    click.echo("")
-    click.echo("Run 'sudo eggpool deploy cron --install' to set this up automatically.")
+    if production:
+        if install:
+            _install_production_backup_cron(dynamic_script=CRON_BACKUP_SCRIPT)
+        elif uninstall:
+            _uninstall_production_backup_cron()
+        else:
+            click.echo("EggPool production backup cron:")
+            click.echo("")
+            click.echo(CRON_BACKUP_FILE)
+            click.echo("")
+            click.echo(CRON_BACKUP_SCRIPT)
+        return
 
     if install:
-        _require_root()
-        _confirm_install("cron backup script + entry", "/usr/local/bin/eggpool-backup")
-        _write_file("/usr/local/bin/eggpool-backup", dynamic_script)
-        import subprocess
-
-        subprocess.run(  # noqa: S603
-            ["chmod", "+x", "/usr/local/bin/eggpool-backup"],
-            check=True,
-        )
-        click.echo("  Installed /usr/local/bin/eggpool-backup")
-
-        # Install user cron entry
-        cron_line = "0 2 * * * /usr/local/bin/eggpool-backup"
-        result = subprocess.run(  # noqa: S603
-            ["crontab", "-l"],
-            capture_output=True,
-            text=True,
-        )
-        existing = result.stdout if result.returncode == 0 else ""
-        # Match the full schedule + command so unrelated cron entries that
-        # merely reference the same binary (e.g. a monitoring probe) do
-        # not falsely satisfy this check.
-        existing_lines = {line.strip() for line in existing.splitlines()}
-        if cron_line in existing_lines:
-            click.echo("  Cron entry already present — skipping.")
-        else:
-            cron_entry = f"\n# EggPool daily backup (personal use)\n{cron_line}\n"
-            new_cron = existing.rstrip() + cron_entry
-            subprocess.run(  # noqa: S603
-                ["crontab", "-"],
-                input=new_cron,
-                check=True,
-                text=True,
+        if os.geteuid() != 0 and not os.environ.get("SUDO_USER"):
+            click.echo(
+                "Error: personal --install requires running under your user.\n"
+                "  Re-run without sudo, or via: sudo -u $USER eggpool "
+                "deploy backup-cron --install",
+                err=True,
             )
-            click.echo("  Installed user cron entry (02:00 daily backup).")
+            sys.exit(1)
+        cron_user = _resolve_cron_user(cron_user)
+        _install_personal_backup_cron(
+            script=dynamic_script,
+            cron_user=cron_user,
+        )
+        return
+
+    if uninstall:
+        cron_user = _resolve_cron_user(cron_user)
+        _uninstall_personal_backup_cron(cron_user=cron_user)
+        return
+
+    click.echo("EggPool daily backup (personal use)")
+    click.echo("")
+    click.echo("Backup script:")
+    click.echo("")
+    click.echo(dynamic_script)
+    click.echo("")
+    click.echo("User crontab fragment:")
+    click.echo("")
+    cron_user = _resolve_cron_user(cron_user)
+    binary_path = _resolve_eggpool_binary() or "/usr/local/bin/eggpool-backup"
+    click.echo(build_personal_backup_block(binary_path))
+
+
+def _install_personal_backup_cron(*, script: str, cron_user: str) -> None:
+    """Install the personal backup script and crontab entry."""
+    import shutil  # noqa: PLC0415
+
+    from eggpool.deploy import build_personal_backup_block
+
+    target_script = "/usr/local/bin/eggpool-backup"
+    if os.geteuid() != 0 and cron_user != pwd_get_username():
+        click.echo(
+            "Error: writing /usr/local/bin requires root or running as the "
+            "target user.",
+            err=True,
+        )
+        sys.exit(1)
+
+    if shutil.which("sqlite3") is None:
+        click.echo(
+            "Warning: sqlite3 is not on PATH. The backup script requires it.",
+            err=True,
+        )
+
+    _write_file(target_script, script)
+    subprocess.run(  # noqa: S603
+        ["chmod", "+x", target_script],
+        check=True,
+    )
+    block = build_personal_backup_block(target_script)
+    from eggpool.deploy import install_cron_block  # noqa: PLC0415
+
+    install_cron_block(block, user=cron_user)
+    click.echo(f"  Backup script installed at {target_script}.")
+    click.echo(f"  Backup cron entry installed for {cron_user}.")
+
+
+def _uninstall_personal_backup_cron(*, cron_user: str) -> None:
+    """Remove the personal backup script and crontab entry."""
+    from eggpool.deploy import remove_cron_block  # noqa: PLC0415
+
+    target_script = Path("/usr/local/bin/eggpool-backup")
+    if target_script.exists():
+        target_script.unlink()
+        click.echo(f"  Removed {target_script}.")
+    remove_cron_block(user=cron_user)
+    click.echo(f"  Removed backup cron entries from {cron_user}'s crontab.")
+
+
+def pwd_get_username() -> str:
+    """Return the current process username via :mod:`pwd`."""
+    import pwd  # noqa: PLC0415
+
+    return pwd.getpwuid(os.getuid()).pw_name
+
+
+def _install_production_backup_cron(*, dynamic_script: str) -> None:
+    """Install the production backup cron at ``/etc/cron.d/eggpool-backup``."""
+    if os.geteuid() != 0:
+        click.echo(
+            "Error: production --install requires root.",
+            err=True,
+        )
+        sys.exit(1)
+
+    target_script = Path("/usr/local/bin/eggpool-backup")
+    target_cron = Path("/etc/cron.d/eggpool-backup")
+
+    if not target_script.exists():
+        target_script.write_text(dynamic_script, encoding="utf-8")
+        target_script.chmod(0o755)
+        click.echo(f"  Wrote {target_script}.")
+
+    from eggpool.deploy import CRON_BACKUP_FILE  # noqa: PLC0415
+
+    target_cron.write_text(CRON_BACKUP_FILE, encoding="utf-8")
+    target_cron.chmod(0o644)
+    click.echo(f"  Wrote {target_cron}.")
+
+
+def _uninstall_production_backup_cron() -> None:
+    """Remove the production backup script and cron.d entry."""
+    if os.geteuid() != 0:
+        click.echo(
+            "Error: production --uninstall requires root.",
+            err=True,
+        )
+        sys.exit(1)
+
+    for path in (
+        Path("/etc/cron.d/eggpool-backup"),
+        Path("/usr/local/bin/eggpool-backup"),
+    ):
+        if path.exists():
+            path.unlink()
+            click.echo(f"  Removed {path}.")
 
 
 @deploy.command("all")
@@ -1550,7 +2297,9 @@ def deploy_cron(ctx: click.Context, install: bool) -> None:
 def deploy_all(ctx: click.Context, install: bool) -> None:
     """Print every deployment snippet in sequence.
 
-    With --install, installs systemd unit, logrotate, and cron entry.
+    With --install, installs systemd unit, logrotate config, and
+    watchdog cron entry. Backup cron lives under its own
+    ``eggpool deploy backup-cron`` command.
     """
     ctx.invoke(deploy_systemd, install=install)
     click.echo("")
@@ -1561,6 +2310,13 @@ def deploy_all(ctx: click.Context, install: bool) -> None:
     click.echo("=" * 72)
     click.echo("")
     ctx.invoke(deploy_cron, install=install)
+    click.echo("")
+    click.echo("=" * 72)
+    click.echo("")
+    click.echo(
+        "Note: nightly backups are configured separately via "
+        "'eggpool deploy backup-cron --install'."
+    )
 
 
 @cli.command()
@@ -2317,6 +3073,13 @@ def _prompt_yes_no(message: str, *, default: bool = False) -> bool:
     is_flag=True,
     help="Skip PATH / shell-rc cleanup.",
 )
+@click.option(
+    "--deploy-artifacts",
+    is_flag=True,
+    help="Also remove system-level deploy artifacts: systemd unit, "
+    "logrotate config, cron entries, backup script. Requires sudo for "
+    "files under /etc and /usr/local/bin.",
+)
 @click.pass_context
 def uninstall(
     ctx: click.Context,
@@ -2324,6 +3087,7 @@ def uninstall(
     keep_data: bool,
     keep_config: bool,
     keep_path: bool,
+    deploy_artifacts: bool,
 ) -> None:
     """Uninstall EggPool from this machine.
 
@@ -2334,9 +3098,11 @@ def uninstall(
     SQLite database, and scrubs eggpool-related PATH entries from the
     user's shell rc files.
 
-    System-level deployment artifacts (systemd unit, logrotate config,
-    cron entry) are not touched automatically; the command prints the
-    manual commands for those at the end.
+    Pass --deploy-artifacts to also remove the system-level deploy
+    artifacts that ``eggpool deploy`` created: the systemd unit, the
+    logrotate config, the watchdog and backup crontab blocks, and the
+    backup script. Files under ``/etc`` and ``/usr/local/bin`` are
+    removed via ``sudo``.
     """
     config_path: str = ctx.obj["config_path"]
 
@@ -2414,17 +3180,124 @@ def uninstall(
         for path in leftover:
             click.echo(f"  {path}", err=True)
         click.echo(
-            "  Remove it manually if it was not created by pipx/uv tool.",
+            "Remove it manually, then re-run with --yes.",
             err=True,
         )
     else:
         click.echo("Verified: eggpool binary is no longer on PATH.")
 
-    # Print cleanup instructions for system-level deploy artifacts.
+    if deploy_artifacts:
+        _remove_deploy_artifacts(assume_yes=assume_yes, confirm=confirm)
+    else:
+        click.echo("")
+        click.echo(
+            "To finish removing system-level deploy artifacts, run "
+            "`eggpool uninstall --deploy-artifacts` or:"
+        )
+        click.echo("  sudo systemctl disable --now eggpool 2>/dev/null || true")
+        click.echo("  sudo rm -f /etc/systemd/system/eggpool.service")
+        click.echo("  sudo rm -f /etc/logrotate.d/eggpool")
+        click.echo("  eggpool deploy cron --uninstall")
+        click.echo("  eggpool deploy backup-cron --uninstall")
+        click.echo("Existing backups under ~/backups/eggpool were preserved.")
+
+
+def _remove_deploy_artifacts(
+    *, assume_yes: bool, confirm: Callable[[str], bool]
+) -> None:
+    """Remove systemd unit, logrotate config, cron blocks, backup script."""
     click.echo("")
-    click.echo("To finish removing system-level deploy artifacts, run:")
-    click.echo("  sudo systemctl disable --now eggpool 2>/dev/null || true")
-    click.echo("  sudo rm -f /etc/systemd/system/eggpool.service")
-    click.echo("  sudo rm -f /etc/logrotate.d/eggpool")
-    click.echo("  crontab -l 2>/dev/null | grep -v 'eggpool' | crontab -")
-    click.echo("Existing backups under ~/backups/eggpool were preserved.")
+    click.echo("Removing system-level deploy artifacts...")
+
+    if confirm("Remove the systemd unit and reload systemd?"):
+        _remove_systemd_unit()
+
+    if confirm("Remove the logrotate config?"):
+        _remove_logrotate_config()
+
+    if confirm("Remove EggPool watchdog cron entries from your crontab?"):
+        _remove_watchdog_cron_blocks()
+
+    if confirm("Remove EggPool backup cron entries and backup script?"):
+        _remove_backup_cron_artifacts()
+
+    if not assume_yes:
+        click.echo("System-level deploy artifacts cleanup finished.")
+
+
+def _remove_systemd_unit() -> None:
+    """Best-effort removal of the systemd unit."""
+    target = Path("/etc/systemd/system/eggpool.service")
+    if not target.exists():
+        click.echo("  No systemd unit found.")
+        return
+    _sudo_unlink(target)
+    if shutil.which("systemctl") is not None:
+        subprocess.run(  # noqa: S603
+            ["sudo", "systemctl", "daemon-reload"],
+            capture_output=True,
+            check=False,
+        )
+    click.echo(f"  Removed {target}.")
+
+
+def _remove_logrotate_config() -> None:
+    """Best-effort removal of the logrotate config."""
+    target = Path("/etc/logrotate.d/eggpool")
+    if not target.exists():
+        click.echo("  No logrotate config found.")
+        return
+    _sudo_unlink(target)
+    click.echo(f"  Removed {target}.")
+
+
+def _remove_watchdog_cron_blocks() -> None:
+    """Strip every EggPool block from the invoking user's crontab."""
+    from eggpool.deploy import remove_cron_block  # noqa: PLC0415
+
+    cron_user = _resolve_cron_user(None)
+    try:
+        remove_cron_block(user=cron_user)
+        click.echo(f"  Stripped EggPool cron blocks from {cron_user}'s crontab.")
+    except (OSError, subprocess.SubprocessError) as exc:
+        click.echo(f"  Warning: could not update crontab: {exc}", err=True)
+
+
+def _remove_backup_cron_artifacts() -> None:
+    """Remove backup cron block and the personal backup script."""
+    from eggpool.deploy import remove_cron_block  # noqa: PLC0415
+
+    cron_user = _resolve_cron_user(None)
+    try:
+        remove_cron_block(user=cron_user)
+    except (OSError, subprocess.SubprocessError) as exc:
+        click.echo(f"  Warning: could not update crontab: {exc}", err=True)
+
+    target = Path("/usr/local/bin/eggpool-backup")
+    if target.exists():
+        _sudo_unlink(target)
+        click.echo(f"  Removed {target}.")
+    else:
+        click.echo("  No backup script found.")
+
+
+def _sudo_unlink(path: Path) -> None:
+    """Remove *path* via sudo when running as a non-root user."""
+    try:
+        path.unlink()
+        return
+    except PermissionError:
+        pass
+    except FileNotFoundError:
+        return
+    result = subprocess.run(  # noqa: S603
+        ["sudo", "rm", "-f", str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        click.echo(
+            f"  Warning: could not remove {path}: {result.stderr.strip()}",
+            err=True,
+        )

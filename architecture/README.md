@@ -372,6 +372,69 @@ def start_server(
 `quiet` options. The CLI flags `eggpool serve --daemon`, `--log-file`,
 `--quiet`, and `--as-root` map directly to these parameters.
 
+### Installation and Deployment
+
+The install / deploy / uninstall surface is split across two source
+modules and one CLI module so the responsibility is explicit:
+
+- **`eggpool.deploy_user`** — user and path resolution:
+  - `DeployUser` dataclass (`user`, `uid`, `gid`, `home`, `is_root`, `is_sudo`)
+  - `resolve_deploy_user()` — handles normal, sudo (`SUDO_USER`/`SUDO_UID`/`SUDO_GID`), and direct-root cases via `pwd.getpwnam` / `pwd.getpwuid`
+  - `resolve_config_path()` — `--config` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml` (single source of truth for every CLI command)
+  - `resolve_env_path()` — `$EGGPOOL_ENV` > `<config-dir>/.env` > XDG default
+  - `default_config_dir()` / `default_data_dir()` / `default_state_dir()` / `default_config_path()` / `default_env_path()` — XDG-aware default paths honoring `$XDG_CONFIG_HOME`, `$XDG_DATA_HOME`, `$XDG_STATE_HOME`
+
+- **`eggpool.deploy`** — bundled snippets + dynamic builders:
+  - Bundled constants: `SYSTEMD_UNIT` (the hardened production layout, byte-for-byte identical to `deploy/eggpool.service`), `LOGROTATE_CONF`, `CRON_BACKUP_FILE`, `CRON_BACKUP_SCRIPT`
+  - Personal builders: `build_personal_systemd_unit()` (renders `User=`/`Group=` from the resolved `DeployUser`), `build_personal_watchdog_cron()`, `build_personal_backup_block()`, `build_personal_logrotate()`
+  - Cron block management: `install_cron_block()`, `remove_cron_block()`, `strip_managed_cron_blocks()` — every block is bracketed by `# BEGIN EggPool ...` / `# END EggPool ...` markers so uninstall only strips eggpool-owned lines
+
+- **`eggpool.cli_full.deploy_*`** — Click commands that consume the modules above:
+  - `deploy systemd [--install] [--production] [--as-root]` — personal mode (default) renders the unit with `User=`/`Group=` set to the invoking user; `--production` provisions `/etc/eggpool` + `/var/lib/eggpool` + dedicated `eggpool` system user
+  - `deploy cron [--install|--uninstall] [--interval N]` — watchdog (`@reboot` + `*/N * * * *` `ensure-running`), bracketed by `BEGIN EggPool watchdog` markers
+  - `deploy backup-cron [--install|--uninstall] [--production]` — daily backup (user cron for personal, `/etc/cron.d/eggpool-backup` for production)
+  - `deploy logrotate [--install]` — writes `/etc/logrotate.d/eggpool` and validates via `logrotate -d` (no `systemctl restart logrotate`)
+  - `deploy all [--install]` — systemd + logrotate + watchdog cron (backup-cron is separate)
+
+- **`eggpool.cli_full.uninstall`** — orchestrates `eggpool.lifecycle.uninstall.uninstall()`. Pass `--deploy-artifacts` to also remove the systemd unit, logrotate config, watchdog + backup cron blocks, and backup script. PATH edits are previewed via `preview_eggpool_path_changes()` / `RcFileChange` before being written so the operator can confirm the diff.
+
+The production systemd unit (`SYSTEMD_UNIT` constant) is the source
+of truth for the production layout. The matching file at
+`deploy/eggpool.service` is kept byte-for-byte identical so both
+source-checkout operators and wheel-installed users see the same
+content. To update either, edit `eggpool.deploy.SYSTEMD_UNIT` AND
+`deploy/eggpool.service` together.
+
+### Filesystem Layout
+
+Personal use (XDG defaults — overridable via `$XDG_*`):
+
+```
+~/.config/eggpool/
+├── config.toml          # Main configuration
+└── .env                 # Environment variables (API keys)
+
+~/.local/share/eggpool/
+├── usage.sqlite3        # SQLite database
+├── usage.sqlite3-wal    # WAL journal
+└── usage.sqlite3-shm    # Shared memory file
+
+~/.local/state/eggpool/
+├── eggpool.pid          # Live PID (owner: supervisor)
+├── eggpool.log          # Daemon log
+└── cron.log             # Watchdog cron output
+```
+
+Production (`eggpool deploy systemd --install --production`):
+
+```
+/etc/eggpool/            # Configuration + env
+/var/lib/eggpool/        # Database + working state
+/var/log/eggpool/        # Daemon logs
+/var/backups/eggpool/    # Daily backup archives
+/opt/eggpool/            # Source checkout + venv
+```
+
 ## Security
 
 - Local client credentials are stripped before upstream forwarding
