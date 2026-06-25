@@ -150,6 +150,54 @@ class RoutingConfig(BaseModel):
     local_quota_mode: Literal["score_only", "hard_cap"] = "score_only"
 
 
+class PricingCatalogEntry(BaseModel):
+    """One external pricing catalog entry.
+
+    External catalogs (OpenRouter, OpenCode Zen, ...) supply authoritative
+    upstream pricing for upstream model IDs that do not surface pricing
+    metadata via the OpenAI / Anthropic ``/v1/models`` endpoint.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    priority: int = Field(default=100, ge=0)
+    ttl_seconds: int = Field(default=86_400, gt=0)
+    base_url: str | None = None
+    api_key: str | None = None
+    options: dict[str, object] = Field(default_factory=dict[str, object])
+
+
+class PricingCatalogsConfig(BaseModel):
+    """Map of external pricing catalogs keyed by canonical name.
+
+    The known catalog names are ``"openrouter"`` and ``"opencode_zen"``;
+    operators may add additional catalog names but the resolver pipeline
+    only ships implementations for the two built-ins.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    openrouter: PricingCatalogEntry = Field(default_factory=PricingCatalogEntry)
+    opencode_zen: PricingCatalogEntry = Field(default_factory=PricingCatalogEntry)
+    aliases: list[dict[str, object]] = Field(default_factory=list[dict[str, object]])
+
+
+class PricingConfig(BaseModel):
+    """Pricing resolution configuration.
+
+    ``catalogs`` configures external pricing catalogs that supplement
+    the upstream metadata path. ``fallback`` controls how missing cache
+    rates are filled (see CostCalculator for the category-specific
+    constants used when ``fallback`` is ``"generic_estimate"``).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    catalogs: PricingCatalogsConfig = Field(default_factory=PricingCatalogsConfig)
+    fallback: Literal["generic_estimate", "off"] = "generic_estimate"
+
+
 class LimitsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -547,6 +595,7 @@ class AppConfig(BaseModel):
     models: ModelsConfig = Field(default_factory=ModelsConfig)
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
+    pricing: PricingConfig = Field(default_factory=PricingConfig)
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     proxies: dict[str, ProxyConfig] = Field(default_factory=dict)

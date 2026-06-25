@@ -2168,7 +2168,8 @@ class TestRenderAccountsExtension:
         ]
         html = render_accounts(accounts=accounts, period="24h")
         assert "<th>Exactness</th>" in html
-        assert "5/2/1/2" in html
+        assert 'class="exactness-badge' in html
+        assert "e:5,d:2,p:0,~:1,?:2" in html
         assert "<th>Est. cost</th>" in html
         assert "<th>Cache R</th>" in html
         assert "<th>Cache W</th>" in html
@@ -2195,7 +2196,7 @@ class TestRenderAccountsExtension:
             }
         ]
         html = render_accounts(accounts=accounts, period="24h")
-        assert "0/0/0/0" in html
+        assert "exactness-badge" in html
         assert "—" in html  # placeholder for missing ratios
 
 
@@ -2230,7 +2231,8 @@ class TestRenderModelsExtension:
         ]
         html = render_models(models=models, period="24h")
         assert "<th>Exactness</th>" in html
-        assert "3/1/1/0" in html
+        assert 'class="exactness-badge' in html
+        assert "e:3,d:1,p:0,~:1,?:0" in html
         assert "40.0%" in html
         assert "10.0%" in html
 

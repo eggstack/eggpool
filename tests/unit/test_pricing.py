@@ -9,6 +9,7 @@ import pytest
 from eggpool.catalog.pricing import (
     CostCalculator,
     PriceSnapshot,
+    microdollars_per_million_from_price_per_1k,
     parse_microdollars_per_million,
     parse_price_per_1k,
 )
@@ -298,7 +299,7 @@ class TestPriceParsing:
             parse_price_per_1k(raw)
 
     @pytest.mark.asyncio
-    async def test_calculate_cost_cache_read_no_rate_estimated(self) -> None:
+    async def test_calculate_cost_cache_read_missing_rate_is_partial(self) -> None:
         snapshot = PriceSnapshot(
             model_id="gpt-4",
             input_price_per_1k=0.003,
@@ -320,14 +321,15 @@ class TestPriceParsing:
             cache_read_tokens=500,
             cache_write_tokens=0,
         )
-        # cache_read_rate is None (defaulting to 0), but cache_read_tokens > 0
-        # exactness should be estimated
-        assert exactness == "estimated"
-        # cost uses zero cache rate
-        assert cost == 18_000
+        # input/output trusted, cache_read missing → partial fallback
+        # exactness is "partial" (trusted + fallback, not full heuristic)
+        assert exactness == "partial"
+        # trusted: 1000*3M + 1000*15M = 18_000 microdollars
+        # cache_read fallback: 500 * 300_000 / 1_000_000 = 150 microdollars
+        assert cost == 18_150
 
     @pytest.mark.asyncio
-    async def test_calculate_cost_cache_write_no_rate_estimated(self) -> None:
+    async def test_calculate_cost_cache_write_missing_rate_is_partial(self) -> None:
         snapshot = PriceSnapshot(
             model_id="gpt-4",
             input_price_per_1k=0.003,
@@ -349,8 +351,11 @@ class TestPriceParsing:
             cache_read_tokens=0,
             cache_write_tokens=200,
         )
-        # cache_write_rate is None, but cache_write_tokens > 0
-        assert exactness == "estimated"
+        # cache_write missing → partial fallback, exactness="partial"
+        assert exactness == "partial"
+        # trusted: 1000*3M + 1000*15M = 18_000 microdollars
+        # cache_write fallback: 200 * 3_750_000 / 1_000_000 = 750 microdollars
+        assert cost == 18_750
 
     @pytest.mark.asyncio
     async def test_calculate_cost_fallback_prices_estimated(self) -> None:
@@ -373,6 +378,179 @@ class TestPriceParsing:
         assert exactness == "estimated"
         # Fallback estimate: 1K input at $3/M + 1K output at $15/M = 18000
         assert cost == 18000
+
+
+class TestPartialFallbackPricing:
+    """Phase 1 of pricing-resolution-correction: per-category fallback.
+
+    These tests cover the partial-fallback policy: when the snapshot
+    has trusted rates for some categories but not others, the missing
+    categories are filled with a per-category heuristic rather than
+    the full request being replaced by a generic estimate.
+    """
+
+    @pytest.mark.asyncio
+    async def test_only_input_priced_output_missing(self) -> None:
+        snapshot = PriceSnapshot(
+            model_id="mimo-v2.5",
+            input_price_per_1k=None,
+            output_price_per_1k=None,
+            captured_at="2024-01-01T00:00:00",
+            input_per_million_microdollars=100_000,  # cheap model
+            output_per_million_microdollars=None,
+            cache_read_per_million_microdollars=None,
+            cache_write_per_million_microdollars=None,
+        )
+        mock_repo = AsyncMock()
+        mock_repo.get_latest_snapshot = AsyncMock(return_value=snapshot)
+        calculator = CostCalculator(price_repo=mock_repo)
+
+        cost, exactness = await calculator.calculate_cost(
+            "mimo-v2.5",
+            input_tokens=30_000_000,
+            output_tokens=10_000_000,
+        )
+        # trusted input: 30M * 100_000 / 1M = 3_000_000 microdollars
+        # output fallback: (10M / 1K) * $0.015 * 1M = 150_000_000 microdollars
+        assert exactness == "partial"
+        assert cost == 3_000_000 + 150_000_000
+
+    @pytest.mark.asyncio
+    async def test_only_cache_priced_input_output_missing(self) -> None:
+        snapshot = PriceSnapshot(
+            model_id="unknown",
+            input_price_per_1k=None,
+            output_price_per_1k=None,
+            captured_at="2024-01-01T00:00:00",
+            input_per_million_microdollars=None,
+            output_per_million_microdollars=None,
+            cache_read_per_million_microdollars=100_000,
+            cache_write_per_million_microdollars=300_000,
+        )
+        mock_repo = AsyncMock()
+        mock_repo.get_latest_snapshot = AsyncMock(return_value=snapshot)
+        calculator = CostCalculator(price_repo=mock_repo)
+
+        cost, exactness = await calculator.calculate_cost(
+            "unknown",
+            input_tokens=10_000_000,
+            output_tokens=1_000_000,
+            cache_read_tokens=5_000_000,
+            cache_write_tokens=500_000,
+        )
+        # input fallback: (10M / 1K) * $0.003 * 1M = 30_000_000
+        # output fallback: (1M / 1K) * $0.015 * 1M = 15_000_000
+        # cache_read trusted: 5M * 100_000 / 1M = 500_000
+        # cache_write trusted: 500k * 300_000 / 1M = 150_000
+        # total = 45_650_000
+        assert exactness == "partial"
+        assert cost == 30_000_000 + 15_000_000 + 500_000 + 150_000
+
+    @pytest.mark.asyncio
+    async def test_no_tokens_returns_unknown(self) -> None:
+        snapshot = PriceSnapshot(
+            model_id="gpt-4",
+            input_price_per_1k=0.003,
+            output_price_per_1k=0.015,
+            captured_at="2024-01-01T00:00:00",
+            input_per_million_microdollars=3_000_000,
+            output_per_million_microdollars=15_000_000,
+        )
+        mock_repo = AsyncMock()
+        mock_repo.get_latest_snapshot = AsyncMock(return_value=snapshot)
+        calculator = CostCalculator(price_repo=mock_repo)
+
+        cost, exactness = await calculator.calculate_cost(
+            "gpt-4", input_tokens=0, output_tokens=0
+        )
+        assert cost == 0
+        assert exactness == "unknown"
+
+    @pytest.mark.asyncio
+    async def test_partial_does_not_replace_with_full_heuristic(self) -> None:
+        """A cheap, partially-priced model should not be inflated by the
+        generic $3/$15 per-1M fallback.
+
+        Reproduces the MiMo 2.5 ~$92 inflation bug: 30M tokens at the
+        generic $3/M input rate alone would be $90 even without cache.
+        The partial-fallback policy keeps the trusted input share cheap
+        and only falls back on the missing output category.
+        """
+        snapshot = PriceSnapshot(
+            model_id="mimo-v2.5",
+            input_price_per_1k=None,
+            output_price_per_1k=None,
+            captured_at="2024-01-01T00:00:00",
+            input_per_million_microdollars=100_000,  # $0.10 / 1M input
+            output_per_million_microdollars=None,
+        )
+        mock_repo = AsyncMock()
+        mock_repo.get_latest_snapshot = AsyncMock(return_value=snapshot)
+        calculator = CostCalculator(price_repo=mock_repo)
+
+        cost, exactness = await calculator.calculate_cost(
+            "mimo-v2.5",
+            input_tokens=30_000_000,
+            output_tokens=1_000_000,
+        )
+        # trusted input: 30M * 100_000 / 1M = 3_000_000 microdollars ($3)
+        # output fallback: (1M / 1K) * $0.015 * 1M = 15_000_000 microdollars
+        # The old max()-based policy would have produced 30M * 3_000 = 90M
+        # input microdollars instead of the trusted 3M; assert the trusted
+        # share is preserved.
+        assert exactness == "partial"
+        trusted_input_share = (30_000_000 * 100_000) // 1_000_000
+        assert trusted_input_share == 3_000_000
+        assert cost == trusted_input_share + 15_000_000
+
+
+class TestMicrodollarsPerMillionConversion:
+    """Phase 1 conversion helper."""
+
+    def test_basic_conversion(self) -> None:
+        assert microdollars_per_million_from_price_per_1k(0.003) == 3_000_000
+
+    def test_high_value_conversion(self) -> None:
+        assert microdollars_per_million_from_price_per_1k(3.0) == 3_000_000_000
+
+    def test_none_passthrough(self) -> None:
+        assert microdollars_per_million_from_price_per_1k(None) is None
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "$3 / 1M",
+            "0.003 / 1K",
+            "0.000003 per token",
+            "$0.30 / 1M",
+            "0.0000003 per token",
+        ],
+    )
+    def test_round_trip_through_parse(self, raw: str) -> None:
+        """Unit-suffixed strings round-trip parse_price_per_1k → helper."""
+        via_helper = microdollars_per_million_from_price_per_1k(parse_price_per_1k(raw))
+        via_parser = parse_microdollars_per_million(raw)
+        assert via_helper == via_parser
+
+
+class TestCachePriceFieldVariants:
+    """Phase 1: parse_microdollars_per_million already accepts every
+    rate shape the upstream catalog may surface. These tests pin that
+    contract for the new OpenRouter/Anthropic field names that
+    ``_maybe_insert_price_snapshot`` now consults.
+    """
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("$0.30 / 1M", 300_000),  # pricing.input_cache_read style
+            ("0.0000003 per token", 300_000),  # per-token OpenRouter style
+            ("0.30 / 1K", 300_000_000),
+            ("300_000", 300_000),
+        ],
+    )
+    def test_cache_rate_parsing_variants(self, raw: str, expected: int) -> None:
+        assert parse_microdollars_per_million(raw) == expected
 
 
 class TestMigrationConversionValues:

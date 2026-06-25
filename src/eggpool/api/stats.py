@@ -16,6 +16,7 @@ Endpoints:
 - GET /api/stats/routing-exclusions
 - GET /api/stats/operational
 - GET /api/stats/pending-health
+- GET /api/stats/pricing-provenance
 - GET /api/stats/recent/{request_id}  (always auth-gated)
 - GET /api/stats/recent-requests  (always auth-gated)
 - GET /api/events
@@ -353,6 +354,26 @@ async def handle_pending_health(request: Request) -> Response:
     return JSONResponse(content=snapshot)
 
 
+async def handle_pricing_provenance(request: Request) -> Response:
+    """GET /api/stats/pricing-provenance.
+
+    Per-(model, provider) provenance breakdown for the latest price
+    snapshot. The dashboard uses this to render the "cost exactness"
+    badges and the high-spend estimated warnings on the Reliability and
+    Accounts pages. Returns one row per ``(model_id, provider_id)``
+    with the latest snapshot's source_detail, source_confidence, and
+    catalog_source. Counts the number of pricing categories (input /
+    output / cache_read / cache_write) that carry a non-null rate so
+    the dashboard can distinguish fully-priced snapshots from partial
+    ones.
+    """
+    from eggpool.stats.queries import fetch_pricing_provenance_stats
+
+    stats = request.app.state.stats
+    rows = await fetch_pricing_provenance_stats(stats._db)
+    return JSONResponse(content={"snapshots": rows})
+
+
 async def handle_recent_requests(
     request: Request,
     limit: int = 50,
@@ -520,6 +541,12 @@ def register_stats_routes(app: Any, require_auth: bool = False) -> None:
         methods=["GET"],
         dependencies=dependencies,
     )
+    app.add_api_route(
+        path="/api/stats/pricing-provenance",
+        endpoint=handle_pricing_provenance,
+        methods=["GET"],
+        dependencies=dependencies,
+    )
 
     # Per-request trace endpoint.  Per-request traces expose the
     # selected model, prompt volume, and error detail that operators
@@ -556,6 +583,7 @@ __all__ = [
     "handle_operational_health",
     "handle_pending_health",
     "handle_pings",
+    "handle_pricing_provenance",
     "handle_recent_requests",
     "handle_request_trace",
     "handle_retry_distribution",

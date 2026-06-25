@@ -13,12 +13,11 @@ from typing import TYPE_CHECKING, Any, cast
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
 
-    from eggpool.db.connection import Database
-
 import click
 
 from eggpool.accounts.registry import account_config_rows
 from eggpool.auth import require_auth_at_startup
+from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
 from eggpool.db.repositories import AccountRepository, ProviderRepository
 from eggpool.deploy_user import (
@@ -2324,6 +2323,101 @@ def deploy_all(ctx: click.Context, install: bool) -> None:
 def rehash(ctx: click.Context) -> None:
     """Restart the server to apply configuration changes."""
     ctx.invoke(restart, timeout=10.0)
+
+
+@cli.group()
+@click.pass_context
+def stats(ctx: click.Context) -> None:
+    """Statistics / observability subcommands."""
+
+
+@stats.command("recompute-costs")
+@click.option(
+    "--dry-run/--apply",
+    default=True,
+    help="Dry-run (default) only reports the changes; --apply writes them.",
+)
+@click.option(
+    "--limit",
+    default=None,
+    type=int,
+    help="Maximum number of historical requests to recompute.",
+)
+@click.pass_context
+def stats_recompute_costs(
+    ctx: click.Context,
+    dry_run: bool,
+    limit: int | None,
+) -> None:
+    """Recompute cost_microdollars on historical requests.
+
+    Walks the requests table in started_at DESC order, recomputes
+    cost from the latest price snapshot per (model_id, provider_id),
+    and reports / applies the change. Useful after upgrading the
+    pricing resolver to fix inflated totals on cached-token-heavy
+    models (e.g. MiMo 2.5).
+    """
+    import asyncio
+
+    config_path_raw = ctx.obj.get("config_path") if ctx.obj else None
+    config = AppConfig.from_toml(config_path_raw) if config_path_raw else None
+    if config is None:
+        click.echo(
+            "No config available; pass --config or set EGGPOOL_CONFIG.", err=True
+        )
+        sys.exit(2)
+
+    async def _runner() -> int:
+        from eggpool.cost_recompute import recompute_request_costs
+
+        db = Database(
+            path=config.database.path,
+            busy_timeout_ms=config.database.busy_timeout_ms,
+            wal=config.database.wal,
+            synchronous=config.database.synchronous,
+        )
+        await db.connect()
+        try:
+            result = await recompute_request_costs(
+                db,
+                limit=limit,
+                dry_run=dry_run,
+            )
+        finally:
+            await db.disconnect()
+        prefix = "DRY-RUN" if dry_run else "APPLY"
+        click.echo(
+            f"{prefix}: scanned {result.scanned} rows, "
+            f"updated {result.updated}, "
+            f"skipped {result.skipped_unchanged}, "
+            f"unchanged cost total {result.cost_total_microdollars:,} μ$"
+        )
+        if result.changed_rows:
+            click.echo("")
+            click.echo(_format_change_rows(result.changed_rows))
+        return 0
+
+    sys.exit(asyncio.run(_runner()))
+
+
+def _format_change_rows(rows: list[dict[str, Any]]) -> str:
+    """Format recompute-costs output as a small text table."""
+    headers = ("model", "provider", "old_μ$", "new_μ$", "Δ μ$")
+    widths = (28, 14, 12, 12, 12)
+    parts = [
+        "  ".join(h.ljust(w) for h, w in zip(headers, widths, strict=True)),
+        "  ".join("-" * w for w in widths),
+    ]
+    for row in rows:
+        cells = (
+            str(row.get("model_id", ""))[: widths[0]],
+            str(row.get("provider_id", ""))[: widths[1]],
+            f"{int(row.get('old_cost_microdollars', 0)):,}",
+            f"{int(row.get('new_cost_microdollars', 0)):,}",
+            f"{int(row.get('delta_microdollars', 0)):+,}",
+        )
+        parts.append("  ".join(c.ljust(w) for c, w in zip(cells, widths, strict=True)))
+    return "\n".join(parts)
 
 
 def _update_server_config(config_path: str, key: str, value: str) -> None:

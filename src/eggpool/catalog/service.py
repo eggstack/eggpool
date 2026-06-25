@@ -9,13 +9,20 @@ import logging
 from typing import TYPE_CHECKING, Any, cast
 
 from eggpool.catalog.cache import ModelCatalogCache
+from eggpool.catalog.catalog_resolvers import (
+    CatalogConfig,
+    CatalogResolverPipeline,
+    OpenRouterCatalogResolver,
+    PricingCatalogResolver,
+)
 from eggpool.catalog.fetcher import fetch_models_for_account
 from eggpool.catalog.limits import ModelLimitResolver, extract_upstream_limits
 from eggpool.catalog.normalizer import normalize_models
-from eggpool.catalog.pricing import (
-    parse_microdollars_per_million,
-    parse_price_per_1k,
+from eggpool.catalog.pricing_aliases import (
+    PricingAliasResolver,
+    seed_default_aliases,
 )
+from eggpool.catalog.pricing_resolver import resolve_pricing_from_metadata
 from eggpool.catalog.protocols import SUPPORTED_PROTOCOLS, ModelProtocolResolver
 from eggpool.constants import DEFAULT_PROVIDER_ID, DEPRECATED_MODEL_ID
 from eggpool.db.repositories import (
@@ -158,12 +165,60 @@ class CatalogService:
         # signal that an upstream name needs a TOML override or family
         # mapping, not a per-cycle event.
         self._warned_unresolved_models: set[str] = set()
+        # Optional external pricing catalog pipeline (OpenRouter, OpenCode Zen).
+        # Populated by ``attach_pricing_resolvers`` once the database is
+        # ready (catalog aliases live in ``model_pricing_aliases``).
+        self._alias_resolver: PricingAliasResolver | None = None
+        self._catalog_pipeline: CatalogResolverPipeline | None = None
 
     def set_price_change_callback(
         self, callback: Callable[[str, str | None], None]
     ) -> None:
         """Register a callback used to invalidate derived pricing caches."""
         self._price_change_callback = callback
+
+    async def attach_pricing_resolvers(self) -> None:
+        """Initialize the alias resolver + external catalog pipeline.
+
+        Loads pricing aliases from ``model_pricing_aliases`` and wires up
+        the configured external catalogs (OpenRouter, OpenCode Zen) in
+        priority order. Idempotent — repeated calls refresh the alias
+        registry in place.
+        """
+        await seed_default_aliases(self._db)
+        resolver = PricingAliasResolver(self._db)
+        await resolver.refresh()
+        self._alias_resolver = resolver
+
+        catalogs_config = self._config.pricing.catalogs
+        resolvers: list[PricingCatalogResolver] = []
+        for name, entry in (
+            ("openrouter", catalogs_config.openrouter),
+            ("opencode_zen", catalogs_config.opencode_zen),
+        ):
+            if not entry.enabled:
+                continue
+            catalog_config = CatalogConfig(
+                name=name,
+                enabled=entry.enabled,
+                priority=entry.priority,
+                ttl_seconds=entry.ttl_seconds,
+                base_url=entry.base_url,
+                api_key=entry.api_key,
+                options=entry.options,
+            )
+            if name == "openrouter":
+                resolvers.append(
+                    OpenRouterCatalogResolver(
+                        config=catalog_config,
+                        client=self._httpx_client,
+                    )
+                )
+        if resolvers:
+            self._catalog_pipeline = CatalogResolverPipeline(
+                resolvers=resolvers,
+                alias_resolver=resolver,
+            )
 
     @property
     def cache(self) -> ModelCatalogCache:
@@ -975,9 +1030,10 @@ class CatalogService:
         """Insert a price snapshot if pricing data is available.
 
         Each pricing category (input, output, cache-read, cache-write)
-        is resolved independently: a TOML override is authoritative
-        for any category it sets, and any category not set by TOML
-        falls back to upstream metadata. The resulting ``source`` is
+        is resolved independently through ``pricing_resolver``: a TOML
+        override is authoritative for any category it sets, and any
+        category not set by TOML falls back to upstream metadata. The
+        resulting ``source`` is
 
         - ``"config"`` if every present value came from TOML,
         - ``"upstream"`` if every present value came from upstream
@@ -1015,107 +1071,29 @@ class CatalogService:
                     override.cache_write_per_million_microdollars
                 )
 
-        meta: dict[str, Any] = model_info.get("source_metadata", {})
-
-        def _safe_parse_price_per_1k(
-            category: str, value: object, *, default_unit: str = "1k"
-        ) -> float | None:
-            try:
-                return parse_price_per_1k(value, default_unit=default_unit)
-            except ValueError as exc:
-                logger.warning(
-                    "Ignoring invalid %s price for %s: %s",
-                    category,
-                    model_id,
-                    exc,
-                )
-                return None
-
-        def _safe_parse_microdollars(category: str, value: object) -> int | None:
-            try:
-                return parse_microdollars_per_million(value)
-            except ValueError as exc:
-                logger.warning(
-                    "Ignoring invalid %s price for %s: %s",
-                    category,
-                    model_id,
-                    exc,
-                )
-                return None
-
-        def _resolve_input() -> float | None:
-            if "input" in override_values:
-                return override_values["input"]
-            pricing: dict[str, Any] | None = meta.get("pricing")
-            if isinstance(pricing, dict) and "prompt" in pricing:
-                return _safe_parse_price_per_1k(
-                    "input", pricing["prompt"], default_unit="token"
-                )
-            upstream = meta.get("input_price_per_1k")
-            return _safe_parse_price_per_1k("input", upstream)
-
-        def _resolve_output() -> float | None:
-            if "output" in override_values:
-                return override_values["output"]
-            pricing: dict[str, Any] | None = meta.get("pricing")
-            if isinstance(pricing, dict) and "completion" in pricing:
-                return _safe_parse_price_per_1k(
-                    "output", pricing["completion"], default_unit="token"
-                )
-            upstream = meta.get("output_price_per_1k")
-            return _safe_parse_price_per_1k("output", upstream)
-
-        def _resolve_cache_read() -> int | None:
-            if "cache_read" in override_values:
-                return int(override_values["cache_read"])
-            upstream = meta.get("cache_read_per_million_microdollars")
-            return _safe_parse_microdollars("cache_read", upstream)
-
-        def _resolve_cache_write() -> int | None:
-            if "cache_write" in override_values:
-                return int(override_values["cache_write"])
-            upstream = meta.get("cache_write_per_million_microdollars")
-            return _safe_parse_microdollars("cache_write", upstream)
-
-        input_price = _resolve_input()
-        output_price = _resolve_output()
-        cache_read_price = _resolve_cache_read()
-        cache_write_price = _resolve_cache_write()
-
-        if all(
-            value is None
-            for value in (
-                input_price,
-                output_price,
-                cache_read_price,
-                cache_write_price,
+        resolved = resolve_pricing_from_metadata(
+            model_id=model_id,
+            provider_id=provider_id,
+            model_info=model_info,
+            override_values=override_values,
+        )
+        if resolved is None and self._catalog_pipeline is not None:
+            # External catalogs (OpenRouter, OpenCode Zen) supply
+            # authoritative pricing for models whose upstream /models
+            # endpoint does not expose pricing metadata. Falls through
+            # to the existing ``return`` below if no catalog matches.
+            resolved = await self._catalog_pipeline.resolve(
+                provider_id=provider_id,
+                model_id=model_id,
             )
-        ):
+        if resolved is None:
             return
 
-        # Determine the per-category provenance to compute the snapshot
-        # source. A category is considered "present" if it has a value;
-        # its provenance is "config" if the override provided it,
-        # otherwise "upstream".
-        present_provenance: set[str] = set()
-        for _key, override_key, present in (
-            ("input", "input", input_price is not None),
-            ("output", "output", output_price is not None),
-            ("cache_read", "cache_read", cache_read_price is not None),
-            ("cache_write", "cache_write", cache_write_price is not None),
-        ):
-            if not present:
-                continue
-            present_provenance.add(
-                "config" if override_key in override_values else "upstream"
-            )
-
-        if present_provenance == {"config"}:
-            source = "config"
-        elif present_provenance == {"upstream"}:
-            source = "upstream"
-        else:
-            source = "mixed"
+        input_price = resolved.input_price_per_1k
+        output_price = resolved.output_price_per_1k
+        cache_read_price = resolved.cache_read_per_million_microdollars
+        cache_write_price = resolved.cache_write_per_million_microdollars
+        source = resolved.source
 
         # Skip insert when every field already matches the latest snapshot.
         snapshot_repo = PriceSnapshotRepository(self._db)
@@ -1147,18 +1125,23 @@ class CatalogService:
             cache_write_per_million_microdollars=cache_write_price,
             source=source,
             provider_id=provider_id,
+            source_detail=resolved.source_detail,
+            source_confidence=resolved.source_confidence,
+            catalog_source=resolved.source_provider_id,
         )
         if self._price_change_callback is not None:
             self._price_change_callback(model_id, provider_id)
         logger.debug(
             "Inserted price snapshot for %s: input=%s output=%s "
-            "cache_read=%s cache_write=%s source=%s",
+            "cache_read=%s cache_write=%s source=%s detail=%s confidence=%s",
             model_id,
             input_price,
             output_price,
             cache_read_price,
             cache_write_price,
             source,
+            resolved.source_detail,
+            resolved.source_confidence,
         )
 
     def get_models_for_exposure(

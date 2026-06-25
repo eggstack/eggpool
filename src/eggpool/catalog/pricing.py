@@ -108,13 +108,24 @@ def parse_price_per_1k(value: object, *, default_unit: str = "1k") -> float | No
     return result
 
 
-def parse_microdollars_per_million(value: object) -> int | None:
-    """Parse a cache rate into integer microdollars per million tokens."""
+def parse_microdollars_per_million(
+    value: object, *, default_unit: str | None = None
+) -> int | None:
+    """Parse a cache rate into integer microdollars per million tokens.
+
+    ``default_unit`` (``"token"``/``"1k"``/``"million"``/``None``) is
+    applied only when the string carries no unit suffix. The default
+    ``None`` matches the pre-existing contract: a bare numeric string is
+    treated as already being in microdollars per million tokens. Use
+    ``default_unit="token"`` for OpenRouter / Anthropic-style cache
+    fields whose numeric form omits the unit (e.g.
+    ``"0.000000021"`` = $0.000000021 per token).
+    """
     number = _extract_decimal(value)
     if number is None:
         return None
 
-    unit = _price_unit(value)
+    unit = _price_unit(value) or default_unit
     if unit == "token":
         # Dollars per token → microdollars per million tokens = × 10^12
         number *= Decimal(1_000_000) * Decimal(1_000_000)  # noqa: SIM114
@@ -123,11 +134,46 @@ def parse_microdollars_per_million(value: object) -> int | None:
         number *= Decimal(1_000_000_000)
     elif unit == "million":
         number *= Decimal(1_000_000)
+    elif unit is None:
+        # No unit in the string and no default → assume already in
+        # microdollars per million tokens. int() truncates fractional
+        # sub-microdollar rates to zero, which matches the legacy
+        # behaviour callers rely on.
+        pass
+    else:
+        raise ValueError(f"unsupported price unit: {unit}")
 
     rounded = int(number.to_integral_value())
     if rounded < 0:
         raise ValueError("price must be non-negative")
     return rounded
+
+
+def microdollars_per_million_from_price_per_1k(
+    price_per_1k: float | None,
+) -> int | None:
+    """Convert legacy dollars/1K float pricing to integer microdollars/1M.
+
+    Centralises the $0.003/1K → 3_000_000 conversion so callers do not
+    embed the ``* 1_000_000_000`` magic number next to other arithmetic.
+    Returns ``None`` when input is ``None`` (so callers can chain optional
+    lookups without an extra ``is not None`` check).
+    """
+    if price_per_1k is None:
+        return None
+    return int(round(price_per_1k * 1_000_000_000))
+
+
+# Cache category fallbacks used by CostCalculator when a per-token rate
+# is missing but the model has nonzero tokens in that category. These
+# are conservative local heuristics, intentionally higher than typical
+# cache rates so that cost is over-reported rather than under-reported
+# for partial snapshots.
+_CACHE_READ_FALLBACK_PER_MILLION_MICRODOLLARS = 300_000  # $0.30 / 1M
+_CACHE_WRITE_FALLBACK_PER_MILLION_MICRODOLLARS = 3_750_000  # $3.75 / 1M
+
+_GENERIC_INPUT_FALLBACK_DOLLARS_PER_1K = 0.003  # $3 / 1M
+_GENERIC_OUTPUT_FALLBACK_DOLLARS_PER_1K = 0.015  # $15 / 1M
 
 
 def coerce_token_count(value: object) -> int:
@@ -343,12 +389,24 @@ class CostCalculator:
         """Calculate cost in microdollars from token usage.
 
         Returns:
-            Tuple of (cost_microdollars, exactness_level)
+            Tuple of (cost_microdollars, exactness_level). Exactness is
+            one of ``"derived"`` (every nonzero billable category had a
+            trusted rate), ``"partial"`` (at least one nonzero category
+            had a trusted rate and at least one was filled by a category
+            fallback), ``"estimated"`` (no trusted rates existed; the
+            local heuristic priced the request), or ``"unknown"`` (no
+            token usage at all).
         """
         input_tokens = _normalize_token_count(input_tokens)
         output_tokens = _normalize_token_count(output_tokens)
         cache_read_tokens = _normalize_token_count(cache_read_tokens)
         cache_write_tokens = _normalize_token_count(cache_write_tokens)
+
+        total_tokens = (
+            input_tokens + output_tokens + cache_read_tokens + cache_write_tokens
+        )
+        if total_tokens == 0:
+            return 0, "unknown"
 
         cache_key = (model_id, provider_id)
         if cache_key not in self._latest_cache:
@@ -368,54 +426,88 @@ class CostCalculator:
         cache_read_rate = snapshot.cache_read_per_million_microdollars
         cache_write_rate = snapshot.cache_write_per_million_microdollars
 
-        # Determine if required rates are missing for nonzero token categories
-        missing_required_rate = (
-            (input_tokens > 0 and input_rate is None)
-            or (output_tokens > 0 and output_rate is None)
-            or (cache_read_tokens > 0 and cache_read_rate is None)
-            or (cache_write_tokens > 0 and cache_write_rate is None)
+        # Track which nonzero categories are missing a trusted rate so
+        # we can fill them with a per-category fallback rather than
+        # wholesale replacing the cost with a generic full-request
+        # estimate. "Trusted" here means the snapshot has a non-None
+        # microdollar rate for that category; legacy float rates are
+        # converted on the fly via the snapshot's int fields.
+        input_missing = input_tokens > 0 and input_rate is None
+        output_missing = output_tokens > 0 and output_rate is None
+        cache_read_missing = cache_read_tokens > 0 and cache_read_rate is None
+        cache_write_missing = cache_write_tokens > 0 and cache_write_rate is None
+
+        any_missing = (
+            input_missing or output_missing or cache_read_missing or cache_write_missing
+        )
+        any_priced = (
+            (input_tokens > 0 and not input_missing)
+            or (output_tokens > 0 and not output_missing)
+            or (cache_read_tokens > 0 and not cache_read_missing)
+            or (cache_write_tokens > 0 and not cache_write_missing)
         )
 
-        if missing_required_rate:
-            # Use fallback estimation for missing categories
-            exactness = "estimated"
-            # Use available rates where possible, fallback to estimate for missing
-            input_cost = (input_tokens * (input_rate or 0)) // 1_000_000
-            output_cost = (output_tokens * (output_rate or 0)) // 1_000_000
-            cache_read_cost = (cache_read_tokens * (cache_read_rate or 0)) // 1_000_000
-            cache_write_cost = (
-                cache_write_tokens * (cache_write_rate or 0)
-            ) // 1_000_000
-            calculated_partial = (
-                input_cost + output_cost + cache_read_cost + cache_write_cost
+        if any_missing and not any_priced:
+            # Every nonzero category is missing a rate — fall back to
+            # the generic full-request heuristic and label it estimated.
+            return (
+                self._estimate_cost(input_tokens, output_tokens),
+                "estimated",
             )
-            # Fall back to at least the estimated cost
-            fallback = self._estimate_cost(input_tokens, output_tokens)
-            cost_microdollars = max(calculated_partial, fallback)
-        else:
-            exactness = "derived"
-            total_numerator = (
-                (input_tokens * (input_rate or 0))
-                + (output_tokens * (output_rate or 0))
-                + (cache_read_tokens * (cache_read_rate or 0))
-                + (cache_write_tokens * (cache_write_rate or 0))
-            )
-            cost_microdollars = round(total_numerator / 1_000_000)
-            # If the integer microdollar arithmetic rounded a nonzero
-            # billable event down to zero, the result is not actually
-            # "derived" (i.e., exact) — it is a lower bound on the
-            # true cost. Downgrade exactness so the request finalizer
-            # floors the cost at the reservation estimate.
-            if cost_microdollars == 0 and any(
-                (
-                    input_tokens,
-                    output_tokens,
-                    cache_read_tokens,
-                    cache_write_tokens,
-                )
-            ):
-                exactness = "estimated"
 
+        # Compute trusted-category cost using integer microdollar math.
+        trusted_numerator = (
+            (input_tokens * (input_rate or 0))
+            + (output_tokens * (output_rate or 0))
+            + (cache_read_tokens * (cache_read_rate or 0))
+            + (cache_write_tokens * (cache_write_rate or 0))
+        )
+        trusted_cost = trusted_numerator // 1_000_000
+
+        if any_missing:
+            # Fill only the missing categories with a per-category
+            # fallback. Mark exactness as "partial" so the dashboard
+            # can distinguish this case from a fully-heuristic bill.
+            fallback_cost = 0
+            if input_missing:
+                fallback_cost += int(
+                    (input_tokens / 1000.0)
+                    * _GENERIC_INPUT_FALLBACK_DOLLARS_PER_1K
+                    * 1_000_000
+                )
+            if output_missing:
+                fallback_cost += int(
+                    (output_tokens / 1000.0)
+                    * _GENERIC_OUTPUT_FALLBACK_DOLLARS_PER_1K
+                    * 1_000_000
+                )
+            if cache_read_missing:
+                fallback_cost += self._fallback_microdollars_for_category(
+                    "cache_read", cache_read_tokens
+                )
+            if cache_write_missing:
+                fallback_cost += self._fallback_microdollars_for_category(
+                    "cache_write", cache_write_tokens
+                )
+            cost_microdollars = trusted_cost + fallback_cost
+            return cost_microdollars, "partial"
+
+        # All categories priced — pure derived cost. If the integer
+        # microdollar arithmetic rounded a nonzero billable event down
+        # to zero (e.g. an extremely cheap rate or tiny token count),
+        # downgrade exactness so the request finalizer floors the cost
+        # at the reservation estimate rather than recording zero.
+        cost_microdollars = round(trusted_numerator / 1_000_000)
+        exactness = "derived"
+        if cost_microdollars == 0 and any(
+            (
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                cache_write_tokens,
+            )
+        ):
+            exactness = "estimated"
         return cost_microdollars, exactness
 
     def _estimate_cost(self, input_tokens: int, output_tokens: int) -> int:
@@ -428,11 +520,33 @@ class CostCalculator:
 
         # Rough estimates in dollars per 1K tokens
         # These are fallback estimates - actual prices vary significantly
-        estimated_input_price = 0.003  # $3 per 1M input tokens
-        estimated_output_price = 0.015  # $15 per 1M output tokens
+        estimated_input_price = _GENERIC_INPUT_FALLBACK_DOLLARS_PER_1K
+        estimated_output_price = _GENERIC_OUTPUT_FALLBACK_DOLLARS_PER_1K
 
         input_cost = (input_tokens / 1000.0) * estimated_input_price
         output_cost = (output_tokens / 1000.0) * estimated_output_price
         total_cost = input_cost + output_cost
 
         return int(total_cost * 1_000_000)
+
+    @staticmethod
+    def _fallback_microdollars_for_category(
+        category: str,
+        tokens: int,
+    ) -> int:
+        """Category-specific fallback microdollars for partial snapshots.
+
+        Used when ``calculate_cost`` has a snapshot but is missing the
+        rate for a single nonzero token category. The fallback is
+        intentionally conservative (over-reports) so partial snapshots
+        cannot silently understate total cost.
+        """
+        if tokens <= 0:
+            return 0
+        if category == "cache_read":
+            rate = _CACHE_READ_FALLBACK_PER_MILLION_MICRODOLLARS
+        elif category == "cache_write":
+            rate = _CACHE_WRITE_FALLBACK_PER_MILLION_MICRODOLLARS
+        else:
+            return 0
+        return (tokens * rate) // 1_000_000

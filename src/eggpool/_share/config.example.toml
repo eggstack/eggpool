@@ -57,6 +57,39 @@ five_hour_microdollars = 12000000
 weekly_microdollars = 30000000
 monthly_microdollars = 60000000
 
+# ---------------------------------------------------------------------------
+# Pricing resolution
+# ---------------------------------------------------------------------------
+# When upstream metadata doesn't expose pricing for a model, EggPool can
+# consult external pricing catalogs (OpenRouter, OpenCode Zen, ...). The
+# resolver pipeline tries each enabled catalog in priority order and
+# stops at the first match. ``fallback = "generic_estimate"`` (default)
+# fills any remaining missing cache rates with conservative estimates so
+# costs stay positive rather than zero; set ``fallback = "off"`` to skip
+# cache fallback entirely (results in zero cost for cache tokens when no
+# rate is known).
+[pricing]
+fallback = "generic_estimate"
+
+[pricing.catalogs]
+# OpenRouter publishes authoritative per-model pricing for many providers
+# via a public /models endpoint. Disable this catalog if you don't want
+# to query openrouter.ai from the EggPool host.
+[pricing.catalogs.openrouter]
+enabled = true
+priority = 100
+ttl_seconds = 86400
+# base_url = "https://openrouter.ai/api/v1"
+# api_key  = "..."   # Optional: only needed for higher rate limits
+# options  = {}      # Resolver-specific options
+
+# OpenCode Zen is the upstream the default provider aggregates. Enable
+# if you want Zen's pricing to feed the catalog pipeline as a fallback.
+[pricing.catalogs.opencode_zen]
+enabled = false
+priority = 200
+ttl_seconds = 86400
+
 [dashboard]
 enabled = true
 public = true

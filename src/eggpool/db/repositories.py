@@ -851,7 +851,8 @@ class PriceSnapshotRepository:
             "captured_at, input_per_million_microdollars, "
             "output_per_million_microdollars, "
             "cache_read_per_million_microdollars, "
-            "cache_write_per_million_microdollars, source, provider_id "
+            "cache_write_per_million_microdollars, source, provider_id, "
+            "source_detail, source_confidence, catalog_source "
             "FROM model_price_snapshots WHERE model_id = ?"
             f"{provider_clause} ORDER BY captured_at DESC, id DESC LIMIT 1",
             params,
@@ -865,7 +866,8 @@ class PriceSnapshotRepository:
             "captured_at, input_per_million_microdollars, "
             "output_per_million_microdollars, "
             "cache_read_per_million_microdollars, "
-            "cache_write_per_million_microdollars, source, provider_id "
+            "cache_write_per_million_microdollars, source, provider_id, "
+            "source_detail, source_confidence, catalog_source "
             "FROM ("
             "  SELECT model_price_snapshots.*, "
             "  ROW_NUMBER() OVER ("
@@ -891,6 +893,9 @@ class PriceSnapshotRepository:
         cache_write_per_million_microdollars: int | None = None,
         source: str = "upstream",
         provider_id: str = DEFAULT_PROVIDER_ID,
+        source_detail: str | None = None,
+        source_confidence: str | None = None,
+        catalog_source: str | None = None,
     ) -> None:
         """Record a new price snapshot.
 
@@ -912,8 +917,9 @@ class PriceSnapshotRepository:
             "(model_id, input_price_per_1k, output_price_per_1k, "
             "input_per_million_microdollars, output_per_million_microdollars, "
             "cache_read_per_million_microdollars, "
-            "cache_write_per_million_microdollars, source, provider_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "cache_write_per_million_microdollars, source, provider_id, "
+            "source_detail, source_confidence, catalog_source) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 model_id,
                 input_price_per_1k,
@@ -924,6 +930,9 @@ class PriceSnapshotRepository:
                 cache_write_per_million_microdollars,
                 source,
                 provider_id,
+                source_detail,
+                source_confidence,
+                catalog_source,
             ),
         )
 

@@ -318,10 +318,17 @@ dashboard's public/auth setting.
   no error_detail). Auth-gated.
 - **Cost/cache/reasoning exactness** (extended fields on `/api/stats/accounts`
   and `/api/stats/models`): per-account and per-model `exact_count`,
-  `estimated_count`, `cache_read_ratio`, `cache_write_ratio`,
-  `reasoning_output_ratio`, `estimated_cost_fraction`, `avg_cost_per_request`,
-  `avg_cost_per_1k_tokens`. Lets you see which accounts/models/providers
-  report exact usage versus locally estimated cost.
+  `partial_count`, `derived_count`, `estimated_count`, `cache_read_ratio`,
+  `cache_write_ratio`, `reasoning_output_ratio`, `estimated_cost_fraction`,
+  `avg_cost_per_request`, `avg_cost_per_1k_tokens`. Lets you see which
+  accounts/models/providers report exact usage versus partially-priced
+  versus locally estimated cost.
+- **Pricing provenance** (`/api/stats/pricing-provenance`): per-`(model,
+  provider)` snapshot breakdown of `source_detail` (operator override vs.
+  upstream metadata vs. OpenRouter catalog vs. curated alias) and
+  `source_confidence` (exact external ID vs. curated alias vs. unknown).
+  Used by the dashboard to render the cost-exactness badge and the
+  high-spend estimated warning.
 
 ## Configuration
 

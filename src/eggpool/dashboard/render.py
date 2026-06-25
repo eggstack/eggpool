@@ -423,24 +423,96 @@ def _render_period_selector(current: str, current_theme: str = "") -> str:
         ("7d", "Last 7 days"),
         ("30d", "Last 30 days"),
     ]
-    parts = [
-        '<form method="get" class="period-selector" '
-        'data-tooltip="Select time range" '
-        'aria-label="Select time range">',
-        '<label>Period: <select name="period" onchange="this.form.submit()">',
-    ]
+    items: list[str] = []
     for value, label in options:
-        selected = " selected" if value == current else ""
-        parts.append(
-            f'<option value="{_html_escape(value)}"{selected}>'
-            f"{_html_escape(label)}</option>"
+        selected = ' selected="selected"' if value == current else ""
+        items.append(
+            f'<option value="{escape(value)}"{selected}>{escape(label)}</option>'
         )
-    parts.append("</select></label>")
-    if current_theme:
+    selector = "".join(items)
+    return (
+        f'<form method="get" class="period-selector">'
+        f'<label for="period">Period: </label>'
+        f'<select id="period" name="period" onchange="this.form.submit()">'
+        f"{selector}"
+        f"</select>"
+        f"</form>"
+    )
+
+
+_HIGH_SPEND_ESTIMATED_DOLLARS = 10.0
+
+
+def _render_pricing_exactness_badge(
+    *,
+    exact: int,
+    derived: int,
+    partial: int,
+    estimated: int,
+    unknown_exc: int,
+) -> str:
+    """Render a compact exactness badge.
+
+    The badge is colored by the worst-case exactness observed: green when
+    every row is ``exact`` or ``derived``, yellow when any ``partial``
+    row exists, red when ``estimated`` or ``unknown`` dominates. Used
+    on the Accounts / Models tables so operators can spot rows whose
+    cost numbers are advisory at a glance.
+    """
+    total = exact + derived + partial + estimated + unknown_exc
+    if total == 0:
+        return '<span class="exactness-badge empty">—</span>'
+    if estimated == total or unknown_exc == total:
+        css_class = "exactness-badge est-major"
+    elif estimated + unknown_exc > 0 or partial > 0:
+        css_class = "exactness-badge partial-mix"
+    else:
+        css_class = "exactness-badge derived"
+    summary = f"e:{exact},d:{derived},p:{partial},~:{estimated},?:{unknown_exc}"
+    return f'<span class="{css_class}" title="{escape(summary)}">{summary}</span>'
+
+
+def _render_pricing_warnings(
+    accounts: list[dict[str, Any]],
+) -> str:
+    """Render a banner warning about high-spend estimated rows.
+
+    Returns an empty string when no row exceeds
+    ``_HIGH_SPEND_ESTIMATED_DOLLARS`` in estimated cost. The banner
+    links to the affected accounts so operators can drill in.
+    """
+    high_spend_rows: list[tuple[str, float, float]] = []
+    for row in accounts:
+        cost_micro = int(row.get("cost_microdollars", 0) or 0)
+        est_fraction_raw = row.get("estimated_cost_fraction")
+        if est_fraction_raw is None:
+            continue
+        est_cost_micro = int(round(cost_micro * float(est_fraction_raw)))
+        est_cost_dollars = est_cost_micro / 1_000_000.0
+        if est_cost_dollars >= _HIGH_SPEND_ESTIMATED_DOLLARS:
+            high_spend_rows.append(
+                (
+                    str(row.get("account_name", "?")),
+                    est_cost_dollars,
+                    float(est_fraction_raw),
+                )
+            )
+    if not high_spend_rows:
+        return ""
+    parts = [
+        '<div class="panel warn pricing-warning">',
+        "<strong>Pricing warning:</strong> ",
+        "the following accounts have substantial cost on estimated "
+        "(non-exact) pricing in the selected period:",
+        "<ul>",
+    ]
+    for name, dollars, fraction in high_spend_rows:
         parts.append(
-            f'<input type="hidden" name="theme" value="{_html_escape(current_theme)}">'
+            f"<li><code>{escape(name)}</code>: "
+            f"~${dollars:,.2f} estimated "
+            f"({fraction * 100:.0f}% of total)</li>"
         )
-    parts.append("</form>")
+    parts.append("</ul></div>")
     return "".join(parts)
 
 
@@ -1215,9 +1287,16 @@ def _render_account_table(accounts: list[dict[str, Any]]) -> str:
         operator_disabled = bool(row.get("operator_disabled", False))
         exact = int(row.get("exact_count", 0) or 0)
         derived = int(row.get("derived_count", 0) or 0)
+        partial_count = int(row.get("partial_count", 0) or 0)
         estimated = int(row.get("estimated_count", 0) or 0)
         unknown_exc = int(row.get("unknown_count", 0) or 0)
-        exactness = f"{exact:,}/{derived:,}/{estimated:,}/{unknown_exc:,}"
+        exactness = _render_pricing_exactness_badge(
+            exact=exact,
+            derived=derived,
+            partial=partial_count,
+            estimated=estimated,
+            unknown_exc=unknown_exc,
+        )
         est_cost_fraction = row.get("estimated_cost_fraction")
         est_cost_pct = (
             _format_percent_unit(est_cost_fraction, digits=1)
@@ -1318,6 +1397,7 @@ def render_accounts(
     body = f"""
 <h2>Accounts</h2>
 {_render_period_selector(period, current_theme)}
+{_render_pricing_warnings(accounts)}
 <section class="panel">
   {_render_account_table(accounts)}
 </section>
@@ -1379,9 +1459,16 @@ def render_models(
             provider = escape(row.get("provider_id", ""))
             exact = int(row.get("exact_count", 0) or 0)
             derived = int(row.get("derived_count", 0) or 0)
+            partial_count = int(row.get("partial_count", 0) or 0)
             estimated = int(row.get("estimated_count", 0) or 0)
             unknown_exc = int(row.get("unknown_count", 0) or 0)
-            exactness = f"{exact:,}/{derived:,}/{estimated:,}/{unknown_exc:,}"
+            exactness = _render_pricing_exactness_badge(
+                exact=exact,
+                derived=derived,
+                partial=partial_count,
+                estimated=estimated,
+                unknown_exc=unknown_exc,
+            )
             est_cost_fraction = row.get("estimated_cost_fraction")
             est_cost_pct = (
                 _format_percent_unit(est_cost_fraction, digits=1)

@@ -71,6 +71,8 @@ async def fetch_summary(
             as exact_count,
         COALESCE(SUM(CASE WHEN exactness = 'derived' THEN 1 ELSE 0 END), 0)
             as derived_count,
+        COALESCE(SUM(CASE WHEN exactness = 'partial' THEN 1 ELSE 0 END), 0)
+            as partial_count,
         COALESCE(SUM(CASE WHEN exactness = 'estimated' THEN 1 ELSE 0 END), 0)
             as estimated_count,
         COALESCE(SUM(CASE WHEN exactness = 'unknown' THEN 1 ELSE 0 END), 0)
@@ -146,6 +148,8 @@ async def fetch_account_stats(
                 as exact_count,
             COALESCE(SUM(CASE WHEN r.exactness = 'derived' THEN 1 ELSE 0 END), 0)
                 as derived_count,
+            COALESCE(SUM(CASE WHEN r.exactness = 'partial' THEN 1 ELSE 0 END), 0)
+                as partial_count,
             COALESCE(SUM(CASE WHEN r.exactness = 'estimated' THEN 1 ELSE 0 END), 0)
                 as estimated_count,
             COALESCE(SUM(CASE WHEN r.exactness = 'unknown' OR r.exactness IS NULL
@@ -201,6 +205,7 @@ async def fetch_account_stats(
         COALESCE(ps.reasoning_tokens, 0) as reasoning_tokens,
         COALESCE(ps.exact_count, 0) as exact_count,
         COALESCE(ps.derived_count, 0) as derived_count,
+        COALESCE(ps.partial_count, 0) as partial_count,
         COALESCE(ps.estimated_count, 0) as estimated_count,
         COALESCE(ps.unknown_count, 0) as unknown_count,
         CASE
@@ -304,6 +309,8 @@ async def fetch_model_stats(
             as exact_count,
         COALESCE(SUM(CASE WHEN r.exactness = 'derived' THEN 1 ELSE 0 END), 0)
             as derived_count,
+        COALESCE(SUM(CASE WHEN r.exactness = 'partial' THEN 1 ELSE 0 END), 0)
+            as partial_count,
         COALESCE(SUM(CASE WHEN r.exactness = 'estimated' THEN 1 ELSE 0 END), 0)
             as estimated_count,
         COALESCE(SUM(CASE WHEN r.exactness = 'unknown' OR r.exactness IS NULL
@@ -1025,6 +1032,7 @@ def _build_summary(row: dict[str, Any]) -> dict[str, Any]:
         "non_streamed_requests": int(row.get("non_streamed_requests", 0)),
         "exact_count": int(row.get("exact_count", 0)),
         "derived_count": int(row.get("derived_count", 0)),
+        "partial_count": int(row.get("partial_count", 0)),
         "estimated_count": int(row.get("estimated_count", 0)),
         "unknown_count": int(row.get("unknown_count", 0)),
         "total_bytes_received": int(row.get("total_bytes_received", 0)),
@@ -1054,6 +1062,7 @@ def _empty_summary() -> dict[str, Any]:
         "non_streamed_requests": 0,
         "exact_count": 0,
         "derived_count": 0,
+        "partial_count": 0,
         "estimated_count": 0,
         "unknown_count": 0,
         "total_bytes_received": 0,
@@ -1806,4 +1815,55 @@ async def fetch_recent_requests(
     """
     params.append(limit)
     rows = await db.fetch_all(sql, tuple(params))
+    return [dict(row) for row in rows]
+
+
+async def fetch_pricing_provenance_stats(
+    db: Database,
+) -> list[dict[str, Any]]:
+    """Aggregate pricing provenance from the latest snapshot per model.
+
+    Returns one row per ``(model_id, provider_id, source_detail,
+    catalog_source)`` tuple, including the most recent captured_at and
+    a count of categories (input/output/cache_read/cache_write) that
+    carry a non-null microdollar rate. Used by the dashboard to surface
+    how much of the catalog is exact upstream metadata vs. curated
+    alias vs. ambiguous-skip.
+    """
+    sql = """
+    WITH latest AS (
+        SELECT
+            model_price_snapshots.*,
+            ROW_NUMBER() OVER(
+                PARTITION BY model_id, provider_id
+                ORDER BY captured_at DESC, id DESC
+            ) AS snapshot_rank
+        FROM model_price_snapshots
+    )
+    SELECT
+        model_id,
+        provider_id,
+        COALESCE(source_detail, '(unknown)') AS source_detail,
+        COALESCE(source_confidence, '(unknown)') AS source_confidence,
+        COALESCE(catalog_source, source) AS catalog_source,
+        source AS aggregate_source,
+        captured_at,
+        (
+            CASE WHEN input_per_million_microdollars IS NOT NULL THEN 1 ELSE 0 END
+            + CASE
+                WHEN output_per_million_microdollars IS NOT NULL THEN 1 ELSE 0 END
+            + CASE WHEN cache_read_per_million_microdollars IS NOT NULL
+                THEN 1 ELSE 0 END
+            + CASE WHEN cache_write_per_million_microdollars IS NOT NULL
+                THEN 1 ELSE 0 END
+        ) AS categories_priced,
+        (
+            COALESCE(input_per_million_microdollars, 0)
+            + COALESCE(output_per_million_microdollars, 0)
+        ) AS anchor_rate_microdollars
+    FROM latest
+    WHERE snapshot_rank = 1
+    ORDER BY model_id
+    """
+    rows = await db.fetch_all(sql)
     return [dict(row) for row in rows]

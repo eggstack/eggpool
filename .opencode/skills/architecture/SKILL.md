@@ -201,6 +201,17 @@ The `/timeseries` page replaces the old "table of bucket counts" with a stacked-
 - `eggpool configsetup opencode --json-only` generates OpenCode config with explicit model limits
 - Effective limits are configuration-derived; no database migration needed for static overrides
 
+## Pricing Resolution
+
+- Resolution order: TOML override (`[pricing] model_overrides`) → upstream `/v1/models` metadata → external catalog (OpenRouter, OpenCode Zen) via the alias registry. Implemented in `src/eggpool/catalog/pricing_resolver.py` as `resolve_pricing_from_metadata()` and the `CatalogResolverPipeline` in `src/eggpool/catalog/catalog_resolvers.py`
+- **`ResolvedPricing` provenance**: every resolution records `source` (`config` / `upstream` / `mixed`), `source_detail` (`operator_override` / `provider_metadata` / `openrouter` / `opencode_zen`), `source_confidence` (`exact_external_id` / `curated_alias` / `provider_metadata`), `source_model_id` (external catalog model ID), `source_provider_id` (catalog name)
+- **Cost exactness values** stored on every finalized request: `derived` (every nonzero billable category priced from a trusted rate), `partial` (at least one nonzero category filled by per-category fallback so the cost stays positive), `estimated` (no trusted rates; the local heuristic priced the request), `unknown` (no token usage)
+- **Per-category fallback** in `CostCalculator._fallback_microdollars_for_category()` fills missing cache rates with conservative constants ($0.30/1M cache read, $3.75/1M cache write) so partial rows over-report rather than under-report. Opt out via `[pricing] fallback = "off"`
+- **Alias registry** (`src/eggpool/catalog/pricing_aliases.py`): maps upstream model IDs (`mimo-v2.5`) onto external catalog IDs (`xiaomi/mimo-v2.5`) with a `confidence` enum (`exact` / `curated_alias` / `ambiguous_skip`). Seeded idempotently at startup via `seed_default_aliases()` and consulted by `CatalogResolverPipeline` before fetching
+- **External catalog configuration** lives under `[pricing.catalogs.<name>]` in `config.toml`: `enabled`, `priority`, `ttl_seconds`, `base_url`, `api_key`, `options`. Built-in implementations: `openrouter` (enabled by default), `opencode_zen` (disabled by default)
+- **`eggpool stats recompute-costs [--dry-run|--apply] [--limit N]`** is the operator escape hatch after upgrading the resolver. Implemented in `src/eggpool/cost_recompute.py`; reuses the live `CostCalculator` so the new values match what the finalizer would write today. Default `--dry-run` reports deltas only
+- **Dashboard wiring**: per-row cost-exactness badge (`<span class="exactness-badge derived|partial-mix|est-major">e:N,d:N,p:N,~:N,?:N</span>`) on the Accounts and Models tables; high-spend estimated warning banner on the Accounts page when any row exceeds $10 in estimated cost
+
 ## Health and Failure Classification
 
 - Health systems use a normalized `FailureCategory` vocabulary shared by `HealthManager` and `AccountRuntimeState`

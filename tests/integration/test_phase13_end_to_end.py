@@ -1139,10 +1139,16 @@ class TestMissingPriceCategory:
     """Section G: Missing price category."""
 
     @pytest.mark.asyncio
-    async def test_missing_input_rate_returns_estimated(
+    async def test_missing_input_rate_returns_partial(
         self, two_account_db: Database
     ) -> None:
-        """Missing rate returns estimated, not derived."""
+        """Missing rate returns partial when other categories are trusted.
+
+        Phase 1 added per-category fallback: output is priced from the
+        trusted rate and input is filled by the conservative generic
+        estimate, so the exactness label becomes ``partial`` rather
+        than ``estimated``. The total cost stays positive.
+        """
         price_repo = PriceRepository(two_account_db)
         cost_calculator = CostCalculator(price_repo)
 
@@ -1164,11 +1170,12 @@ class TestMissingPriceCategory:
             output_tokens=500,
         )
 
-        # Should be estimated (missing required input rate)
-        assert exactness == "estimated", (
-            f"Missing input rate should return 'estimated', got '{exactness}'"
+        # Output is trusted, input is filled by per-category fallback.
+        assert exactness == "partial", (
+            f"Missing input rate with trusted output should return 'partial', "
+            f"got '{exactness}'"
         )
-        assert cost > 0, "Cost should be nonzero even with estimated fallback"
+        assert cost > 0, "Cost should be nonzero with per-category fallback"
 
 
 # ===========================================================================
