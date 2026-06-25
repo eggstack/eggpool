@@ -111,4 +111,30 @@
     }
     return (value / 1_000_000_000).toFixed(1) + "B";
   };
+
+  namespace.formatBytes = function formatBytes(value) {
+    if (value === null || value === undefined || Number.isNaN(Number(value))) {
+      return "—";
+    }
+    const bytes = Number(value);
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let val = bytes;
+    for (let i = 0; i < units.length; i++) {
+      if (Math.abs(val) < 1000 || i === units.length - 1) {
+        if (units[i] === "B") {
+          return val.toFixed(0) + " B";
+        }
+        return val.toFixed(1) + " " + units[i];
+      }
+      val /= 1000;
+    }
+    return val.toFixed(1) + " PB";
+  };
+
+  namespace.formatMicrodollars = function formatMicrodollars(value) {
+    if (value === null || value === undefined || Number.isNaN(Number(value))) {
+      return "—";
+    }
+    return "$" + (Number(value) / 1_000_000).toFixed(6);
+  };
 })();

@@ -357,6 +357,7 @@ def _render_nav(
         ("traces", "/traces", "Traces"),
         ("events", "/events", "Events"),
         ("timeseries", "/timeseries", "Timeseries"),
+        ("runtime", "/runtime", "Runtime"),
     ]
     parts = ['<nav class="topnav">']
     for key, href, label in items:
@@ -1805,6 +1806,287 @@ def render_pings(
     )
 
 
+def render_runtime(
+    snapshot: dict[str, Any],
+    theme_css: str = "",
+    available_themes: list[str] | None = None,
+    current_theme: str = "",
+) -> str:
+    """Render the runtime metrics page."""
+    server = _as_dict(snapshot.get("server"))
+    memory = _as_dict(snapshot.get("memory"))
+    processes = _as_dict(snapshot.get("processes"))
+    background_tasks: list[dict[str, Any]] = snapshot.get("background_tasks") or []
+    db = _as_dict(snapshot.get("db"))
+    routing = _as_dict(snapshot.get("routing_runtime"))
+    probe_errors: list[str] = snapshot.get("probe_errors") or []
+
+    # Server section
+    pid = server.get("pid", "—")
+    uptime_s = server.get("uptime_seconds")
+    uptime = format_age_seconds(uptime_s)
+    threads = server.get("configured_server_threads", "—")
+    python_ver = escape(str(server.get("python_version", "—")))
+    platform_str = escape(str(server.get("platform", "—")))
+    ppid = server.get("ppid", "—")
+    is_daemon = server.get("is_daemon_hint", False)
+    daemon_label = "yes" if is_daemon else "no"
+
+    # Process count
+    process_count = processes.get("eggpool_process_count")
+    expected_count = processes.get("expected_worker_process_count", 2)
+    process_warning = processes.get("process_count_warning", False)
+
+    # Memory
+    rss_bytes = memory.get("rss_bytes")
+    rss = format_bytes(rss_bytes) if rss_bytes is not None else "—"
+    open_fds = format_int(memory.get("open_fd_count"))
+    thread_count = format_int(memory.get("thread_count"))
+
+    # Database
+    db_path = escape(str(db.get("path") or ":memory:"))
+    db_file_size = format_bytes(db.get("file_size_bytes"))
+    db_wal_size = format_bytes(db.get("wal_size_bytes"))
+    db_wal_enabled = db.get("wal_enabled", False)
+    db_wal_live = db.get("wal_mode_live", "")
+    db_sync = escape(str(db.get("synchronous_live") or "—"))
+    db_primary_connected = db.get("primary_connected")
+    db_separate_stats = db.get("stats_connection_separate", False)
+
+    # Routing / in-flight
+    pending_count = routing.get("pending_count")
+    oldest_pending_age = format_age_seconds(routing.get("oldest_pending_age_seconds"))
+    active_reservations = routing.get("active_reservations_count")
+    reserved_microdollars = format_microdollars(routing.get("reserved_microdollars", 0))
+    active_requests = routing.get("active_requests_total")
+    active_backoff_count = routing.get("active_backoff_count")
+    health_states: dict[str, str] = routing.get("health_states_by_account") or {}
+
+    # Process count warning card
+    process_warn_class = "warning" if process_warning else ""
+    process_count_display = (
+        format_int(process_count) if process_count is not None else "—"
+    )
+    expected_display = format_int(expected_count) if expected_count is not None else "—"
+
+    # Server info cards
+    server_cards = f"""
+<section class="cards">
+  <div class="card">
+    <h3>Server PID</h3>
+    <p class="metric">{pid}</p>
+    <p class="sub">PPID {ppid} · daemon {daemon_label}</p>
+  </div>
+  <div class="card">
+    <h3>Uptime</h3>
+    <p class="metric">{uptime}</p>
+    <p class="sub">uptime since start</p>
+  </div>
+  <div class="card">
+    <h3>Threads</h3>
+    <p class="metric">{threads}</p>
+    <p class="sub">configured server threads</p>
+  </div>
+  <div class="card">
+    <h3>Python</h3>
+    <p class="metric">{python_ver}</p>
+    <p class="sub">{platform_str}</p>
+  </div>
+</section>
+"""
+
+    # Process & memory cards
+    memory_cards = f"""
+<section class="cards">
+  <div class="card{process_warn_class}">
+    <h3>Processes</h3>
+    <p class="metric">{process_count_display}</p>
+    <p class="sub">expected {expected_display}</p>
+  </div>
+  <div class="card">
+    <h3>RSS memory</h3>
+    <p class="metric">{rss}</p>
+    <p class="sub">resident set size</p>
+  </div>
+  <div class="card">
+    <h3>Open FDs</h3>
+    <p class="metric">{open_fds}</p>
+    <p class="sub">file descriptors</p>
+  </div>
+  <div class="card">
+    <h3>Threads (active)</h3>
+    <p class="metric">{thread_count}</p>
+    <p class="sub">threading.active_count()</p>
+  </div>
+</section>
+"""
+
+    # Background tasks table
+    if background_tasks:
+        task_rows: list[str] = []
+        for task in background_tasks:
+            name = escape(str(task.get("name", "")))
+            running = bool(task.get("running", False))
+            done = bool(task.get("done", False))
+            cancelled = bool(task.get("cancelled", False))
+            restarts = int(task.get("restart_count", 0) or 0)
+            max_restarts = task.get("max_restarts")
+            status = "running" if running else ("cancelled" if cancelled else "stopped")
+            status_cls = "yes" if running else ("no" if cancelled else "")
+            max_str = format_int(max_restarts) if max_restarts is not None else "—"
+            task_rows.append(
+                f"<tr>"
+                f"<td>{name}</td>"
+                f'<td class="{status_cls}">{status}</td>'
+                f"<td>{restarts}</td>"
+                f"<td>{max_str}</td>"
+                f"<td>{'yes' if done else 'no'}</td>"
+                f"</tr>"
+            )
+        tasks_table = (
+            '<table class="data compact">'
+            "<thead><tr>"
+            "<th>Task</th>"
+            "<th>Status</th>"
+            "<th>Restarts</th>"
+            "<th>Max restarts</th>"
+            "<th>Done</th>"
+            "</tr></thead><tbody>"
+            f"{''.join(task_rows)}"
+            "</tbody></table>"
+        )
+    else:
+        tasks_table = '<p class="empty">No background tasks registered.</p>'
+
+    # Database info cards
+    db_cards = f"""
+<section class="cards">
+  <div class="card">
+    <h3>Database</h3>
+    <p class="metric">{db_path}</p>
+    <p class="sub">file size {db_file_size}</p>
+  </div>
+  <div class="card">
+    <h3>WAL</h3>
+    <p class="metric">{db_wal_size}</p>
+    <p class="sub">enabled {escape(str(db_wal_enabled))} · mode {db_wal_live}</p>
+  </div>
+  <div class="card">
+    <h3>Sync</h3>
+    <p class="metric">{db_sync}</p>
+    <p class="sub">connected {escape(str(db_primary_connected))}</p>
+  </div>
+  <div class="card">
+    <h3>Stats DB</h3>
+    <p class="metric">{"separate" if db_separate_stats else "shared"}</p>
+    <p class="sub">stats connection</p>
+  </div>
+</section>
+"""
+
+    # In-flight / routing cards
+    pending_count_str = format_int(pending_count) if pending_count is not None else "—"
+    active_res_str = (
+        format_int(active_reservations) if active_reservations is not None else "—"
+    )
+    active_req_str = format_int(active_requests) if active_requests is not None else "—"
+    backoff_str = (
+        format_int(active_backoff_count) if active_backoff_count is not None else "—"
+    )
+    routing_cards = f"""
+<section class="cards">
+  <div class="card">
+    <h3>Pending requests</h3>
+    <p class="metric">{pending_count_str}</p>
+    <p class="sub">oldest {oldest_pending_age}</p>
+  </div>
+  <div class="card">
+    <h3>Active reservations</h3>
+    <p class="metric">{active_res_str}</p>
+    <p class="sub">reserved {reserved_microdollars}</p>
+  </div>
+  <div class="card">
+    <h3>In-flight requests</h3>
+    <p class="metric">{active_req_str}</p>
+    <p class="sub">active upstream</p>
+  </div>
+  <div class="card">
+    <h3>Active backoffs</h3>
+    <p class="metric">{backoff_str}</p>
+    <p class="sub">account backoff rows</p>
+  </div>
+</section>
+"""
+
+    # Health states table
+    if health_states:
+        health_rows: list[str] = []
+        for acct, state in sorted(health_states.items()):
+            health_rows.append(
+                f"<tr>"
+                f"<td>{escape(acct)}</td>"
+                f'<td class="{sanitize_class_name(state)}">{escape(state)}</td>'
+                f"</tr>"
+            )
+        health_table = (
+            '<table class="data compact">'
+            "<thead><tr>"
+            "<th>Account</th>"
+            "<th>Health state</th>"
+            "</tr></thead><tbody>"
+            f"{''.join(health_rows)}"
+            "</tbody></table>"
+        )
+    else:
+        health_table = '<p class="empty">No health state data.</p>'
+
+    # Probe errors
+    probe_section = ""
+    if probe_errors:
+        error_items = "".join(f"<li>{escape(err)}</li>" for err in probe_errors)
+        probe_section = f"""
+<section class="panel warning">
+  <h3>Probe errors</h3>
+  <ul>{error_items}</ul>
+</section>
+"""
+
+    body = f"""
+<h2>Runtime</h2>
+<p class="sub">Process-level diagnostics for the running EggPool instance.</p>
+
+{server_cards}
+
+{memory_cards}
+
+<section class="panel">
+  <h3>Background tasks</h3>
+  {tasks_table}
+</section>
+
+{db_cards}
+
+{routing_cards}
+
+<section class="panel">
+  <h3>Health states</h3>
+  {health_table}
+</section>
+
+{probe_section}
+"""
+    return _render_layout(
+        title="Runtime",
+        body=body,
+        active_nav="runtime",
+        period="runtime",
+        theme_css=theme_css,
+        available_themes=available_themes,
+        current_theme=current_theme,
+        auto_refresh=True,
+    )
+
+
 def _render_chart_canvas(
     canvas_id: str,
     chart_type: str,
@@ -2775,6 +3057,7 @@ __all__ = [
     "render_pings",
     "render_reliability",
     "render_routing",
+    "render_runtime",
     "render_timeseries",
     "render_traces",
 ]

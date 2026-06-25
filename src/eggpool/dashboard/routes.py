@@ -25,6 +25,7 @@ from eggpool.dashboard.render import (
     render_pings,
     render_reliability,
     render_routing,
+    render_runtime,
     render_timeseries,
     render_traces,
 )
@@ -490,6 +491,22 @@ async def handle_timeseries_json(
     return JSONResponse(content=series or [])
 
 
+async def handle_runtime(request: Request, theme: str | None = None) -> Response:
+    """Render the runtime metrics page."""
+    _get_dashboard_config(request)
+    runtime_metrics = request.app.state.runtime_metrics
+    snapshot = await runtime_metrics.snapshot()
+    theme_css, _, current_theme, available = _get_theme_data(request, theme)
+    return HTMLResponse(
+        content=render_runtime(
+            snapshot,
+            theme_css=theme_css,
+            available_themes=available,
+            current_theme=current_theme,
+        )
+    )
+
+
 def register_dashboard_routes(app: Any, require_auth: bool = False) -> None:
     """Attach the dashboard HTML routes to a FastAPI app.
 
@@ -580,6 +597,13 @@ def register_dashboard_routes(app: Any, require_auth: bool = False) -> None:
         dependencies=dependencies,
     )
     app.add_api_route(
+        path="/runtime",
+        endpoint=handle_runtime,
+        methods=["GET"],
+        response_class=HTMLResponse,
+        dependencies=dependencies,
+    )
+    app.add_api_route(
         path="/api/timeseries",
         endpoint=handle_timeseries_json,
         methods=["GET"],
@@ -598,6 +622,7 @@ __all__ = [
     "handle_pings",
     "handle_reliability",
     "handle_routing",
+    "handle_runtime",
     "handle_timeseries",
     "handle_timeseries_json",
     "handle_traces",

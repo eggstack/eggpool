@@ -280,6 +280,12 @@ sudo journalctl -u eggpool --since "5 minutes ago"
 sudo -u eggpool /opt/eggpool/.venv/bin/eggpool check-config --config /etc/eggpool/config.toml
 ```
 
+### Runtime diagnostics
+
+```bash
+eggpool runtime-status          # compact runtime health from running server
+```
+
 ### Database locked errors
 
 1. Check that only one instance is running: `pgrep -f eggpool`

@@ -2920,6 +2920,171 @@ def ensure_running(ctx: click.Context) -> None:
     sys.exit(fastcli._run_ensure_running(config_path))  # type: ignore[reportPrivateUsage] - fallback path
 
 
+@cli.command("runtime-status")
+@click.pass_context
+def runtime_status(ctx: click.Context) -> None:
+    """Print a compact runtime health summary from the running server.
+
+    Calls the local ``/api/stats/runtime`` endpoint and displays
+    process, memory, background-task, and database status.  Requires
+    the server to be running; exits non-zero otherwise.
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    from eggpool.deploy_user import resolve_config_path
+
+    config_path: str = ctx.obj["config_path"]
+    resolved = resolve_config_path(cli_value=config_path)
+    from eggpool.models.config import AppConfig
+
+    config = AppConfig.from_toml(str(resolved))
+
+    host = config.server.host
+    port = config.server.port
+    api_key = config.server.resolved_api_key
+
+    # Normalize bind address for localhost probe
+    if host in ("0.0.0.0", "::"):
+        host = "127.0.0.1"
+
+    url = f"http://{host}:{port}/api/stats/runtime"
+    req = urllib.request.Request(url, method="GET")
+    if api_key:
+        req.add_header("Authorization", f"Bearer {api_key}")
+
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        click.echo(f"Server returned HTTP {exc.code}", err=True)
+        sys.exit(1)
+    except (urllib.error.URLError, OSError) as exc:
+        click.echo(f"Cannot reach server at {url}: {exc}", err=True)
+        sys.exit(1)
+
+    _print_runtime_status(data)
+
+
+def _print_runtime_status(data: dict[str, Any]) -> None:
+    """Format and print a compact runtime status summary."""
+    server = cast("dict[str, Any]", data.get("server", {}))
+    memory = cast("dict[str, Any]", data.get("memory", {}))
+    processes = cast("dict[str, Any]", data.get("processes", {}))
+    db_info = cast("dict[str, Any]", data.get("db", {}))
+    routing = cast("dict[str, Any]", data.get("routing_runtime", {}))
+    bg_tasks = cast("list[dict[str, Any]]", data.get("background_tasks", []))
+    probe_errors = cast("list[str]", data.get("probe_errors", []))
+
+    click.echo("=== EggPool Runtime Status ===")
+    click.echo()
+
+    # Server
+    pid = server.get("pid", "?")
+    uptime = server.get("uptime_seconds", "?")
+    threads = server.get("configured_server_threads", "?")
+    pyver = server.get("python_version", "?")
+    click.echo(f"  PID:            {pid}")
+    click.echo(f"  Uptime:         {_format_duration(uptime)}")
+    click.echo(f"  Server Threads: {threads}")
+    click.echo(f"  Python:         {pyver}")
+
+    # Memory
+    click.echo()
+    rss = memory.get("rss_bytes")
+    vms = memory.get("vms_bytes")
+    fds = memory.get("open_fd_count")
+    thr = memory.get("thread_count")
+    click.echo(f"  RSS:            {_format_bytes(rss)}")
+    click.echo(f"  VMS:            {_format_bytes(vms)}")
+    click.echo(f"  Open FDs:       {fds if fds is not None else 'N/A'}")
+    click.echo(f"  Threads:        {thr if thr is not None else 'N/A'}")
+
+    # Process count
+    click.echo()
+    observed = processes.get("eggpool_process_count")
+    expected = processes.get("expected_worker_process_count")
+    warning = processes.get("process_count_warning", False)
+    click.echo(f"  EggPool Processes: {observed} (expected: {expected})")
+    if warning:
+        click.echo("  *** WARNING: Process count exceeds expected ***")
+
+    # Background tasks
+    click.echo()
+    click.echo("  Background Tasks:")
+    if not bg_tasks:
+        click.echo("    (none)")
+    for task in bg_tasks:
+        name = task.get("name", "?")
+        running = task.get("running", False)
+        restarts = task.get("restart_count", 0)
+        status = "running" if running else "STOPPED"
+        line = f"    {name}: {status}"
+        if restarts > 0:
+            line += f" (restarts: {restarts})"
+        click.echo(line)
+
+    # Database
+    click.echo()
+    db_path = db_info.get("path", ":memory:")
+    wal_size = db_info.get("wal_size_bytes")
+    file_size = db_info.get("file_size_bytes")
+    click.echo(f"  DB Path:        {db_path or ':memory:'}")
+    click.echo(f"  DB Size:        {_format_bytes(file_size)}")
+    click.echo(f"  WAL Size:       {_format_bytes(wal_size)}")
+
+    # Routing
+    click.echo()
+    pending = routing.get("pending_count")
+    reservations = routing.get("active_reservations_count")
+    reserved = routing.get("reserved_microdollars")
+    click.echo(f"  Pending Requests:   {pending if pending is not None else 'N/A'}")
+    click.echo(
+        f"  Active Reservations: {reservations if reservations is not None else 'N/A'}"
+    )
+    click.echo(f"  Reserved (μ$):      {reserved if reserved is not None else 'N/A'}")
+
+    # Probe errors
+    if probe_errors:
+        click.echo()
+        click.echo("  Probe Errors:")
+        for err in probe_errors:
+            click.echo(f"    - {err}")
+
+    click.echo()
+
+
+def _format_duration(seconds: object) -> str:
+    """Format seconds into a human-readable duration string."""
+    if not isinstance(seconds, (int, float)):
+        return str(seconds)
+    s = int(seconds)
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m {s % 60}s"
+    h = s // 3600
+    m = (s % 3600) // 60
+    return f"{h}h {m}m"
+
+
+def _format_bytes(value: object) -> str:
+    """Format bytes into a human-readable size string."""
+    if value is None:
+        return "N/A"
+    if not isinstance(value, (int, float)):
+        return str(value)
+    b = int(value)
+    if b < 1024:
+        return f"{b} B"
+    if b < 1024 * 1024:
+        return f"{b / 1024:.1f} KB"
+    if b < 1024 * 1024 * 1024:
+        return f"{b / (1024 * 1024):.1f} MB"
+    return f"{b / (1024 * 1024 * 1024):.2f} GB"
+
+
 @cli.command()
 @click.option(
     "--output-dir",

@@ -453,6 +453,10 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
 
     configure_logging(level=config.server.log_level)
 
+    # Record startup timestamps for runtime metrics
+    app.state.started_monotonic = time.monotonic()
+    app.state.started_epoch = time.time()
+
     # 1. Validate auth at startup
     require_auth_at_startup(config.server.resolved_api_key)
 
@@ -718,6 +722,20 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # 20. Background task supervisor
     supervisor = TaskSupervisor()
     app.state.supervisor = supervisor
+
+    # 20b. Runtime metrics service (for /api/stats/runtime)
+    from eggpool.runtime_metrics import RuntimeMetricsService
+
+    app.state.runtime_metrics = RuntimeMetricsService(
+        config=config,
+        db=db,
+        stats_db=stats_db,
+        supervisor=supervisor,
+        router=router,
+        health_manager=health_manager,
+        started_monotonic=app.state.started_monotonic,
+        started_epoch=app.state.started_epoch,
+    )
 
     # Register catalog refresh task
     if config.models.refresh_interval_s > 0:
@@ -998,6 +1016,11 @@ def create_app(
                 media_type="text/css",
                 headers={"Cache-Control": "public, max-age=300"},
             )
+
+    # Runtime metrics endpoint — always auth-gated regardless of dashboard.public
+    from eggpool.api.runtime import register_runtime_routes
+
+    register_runtime_routes(app)
 
     @app.get(f"{API_V1_PREFIX}/healthz")
     async def healthz() -> HealthResponse:  # pyright: ignore[reportUnusedFunction]

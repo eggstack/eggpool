@@ -120,6 +120,7 @@ Four migrations extend the request lifecycle with structured observability. Ever
 | `GET /api/stats/recent/{request_id}` | Parent request + full attempt chain + routing decisions. Returns account name, model, protocol, status, error class (never raw `error_detail`). | **always auth-gated** |
 | `GET /api/stats/recent-requests` | Bounded recent-requests metadata list (no body, no auth headers, no error_detail, no client_ip by default). | **always auth-gated** |
 | `GET /api/stats/accounts` / `/api/stats/models` (extended) | Adds `exact_count/derived_count/estimated_count/unknown_count`, `estimated_cost_fraction`, `cache_read_ratio`, `cache_write_ratio`, `reasoning_output_ratio`, `avg_cost_per_request`, `avg_cost_per_1k_tokens` | dashboard default |
+| `GET /api/stats/runtime` | Runtime/operations metrics: process topology, memory, background tasks, DB health, in-flight counts. Always auth-gated. | **always auth-gated** |
 
 ## Dashboard Pages
 
@@ -134,6 +135,7 @@ Server-rendered HTML pages in `src/eggpool/dashboard/render.py`, all inheriting 
 | Accounts | `/accounts` | Per-account stats with exactness, cache/reasoning ratios, cost-per-1k-tokens | no |
 | Models | `/models` | Per-model stats with the same exactness columns | no |
 | Latency | `/latency` | TTFT breakdown + connect/read/coordinator-overhead phases | yes |
+| Runtime | `/runtime` | Runtime health: process count, memory, background tasks, DB sizes | no |
 | Pings | `/pings` | Provider health/ping stats | no |
 | Events | `/events` | Recent events | no |
 | Timeseries | `/timeseries` | Time-bucketed request counts | yes |
@@ -185,6 +187,7 @@ The Overview page is the only page that auto-refreshes in place (every `[dashboa
 | `eggpool ensure-running` | Repair: start the server if it is not running; no-op when alive. Fast-path. |
 | `eggpool models refresh` | Refresh model catalog from upstream |
 | `eggpool configsetup opencode` | Print OpenCode provider config JSON with model limits |
+| `eggpool runtime-status` | Print compact runtime health summary from running server |
 | `eggpool db vacuum` | Reclaim SQLite space |
 | `eggpool deploy systemd` | Print systemd unit; `--install` writes it (personal by default; `--production` for the dedicated-system layout; `--as-root` for a root-owned personal unit) |
 | `eggpool deploy cron` | Print / install / uninstall the watchdog crontab (`@reboot` + `*/N * * * *` `eggpool ensure-running`). `--interval N` (1-59, default 5) |

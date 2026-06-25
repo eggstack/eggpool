@@ -1,0 +1,463 @@
+"""Tests for RuntimeMetricsService.snapshot()."""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import time
+from typing import TYPE_CHECKING, Any
+from unittest.mock import patch
+
+import pytest
+import pytest_asyncio
+
+from eggpool.db.connection import Database
+from eggpool.db.migrations import MigrationRunner
+from eggpool.models.config import AppConfig
+from eggpool.runtime_metrics import (
+    _MAX_PROBE_ERROR_LEN,
+    RuntimeMetricsService,
+    _safe_int,
+    _truncate_probe_error,
+)
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
+
+def _build_config() -> AppConfig:
+    return AppConfig.from_dict(
+        {
+            "server": {
+                "api_key_env": "OPENCODE_TEST_KEY",
+                "host": "127.0.0.1",
+                "port": 0,
+                "threads": 2,
+            },
+            "database": {"path": ":memory:"},
+            "upstream": {"base_url": "http://localhost:19999"},
+            "models": {"startup_refresh": False, "refresh_interval_s": 0},
+            "accounts": [{"name": "test-acct", "api_key_env": "OPENCODE_TEST_KEY"}],
+            "dashboard": {"enabled": False},
+        }
+    )
+
+
+@pytest_asyncio.fixture()
+async def db(tmp_path: Any) -> AsyncGenerator[Database, None]:
+    database = Database(path=str(tmp_path / "test.sqlite3"))
+    await database.connect()
+    runner = MigrationRunner(database)
+    await runner.run()
+    yield database
+    await database.disconnect()
+
+
+def _make_service(
+    db: Database,
+    *,
+    config: AppConfig | None = None,
+    stats_db: Database | None = None,
+    supervisor: Any = None,
+    router: Any = None,
+    health_manager: Any = None,
+    started_monotonic: float | None = None,
+    started_epoch: float | None = None,
+) -> RuntimeMetricsService:
+    if config is None:
+        config = _build_config()
+    if started_monotonic is None:
+        started_monotonic = time.monotonic() - 100.0
+    if started_epoch is None:
+        started_epoch = time.time() - 100.0
+    return RuntimeMetricsService(
+        config=config,
+        db=db,
+        stats_db=stats_db,
+        supervisor=supervisor,
+        router=router,
+        health_manager=health_manager,
+        started_monotonic=started_monotonic,
+        started_epoch=started_epoch,
+    )
+
+
+# -- _safe_int / _truncate_probe_error -------------------------------------
+
+
+def test_safe_int_valid() -> None:
+    assert _safe_int("42") == 42
+    assert _safe_int(3.7) == 3
+
+
+def test_safe_int_invalid() -> None:
+    assert _safe_int("not-a-number") is None
+    assert _safe_int(None) is None  # type: ignore[arg-type]
+
+
+def test_truncate_probe_error_short() -> None:
+    msg = "short message"
+    assert _truncate_probe_error(msg) == msg
+
+
+def test_truncate_probe_error_long() -> None:
+    msg = "x" * 300
+    result = _truncate_probe_error(msg)
+    assert len(result) == _MAX_PROBE_ERROR_LEN  # truncated to max + "..."
+    assert result.endswith("...")
+
+
+# -- snapshot() top-level structure -----------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_snapshot_returns_all_top_level_keys(db: Database) -> None:
+    service = _make_service(db)
+    snapshot = await service.snapshot()
+    assert "server" in snapshot
+    assert "memory" in snapshot
+    assert "processes" in snapshot
+    assert "background_tasks" in snapshot
+    assert "db" in snapshot
+    assert "routing_runtime" in snapshot
+    assert "probe_errors" in snapshot
+    assert isinstance(snapshot["probe_errors"], list)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_probe_errors_is_bounded(db: Database) -> None:
+    service = _make_service(db)
+    snapshot = await service.snapshot()
+    assert len(snapshot["probe_errors"]) <= 16  # _MAX_PROBE_ERRORS
+
+
+# -- Server fields ---------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_server_fields_present(db: Database) -> None:
+    service = _make_service(db)
+    snapshot = await service.snapshot()
+    server = snapshot["server"]
+    assert isinstance(server["pid"], int)
+    assert server["pid"] == os.getpid()
+    assert isinstance(server["ppid"], int)
+    assert isinstance(server["process_group_id"], int)
+    assert isinstance(server["session_id"], int)
+    assert isinstance(server["uptime_seconds"], float)
+    assert server["uptime_seconds"] >= 0
+    assert isinstance(server["started_epoch"], float)
+    assert isinstance(server["python_version"], str)
+    assert isinstance(server["platform"], str)
+    assert isinstance(server["is_daemon_hint"], bool)
+    assert isinstance(server["configured_server_threads"], int)
+    assert server["configured_server_threads"] == 2
+
+
+@pytest.mark.asyncio
+async def test_server_uptime_increases(db: Database) -> None:
+    service = _make_service(db, started_monotonic=time.monotonic() - 1.0)
+    snap1 = await service.snapshot()
+    await asyncio.sleep(0.05)
+    snap2 = await service.snapshot()
+    assert snap2["server"]["uptime_seconds"] > snap1["server"]["uptime_seconds"]
+
+
+# -- Memory fields (null-safe) ---------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_memory_fields_present(db: Database) -> None:
+    service = _make_service(db)
+    snapshot = await service.snapshot()
+    memory = snapshot["memory"]
+    # rss_bytes may be populated or None depending on platform
+    assert "rss_bytes" in memory
+    assert "vms_bytes" in memory
+    assert "open_fd_count" in memory
+    assert "thread_count" in memory
+    assert isinstance(memory["thread_count"], int)
+
+
+@pytest.mark.asyncio
+async def test_memory_null_safe_when_proc_unavailable(
+    db: Database,
+) -> None:
+    """snapshot() must not raise when /proc is unavailable."""
+    service = _make_service(db)
+    # Patch Path to raise for /proc paths
+    with patch("pathlib.Path.exists", side_effect=OSError("no /proc")):
+        snapshot = await service.snapshot()
+    # All memory fields should be set (possibly None)
+    assert "rss_bytes" in snapshot["memory"]
+    assert "vms_bytes" in snapshot["memory"]
+
+
+# -- Process count warning -------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_process_count_fields_present(db: Database) -> None:
+    service = _make_service(db)
+    snapshot = await service.snapshot()
+    processes = snapshot["processes"]
+    assert "eggpool_process_count" in processes
+    assert "expected_worker_process_count" in processes
+    assert "process_count_warning" in processes
+    assert isinstance(processes["expected_worker_process_count"], int)
+
+
+# -- Background tasks snapshot ---------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_background_tasks_empty_when_no_supervisor(
+    db: Database,
+) -> None:
+    service = _make_service(db, supervisor=None)
+    snapshot = await service.snapshot()
+    assert snapshot["background_tasks"] == []
+
+
+@pytest.mark.asyncio
+async def test_background_tasks_with_supervisor(db: Database) -> None:
+    from eggpool.background import TaskSupervisor
+
+    supervisor = TaskSupervisor()
+
+    async def dummy() -> None:
+        await asyncio.sleep(3600)
+
+    supervisor.register("test-task", dummy, max_restarts=5)
+
+    service = _make_service(db, supervisor=supervisor)
+    snapshot = await service.snapshot()
+    tasks = snapshot["background_tasks"]
+    assert len(tasks) == 1
+    task = tasks[0]
+    assert task["name"] == "test-task"
+    assert task["registered"] is True
+    assert task["max_restarts"] == 5
+    assert isinstance(task["running"], bool)
+    assert isinstance(task["done"], bool)
+    assert isinstance(task["cancelled"], bool)
+    assert isinstance(task["restart_count"], int)
+
+
+@pytest.mark.asyncio
+async def test_background_tasks_cancelled_state(db: Database) -> None:
+    from eggpool.background import TaskSupervisor
+
+    supervisor = TaskSupervisor()
+
+    async def dummy() -> None:
+        await asyncio.sleep(3600)
+
+    task_obj = supervisor.register("cancel-me", dummy)
+    await task_obj.start()
+    # Cancel returns a bool, not a coroutine
+    task_obj._task.cancel()  # type: ignore[union-attr]
+    # Give the task a moment to process cancellation
+    await asyncio.sleep(0.01)
+
+    service = _make_service(db, supervisor=supervisor)
+    snapshot = await service.snapshot()
+    tasks = snapshot["background_tasks"]
+    assert len(tasks) == 1
+    # cancelled flag may be True if task was cancelled
+    assert isinstance(tasks[0]["cancelled"], bool)
+
+
+@pytest.mark.asyncio
+async def test_background_tasks_not_started_state(db: Database) -> None:
+    from eggpool.background import TaskSupervisor
+
+    supervisor = TaskSupervisor()
+
+    async def quick_finish() -> None:
+        return
+
+    supervisor.register("not-started", quick_finish)
+    # Register but don't start — task is not running, _task is None
+    service = _make_service(db, supervisor=supervisor)
+    snapshot = await service.snapshot()
+    tasks = snapshot["background_tasks"]
+    assert len(tasks) == 1
+    assert tasks[0]["running"] is False
+    # _task is None so done() check yields False
+    assert tasks[0]["done"] is False
+
+
+# -- DB snapshot fields ----------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_db_snapshot_fields_present(db: Database) -> None:
+    service = _make_service(db)
+    snapshot = await service.snapshot()
+    db_info = snapshot["db"]
+    assert "path" in db_info
+    assert "is_memory_db" in db_info
+    assert "wal_enabled" in db_info
+    assert "wal_mode_live" in db_info
+    assert "synchronous" in db_info
+    assert "synchronous_live" in db_info
+    assert "busy_timeout_ms" in db_info
+    assert "primary_connected" in db_info
+    assert "stats_connection_separate" in db_info
+    assert "file_size_bytes" in db_info
+    assert "wal_size_bytes" in db_info
+    assert "shm_size_bytes" in db_info
+
+
+@pytest.mark.asyncio
+async def test_db_memory_db_detected(db: Database) -> None:
+    config = AppConfig.from_dict(
+        {
+            "server": {"api_key_env": "OPENCODE_TEST_KEY"},
+            "database": {"path": ":memory:"},
+            "upstream": {"base_url": "http://localhost:19999"},
+            "models": {"startup_refresh": False, "refresh_interval_s": 0},
+            "accounts": [{"name": "test", "api_key_env": "OPENCODE_TEST_KEY"}],
+            "dashboard": {"enabled": False},
+        }
+    )
+    service = _make_service(db, config=config)
+    snapshot = await service.snapshot()
+    assert snapshot["db"]["is_memory_db"] is True
+    assert snapshot["db"]["path"] is None
+    assert snapshot["db"]["file_size_bytes"] is None
+    assert snapshot["db"]["wal_size_bytes"] is None
+    assert snapshot["db"]["shm_size_bytes"] is None
+
+
+@pytest.mark.asyncio
+async def test_db_file_based_handles_missing_file(
+    tmp_path: Any,
+) -> None:
+    config = AppConfig.from_dict(
+        {
+            "server": {"api_key_env": "OPENCODE_TEST_KEY"},
+            "database": {"path": str(tmp_path / "nonexistent.sqlite3")},
+            "upstream": {"base_url": "http://localhost:19999"},
+            "models": {"startup_refresh": False, "refresh_interval_s": 0},
+            "accounts": [{"name": "test", "api_key_env": "OPENCODE_TEST_KEY"}],
+            "dashboard": {"enabled": False},
+        }
+    )
+    database = Database(path=str(tmp_path / "test.sqlite3"))
+    await database.connect()
+    runner = MigrationRunner(database)
+    await runner.run()
+    try:
+        service = _make_service(database, config=config)
+        snapshot = await service.snapshot()
+        db_info = snapshot["db"]
+        assert db_info["is_memory_db"] is False
+        assert db_info["path"] == str(tmp_path / "nonexistent.sqlite3")
+        assert db_info["file_size_bytes"] is None
+    finally:
+        await database.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_db_stats_connection_separate(db: Database) -> None:
+    service = _make_service(db, stats_db=db)
+    snapshot = await service.snapshot()
+    assert snapshot["db"]["stats_connection_separate"] is False
+
+
+@pytest.mark.asyncio
+async def test_db_stats_connection_separate_true(
+    db: Database,
+    tmp_path: Any,
+) -> None:
+    other_db = Database(path=str(tmp_path / "other.sqlite3"))
+    await other_db.connect()
+    try:
+        service = _make_service(db, stats_db=other_db)
+        snapshot = await service.snapshot()
+        assert snapshot["db"]["stats_connection_separate"] is True
+    finally:
+        await other_db.disconnect()
+
+
+# -- Routing runtime fields ------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_routing_runtime_fields_present(db: Database) -> None:
+    service = _make_service(db)
+    snapshot = await service.snapshot()
+    routing = snapshot["routing_runtime"]
+    assert "active_requests_total" in routing
+    assert "active_requests_by_account" in routing
+    assert "pending_count" in routing
+    assert "oldest_pending_age_seconds" in routing
+    assert "active_reservations_count" in routing
+    assert "reserved_microdollars" in routing
+    assert "health_states_by_account" in routing
+    assert "active_backoff_count" in routing
+
+
+@pytest.mark.asyncio
+async def test_routing_runtime_no_router(db: Database) -> None:
+    service = _make_service(db, router=None, health_manager=None)
+    snapshot = await service.snapshot()
+    routing = snapshot["routing_runtime"]
+    assert routing["active_requests_total"] is None
+    assert routing["active_requests_by_account"] is None
+    assert routing["health_states_by_account"] is None
+
+
+@pytest.mark.asyncio
+async def test_routing_runtime_pending_health(db: Database) -> None:
+    """Pending count should be 0 when there are no pending requests."""
+    service = _make_service(db)
+    snapshot = await service.snapshot()
+    routing = snapshot["routing_runtime"]
+    assert routing["pending_count"] == 0
+    assert routing["active_reservations_count"] == 0
+    assert routing["reserved_microdollars"] == 0
+
+
+# -- Probe errors do not leak secrets --------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_probe_errors_do_not_include_api_keys(
+    db: Database,
+) -> None:
+    config = AppConfig.from_dict(
+        {
+            "server": {
+                "api_key_env": "OPENCODE_TEST_KEY",
+                "api_key": "super-secret-key-12345678",
+            },
+            "database": {"path": ":memory:"},
+            "upstream": {"base_url": "http://localhost:19999"},
+            "models": {"startup_refresh": False, "refresh_interval_s": 0},
+            "accounts": [{"name": "test", "api_key_env": "OPENCODE_TEST_KEY"}],
+            "dashboard": {"enabled": False},
+        }
+    )
+    service = _make_service(db, config=config)
+    snapshot = await service.snapshot()
+    for err in snapshot["probe_errors"]:
+        assert "super-secret" not in err
+        assert "OPENCODE_TEST_KEY" not in err
+
+
+# -- Snapshot is deterministic for same inputs -----------------------------
+
+
+@pytest.mark.asyncio
+async def test_snapshot_returns_stable_keys(db: Database) -> None:
+    service = _make_service(db)
+    snap1 = await service.snapshot()
+    snap2 = await service.snapshot()
+    assert set(snap1.keys()) == set(snap2.keys())
+    assert set(snap1["server"].keys()) == set(snap2["server"].keys())
+    assert set(snap1["memory"].keys()) == set(snap2["memory"].keys())
+    assert set(snap1["db"].keys()) == set(snap2["db"].keys())
+    assert set(snap1["routing_runtime"].keys()) == set(snap2["routing_runtime"].keys())

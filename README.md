@@ -147,6 +147,7 @@ The uninstall command removes the binary, active config, `.env`, database, and `
 | `eggpool update` | Check for updates and reinstall if newer |
 | `eggpool croncheck` | Lightweight check: exit 0 if server is running, exit 1 if not |
 | `eggpool ensure-running` | Repair: start the server if it is not running; no-op when already alive |
+| `eggpool runtime-status` | Print compact runtime health summary from running server |
 | `eggpool models refresh` | Refresh the model catalog from upstream |
 | `eggpool accounts status` | Show configured account status |
 | `eggpool accounts list` | List configured provider accounts |
@@ -246,6 +247,7 @@ The dashboard includes:
 - Overview with request counts, error rates, costs, token usage, and a System Health row surfacing pending-request and reservation leaks
 - Reliability page (`/reliability`) with attempt success/retry breakdown, `retry_category` distribution, pending health, and operational events
 - Routing page (`/routing`) with per-`(model, provider)` decision aggregates, account selection counts, and exclusion taxonomy (suppressive vs advisory)
+- Runtime page (`/runtime`) with process topology, memory, background task status, database health, and in-flight request counts
 - Traces page (`/traces`) with auth-gated recent request metadata (no error_detail, no client_ip)
 - Account and model breakdowns with filtering, exactness columns, cache/reasoning ratios, and cost-per-1k-tokens
 - Latency metrics including time-to-first-token (TTFT) and connect/read/coordinator-overhead phase breakdown
@@ -271,12 +273,13 @@ appropriate cache headers.
 JSON stats endpoints are available under `/api/stats/*`, including summary,
 accounts, models, timeseries, errors, latency, pings, bandwidth, attempts,
 retries, routing, routing-selections, routing-exclusions, operational,
-pending-health, recent-requests, recent/{request_id}, and `/api/events`. The
-recent-requests, recent/{request_id}, and pending-health endpoints are always
-auth-gated (even when the dashboard is public) because they expose
-per-request metadata (model, prompt volume, error class) or operational
-state (pending reservations, reserved cost). All other stats endpoints
-inherit the dashboard's public/auth setting.
+pending-health, runtime, recent-requests, recent/{request_id}, and
+`/api/events`. The recent-requests, recent/{request_id}, pending-health,
+and runtime endpoints are always auth-gated (even when the dashboard is
+public) because they expose per-request metadata (model, prompt volume,
+error class), operational state (pending reservations, reserved cost),
+or process-level details (PID, memory, DB path, background task names).
+All other stats endpoints inherit the dashboard's public/auth setting.
 
 ### Observability surfaces
 
@@ -752,5 +755,19 @@ threads = 4
 
 The worker is named `eggpool` in `ps` / `top` (via Granian's
 `process_name`), so it does not appear as a generic `python` entry.
+
+### Runtime Diagnostics
+
+`eggpool runtime-status` calls the local `/api/stats/runtime` endpoint and
+prints a compact terminal summary of process topology, memory usage,
+background task health, database file/WAL sizes, and in-flight request
+counts. Use it to diagnose daemon/systemd/cron deployments without
+inspecting logs.
+
+The `/api/stats/runtime` endpoint and the `/runtime` dashboard page expose
+the same data. Both are always auth-gated regardless of `dashboard.public`
+because they reveal operational details (PID, memory, DB path, process
+count). The endpoint is best-effort: probes that fail on a given platform
+(e.g., `/proc` on macOS) return `null` for the affected field.
 
 See [CHANGELOG](CHANGELOG.md) for release history.
