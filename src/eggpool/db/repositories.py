@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import datetime as _dt
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 from eggpool.catalog.pricing import (
@@ -113,6 +115,14 @@ class AccountRepository:
             (name,),
         )
         return int(row["id"]) if row is not None else None
+
+    async def get_name_by_id(self, account_id: int) -> str | None:
+        """Fetch account name by id; ``None`` when not found."""
+        row = await self._db.fetch_one(
+            "SELECT name FROM accounts WHERE id = ?",
+            (account_id,),
+        )
+        return str(row["name"]) if row is not None else None
 
     async def list_enabled(self) -> list[dict[str, Any]]:
         """List all enabled accounts."""
@@ -1059,3 +1069,265 @@ class CatalogReconciliationRepository:
                 DEFAULT_PROVIDER_ID,
             ),
         )
+
+
+def _epoch_to_iso(value: float) -> str:
+    """Convert a POSIX timestamp to the SQLite ``YYYY-MM-DD HH:MM:SS`` format."""
+    return _dt.datetime.fromtimestamp(value, tz=_dt.UTC).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _iso_to_epoch(value: str | None) -> float | None:
+    """Convert an ISO timestamp from SQLite back to a POSIX epoch (UTC)."""
+    if value is None:
+        return None
+    try:
+        parsed = _dt.datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=_dt.UTC
+        )
+    except ValueError:
+        return None
+    return parsed.timestamp()
+
+
+class AccountBackoffRepository:
+    """Persistence for upstream-observed backoffs.
+
+    Only stores authoritative upstream signals (429/402/5xx,
+    transport failures, auth failures, model unavailability). Local
+    estimated quota overage MUST NOT flow through this repository;
+    those values remain advisory in the in-memory estimator and the
+    routing scorer.
+
+    Writes are always wrapped in ``async with db.transaction():``;
+    readers use ``fetch_one``/``fetch_all`` which acquire the
+    connection lock independently.
+    """
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def upsert_failure(
+        self,
+        *,
+        account_id: int,
+        model_id: str | None,
+        reason: str,
+        status_code: int | None,
+        error_class: str | None,
+        backoff_until: float | None,
+        consecutive_failures: int,
+    ) -> None:
+        """Record or refresh an active backoff for an (account, model, reason).
+
+        ``backoff_until`` is a POSIX epoch in seconds; ``None`` records
+        a terminal disable that does not auto-expire. ``model_id``
+        ``None`` means account-wide suppression.
+
+        Implementation note: SQLite UNIQUE constraints treat two NULLs
+        as distinct, so the table-level UNIQUE on
+        ``(account_id, model_id, reason)`` does not deduplicate rows
+        with ``model_id IS NULL``. This method performs an explicit
+        existence check and chooses INSERT vs UPDATE accordingly. Both
+        paths share the same transaction boundary so the row remains
+        consistent with concurrent reads.
+        """
+        backoff_iso = (
+            _epoch_to_iso(backoff_until) if backoff_until is not None else None
+        )
+        async with self._db.transaction():
+            if model_id is None:
+                existing = await self._db.fetch_one(
+                    "SELECT id FROM account_backoffs "
+                    "WHERE account_id = ? AND model_id IS NULL AND reason = ?",
+                    (account_id, reason),
+                )
+            else:
+                existing = await self._db.fetch_one(
+                    "SELECT id FROM account_backoffs "
+                    "WHERE account_id = ? AND model_id = ? AND reason = ?",
+                    (account_id, model_id, reason),
+                )
+            if existing is None:
+                await self._db.execute_insert(
+                    """
+                    INSERT INTO account_backoffs (
+                        account_id, model_id, reason, status_code, error_class,
+                        consecutive_failures, backoff_until,
+                        last_failure_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?,
+                              CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    """,
+                    (
+                        account_id,
+                        model_id,
+                        reason,
+                        status_code,
+                        error_class,
+                        consecutive_failures,
+                        backoff_iso,
+                    ),
+                )
+            else:
+                await self._db.execute_write(
+                    """
+                    UPDATE account_backoffs SET
+                        status_code = ?,
+                        error_class = ?,
+                        consecutive_failures = ?,
+                        backoff_until = ?,
+                        last_failure_at = CURRENT_TIMESTAMP,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (
+                        status_code,
+                        error_class,
+                        consecutive_failures,
+                        backoff_iso,
+                        int(existing["id"]),
+                    ),
+                )
+
+    async def clear_success(
+        self,
+        *,
+        account_id: int,
+        model_id: str | None = None,
+        reasons: list[str] | None = None,
+    ) -> int:
+        """Remove backoff rows after a successful request.
+
+        When ``model_id`` is given, only the matching pair is cleared.
+        When ``model_id`` is ``None``, all rows for the account whose
+        ``model_id`` is either ``NULL`` (account-wide) or equal to
+        ``model_id`` are removed.
+
+        ``reasons`` optionally filters the deletion to a subset of
+        reasons (e.g. ``["rate_limited"]``). Returns the rowcount.
+        """
+        clauses = ["account_id = ?"]
+        params: list[Any] = [account_id]
+        if model_id is None:
+            clauses.append("(model_id IS NULL)")
+        else:
+            clauses.append("(model_id IS NULL OR model_id = ?)")
+            params.append(model_id)
+        if reasons:
+            placeholders = ",".join("?" for _ in reasons)
+            clauses.append(f"reason IN ({placeholders})")
+            params.extend(reasons)
+        where_sql = " AND ".join(clauses)
+        async with self._db.transaction():
+            return int(
+                await self._db.execute_write(
+                    f"DELETE FROM account_backoffs WHERE {where_sql}",
+                    tuple(params),
+                )
+            )
+
+    async def list_active(
+        self,
+        *,
+        now: float | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """Return currently-active backoff rows.
+
+        Active means: ``backoff_until`` is NULL (terminal/indefinite)
+        or ``backoff_until`` is strictly greater than the cutoff.
+        ``now`` defaults to ``time.time()``. Returns a list of plain
+        dicts with epoch floats for ``backoff_until`` so callers do
+        not need to parse SQLite timestamps.
+        """
+        if now is None:
+            now = time.time()
+        now_iso = _epoch_to_iso(now)
+        rows = await self._db.fetch_all(
+            """
+            SELECT id, account_id, account_id AS acct_id, model_id, reason,
+                   status_code, error_class, consecutive_failures,
+                   backoff_until, last_failure_at, updated_at
+            FROM account_backoffs
+            WHERE backoff_until IS NULL OR backoff_until > ?
+            ORDER BY account_id, model_id, reason
+            LIMIT ?
+            """,
+            (now_iso, limit),
+        )
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            entry = dict(row)
+            entry["backoff_until_epoch"] = _iso_to_epoch(entry.get("backoff_until"))
+            entry.pop("acct_id", None)
+            results.append(entry)
+        return results
+
+    async def expire_old(self, *, now: float | None = None) -> int:
+        """Delete expired backoff rows; returns count removed.
+
+        Expired means: ``backoff_until`` is non-NULL and not strictly
+        greater than the cutoff. Terminal rows (``backoff_until IS
+        NULL``) are preserved.
+        """
+        if now is None:
+            now = time.time()
+        now_iso = _epoch_to_iso(now)
+        async with self._db.transaction():
+            return int(
+                await self._db.execute_write(
+                    """
+                    DELETE FROM account_backoffs
+                    WHERE backoff_until IS NOT NULL
+                      AND backoff_until <= ?
+                    """,
+                    (now_iso,),
+                )
+            )
+
+    async def clear_account(self, *, account_id: int) -> int:
+        """Delete every backoff row for an account; returns count removed."""
+        async with self._db.transaction():
+            return int(
+                await self._db.execute_write(
+                    "DELETE FROM account_backoffs WHERE account_id = ?",
+                    (account_id,),
+                )
+            )
+
+    async def get_for_account_model(
+        self,
+        *,
+        account_id: int,
+        model_id: str | None,
+    ) -> list[dict[str, Any]]:
+        """Return all backoff rows for an (account, model) pair."""
+        if model_id is None:
+            rows = await self._db.fetch_all(
+                """
+                SELECT id, account_id, model_id, reason, status_code,
+                       error_class, consecutive_failures, backoff_until,
+                       last_failure_at, updated_at
+                FROM account_backoffs
+                WHERE account_id = ? AND model_id IS NULL
+                ORDER BY reason
+                """,
+                (account_id,),
+            )
+        else:
+            rows = await self._db.fetch_all(
+                """
+                SELECT id, account_id, model_id, reason, status_code,
+                       error_class, consecutive_failures, backoff_until,
+                       last_failure_at, updated_at
+                FROM account_backoffs
+                WHERE account_id = ? AND (model_id IS NULL OR model_id = ?)
+                ORDER BY reason
+                """,
+                (account_id, model_id),
+            )
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            entry = dict(row)
+            entry["backoff_until_epoch"] = _iso_to_epoch(entry.get("backoff_until"))
+            results.append(entry)
+        return results

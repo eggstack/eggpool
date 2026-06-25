@@ -5,8 +5,13 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
+from eggpool.health.backoff import seed_random_for_test
 from eggpool.health.circuit_breaker import CircuitBreaker, CircuitState
-from eggpool.health.health_manager import HealthManager
+from eggpool.health.health_manager import (
+    FailureCategory,
+    HealthManager,
+    classify_failure_category,
+)
 from eggpool.retry.classification import RetryCategory, RetryClassifier
 
 if TYPE_CHECKING:
@@ -347,3 +352,77 @@ class TestHealthManager:
         assert health.is_healthy
         assert health.consecutive_failures == 0
         assert health.health_state == "healthy"
+
+
+class TestClassifyFailureCategoryPhase6:
+    """Phase 6 status-code coverage."""
+
+    def test_408_maps_to_connect_timeout(self) -> None:
+        assert classify_failure_category(None, 408) is FailureCategory.CONNECT_TIMEOUT
+
+    def test_409_maps_to_unknown(self) -> None:
+        assert classify_failure_category(None, 409) is FailureCategory.UNKNOWN
+
+    def test_422_maps_to_unknown(self) -> None:
+        assert classify_failure_category(None, 422) is FailureCategory.UNKNOWN
+
+    def test_402_with_unknown_error_class_is_quota(self) -> None:
+        assert (
+            classify_failure_category("vendor_specific_code", 402)
+            is FailureCategory.QUOTA_EXHAUSTED
+        )
+
+
+class TestRecordFailureWithPolicy:
+    """HealthManager.record_failure_with_policy routing."""
+
+    def setup_method(self) -> None:
+        seed_random_for_test(123)
+
+    def test_authentication_failed_is_terminal(self) -> None:
+        manager = HealthManager()
+        result = manager.record_failure_with_policy("acct", "authentication_failed")
+        assert result is None
+        health = manager.get_account_health("acct")
+        assert health.health_state == "authentication_failed"
+        assert not health.is_healthy
+
+    def test_quota_exhausted_applies_cooldown(self) -> None:
+        manager = HealthManager()
+        result = manager.record_failure_with_policy("acct", "quota_exhausted")
+        assert result is not None
+        assert result > 0
+        health = manager.get_account_health("acct")
+        assert health.health_state == "quota_exhausted"
+        assert not health.is_healthy
+        assert health.cooldown_until > time.time()
+
+    def test_rate_limited_honors_retry_after(self) -> None:
+        manager = HealthManager()
+        result = manager.record_failure_with_policy(
+            "acct", "rate_limited", retry_after=42.0
+        )
+        # Retry-After is honored; value is within ±15% jitter envelope.
+        assert result is not None
+        assert 35.7 <= result <= 48.3
+        health = manager.get_account_health("acct")
+        assert health.health_state == "rate_limited"
+
+    def test_context_limit_is_noop(self) -> None:
+        manager = HealthManager()
+        manager.record_success("acct")
+        result = manager.record_failure_with_policy("acct", "context_limit_exceeded")
+        assert result is None
+        health = manager.get_account_health("acct")
+        assert health.is_healthy
+        assert health.consecutive_failures == 0
+        assert health.health_state == "healthy"
+
+    def test_unknown_reason_falls_back(self) -> None:
+        manager = HealthManager()
+        result = manager.record_failure_with_policy("acct", "some_unknown_reason")
+        # Falls through to record_failure, which returns ``None``.
+        assert result is None
+        health = manager.get_account_health("acct")
+        # record_failure still increments failure count.
+        assert health.consecutive_failures == 1

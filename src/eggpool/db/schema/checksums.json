@@ -22,6 +22,7 @@
         "0020_performance_indexes.sql": "f24b294c0e3cc9b5e3f5e0bf4c8fa74094eab0e435c3dbc14a58b349aa206198",
         "0021_provider_model_metadata.sql": "4fa6068dde0ec352b02f5f34cfca455be0c7e0090501ed17a1aa7135dd292516",
         "0022_dashboard_indexes.sql": "3998c1f78699af8b71bb90eda959a53bc448442302b94a445a672e3f25931e69",
-        "0023_deprecated_model_placeholder.sql": "f149d4ac7a1eea10c55e63ba45011b58ef411ba67f3ebc7f0d2e7f7dd5c4b796"
+        "0023_deprecated_model_placeholder.sql": "f149d4ac7a1eea10c55e63ba45011b58ef411ba67f3ebc7f0d2e7f7dd5c4b796",
+        "0024_account_backoffs.sql": "c4838b862787abffb3adce5d220bb24590e7b62cf1b189fc9a8739dce137e740"
     }
 }

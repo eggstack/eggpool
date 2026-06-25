@@ -120,6 +120,65 @@ def test_eligible_accounts_can_filter_by_provider_protocol_policy() -> None:
     assert eligible == []
 
 
+def test_eligible_accounts_keeps_above_local_quota_in_score_only_mode() -> None:
+    """Above-local-quota accounts remain eligible in the default score_only mode.
+
+    This is the key Phase 1 invariant: local cost estimates must never
+    hard-suppress routing by themselves. Only upstream-observed
+    failures, explicit operator disablement, catalog/protocol
+    incompatibility, or an opt-in hard_cap mode may make an account
+    ineligible.
+    """
+    cache = ModelCatalogCache()
+    cache.update_from_account(
+        "acct1", "opencode-go", [{"model_id": "gpt-4", "protocol": "openai"}]
+    )
+    states = [AccountRuntimeState(name="acct1", enabled=True)]
+
+    estimator = QuotaEstimator()
+    estimator.accounts["acct1"] = AccountQuota(
+        account_name="acct1",
+        capacity_5h_microdollars=1_000_000,
+    )
+    estimator.record_usage("acct1", 1000, 5_000_000)
+
+    eligible = get_eligible_accounts(
+        states,
+        "gpt-4",
+        cache,
+        quota_estimator=estimator,
+        local_quota_mode="score_only",
+    )
+
+    assert [state.name for state in eligible] == ["acct1"]
+
+
+def test_eligible_accounts_excludes_above_local_quota_in_hard_cap_mode() -> None:
+    """The hard_cap mode preserves the legacy suppression behavior."""
+    cache = ModelCatalogCache()
+    cache.update_from_account(
+        "acct1", "opencode-go", [{"model_id": "gpt-4", "protocol": "openai"}]
+    )
+    states = [AccountRuntimeState(name="acct1", enabled=True)]
+
+    estimator = QuotaEstimator()
+    estimator.accounts["acct1"] = AccountQuota(
+        account_name="acct1",
+        capacity_5h_microdollars=1_000_000,
+    )
+    estimator.record_usage("acct1", 1000, 5_000_000)
+
+    eligible = get_eligible_accounts(
+        states,
+        "gpt-4",
+        cache,
+        quota_estimator=estimator,
+        local_quota_mode="hard_cap",
+    )
+
+    assert eligible == []
+
+
 @pytest.mark.asyncio()
 async def test_router_selects_account() -> None:
     os.environ["TEST_ROUTER_KEY"] = "key"

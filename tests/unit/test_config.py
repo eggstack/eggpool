@@ -1026,6 +1026,36 @@ class TestCollapseModels:
             ModelsConfig.model_validate({"collapse_models": [1, 2]})
 
 
+class TestLocalQuotaMode:
+    """Tests for the routing-level ``local_quota_mode`` opt-in.
+
+    The default ``"score_only"`` mode keeps above-capacity accounts
+    eligible; only upstream-observed failures suppress routing. The
+    opt-in ``"hard_cap"`` mode preserves the legacy behavior where
+    local capacity may hard-suppress accounts.
+    """
+
+    def test_local_quota_mode_defaults_to_score_only(self):
+        from eggpool.models.config import RoutingConfig
+
+        cfg = RoutingConfig()
+        assert cfg.local_quota_mode == "score_only"
+
+    def test_local_quota_mode_parses_hard_cap(self):
+        from eggpool.models.config import RoutingConfig
+
+        cfg = RoutingConfig(local_quota_mode="hard_cap")
+        assert cfg.local_quota_mode == "hard_cap"
+
+    def test_local_quota_mode_rejects_unknown_value(self):
+        from pydantic import ValidationError
+
+        from eggpool.models.config import RoutingConfig
+
+        with pytest.raises(ValidationError):
+            RoutingConfig.model_validate({"local_quota_mode": "advisory"})
+
+
 class TestProviderPriorityBackwardCompatibility:
     """Regression tests for plan line 410-413.
 

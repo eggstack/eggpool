@@ -20,6 +20,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import Response as StarletteResponse
 
 from eggpool.accounts.registry import AccountRegistry, account_config_rows
+from eggpool.api.backoff import register_backoff_routes
 from eggpool.api.chat_completions import handle_chat_completions
 from eggpool.api.messages import handle_messages
 from eggpool.api.models import serialize_openai_model
@@ -39,6 +40,7 @@ from eggpool.dashboard.routes import register_dashboard_routes
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
 from eggpool.db.repositories import (
+    AccountBackoffRepository,
     AccountEventRepository,
     AccountRepository,
     AttemptRepository,
@@ -214,6 +216,70 @@ def _remove_pid_file() -> None:
         PID_FILE.unlink(missing_ok=True)
 
 
+async def _hydrate_health_from_backoffs(
+    repo: AccountBackoffRepository,
+    health_manager: HealthManager,
+) -> None:
+    """Reapply persisted upstream backoffs onto the in-memory health manager.
+
+    Called once at startup after account sync so a 429/402/5xx sequence
+    that ended just before the previous shutdown continues to
+    suppress the same account (or account/model pair) until the
+    recorded deadline expires. ``model_unavailable`` rows with a NULL
+    ``backoff_until`` are re-applied as indefinite model disables.
+
+    Errors are surfaced to the caller; the lifespan wraps this call
+    in ``try/except`` so a corrupted row cannot block startup.
+    """
+    account_repo = AccountRepository(repo._db)  # type: ignore[arg-type]  # noqa: SLF001 -- private access by design
+    active = await repo.list_active()
+    if not active:
+        return
+    logger.info(
+        "Hydrating %d persisted upstream backoffs into HealthManager",
+        len(active),
+    )
+    for row in active:
+        account_name = await account_repo.get_name_by_id(int(row["account_id"]))
+        if account_name is None:
+            continue
+        reason = str(row.get("reason") or "")
+        model_id = row.get("model_id")
+        backoff_until_epoch = row.get("backoff_until_epoch")
+        consecutive_failures = int(row.get("consecutive_failures") or 1)
+        if reason == "model_unavailable" and backoff_until_epoch is None:
+            if model_id:
+                health_manager.disable_model(account_name, str(model_id))
+            continue
+        if backoff_until_epoch is None:
+            # Terminal row with unknown handling: skip to avoid
+            # creating an infinite-cooldown that the operator did
+            # not ask for.
+            continue
+        remaining = max(0.0, float(backoff_until_epoch) - time.time())
+        if remaining <= 0:
+            # Already expired; the next periodic ``expire_old`` call
+            # will prune it. No need to set a zero-second cooldown.
+            continue
+        if reason == "quota_exhausted":
+            health_manager.record_quota_exhausted(account_name, remaining)
+        elif reason == "rate_limited":
+            health_manager.record_rate_limit(account_name, remaining)
+        elif reason == "authentication_failed":
+            health_manager.disable_account(
+                account_name, reason="authentication_failed", duration_seconds=remaining
+            )
+        else:
+            # Unknown / transient reason: set a generic cooldown so
+            # the account is not selected until the deadline passes.
+            health = health_manager.get_account_health(account_name)
+            health.cooldown_until = time.time() + remaining
+            health.health_state = "cooldown"
+            health.is_healthy = False
+            health.consecutive_failures = consecutive_failures
+            health.last_check = time.time()
+
+
 @asynccontextmanager
 async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     """Initialize runtime state; cleanup is owned by the outer lifespan."""
@@ -295,6 +361,21 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     health_manager = HealthManager()
     app.state.health_manager = health_manager
 
+    # 9b. Persistent backoff repository and hydration from SQLite.
+    # Phase 4 ensures that real upstream-derived backoffs survive
+    # restarts; local-estimate quota overage is never persisted.
+    account_backoff_repo = AccountBackoffRepository(db)
+    app.state.account_backoff_repo = account_backoff_repo
+    try:
+        await _hydrate_health_from_backoffs(account_backoff_repo, health_manager)
+    except Exception:
+        # A corrupted database must not prevent startup; log and
+        # continue with the in-memory health manager only.
+        logger.exception(
+            "Failed to hydrate health manager from persisted backoffs; "
+            "continuing without historical suppression state"
+        )
+
     # 10. Catalog service
     catalog = CatalogService(config, registry, db, client_pool, ping_repo=ping_repo)
     app.state.catalog = catalog
@@ -336,6 +417,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         catalog,
         health_manager=health_manager,
         stale_after_s=float(config.models.stale_after_s),
+        local_quota_mode=config.routing.local_quota_mode,
     )
     app.state.router = router
 
@@ -437,6 +519,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         stats_db,
         health_manager=health_manager,
         ping_repo=PingRepository(stats_db),
+        account_backoff_repo=account_backoff_repo,
     )
 
     # 18. Request coordinator
@@ -457,6 +540,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         quota_exhausted_cooldown_seconds=config.routing.quota_exhausted_cooldown_seconds,
         persist_error_detail=config.security.persist_redacted_error_detail,
         config=config,
+        account_backoff_repo=account_backoff_repo,
     )
     app.state.coordinator = coordinator
 
@@ -629,6 +713,7 @@ def create_app(
         dashboard_require_auth = not config.dashboard.public
         register_dashboard_routes(app, require_auth=dashboard_require_auth)
         register_stats_routes(app, require_auth=dashboard_require_auth)
+        register_backoff_routes(app, require_auth=dashboard_require_auth)
 
         @app.get("/static/dashboard.css")
         async def dashboard_css() -> Response:  # pyright: ignore[reportUnusedFunction]

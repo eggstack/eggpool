@@ -45,6 +45,15 @@ inflight_penalty = 100000
 health_penalty = 500000
 randomize_near_ties = true
 quota_exhausted_cooldown_seconds = 300
+# Local quota mode controls whether locally estimated over-capacity
+# usage hard-excludes accounts from routing or only affects rank.
+# "score_only" (default) is safe for subscription aggregation: upstream
+# 429/402/5xx remain the authoritative suppression signal and accounts
+# above local quota still receive requests.
+# "hard_cap" is an opt-in escape hatch that re-enables local quota as a
+# hard eligibility gate (legacy pre-suppression behavior). Subscription
+# aggregators should normally leave this as "score_only".
+local_quota_mode = "score_only"
 
 [limits]
 five_hour_microdollars = 12000000

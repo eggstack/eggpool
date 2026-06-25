@@ -28,7 +28,7 @@ from eggpool.stats.queries import (
 
 if TYPE_CHECKING:
     from eggpool.db.connection import Database
-    from eggpool.db.repositories import PingRepository
+    from eggpool.db.repositories import AccountBackoffRepository, PingRepository
     from eggpool.health.health_manager import HealthManager
 
 
@@ -144,10 +144,12 @@ class StatsService:
         db: Database,
         health_manager: HealthManager | None = None,
         ping_repo: PingRepository | None = None,
+        account_backoff_repo: AccountBackoffRepository | None = None,
     ) -> None:
         self._db = db
         self._health_manager = health_manager
         self._ping_repo = ping_repo
+        self._account_backoff_repo = account_backoff_repo
         self._dashboard_cache: dict[tuple[str, ...], tuple[float, object]] = {}
 
     def _dashboard_cache_key(
@@ -258,12 +260,89 @@ class StatsService:
                     if self._health_manager.is_account_healthy(name)
                     else "unhealthy"
                 )
+                health = self._health_manager.get_account_health(name)
+                row["consecutive_upstream_failures"] = int(
+                    getattr(health, "consecutive_failures", 0)
+                )
+                row["operator_disabled"] = bool(
+                    getattr(health, "disabled_until", None) is not None
+                    and float(getattr(health, "disabled_until", 0.0)) > time.time()
+                )
             else:
                 row["health_state"] = "healthy"
+                row["consecutive_upstream_failures"] = 0
+                row["operator_disabled"] = False
+
+            await self._enrich_with_backoff(row, row.get("account_id"))
+
+            reserved = row.get("reserved_microdollars", 0) or 0
+            row["estimated_over_local_budget"] = bool(
+                row.get("capacity_5h_microdollars") is not None
+                and int(reserved) > int(row.get("capacity_5h_microdollars") or 0)
+            )
 
         if use_cache:
             self._set_dashboard_cache(key, rows)
         return rows
+
+    async def _enrich_with_backoff(
+        self,
+        row: dict[str, Any],
+        account_id: int | None,
+    ) -> None:
+        """Populate upstream-backoff fields on a single account row.
+
+        Sets ``upstream_backoff_reason``, ``backoff_until``, and
+        ``authentication_failed`` from the most recent active
+        ``account_backoffs`` row for the account. Missing data yields
+        ``None``/``False`` values so the renderer can always show
+        explicit placeholders.
+        """
+        if self._account_backoff_repo is None or account_id is None:
+            row["upstream_backoff_reason"] = None
+            row["backoff_until"] = None
+            row["authentication_failed"] = False
+            return
+        try:
+            backoffs: list[
+                dict[str, Any]
+            ] = await self._account_backoff_repo.get_for_account_model(
+                account_id=int(account_id), model_id=None
+            )
+        except Exception:
+            row["upstream_backoff_reason"] = None
+            row["backoff_until"] = None
+            row["authentication_failed"] = False
+            return
+        now = time.time()
+        active: list[dict[str, Any]] = []
+        for b in backoffs:
+            until = b.get("backoff_until_epoch")
+            if until is None or float(until) > now:
+                active.append(b)
+        if not active:
+            row["upstream_backoff_reason"] = None
+            row["backoff_until"] = None
+            row["authentication_failed"] = False
+            return
+        preferred: dict[str, Any] | None = next(
+            (
+                b
+                for b in active
+                if str(b.get("reason") or "") == "authentication_failed"
+            ),
+            None,
+        )
+        if preferred is None:
+            preferred = max(
+                active,
+                key=lambda b: float(b.get("backoff_until_epoch") or 0.0),
+            )
+        row["upstream_backoff_reason"] = str(preferred.get("reason") or "")
+        row["backoff_until"] = preferred.get("backoff_until_epoch")
+        row["authentication_failed"] = any(
+            str(b.get("reason") or "") == "authentication_failed" for b in active
+        )
 
     @staticmethod
     def _cost_per_hour(value: object, window_seconds: int) -> float:

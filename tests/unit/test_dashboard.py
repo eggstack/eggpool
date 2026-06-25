@@ -595,6 +595,78 @@ class TestRenderAccounts:
         assert "0.0 tok/s" not in html
         assert "—" in html  # the dash placeholder rendered for cold accounts
 
+    def test_backoff_columns_rendered(self) -> None:
+        """Backoff-related columns appear in the accounts table."""
+        accounts = [
+            {
+                "account_name": "rate-limited-acct",
+                "account_enabled": 1,
+                "provider_id": "opencode-go",
+                "request_count": 10,
+                "error_count": 0,
+                "input_tokens": 100,
+                "output_tokens": 200,
+                "total_tokens": 300,
+                "tokens_per_second": 30.0,
+                "cost_microdollars": 500_000,
+                "avg_latency_ms": 75.5,
+                "reserved_microdollars": 0,
+                "active_reservations": 0,
+                "bytes_received": 0,
+                "bytes_emitted": 0,
+                "health_state": "unhealthy",
+                "estimated_over_local_budget": False,
+                "upstream_backoff_reason": "rate_limited",
+                "backoff_until": 1735689600.0,
+                "consecutive_upstream_failures": 3,
+                "authentication_failed": False,
+                "operator_disabled": False,
+            }
+        ]
+        html = render_accounts(accounts=accounts, period="24h")
+        assert "<th>Over budget</th>" in html
+        assert "<th>Upstream backoff</th>" in html
+        assert "<th>Backoff until</th>" in html
+        assert "<th>Failures</th>" in html
+        assert "<th>Auth fail</th>" in html
+        assert "<th>Disabled</th>" in html
+        assert "rate_limited" in html
+        assert ">3</td>" in html
+        assert "2025-01-01" in html
+
+    def test_backoff_columns_dash_when_no_state(self) -> None:
+        """Accounts with no backoff state show explicit placeholders."""
+        accounts = [
+            {
+                "account_name": "healthy-acct",
+                "account_enabled": 1,
+                "provider_id": "opencode-go",
+                "request_count": 5,
+                "error_count": 0,
+                "input_tokens": 100,
+                "output_tokens": 200,
+                "total_tokens": 300,
+                "tokens_per_second": 60.0,
+                "cost_microdollars": 500_000,
+                "avg_latency_ms": 75.5,
+                "reserved_microdollars": 0,
+                "active_reservations": 0,
+                "bytes_received": 0,
+                "bytes_emitted": 0,
+                "health_state": "healthy",
+                "estimated_over_local_budget": False,
+                "upstream_backoff_reason": None,
+                "backoff_until": None,
+                "consecutive_upstream_failures": 0,
+                "authentication_failed": False,
+                "operator_disabled": False,
+            }
+        ]
+        html = render_accounts(accounts=accounts, period="24h")
+        assert ">no</td>" in html  # over-budget flag defaults to no
+        assert ">0</td>" in html  # failure count defaults to 0
+        assert "—" in html  # backoff reason and timestamp placeholders
+
 
 class TestRenderModels:
     """Tests for the models page renderer."""

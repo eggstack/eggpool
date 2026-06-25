@@ -80,12 +80,16 @@ class Router:
         quota_estimator: QuotaEstimator | None = None,
         health_manager: HealthManager | None = None,
         stale_after_s: float | None = None,
+        local_quota_mode: str = "score_only",
     ) -> None:
         self._registry = registry
         self._catalog = catalog
         self._quota_estimator = quota_estimator or QuotaEstimator()
         self._health_manager = health_manager
         self._stale_after_s = stale_after_s
+        # ``score_only`` keeps above-capacity accounts eligible (rank-only);
+        # ``hard_cap`` restores pre-suppression behavior as an opt-in.
+        self._local_quota_mode = local_quota_mode
         # Counter updates are tiny and infrequent compared with upstream I/O.
         # One stable lock avoids lock-replacement races when a counter reaches
         # zero while another coroutine is already waiting to increment it.
@@ -213,6 +217,7 @@ class Router:
             protocol=protocol,
             account_supports_protocol=self._registry.account_supports_protocol,
             quota_estimator=self._quota_estimator,
+            local_quota_mode=self._local_quota_mode,
         )
         if exclude_accounts:
             eligible = [

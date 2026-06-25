@@ -163,13 +163,29 @@ The `weight` field continues to bias scoring inside a single tier. `weight`
 orders accounts within a tier; `routing_priority` orders tiers.
 
 Accounts are excluded from routing when:
-- Quota is exhausted (recovers after cooldown)
-- Account is disabled or suspended
-- Model is not supported by the account
+- Upstream-observed failure (`quota_exhausted`, `rate_limited`, auth, 5xx) is still inside its bounded backoff window (recovers after cooldown)
+- Account is explicitly disabled or suspended by the operator
+- Model is not supported by the account (catalog/protocol incompatibility)
 - Health circuit breaker is open
+- `local_quota_mode = "hard_cap"` is enabled AND local estimate exceeds capacity (opt-in legacy behavior; default is `score_only` advisory)
+
+In the default `score_only` mode, local cost and quota estimates influence
+routing **priority** only — above-capacity accounts stay eligible. Only
+upstream-observed failures, explicit operator disablement, and catalog/
+protocol incompatibility can suppress routing. See
+`plans/upstream-authoritative-suppression.md` for the full design.
+
+Upstream-derived backoffs (429, 402, model-unavailable) persist across
+restarts in the `account_backoffs` table (`src/eggpool/db/schema/0024_account_backoffs.sql`)
+and are rehydrated into the in-memory `HealthManager` at startup.
+Local-estimate overage never produces a backoff row.
 
 A single request still picks one upstream account. Failover across priority
 tiers happens only through the existing `exclude_accounts` retry path.
+When every candidate account has been attempted and exhausted mid-request,
+the coordinator raises `UpstreamExhaustedError` (502) — synthetic 503 is
+reserved for genuine pre-dispatch unavailability (no enabled accounts,
+missing credentials, all explicitly disabled, model unknown).
 
 ## Provider Routing Priority and Model Collapse
 

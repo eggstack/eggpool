@@ -37,11 +37,27 @@ def classify_failure_category(
     quota-exhausted substring check is intentionally permissive to
     accept vendor-specific spellings (``quotaexhausted`` or
     ``quota_exhausted``).
+
+    Phase 6 explicit handling:
+
+    * HTTP 408 (request timeout) maps to ``CONNECT_TIMEOUT`` so a
+      timed-out upstream request is treated as transport pressure
+      rather than a client mistake.
+    * HTTP 409 and 422 are intentionally mapped to ``UNKNOWN``; they
+      are provider-specific and must not trigger account suppression
+      unless the error class explicitly matches a known category.
     """
     if error_class is None and status_code is None:
         return FailureCategory.UNKNOWN
     if status_code == 402:
         return FailureCategory.QUOTA_EXHAUSTED
+    if status_code == 408:
+        return FailureCategory.CONNECT_TIMEOUT
+    if status_code in (409, 422):
+        # Provider-specific; do not blindly suppress account health
+        # unless the body / error class explicitly identifies a
+        # category the caller already knows about.
+        return FailureCategory.UNKNOWN
     if error_class is None:
         # status_code already handled above; any other code without
         # an error class falls through to the generic catch-all below.
@@ -194,6 +210,105 @@ class HealthManager:
         health.cooldown_until = time.time() + max(0.0, retry_after_seconds)
         health.health_state = "rate_limited"
         health.is_healthy = False
+
+    def record_failure_with_policy(
+        self,
+        account_name: str,
+        reason: str,
+        *,
+        retry_after: float | None = None,
+    ) -> float | None:
+        """Apply a reason-specific backoff policy to the account.
+
+        Routes through the dedicated :mod:`eggpool.health.backoff`
+        layer so the policy table is testable and reviewable in
+        isolation. Returns the cooldown duration in seconds when one
+        was applied, ``None`` otherwise (terminal or no-op reasons).
+
+        Parameters
+        ----------
+        account_name:
+            Target account. The method is a no-op for unknown
+            accounts unless the call later creates one via the health
+            manager's lookup.
+        reason:
+            A :class:`BackoffReason` value or string. Unknown reasons
+            fall through to :meth:`record_failure` with the same
+            ``reason``.
+        retry_after:
+            Optional upstream ``Retry-After`` value (seconds). Honored
+            for ``rate_limited`` and ``quota_exhausted``.
+
+        Notes
+        -----
+        ``model_unavailable`` is handled by calling
+        :meth:`disable_model` for the account-wide scope only. The
+        per-model key is intentionally not threaded through this
+        method; the coordinator must invoke :meth:`disable_model`
+        directly with the specific ``model_id`` so the catalog cache
+        and health manager stay in sync.
+        """
+        # Local import keeps the health manager usable in environments
+        # where the backoff module is intentionally mocked out.
+        from eggpool.health.backoff import (
+            BackoffPolicy,
+            compute_backoff_seconds,
+            get_backoff_policy,
+        )
+
+        if reason == "authentication_failed":
+            self.record_failure(account_name, reason="authentication_failed")
+            return None
+
+        if reason == "context_limit_exceeded":
+            # No account-level suppression for context-limit errors.
+            return None
+
+        policy: BackoffPolicy | None = get_backoff_policy(reason)
+        if policy is None:
+            # Unknown reason: fall back to the legacy record_failure
+            # path so existing behavior is preserved.
+            self.record_failure(account_name, reason=reason)
+            return None
+
+        if policy.base_delay <= 0 or policy.cap <= 0:
+            # Terminal (auth) or zero-policy reasons already routed
+            # above; this branch handles ``model_unavailable`` whose
+            # policy exists but uses an empty base to signal "no
+            # exponential backoff".
+            if reason == "model_unavailable":
+                # Per-model disable lives outside this method because
+                # it requires the model id; the coordinator calls
+                # ``disable_model`` directly.
+                return None
+            return None
+
+        health = self.get_account_health(account_name)
+        delay = compute_backoff_seconds(
+            reason,
+            consecutive_failures=health.consecutive_failures + 1,
+            retry_after=retry_after,
+            jitter=True,
+        )
+        if delay is None:
+            return None
+
+        if reason == "quota_exhausted":
+            self.record_quota_exhausted(account_name, delay)
+            return delay
+        if reason == "rate_limited":
+            self.record_rate_limit(account_name, delay)
+            return delay
+
+        # Generic transient category: bounded cooldown with the
+        # generic "cooldown" health state so the runtime view stays
+        # consistent with ``AccountRuntimeState``.
+        health.cooldown_until = time.time() + delay
+        health.health_state = "cooldown"
+        health.is_healthy = False
+        health.consecutive_failures += 1
+        health.last_check = time.time()
+        return delay
 
     def disable_account(
         self,

@@ -277,21 +277,12 @@ class RequestFinalizer:
 
         # Post-commit: update in-memory state only if we performed the transition
         if transitioned:
-            # 1. Reservation cleanup depends on whether the reservation was
-            #    actually released. If the attempt finalizer already released
-            #    the reservation (signalled by health_already_applied, which
-            #    is set when retries have been exhausted) we must not
-            #    decrement again. reservation_released additionally guards
-            #    against double-decrement when the attempt finalizer
-            #    already removed the in-memory tracking.
-            if reservation_released and not data.health_already_applied:
-                # 1a. Remove exactly the reserved amount from in-memory tracking
+            if reservation_released:
                 if self._quota_estimator is not None:
                     await self._quota_estimator.remove_reservation(
                         selected.account_name, selected.estimated_microdollars
                     )
 
-                # 1b. Decrement active request count
                 if self._router is not None:
                     await self._router.decrement_active_request_count(
                         selected.account_name

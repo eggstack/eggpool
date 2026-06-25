@@ -41,6 +41,10 @@ inflight_penalty = 100000
 health_penalty = 500000
 randomize_near_ties = true
 quota_exhausted_cooldown_seconds = 300
+# "score_only" (default) keeps above-capacity accounts eligible; only
+# upstream-observed failures suppress routing. Switch to "hard_cap"
+# for an opt-in legacy behavior where local quota can hard-suppress.
+local_quota_mode = "score_only"
 
 [limits]
 five_hour_microdollars = 12000000

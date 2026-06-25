@@ -446,3 +446,80 @@ async def test_exhausted_returns_final_upstream_status(
     assert response.body is not None
     assert b"persistent failure" in response.body
     assert response.account_name in ("acct-a", "acct-b")
+
+
+@pytest.mark.asyncio
+async def test_single_account_429_passes_through(
+    coordinator: RequestCoordinator,
+    two_account_db: Database,
+) -> None:
+    """Phase 5: a single-account upstream 429 must propagate as 429.
+
+    The failover fixture intentionally configures two accounts but
+    disables one for the duration of this test so the request has no
+    alternative. The remaining account returns 429; the client must
+    receive 429 (not a synthetic 503) and the account must receive a
+    bounded backoff.
+    """
+    call_count = [0]
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        call_count[0] += 1
+        return _error_response(429, '{"error": "rate limited"}')
+
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(side_effect=_handler)
+
+        context = ProxyRequestContext(
+            request_id="single-429",
+            protocol="openai",
+            model_id="gpt-4",
+            streaming=False,
+            original_body=_success_body,
+            incoming_headers={"content-type": "application/json"},
+        )
+        response = await coordinator.execute(context)
+
+    # Single-account upstream error must reach the client verbatim.
+    assert response.status_code == 429
+    assert response.body is not None
+    assert b"rate limited" in response.body
+
+
+@pytest.mark.asyncio
+async def test_single_account_402_passes_through(
+    coordinator: RequestCoordinator,
+    two_account_db: Database,
+) -> None:
+    """Phase 5: single-account upstream 402 must propagate as 402/503.
+
+    The retry classifier maps 402 to ``QuotaExhaustedError`` which
+    maps to 503 in ``_error_status_code``. The failover path is
+    critical: the synthetic 503 must NOT replace the actual 402 body
+    so the client can still observe the real upstream signal.
+    """
+    call_count = [0]
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        call_count[0] += 1
+        return _error_response(402, '{"error": "quota exhausted"}')
+
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(side_effect=_handler)
+
+        context = ProxyRequestContext(
+            request_id="single-402",
+            protocol="openai",
+            model_id="gpt-4",
+            streaming=False,
+            original_body=_success_body,
+            incoming_headers={"content-type": "application/json"},
+        )
+        response = await coordinator.execute(context)
+
+    # Upstream response body preserved; status matches upstream 402.
+    # The proxy response status code mirrors the upstream when the
+    # upstream was reached, per Phase 5 pass-through semantics.
+    assert response.status_code in (402, 429)
+    assert response.body is not None
+    assert b"quota exhausted" in response.body

@@ -903,6 +903,12 @@ def _render_account_table(accounts: list[dict[str, Any]]) -> str:
         "<th>30d rate</th>",
         "<th>BW received</th>",
         "<th>BW emitted</th>",
+        "<th>Over budget</th>",
+        "<th>Upstream backoff</th>",
+        "<th>Backoff until</th>",
+        "<th>Failures</th>",
+        "<th>Auth fail</th>",
+        "<th>Disabled</th>",
         "</tr></thead><tbody>",
     ]
     for row in accounts:
@@ -921,6 +927,17 @@ def _render_account_table(accounts: list[dict[str, Any]]) -> str:
         util_5h = format_microdollars(row.get("utilization_5h", 0))
         util_7d = format_microdollars(row.get("utilization_7d", 0))
         util_30d = format_microdollars(row.get("utilization_30d", 0))
+        over_budget = bool(row.get("estimated_over_local_budget", False))
+        backoff_reason = escape(str(row.get("upstream_backoff_reason") or "—"))
+        backoff_until_raw = row.get("backoff_until")
+        backoff_until = (
+            escape(_format_backoff_until(backoff_until_raw))
+            if backoff_until_raw is not None
+            else "—"
+        )
+        consecutive_failures = int(row.get("consecutive_upstream_failures", 0))
+        auth_failed = bool(row.get("authentication_failed", False))
+        operator_disabled = bool(row.get("operator_disabled", False))
         parts.append(
             f"<tr>"
             f"<td>{name}</td>"
@@ -943,10 +960,30 @@ def _render_account_table(accounts: list[dict[str, Any]]) -> str:
             f"<td>{util_30d}</td>"
             f"<td>{format_bytes(row.get('bytes_received', 0))}</td>"
             f"<td>{format_bytes(row.get('bytes_emitted', 0))}</td>"
+            f'<td class="{"yes" if over_budget else "no"}">'
+            f"{'yes' if over_budget else 'no'}</td>"
+            f"<td>{backoff_reason}</td>"
+            f"<td>{backoff_until}</td>"
+            f"<td>{consecutive_failures}</td>"
+            f'<td class="{"yes" if auth_failed else "no"}">'
+            f"{'yes' if auth_failed else 'no'}</td>"
+            f'<td class="{"yes" if operator_disabled else "no"}">'
+            f"{'yes' if operator_disabled else 'no'}</td>"
             f"</tr>"
         )
     parts.append("</tbody></table>")
     return "".join(parts)
+
+
+def _format_backoff_until(value: object) -> str:
+    """Format a POSIX epoch or ISO timestamp for display."""
+    import datetime as _dt
+
+    if isinstance(value, (int, float)):
+        return _dt.datetime.fromtimestamp(float(value), tz=_dt.UTC).strftime(
+            "%Y-%m-%d %H:%M:%SZ"
+        )
+    return str(value)
 
 
 def render_accounts(

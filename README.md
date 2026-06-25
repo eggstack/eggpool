@@ -283,6 +283,32 @@ setting: suffixed IDs when `false`, unsuffixed when `true`. See
 [docs/providers.md](docs/providers.md) for the full worked example with three
 providers and three priorities.
 
+### Local Quota Mode (Upstream-Authoritative Suppression)
+
+By default, EggPool uses **upstream-authoritative suppression** for routing
+eligibility. Local cost estimates are advisory — they influence which account
+is preferred but cannot, by themselves, exclude an account from routing. Only
+upstream-observed failures (429, 402, 5xx, auth) and explicit operator
+disablement can suppress an account.
+
+This is the safe default for subscription aggregators: a stretched local
+estimate cannot brick routing. To restore the legacy behavior where locally
+over-quota accounts are hard-excluded, opt in via `[routing]`:
+
+```toml
+[routing]
+local_quota_mode = "score_only"   # default; advisory only
+# local_quota_mode = "hard_cap"   # opt-in; local over-quota excludes accounts
+```
+
+When `hard_cap` is enabled, a warning is logged at startup because it can
+intentionally produce local 503s under estimate drift. See
+`plans/upstream-authoritative-suppression.md` for the full design.
+
+Active upstream-derived backoffs persist across restarts in the
+`account_backoffs` table. The `/api/backoffs` endpoint and the dashboard
+accounts table expose the current state during incidents.
+
 ### Per-Account Outbound Proxy
 
 Each account can route upstream traffic through a [pproxy](https://pypi.org/project/pproxy/)-compatible outbound proxy. This is useful for geo-routing, residential IP rotation, or isolating provider traffic by account.

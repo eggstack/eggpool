@@ -171,3 +171,114 @@ class TestRetryAfterParsing:
         result = classifier.classify(503, headers={"retry-after": date_str})
         assert result.retry_after is not None
         assert 59.0 < result.retry_after < 61.0
+
+
+class TestPhase6StatusCodes:
+    """Phase 6 explicit status-code handling."""
+
+    def test_408_maps_to_transient(self, classifier: RetryClassifier) -> None:
+        result = classifier.classify(408)
+        assert result.category == RetryCategory.TRANSIENT
+        assert result.is_retryable
+
+    def test_409_maps_to_bad_request(self, classifier: RetryClassifier) -> None:
+        result = classifier.classify(409)
+        assert result.category == RetryCategory.BAD_REQUEST
+        assert not result.is_retryable
+
+    def test_422_maps_to_bad_request(self, classifier: RetryClassifier) -> None:
+        result = classifier.classify(422)
+        assert result.category == RetryCategory.BAD_REQUEST
+        assert not result.is_retryable
+
+    def test_409_with_quota_body_promoted(self, classifier: RetryClassifier) -> None:
+        body = b'{"error": "quota exhausted"}'
+        result = classifier.classify(409, body=body)
+        assert result.category == RetryCategory.QUOTA_EXCEEDED
+        assert result.is_retryable
+
+    def test_403_with_quota_body_promoted(self, classifier: RetryClassifier) -> None:
+        body = b'{"error": "insufficient credits"}'
+        result = classifier.classify(403, body=body)
+        assert result.category == RetryCategory.QUOTA_EXCEEDED
+
+    def test_403_without_quota_body_is_auth(self, classifier: RetryClassifier) -> None:
+        result = classifier.classify(403)
+        assert result.category == RetryCategory.AUTH_FAILURE
+
+
+class TestProviderSignalDetection:
+    """Phase 6: provider body signal detection."""
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            b'{"error": "quota exceeded"}',
+            b"out of credits",
+            b'{"msg":"insufficient balance"}',
+            b'{"msg":"account limit reached"}',
+        ],
+    )
+    def test_quota_signals_detected(
+        self, classifier: RetryClassifier, body: bytes
+    ) -> None:
+        signal = classifier._extract_provider_signal(body)
+        assert signal is RetryCategory.QUOTA_EXCEEDED
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            b"rate limit exceeded",
+            b"too many requests",
+            b"please slow down",
+        ],
+    )
+    def test_rate_limit_signals_detected(
+        self, classifier: RetryClassifier, body: bytes
+    ) -> None:
+        signal = classifier._extract_provider_signal(body)
+        assert signal is RetryCategory.QUOTA_EXCEEDED
+
+    def test_queue_position_not_flagged_as_rate_limit(
+        self, classifier: RetryClassifier
+    ) -> None:
+        # "too many requests in queue" is a server-side queueing
+        # message, NOT a 429-style rate limit. The denylist in the
+        # pattern ensures we do not promote it to a hard backoff.
+        body = b"too many requests in queue, please retry later"
+        assert classifier._extract_provider_signal(body) is None
+
+    def test_unrelated_body_returns_none(self, classifier: RetryClassifier) -> None:
+        body = b'{"error": "internal server error"}'
+        assert classifier._extract_provider_signal(body) is None
+
+    def test_empty_body_returns_none(self, classifier: RetryClassifier) -> None:
+        assert classifier._extract_provider_signal(b"") is None
+        assert classifier._extract_provider_signal(None) is None
+
+
+class TestParseRetryAfterPublic:
+    """Phase 6: public ``parse_retry_after`` helper for HealthManager reuse."""
+
+    def test_returns_default_when_header_missing(
+        self, classifier: RetryClassifier
+    ) -> None:
+        assert classifier.parse_retry_after(None, default=30.0) == 30.0
+        assert classifier.parse_retry_after({}, default=10.0) == 10.0
+
+    def test_returns_default_when_header_invalid(
+        self, classifier: RetryClassifier
+    ) -> None:
+        result = classifier.parse_retry_after(
+            {"Retry-After": "not-a-date"}, default=15.0
+        )
+        assert result == 15.0
+
+    def test_returns_parsed_when_present(self, classifier: RetryClassifier) -> None:
+        result = classifier.parse_retry_after({"retry-after": "42"}, default=60.0)
+        assert result == 42.0
+
+    def test_returns_none_when_default_is_none(
+        self, classifier: RetryClassifier
+    ) -> None:
+        assert classifier.parse_retry_after(None, default=None) is None

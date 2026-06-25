@@ -134,6 +134,13 @@ class RoutingConfig(BaseModel):
     health_penalty: int = Field(default=500_000, ge=0)
     randomize_near_ties: bool = True
     quota_exhausted_cooldown_seconds: float = Field(default=300.0, ge=0)
+    # Local quota mode controls whether locally estimated over-capacity
+    # usage hard-excludes accounts from routing or only affects rank.
+    # "score_only" (default) is safe for subscription aggregation:
+    # upstream 429/402/5xx remain the authoritative suppression signal.
+    # "hard_cap" is an opt-in escape hatch that re-enables local quota
+    # as a hard eligibility gate (legacy behavior).
+    local_quota_mode: Literal["score_only", "hard_cap"] = "score_only"
 
 
 class LimitsConfig(BaseModel):

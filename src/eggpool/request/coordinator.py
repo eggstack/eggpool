@@ -14,6 +14,7 @@ import httpx
 from eggpool.catalog.pricing import coerce_token_count
 from eggpool.constants import DEFAULT_PROVIDER_ID
 from eggpool.db.repositories import (
+    AccountBackoffRepository,
     AccountRepository,
     AttemptRepository,
     RequestRepository,
@@ -31,6 +32,7 @@ from eggpool.errors import (
     TemporaryUpstreamError,
     TransientUpstreamError,
     UpstreamError,
+    UpstreamExhaustedError,
 )
 from eggpool.health.health_manager import (
     FailureCategory,
@@ -200,6 +202,7 @@ class RequestCoordinator:
         quota_exhausted_cooldown_seconds: float = 300.0,
         persist_error_detail: bool = False,
         config: AppConfig | None = None,
+        account_backoff_repo: AccountBackoffRepository | None = None,
     ) -> None:
         self._registry = registry
         self._catalog = catalog
@@ -225,6 +228,7 @@ class RequestCoordinator:
         self._max_retry_attempts = max_retry_attempts
         self._quota_exhausted_cooldown_seconds = quota_exhausted_cooldown_seconds
         self._persist_error_detail = persist_error_detail
+        self._account_backoff_repo = account_backoff_repo
 
         # Build the attempt finalizer with all dependencies
         self._attempt_finalizer = AttemptFinalizer(
@@ -379,7 +383,7 @@ class RequestCoordinator:
                         )
                 # Apply health transitions only when the attempt transitioned
                 if result.attempt_transitioned:
-                    self._apply_health_transition(
+                    await self._apply_health_transition(
                         selected.account_name, err, context.model_id
                     )
                     health_applied = True
@@ -485,6 +489,18 @@ class RequestCoordinator:
             )
 
             if not eligible_account_names:
+                # Phase 5: distinguish pre-dispatch unavailability
+                # from post-retry exhaustion. ``get_eligible_account_names``
+                # already excludes ``context.attempted_accounts``; an
+                # empty result on the first attempt means no enabled
+                # accounts at all (503). An empty result after at
+                # least one attempt means every eligible candidate has
+                # been tried in this request (502).
+                if context.attempted_accounts:
+                    raise UpstreamExhaustedError(
+                        f"All eligible accounts attempted for model "
+                        f"{context.model_id!r}"
+                    )
                 raise ModelUnavailableError(
                     f"No accounts available for model {context.model_id!r}"
                 )
@@ -548,6 +564,19 @@ class RequestCoordinator:
                     selected_state = None
 
             if selected_state is None:
+                # Distinguish "all enabled accounts already attempted in
+                # this request" (502 UpstreamExhaustedError) from "no
+                # enabled accounts at all" (503 ModelUnavailableError).
+                # The retry loop only reaches this point after at
+                # least one attempt has been recorded in
+                # ``context.attempted_accounts``; an empty candidate
+                # list while the registry still has enabled states
+                # means the eligible subset was exhausted mid-request.
+                if self._all_accounts_attempted(context):
+                    raise UpstreamExhaustedError(
+                        f"All eligible accounts attempted for model "
+                        f"{context.model_id!r}"
+                    )
                 raise ModelUnavailableError(
                     f"No accounts available for model {context.model_id!r}"
                 )
@@ -851,6 +880,24 @@ class RequestCoordinator:
                 ),
             )
 
+            # Clear persisted backoff rows on a successful request so
+            # restart-time hydration starts from a clean slate for
+            # this account. Only transient reasons are cleared;
+            # terminal ones (authentication_failed, model_unavailable)
+            # are preserved.
+            await self._clear_backoff(
+                selected.account_name,
+                model_id=None,
+                reasons=[
+                    "quota_exhausted",
+                    "rate_limited",
+                    "upstream_server_error",
+                    "connect_timeout",
+                    "connection_failure",
+                    "protocol_error",
+                ],
+            )
+
             resp_headers.append(("x-proxy-request-id", context.request_id))
             resp_headers.append(("x-proxy-attempt-count", str(attempt_num)))
             return PreparedProxyResponse(
@@ -1033,6 +1080,8 @@ class RequestCoordinator:
         )
         finalizer = self._finalizer
         persist_error_detail = self._persist_error_detail
+        account_backoff_repo = self._account_backoff_repo
+        clear_backoff = self._clear_backoff
 
         async def _stream() -> AsyncIterator[bytes]:
             nonlocal bytes_emitted, first_byte_ms
@@ -1071,6 +1120,25 @@ class RequestCoordinator:
                         bytes_received=len(context.original_body),
                     ),
                 )
+
+                # Clear persisted transient backoff rows on a
+                # successful streaming request so restart-time
+                # hydration starts clean for this account. Local
+                # estimate quota overage is never persisted, so this
+                # call only touches real upstream backoffs.
+                if account_backoff_repo is not None:
+                    await clear_backoff(
+                        selected.account_name,
+                        model_id=None,
+                        reasons=[
+                            "quota_exhausted",
+                            "rate_limited",
+                            "upstream_server_error",
+                            "connect_timeout",
+                            "connection_failure",
+                            "protocol_error",
+                        ],
+                    )
 
             except asyncio.CancelledError:
                 # Client cancellation - finalize but don't penalize health.
@@ -1314,7 +1382,7 @@ class RequestCoordinator:
             )
         return sanitized
 
-    def _apply_health_transition(
+    async def _apply_health_transition(
         self,
         account_name: str,
         err: _RetryableUpstreamError,
@@ -1326,30 +1394,51 @@ class RequestCoordinator:
 
         category = classify_failure_category(err.error_class, err.status_code)
         rate_limit_retry_after: float | None = None
+        backoff_until_epoch: float | None = None
         if category == FailureCategory.AUTHENTICATION_FAILED:
             self._health_manager.record_failure(
                 account_name, model_id=model_id, reason="authentication_failed"
             )
+            # Terminal; persist a long-ish backoff so restarts honor it.
+            backoff_until_epoch = time.time() + 365 * 86400
         elif category == FailureCategory.RATE_LIMITED:
             rate_limit_retry_after = (
                 60.0 if err.retry_after is None else err.retry_after
             )
             self._health_manager.record_rate_limit(account_name, rate_limit_retry_after)
             self._health_manager.release_request(account_name)
+            backoff_until_epoch = time.time() + rate_limit_retry_after
         elif category == FailureCategory.QUOTA_EXHAUSTED:
             self._health_manager.record_quota_exhausted(
                 account_name,
                 self._quota_exhausted_cooldown_seconds,
             )
             self._health_manager.release_request(account_name)
+            backoff_until_epoch = time.time() + self._quota_exhausted_cooldown_seconds
         elif category == FailureCategory.MODEL_UNAVAILABLE:
             self._health_manager.disable_model(account_name, model_id)
             self._health_manager.release_request(account_name)
             self._catalog.cache.mark_model_unavailable(account_name, model_id)
+            # model_unavailable rows with NULL backoff_until are
+            # terminal in the hydration path.
+            backoff_until_epoch = None
         else:
             self._health_manager.record_failure(
                 account_name, model_id=model_id, reason=category.value
             )
+            # Transient reasons get a short exponential cooldown so a
+            # restart does not silently clear them.
+            from eggpool.health.backoff import compute_backoff_seconds
+
+            delay = compute_backoff_seconds(
+                category.value,
+                consecutive_failures=self._health_manager.get_account_health(
+                    account_name
+                ).consecutive_failures,
+                jitter=False,
+            )
+            if delay is not None and delay > 0:
+                backoff_until_epoch = time.time() + delay
 
         # Also update runtime state with normalized category
         state = self._registry.get_state(account_name)
@@ -1358,6 +1447,118 @@ class RequestCoordinator:
                 category.value,
                 cooldown_seconds=self._quota_exhausted_cooldown_seconds,
                 rate_limit_retry_after=rate_limit_retry_after,
+            )
+
+        # Persist authoritative backoff to SQLite so the suppression
+        # survives restart. ``model_unavailable`` is scoped to the
+        # (account, model) pair; everything else is account-wide.
+        await self._persist_backoff(
+            account_name=account_name,
+            model_id=model_id
+            if category == FailureCategory.MODEL_UNAVAILABLE
+            else None,
+            reason=category.value,
+            status_code=err.status_code,
+            error_class=err.error_class,
+            backoff_until=backoff_until_epoch,
+            consecutive_failures=self._health_manager.get_account_health(
+                account_name
+            ).consecutive_failures,
+        )
+
+    async def _persist_backoff(
+        self,
+        *,
+        account_name: str,
+        model_id: str | None,
+        reason: str,
+        status_code: int | None,
+        error_class: str | None,
+        backoff_until: float | None,
+        consecutive_failures: int,
+    ) -> None:
+        """Write the authoritative backoff to ``account_backoff_repo``.
+
+        Silently skips when no repository was injected (e.g. legacy
+        tests) or when the reason has no policy (e.g. client 4xx).
+        """
+        if self._account_backoff_repo is None:
+            return
+        from eggpool.health.backoff import is_backoff_reason
+
+        if not is_backoff_reason(reason):
+            return
+        account_id = self._account_id_cache.get(account_name)
+        if account_id is None:
+            try:
+                account_repo = AccountRepository(self._db)
+                account_id = await account_repo.get_id_by_name(account_name)
+            except Exception:
+                logger.exception(
+                    "Failed to resolve account_id for backoff persistence (account=%r)",
+                    account_name,
+                )
+                return
+            if account_id is None:
+                return
+            self._account_id_cache[account_name] = account_id
+        try:
+            await self._account_backoff_repo.upsert_failure(
+                account_id=account_id,
+                model_id=model_id,
+                reason=reason,
+                status_code=status_code,
+                error_class=error_class,
+                backoff_until=backoff_until,
+                consecutive_failures=consecutive_failures,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to persist backoff (account=%r reason=%r)",
+                account_name,
+                reason,
+            )
+
+    async def _clear_backoff(
+        self,
+        account_name: str,
+        *,
+        model_id: str | None = None,
+        reasons: list[str] | None = None,
+    ) -> None:
+        """Remove persisted backoff rows for a successful request.
+
+        Errors are logged and swallowed so the request lifecycle
+        continues; the in-memory health manager is the source of
+        truth for the current process and the repository is purely
+        durable state.
+        """
+        if self._account_backoff_repo is None:
+            return
+        account_id = self._account_id_cache.get(account_name)
+        if account_id is None:
+            try:
+                account_repo = AccountRepository(self._db)
+                account_id = await account_repo.get_id_by_name(account_name)
+            except Exception:
+                logger.exception(
+                    "Failed to resolve account_id for backoff cleanup (account=%r)",
+                    account_name,
+                )
+                return
+            if account_id is None:
+                return
+            self._account_id_cache[account_name] = account_id
+        try:
+            await self._account_backoff_repo.clear_success(
+                account_id=account_id,
+                model_id=model_id,
+                reasons=reasons,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to clear backoff rows (account=%r)",
+                account_name,
             )
 
     async def _finalize_non_retryable(
@@ -1483,7 +1684,13 @@ class RequestCoordinator:
                 ),
             )
 
-        # Use last upstream response if available
+        # Use last upstream response if available (Phase 5 pass-through).
+        # When at least one upstream dispatch returned a status/body,
+        # we prefer that real upstream error over a synthetic proxy
+        # envelope. This ensures single-account upstream errors (e.g.
+        # 429, 402) propagate as the same status the client would
+        # have received against the upstream directly, instead of
+        # being converted into a synthetic 503.
         if last_upstream_response is not None:
             status, headers, body = last_upstream_response
             resp_headers = list(headers) + [
@@ -1500,7 +1707,12 @@ class RequestCoordinator:
                 attempt_count=attempt_num,
             )
 
-        # Generate a protocol-compatible proxy error envelope
+        # No upstream was ever reached. The status code is derived
+        # from the categorized exception: an ``UpstreamExhaustedError``
+        # surfaces as 502, an ``AuthenticationError`` as 502, a
+        # ``RateLimitError`` as 429, a ``QuotaExhaustedError`` as 503,
+        # and ``ModelUnavailableError`` (pre-dispatch) as 503. This
+        # distinction is enforced by the proxy_request error handler.
         status_code = self._error_status_code(last_error)
         error_msg = str(last_error or "Request failed")
         if context.protocol == "anthropic":
@@ -1536,6 +1748,21 @@ class RequestCoordinator:
             latency_ms=elapsed_ms,
             attempt_count=attempt_num,
         )
+
+    def _all_accounts_attempted(self, context: ProxyRequestContext) -> bool:
+        """Return whether every enabled account has been attempted.
+
+        Used by the retry loop to distinguish pre-dispatch
+        unavailability (genuine 503) from post-retry exhaustion
+        (502 ``UpstreamExhaustedError``). ``True`` when the
+        registered account set is non-empty and every name is
+        already in ``context.attempted_accounts``.
+        """
+        enabled = self._registry.get_enabled_states()
+        if not enabled:
+            return False
+        attempted = context.attempted_accounts
+        return all(state.name in attempted for state in enabled)
 
     def _validate_endpoint(self, context: ProxyRequestContext) -> None:
         """Validate that the endpoint matches the model's protocol.

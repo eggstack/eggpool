@@ -87,6 +87,9 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 - Every DML write must run inside `async with db.transaction():`
 - SQLite transactions are serialized across concurrent tasks via a single connection lock + ContextVar
 - Requests must be persisted before upstream dispatch; pre-body failures can retry, but no retry after first downstream byte
+- **Upstream-authoritative suppression**: local quota estimates are advisory by default (`local_quota_mode = "score_only"`). Above-capacity accounts stay eligible; only upstream-observed failures (429/402/5xx/auth) and explicit operator disablement suppress routing. Switch to `hard_cap` only as an opt-in escape hatch.
+- **Backoff persistence**: upstream-derived backoffs survive restarts via the `account_backoffs` table (`src/eggpool/db/schema/0024_account_backoffs.sql`). Hydration runs at startup after account sync, best-effort (never blocks boot). Local cost overruns must never be persisted as backoff rows.
+- **Synthetic 503 vs 502**: `ModelUnavailableError` (503) is reserved for genuine pre-dispatch unavailability. `UpstreamExhaustedError` (502) is raised when every candidate account was attempted and exhausted mid-request. Single-account upstream errors pass through to the client rather than becoming synthetic 503s.
 
 ## CLI Commands
 

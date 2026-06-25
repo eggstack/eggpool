@@ -353,6 +353,41 @@ class TestQuotaFairScorer:
         score = RoutingScore("a", 0.5, 1.0, True, tier=5)
         assert score.tier == 5
 
+    @pytest.mark.asyncio()
+    async def test_above_quota_account_remains_scoreable(self) -> None:
+        """Above-capacity accounts remain scoreable but worse-ranked.
+
+        In ``score_only`` mode (the default), the scorer never returns
+        ``is_eligible=False`` simply because local cost exceeds the
+        configured capacity. It still reflects the higher utilization
+        through the quota score so high-usage accounts are ranked below
+        lower-usage peers.
+        """
+        from eggpool.quota.estimation import AccountQuota, PersistedWindowSnapshot
+
+        estimator = QuotaEstimator()
+        estimator.accounts["acct1"] = AccountQuota(
+            account_name="acct1",
+            capacity_5h_microdollars=10_000_000,
+            persisted_snapshot=PersistedWindowSnapshot(
+                account_id=1, cost_5h=50_000_000, cost_7d=0, cost_30d=0
+            ),
+        )
+        estimator.accounts["acct2"] = AccountQuota(
+            account_name="acct2",
+            capacity_5h_microdollars=10_000_000,
+            persisted_snapshot=PersistedWindowSnapshot(
+                account_id=2, cost_5h=0, cost_7d=0, cost_30d=0
+            ),
+        )
+
+        scorer = QuotaFairScorer(quota_estimator=estimator)
+        scores = await scorer.score_accounts(["acct1", "acct2"])
+
+        assert all(score.is_eligible for score in scores)
+        by_name = {score.account_name: score for score in scores}
+        assert by_name["acct1"].quota_score > by_name["acct2"].quota_score
+
 
 class TestEstimateCostTierPriority:
     """Tests for the 5-tier cost estimation hierarchy in QuotaEstimator."""

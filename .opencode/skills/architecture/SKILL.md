@@ -48,6 +48,9 @@ See `architecture/README.md` for the full design overview.
 - Tier-based routing: eligible accounts are grouped by `routing_priority` (default `0`); the highest non-empty tier wins; the `QuotaFairScorer` load-balances within the chosen tier; lower tiers are reached only via `exclude_accounts` retry paths
 - `routing_priority` orders tiers; `weight` orders accounts within a tier — the two compose
 - `collapse_models = false` (default) exposes provider-suffixed model IDs; `collapse_models = true` collapses to a single unsuffixed ID routed across all providers
+- **Upstream-authoritative suppression** (default `local_quota_mode = "score_only"`): local cost estimates influence routing rank but never hard-exclude accounts. Only upstream-observed failures, explicit operator disablement, catalog/protocol incompatibility, or an explicit `local_quota_mode = "hard_cap"` may make an account ineligible. See `plans/upstream-authoritative-suppression.md` for context.
+- **`hard_cap` opt-in**: setting `local_quota_mode = "hard_cap"` restores legacy behavior where locally over-quota accounts are excluded. Subscription aggregators should normally leave the default unchanged; a warning is logged at startup when `hard_cap` is enabled.
+- Reservation cleanup is gated on `reservation_released` alone — `health_already_applied` must not be a precondition for in-memory reservation teardown, otherwise single-account 429/402 paths leak in-memory reservation state.
 
 ## Multi-Provider
 
@@ -106,6 +109,12 @@ EggPool prepends `Bearer ` automatically. An optional
 
 - Health systems use a normalized `FailureCategory` vocabulary shared by `HealthManager` and `AccountRuntimeState`
 - `models.resolution_status` is set to `'resolved'` for all persisted models with resolved protocols
+- **`BackoffPolicy` (in `health/backoff.py`)** maps each `FailureCategory` to a bounded exponential schedule (base, multiplier, cap, jitter, scope). Authentication failure is terminal — handled via `disable_account`. Context-limit failures produce no backoff. Rate-limit and quota-exhausted reasons honor upstream `Retry-After` when present.
+- **`account_backoffs` table** persists upstream-derived backoffs across restarts. `AccountBackoffRepository` exposes upsert, clear-on-success, list_active, and expire_old. `HealthManager` state is rehydrated from this table at startup (best-effort, never blocks boot).
+- **Successful requests clear transient backoff** for the relevant `(account_id, model_id, reason)` scope via `AccountBackoffRepository.clear_success`. Local cost overruns are never persisted as backoff rows.
+- **Error classification (`retry/classification.py`)**: 408→TRANSIENT, 409/422→BAD_REQUEST (do not blindly suppress accounts), 429/402→QUOTA_EXCEEDED, 5xx→TEMPORARY/TRANSIENT. Provider error bodies are inspected for quota/rate-limit terms when status codes are ambiguous, with a denylist for false positives like "too many requests in queue".
+- **`UpstreamExhaustedError` vs `ModelUnavailableError`**: 503 is reserved for genuine pre-dispatch unavailability (no enabled accounts, missing credentials, all explicitly disabled, model unknown). 502 (`UpstreamExhaustedError`) is raised when every candidate account was attempted and exhausted mid-request.
+- **`/api/backoffs` endpoint** exposes active backoff rows from `AccountBackoffRepository.list_active(now)` for operator visibility during incidents.
 
 ## Error Hierarchy
 

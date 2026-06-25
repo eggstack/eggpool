@@ -5,10 +5,16 @@ An account is eligible only when all of the following are true:
 - Credential loaded successfully
 - Not in authentication-failed state
 - Not in an active circuit-breaker cooldown
-- Not locally considered exhausted for the relevant quota policy
 - Supports the requested model (with recent catalog refresh)
 - Supports the requested protocol
 - Has not exceeded any configured local concurrency ceiling
+
+Note: local quota estimates are advisory in the default routing mode
+("score_only"). They influence rank but must not hard-exclude accounts
+from eligibility. Only upstream-observed failures, explicit operator
+disablement, catalog/protocol incompatibility, or an explicit
+``hard_cap`` mode may make an account ineligible. See the
+``upstream-authoritative-suppression`` plan for context.
 """
 
 from __future__ import annotations
@@ -34,6 +40,7 @@ def get_eligible_accounts(
     protocol: str | None = None,
     account_supports_protocol: Callable[[str, str], bool] | None = None,
     quota_estimator: QuotaEstimator | None = None,
+    local_quota_mode: str = "score_only",
 ) -> list[AccountRuntimeState]:
     """Get accounts eligible for routing a specific model.
 
@@ -48,20 +55,26 @@ def get_eligible_accounts(
     - supports the requested protocol (if protocol is given)
     - belongs to a provider configured for that protocol (if available)
     - belongs to the specified provider (if provider_id is given)
-    - configured local quota capacity is not exceeded (when
-      quota_estimator is supplied)
+    - when ``local_quota_mode="hard_cap"``, configured local quota
+      capacity is not exceeded (when ``quota_estimator`` is supplied)
+
+    In the default ``local_quota_mode="score_only"`` mode, local quota
+    estimates influence routing rank only and never hard-exclude
+    accounts. Switch to ``"hard_cap"`` to restore the pre-suppression
+    behavior where locally over-quota accounts are excluded.
     """
     eligible: list[AccountRuntimeState] = []
+    apply_local_quota_gate = local_quota_mode == "hard_cap"
     for state in all_states:
         if not state.is_eligible():
             continue
 
-        # Honor operator-configured local quota capacity thresholds
-        # before exposing the account to upstream.  Without this, an
-        # account over its 30-day limit keeps being selected, the
-        # upstream returns 402/429, and only then does the health
-        # manager cool it down.
-        if quota_estimator is not None:
+        # Optional operator opt-in: honor configured local quota
+        # capacity thresholds before exposing the account to upstream.
+        # Without ``hard_cap``, local usage may be high but the account
+        # remains eligible; upstream ``quota_exhausted`` or
+        # ``rate_limited`` health transitions are authoritative.
+        if apply_local_quota_gate and quota_estimator is not None:
             quota = quota_estimator.get_account_quota(state.name)
             if quota is not None and not quota.is_within_limits():
                 continue
