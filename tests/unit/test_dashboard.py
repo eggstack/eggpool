@@ -80,7 +80,7 @@ class TestEscape:
         assert format_microdollars(None) == "$0.000000"
 
     def test_format_tokens(self) -> None:
-        assert format_tokens(1_000_000) == "1,000,000"
+        assert format_tokens(1_000_000) == "1.00 M"
         assert format_tokens(0) == "0"
 
     def test_format_tokens_per_second(self) -> None:
