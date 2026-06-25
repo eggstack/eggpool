@@ -12,6 +12,15 @@ from typing import Any
 
 _PATTERN: re.Pattern[str] = re.compile(r"[^a-zA-Z0-9_-]")
 
+_SCALED_COUNT_UNITS: tuple[tuple[float, str], ...] = (
+    (1_000_000_000_000_000.0, "P"),
+    (1_000_000_000_000.0, "T"),
+    (1_000_000_000.0, "B"),
+    (1_000_000.0, "M"),
+)
+
+_BYTE_UNITS: tuple[str, ...] = ("B", "KB", "MB", "GB", "TB", "PB", "EB")
+
 
 def escape(value: Any) -> str:
     """Escape a value for safe inclusion in HTML.
@@ -38,11 +47,41 @@ def format_microdollars(value: int | float | None) -> str:
     return f"${value / 1_000_000:.6f}"
 
 
-def format_tokens(value: int | None) -> str:
-    """Format a token count with thousands separators."""
+def format_scaled_count(value: int | float | None) -> str:
+    """Format large count-like values with compact SI suffixes.
+
+    Counts below one million stay exact with thousands separators because
+    values like ``47,000`` are still readable and more useful than
+    ``47.00 K``.  Million-scale and larger values are shortened to two
+    decimal places using dashboard-friendly suffixes: M, B, T, and P.
+    """
     if value is None:
         value = 0
-    return f"{int(value):,}"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+    abs_number = abs(number)
+    if abs_number < 1_000_000:
+        return f"{int(number):,}"
+
+    for threshold, suffix in _SCALED_COUNT_UNITS:
+        if abs_number >= threshold:
+            return f"{number / threshold:.2f} {suffix}"
+
+    # Unreachable with the thresholds above, but keep a safe exact fallback.
+    return f"{int(number):,}"
+
+
+def format_tokens(value: int | float | None) -> str:
+    """Format a token count for dashboard display.
+
+    Small counts render exactly with thousands separators.  Large counts
+    scale to M/B/T/P so cache, reasoning, and long-running aggregate token
+    counters remain compact once they reach millions or higher.
+    """
+    return format_scaled_count(value)
 
 
 def format_tokens_per_second(value: float | None) -> str:
@@ -75,21 +114,28 @@ def format_latency(value: float | None) -> str:
 
 
 def format_bytes(value: int | float | None) -> str:
-    """Format a byte count as a human-readable string (B, KB, MB, GB, TB).
+    """Format a byte count as a human-readable string.
 
-    Uses 1000-based (SI) divisions for network bandwidth readability.
+    Uses 1000-based (SI) divisions for network bandwidth readability and
+    scales from B through EB so long-running dashboards do not get stuck
+    displaying only MB- or TB-sized aggregates.
     """
     if value is None:
         value = 0
-    value = float(value)
-    units = ["B", "KB", "MB", "GB", "TB"]
-    for unit in units:
-        if abs(value) < 1000.0 or unit == "TB":
-            if unit == "B":
-                return f"{int(value)} B"
-            return f"{value:.1f} {unit}"
-        value /= 1000.0
-    return f"{value:.1f} PB"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+    unit_index = 0
+    while abs(number) >= 1000.0 and unit_index < len(_BYTE_UNITS) - 1:
+        number /= 1000.0
+        unit_index += 1
+
+    unit = _BYTE_UNITS[unit_index]
+    if unit == "B":
+        return f"{int(number)} B"
+    return f"{number:.1f} {unit}"
 
 
 def format_timestamp(value: Any) -> str:
