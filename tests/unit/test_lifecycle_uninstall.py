@@ -14,6 +14,7 @@ from eggpool.lifecycle.uninstall import (
     EGGPOOL_SHELL_MARKER,
     InstallMethod,
     UninstallPaths,
+    _assert_safe_path,
     _find_pipx_invocation,
     _pipx_uninstall,
     detect_install_method,
@@ -791,3 +792,191 @@ class TestResolveUninstallPaths:
         paths = resolve_uninstall_paths(config, env={})
 
         assert paths.env_path == env
+
+
+# ---------------------------------------------------------------------------
+# _assert_safe_path
+# ---------------------------------------------------------------------------
+
+
+class TestAssertSafePath:
+    def test_rejects_root(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("pathlib.Path.home", lambda: Path("/root"))
+        with pytest.raises(RuntimeError, match="Refusing to delete '/'"):
+            _assert_safe_path(Path("/"), label="test")
+
+    def test_rejects_home_directory(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("pathlib.Path.home", lambda: Path("/Users/testuser"))
+        with pytest.raises(RuntimeError, match="home directory"):
+            _assert_safe_path(Path("/Users/testuser"), label="test")
+
+    def test_rejects_tilde_expansion_to_home(self) -> None:
+        with pytest.raises(RuntimeError, match="home directory"):
+            _assert_safe_path(Path("~"), label="test")
+
+    def test_rejects_system_directory(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("pathlib.Path.home", lambda: Path("/Users/testuser"))
+        with pytest.raises(RuntimeError, match="top-level system directory"):
+            _assert_safe_path(Path("/usr"), label="test")
+
+    def test_rejects_top_level_home_child(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("pathlib.Path.home", lambda: Path("/Users/testuser"))
+        with pytest.raises(RuntimeError, match="top-level directory in your home"):
+            _assert_safe_path(Path("/Users/testuser/.config"), label="test")
+
+    def test_accepts_eggpool_data_dir(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("pathlib.Path.home", lambda: Path("/Users/testuser"))
+        _assert_safe_path(Path("/Users/testuser/.local/share/eggpool"), label="test")
+
+    def test_accepts_nested_tmp_path(self, tmp_path: Path) -> None:
+        target = tmp_path / "eggpool" / "data"
+        target.mkdir(parents=True)
+        _assert_safe_path(target, label="test")
+
+
+# ---------------------------------------------------------------------------
+# _assert_safe_path integration with uninstall()
+# ---------------------------------------------------------------------------
+
+
+class TestUninstallRejectsDangerousPaths:
+    def test_uninstall_rejects_home_as_data_dir(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """If data_dir resolves to $HOME, uninstall must refuse."""
+        config = tmp_path / "config.toml"
+        config.write_text("[server]\n")
+        # Craft a paths object where data_dir == home.
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setattr("pathlib.Path.home", lambda: home)
+        db = home / "usage.sqlite3"
+        db.touch()
+        paths = UninstallPaths(
+            install_method=InstallMethod.PIPX,
+            config_path=config,
+            db_path=db,
+            env_path=None,
+            data_dir=home,
+            binary_path=None,
+            eggpool_dir=None,
+        )
+
+        with pytest.raises(RuntimeError, match="home directory"):
+            uninstall(
+                paths=paths,
+                confirm=lambda _m: True,
+                cleanup_data=True,
+                cleanup_config=False,
+                cleanup_path=False,
+                pipx_runner=MagicMock(return_value=_fake_result(0)),
+            )
+
+    def test_uninstall_rejects_root_as_data_dir(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """If data_dir resolves to /, uninstall must refuse."""
+        config = tmp_path / "config.toml"
+        config.write_text("[server]\n")
+        paths = UninstallPaths(
+            install_method=InstallMethod.PIPX,
+            config_path=config,
+            db_path=Path("/usage.sqlite3"),
+            env_path=None,
+            data_dir=Path("/"),
+            binary_path=None,
+            eggpool_dir=None,
+        )
+
+        with pytest.raises(RuntimeError, match="Refusing to delete '/'"):
+            uninstall(
+                paths=paths,
+                confirm=lambda _m: True,
+                cleanup_data=True,
+                cleanup_config=False,
+                cleanup_path=False,
+                pipx_runner=MagicMock(return_value=_fake_result(0)),
+            )
+
+    def test_uninstall_rejects_home_as_source_dir(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """If eggpool_dir resolves to $HOME, uninstall must refuse."""
+        config = tmp_path / "config.toml"
+        config.write_text("[server]\n")
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setattr("pathlib.Path.home", lambda: home)
+        # Create a valid eggpool project in home so verify_eggpool would pass.
+        (home / "pyproject.toml").write_text(
+            '[project]\nname = "eggpool"\nversion = "0.0.0"\n',
+            encoding="utf-8",
+        )
+        paths = UninstallPaths(
+            install_method=InstallMethod.SOURCE,
+            config_path=config,
+            db_path=home / "usage.sqlite3",
+            env_path=None,
+            data_dir=home,
+            binary_path=None,
+            eggpool_dir=home,
+        )
+
+        with pytest.raises(RuntimeError, match="home directory"):
+            uninstall(
+                paths=paths,
+                confirm=lambda _m: True,
+                cleanup_data=False,
+                cleanup_config=False,
+                cleanup_path=False,
+            )
+
+
+# ---------------------------------------------------------------------------
+# _resolve_db_path rejects dangerous paths from config
+# ---------------------------------------------------------------------------
+
+
+class TestResolveDbPathRejectsDangerous:
+    def test_rejects_home_as_db_path(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Config with [database].path = ~ must raise."""
+        from eggpool.lifecycle.uninstall import _resolve_db_path
+
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setattr("pathlib.Path.home", lambda: home)
+        config = tmp_path / "config.toml"
+        config.write_text(f'[database]\npath = "{home}"\n')
+
+        with pytest.raises(RuntimeError, match="home directory"):
+            _resolve_db_path(config_path=config, env={})
+
+    def test_rejects_root_as_db_path(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Config with [database].path = / must raise."""
+        from eggpool.lifecycle.uninstall import _resolve_db_path
+
+        monkeypatch.setattr("pathlib.Path.home", lambda: Path("/root"))
+        config = tmp_path / "config.toml"
+        config.write_text('[database]\npath = "/"\n')
+
+        with pytest.raises(RuntimeError, match="Refusing to delete '/'"):
+            _resolve_db_path(config_path=config, env={})
+
+    def test_rejects_system_dir_as_db_path(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Config with [database].path = /usr must raise."""
+        from eggpool.lifecycle.uninstall import _resolve_db_path
+
+        monkeypatch.setattr("pathlib.Path.home", lambda: Path("/root"))
+        config = tmp_path / "config.toml"
+        config.write_text('[database]\npath = "/usr"\n')
+
+        with pytest.raises(RuntimeError, match="top-level system directory"):
+            _resolve_db_path(config_path=config, env={})

@@ -424,6 +424,7 @@ def uninstall(
             raise RuntimeError(
                 "Source install detected but no eggpool directory is known."
             )
+        _assert_safe_path(paths.eggpool_dir, label="source checkout directory")
         confirmed = confirm(
             f"Delete the eggpool source checkout at {paths.eggpool_dir}?"
         )
@@ -437,6 +438,7 @@ def uninstall(
                 "Remove it by hand, then re-run with --keep-binary to skip "
                 "this check."
             )
+        _assert_safe_path(paths.binary_path, label="binary")
         confirmed = confirm(f"Delete the eggpool binary at {paths.binary_path}?")
         if not confirmed:
             raise RuntimeError("Uninstall aborted before binary removal.")
@@ -458,6 +460,7 @@ def uninstall(
     if cleanup_data and confirm(
         f"Delete the eggpool data directory at {paths.data_dir}?"
     ):
+        _assert_safe_path(paths.data_dir, label="data directory")
         _safe_rm_tree(paths.data_dir)
 
     if cleanup_path:
@@ -532,7 +535,9 @@ def _resolve_db_path(*, config_path: Path, env: dict[str, str]) -> Path:
     database = cast("dict[str, object]", database_obj)
     path_value_obj: object = database.get("path")
     if isinstance(path_value_obj, str) and path_value_obj.strip():
-        return Path(path_value_obj).expanduser().resolve()
+        db_path = Path(path_value_obj).expanduser().resolve()
+        _assert_safe_path(db_path, label="database path")
+        return db_path
     return Path(DEFAULT_DATABASE_PATH).expanduser().resolve()
 
 
@@ -555,9 +560,54 @@ def _resolve_binary_path() -> Path | None:
     return None
 
 
-def _safe_rm_tree(target: Path) -> None:
+def _assert_safe_path(target: Path, *, label: str) -> None:
+    """Raise ``RuntimeError`` if *target* is a dangerous path to delete.
+
+    This prevents the uninstaller from recursively removing the user's
+    home directory, ``/``, or other critical system paths when config
+    values or path resolution produce an unexpected result.
+    """
+    resolved = target.expanduser().resolve()
+    home = Path.home().resolve()
+
+    # The most dangerous case: the target is / or a parent of /.
+    if resolved == Path("/"):
+        raise RuntimeError(
+            f"Refusing to delete '/' as the {label}. "
+            "Check your configuration — the resolved path is the root directory."
+        )
+
+    # Target is the user's home directory.
+    if resolved == home:
+        raise RuntimeError(
+            f"Refusing to delete your home directory ({home}) as the {label}. "
+            "Check your [database].path setting — it should point to a "
+            "file inside a data directory, not ~ itself."
+        )
+
+    # Target is a direct child of / that looks like a system directory.
+    if resolved.parent == Path("/"):
+        raise RuntimeError(
+            f"Refusing to delete '{resolved}' as the {label}. "
+            "This is a top-level system directory."
+        )
+
+    # Target is a direct child of the home directory that is not an
+    # eggpool-specific path (e.g. ~ itself was already caught above,
+    # but ~/.config, ~/.cache, etc. should also be rejected).
+    if resolved.parent == home:
+        raise RuntimeError(
+            f"Refusing to delete '{resolved}' as the {label}. "
+            "This is a top-level directory in your home and is not "
+            "an eggpool data path."
+        )
+
+
+def _safe_rm_tree(target: Path, *, label: str = "directory") -> None:
     """Recursively delete ``target`` without following symlinks to /."""
-    import contextlib
+    import contextlib  # noqa: PLC0415
+
+    _assert_safe_path(target, label=label)
 
     if not target.exists():
         return
@@ -566,7 +616,7 @@ def _safe_rm_tree(target: Path) -> None:
         return
     for child in target.iterdir():
         if child.is_dir() and not child.is_symlink():
-            _safe_rm_tree(child)
+            _safe_rm_tree(child, label=label)
         else:
             with contextlib.suppress(FileNotFoundError):
                 child.unlink()
