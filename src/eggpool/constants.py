@@ -26,8 +26,57 @@ API_V1_PREFIX = "/v1"
 MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024  # 10 MB
 MAX_SSE_FRAME_SIZE = 64 * 1024  # 64 KB
 
+# ``PID_FILE`` is kept for backwards compatibility with modules that
+# still import it directly. The authoritative resolver is
+# :func:`eggpool.runtime_paths.default_pid_file`, which honours
+# ``$EGGPOOL_PID_FILE``, ``$XDG_RUNTIME_DIR``, and the per-user state
+# directory with a UID-scoped ``/tmp`` fallback. The wrapped property
+# below resolves the live path on every read so tests that monkey-patch
+# environment variables see the updated value.
+# See ``plans/daemon-and-runtime.md`` for the design.
 RUNTIME_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp"))
-PID_FILE = RUNTIME_DIR / "eggpool.pid"
+
+
+class _PIDFileProxy:
+    """Lazy proxy that always resolves through :func:`runtime_paths.default_pid_file`.
+
+    Returning a ``Path`` instance from a class attribute is impossible
+    at import time (the resolver depends on the current environment),
+    so the constant is exposed as a proxy. ``str(PID_FILE)`` and
+    ``PID_FILE / "x"`` both work because the proxy forwards
+    ``__fspath__`` and the path operations fall through to the
+    resolved :class:`pathlib.Path`.
+    """
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._resolve(), name)
+
+    def __fspath__(self) -> str:
+        return str(self._resolve())
+
+    def __truediv__(self, other: object) -> Path:
+        return self._resolve() / other  # type: ignore[operator]
+
+    def __str__(self) -> str:
+        return str(self._resolve())
+
+    def __repr__(self) -> str:
+        return repr(self._resolve())
+
+    def __eq__(self, other: object) -> bool:
+        return self._resolve() == other
+
+    def __hash__(self) -> int:
+        return hash(self._resolve())
+
+    @staticmethod
+    def _resolve() -> Path:
+        from eggpool.runtime_paths import default_pid_file
+
+        return default_pid_file()
+
+
+PID_FILE = _PIDFileProxy()
 
 PLACEHOLDER_API_KEYS: frozenset[str] = frozenset(
     {

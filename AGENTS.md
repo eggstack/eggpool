@@ -107,13 +107,24 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 - `eggpool restart` no longer has inline subprocess logic; it delegates to `runtime.restart_server` which calls `runtime.send_sigterm` and `runtime.start_server` (which `subprocess.Popen`s a new supervisor)
 - `eggpool ensure-running` is the canonical cron watchdog command — it atomically checks-and-starts without ever spawning a duplicate instance. Use it from `@reboot` and `*/5 * * * *` crontab lines, not `croncheck || eggpool serve &`
 
+### Daemon Mode
+
+- Foreground `eggpool serve` remains the debugging/operator path and prints Granian logs to the calling terminal
+- `eggpool serve --daemon` validates the config, refuses to start a second instance, then spawns a detached child and returns promptly with a short success message pointing at the log file
+- The detached child runs the normal foreground `serve` command (Granian supervisor + worker). The `--daemon` flag is **never** forwarded to the child; detachment is purely a parent-side concern. The child owns its own PID file lifecycle via `runtime.write_pid_file()` / `runtime.clear_pid_file()`
+- Default log destination is `~/.local/state/eggpool/eggpool.log`, resolvable via `eggpool.runtime_paths.default_log_file()`. Override with `--log-file PATH` or `$EGGPOOL_LOG_FILE`. A log file beats `/dev/null` by default because a silent background failure is hard to diagnose
+- The child is launched with `start_new_session=True`, `stdin=subprocess.DEVNULL`, and `stdout`/`stderr` redirected to the log file (or `/dev/null` when `--quiet` is set without `--log-file`). The child survives shell exit and signals to the parent CLI do not propagate
+- `runtime.start_server()` signature: `start_server(config_path, *, cwd=None, daemon=True, log_path=None, quiet=True, verify=False, verify_timeout_s=3.0)`. `runtime.restart_server()` accepts the same `daemon`, `log_path`, `quiet` options
+- `serve --daemon` refuses to daemonize when the effective UID is 0 unless `--as-root` is passed (prevents accidental root personal deployment)
+- Systemd should **not** use `--daemon`. The systemd unit already owns the process lifecycle; run foreground `serve` and let systemd manage the PID, journal logs, and restart policy
+
 ## CLI Commands
 
 | Command | Description |
 |---------|-------------|
 | `eggpool help` | Show help message and available commands |
 | `eggpool version` | Print the installed version |
-| `eggpool serve` | Start the aggregation proxy server (default command) |
+| `eggpool serve` | Start the aggregation proxy server (default command). Flags: `--daemon`, `--log-file PATH`, `--quiet`, `--as-root` (see [Process Model / Daemon Mode](#daemon-mode)) |
 | `eggpool check-config` | Validate the configuration file |
 | `eggpool migrate` | Run database migrations |
 | `eggpool onboard` | Run the interactive onboarding setup (connect providers, start server) |

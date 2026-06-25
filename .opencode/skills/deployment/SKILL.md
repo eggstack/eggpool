@@ -138,6 +138,29 @@ removed automatically).
 - `eggpool restart` delegates to `runtime.restart_server`, which calls `runtime.send_sigterm` and `runtime.start_server` (a `subprocess.Popen` of a new supervisor). There is no inline subprocess logic in the CLI command itself
 - Cron-driven watchdog entries should call `eggpool ensure-running` (not `croncheck || eggpool serve &`). `ensure-running` atomically checks-and-starts without ever spawning a duplicate instance and uses the stdlib-only fast-path CLI so the cron tick is cheap. See `plans/lightweight-cli-watchdog.md`
 
+### Daemon Mode for Personal Use
+
+For personal / SBC deployments that are not managed by systemd, `eggpool serve` exposes a `--daemon` flag that spawns a detached supervisor in the background and returns the shell promptly:
+
+```bash
+eggpool --config config.toml serve --daemon
+```
+
+The detached child runs the normal foreground `serve` command (Granian supervisor + worker). The `--daemon` flag is never forwarded to the child; detachment is purely a parent-side concern. The child detaches via `start_new_session=True` with `stdin=subprocess.DEVNULL` and `stdout`/`stderr` redirected to a log file (or `/dev/null` when `--quiet` is set without `--log-file`). The child survives shell exit and signals to the parent CLI do not propagate.
+
+Default log destination is `~/.local/state/eggpool/eggpool.log`, resolvable via `eggpool.runtime_paths.default_log_file()`. A log file beats `/dev/null` by default because a silent background failure is hard to diagnose. Override via:
+
+- `--log-file PATH` on the CLI, or
+- `$EGGPOOL_LOG_FILE` in the environment
+
+To suppress the log file and send the daemon's stdout/stderr to `/dev/null`, pass `--quiet`. The flag has no effect without `--daemon`; the foreground command always streams to the calling terminal so the operator can see Granian's output.
+
+`serve --daemon` refuses to run as root unless `--as-root` is passed. This prevents accidentally starting a personal deployment as root; the explicit flag exists for intentional system-wide installs.
+
+Systemd should **not** use `--daemon`. The systemd unit already manages the process lifecycle; run foreground `serve` and let systemd own the supervisor PID, journal logs, and restart policy. The `croncheck` / `ensure-running` watchdog path remains the canonical way to auto-restart the server on a non-systemd host; `serve --daemon` is the explicit one-shot for starting the server detached from an interactive shell.
+
+See `plans/daemon-and-runtime.md` for the full design.
+
 ## Filesystem Layout
 
 ```

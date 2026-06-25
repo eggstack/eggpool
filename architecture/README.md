@@ -305,6 +305,73 @@ EggPool supports configurable effective context limits per model per provider, a
 
 `eggpool configsetup opencode --json-only` generates OpenCode provider config with explicit `limit.context`, `limit.input`, and `limit.output` per model. This drives OpenCode's native compaction machinery.
 
+## Daemon Mode
+
+`eggpool serve --daemon` is a one-shot detach helper for personal / SBC
+deployments. It validates the configuration, refuses to start a second
+instance, spawns a detached child running the normal foreground `serve`
+command, and returns promptly with a short success message pointing at
+the log file.
+
+The parent only validates the config and refuses to start a second
+instance. The detached child runs the foreground supervisor (Granian +
+worker) unchanged. The `--daemon` flag is **never** forwarded to the
+child; detachment is purely a parent-side concern. The child owns its
+own PID file lifecycle via `runtime.write_pid_file()` /
+`runtime.clear_pid_file()`.
+
+### Detach mechanics
+
+- `start_new_session=True` so the child survives shell exit and signals to the parent CLI do not propagate
+- `stdin=subprocess.DEVNULL` to detach from the calling terminal
+- `stdout`/`stderr` redirected to a log file (or `/dev/null` when `--quiet` is set without `--log-file`)
+- Default log file: `~/.local/state/eggpool/eggpool.log` (resolvable via `eggpool.runtime_paths.default_log_file()`); override with `--log-file PATH` or `$EGGPOOL_LOG_FILE`. A log file beats `/dev/null` by default because a silent background failure is hard to diagnose
+- The `subprocess.Popen` handle is intentionally not awaited by the CLI parent; the parent returns as soon as the child has been spawned
+
+### PID file resolution
+
+PID file path resolution lives in `eggpool.runtime_paths.default_pid_file()` and is the single source of truth shared by `serve`, `serve --daemon`, `croncheck`, `ensure-running`, `stop`, `restart`, systemd, and the cron watchdog. Precedence:
+
+1. `$EGGPOOL_PID_FILE` (if set)
+2. `$XDG_RUNTIME_DIR/eggpool.pid` (if `XDG_RUNTIME_DIR` is set)
+3. `~/.local/state/eggpool/eggpool.pid` (state dir auto-created)
+4. `/tmp/eggpool-<UID>.pid` (UID-scoped fallback)
+
+The `eggpool.constants.PID_FILE` constant is now a `_PIDFileProxy` that
+resolves through `default_pid_file()` on every read, so the constant
+inherits the same resolver for backwards compatibility with code that
+imports it directly.
+
+### Root-user guard
+
+`serve --daemon` refuses to daemonize when the effective UID is 0 unless
+`--as-root` is passed. This prevents accidentally starting a personal
+deployment as root; the explicit flag exists for intentional system-wide
+installs. systemd production deployments should run foreground `serve`
+under the systemd unit (with `User=` set) and must not use `--daemon`.
+
+### `runtime.start_server()` signature
+
+`runtime.start_server()` accepts:
+
+```python
+def start_server(
+    config_path: str,
+    *,
+    cwd: str | None = None,
+    daemon: bool = True,
+    log_path: str | None = None,
+    quiet: bool = True,
+    verify: bool = False,
+    verify_timeout_s: float = 3.0,
+) -> subprocess.Popen[bytes]:
+    ...
+```
+
+`runtime.restart_server()` accepts the same `daemon`, `log_path`, and
+`quiet` options. The CLI flags `eggpool serve --daemon`, `--log-file`,
+`--quiet`, and `--as-root` map directly to these parameters.
+
 ## Security
 
 - Local client credentials are stripped before upstream forwarding

@@ -139,7 +139,7 @@ uv run eggpool connect list
 |---------|-------------|
 | `eggpool help` | Show help message and available commands |
 | `eggpool version` | Print the installed version |
-| `eggpool serve` | Start the aggregation proxy server (default command) |
+| `eggpool serve` | Start the aggregation proxy server (default command). Use `--daemon` to detach into the background (see [Daemon Mode](#daemon-mode)). |
 | `eggpool check-config` | Validate the configuration file |
 | `eggpool migrate` | Run database migrations |
 | `eggpool onboard` | Run the interactive onboarding setup (connect providers, start server) |
@@ -177,6 +177,43 @@ All commands accept `--config /path/to/config.toml` (defaults to `config.toml`).
 Running `eggpool` with no arguments prints the help message.
 Configuration changes require a service restart; live reload is intentionally
 not supported.
+
+## Daemon Mode
+
+For personal / SBC deployments where you want to start EggPool and get your
+shell back, `eggpool serve` accepts a `--daemon` flag that spawns a detached
+supervisor in the background and returns promptly:
+
+```bash
+eggpool --config config.toml serve --daemon
+```
+
+The daemon parent only validates the config and refuses to start a second
+instance. The detached child runs the normal foreground `serve` command
+(including the Granian supervisor + worker); the `--daemon` flag is **not**
+forwarded to the child, so child behavior is identical to running `eggpool
+serve` directly.
+
+Flags:
+
+- `--daemon` — spawn the detached supervisor and return the shell. Without this flag, `serve` blocks on Granian and prints logs to the terminal.
+- `--log-file PATH` — redirect the supervisor's stdout/stderr to `PATH`. Defaults to `~/.local/state/eggpool/eggpool.log` (resolvable via `eggpool.runtime_paths.default_log_file()`; honors `$EGGPOOL_LOG_FILE`). The default is intentional: a background start that fails silently is hard to diagnose, so a log file beats `/dev/null`.
+- `--quiet` — with `--daemon` and no `--log-file`, send the supervisor's stdout/stderr to `/dev/null`. Has no effect without `--daemon`; the foreground command always streams to the terminal.
+- `--as-root` — allow daemonizing when the effective UID is 0. Refused by default to prevent accidentally starting a personal deployment as root. Pass this flag for intentional system-wide installs.
+
+The child's stdin is closed (`subprocess.DEVNULL`) and stdout/stderr are
+redirected to the configured log file (or `/dev/null` when `--quiet` is set
+without `--log-file`). The child detaches via `start_new_session=True` so it
+survives shell exit and signals to the parent CLI do not propagate to it.
+
+Systemd units should **not** use `--daemon`. The systemd unit already
+manages the process lifecycle; run foreground `serve` and let systemd
+own the supervisor PID, journal logs, and restart policy.
+
+The cron watchdog command `eggpool ensure-running` continues to work the
+same way; `serve --daemon` is the explicit operator-facing one-shot for
+starting the server detached (e.g. from an interactive shell after a
+fresh install).
 
 ## Operational Scripts
 

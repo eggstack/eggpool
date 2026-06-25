@@ -143,21 +143,21 @@ def run_onboarding(config_path: str, providers_path: str | None = None) -> None:
         return
 
     # Check if server is already running before starting
-    from eggpool.constants import PID_FILE
+    from eggpool.runtime_paths import default_pid_file, read_pid_file
 
-    if PID_FILE.exists():
-        try:
-            pid = int(PID_FILE.read_text(encoding="utf-8").strip())
-            import os as _os
-
-            _os.kill(pid, 0)  # Check if process exists
-            sys.stdout.write(
-                "\nServer is already running. "
-                "Use 'eggpool restart' to apply configuration changes.\n"
-            )
-            return
-        except (ValueError, ProcessLookupError, PermissionError, OSError):
-            pass  # Stale PID file, continue to start
+    pid_file = default_pid_file()
+    if pid_file.exists():
+        pid = read_pid_file(pid_file)
+        if pid is not None:
+            try:
+                os.kill(pid, 0)  # Check if process exists
+                sys.stdout.write(
+                    "\nServer is already running. "
+                    "Use 'eggpool restart' to apply configuration changes.\n"
+                )
+                return
+            except (ProcessLookupError, PermissionError, OSError):
+                pass  # Stale PID file, continue to start
 
     # Start the server
     sys.stdout.write("\n--- Starting Server ---\n")

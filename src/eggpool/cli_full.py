@@ -108,23 +108,98 @@ def _app_loader(target: str) -> Any:
 
 
 @cli.command()
+@click.option(
+    "--daemon",
+    "daemon",
+    is_flag=True,
+    help=(
+        "Spawn a detached supervisor in the background and return the "
+        "shell promptly. The child runs the normal foreground `serve` "
+        "command; stdin is closed and stdout/stderr are redirected to "
+        "the daemon log file (see --log-file). Use this for personal / "
+        "SBC deployments. Systemd units should NOT use --daemon; run "
+        "foreground `serve` and let systemd manage the process."
+    ),
+)
+@click.option(
+    "--log-file",
+    "log_file",
+    default=None,
+    type=click.Path(dir_okay=False, writable=True),
+    help=(
+        "Log destination for the detached supervisor when --daemon is "
+        "set. Defaults to $EGGPOOL_LOG_FILE, otherwise the resolver's "
+        "state-dir log (~/.local/state/eggpool/eggpool.log). Ignored "
+        "without --daemon; the foreground command always logs to the "
+        "calling terminal."
+    ),
+)
+@click.option(
+    "--quiet",
+    "quiet",
+    is_flag=True,
+    help=(
+        "With --daemon, send the supervisor's stdout/stderr to "
+        "/dev/null when no log file is configured. Has no effect "
+        "without --daemon; foreground `serve` always streams to the "
+        "terminal so the operator can see Granian's output."
+    ),
+)
+@click.option(
+    "--as-root",
+    "as_root",
+    is_flag=True,
+    help=(
+        "Allow --daemon to start when the current effective UID is 0. "
+        "Refused by default to prevent accidentally daemonizing a "
+        "personal deployment as root; use this flag for intentional "
+        "system-wide installs."
+    ),
+)
 @click.pass_context
-def serve(ctx: click.Context) -> None:
+def serve(
+    ctx: click.Context,
+    daemon: bool,
+    log_file: str | None,
+    quiet: bool,
+    as_root: bool,
+) -> None:
     """Start the aggregation proxy server.
 
-    This process is the Granian supervisor. Granian keeps ``workers=1``
-    so the total process count is two (supervisor + one worker) plus
-    a small thread pool sized by ``[server].threads``. The supervisor
-    owns the PID file: it writes ``os.getpid()`` before
+    Foreground mode (the default) is the Granian supervisor. Granian
+    keeps ``workers=1`` so the total process count is two (supervisor
+    + one worker) plus a small thread pool sized by ``[server].threads``.
+    The supervisor owns the PID file: it writes ``os.getpid()`` before
     ``Granian.serve()`` and clears the file when Granian returns. The
     ASGI worker is a child of the supervisor and never touches the
     PID file, so ``eggpool stop`` always signals the right process.
-    """
-    from granian import Granian  # type: ignore[import-untyped]
 
+    Daemon mode (``--daemon``) is a one-shot detach: this process
+    validates the config, refuses to start a second instance, and
+    spawns a detached child that runs the normal foreground
+    supervisor. The child writes its own PID file and clears it on
+    exit. The parent returns promptly with a short success message
+    pointing at the log file. The child is **not** passed any
+    ``--daemon`` flag; detachment is purely a parent-side concern.
+    See ``plans/daemon-and-runtime.md`` for the full design.
+    """
     from eggpool import runtime
 
     config_path: str = ctx.obj["config_path"]
+
+    if daemon and os.geteuid() == 0 and not as_root:
+        click.echo(
+            "Error: refusing to daemonize as root for personal deployment.\n"
+            "  Run as your normal user, or pass --as-root if this is intentional.",
+            err=True,
+        )
+        sys.exit(1)
+
+    if daemon:
+        _serve_daemon(ctx, config_path, log_file=log_file, quiet=quiet)
+        return
+
+    from granian import Granian  # type: ignore[import-untyped]
 
     try:
         config = AppConfig.from_toml(config_path)
@@ -185,6 +260,81 @@ def serve(ctx: click.Context) -> None:
         ).serve(target_loader=_app_loader)  # type: ignore[reportArgumentType]
     finally:
         runtime.clear_pid_file()
+
+
+def _serve_daemon(
+    ctx: click.Context,
+    config_path: str,
+    *,
+    log_file: str | None,
+    quiet: bool,
+) -> None:
+    """Spawn a detached ``serve`` supervisor and report success.
+
+    The parent only validates the config and refuses to start a second
+    instance. The child is the normal foreground ``serve`` command; it
+    owns its own PID file lifecycle and log destination. The parent
+    does **not** wait for the child to come up before returning -- the
+    operator can ``eggpool croncheck`` (or read the log) to confirm.
+    """
+    from eggpool import runtime
+    from eggpool.runtime_paths import default_log_file, default_pid_file
+
+    try:
+        config = AppConfig.from_toml(config_path)
+    except AggregatorError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
+    try:
+        config.validate_account_credentials()
+    except AggregatorError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
+    # Refuse to start a second instance. The PID file is the primary
+    # signal, but we also probe /v1/healthz so a server started by a
+    # different installation (or that escaped the supervisor's
+    # lifecycle) is still detected.
+    existing_pid = runtime.read_pid()
+    if existing_pid is not None and runtime.is_process_running(existing_pid):
+        click.echo(
+            f"Error: server is already running (PID {existing_pid}).\n"
+            "  Run `eggpool stop` or `eggpool restart` to manage it.",
+            err=True,
+        )
+        sys.exit(1)
+    if runtime.probe_healthz(config.server.host, config.server.port):
+        click.echo(
+            f"Error: another process is already serving "
+            f"{config.server.host}:{config.server.port}.\n"
+            "  Run `eggpool stop` or use a different host/port.",
+            err=True,
+        )
+        sys.exit(1)
+    runtime.clear_pid_file()
+
+    pid_file = default_pid_file()
+    log_target = Path(log_file) if log_file else default_log_file()
+
+    try:
+        proc = runtime.start_server(
+            config_path,
+            daemon=True,
+            log_path=str(log_target),
+            quiet=quiet,
+        )
+    except (OSError, FileNotFoundError) as exc:
+        click.echo(f"Error: failed to start server: {exc}", err=True)
+        sys.exit(1)
+
+    click.echo(f"Spawned eggpool supervisor (PID {proc.pid}).")
+    click.echo(f"  PID file: {pid_file}")
+    click.echo(f"  Log file: {log_target}")
+    click.echo(
+        "  Tail the log or run `eggpool croncheck` to confirm the "
+        "supervisor finished starting up."
+    )
 
 
 @cli.group(invoke_without_command=True)
@@ -1983,20 +2133,19 @@ def croncheck(ctx: click.Context) -> None:
     Designed for cron jobs that should restart a stopped server.
     Uses only the PID file and a kill probe — no network I/O.
     """
-    from eggpool.constants import PID_FILE
+    from eggpool.runtime_paths import default_pid_file, read_pid_file
 
-    if not PID_FILE.exists():
+    pid_file = default_pid_file()
+    if not pid_file.exists():
         sys.exit(1)
 
-    try:
-        pid = int(PID_FILE.read_text(encoding="utf-8").strip())
-    except (ValueError, OSError):
+    pid = read_pid_file(pid_file)
+    if pid is None:
         sys.exit(1)
 
     if _is_process_running(pid):
         sys.exit(0)
-    else:
-        sys.exit(1)
+    sys.exit(1)
 
 
 @cli.command("ensure-running")

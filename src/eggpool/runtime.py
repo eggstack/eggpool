@@ -7,7 +7,7 @@ duplicated across ``eggpool.cli`` and ``eggpool.providers.connect``:
 - checking whether a PID is alive
 - waiting for a process to exit
 - probing the data plane for an already-running server
-- starting the server in the background
+- starting the server in the background (foreground or daemon mode)
 - restarting the running server
 
 The PID file is owned by the **supervisor** process: the CLI's
@@ -19,14 +19,26 @@ processes cleanly. See ``plans/fix_granian_single_process.md`` for
 the full design.
 
 Putting these helpers in one place ensures consistent behavior
-(timeout handling, error reporting, cleanup of stale PID files) and
-avoids the drift that had accumulated in the old inline
-implementations.
+(timeout handling, error reporting, cleanup of stale PID files,
+daemon-mode log redirection) and avoids the drift that had
+accumulated in the old inline implementations.
+
+Daemon mode
+-----------
+``start_server(..., daemon=True)`` spawns a detached supervisor that
+runs the normal foreground ``serve`` command. The child's stdin is
+closed (``/dev/null``) and stdout/stderr are appended to a log file
+under the operator's state directory, so the spawning shell is not
+tied to the new process and Granian logs survive a closed terminal.
+The child command is **not** passed any ``--daemon`` flag; the
+detachment is purely a parent-side concern. See
+``plans/daemon-and-runtime.md`` for the full design.
 """
 
 from __future__ import annotations
 
 import contextlib
+import io
 import logging
 import os
 import signal
@@ -36,25 +48,36 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Final
+from typing import IO, Final
 
 logger = logging.getLogger(__name__)
 
 
 DEFAULT_SHUTDOWN_TIMEOUT_S = 10.0
 DEFAULT_HEALTH_PROBE_TIMEOUT_S: Final = 1.0
+DEFAULT_DAEMON_VERIFY_TIMEOUT_S: Final = 3.0
 
 
 def _pid_file() -> Path:
-    """Resolve the live PID file path from ``eggpool.constants``.
+    """Resolve the live PID file path from :data:`eggpool.constants.PID_FILE`.
 
-    Imported lazily on each call so tests that monkey-patch
-    ``eggpool.constants.PID_FILE`` see the patched value instead of the
-    one captured at import time.
+    The constant is a lazy proxy that resolves through
+    :func:`eggpool.runtime_paths.default_pid_file` on every read, so
+    tests that monkey-patch ``eggpool.constants.PID_FILE`` with a
+    concrete :class:`pathlib.Path` still work unchanged: the proxy is
+    replaced by the test value and the runtime helpers consume the
+    test path directly. The proxy default ensures production callers
+    always see the current ``$EGGPOOL_PID_FILE`` / ``$XDG_RUNTIME_DIR``
+    / state-dir / ``/tmp/<UID>`` precedence without re-implementing
+    the resolver at every call site.
+
+    Imported lazily on each call so tests that monkey-patch the
+    constant see the patched value instead of the one captured at
+    import time.
     """
     from eggpool.constants import PID_FILE
 
-    return PID_FILE
+    return Path(os.fspath(PID_FILE))
 
 
 def read_pid() -> int | None:
@@ -173,8 +196,61 @@ def stop_server(timeout: float = DEFAULT_SHUTDOWN_TIMEOUT_S) -> bool:
     return False
 
 
-def start_server(
-    config_path: str, *, cwd: str | None = None
+def _resolve_daemon_log_path(log_path: str | None, *, quiet: bool) -> Path | None:
+    """Pick a concrete log file path for daemon mode.
+
+    Precedence: explicit ``log_path`` argument, ``$EGGPOOL_LOG_FILE``,
+    the resolver's default state-dir log. Returns ``None`` only when
+    ``quiet=True`` and the operator did not specify any path, in which
+    case the child should have its stdout/stderr sent to ``/dev/null``.
+    """
+    if log_path:
+        path = Path(log_path)
+        with contextlib.suppress(OSError):
+            path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    if quiet:
+        return None
+
+    from eggpool.runtime_paths import default_log_file
+
+    return default_log_file()
+
+
+def _open_daemon_streams(
+    log_path: Path | None, *, quiet: bool
+) -> tuple[IO[bytes] | int, IO[bytes] | int]:
+    """Open stdout/stderr targets for the daemon child.
+
+    Returns ``(stdout, stderr)`` as either a ``Path``-backed append
+    handle or ``subprocess.DEVNULL``. When ``quiet=True`` and no
+    ``log_path`` was supplied, both streams go to ``/dev/null`` so the
+    spawning shell is not tied to the child. The file handles returned
+    here are owned by the caller; the child inherits the underlying
+    file descriptor and the caller is responsible for closing the
+    Python handle after ``Popen`` has duplicated it.
+    """
+    if log_path is not None:
+        handle = open(log_path, "ab")  # noqa: SIM115 - intentional append
+        return handle, handle
+    if quiet:
+        return subprocess.DEVNULL, subprocess.DEVNULL
+    # No log file and not quiet: still detach from the parent terminal
+    # so the spawning shell is not blocked on a stdout pipe. Operators
+    # who want a log file can set $EGGPOOL_LOG_FILE or pass --log-file.
+    return subprocess.DEVNULL, subprocess.DEVNULL
+
+
+def start_server(  # noqa: PLR0913 - daemon options are explicit by design
+    config_path: str,
+    *,
+    cwd: str | None = None,
+    daemon: bool = True,
+    log_path: str | None = None,
+    quiet: bool = True,
+    verify: bool = False,
+    verify_timeout_s: float = DEFAULT_DAEMON_VERIFY_TIMEOUT_S,
 ) -> subprocess.Popen[bytes]:
     """Spawn a fresh server in the background.
 
@@ -185,18 +261,99 @@ def start_server(
     calling ``Granian(...).serve()`` and clears the file in a
     ``finally`` block. The caller can wait on the returned handle if
     it needs to surface the exit code; the typical CLI path does not.
+
+    Daemon behavior
+    ---------------
+    When ``daemon=True`` (the default), the child is launched with
+    stdin closed and stdout/stderr redirected away from the parent
+    terminal. The child command itself is **always** the normal
+    foreground ``serve`` invocation; the ``--daemon`` flag is never
+    forwarded to the child. Log destination precedence:
+
+    1. ``log_path`` argument
+    2. ``$EGGPOOL_LOG_FILE`` (via :func:`runtime_paths.default_log_file`)
+    3. ``~/.local/state/eggpool/eggpool.log`` (the resolver default)
+
+    When ``quiet=True`` and no log path is supplied, the streams go to
+    ``/dev/null``. When ``quiet=False``, an unset log path still
+    detaches from the terminal; operators who want Granian logs
+    captured to disk must supply ``log_path`` or set the env var.
+
+    When ``verify=True``, the call returns only after the child has
+    written its PID file or the verify timeout has elapsed. The
+    verify is best-effort: a slow supervisor that fails to write the
+    PID file within the timeout is still considered a successful
+    spawn, because the supervisor may legitimately take a few seconds
+    to parse its config and start Granian.
+
+    The function raises :class:`OSError` (or a subclass) when the
+    spawn itself fails. Permission errors opening the log file and
+    missing executables both surface as ``OSError``/``FileNotFoundError``
+    and are not caught here.
     """
     resolved = str(Path(config_path).resolve())
     argv = [sys.executable, "-m", "eggpool", "--config", resolved, "serve"]
-    return subprocess.Popen(  # noqa: S602,S603 - intentional spawn
-        argv,
-        cwd=cwd or os.getcwd(),
-        start_new_session=True,
-    )
+
+    if not daemon:
+        return subprocess.Popen(  # noqa: S602,S603 - intentional spawn
+            argv,
+            cwd=cwd or os.getcwd(),
+            start_new_session=True,
+        )
+
+    log_target = _resolve_daemon_log_path(log_path, quiet=quiet)
+    stdout_target, stderr_target = _open_daemon_streams(log_target, quiet=quiet)
+    try:
+        proc = subprocess.Popen(  # noqa: S602,S603 - intentional spawn
+            argv,
+            cwd=cwd or os.getcwd(),
+            stdin=subprocess.DEVNULL,
+            stdout=stdout_target,
+            stderr=stderr_target,
+            start_new_session=True,
+        )
+    finally:
+        # Close the parent's copy of the file descriptor once Popen has
+        # duplicated it into the child. The child still has its own
+        # open handle, so the log file is not orphaned; the parent no
+        # longer holds a Python-level reference to it.
+        if log_target is not None:
+            for stream in (stdout_target, stderr_target):
+                if isinstance(stream, io.IOBase):
+                    with contextlib.suppress(OSError):
+                        stream.close()
+
+    if verify:
+        _wait_for_pid_file(verify_timeout_s)
+
+    return proc
+
+
+def _wait_for_pid_file(timeout_s: float) -> bool:
+    """Wait up to ``timeout_s`` for the supervisor's PID file to appear.
+
+    Returns ``True`` when the file exists and contains a parseable PID
+    within the timeout, ``False`` otherwise. A parseable PID does not
+    imply the process is alive; the caller's downstream probe handles
+    liveness.
+    """
+    from eggpool.runtime_paths import default_pid_file, read_pid_file
+
+    deadline = time.monotonic() + max(0.0, timeout_s)
+    while time.monotonic() < deadline:
+        if read_pid_file(default_pid_file()) is not None:
+            return True
+        time.sleep(0.05)
+    return False
 
 
 def restart_server(
-    config_path: str, timeout: float = DEFAULT_SHUTDOWN_TIMEOUT_S
+    config_path: str,
+    timeout: float = DEFAULT_SHUTDOWN_TIMEOUT_S,
+    *,
+    daemon: bool = True,
+    log_path: str | None = None,
+    quiet: bool = True,
 ) -> bool:
     """Stop the running server (if any) and start a new one.
 
@@ -207,6 +364,11 @@ def restart_server(
     not from the worker PID (the lifespan no longer touches the PID
     file). Stopping the supervisor also tears down its worker, so
     the restart is clean.
+
+    The new supervisor is launched with the same daemon/log options
+    the operator would have used for ``eggpool serve --daemon``; the
+    restart is always detached. Pass ``daemon=False`` only for tests
+    that need to drive the supervisor synchronously.
     """
     pid = read_pid()
     if pid is None or not is_process_running(pid):
@@ -224,5 +386,10 @@ def restart_server(
         return False
 
     clear_pid_file()
-    start_server(config_path)
+    start_server(
+        config_path,
+        daemon=daemon,
+        log_path=log_path,
+        quiet=quiet,
+    )
     return True
