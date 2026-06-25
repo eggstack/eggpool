@@ -7,26 +7,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- 503 saturation after several minutes of streaming load. Streaming
-  request finalization is now wrapped in `asyncio.shield(asyncio.wait_for(..., timeout=10))`
-  so ASGI task cancellation cannot kill the finalizer while it holds
-  the SQLite connection lock. A periodic `stale_request_finalizer`
-  background task force-finalizes any request that has been `pending`
-  longer than `upstream.read_timeout_s` and reconciles the in-memory
-  active-count and quota-reservation caches. Startup `_crash_recovery`
-  no longer time-gates its sweep — a process restart is treated as a
-  definitive boundary, so every leaked pending request and every active
-  reservation from the previous process is recovered on boot.
+## [0.3.0] - 2026-06-25
 
 ### Added
 
-- `app._finalize_stale_requests_once()` exposed for one-off operator
-  invocations and tests; the periodic `_finalize_stale_requests()`
-  loop schedules it every 60 seconds. New migration `0025_stale_request_index.sql`
-  documents the `idx_requests_status_started` index anchor for the
-  safety-net sweep (the index itself was created by migration 0004).
+- **Daemon mode**: `eggpool serve --daemon` spawns a detached supervisor
+  and returns the shell promptly. The child runs the normal foreground
+  `serve` command (Granian supervisor + worker); `--daemon` is never
+  forwarded. Flags: `--log-file PATH`, `--quiet`, `--as-root`. Default
+  log destination is `~/.local/state/eggpool/eggpool.log`.
+- **Fast-path CLI**: `eggpool ensure-running` and `eggpool croncheck`
+  are dispatched without importing Click via `eggpool.fastcli`. Both
+  modules are stdlib-only, keeping cron watchdog ticks cheap on
+  Raspberry Pi-class hardware.
+- **`eggpool runtime-status`**: compact terminal health summary from
+  the running server (process topology, memory, background tasks,
+  database health, in-flight requests). Supports `--json` for
+  scripting.
+- **Grouped timeseries dashboard**: stacked-bar chart on `/timeseries`
+  with groupable dimensions (`provider_model`, `provider`, `model`,
+  `account`), top-N + Other folding, per-bucket detail table, and
+  interactive controls for period, bucket, group_by, metric, and
+  limit. Backed by `/api/timeseries/grouped`.
+- **Metrics dashboard**: reliability page (attempt success/retry
+  breakdown, `retry_category` distribution, pending health, operational
+  events), routing page (per-`(model, provider)` decision aggregates,
+  account selection counts, exclusion taxonomy), traces page
+  (auth-gated recent request metadata), latency phase decomposition
+  (`upstream_connect_ms`, `upstream_read_ms`, `coordinator_overhead_ms`).
+- **CSS tooltip system**: pure-CSS `[data-tooltip]` bubbles on heatmap
+  cells, column headers, topbar controls, and status badges. No
+  JavaScript; survives overview auto-refresh `innerHTML` swap.
+- **Upstream-authoritative suppression**: local quota estimates are
+  advisory by default (`local_quota_mode = "score_only"`). Above-capacity
+  accounts stay eligible; only upstream-observed failures (429/402/5xx/auth)
+  and explicit operator disablement suppress routing. Opt in to legacy
+  behavior via `local_quota_mode = "hard_cap"`.
+- **Runtime/ops metrics**: `/api/stats/runtime` endpoint exposes
+  process topology, memory, background task state, database health,
+  and in-flight request counts. `/runtime` dashboard page renders
+  these metrics.
+- **Attempt analytics**: per-attempt aggregates including latency
+  percentiles, byte totals, retry rate, and `retry_category`
+  distribution. Every `request_attempts` row carries
+  `provider_id/model_id/protocol/retry_category/release_reason/bytes_received/latency_ms/streamed/is_retry_outcome`.
+- **Routing analytics**: per-`(model, provider)` decision aggregates,
+  account-level selection counts, and per-`(account, reason)` exclusion
+  counts. Every routing decision persisted to `routing_decisions` in
+  the same transaction as the `request_attempts` INSERT.
+- **Operational health**: `crash_recovery`, `stale_request_finalizer`,
+  and `reservation_reconcile` safety-net events recorded as
+  `operational_events` rows.
+- **Pricing provenance**: `source_detail` and `source_confidence`
+  columns on `model_price_snapshots` for dashboard attribution.
+  Migration `0031_price_snapshot_provenance.sql`.
+- **Pricing alias registry**: maps upstream model IDs to external
+  catalog IDs with `exact`/`curated_alias`/`ambiguous_skip` confidence.
+  Migration `0030_model_pricing_aliases.sql`. Seeded idempotently at
+  startup.
+- **Install/deploy simplification**: `eggpool deploy systemd --install`
+  personal mode auto-detects user, binary, and config paths.
+  `eggpool deploy backup-cron` and `eggpool deploy all` for complete
+  lifecycle management.
+- `eggpool stats recompute-costs [--dry-run|--apply] [--limit N]`
+  operator escape hatch for fixing inflated cost totals after resolver
+  upgrades.
+- `eggpool init-config` writes bundled `config.example.toml` to
+  current directory or target path.
+
+### Fixed
+
+- 503 saturation after several minutes of streaming load. Streaming
+  request finalization is now wrapped in
+  `asyncio.shield(asyncio.wait_for(..., timeout=10))` so ASGI task
+  cancellation cannot kill the finalizer while it holds the SQLite
+  connection lock. A periodic `stale_request_finalizer` background
+  task force-finalizes any request that has been `pending` longer than
+  `upstream.read_timeout_s` and reconciles the in-memory active-count
+  and quota-reservation caches. Startup `_crash_recovery` no longer
+  time-gates its sweep — a process restart is treated as a definitive
+  boundary, so every leaked pending request and every active
+  reservation from the previous process is recovered on boot.
+- MiMo-style cost inflation via provider-aware pricing resolution.
+  The resolver now correctly handles cached-token-heavy models where
+  upstream metadata reports different pricing than the external catalog.
+- Stale `format_tokens` assertion after unit-scaling rewrite.
+- MiniMax and GeneralCompute provider contract alignment: auth headers,
+  URL composition, and static model seeding now match the documented
+  contracts.
+
+### Changed
+
+- `eggpool serve` runs as a single supervisor process invoking Granian
+  with `workers=1`. The supervisor owns the PID file; the FastAPI
+  lifespan no longer touches it.
+- `eggpool restart` delegates to `runtime.restart_server` instead of
+  inlining subprocess logic.
+- AGENTS.md trimmed to point to skills for details; CLI commands
+  table expanded to cover all 35+ commands.
 
 ## [0.2.2] - 2026-06-25
 
