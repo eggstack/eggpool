@@ -251,6 +251,17 @@ The dashboard includes:
 - Timeseries charts with auto-refresh
 - Interactive theme selector with 50+ [Halloy](https://themes.halloy.chat/) themes
 
+### Dashboard Tooltips
+
+Heatmap cells, sortable column headers, topbar controls (refresh, theme,
+period), and account/model status badges expose short descriptions on hover
+through a pure-CSS `[data-tooltip]` system. The bubble re-themes
+automatically via the existing `--card-bg`, `--card-border`, and
+`--page-text` CSS variables; every tooltip target also sets `aria-label`
+so screen readers announce the same text. The native `<title>` element is
+preserved on SVG cells as a fallback. The system is JavaScript-free and
+survives the overview page auto-refresh `innerHTML` swap.
+
 Static assets (CSS, JavaScript, favicon) are served from `/static/` with
 appropriate cache headers.
 

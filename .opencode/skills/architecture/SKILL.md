@@ -138,6 +138,23 @@ present; only the no-config fallback returns bare paths.
 
 API keys must be raw tokens; EggPool prepends the configured auth scheme automatically. An optional `[providers.<id>.verify]` block controls live verification probes.
 
+## Dashboard
+
+### Tooltip System
+
+- Pure CSS only — declared at the bottom of `src/eggpool/dashboard/static/dashboard.css`. No JavaScript listeners, no per-site CSS, no new dependencies
+- Generalizable `[data-tooltip]` rule at `src/eggpool/dashboard/static/dashboard.css:396`: any element with the attribute renders a themed bubble using existing CSS custom properties (`--card-bg`, `--card-border`, `--page-text`); new tooltip sites need no additional CSS
+- `aria-label` is set on every tooltip target so screen readers announce the same text sighted users see
+- Every interpolated value inside `data-tooltip="..."` and `aria-label="..."` is HTML-escaped via `_html_escape(..., quote=True)` — never interpolate raw upstream or model data
+- Overview auto-refresh swaps regions via `innerHTML` every 15-60s; CSS-only tooltips survive because no JS listeners exist
+- Reduced-motion friendly via `@media (prefers-reduced-motion: reduce)` at `src/eggpool/dashboard/static/dashboard.css:462` (transition: none)
+- Optional `[data-tooltip-pos="bottom"]` modifier (`src/eggpool/dashboard/static/dashboard.css:450`) flips the bubble below the element — not used in the first pass
+- Heatmap cells in `_render_bandwidth_heatmap()` at `src/eggpool/dashboard/render.py:615` still render the SVG `<rect>` grid with a `<title>` element (native fallback + the `tests/unit/test_dashboard.py:test_renders_tooltip` contract) but the rects carry `pointer-events="none"` via `.heatmap rect { pointer-events: none; }` at `src/eggpool/dashboard/static/dashboard.css:370` so hover never reaches the SVG title
+- A sibling `<div class="heatmap-overlay">` (`src/eggpool/dashboard/render.py:789`, styled at `src/eggpool/dashboard/static/dashboard.css:375`) mirrors the cell grid as transparent hitboxes with `data-tooltip` and `aria-label` (date + metrics + request count). Cell color stays in the SVG `<rect>`; the overlay is `background: transparent`
+- `_format_tooltip_date()` at `src/eggpool/dashboard/render.py:83` reformats `YYYY-MM-DD` into `Wed, Mar 5 2026`
+- `_status_badge_tooltip()` at `src/eggpool/dashboard/render.py:61` maps status badge names (`cooldown_active`, `auth_failed`, `rate_limited`, `quota_exhausted`, `circuit_open`, ...) to human descriptions; status badges in event tables carry `data-tooltip` from the same mapping
+- Topbar opt-ins: theme selector (`Switch dashboard theme`), period selector (`Select time range`), refresh `↻` button (`Reload this page`)
+
 ## Model Context Limits
 
 - `ModelLimitOverrideConfig` provides reusable limit fields (context, input, output, enforcement)

@@ -7,7 +7,7 @@ small. All values rendered into HTML are escaped via the `escape` module.
 from __future__ import annotations
 
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from html import escape as _html_escape
 from typing import Any
 
@@ -40,6 +40,29 @@ _DEFAULT_HEATMAP_COLORS = [
     "#216e39",
 ]
 
+
+_STATUS_BADGE_TOOLTIPS: dict[str, str] = {
+    "disabled": "Account disabled by operator",
+    "auth_error": "Upstream rejected the credentials",
+    "auth_failed": "Upstream rejected the credentials",
+    "rate_limited": "Upstream returned 429 recently",
+    "quota_exhausted": "Upstream reported the quota is exhausted",
+    "cooldown_active": "Account is in cooldown after recent failures",
+    "circuit_open": "Account is circuit-broken until cooldown expires",
+    "circuit_close": "Account circuit-breaker recovered",
+    "circuit_closed": "Account circuit-breaker recovered",
+    "model_appeared": "Model first seen in upstream catalog",
+    "model_discovered": "Model first seen in upstream catalog",
+    "reservation_recovered": "Reservation recovered after restart",
+    "catalog_refresh_failed": "Catalog refresh failed; using stale data",
+}
+
+
+def _status_badge_tooltip(name: str) -> str | None:
+    """Return the human description for a status badge, or None."""
+    return _STATUS_BADGE_TOOLTIPS.get(name)
+
+
 # Module-level caches. Theme TOML files are immutable for the lifetime of
 # the process and ``themes_dir`` is taken from config (which only changes
 # via ``eggpool rehash`` / restart), so a simple dict cache avoids repeated
@@ -54,6 +77,19 @@ def _themes_dir_key(themes_dir: str | None) -> str | None:
     if themes_dir is None:
         return None
     return str(themes_dir)
+
+
+def _format_tooltip_date(day_str: str) -> str:
+    """Format an ISO ``YYYY-MM-DD`` day string as a human-friendly label.
+
+    Returns the original ``day_str`` unchanged if it cannot be parsed so
+    that the tooltip still has something meaningful to display.
+    """
+    try:
+        parsed = datetime.strptime(day_str, "%Y-%m-%d")
+    except (TypeError, ValueError):
+        return day_str
+    return parsed.strftime("%a, %b %-d %Y")
 
 
 def get_theme_css(theme_name: str, themes_dir: str | None = None) -> str:
@@ -273,13 +309,24 @@ def _render_nav(
             )
         options_html = "".join(theme_options)
         parts.append(
-            '<form method="get" class="theme-selector">'
+            '<form method="get" class="theme-selector" '
+            'data-tooltip="Switch dashboard theme" '
+            'aria-label="Switch dashboard theme">'
             '<select name="theme" onchange="this.form.submit()">'
             f"{options_html}"
             "</select>"
             f'<input type="hidden" name="period" value="{_html_escape(period)}">'
             "</form>"
         )
+
+    # Manual refresh button
+    parts.append(
+        '<button type="button" class="topnav-refresh" '
+        'data-tooltip="Reload this page" '
+        'aria-label="Reload this page" '
+        'onclick="window.location.reload()">'
+        "↻</button>"
+    )
 
     parts.append("</nav>")
     return "".join(parts)
@@ -294,7 +341,9 @@ def _render_period_selector(current: str, current_theme: str = "") -> str:
         ("30d", "Last 30 days"),
     ]
     parts = [
-        '<form method="get" class="period-selector">',
+        '<form method="get" class="period-selector" '
+        'data-tooltip="Select time range" '
+        'aria-label="Select time range">',
         '<label>Period: <select name="period" onchange="this.form.submit()">',
     ]
     for value, label in options:
@@ -532,11 +581,19 @@ def _render_event_glance(events: list[dict[str, Any]]) -> str:
     rows: list[str] = []
     for row in events[:10]:
         event_type = str(row.get("event_type", ""))
+        badge_tooltip = _status_badge_tooltip(event_type) or ""
+        badge_attrs = (
+            f' data-tooltip="{_html_escape(badge_tooltip)}"'
+            f' aria-label="{_html_escape(badge_tooltip)}"'
+            if badge_tooltip
+            else ""
+        )
         rows.append(
             f"<tr>"
             f"<td>{format_timestamp(row.get('created_at', ''))}</td>"
             f"<td>{escape(row.get('account_name', ''))}</td>"
-            f'<td><span class="event-tag {sanitize_class_name(event_type)}">'
+            f'<td><span class="event-tag {sanitize_class_name(event_type)}"'
+            f"{badge_attrs}>"
             f"{escape(event_type)}</span></td>"
             f"<td>{truncate(row.get('details', ''), 120)}</td>"
             f"</tr>"
@@ -570,20 +627,33 @@ def _render_bandwidth_heatmap(
     if not daily_data:
         return '<p class="empty">No activity data available.</p>'
 
-    # Build day -> aggregated-value lookup.
+    # Build day -> aggregated-value lookup and day -> request_count lookup.
+    day_requests: dict[str, int] = {}
     if value_field == "bytes":
         day_values: dict[str, int] = {}
         for row in daily_data:
             day_str = str(row.get("day", ""))
             val = int(row.get("bytes_emitted", 0)) + int(row.get("bytes_received", 0))
             day_values[day_str] = val
+            day_requests[day_str] = int(row.get("request_count", 0))
         formatter: Any = format_bytes
+        in_out: dict[str, tuple[int, int]] = {
+            str(row.get("day", "")): (
+                int(row.get("bytes_received", 0)),
+                int(row.get("bytes_emitted", 0)),
+            )
+            for row in daily_data
+        }
     elif value_field == "total_tokens":
         day_values = {
             str(row.get("day", "")): int(row.get("total_tokens", 0))
             for row in daily_data
         }
         formatter = format_tokens
+        in_out = {}
+        for row in daily_data:
+            day_str = str(row.get("day", ""))
+            day_requests[day_str] = int(row.get("request_count", 0))
     else:
         raise ValueError(f"unsupported heatmap value_field: {value_field!r}")
 
@@ -664,6 +734,7 @@ def _render_bandwidth_heatmap(
         )
 
     # Day cells
+    hitboxes: list[str] = []
     for week in range(num_weeks):
         for day_of_week in range(7):
             cell_date = grid_start + timedelta(weeks=week, days=day_of_week)
@@ -675,11 +746,34 @@ def _render_bandwidth_heatmap(
             x = left_margin + week * step
             y = top_margin + day_of_week * step
             tooltip = f"{day_str}: {formatter(value)}"
+            request_count = day_requests.get(day_str, 0)
+            request_count_text = (
+                f"{request_count:,} request{'s' if request_count != 1 else ''}"
+            )
+            pretty_date = _format_tooltip_date(day_str)
+            if value_field == "bytes":
+                in_bytes, out_bytes = in_out.get(day_str, (0, 0))
+                tooltip_text = (
+                    f"{pretty_date}\n"
+                    f"{format_bytes(in_bytes)} in · "
+                    f"{format_bytes(out_bytes)} out · "
+                    f"{request_count_text}"
+                )
+            else:
+                tooltip_text = (
+                    f"{pretty_date}\n{formatter(value)} tokens · {request_count_text}"
+                )
+            tooltip_attr = _html_escape(tooltip_text, quote=True)
             cells.append(
                 f'<rect x="{x}" y="{y}" width="{cell_size}" '
                 f'height="{cell_size}" rx="2" fill="{color}" '
-                f'class="heatmap-cell">'
-                f"<title>{tooltip}</title></rect>"
+                f'class="heatmap-cell" pointer-events="none">'
+                f"<title>{_html_escape(tooltip)}</title></rect>"
+            )
+            hitboxes.append(
+                f'<div class="heatmap-hitbox" '
+                f'data-tooltip="{tooltip_attr}" '
+                f'aria-label="{tooltip_attr}"></div>'
             )
 
     svg = (
@@ -688,8 +782,11 @@ def _render_bandwidth_heatmap(
         f'role="img" aria-label="{_html_escape(title)}">'
         f"{''.join(cells)}</svg>"
     )
+    overlay = (
+        f'<div class="heatmap-overlay" aria-hidden="true">{"".join(hitboxes)}</div>'
+    )
 
-    return f'<div class="heatmap">{svg}</div>'
+    return f'<div class="heatmap">{svg}{overlay}</div>'
 
 
 def render_overview(
@@ -1122,14 +1219,23 @@ def render_events(
         for row in events:
             ts = format_timestamp(row.get("created_at", ""))
             name = escape(row.get("account_name", ""))
-            etype = escape(row.get("event_type", ""))
+            event_type = str(row.get("event_type", ""))
+            etype = escape(event_type)
             details = truncate(row.get("details", ""), 200)
-            cls = sanitize_class_name(str(row.get("event_type", "")))
+            cls = sanitize_class_name(event_type)
+            badge_tooltip = _status_badge_tooltip(event_type) or ""
+            badge_attrs = (
+                f' data-tooltip="{_html_escape(badge_tooltip)}"'
+                f' aria-label="{_html_escape(badge_tooltip)}"'
+                if badge_tooltip
+                else ""
+            )
             parts.append(
                 f"<tr>"
                 f"<td>{ts}</td>"
                 f"<td>{name}</td>"
-                f'<td><span class="event-tag {cls}">{etype}</span></td>'
+                f'<td><span class="event-tag {cls}"{badge_attrs}>'
+                f"{etype}</span></td>"
                 f"<td>{details}</td>"
                 f"</tr>"
             )

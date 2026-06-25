@@ -17,6 +17,7 @@ from eggpool.dashboard.escape import (
     truncate,
 )
 from eggpool.dashboard.render import (
+    _format_tooltip_date,
     _render_bandwidth_heatmap,
     _render_nav,
     render_accounts,
@@ -1565,3 +1566,230 @@ class TestDashboardStylesheet:
             assert selector in css
         assert "z-index: 1" in css
         assert "position: relative" in css
+
+
+class TestTooltipDateFormat:
+    """Tests for the ``_format_tooltip_date`` helper."""
+
+    def test_format_known_iso_date(self) -> None:
+        assert _format_tooltip_date("2026-03-05") == "Thu, Mar 5 2026"
+
+    def test_format_first_of_month(self) -> None:
+        assert _format_tooltip_date("2024-01-01") == "Mon, Jan 1 2024"
+
+    def test_format_end_of_month(self) -> None:
+        assert _format_tooltip_date("2024-12-31") == "Tue, Dec 31 2024"
+
+    def test_format_invalid_string_returned_unchanged(self) -> None:
+        assert _format_tooltip_date("not-a-date") == "not-a-date"
+
+    def test_format_empty_string_returned_unchanged(self) -> None:
+        assert _format_tooltip_date("") == ""
+
+
+class TestHeatmapTooltipSystem:
+    """Tests for the styled CSS tooltip system on the bandwidth heatmap."""
+
+    @staticmethod
+    def _today() -> str:
+        from datetime import date as _date
+
+        return _date.today().isoformat()
+
+    def test_renders_data_tooltip(self) -> None:
+        daily = [
+            {
+                "day": self._today(),
+                "bytes_received": 1000,
+                "bytes_emitted": 500,
+                "request_count": 7,
+            }
+        ]
+        html = _render_bandwidth_heatmap(daily)
+        assert "data-tooltip=" in html
+        assert "aria-label=" in html
+        assert 'class="heatmap-hitbox"' in html
+
+    def test_tooltip_text_includes_request_count(self) -> None:
+        daily = [
+            {
+                "day": self._today(),
+                "bytes_received": 1500,
+                "bytes_emitted": 500,
+                "request_count": 23,
+            }
+        ]
+        html = _render_bandwidth_heatmap(daily)
+        assert "23 requests" in html
+        assert "1.5 KB in" in html
+        assert "500 B out" in html
+
+    def test_tooltip_text_includes_token_count_for_total_tokens(self) -> None:
+        daily = [{"day": self._today(), "total_tokens": 1204, "request_count": 23}]
+        html = _render_bandwidth_heatmap(daily, value_field="total_tokens")
+        assert "1,204 tokens" in html
+        assert "23 requests" in html
+
+    def test_tooltip_singular_request_when_count_is_one(self) -> None:
+        daily = [
+            {
+                "day": self._today(),
+                "bytes_received": 1000,
+                "bytes_emitted": 500,
+                "request_count": 1,
+            }
+        ]
+        html = _render_bandwidth_heatmap(daily)
+        assert "1 request" in html
+        assert "1 requests" not in html
+
+    def test_tooltip_text_includes_pretty_date(self) -> None:
+        daily = [
+            {
+                "day": self._today(),
+                "bytes_received": 1000,
+                "bytes_emitted": 500,
+                "request_count": 5,
+            }
+        ]
+        html = _render_bandwidth_heatmap(daily)
+        from datetime import date as _date
+
+        pretty = _format_tooltip_date(_date.today().isoformat())
+        assert pretty in html
+
+    def test_overlay_grid_geometry(self) -> None:
+        from datetime import date as _date
+        from datetime import timedelta as _td
+
+        today = _date.today()
+        daily = [
+            {
+                "day": (today - _td(days=i)).isoformat(),
+                "bytes_received": 1000,
+                "bytes_emitted": 500,
+                "request_count": 1,
+            }
+            for i in range(5)
+        ]
+        html = _render_bandwidth_heatmap(daily)
+        assert html.count('class="heatmap-overlay"') == 1
+        # The heatmap renders the full 90-day window even with sparse data;
+        # hitboxes are emitted once per visible day, not once per data row.
+        assert html.count('class="heatmap-hitbox"') >= 5
+        assert html.count('class="heatmap-overlay"') == 1
+
+    def test_overlay_grid_full_window_geometry(self) -> None:
+        from datetime import date as _date
+        from datetime import timedelta as _td
+
+        today = _date.today()
+        n_days = 90
+        daily = [
+            {
+                "day": (today - _td(days=i)).isoformat(),
+                "bytes_received": 100,
+                "bytes_emitted": 50,
+                "request_count": 1,
+            }
+            for i in range(n_days)
+        ]
+        html = _render_bandwidth_heatmap(daily)
+        assert html.count('class="heatmap-overlay"') == 1
+        assert html.count('class="heatmap-hitbox"') == n_days
+
+    def test_pointer_events_none_on_heatmap_rect(self) -> None:
+        daily = [
+            {
+                "day": self._today(),
+                "bytes_received": 1000,
+                "bytes_emitted": 500,
+                "request_count": 1,
+            }
+        ]
+        html = _render_bandwidth_heatmap(daily)
+        assert 'pointer-events="none"' in html
+
+    def test_tooltip_attribute_uses_html_escape(self) -> None:
+        daily = [
+            {
+                "day": self._today(),
+                "bytes_received": 1000,
+                "bytes_emitted": 500,
+                "request_count": 1,
+            }
+        ]
+        html = _render_bandwidth_heatmap(daily)
+        # The hitbox attributes must be present and well-formed.
+        assert 'data-tooltip="' in html
+        assert 'aria-label="' in html
+
+    def test_heatmap_contains_overlay_after_svg(self) -> None:
+        daily = [
+            {
+                "day": self._today(),
+                "bytes_received": 1000,
+                "bytes_emitted": 500,
+                "request_count": 1,
+            }
+        ]
+        html = _render_bandwidth_heatmap(daily)
+        svg_pos = html.index("<svg")
+        overlay_pos = html.index('class="heatmap-overlay"')
+        assert svg_pos < overlay_pos
+
+
+class TestTooltipStylesheet:
+    """Tests for the tooltip CSS rules."""
+
+    @staticmethod
+    def _load_css() -> str:
+        from pathlib import Path
+
+        css_path = (
+            Path(__file__).parent.parent.parent
+            / "src"
+            / "eggpool"
+            / "dashboard"
+            / "static"
+            / "dashboard.css"
+        )
+        return css_path.read_text(encoding="utf-8")
+
+    def test_data_tooltip_attribute_selector_present(self) -> None:
+        css = self._load_css()
+        assert "[data-tooltip]" in css
+
+    def test_data_tooltip_uses_theme_css_vars(self) -> None:
+        css = self._load_css()
+        assert "var(--card-bg)" in css
+        assert "var(--card-border)" in css
+        assert "var(--page-text)" in css
+
+    def test_data_tooltip_supports_bottom_position(self) -> None:
+        css = self._load_css()
+        assert 'data-tooltip-pos="bottom"' in css
+
+    def test_data_tooltip_includes_reduced_motion(self) -> None:
+        css = self._load_css()
+        assert "prefers-reduced-motion" in css
+
+    def test_heatmap_rect_pointer_events_none(self) -> None:
+        css = self._load_css()
+        assert ".heatmap rect" in css
+        assert "pointer-events: none" in css
+
+    def test_heatmap_container_is_relative(self) -> None:
+        css = self._load_css()
+        assert ".heatmap" in css
+        assert "position: relative" in css
+
+    def test_heatmap_overlay_grid_geometry(self) -> None:
+        css = self._load_css()
+        assert ".heatmap-overlay" in css
+        assert "repeat(13, 13px)" in css
+        assert "repeat(7, 13px)" in css
+
+    def test_tooltip_pointer_events_none(self) -> None:
+        css = self._load_css()
+        assert "pointer-events: none" in css
