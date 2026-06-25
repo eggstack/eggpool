@@ -238,7 +238,7 @@ See `config.example.toml` for all available options.
 
 ### Key Sections
 
-- `[server]` — Bind address, port (default 11300), API key, logging
+- `[server]` — Bind address, port (default 11300), API key, logging, `threads` (Granian event-loop threads; default 1, max 64)
 - `[upstream]` — Upstream API base URL, timeouts, connection pool
 - `[database]` — SQLite path, WAL mode, synchronous mode
 - `[models]` — Catalog refresh interval, exposure mode, staleness settings, `collapse_models` flag
@@ -541,5 +541,34 @@ sudo systemctl restart eggpool
 sudo systemctl status eggpool
 sudo journalctl -u eggpool -n 100 --no-pager
 ```
+
+### Process model
+
+`eggpool serve` runs as a single supervisor process that launches a
+single Granian worker (`workers=1`) under the same canonical process
+name `eggpool`. You will see two `eggpool` entries in `ps` / `top` /
+`pgrep`: the supervisor and the worker. The supervisor owns the PID
+file (`/tmp/eggpool.pid` on macOS, `$XDG_RUNTIME_DIR/eggpool.pid` on
+Linux); the FastAPI lifespan does not.
+
+`eggpool serve` refuses to start a second instance: it first checks
+the PID file and then probes `GET /v1/healthz` over `127.0.0.1`. A
+running instance (live PID or 200 from the probe) causes the new
+`serve` to exit non-zero so a stale PID file is never overwritten
+silently. Stale PID files (PID not running) are cleared automatically
+before startup.
+
+For low-resource devices, the Granian worker's event-loop thread
+count is the primary tuning knob. The default is one thread, which
+keeps the Pi footprint to one supervisor process plus one worker
+process plus one event-loop thread. Raise it on capable hardware:
+
+```toml
+[server]
+threads = 4
+```
+
+The worker is named `eggpool` in `ps` / `top` (via Granian's
+`process_name`), so it does not appear as a generic `python` entry.
 
 See [CHANGELOG](CHANGELOG.md) for release history.

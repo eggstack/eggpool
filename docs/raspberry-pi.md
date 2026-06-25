@@ -58,6 +58,32 @@ max_keepalive = 10
 refresh_interval_s = 7200
 ```
 
+## Process Model
+
+EggPool's default process model is Pi-friendly: one `eggpool serve`
+supervisor process plus one Granian worker, with a single event-loop
+thread in the worker. Both processes appear as `eggpool` in `ps` /
+`top` (no generic `python` entry), so the total footprint is two
+processes and one thread before considering any upstream outbound
+connections.
+
+The single tuning knob for per-worker concurrency is `[server].threads`
+(int, default `1`, max `64`), which maps to Granian `runtime_threads`.
+The default is correct for Pi 4 / Pi 5; raise it only if your workload
+genuinely needs more concurrency than a single event loop can deliver:
+
+```toml
+[server]
+threads = 2
+```
+
+The PID file lives at `$XDG_RUNTIME_DIR/eggpool.pid` (or
+`/tmp/eggpool.pid` if `XDG_RUNTIME_DIR` is unset) and is owned by the
+supervisor. If `eggpool serve` ever exits non-zero with a message
+about an existing instance, that is the duplicate-instance guard
+catching a live PID or a successful `/v1/healthz` probe — check
+`pgrep -f eggpool` before retrying.
+
 ## Reduce SD Card Wear
 
 Log to tmpfs by adding to `/etc/fstab`:

@@ -275,13 +275,16 @@ class TestApplicationStartupRequiresAuth:
 
 @pytest.mark.asyncio
 async def test_startup_failure_closes_all_initialized_resources(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
+    tmp_path,
 ) -> None:
-    """Failures before lifespan yield still close databases, clients, and PID."""
+    """Failures before lifespan yield still close databases and clients.
+
+    The PID file is owned by the ``eggpool serve`` supervisor and is no
+    longer created or removed by lifespan, so this test no longer
+    asserts anything about the PID file.
+    """
     from eggpool.errors import CatalogUnavailableError
 
-    pid_path = tmp_path / "eggpool.pid"
-    monkeypatch.setattr("eggpool.app.PID_FILE", pid_path)
     config = AppConfig.from_dict(
         {
             "server": {"api_key_env": "", "host": "127.0.0.1", "port": 0},
@@ -304,4 +307,3 @@ async def test_startup_failure_closes_all_initialized_resources(
     assert app.state.db._conn is None  # noqa: SLF001
     assert app.state.stats_db._conn is None  # noqa: SLF001
     assert all(client.is_closed for client in app.state.client_pool._clients.values())  # noqa: SLF001
-    assert not pid_path.exists()

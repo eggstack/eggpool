@@ -128,6 +128,15 @@ removed automatically).
 - Uses `ProtectSystem=strict` and `ReadWritePaths=/var/lib/eggpool`
 - Graceful shutdown: stops accepting new connections, waits for in-flight requests (up to 30s), closes connections, exits cleanly
 
+## Process Model
+
+- Default: two processes — the `eggpool serve` supervisor plus one Granian worker. Both appear as `eggpool` in `ps` / `top` / `pgrep` (Granian is launched with `process_name="eggpool"`, not a generic `python` entry)
+- The Granian worker is launched with `workers=1`. Multi-worker scaling is intentionally not exposed; per-worker concurrency is the knob operators tune
+- `[server].threads` (int, default `1`, min `1`, max `64`) sets Granian `runtime_threads` — the number of event-loop threads in the worker. Default `1` is for SBC / Raspberry Pi; raise on capable hardware
+- PID file lives at `PID_FILE = RUNTIME_DIR / "eggpool.pid"` (`/tmp/eggpool.pid` on macOS, `$XDG_RUNTIME_DIR/eggpool.pid` on Linux) and is owned by the **supervisor**, not the FastAPI lifespan. The supervisor writes `os.getpid()` before `Granian.serve()` and clears the file in a `finally` block
+- `eggpool serve` refuses to start a second instance: it checks the PID file via `runtime.read_pid()` + `runtime.is_process_running()`, then probes `GET /v1/healthz` over `127.0.0.1` via stdlib `urllib.request` (bind `0.0.0.0` / `::` rewritten to `127.0.0.1`). A live PID or a 200 from the probe exits `1`; stale PID files are cleared before starting
+- `eggpool restart` delegates to `runtime.restart_server`, which calls `runtime.send_sigterm` and `runtime.start_server` (a `subprocess.Popen` of a new supervisor). There is no inline subprocess logic in the CLI command itself
+
 ## Filesystem Layout
 
 ```

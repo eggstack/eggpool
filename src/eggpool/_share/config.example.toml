@@ -4,6 +4,12 @@ port = 11300
 # api_key = "ep_..." # Auto-generated on first `configsetup`; use `eggpool newkey` to regenerate
 log_level = "INFO"
 access_log = true
+# Number of Granian event-loop threads. Default 1 keeps the thread
+# pool small for single-board / Raspberry Pi deployments where every
+# thread costs memory. Increase on more capable hardware for higher
+# request concurrency; the process count (one supervisor + one
+# worker) is unchanged.
+threads = 1
 
 [upstream]
 base_url = "https://opencode.ai/zen/go/v1"

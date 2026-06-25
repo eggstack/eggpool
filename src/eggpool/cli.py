@@ -110,8 +110,19 @@ def _app_loader(target: str) -> Any:
 @cli.command()
 @click.pass_context
 def serve(ctx: click.Context) -> None:
-    """Start the aggregation proxy server."""
+    """Start the aggregation proxy server.
+
+    This process is the Granian supervisor. Granian keeps ``workers=1``
+    so the total process count is two (supervisor + one worker) plus
+    a small thread pool sized by ``[server].threads``. The supervisor
+    owns the PID file: it writes ``os.getpid()`` before
+    ``Granian.serve()`` and clears the file when Granian returns. The
+    ASGI worker is a child of the supervisor and never touches the
+    PID file, so ``eggpool stop`` always signals the right process.
+    """
     from granian import Granian  # type: ignore[import-untyped]
+
+    from eggpool import runtime
 
     config_path: str = ctx.obj["config_path"]
 
@@ -136,16 +147,44 @@ def serve(ctx: click.Context) -> None:
 
     configure_logging(level=config.server.log_level)
 
+    # Refuse to start a second instance. The PID file is the primary
+    # signal, but we also probe /v1/healthz so a server started by a
+    # different installation (or that escaped the supervisor's
+    # lifecycle) is still detected.
+    existing_pid = runtime.read_pid()
+    if existing_pid is not None and runtime.is_process_running(existing_pid):
+        click.echo(
+            f"Error: server is already running (PID {existing_pid}).\n"
+            "  Run `eggpool stop` or `eggpool restart` to manage it.",
+            err=True,
+        )
+        sys.exit(1)
+    if runtime.probe_healthz(config.server.host, config.server.port):
+        click.echo(
+            f"Error: another process is already serving "
+            f"{config.server.host}:{config.server.port}.\n"
+            "  Run `eggpool stop` or use a different host/port.",
+            err=True,
+        )
+        sys.exit(1)
+    runtime.clear_pid_file()
+
     log_level = config.server.log_level.lower()
-    Granian(
-        config_path,
-        address=config.server.host,
-        port=config.server.port,
-        interface="asgi",  # type: ignore[reportArgumentType]
-        workers=1,
-        log_level=log_level,  # type: ignore[reportArgumentType]
-        log_access=config.server.access_log,
-    ).serve(target_loader=_app_loader)  # type: ignore[reportArgumentType]
+    runtime.write_pid_file()
+    try:
+        Granian(
+            config_path,
+            address=config.server.host,
+            port=config.server.port,
+            interface="asgi",  # type: ignore[reportArgumentType]
+            workers=1,
+            runtime_threads=config.server.threads,  # type: ignore[reportArgumentType]
+            process_name="eggpool",
+            log_level=log_level,  # type: ignore[reportArgumentType]
+            log_access=config.server.access_log,
+        ).serve(target_loader=_app_loader)  # type: ignore[reportArgumentType]
+    finally:
+        runtime.clear_pid_file()
 
 
 @cli.group(invoke_without_command=True)
@@ -1840,8 +1879,11 @@ def stop(ctx: click.Context, timeout: float) -> None:
 def restart(ctx: click.Context, timeout: float) -> None:
     """Fully restart the server (stop then start).
 
-    This stops the current process and starts a fresh one.
-    The legacy 'eggpool rehash' command delegates to this full restart path.
+    Reads the supervisor PID written by ``eggpool serve``, sends
+    SIGTERM, waits for clean exit, then spawns a new supervisor. The
+    new supervisor writes its own PID to the file before
+    ``Granian.serve()`` runs. The legacy ``eggpool rehash`` command
+    delegates to this same path.
     """
     from eggpool import runtime
 
@@ -1850,7 +1892,9 @@ def restart(ctx: click.Context, timeout: float) -> None:
     pid = _read_pid()
     if pid is not None and _is_process_running(pid):
         click.echo(f"Stopping server (PID {pid})...")
-        runtime.send_sigterm(pid)
+        if not runtime.send_sigterm(pid):
+            click.echo("Error sending signal.", err=True)
+            return
         if not _wait_for_exit(pid, timeout):
             click.echo(
                 f"Server did not stop within {timeout}s. "
@@ -1859,11 +1903,12 @@ def restart(ctx: click.Context, timeout: float) -> None:
             )
             return
         click.echo("Server stopped.")
+    else:
+        if pid is not None and not _is_process_running(pid):
+            runtime.clear_pid_file()
 
-    runtime.clear_pid_file()
     click.echo("Starting server...")
     runtime.start_server(config_path)
-
     click.echo("Server started.")
 
 

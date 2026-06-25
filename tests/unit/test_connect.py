@@ -1380,6 +1380,341 @@ class TestGranianServe:
         assert isinstance(app.state.config, AppConfig)
         assert app.state.config_path == str(config_path)
 
+    def test_server_config_has_threads_field(self) -> None:
+        """``ServerConfig`` exposes a ``threads`` knob for Granian runtime threads."""
+        from eggpool.models.config import ServerConfig
+
+        cfg = ServerConfig()
+        assert cfg.threads == 1
+
+    def test_server_config_threads_zero_rejected(self) -> None:
+        """``threads`` must be >= 1 to keep the event loop usable."""
+        from pydantic import ValidationError
+
+        from eggpool.models.config import ServerConfig
+
+        with pytest.raises(ValidationError):
+            ServerConfig(threads=0)
+
+    def test_server_config_threads_capped(self) -> None:
+        """``threads`` is capped at 64 to prevent runaway thread counts."""
+        from pydantic import ValidationError
+
+        from eggpool.models.config import ServerConfig
+
+        with pytest.raises(ValidationError):
+            ServerConfig(threads=65)
+
+    def test_app_does_not_write_or_remove_pid_file(self) -> None:
+        """Lifespan does not own the PID file (supervisor does)."""
+        import ast
+        from pathlib import Path
+
+        app_path = Path(__file__).parent.parent.parent / "src" / "eggpool" / "app.py"
+        source = app_path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name in {
+                "_write_pid_file",
+                "_remove_pid_file",
+            }:
+                pytest.fail(
+                    f"app.py must not define {node.name}; supervisor owns PID file"
+                )
+
+    def test_serve_cli_writes_supervisor_pid_and_clears_on_exit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``eggpool serve`` writes the supervisor PID before Granian starts
+        and clears it when Granian returns.
+        """
+        from click.testing import CliRunner
+
+        from eggpool import cli as cli_module
+        from eggpool import runtime as runtime_module
+
+        pid_file = tmp_path / "eggpool.pid"
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            '[server]\nhost = "127.0.0.1"\nport = 0\n', encoding="utf-8"
+        )
+        monkeypatch.setattr("eggpool.constants.PID_FILE", pid_file)
+
+        observed: dict[str, object] = {}
+
+        class FakeGranian:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                observed["args"] = args
+                observed["kwargs"] = kwargs
+
+            def serve(self, *args: object, **kwargs: object) -> None:
+                observed["serve_kwargs"] = kwargs
+                assert pid_file.exists(), "supervisor must write PID before .serve()"
+                observed["pid_in_file"] = pid_file.read_text(encoding="utf-8")
+
+        monkeypatch.setattr("granian.Granian", FakeGranian)
+        monkeypatch.setattr(runtime_module, "probe_healthz", lambda *_a, **_k: False)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.cli, ["--config", str(config_path), "serve"])
+
+        assert result.exit_code == 0, result.output
+        kwargs = observed["kwargs"]
+        assert kwargs.get("workers") == 1
+        assert kwargs.get("runtime_threads") == 1
+        assert kwargs.get("process_name") == "eggpool"
+        assert not pid_file.exists(), "PID file must be cleared after Granian returns"
+
+    def test_serve_cli_refuses_when_pid_file_points_to_live_process(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A second ``eggpool serve`` exits with code 1 if the PID file
+        contains a still-running process.
+        """
+        from click.testing import CliRunner
+
+        from eggpool import cli as cli_module
+        from eggpool import runtime as runtime_module
+
+        pid_file = tmp_path / "eggpool.pid"
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            '[server]\nhost = "127.0.0.1"\nport = 0\n', encoding="utf-8"
+        )
+        monkeypatch.setattr("eggpool.constants.PID_FILE", pid_file)
+        pid_file.write_text("999999", encoding="utf-8")
+        monkeypatch.setattr(runtime_module, "is_process_running", lambda _pid: True)
+        monkeypatch.setattr(runtime_module, "probe_healthz", lambda *_a, **_k: False)
+
+        granian_called = False
+
+        class FakeGranian:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                nonlocal granian_called
+                granian_called = True
+
+            def serve(self, *args: object, **kwargs: object) -> None:
+                pass
+
+        monkeypatch.setattr("granian.Granian", FakeGranian)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.cli, ["--config", str(config_path), "serve"])
+
+        assert result.exit_code == 1
+        assert "already running" in result.stderr.lower()
+        assert not granian_called
+        # Stale PID file pointing at a live process must not be removed
+        # by the second start attempt.
+        assert pid_file.exists()
+
+    def test_serve_cli_refuses_when_healthz_probe_succeeds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A second ``eggpool serve`` exits with code 1 if a foreign
+        process is already serving the configured host/port (e.g.
+        the previous install's PID file is gone but the server is
+        still up).
+        """
+        from click.testing import CliRunner
+
+        from eggpool import cli as cli_module
+        from eggpool import runtime as runtime_module
+
+        pid_file = tmp_path / "eggpool.pid"
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            '[server]\nhost = "127.0.0.1"\nport = 0\n', encoding="utf-8"
+        )
+        monkeypatch.setattr("eggpool.constants.PID_FILE", pid_file)
+        monkeypatch.setattr(runtime_module, "read_pid", lambda: None)
+        monkeypatch.setattr(runtime_module, "is_process_running", lambda _pid: False)
+        monkeypatch.setattr(runtime_module, "probe_healthz", lambda *_a, **_k: True)
+
+        granian_called = False
+
+        class FakeGranian:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                nonlocal granian_called
+                granian_called = True
+
+            def serve(self, *args: object, **kwargs: object) -> None:
+                pass
+
+        monkeypatch.setattr("granian.Granian", FakeGranian)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.cli, ["--config", str(config_path), "serve"])
+
+        assert result.exit_code == 1
+        assert "another process" in result.stderr.lower()
+        assert not granian_called
+
+    def test_serve_cli_passes_threads_from_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``eggpool serve`` forwards ``config.server.threads`` to Granian."""
+        from click.testing import CliRunner
+
+        from eggpool import cli as cli_module
+        from eggpool import runtime as runtime_module
+
+        pid_file = tmp_path / "eggpool.pid"
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            '[server]\nhost = "127.0.0.1"\nport = 0\nthreads = 4\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr("eggpool.constants.PID_FILE", pid_file)
+        monkeypatch.setattr(runtime_module, "read_pid", lambda: None)
+        monkeypatch.setattr(runtime_module, "is_process_running", lambda _pid: False)
+        monkeypatch.setattr(runtime_module, "probe_healthz", lambda *_a, **_k: False)
+
+        captured: dict[str, object] = {}
+
+        class FakeGranian:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                captured.update(kwargs)
+
+            def serve(self, *args: object, **kwargs: object) -> None:
+                captured["served"] = True
+
+        monkeypatch.setattr("granian.Granian", FakeGranian)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.cli, ["--config", str(config_path), "serve"])
+
+        assert result.exit_code == 0, result.output
+        assert captured.get("runtime_threads") == 4
+        assert captured.get("workers") == 1
+
+
+class TestProbeHealthz:
+    """Tests for ``runtime.probe_healthz``."""
+
+    @staticmethod
+    def _make_response(status: int) -> object:
+        class _Response:
+            def __init__(self) -> None:
+                self.status = status
+
+            def __enter__(self) -> _Response:
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+        return _Response()
+
+    def test_rewrites_wildcard_hosts_to_loopback(self) -> None:
+        captured: dict[str, str] = {}
+
+        def fake_urlopen(request: object, timeout: float) -> object:  # noqa: ARG001
+            captured["url"] = request.full_url  # type: ignore[attr-defined]
+            return self._make_response(200)
+
+        from eggpool import runtime as runtime_module
+
+        original = runtime_module.urllib.request.urlopen
+        runtime_module.urllib.request.urlopen = fake_urlopen  # type: ignore[assignment]
+        try:
+            assert runtime_module.probe_healthz("0.0.0.0", 11300) is True
+            assert captured["url"] == "http://127.0.0.1:11300/v1/healthz"
+
+            assert runtime_module.probe_healthz("::", 11300) is True
+            assert captured["url"] == "http://127.0.0.1:11300/v1/healthz"
+        finally:
+            runtime_module.urllib.request.urlopen = original  # type: ignore[assignment]
+
+    def test_preserves_explicit_localhost(self) -> None:
+        captured: dict[str, str] = {}
+
+        def fake_urlopen(request: object, timeout: float) -> object:  # noqa: ARG001
+            captured["url"] = request.full_url  # type: ignore[attr-defined]
+            return self._make_response(200)
+
+        from eggpool import runtime as runtime_module
+
+        original = runtime_module.urllib.request.urlopen
+        runtime_module.urllib.request.urlopen = fake_urlopen  # type: ignore[assignment]
+        try:
+            assert runtime_module.probe_healthz("127.0.0.1", 12345) is True
+            assert captured["url"] == "http://127.0.0.1:12345/v1/healthz"
+        finally:
+            runtime_module.urllib.request.urlopen = original  # type: ignore[assignment]
+
+    def test_returns_false_on_connection_error(self) -> None:
+        import urllib.error
+
+        from eggpool import runtime as runtime_module
+
+        def fake_urlopen(request: object, timeout: float) -> object:  # noqa: ARG001
+            raise urllib.error.URLError("refused")
+
+        original = runtime_module.urllib.request.urlopen
+        runtime_module.urllib.request.urlopen = fake_urlopen  # type: ignore[assignment]
+        try:
+            assert runtime_module.probe_healthz("127.0.0.1", 1) is False
+        finally:
+            runtime_module.urllib.request.urlopen = original  # type: ignore[assignment]
+
+    def test_returns_false_on_non_200(self) -> None:
+        from eggpool import runtime as runtime_module
+
+        def fake_urlopen(request: object, timeout: float) -> object:  # noqa: ARG001
+            return self._make_response(503)
+
+        original = runtime_module.urllib.request.urlopen
+        runtime_module.urllib.request.urlopen = fake_urlopen  # type: ignore[assignment]
+        try:
+            assert runtime_module.probe_healthz("127.0.0.1", 11300) is False
+        finally:
+            runtime_module.urllib.request.urlopen = original  # type: ignore[assignment]
+
+
+class TestRuntimeWritePidFile:
+    """Tests for ``runtime.write_pid_file`` (supervisor-owned PID)."""
+
+    def test_writes_current_pid_by_default(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import os
+
+        from eggpool import runtime as runtime_module
+
+        pid_file = tmp_path / "eggpool.pid"
+        monkeypatch.setattr("eggpool.constants.PID_FILE", pid_file)
+        runtime_module.write_pid_file()
+
+        try:
+            assert pid_file.read_text(encoding="utf-8") == str(os.getpid())
+        finally:
+            pid_file.unlink(missing_ok=True)
+
+    def test_writes_explicit_pid(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from eggpool import runtime as runtime_module
+
+        pid_file = tmp_path / "eggpool.pid"
+        monkeypatch.setattr("eggpool.constants.PID_FILE", pid_file)
+        runtime_module.write_pid_file(pid=1234)
+
+        try:
+            assert pid_file.read_text(encoding="utf-8") == "1234"
+        finally:
+            pid_file.unlink(missing_ok=True)
+
+    def test_does_not_raise_on_write_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from eggpool import runtime as runtime_module
+
+        bad_path = tmp_path / "missing" / "eggpool.pid"
+        monkeypatch.setattr("eggpool.constants.PID_FILE", bad_path)
+        # Should not raise; PID file is best-effort.
+        runtime_module.write_pid_file(pid=1)
+
 
 def test_config_refresh_command_removed() -> None:
     """Live config reload is unsupported; the CLI must not expose it."""

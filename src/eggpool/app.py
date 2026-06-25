@@ -5,9 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import time
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from importlib.metadata import version as _get_version
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -35,7 +34,7 @@ from eggpool.background.cleanup import (
 )
 from eggpool.catalog.pricing import CostCalculator, PriceRepository
 from eggpool.catalog.service import CatalogService
-from eggpool.constants import API_V1_PREFIX, MAX_REQUEST_BODY_BYTES, PID_FILE
+from eggpool.constants import API_V1_PREFIX, MAX_REQUEST_BODY_BYTES
 from eggpool.dashboard.routes import register_dashboard_routes
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
@@ -357,20 +356,6 @@ async def _finalize_stale_requests_once(
     return len(transitioned)
 
 
-def _write_pid_file() -> None:
-    """Write the current PID to the PID file."""
-    try:
-        PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
-    except OSError:
-        logger.warning("Could not write PID file %s", PID_FILE)
-
-
-def _remove_pid_file() -> None:
-    """Remove the PID file."""
-    with suppress(OSError):
-        PID_FILE.unlink(missing_ok=True)
-
-
 async def _hydrate_health_from_backoffs(
     repo: AccountBackoffRepository,
     health_manager: HealthManager,
@@ -447,9 +432,6 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
 
     # 1b. Validate account credentials
     config.validate_account_credentials()
-
-    # 1c. Write PID file. Configuration is restart-only by design.
-    _write_pid_file()
 
     # 2. Database
     db = Database(
@@ -817,7 +799,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
                 await db.disconnect()
             except Exception:
                 logger.exception("Error closing database during shutdown")
-        _remove_pid_file()
 
 
 async def _catalog_refresh_loop(

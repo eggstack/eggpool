@@ -67,6 +67,13 @@ class ServerConfig(BaseModel):
     api_key_env: str = "SERVER_API_KEY"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     access_log: bool = True
+    # Number of Granian runtime (event-loop) threads. Granian already
+    # defaults to 1 — keep the field explicit so single-board / SBC
+    # deployments have a documented, configurable knob for low-memory
+    # tuning. Increase on more capable hardware for higher request
+    # parallelism; Granian still keeps ``workers=1`` so the process
+    # count remains small.
+    threads: int = Field(default=1, ge=1, le=64)
 
     @property
     def resolved_api_key(self) -> str | None:

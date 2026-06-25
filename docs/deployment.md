@@ -205,6 +205,44 @@ sudo eggpool deploy cron
 - `NoNewPrivileges`, `PrivateTmp`, `RestrictNamespaces` — hardened
 - No `ExecReload` — config changes require `systemctl restart`
 
+### Process model
+
+`eggpool serve` runs as a single supervisor process that invokes
+Granian with `workers=1`. The result is two processes under the
+canonical name `eggpool`: the supervisor and the Granian worker.
+Granian is launched with `process_name="eggpool"`, so both show up
+as `eggpool` in `ps` / `top` / `pgrep` rather than as a generic
+`python` entry. There is no multi-worker scaling — the knob operators
+tune is per-worker concurrency.
+
+The PID file is owned by the supervisor and lives at
+`$XDG_RUNTIME_DIR/eggpool.pid` on Linux (falling back to
+`/tmp/eggpool.pid`). The supervisor writes `os.getpid()` before
+`Granian.serve()` and clears the file in a `finally` block; the
+FastAPI lifespan does not touch it. `eggpool serve` also refuses to
+start a second instance: it checks the PID file and, if no live PID
+is recorded, probes `GET /v1/healthz` over `127.0.0.1` (the bind
+address `0.0.0.0` / `::` is rewritten to a loopback address for the
+probe). Either a live PID or a 200 from the probe causes the new
+`serve` to exit non-zero so a stale PID file is never silently
+overwritten.
+
+The primary tuning knob is `[server].threads` (int, default `1`,
+min `1`, max `64`), which sets Granian `runtime_threads` — the
+number of event-loop threads in the worker. The default of one
+thread is intentional; raise it on capable hardware:
+
+```toml
+[server]
+threads = 4
+```
+
+`eggpool restart` delegates to `runtime.restart_server`, which calls
+`runtime.send_sigterm` against the supervisor recorded in the PID
+file and then `runtime.start_server` (a `subprocess.Popen` of a new
+supervisor). There is no inline subprocess logic in the CLI command
+itself.
+
 ---
 
 ## Troubleshooting

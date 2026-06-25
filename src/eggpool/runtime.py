@@ -3,15 +3,25 @@
 This module centralizes process-lifecycle primitives that were previously
 duplicated across ``eggpool.cli`` and ``eggpool.providers.connect``:
 
-- reading the PID file
+- reading and clearing the PID file
 - checking whether a PID is alive
 - waiting for a process to exit
+- probing the data plane for an already-running server
 - starting the server in the background
 - restarting the running server
 
-Putting these helpers in one place ensures consistent behavior (timeout
-handling, error reporting, cleanup of stale PID files) and avoids the
-drift that had accumulated in the old inline implementations.
+The PID file is owned by the **supervisor** process: the CLI's
+``serve`` command writes ``os.getpid()`` before calling
+``Granian(...).serve()`` and removes the file in a ``finally`` block.
+Granian's supervisor + single-worker model means the worker is a
+child of the supervisor; signaling the supervisor PID stops both
+processes cleanly. See ``plans/fix_granian_single_process.md`` for
+the full design.
+
+Putting these helpers in one place ensures consistent behavior
+(timeout handling, error reporting, cleanup of stale PID files) and
+avoids the drift that had accumulated in the old inline
+implementations.
 """
 
 from __future__ import annotations
@@ -23,12 +33,16 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
+from typing import Final
 
 logger = logging.getLogger(__name__)
 
 
 DEFAULT_SHUTDOWN_TIMEOUT_S = 10.0
+DEFAULT_HEALTH_PROBE_TIMEOUT_S: Final = 1.0
 
 
 def _pid_file() -> Path:
@@ -52,6 +66,21 @@ def read_pid() -> int | None:
         return int(path.read_text(encoding="utf-8").strip())
     except (ValueError, OSError):
         return None
+
+
+def write_pid_file(pid: int | None = None) -> None:
+    """Write ``pid`` (default: current process) to the PID file.
+
+    Best-effort: a failure to write is logged at warning level so
+    startup is never blocked by filesystem issues. The caller is the
+    supervisor process (``serve`` command), not the ASGI worker.
+    """
+    path = _pid_file()
+    target = pid if pid is not None else os.getpid()
+    try:
+        path.write_text(str(target), encoding="utf-8")
+    except OSError as exc:
+        logger.warning("Could not write PID file %s: %s", path, exc)
 
 
 def clear_pid_file() -> None:
@@ -97,6 +126,34 @@ def send_sigterm(pid: int) -> bool:
         return False
 
 
+def probe_healthz(
+    host: str = "127.0.0.1",
+    port: int = 11300,
+    *,
+    timeout_s: float = DEFAULT_HEALTH_PROBE_TIMEOUT_S,
+) -> bool:
+    """Return ``True`` if ``GET /v1/healthz`` on ``host:port`` answers 200.
+
+    Used to detect an already-running server before launching a second
+    instance, even when the running server was started by a different
+    installation (no shared PID file) or by a stale process that
+    escaped the supervisor's lifecycle. The probe is intentionally
+    short and uses the standard library to avoid a runtime dependency
+    on ``httpx`` for this one CLI check.
+
+    Bind-address ``0.0.0.0`` is rewritten to ``127.0.0.1`` so the
+    probe targets the local listener.
+    """
+    target_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+    url = f"http://{target_host}:{port}/v1/healthz"
+    request = urllib.request.Request(url, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_s) as response:  # noqa: S310 - URL built from operator config
+            return response.status == 200
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
+        return False
+
+
 def stop_server(timeout: float = DEFAULT_SHUTDOWN_TIMEOUT_S) -> bool:
     """Stop the running server, if any.
 
@@ -123,7 +180,11 @@ def start_server(
 
     The returned ``Popen`` handle is intentionally not awaited; the new
     process detaches via ``start_new_session=True`` so signals to the
-    parent CLI do not propagate to the server.
+    parent CLI do not propagate to the server. The new process is the
+    supervisor: it writes its own PID via ``write_pid_file()`` before
+    calling ``Granian(...).serve()`` and clears the file in a
+    ``finally`` block. The caller can wait on the returned handle if
+    it needs to surface the exit code; the typical CLI path does not.
     """
     resolved = str(Path(config_path).resolve())
     argv = [sys.executable, "-m", "eggpool", "--config", resolved, "serve"]
@@ -141,7 +202,11 @@ def restart_server(
 
     Returns ``True`` when a fresh server was successfully spawned,
     ``False`` when no server was previously running or the restart
-    could not be completed within the timeout.
+    could not be completed within the timeout. The supervisor PID is
+    read from the PID file written by the running ``serve`` command,
+    not from the worker PID (the lifespan no longer touches the PID
+    file). Stopping the supervisor also tears down its worker, so
+    the restart is clean.
     """
     pid = read_pid()
     if pid is None or not is_process_running(pid):
