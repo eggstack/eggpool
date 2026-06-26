@@ -340,7 +340,7 @@ async def create_runtime_backup(
             finally:
                 src_conn.close()
 
-        await asyncio.get_event_loop().run_in_executor(None, _snapshot_sqlite)
+        await asyncio.to_thread(_snapshot_sqlite)
 
         source = BackupSource(
             config_source=config_path,

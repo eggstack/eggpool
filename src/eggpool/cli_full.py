@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 import subprocess
 import sys
+import zipfile
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -42,7 +44,11 @@ from eggpool.lifecycle import (
 from eggpool.lifecycle import (
     uninstall as do_uninstall,
 )
-from eggpool.lifecycle.backup import BackupContents, create_backup
+from eggpool.lifecycle.backup import (
+    BackupContents,
+    create_backup,
+    create_runtime_backup,
+)
 from eggpool.logging import configure_logging
 from eggpool.models.config import AppConfig
 from eggpool.providers.client_pool import ProviderClientPool
@@ -3198,6 +3204,10 @@ def backup(ctx: click.Context, output_dir: str | None) -> None:
     to it, the SQLite database (with its WAL and SHM sidecars when
     present), and a META block describing the archive's contents.
 
+    When the database is a regular file (not ``:memory:``), an
+    in-process SQLite snapshot is used for a consistent backup even if
+    the server is running.
+
     Backups are stored under ``$XDG_BACKUP_HOME/eggpool`` or, when that
     variable is unset, ``$HOME/backups/eggpool``. The filename follows
     the pattern ``eggpool-backup-YYYYMMDD-HHMMSS.zip`` so that
@@ -3211,29 +3221,53 @@ def backup(ctx: click.Context, output_dir: str | None) -> None:
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)
 
-    env_path = Path(config_path).parent / ".env"
-    contents = BackupContents(
-        config_path=Path(config_path).resolve(),
-        db_path=Path(config.database.path).expanduser().resolve(),
-        env_path=env_path if env_path.exists() else None,
-        install_method=_detect_install_method(),
-    )
-
     target_dir = Path(output_dir) if output_dir else default_backup_dir()
+    db_path = Path(config.database.path).expanduser().resolve()
+    resolved_config_path = Path(config_path).resolve()
+    env_path = resolved_config_path.parent / ".env"
 
-    try:
-        archive = create_backup(contents, output_dir=target_dir)
-    except OSError as exc:
-        click.echo(f"Error: could not write backup: {exc}", err=True)
-        sys.exit(1)
+    # Use SQLite backup API for file-backed databases (consistent
+    # snapshot even while the server is running).  Fall back to raw
+    # copy for :memory:, missing, or corrupt databases.
+    archive: Path | None = None
+    if config.database.path != ":memory:" and db_path.exists():
+
+        async def _runtime_backup() -> Path:
+            return await create_runtime_backup(
+                db_path=db_path,
+                config_path=resolved_config_path,
+                env_path=env_path if env_path.exists() else None,
+                output_dir=target_dir,
+                install_method=_detect_install_method(),
+                include_env=True,
+            )
+
+        # Snapshot failed (corrupt DB, not a real SQLite file, etc.);
+        # fall back to raw file copy.
+        with suppress(Exception):
+            archive = asyncio.run(_runtime_backup())
+
+    if archive is None:
+        contents = BackupContents(
+            config_path=resolved_config_path,
+            db_path=db_path,
+            env_path=env_path if env_path.exists() else None,
+            install_method=_detect_install_method(),
+        )
+        try:
+            archive = create_backup(contents, output_dir=target_dir)
+        except OSError as exc:
+            click.echo(f"Error: could not write backup: {exc}", err=True)
+            sys.exit(1)
 
     click.echo(f"Wrote backup: {archive}")
-    if contents.env_path is not None:
-        click.echo(f"  included: env ({contents.env_path})")
-    for member in sorted(contents.member_names()):
-        if member == "env":
-            continue
-        click.echo(f"  included: {member}")
+    if env_path.exists():
+        click.echo(f"  included: env ({env_path})")
+    with zipfile.ZipFile(archive) as zf:
+        for member in sorted(zf.namelist()):
+            if member == ".env":
+                continue
+            click.echo(f"  included: {member}")
 
 
 @cli.group(invoke_without_command=True)

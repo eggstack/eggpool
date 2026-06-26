@@ -117,12 +117,10 @@ async def _run_backup_once(
         size_kb,
     )
 
-    deleted = await asyncio.get_event_loop().run_in_executor(
-        None,
-        lambda: prune_backups(
-            backup_dir=output_dir,
-            retain_count=config.backup.retain_count,
-        ),
+    deleted = await asyncio.to_thread(
+        prune_backups,
+        backup_dir=output_dir,
+        retain_count=config.backup.retain_count,
     )
     if deleted:
         logger.info(

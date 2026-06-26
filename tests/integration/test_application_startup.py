@@ -372,3 +372,125 @@ async def test_startup_failure_closes_all_initialized_resources(
     assert app.state.db._conn is None  # noqa: SLF001
     assert app.state.stats_db._conn is None  # noqa: SLF001
     assert all(client.is_closed for client in app.state.client_pool._clients.values())  # noqa: SLF001
+
+
+# ---------------------------------------------------------------------------
+# Automatic backup registration wiring tests
+# ---------------------------------------------------------------------------
+
+_UPSTREAM_MOCK = {
+    "object": "list",
+    "data": [{"id": "gpt-4", "object": "model", "owned_by": "openai"}],
+}
+
+
+def _backup_config(
+    tmp_path,
+    *,
+    enabled: bool = True,
+    interval_s: int = 86400,
+    db_path: str | None = None,
+) -> AppConfig:
+    """Build a minimal config for backup wiring tests."""
+    actual_db = db_path or str(tmp_path / "backup_test.sqlite3")
+    return AppConfig.from_dict(
+        {
+            "server": {"api_key_env": "", "host": "127.0.0.1", "port": 0},
+            "database": {"path": actual_db, "wal": True},
+            "upstream": {"base_url": UPSTREAM_BASE},
+            "models": {"startup_refresh": True, "refresh_interval_s": 0},
+            "accounts": [],
+            "dashboard": {"enabled": False},
+            "backup": {
+                "enabled": enabled,
+                "interval_s": interval_s,
+                "startup_delay_s": 0,
+            },
+        }
+    )
+
+
+class TestAutomaticBackupRegistration:
+    """Verify automatic_backup task registration behind config gates."""
+
+    @pytest.mark.asyncio
+    async def test_registered_by_default(self, tmp_path) -> None:
+        """With default backup config, automatic_backup is registered."""
+        config = _backup_config(tmp_path)
+        app = create_app(config, config_path=str(tmp_path / "config.toml"))
+        with respx.mock:
+            respx.get(f"{UPSTREAM_BASE}/models").mock(
+                return_value=httpx.Response(200, json=_UPSTREAM_MOCK)
+            )
+            respx.get("https://pypi.org/pypi/eggpool/json").mock(
+                return_value=httpx.Response(200, json={"info": {"version": "0.0.0"}})
+            )
+            async with app.router.lifespan_context(app):
+                task = app.state.supervisor.get_task("automatic_backup")
+                assert task is not None
+
+    @pytest.mark.asyncio
+    async def test_not_registered_when_disabled(self, tmp_path) -> None:
+        """When backup.enabled = false, the task is not registered."""
+        config = _backup_config(tmp_path, enabled=False)
+        app = create_app(config, config_path=str(tmp_path / "config.toml"))
+        with respx.mock:
+            respx.get(f"{UPSTREAM_BASE}/models").mock(
+                return_value=httpx.Response(200, json=_UPSTREAM_MOCK)
+            )
+            respx.get("https://pypi.org/pypi/eggpool/json").mock(
+                return_value=httpx.Response(200, json={"info": {"version": "0.0.0"}})
+            )
+            async with app.router.lifespan_context(app):
+                assert app.state.supervisor.get_task("automatic_backup") is None
+
+    @pytest.mark.asyncio
+    async def test_not_registered_when_interval_zero(self, tmp_path) -> None:
+        """When backup.interval_s = 0, the task is not registered."""
+        config = _backup_config(tmp_path, interval_s=0)
+        app = create_app(config, config_path=str(tmp_path / "config.toml"))
+        with respx.mock:
+            respx.get(f"{UPSTREAM_BASE}/models").mock(
+                return_value=httpx.Response(200, json=_UPSTREAM_MOCK)
+            )
+            respx.get("https://pypi.org/pypi/eggpool/json").mock(
+                return_value=httpx.Response(200, json={"info": {"version": "0.0.0"}})
+            )
+            async with app.router.lifespan_context(app):
+                assert app.state.supervisor.get_task("automatic_backup") is None
+
+    @pytest.mark.asyncio
+    async def test_in_memory_db_does_not_crash_startup(self, tmp_path) -> None:
+        """In-memory database: task is registered but skipped at runtime."""
+        config = _backup_config(tmp_path, db_path=":memory:")
+        app = create_app(config, config_path=str(tmp_path / "config.toml"))
+        with respx.mock:
+            respx.get(f"{UPSTREAM_BASE}/models").mock(
+                return_value=httpx.Response(200, json=_UPSTREAM_MOCK)
+            )
+            respx.get("https://pypi.org/pypi/eggpool/json").mock(
+                return_value=httpx.Response(200, json={"info": {"version": "0.0.0"}})
+            )
+            async with app.router.lifespan_context(app):
+                task = app.state.supervisor.get_task("automatic_backup")
+                assert task is not None
+                # Existing tasks still registered.
+                assert app.state.supervisor.get_task("update_checker") is not None
+
+    @pytest.mark.asyncio
+    async def test_existing_tasks_still_register(self, tmp_path) -> None:
+        """Backup registration does not interfere with other tasks."""
+        config = _backup_config(tmp_path)
+        app = create_app(config, config_path=str(tmp_path / "config.toml"))
+        with respx.mock:
+            respx.get(f"{UPSTREAM_BASE}/models").mock(
+                return_value=httpx.Response(200, json=_UPSTREAM_MOCK)
+            )
+            respx.get("https://pypi.org/pypi/eggpool/json").mock(
+                return_value=httpx.Response(200, json={"info": {"version": "0.0.0"}})
+            )
+            async with app.router.lifespan_context(app):
+                supervisor = app.state.supervisor
+                # Update checker and backup both registered.
+                assert supervisor.get_task("update_checker") is not None
+                assert supervisor.get_task("automatic_backup") is not None
