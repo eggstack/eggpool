@@ -633,6 +633,8 @@ class DnsCacheConfig(BaseModel):
     positive_ttl_seconds: int = Field(default=300, gt=0)
     negative_ttl_seconds: int = Field(default=30, gt=0)
     stale_if_error_seconds: int = Field(default=3600, ge=0)
+    prefer_ipv6: bool = False
+    lookup_timeout_seconds: int = Field(default=5, gt=0)
 
 
 class NetworkConfig(BaseModel):

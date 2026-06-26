@@ -57,6 +57,12 @@ class DnsCache:
         self.stale_hits = 0
         self.evictions = 0
         self._per_host: dict[tuple[str, int], dict[str, int]] = {}
+        self._resolution_errors: dict[tuple[str, int, str], int] = {}
+        self._lookup_timeout_s: float | None = (
+            float(config.lookup_timeout_seconds)
+            if config.lookup_timeout_seconds
+            else None
+        )
 
     def _record(self, key: DnsCacheKey, field: str) -> None:
         counter_key = (key.hostname, key.address_family)
@@ -71,12 +77,34 @@ class DnsCache:
             }
         self._per_host[counter_key][field] += 1
 
+    def _record_error(
+        self, hostname: str, address_family: int, error_kind: str
+    ) -> None:
+        error_key = (hostname, address_family, error_kind)
+        if len(self._resolution_errors) >= self._MAX_TRACKED_HOSTS:
+            return
+        self._resolution_errors[error_key] = (
+            self._resolution_errors.get(error_key, 0) + 1
+        )
+
+    @property
+    def entries(self) -> dict[str, int]:
+        positive = sum(
+            1 for v in self._cache.values() if isinstance(v, PositiveCacheEntry)
+        )
+        return {"positive": positive, "negative": len(self._cache) - positive}
+
     def snapshot(self) -> dict[str, object]:
         by_host: dict[str, dict[str, int]] = {}
         for (host, fam), counters in self._per_host.items():
             fam_label = "ipv4" if fam == socket.AF_INET else "ipv6"
             label = f"{host}/{fam_label}"
             by_host[label] = dict(counters)
+        resolution_errors: dict[str, int] = {}
+        for (host, fam, kind), count in self._resolution_errors.items():
+            fam_label = "ipv4" if fam == socket.AF_INET else "ipv6"
+            label = f"{host}/{fam_label}/{kind}"
+            resolution_errors[label] = count
         return {
             "hits": self.hits,
             "misses": self.misses,
@@ -84,6 +112,8 @@ class DnsCache:
             "stale_hits": self.stale_hits,
             "evictions": self.evictions,
             "size": len(self._cache),
+            "entries": self.entries,
+            "resolution_errors": resolution_errors,
             "by_host": by_host,
         }
 
@@ -152,7 +182,21 @@ class DnsCache:
             return await future
 
         try:
-            addresses = await self._dns_lookup(key.hostname, key.address_family)
+            coro = self._dns_lookup(key.hostname, key.address_family)
+            if self._lookup_timeout_s is not None:
+                addresses = await asyncio.wait_for(coro, timeout=self._lookup_timeout_s)
+            else:
+                addresses = await coro
+        except TimeoutError:
+            error_msg = f"DNS lookup timed out after {self._lookup_timeout_s}s"
+            self._record_error(key.hostname, key.address_family, "timeout")
+            self._store_negative(key, httpcore.ConnectTimeout, error_msg)
+            async with self._lock:
+                self._singleflight.pop(key, None)
+            exc = httpcore.ConnectTimeout(error_msg)
+            if not future.cancelled():
+                future.set_exception(exc)
+            raise exc from None
         except Exception as exc:
             async with self._lock:
                 self._singleflight.pop(key, None)
@@ -182,6 +226,7 @@ class DnsCache:
             addresses: list[str] = [str(r[4][0]) for r in result]
         except socket.gaierror as exc:
             msg = str(exc)
+            self._record_error(hostname, address_family, "dns_resolution")
             self._store_negative(
                 DnsCacheKey(hostname=hostname, address_family=address_family),
                 httpcore.ConnectError,
@@ -190,6 +235,7 @@ class DnsCache:
             raise httpcore.ConnectError(msg) from exc
         except TimeoutError as exc:
             msg = str(exc)
+            self._record_error(hostname, address_family, "timeout")
             self._store_negative(
                 DnsCacheKey(hostname=hostname, address_family=address_family),
                 httpcore.ConnectTimeout,
@@ -198,6 +244,7 @@ class DnsCache:
             raise httpcore.ConnectTimeout(msg) from exc
         except OSError as exc:
             msg = str(exc)
+            self._record_error(hostname, address_family, "os_error")
             self._store_negative(
                 DnsCacheKey(hostname=hostname, address_family=address_family),
                 httpcore.ConnectError,
@@ -211,6 +258,7 @@ class DnsCache:
                 addresses,
             )
             return addresses
+        self._record_error(hostname, address_family, "empty_response")
         self._store_negative(
             DnsCacheKey(hostname=hostname, address_family=address_family),
             httpcore.ConnectError,
@@ -263,6 +311,9 @@ class DnsNetworkBackend(httpcore.AsyncNetworkBackend):
     ) -> None:
         self._cache = DnsCache(config)
         self._wrapped = wrapped
+        self._address_family = (
+            socket.AF_INET6 if config.prefer_ipv6 else socket.AF_UNSPEC
+        )
 
     @property
     def cache(self) -> DnsCache:
@@ -277,7 +328,7 @@ class DnsNetworkBackend(httpcore.AsyncNetworkBackend):
         socket_options: (Iterable[httpcore.SOCKET_OPTION] | None) = None,
     ) -> httpcore.AsyncNetworkStream:
         if self._cache.enabled:
-            addresses = await self._cache.resolve(host, socket.AF_UNSPEC)
+            addresses = await self._cache.resolve(host, self._address_family)
             resolved = addresses[0] if addresses else host
         else:
             resolved = host

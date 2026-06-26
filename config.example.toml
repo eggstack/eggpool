@@ -80,6 +80,8 @@ monthly_microdollars = 60000000
 # positive_ttl_seconds = 300       # upper cap for positive DNS answers (default: 300)
 # negative_ttl_seconds = 30        # how long to cache lookup failures (default: 30)
 # stale_if_error_seconds = 3600    # max age for stale records usable on resolver failure (default: 3600)
+# prefer_ipv6 = false              # prefer IPv6 addresses in DNS resolution (default: false)
+# lookup_timeout_seconds = 5       # timeout for DNS lookups in seconds (default: 5)
 
 [dashboard]
 enabled = true

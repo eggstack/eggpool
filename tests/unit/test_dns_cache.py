@@ -28,6 +28,8 @@ def _make_config(
     positive_ttl_seconds: int = 300,
     negative_ttl_seconds: int = 30,
     stale_if_error_seconds: int = 3600,
+    prefer_ipv6: bool = False,
+    lookup_timeout_seconds: int = 5,
 ) -> DnsCacheConfig:
     return DnsCacheConfig(
         enabled=enabled,
@@ -35,6 +37,8 @@ def _make_config(
         positive_ttl_seconds=positive_ttl_seconds,
         negative_ttl_seconds=negative_ttl_seconds,
         stale_if_error_seconds=stale_if_error_seconds,
+        prefer_ipv6=prefer_ipv6,
+        lookup_timeout_seconds=lookup_timeout_seconds,
     )
 
 
@@ -78,6 +82,8 @@ class TestDnsCacheConfigParsing:
         assert cfg.positive_ttl_seconds == 300
         assert cfg.negative_ttl_seconds == 30
         assert cfg.stale_if_error_seconds == 3600
+        assert cfg.prefer_ipv6 is False
+        assert cfg.lookup_timeout_seconds == 5
 
     def test_custom_values(self) -> None:
         cfg = DnsCacheConfig(
@@ -86,12 +92,16 @@ class TestDnsCacheConfigParsing:
             positive_ttl_seconds=60,
             negative_ttl_seconds=5,
             stale_if_error_seconds=120,
+            prefer_ipv6=True,
+            lookup_timeout_seconds=3,
         )
         assert cfg.enabled is False
         assert cfg.max_entries == 10
         assert cfg.positive_ttl_seconds == 60
         assert cfg.negative_ttl_seconds == 5
         assert cfg.stale_if_error_seconds == 120
+        assert cfg.prefer_ipv6 is True
+        assert cfg.lookup_timeout_seconds == 3
 
     def test_rejects_zero_max_entries(self) -> None:
         with pytest.raises(ValidationError):
@@ -124,6 +134,14 @@ class TestDnsCacheConfigParsing:
     def test_rejects_negative_stale_if_error(self) -> None:
         with pytest.raises(ValidationError):
             DnsCacheConfig(stale_if_error_seconds=-1)
+
+    def test_rejects_zero_lookup_timeout(self) -> None:
+        with pytest.raises(ValidationError):
+            DnsCacheConfig(lookup_timeout_seconds=0)
+
+    def test_rejects_negative_lookup_timeout(self) -> None:
+        with pytest.raises(ValidationError):
+            DnsCacheConfig(lookup_timeout_seconds=-1)
 
     def test_rejects_extra_fields(self) -> None:
         with pytest.raises(ValidationError):
@@ -786,6 +804,8 @@ class TestSnapshot:
             "stale_hits": 0,
             "evictions": 0,
             "size": 0,
+            "entries": {"positive": 0, "negative": 0},
+            "resolution_errors": {},
             "by_host": {},
         }
 
@@ -837,8 +857,152 @@ class TestSnapshot:
         snap = cache.snapshot()
         assert snap["negative_hits"] == 1
 
+    @pytest.mark.asyncio
+    async def test_snapshot_entries_breakdown(self) -> None:
+        cfg = _make_config(positive_ttl_seconds=300, negative_ttl_seconds=300)
+        cache = DnsCache(cfg)
+        with patch(
+            "eggpool.providers.dns_cache.socket.getaddrinfo",
+            return_value=[(socket.AF_INET, 0, 0, "", ("1.2.3.4", 0))],
+        ):
+            await cache.resolve("a.com", socket.AF_INET)
+        with (
+            patch(
+                "eggpool.providers.dns_cache.socket.getaddrinfo",
+                side_effect=socket.gaierror("fail"),
+            ),
+            pytest.raises(httpcore.ConnectError),
+        ):
+            await cache.resolve("b.com", socket.AF_INET)
+        snap = cache.snapshot()
+        assert snap["entries"] == {"positive": 1, "negative": 1}
 
-class TestNormalize:
+    @pytest.mark.asyncio
+    async def test_snapshot_resolution_errors(self) -> None:
+        cfg = _make_config()
+        cache = DnsCache(cfg)
+        with (
+            patch(
+                "eggpool.providers.dns_cache.socket.getaddrinfo",
+                side_effect=socket.gaierror("name error"),
+            ),
+            pytest.raises(httpcore.ConnectError),
+        ):
+            await cache.resolve("fail.com", socket.AF_INET)
+        with (
+            patch(
+                "eggpool.providers.dns_cache.socket.getaddrinfo",
+                side_effect=TimeoutError("slow"),
+            ),
+            pytest.raises(httpcore.ConnectTimeout),
+        ):
+            await cache.resolve("slow.com", socket.AF_INET)
+        snap = cache.snapshot()
+        errs = snap["resolution_errors"]
+        assert errs["fail.com/ipv4/dns_resolution"] == 1
+        assert errs["slow.com/ipv4/timeout"] == 1
+
+    @pytest.mark.asyncio
+    async def test_snapshot_by_host_negative_and_stale(self) -> None:
+        cfg = _make_config(
+            positive_ttl_seconds=10,
+            negative_ttl_seconds=300,
+            stale_if_error_seconds=10,
+        )
+        cache = DnsCache(cfg)
+        fake_time = [1000.0]
+        call_count = 0
+
+        def _monotonic() -> float:
+            return fake_time[0]
+
+        def _mock_getaddrinfo(host, port, family):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 1:
+                return [(socket.AF_INET, 0, 0, "", ("1.2.3.4", 0))]
+            raise socket.gaierror("down")
+
+        with (
+            patch(
+                "eggpool.providers.dns_cache.time.monotonic",
+                side_effect=_monotonic,
+            ),
+            patch(
+                "eggpool.providers.dns_cache.socket.getaddrinfo",
+                side_effect=_mock_getaddrinfo,
+            ),
+        ):
+            await cache.resolve("host.com", socket.AF_INET)
+            fake_time[0] += 15
+            await cache.resolve("host.com", socket.AF_INET)
+            fake_time[0] += 10
+            with pytest.raises(httpcore.ConnectError):
+                await cache.resolve("host.com", socket.AF_INET)
+        snap = cache.snapshot()
+        host_stats = snap["by_host"]["host.com/ipv4"]
+        assert host_stats["stale_hits"] == 1
+        assert host_stats["misses"] == 2
+
+
+class TestPreferIpv6:
+    def test_prefer_ipv6_default_false(self) -> None:
+        cfg = _make_config()
+        backend = DnsNetworkBackend(cfg, MagicMock(spec=httpcore.AsyncNetworkBackend))
+        assert backend._address_family == socket.AF_UNSPEC
+
+    def test_prefer_ipv6_sets_af_inet6(self) -> None:
+        cfg = _make_config(prefer_ipv6=True)
+        backend = DnsNetworkBackend(cfg, MagicMock(spec=httpcore.AsyncNetworkBackend))
+        assert backend._address_family == socket.AF_INET6
+
+    @pytest.mark.asyncio
+    async def test_prefer_ipv6_uses_ipv6_family(self) -> None:
+        cfg = _make_config(prefer_ipv6=True)
+        cache = DnsCache(cfg)
+        with patch(
+            "eggpool.providers.dns_cache.socket.getaddrinfo",
+            return_value=[(socket.AF_INET6, 0, 0, "", ("::1", 0))],
+        ) as mock_lookup:
+            result = await cache.resolve("example.com", socket.AF_INET6)
+        assert result == ["::1"]
+        mock_lookup.assert_called_once_with("example.com", None, socket.AF_INET6)
+
+
+class TestLookupTimeout:
+    @pytest.mark.asyncio
+    async def test_lookup_timeout_wraps_dns_lookup(self) -> None:
+        cfg = _make_config(lookup_timeout_seconds=1)
+        cache = DnsCache(cfg)
+        with patch(
+            "eggpool.providers.dns_cache.socket.getaddrinfo",
+            return_value=[(socket.AF_INET, 0, 0, "", ("1.2.3.4", 0))],
+        ):
+            result = await cache.resolve("example.com", socket.AF_INET)
+        assert result == ["1.2.3.4"]
+
+    @pytest.mark.asyncio
+    async def test_lookup_timeout_fires_on_slow_lookup(self) -> None:
+        cfg = _make_config(lookup_timeout_seconds=1)
+        cache = DnsCache(cfg)
+
+        async def _slow_lookup(*args: object) -> list[object]:
+            await asyncio.sleep(10)
+            return []  # pragma: no cover
+
+        with (
+            patch.object(cache, "_dns_lookup", side_effect=_slow_lookup),
+            pytest.raises(httpcore.ConnectTimeout),
+        ):
+            await cache.resolve("slow.com", socket.AF_INET)
+        snap = cache.snapshot()
+        assert snap["resolution_errors"]["slow.com/ipv4/timeout"] == 1
+
+    def test_lookup_timeout_none_when_zero(self) -> None:
+        cfg = _make_config(lookup_timeout_seconds=5)
+        cache = DnsCache(cfg)
+        assert cache._lookup_timeout_s == 5.0
+
     def test_lowercases_hostname(self) -> None:
         cfg = _make_config()
         cache = DnsCache(cfg)
