@@ -17,6 +17,7 @@ from eggpool.models.config import AppConfig
 from eggpool.runtime_metrics import (
     _MAX_PROBE_ERROR_LEN,
     RuntimeMetricsService,
+    _parse_proc_stat_memory,
     _safe_int,
     _truncate_probe_error,
 )
@@ -107,6 +108,44 @@ def test_truncate_probe_error_long() -> None:
     result = _truncate_probe_error(msg)
     assert len(result) == _MAX_PROBE_ERROR_LEN  # truncated to max + "..."
     assert result.endswith("...")
+
+
+def test_parse_proc_stat_memory_uses_rss_pages_not_vsize() -> None:
+    """RSS must come from stat field 24, not vsize field 23."""
+    page_size = 4096
+    vsize_bytes = 1_200_000_000
+    rss_pages = 50_000
+    fields = [
+        "S",  # 3 state
+        "1",  # 4 ppid
+        "1",  # 5 pgrp
+        "1",  # 6 session
+        "0",  # 7 tty_nr
+        "-1",  # 8 tpgid
+        "4194560",  # 9 flags
+        "100",  # 10 minflt
+        "0",  # 11 cminflt
+        "0",  # 12 majflt
+        "0",  # 13 cmajflt
+        "10",  # 14 utime
+        "20",  # 15 stime
+        "0",  # 16 cutime
+        "0",  # 17 cstime
+        "20",  # 18 priority
+        "0",  # 19 nice
+        "1",  # 20 num_threads
+        "0",  # 21 itrealvalue
+        "123456",  # 22 starttime
+        str(vsize_bytes),  # 23 vsize
+        str(rss_pages),  # 24 rss
+    ]
+    stat = f"12345 (eggpool worker) {' '.join(fields)}"
+
+    vms_bytes, rss_bytes = _parse_proc_stat_memory(stat, page_size)
+
+    assert vms_bytes == vsize_bytes
+    assert rss_bytes == rss_pages * page_size
+    assert rss_bytes != vsize_bytes * page_size
 
 
 # -- snapshot() top-level structure -----------------------------------------

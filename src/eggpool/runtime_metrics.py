@@ -51,6 +51,24 @@ def _truncate_probe_error(msg: str) -> str:
     return msg[: _MAX_PROBE_ERROR_LEN - 3] + "..."
 
 
+def _parse_proc_stat_memory(stat: str, page_size: int) -> tuple[int | None, int | None]:
+    """Parse current VMS/RSS bytes from Linux ``/proc/self/stat`` content."""
+    parts = stat.split(")", maxsplit=1)
+    if len(parts) < 2:
+        return None, None
+
+    fields = parts[1].split()
+    # After the comm field, fields[0] is state. Linux stat field numbers
+    # therefore map as: vsize field 23 -> fields[20], rss field 24 -> fields[21].
+    if len(fields) <= 21:
+        return None, None
+
+    vms_bytes = _safe_int(fields[20])
+    rss_pages = _safe_int(fields[21])
+    rss_bytes = rss_pages * page_size if rss_pages is not None else None
+    return vms_bytes, rss_bytes
+
+
 class RuntimeMetricsService:
     """Collects runtime/operations metrics for the running EggPool process.
 
@@ -179,16 +197,15 @@ class RuntimeMetricsService:
         if sys.platform == "linux":
             try:
                 stat = Path("/proc/self/stat").read_text()
-                parts = stat.split(")")
-                if len(parts) >= 2:
-                    fields = parts[1].split()
-                    # fields[20] = vsize (bytes), fields[21] = rss (pages)
-                    if len(fields) > 21:
-                        vms_bytes = _safe_int(fields[19])
-                        page_size = os.sysconf("SC_PAGE_SIZE")
-                        rss_pages = _safe_int(fields[20])
-                        if rss_pages is not None and page_size:
-                            rss_bytes = rss_pages * int(page_size)
+                page_size = int(os.sysconf("SC_PAGE_SIZE"))
+                proc_vms_bytes, proc_rss_bytes = _parse_proc_stat_memory(
+                    stat,
+                    page_size,
+                )
+                if proc_vms_bytes is not None:
+                    vms_bytes = proc_vms_bytes
+                if proc_rss_bytes is not None:
+                    rss_bytes = proc_rss_bytes
             except Exception:
                 pass  # Not critical
 
