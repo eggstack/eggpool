@@ -19,19 +19,36 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import warnings
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
+if TYPE_CHECKING:
+    from eggpool.models.config import NetworkConfig
+
 logger = logging.getLogger(__name__)
 
-# Defaults chosen for background / CLI network paths.  These are
-# intentionally conservative: update checks and catalog fetches are
-# infrequent and non-latency-critical.
-_DEFAULT_CONNECT_TIMEOUT_S = 10.0
-_DEFAULT_READ_TIMEOUT_S = 30.0
-_DEFAULT_MAX_CONNECTIONS = 10
-_DEFAULT_MAX_KEEPALIVE = 4
-_DEFAULT_KEEPALIVE_EXPIRY_S = 90.0
+# Module-level flag: set to True after the first OutboundClientManager
+# is created, so we can warn about ad-hoc constructions after startup.
+_manager_created = False
+
+
+def warn_adhoc_client_construction(location: str) -> None:
+    """Warn when a fresh httpx client is constructed outside managed paths.
+
+    Call this from any module that builds an ``httpx.AsyncClient`` or
+    ``httpx.Client`` directly.  The warning is suppressed until the
+    first :class:`OutboundClientManager` is created (during startup)
+    so bootstrap code does not trigger false positives.
+    """
+    if _manager_created:
+        warnings.warn(
+            f"Fresh HTTP client constructed at {location}; this defeats "
+            "connection reuse. Use OutboundClientManager.get_client() or "
+            "ProviderClientPool instead.",
+            stacklevel=2,
+        )
 
 
 class OutboundClientManager:
@@ -46,9 +63,15 @@ class OutboundClientManager:
     client builds do not grow with request volume.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, config: NetworkConfig | None = None) -> None:
+        global _manager_created
+        _manager_created = True
+
+        self._config = config
         self._client: httpx.AsyncClient | None = None
         self._build_count: int = 0
+        self._request_count: int = 0
+        self._error_count: int = 0
         self._lock: asyncio.Lock = asyncio.Lock()
 
     def _build_client(self) -> httpx.AsyncClient:
@@ -58,16 +81,30 @@ class OutboundClientManager:
         :meth:`get_client` call).
         """
         self._build_count += 1
+        if self._config is not None:
+            cfg = self._config
+            max_connections = cfg.max_connections
+            max_keepalive = cfg.max_keepalive
+            keepalive_expiry = cfg.keepalive_expiry_s
+            connect_timeout = cfg.connect_timeout_s
+            read_timeout = cfg.read_timeout_s
+        else:
+            max_connections = 10
+            max_keepalive = 4
+            keepalive_expiry = 90.0
+            connect_timeout = 10.0
+            read_timeout = 30.0
+
         limits = httpx.Limits(
-            max_connections=_DEFAULT_MAX_CONNECTIONS,
-            max_keepalive_connections=_DEFAULT_MAX_KEEPALIVE,
-            keepalive_expiry=_DEFAULT_KEEPALIVE_EXPIRY_S,
+            max_connections=max_connections,
+            max_keepalive_connections=max_keepalive,
+            keepalive_expiry=keepalive_expiry,
         )
         timeout = httpx.Timeout(
-            connect=_DEFAULT_CONNECT_TIMEOUT_S,
-            read=_DEFAULT_READ_TIMEOUT_S,
-            write=_DEFAULT_READ_TIMEOUT_S,
-            pool=_DEFAULT_CONNECT_TIMEOUT_S,
+            connect=connect_timeout,
+            read=read_timeout,
+            write=read_timeout,
+            pool=connect_timeout,
         )
         client = httpx.AsyncClient(
             timeout=timeout,
@@ -78,7 +115,7 @@ class OutboundClientManager:
             "Outbound client manager: built shared HTTP client "
             "(build #%d, max_connections=%d)",
             self._build_count,
-            _DEFAULT_MAX_CONNECTIONS,
+            max_connections,
         )
         return client
 
@@ -96,6 +133,26 @@ class OutboundClientManager:
             self._client = self._build_client()
             return self._client
 
+    def inject_client(self, client: httpx.AsyncClient) -> None:
+        """Replace the internal client with a pre-built instance.
+
+        Intended for tests that need to inject a mock transport or
+        verify that code paths use the shared client.  Not for
+        production use.
+        """
+        self._client = client
+
+    def record_request(self, *, success: bool = True) -> None:
+        """Record a completed outbound request for metrics.
+
+        Call this after a request made through the shared client
+        completes.  ``success`` should be False for connection errors,
+        timeouts, and unexpected status classes.
+        """
+        self._request_count += 1
+        if not success:
+            self._error_count += 1
+
     @property
     def build_count(self) -> int:
         """Return the number of clients built by this manager.
@@ -105,6 +162,25 @@ class OutboundClientManager:
         the hot path and must be fixed.
         """
         return self._build_count
+
+    @property
+    def request_count(self) -> int:
+        """Return the total number of requests made through the shared client."""
+        return self._request_count
+
+    @property
+    def error_count(self) -> int:
+        """Return the total number of failed requests through the shared client."""
+        return self._error_count
+
+    def snapshot(self) -> dict[str, Any]:
+        """Return a metrics snapshot for runtime diagnostics."""
+        return {
+            "build_count": self._build_count,
+            "request_count": self._request_count,
+            "error_count": self._error_count,
+            "has_client": self._client is not None,
+        }
 
     async def aclose(self) -> None:
         """Close the shared client if one was built."""

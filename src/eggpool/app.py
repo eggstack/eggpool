@@ -557,7 +557,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         app.state.httpx_client = legacy_client
 
     # 7b. Outbound client manager (shared client for background/CLI network paths)
-    outbound_manager = OutboundClientManager()
+    outbound_manager = OutboundClientManager(config=config.network)
     app.state.outbound_manager = outbound_manager
     # Pre-initialize the shared client so it's ready for catalog resolvers
     outbound_client = await outbound_manager.get_client()
@@ -804,6 +804,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         started_monotonic=app.state.started_monotonic,
         started_epoch=app.state.started_epoch,
         metrics_coalescer=metrics_coalescer,
+        outbound_manager=outbound_manager,
     )
 
     # Register catalog refresh task

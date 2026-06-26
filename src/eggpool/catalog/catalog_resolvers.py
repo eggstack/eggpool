@@ -32,6 +32,7 @@ from eggpool.catalog.pricing_resolver import (
     SOURCE_DETAIL_OPENROUTER,
     ResolvedPricing,
 )
+from eggpool.providers.outbound import warn_adhoc_client_construction
 
 if TYPE_CHECKING:
     from eggpool.catalog.pricing_aliases import PricingAlias, PricingAliasResolver
@@ -167,6 +168,7 @@ class OpenRouterCatalogResolver:
         self._client = client or self._build_client()
 
     def _build_client(self) -> httpx.AsyncClient:
+        warn_adhoc_client_construction("OpenRouterCatalogResolver._build_client")
         headers = {"User-Agent": "eggpool/1.0"}
         if self._config.api_key:
             headers["Authorization"] = f"Bearer {self._config.api_key}"

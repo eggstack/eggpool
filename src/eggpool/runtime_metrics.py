@@ -91,6 +91,7 @@ class RuntimeMetricsService:
         started_monotonic: float,
         started_epoch: float,
         metrics_coalescer: Any | None = None,  # noqa: ANN401
+        outbound_manager: Any | None = None,  # noqa: ANN401
     ) -> None:
         self._config = config
         self._db = db
@@ -102,6 +103,7 @@ class RuntimeMetricsService:
         self._started_monotonic = started_monotonic
         self._started_epoch = started_epoch
         self._metrics_coalescer = metrics_coalescer
+        self._outbound_manager = outbound_manager
 
     async def snapshot(self) -> dict[str, Any]:
         """Return a best-effort runtime snapshot.
@@ -136,6 +138,9 @@ class RuntimeMetricsService:
 
         # Metrics buffer health
         result["metrics_buffer"] = self._snapshot_metrics_buffer(probe_errors)
+
+        # Outbound client manager health
+        result["outbound_client"] = self._snapshot_outbound_client(probe_errors)
 
         return result
 
@@ -517,6 +522,23 @@ class RuntimeMetricsService:
             "health_states_by_account": health_states,
             "active_backoff_count": active_backoff_count,
         }
+
+    def _snapshot_outbound_client(self, probe_errors: list[str]) -> dict[str, Any]:
+        """Best-effort snapshot of the outbound client manager state."""
+        if self._outbound_manager is None:
+            return {
+                "build_count": 0,
+                "request_count": 0,
+                "error_count": 0,
+                "has_client": False,
+            }
+        try:
+            return self._outbound_manager.snapshot()
+        except Exception as exc:
+            probe_errors.append(
+                _truncate_probe_error(f"Outbound client snapshot failed: {exc}")
+            )
+            return {"error": str(exc)}
 
     def _snapshot_metrics_buffer(self, probe_errors: list[str]) -> dict[str, Any]:
         """Best-effort snapshot of the metrics write coalescer state."""

@@ -54,8 +54,8 @@ All four must pass with zero errors.
 
 - Provider-suffixed model IDs: `model-id/provider-id` (e.g., `claude-sonnet-4/opencode-go`)
 - `ProviderClientPool` manages per-provider `httpx.AsyncClient` with independent connection pools for upstream LLM forwarding and catalog model-list fetches
-- `OutboundClientManager` owns a shared `httpx.AsyncClient` for non-provider network paths (update checks, external catalog fetches). Initialized once at startup; `build_count` should stabilize at 1
-- Hot-path provider requests must **never** construct fresh HTTP clients. Background and CLI paths should use the shared outbound client
+- `OutboundClientManager` owns a shared `httpx.AsyncClient` for non-provider network paths (update checks, external catalog fetches). Initialized once at startup; `build_count` should stabilize at 1. Accepts `[network]` config for transport tuning. Exposes `snapshot()` with `build_count`, `request_count`, `error_count` for runtime diagnostics. `inject_client()` is the test escape hatch
+- Hot-path provider requests must **never** construct fresh HTTP clients. Background and CLI paths should use the shared outbound client. `warn_adhoc_clientConstruction()` emits a runtime warning after startup when fresh clients are built outside managed paths
 - Flat `[[accounts]]` configs auto-normalize to a default `opencode-go` provider
 - `parse_model_provider()` and `format_model_provider()` in `routing/provider.py`
 

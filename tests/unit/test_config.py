@@ -1277,3 +1277,74 @@ include_env = false
         config = AppConfig.from_toml(str(config_file))
         assert config.backup.enabled is True
         assert config.backup.interval_s == 86_400
+
+
+class TestNetworkConfig:
+    def test_defaults(self) -> None:
+        from eggpool.models.config import NetworkConfig
+
+        cfg = NetworkConfig()
+        assert cfg.connect_timeout_s == 10.0
+        assert cfg.read_timeout_s == 30.0
+        assert cfg.max_connections == 10
+        assert cfg.max_keepalive == 4
+        assert cfg.keepalive_expiry_s == 90.0
+
+    def test_custom_values(self) -> None:
+        from eggpool.models.config import NetworkConfig
+
+        cfg = NetworkConfig(
+            connect_timeout_s=5.0,
+            read_timeout_s=60.0,
+            max_connections=20,
+            max_keepalive=8,
+            keepalive_expiry_s=120.0,
+        )
+        assert cfg.connect_timeout_s == 5.0
+        assert cfg.read_timeout_s == 60.0
+        assert cfg.max_connections == 20
+        assert cfg.max_keepalive == 8
+        assert cfg.keepalive_expiry_s == 120.0
+
+    def test_rejects_keepalive_exceeding_connections(self) -> None:
+        from eggpool.models.config import NetworkConfig
+
+        with pytest.raises(ConfigError, match="max_keepalive"):
+            NetworkConfig(max_connections=4, max_keepalive=8)
+
+    def test_rejects_unknown_keys(self) -> None:
+        from eggpool.models.config import NetworkConfig
+
+        with pytest.raises(ValueError):
+            NetworkConfig(extra_field="nope")  # type: ignore[arg-type]
+
+    def test_appconfig_has_network_field(self) -> None:
+        config = AppConfig()
+        assert config.network.connect_timeout_s == 10.0
+        assert config.network.max_connections == 10
+
+    def test_network_config_from_toml(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(
+            """
+[network]
+connect_timeout_s = 5.0
+read_timeout_s = 60.0
+max_connections = 20
+max_keepalive = 8
+keepalive_expiry_s = 120.0
+"""
+        )
+        config = AppConfig.from_toml(str(config_file))
+        assert config.network.connect_timeout_s == 5.0
+        assert config.network.read_timeout_s == 60.0
+        assert config.network.max_connections == 20
+        assert config.network.max_keepalive == 8
+        assert config.network.keepalive_expiry_s == 120.0
+
+    def test_network_section_optional_in_toml(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("")  # empty config
+        config = AppConfig.from_toml(str(config_file))
+        assert config.network.connect_timeout_s == 10.0
+        assert config.network.max_connections == 10

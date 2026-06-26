@@ -618,6 +618,33 @@ class ModelOverrideConfig(ModelLimitOverrideConfig):
         return parse_microdollars_per_million(value)
 
 
+class NetworkConfig(BaseModel):
+    """Outbound HTTP client transport settings for background/CLI paths.
+
+    Controls the shared ``OutboundClientManager`` client used by update
+    checks, external catalog fetches, and CLI diagnostic commands.
+    Provider-specific clients (LLM forwarding) use per-provider
+    ``[providers.<id>]`` transport settings instead.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    connect_timeout_s: float = Field(default=10.0, gt=0)
+    read_timeout_s: float = Field(default=30.0, gt=0)
+    max_connections: int = Field(default=10, gt=0)
+    max_keepalive: int = Field(default=4, gt=0)
+    keepalive_expiry_s: float = Field(default=90.0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_keepalive(self) -> NetworkConfig:
+        if self.max_keepalive > self.max_connections:
+            raise ConfigError(
+                f"max_keepalive ({self.max_keepalive}) must not exceed "
+                f"max_connections ({self.max_connections})"
+            )
+        return self
+
+
 class BackupConfig(BaseModel):
     """Automatic backup configuration.
 
@@ -650,6 +677,7 @@ class AppConfig(BaseModel):
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     metrics: MetricsConfig = Field(default_factory=MetricsConfig)
     backup: BackupConfig = Field(default_factory=BackupConfig)
+    network: NetworkConfig = Field(default_factory=NetworkConfig)
     proxies: dict[str, ProxyConfig] = Field(default_factory=dict)
     accounts: list[AccountConfig] = Field(default_factory=list[AccountConfig])
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
