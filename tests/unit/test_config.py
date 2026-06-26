@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from eggpool.errors import ConfigError
-from eggpool.models.config import AppConfig
+from eggpool.models.config import AppConfig, DatabaseConfig
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -69,9 +69,22 @@ def test_load_valid_config(valid_config: Path) -> None:
         all_accts = config.all_accounts()
         assert len(all_accts) == 2
         assert all_accts[0].name == "test_account"
+        assert config.database.worker_threads == 1
     finally:
         del os.environ["TEST_KEY_1"]
         del os.environ["TEST_KEY_2"]
+
+
+def test_database_worker_threads_two_allowed() -> None:
+    cfg = DatabaseConfig(worker_threads=2)
+    assert cfg.worker_threads == 2
+
+
+def test_database_worker_threads_above_two_rejected() -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        DatabaseConfig(worker_threads=3)
 
 
 def test_missing_required_fields(tmp_path: Path) -> None:

@@ -344,6 +344,7 @@ async def test_db_snapshot_fields_present(db: Database) -> None:
     assert "synchronous" in db_info
     assert "synchronous_live" in db_info
     assert "busy_timeout_ms" in db_info
+    assert db_info["configured_worker_threads"] == 1
     assert "primary_connected" in db_info
     assert "stats_connection_separate" in db_info
     assert "file_size_bytes" in db_info

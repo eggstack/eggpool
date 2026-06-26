@@ -493,10 +493,14 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # 6. Crash recovery
     await _crash_recovery(db)
 
-    # Keep analytics reads off the data-plane connection lock. In-memory
-    # SQLite databases cannot be shared by opening a second connection.
+    # aiosqlite uses one worker thread per connection. The default keeps
+    # stats on the primary connection for a single SQLite worker thread;
+    # operators can opt into a second read-only stats connection when
+    # dashboard analytics should avoid the data-plane connection lock.
+    # In-memory SQLite databases cannot be shared by opening a second
+    # connection.
     stats_db = db
-    if config.database.path != ":memory:":
+    if config.database.path != ":memory:" and config.database.worker_threads > 1:
         stats_db = Database(
             path=config.database.path,
             busy_timeout_ms=config.database.busy_timeout_ms,

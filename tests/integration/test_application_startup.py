@@ -96,9 +96,7 @@ class TestApplicationStartup:
                 assert db is not None
                 assert db._conn is not None  # noqa: SLF001
                 stats_db: Database = app.state.stats_db
-                assert stats_db is not db
-                assert stats_db.read_only is True
-                assert stats_db._conn is not None  # noqa: SLF001
+                assert stats_db is db
 
                 rows = await db.fetch_all("SELECT name FROM accounts ORDER BY name")
                 names = [row["name"] for row in rows]
@@ -137,6 +135,43 @@ class TestApplicationStartup:
             assert names == ["acct-alpha", "acct-beta"]
         finally:
             await db2.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_worker_threads_two_opens_separate_stats_connection(
+        self,
+        config_file_db: AppConfig,
+    ) -> None:
+        """``database.worker_threads = 2`` opts into a read-only stats thread."""
+        config = config_file_db.model_copy(deep=True)
+        config.database.worker_threads = 2
+        app = create_app(config)
+
+        with respx.mock:
+            respx.get(f"{UPSTREAM_BASE}/models").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "object": "list",
+                        "data": [
+                            {
+                                "id": "gpt-4",
+                                "object": "model",
+                                "owned_by": "openai",
+                            },
+                        ],
+                    },
+                )
+            )
+
+            async with app.router.lifespan_context(app):
+                db: Database = app.state.db
+                stats_db: Database = app.state.stats_db
+                assert stats_db is not db
+                assert stats_db.read_only is True
+                assert stats_db._conn is not None  # noqa: SLF001
+
+            assert db._conn is None  # noqa: SLF001
+            assert stats_db._conn is None  # noqa: SLF001
 
     @pytest.mark.asyncio
     async def test_restart_succeeds_after_full_lifecycle(

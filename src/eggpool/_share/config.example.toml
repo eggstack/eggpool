@@ -25,6 +25,9 @@ path = "usage.sqlite3"
 busy_timeout_ms = 5000
 wal = true
 synchronous = "NORMAL"
+# aiosqlite uses one worker thread per SQLite connection. Default 1 keeps
+# the process small; set to 2 to add a read-only stats/dashboard connection.
+worker_threads = 1
 
 [models]
 # How often to refresh the model catalog from upstream providers (seconds).

@@ -2333,6 +2333,7 @@ def render_runtime(
     db_sync = escape(str(db.get("synchronous_live") or "—"))
     db_primary_connected = db.get("primary_connected")
     db_separate_stats = db.get("stats_connection_separate", False)
+    db_worker_threads = format_int(db.get("configured_worker_threads"))
 
     # Routing / in-flight
     pending_count = routing.get("pending_count")
@@ -2463,7 +2464,7 @@ def render_runtime(
   <div class="card">
     <h3>Stats DB</h3>
     <p class="metric">{"separate" if db_separate_stats else "shared"}</p>
-    <p class="sub">stats connection</p>
+    <p class="sub">{db_worker_threads} configured SQLite worker threads</p>
   </div>
 </section>
 """

@@ -397,6 +397,7 @@ class RuntimeMetricsService:
             "synchronous": config_db.synchronous,
             "synchronous_live": synchronous,
             "busy_timeout_ms": config_db.busy_timeout_ms,
+            "configured_worker_threads": config_db.worker_threads,
             "primary_connected": primary_connected,
             "stats_connection_separate": stats_db_separate,
             "file_size_bytes": file_size_bytes,

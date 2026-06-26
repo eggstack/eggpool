@@ -112,6 +112,11 @@ class DatabaseConfig(BaseModel):
     busy_timeout_ms: int = Field(default=5000, gt=0)
     wal: bool = True
     synchronous: Literal["OFF", "NORMAL", "FULL", "EXTRA"] = "NORMAL"
+    # aiosqlite uses one Python worker thread per connection. Keep the
+    # default at one for small-device deployments; setting this to 2
+    # opens a separate read-only stats connection so dashboard analytics
+    # do not share the data-plane connection lock.
+    worker_threads: int = Field(default=1, ge=1, le=2)
 
 
 class ModelsConfig(BaseModel):
