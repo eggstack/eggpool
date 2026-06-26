@@ -1179,3 +1179,101 @@ class TestProviderPriorityBackwardCompatibility:
             del os.environ["K_A"]
             del os.environ["K_B"]
             del os.environ["K_C"]
+
+
+# ---------------------------------------------------------------------------
+# BackupConfig
+# ---------------------------------------------------------------------------
+
+
+class TestBackupConfig:
+    def test_defaults(self) -> None:
+        from eggpool.models.config import BackupConfig
+
+        cfg = BackupConfig()
+        assert cfg.enabled is True
+        assert cfg.interval_s == 86_400
+        assert cfg.retain_count == 14
+        assert cfg.startup_delay_s == 300
+        assert cfg.directory is None
+        assert cfg.include_env is True
+
+    def test_disabled(self) -> None:
+        from eggpool.models.config import BackupConfig
+
+        cfg = BackupConfig(enabled=False)
+        assert cfg.enabled is False
+
+    def test_custom_values(self) -> None:
+        from eggpool.models.config import BackupConfig
+
+        cfg = BackupConfig(
+            interval_s=3600,
+            retain_count=7,
+            startup_delay_s=60,
+            directory="/custom/dir",
+            include_env=False,
+        )
+        assert cfg.interval_s == 3600
+        assert cfg.retain_count == 7
+        assert cfg.startup_delay_s == 60
+        assert cfg.directory == "/custom/dir"
+        assert cfg.include_env is False
+
+    def test_zero_interval_disables(self) -> None:
+        from eggpool.models.config import BackupConfig
+
+        cfg = BackupConfig(interval_s=0)
+        assert cfg.interval_s == 0
+
+    def test_rejects_negative_interval(self) -> None:
+        from eggpool.models.config import BackupConfig
+
+        with pytest.raises(ValueError):
+            BackupConfig(interval_s=-1)
+
+    def test_rejects_zero_retain_count(self) -> None:
+        from eggpool.models.config import BackupConfig
+
+        with pytest.raises(ValueError):
+            BackupConfig(retain_count=0)
+
+    def test_rejects_unknown_keys(self) -> None:
+        from eggpool.models.config import BackupConfig
+
+        with pytest.raises(ValueError):
+            BackupConfig(extra_field="nope")  # type: ignore[arg-type]
+
+    def test_appconfig_has_backup_field(self) -> None:
+        config = AppConfig()
+        assert config.backup.enabled is True
+        assert config.backup.interval_s == 86_400
+        assert config.backup.retain_count == 14
+
+    def test_backup_config_from_toml(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(
+            """
+[backup]
+enabled = false
+interval_s = 3600
+retain_count = 7
+startup_delay_s = 60
+directory = "/tmp/backups"
+include_env = false
+"""
+        )
+        config = AppConfig.from_toml(str(config_file))
+        assert config.backup.enabled is False
+        assert config.backup.interval_s == 3600
+        assert config.backup.retain_count == 7
+        assert config.backup.startup_delay_s == 60
+        assert config.backup.directory == "/tmp/backups"
+        assert config.backup.include_env is False
+
+    def test_backup_section_optional_in_toml(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("")  # empty config
+        config = AppConfig.from_toml(str(config_file))
+        assert config.backup.enabled is True
+        assert config.backup.interval_s == 86_400

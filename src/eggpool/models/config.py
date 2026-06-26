@@ -618,6 +618,24 @@ class ModelOverrideConfig(ModelLimitOverrideConfig):
         return parse_microdollars_per_million(value)
 
 
+class BackupConfig(BaseModel):
+    """Automatic backup configuration.
+
+    Controls the in-process background backup task that periodically
+    creates restore-compatible ``.zip`` archives of the configuration
+    and database.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    interval_s: int = Field(default=86_400, ge=0)
+    retain_count: int = Field(default=14, ge=1)
+    startup_delay_s: int = Field(default=300, ge=0)
+    directory: str | None = None
+    include_env: bool = True
+
+
 class AppConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -631,6 +649,7 @@ class AppConfig(BaseModel):
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     metrics: MetricsConfig = Field(default_factory=MetricsConfig)
+    backup: BackupConfig = Field(default_factory=BackupConfig)
     proxies: dict[str, ProxyConfig] = Field(default_factory=dict)
     accounts: list[AccountConfig] = Field(default_factory=list[AccountConfig])
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)

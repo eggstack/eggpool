@@ -101,12 +101,25 @@ eggpool deploy cron --install
 
 This writes a `@reboot` + `*/5 * * * *` `eggpool ensure-running` block to the invoking user's crontab (or `SUDO_USER`'s crontab under sudo). Use `--interval N` to change the poll cadence. The block is bracketed by `# BEGIN EggPool watchdog` / `# END EggPool watchdog` markers so uninstall only strips the eggpool-owned lines. See [docs/deployment.md](docs/deployment.md) for the full design.
 
-### Backup and uninstall
+### Backup and restore
 
-EggPool ships lifecycle commands that mirror the install flow:
+EggPool creates **automatic daily backups** by default. The in-process `automatic_backup` supervised task produces restore-compatible `.zip` archives every 24 hours (after an initial 5-minute startup delay) and retains the last 14. Archives are stored under `$XDG_BACKUP_HOME/eggpool` or `~/backups/eggpool`.
+
+```toml
+# Optional — automatic backups are enabled by default
+[backup]
+enabled = true
+interval_s = 86400
+retain_count = 14
+startup_delay_s = 300
+# directory = "/path/to/backups"
+include_env = true
+```
+
+Manual backup and restore are also available:
 
 ```bash
-# Backup config + .env + database to ~/backups/eggpool/
+# Manual backup config + .env + database
 eggpool backup
 
 # Restore from a specific archive (or omit the path for an interactive menu)
@@ -119,7 +132,7 @@ eggpool uninstall --yes
 eggpool uninstall --yes --deploy-artifacts
 ```
 
-The uninstall command removes the binary, active config, `.env`, database, and `eggpool` shell-rc entries. Pass `--deploy-artifacts` to also remove the systemd unit, logrotate config, watchdog + backup cron blocks, and the personal backup script. Existing backups under `~/backups/eggpool/` are always left in place. See [docs/backup-restore.md](docs/backup-restore.md) for the full backup/restore workflow.
+`eggpool deploy backup-cron` is optional and mainly for operators who prefer external scheduling or want backups even when the server process is not running. See [docs/backup-restore.md](docs/backup-restore.md) for the full backup/restore workflow.
 
 ## CLI Commands
 
@@ -156,7 +169,7 @@ The uninstall command removes the binary, active config, `.env`, database, and `
 | `eggpool init-config` | Write bundled config.example.toml to current directory or TARGET |
 | `eggpool deploy systemd` | Print systemd unit; `--install` writes it (personal by default; `--production` for the dedicated-system layout; `--as-root` for a root-owned personal unit) |
 | `eggpool deploy cron` | Print / install / uninstall the **watchdog** crontab (`@reboot` + `*/N * * * *` `ensure-running`). `--interval N` (1-59, default 5) |
-| `eggpool deploy backup-cron` | Print / install / uninstall the daily backup cron (personal user cron or production `/etc/cron.d/`) |
+| `eggpool deploy backup-cron` | Print / install / uninstall the daily backup cron. Optional — in-process automatic backup runs by default |
 | `eggpool deploy logrotate` | Print / install the logrotate config (validated via `logrotate -d`) |
 | `eggpool deploy all` | Print / install systemd + logrotate + watchdog cron (backup-cron is separate) |
 | `eggpool backup` | Create a timestamped `.zip` backup (default `~/backups/eggpool/`) |

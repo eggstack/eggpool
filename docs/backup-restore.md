@@ -1,6 +1,32 @@
 # Backup and Restore
 
-## What to Back Up
+## Automatic Backups
+
+EggPool creates automatic daily backups by default. The `automatic_backup`
+supervised background task produces restore-compatible `.zip` archives
+every 24 hours (after a 5-minute startup delay) and retains the last 14
+by default.
+
+```toml
+# Optional — automatic backups are enabled by default
+[backup]
+enabled = true
+interval_s = 86400         # every 24 hours
+retain_count = 14          # keep last 14 backups
+startup_delay_s = 300      # wait 5 min after boot before first backup
+# directory = "/path/to/backups"  # override default location
+include_env = true         # include .env file (may contain API keys)
+```
+
+The automatic task uses `sqlite3.Connection.backup()` for consistent
+snapshots and writes archives atomically (write-to-temp + rename).
+No external `sqlite3` binary is required.
+
+The `eggpool deploy backup-cron` path remains available for operators
+who prefer external scheduling or want backups even when the server
+process is not running.
+
+## Manual Backup
 
 | File | Description | Frequency |
 |------|-------------|-----------|

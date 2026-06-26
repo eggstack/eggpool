@@ -22,6 +22,7 @@ or ``gzip``.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import tomllib
@@ -36,9 +37,13 @@ from eggpool.providers.connect import TerminalMenu
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+logger = logging.getLogger(__name__)
+
 BACKUP_FORMAT_VERSION = 1
 
-BACKUP_FILENAME_RE = re.compile(r"^eggpool-backup-(?P<stamp>\d{8}-\d{6})\.zip$")
+BACKUP_FILENAME_RE = re.compile(
+    r"^eggpool-backup-(?P<stamp>\d{8}-\d{6})(?:-(?P<suffix>\d+))?\.zip$"
+)
 
 CONFIG_BASENAME = "config.toml"
 ENV_BASENAME = ".env"
@@ -115,6 +120,46 @@ class BackupContents:
 
 
 @dataclass(frozen=True)
+class BackupSource:
+    """Separate source paths for archive creation and restore metadata.
+
+    Runtime backups stage a consistent SQLite snapshot into a temporary
+    path while the META ``db_path`` must point at the live database so
+    restore targets the correct on-disk location.
+    """
+
+    config_source: Path
+    db_source: Path
+    env_source: Path | None = None
+    config_target: Path | None = None
+    db_target: Path | None = None
+    env_target: Path | None = None
+    install_method: str = "unknown"
+
+    def __post_init__(self) -> None:
+        if self.config_target is None:
+            object.__setattr__(self, "config_target", self.config_source)
+        if self.db_target is None:
+            object.__setattr__(self, "db_target", self.db_source)
+        if self.env_target is None:
+            object.__setattr__(self, "env_target", self.env_source)
+
+    def to_backup_contents(self) -> BackupContents:
+        """Convert to a ``BackupContents`` using source paths."""
+        return BackupContents(
+            config_path=self.config_source,
+            db_path=self.db_source,
+            env_path=self.env_source,
+            install_method=self.install_method,
+        )
+
+    def meta_db_path(self) -> Path:
+        """The ``db_path`` recorded in archive metadata (the restore target)."""
+        assert self.db_target is not None
+        return self.db_target
+
+
+@dataclass(frozen=True)
 class BackupEntry:
     """A backup archive discovered on disk, with parsed metadata."""
 
@@ -179,17 +224,53 @@ def _snapshot_existing_files(targets: Sequence[Path], staging_dir: Path) -> None
         snapshot.write_bytes(target.read_bytes())
 
 
+def _build_archive(
+    archive_path: Path,
+    contents: BackupContents,
+    *,
+    now: datetime | None = None,
+    meta_db_path: Path | None = None,
+) -> None:
+    """Write the zip archive to ``archive_path``.
+
+    ``meta_db_path`` overrides the ``db_path`` recorded in META so
+    runtime backups can point at the live DB while staging a snapshot.
+    """
+    members = contents.arcnames()
+
+    meta_lines = [
+        f"format_version = {BACKUP_FORMAT_VERSION}",
+        f"created_at = {_now_iso(now)!r}",
+        f"install_method = {contents.install_method!r}",
+        f"config_path = {str(contents.config_path)!r}",
+        f"db_path = {str(meta_db_path or contents.db_path)!r}",
+    ]
+    if contents.env_path is not None:
+        meta_lines.append(f"env_path = {str(contents.env_path)!r}")
+    meta_lines.append("members = " + json.dumps(sorted(members.values())))
+    meta_lines.append("")
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr(META_BASENAME, "\n".join(meta_lines))
+        for src, arcname in members.items():
+            archive.write(src, arcname=arcname)
+
+
 def create_backup(
     contents: BackupContents,
     output_dir: Path | None = None,
     *,
     now: datetime | None = None,
+    meta_db_path: Path | None = None,
 ) -> Path:
     """Create a backup archive under ``output_dir`` and return its path.
 
     The archive filename is generated via :func:`backup_filename` so that
     multiple backups taken in the same minute would still be unique
     (the function appends a numeric suffix when collisions occur).
+
+    Archive publication is atomic: the zip is written to a temporary
+    path and renamed into the final location so a crash mid-write
+    never leaves a partial archive at the expected filename.
     """
     target_dir = output_dir or default_backup_dir()
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -201,25 +282,105 @@ def create_backup(
         stamp = (now or datetime.now(UTC)).astimezone().strftime("%Y%m%d-%H%M%S")
         archive_path = target_dir / f"eggpool-backup-{stamp}-{suffix}.zip"
 
-    members = contents.arcnames()
-
-    meta_lines = [
-        f"format_version = {BACKUP_FORMAT_VERSION}",
-        f"created_at = {_now_iso(now)!r}",
-        f"install_method = {contents.install_method!r}",
-        f"config_path = {str(contents.config_path)!r}",
-        f"db_path = {str(contents.db_path)!r}",
-    ]
-    if contents.env_path is not None:
-        meta_lines.append(f"env_path = {str(contents.env_path)!r}")
-    meta_lines.append("members = " + json.dumps(sorted(members.values())))
-    meta_lines.append("")
-    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED) as archive:
-        archive.writestr(META_BASENAME, "\n".join(meta_lines))
-        for src, arcname in members.items():
-            archive.write(src, arcname=arcname)
+    tmp_path = archive_path.with_suffix(".zip.tmp")
+    try:
+        _build_archive(tmp_path, contents, now=now, meta_db_path=meta_db_path)
+        tmp_path.replace(archive_path)
+    except BaseException:
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise
 
     return archive_path
+
+
+async def create_runtime_backup(
+    *,
+    db_path: Path,
+    config_path: Path,
+    env_path: Path | None,
+    output_dir: Path,
+    install_method: str,
+    include_env: bool,
+    busy_timeout_ms: int = 5000,
+    now: datetime | None = None,
+) -> Path:
+    """Create a restore-compatible backup using an in-process SQLite snapshot.
+
+    Uses stdlib ``sqlite3.Connection.backup()`` to produce a consistent
+    snapshot of the live database, then writes it into the lifecycle
+    ``.zip`` archive format.  The archive metadata always records the
+    live ``db_path``, not the temporary snapshot, so restore targets
+    the correct on-disk location.
+    """
+    import asyncio
+    import shutil
+    import sqlite3
+    import tempfile
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    staging_dir = Path(
+        tempfile.mkdtemp(
+            prefix=".eggpool-backup-staging-",
+            dir=str(output_dir),
+        )
+    )
+    staged_db = staging_dir / "usage.sqlite3"
+
+    try:
+
+        def _snapshot_sqlite() -> None:
+            src_conn = sqlite3.connect(str(db_path), timeout=busy_timeout_ms / 1000.0)
+            try:
+                dst_conn = sqlite3.connect(str(staged_db))
+                try:
+                    src_conn.backup(dst_conn)
+                finally:
+                    dst_conn.close()
+            finally:
+                src_conn.close()
+
+        await asyncio.get_event_loop().run_in_executor(None, _snapshot_sqlite)
+
+        source = BackupSource(
+            config_source=config_path,
+            db_source=staged_db,
+            env_source=env_path if include_env else None,
+            config_target=config_path,
+            db_target=db_path,
+            env_target=env_path if include_env else None,
+            install_method=install_method,
+        )
+        return create_backup(
+            source.to_backup_contents(),
+            output_dir=output_dir,
+            now=now,
+            meta_db_path=db_path,
+        )
+    finally:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+
+
+def prune_backups(*, backup_dir: Path, retain_count: int) -> list[Path]:
+    """Remove old backup archives, keeping the newest ``retain_count``.
+
+    Returns a list of deleted paths.  Ignores files that do not match
+    the lifecycle filename pattern and logs but does not raise on
+    individual deletion failures.
+    """
+    backups = list_backups(backup_dir)
+    if len(backups) <= retain_count:
+        return []
+
+    to_delete = backups[retain_count:]
+    deleted: list[Path] = []
+    for entry in to_delete:
+        try:
+            entry.path.unlink()
+            deleted.append(entry.path)
+        except OSError:
+            logger.warning("Failed to prune backup %s", entry.path, exc_info=True)
+    return deleted
 
 
 def list_backups(backup_dir: Path | None = None) -> list[BackupEntry]:

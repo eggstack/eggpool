@@ -13,11 +13,13 @@ from eggpool.lifecycle.backup import (
     BACKUP_FORMAT_VERSION,
     BackupContents,
     BackupEntry,
+    BackupSource,
     backup_filename,
     create_backup,
     default_backup_dir,
     list_backups,
     parse_zip_metadata,
+    prune_backups,
     restore_backup,
     select_backup,
 )
@@ -420,3 +422,144 @@ class TestRestoreBackup:
         )
         with pytest.raises(ValueError, match="unexpected member"):
             restore_backup(archive, contents=targets)
+
+
+# ---------------------------------------------------------------------------
+# Atomic writes
+# ---------------------------------------------------------------------------
+
+
+class TestAtomicWrites:
+    def test_no_temp_file_on_success(self, tmp_path: Path) -> None:
+        """A successful backup leaves no .tmp file behind."""
+        contents = _make_project(tmp_path)
+        archive = create_backup(contents, output_dir=tmp_path, now=_fixed_now())
+
+        tmp_files = list(tmp_path.glob("*.tmp"))
+        assert tmp_files == []
+        assert archive.exists()
+
+    def test_no_final_archive_on_failure(self, tmp_path: Path) -> None:
+        """If archive creation fails, no final .zip is left."""
+        # Point at a config that doesn't exist to force an error.
+        contents = BackupContents(
+            config_path=tmp_path / "nonexistent.toml",
+            db_path=tmp_path / "nonexistent.sqlite3",
+        )
+        target = tmp_path / "backups"
+        with pytest.raises(FileNotFoundError):
+            create_backup(contents, output_dir=target, now=_fixed_now())
+
+        zips = list(target.glob("eggpool-backup-*.zip")) if target.exists() else []
+        assert zips == []
+
+
+# ---------------------------------------------------------------------------
+# BackupSource
+# ---------------------------------------------------------------------------
+
+
+class TestBackupSource:
+    def test_defaults_target_to_source(self) -> None:
+        src = Path("/src/config.toml")
+        db = Path("/src/db.sqlite3")
+        source = BackupSource(config_source=src, db_source=db)
+        assert source.config_target == src
+        assert source.db_target == db
+        assert source.env_target is None
+
+    def test_explicit_targets(self) -> None:
+        source = BackupSource(
+            config_source=Path("/a"),
+            db_source=Path("/b"),
+            config_target=Path("/c"),
+            db_target=Path("/d"),
+        )
+        assert source.config_target == Path("/c")
+        assert source.db_target == Path("/d")
+
+    def test_meta_db_path_returns_target(self) -> None:
+        source = BackupSource(
+            config_source=Path("/src"),
+            db_source=Path("/staged"),
+            db_target=Path("/live"),
+        )
+        assert source.meta_db_path() == Path("/live")
+
+    def test_to_backup_contents(self) -> None:
+        source = BackupSource(
+            config_source=Path("/c"),
+            db_source=Path("/d"),
+            env_source=Path("/e"),
+            install_method="test",
+        )
+        contents = source.to_backup_contents()
+        assert contents.config_path == Path("/c")
+        assert contents.db_path == Path("/d")
+        assert contents.env_path == Path("/e")
+        assert contents.install_method == "test"
+
+
+# ---------------------------------------------------------------------------
+# prune_backups
+# ---------------------------------------------------------------------------
+
+
+class TestPruneBackups:
+    def test_keeps_newest_and_deletes_older(self, tmp_path: Path) -> None:
+        """Prune retains the newest N backups and removes the rest."""
+        contents = _make_project(tmp_path)
+        archives = []
+        for i in range(5):
+            dt = datetime(2026, 1, i + 1, 0, 0, 0, tzinfo=UTC)
+            a = create_backup(contents, output_dir=tmp_path, now=dt)
+            archives.append(a)
+
+        deleted = prune_backups(backup_dir=tmp_path, retain_count=3)
+
+        assert len(deleted) == 2
+        # The two oldest should be deleted
+        remaining = list_backups(tmp_path)
+        assert len(remaining) == 3
+        # Newest 3 remain
+        remaining_names = {e.path.name for e in remaining}
+        assert archives[4].name in remaining_names
+        assert archives[3].name in remaining_names
+        assert archives[2].name in remaining_names
+
+    def test_noop_when_under_limit(self, tmp_path: Path) -> None:
+        """No files are deleted when count is at or under retain_count."""
+        contents = _make_project(tmp_path)
+        create_backup(contents, output_dir=tmp_path, now=_fixed_now())
+
+        deleted = prune_backups(backup_dir=tmp_path, retain_count=14)
+        assert deleted == []
+
+    def test_ignores_unknown_files(self, tmp_path: Path) -> None:
+        """Non-backup files are not touched by prune."""
+        contents = _make_project(tmp_path)
+        create_backup(contents, output_dir=tmp_path, now=_fixed_now())
+        stray = tmp_path / "stray.txt"
+        stray.write_text("keep me")
+
+        deleted = prune_backups(backup_dir=tmp_path, retain_count=1)
+        assert deleted == []
+        assert stray.exists()
+
+    def test_empty_directory(self, tmp_path: Path) -> None:
+        deleted = prune_backups(backup_dir=tmp_path, retain_count=5)
+        assert deleted == []
+
+    def test_filename_re_matches_suffixed(self) -> None:
+        """BACKUP_FILENAME_RE matches collision-suffixed filenames."""
+        assert (
+            BACKUP_FILENAME_RE.match("eggpool-backup-20260624-123456.zip") is not None
+        )
+        assert (
+            BACKUP_FILENAME_RE.match("eggpool-backup-20260624-123456-1.zip") is not None
+        )
+        assert (
+            BACKUP_FILENAME_RE.match("eggpool-backup-20260624-123456-42.zip")
+            is not None
+        )
+        assert BACKUP_FILENAME_RE.match("stray-file.zip") is None

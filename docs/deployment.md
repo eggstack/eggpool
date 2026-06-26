@@ -104,8 +104,15 @@ vacuum when you need to reclaim space after large data deletions.
 
 #### Backups
 
-Backups are useful for recovery but are not a substitute for durable
-storage. The daily backup cron can be installed with:
+EggPool creates automatic daily backups by default. The `automatic_backup`
+supervised task runs in-process and produces restore-compatible `.zip`
+archives every 24 hours with count-based retention (default 14). Backups
+use `sqlite3.Connection.backup()` for consistent snapshots and atomic
+archive publication.
+
+The `eggpool deploy backup-cron` path remains available for operators
+who prefer external scheduling or want backups even when the server
+process is not running:
 
 ```bash
 eggpool deploy backup-cron --install
@@ -155,10 +162,13 @@ eggpool serve --daemon    # detached supervisor; log -> ~/.local/state/eggpool/e
 instance, then spawns a detached child and returns promptly. See
 [Daemon Mode](#daemon-mode) below for the full contract.
 
-### 6. Daily backup
+### 6. Backups (automatic + optional cron)
 
-Install the daily backup script and cron entry separately so the
-watchdog and the backup schedule don't compete:
+EggPool creates automatic daily backups by default under the
+`automatic_backup` supervised task. No additional setup is required.
+
+If you prefer external cron-based scheduling (e.g. backups when the
+server is not running), install the backup cron separately:
 
 ```bash
 eggpool deploy backup-cron --install

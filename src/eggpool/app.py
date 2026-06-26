@@ -857,6 +857,28 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # dashboard render shows the latest state.
     _register_update_checker(app, supervisor)
 
+    # Register automatic backup task (default: daily, retain 14).
+    if config.backup.enabled and config.backup.interval_s > 0:
+        from eggpool.background.backup import automatic_backup_loop
+
+        raw_config_path: str | None = getattr(app.state, "config_path", None)
+        resolved_config_path = Path(raw_config_path) if raw_config_path else None
+        resolved_env_path: Path | None = None
+        if resolved_config_path is not None:
+            candidate = resolved_config_path.parent / ".env"
+            if candidate.exists():
+                resolved_env_path = candidate
+
+        supervisor.register(
+            "automatic_backup",
+            lambda: automatic_backup_loop(
+                config=config,
+                db=db,
+                config_path=resolved_config_path,
+                env_path=resolved_env_path,
+            ),
+        )
+
     # 21. Start background tasks
     await supervisor.start_all()
 

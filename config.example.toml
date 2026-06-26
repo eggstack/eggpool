@@ -119,6 +119,19 @@ cors_origins = []
 redact_headers = ["authorization", "x-api-key"]
 persist_redacted_error_detail = false
 
+# ─── Automatic Backups ────────────────────────────────────────────────
+# EggPool creates automatic daily backups by default. Archives are
+# restore-compatible .zip files stored under $XDG_BACKUP_HOME/eggpool
+# (or ~/backups/eggpool). The eggpool deploy backup-cron path remains
+# available for operators who prefer external scheduling.
+# [backup]
+# enabled = true
+# interval_s = 86400           # every 24 hours
+# retain_count = 14            # keep last 14 backups
+# startup_delay_s = 300        # wait 5 min after boot before first backup
+# # directory = "/path/to/backups"  # override default backup location
+# include_env = true           # include .env file (may contain API keys)
+
 # Optional outbound proxies. Omit this section for direct upstream connections.
 # Values use pproxy URI syntax:
 # https://pypi.org/project/pproxy/#uri-syntax
