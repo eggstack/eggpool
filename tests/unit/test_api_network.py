@@ -161,13 +161,19 @@ def test_outbound_clients_shape(app_with_key: FastAPI) -> None:
     data = response.json()
     ob = data["outbound_clients"]
     assert "builds_total" in ob
+    assert "scopes" in ob
     assert "request_count" in ob
     assert "error_count" in ob
     assert "has_client" in ob
+    assert "per_host_requests" in ob
+    assert "per_host_errors" in ob
     assert isinstance(ob["builds_total"], int)
+    assert isinstance(ob["scopes"], dict)
     assert isinstance(ob["request_count"], int)
     assert isinstance(ob["error_count"], int)
     assert isinstance(ob["has_client"], bool)
+    assert isinstance(ob["per_host_requests"], dict)
+    assert isinstance(ob["per_host_errors"], dict)
 
 
 def test_dns_cache_shape(app_with_key: FastAPI) -> None:
@@ -199,6 +205,44 @@ def test_hosts_is_list(app_with_key: FastAPI) -> None:
     )
     data = response.json()
     assert isinstance(data["hosts"], list)
+
+
+def test_host_entry_shape(app_with_key: FastAPI) -> None:
+    """When hosts exist, each has the required fields."""
+    # The test fixture has no DNS cache entries, so hosts will be empty.
+    # Verify the shape by checking the key is present and is a list.
+    client = TestClient(app_with_key)
+    response = client.get(
+        "/api/network/diagnostics",
+        headers={"Authorization": "Bearer test-key-12345678"},
+    )
+    data = response.json()
+    hosts = data["hosts"]
+    assert isinstance(hosts, list)
+    for entry in hosts:
+        assert "host" in entry
+        assert "family" in entry
+        assert "state" in entry
+        assert "expires_in_seconds" in entry
+        assert "stale_available" in entry
+        assert "last_error_kind" in entry
+        assert entry["state"] in ("positive", "negative")
+        assert isinstance(entry["expires_in_seconds"], (int, float))
+        assert isinstance(entry["stale_available"], bool)
+
+
+def test_provider_client_pool_in_response(app_with_key: FastAPI) -> None:
+    """The provider_client_pool data is included in the response."""
+    client = TestClient(app_with_key)
+    response = client.get(
+        "/api/network/diagnostics",
+        headers={"Authorization": "Bearer test-key-12345678"},
+    )
+    data = response.json()
+    ob = data["outbound_clients"]
+    # scopes is always present (may be empty when no outbound manager is configured)
+    assert "scopes" in ob
+    assert isinstance(ob["scopes"], dict)
 
 
 # -- register_network_routes always attaches auth dependency ---------------

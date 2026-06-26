@@ -2302,6 +2302,7 @@ def render_runtime(
     routing = _as_dict(snapshot.get("routing_runtime"))
     probe_errors: list[str] = snapshot.get("probe_errors") or []
     outbound = _as_dict(snapshot.get("outbound_client"))
+    provider_pool = _as_dict(snapshot.get("provider_client_pool"))
     dns_cache = _as_dict(snapshot.get("dns_cache"))
 
     # Server section
@@ -2545,6 +2546,7 @@ def render_runtime(
     ob_builds = format_int(outbound.get("build_count", 0))
     ob_requests = format_int(outbound.get("request_count", 0))
     ob_errors = format_int(outbound.get("error_count", 0))
+    provider_builds = format_int(provider_pool.get("build_count", 0))
 
     network_cards = f"""
 <section class="panel">
@@ -2581,6 +2583,11 @@ def render_runtime(
       <h3>Outbound requests</h3>
       <p class="metric">{ob_requests}</p>
       <p class="sub">errors {ob_errors}</p>
+    </div>
+    <div class="card">
+      <h3>Provider clients</h3>
+      <p class="metric">{provider_builds}</p>
+      <p class="sub">per-provider builds</p>
     </div>
   </section>
 </section>

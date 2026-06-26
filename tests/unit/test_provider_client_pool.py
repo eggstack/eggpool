@@ -100,6 +100,19 @@ class TestProviderClientPool:
         pool = ProviderClientPool.from_config({})
         assert pool.providers == []
 
+    def test_snapshot_empty_pool(self) -> None:
+        pool = ProviderClientPool()
+        snap = pool.snapshot()
+        assert snap == {"build_count": 0, "providers": {}}
+
+    def test_snapshot_with_providers(self) -> None:
+        pool = ProviderClientPool()
+        pool.register("alpha", httpx.AsyncClient(base_url="https://alpha.example.com"))
+        pool.register("beta", httpx.AsyncClient(base_url="https://beta.example.com"))
+        snap = pool.snapshot()
+        assert snap["build_count"] == 2
+        assert snap["providers"] == {"alpha": 1, "beta": 1}
+
     def test_from_app_config_uses_account_proxy_clients(self) -> None:
         config = AppConfig(
             proxies={"local": {"url": "http://127.0.0.1:8081"}},

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import contextlib
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpcore
 import httpx
@@ -64,6 +64,18 @@ class ProviderClientPool:
     def providers(self) -> list[str]:
         """List registered provider IDs."""
         return list(self._clients.keys())
+
+    def snapshot(self) -> dict[str, Any]:
+        """Return a metrics snapshot for runtime diagnostics.
+
+        Each provider gets exactly one client at startup, so per-provider
+        build counts are always 1.  This exposes the total count and a
+        per-provider breakdown for the diagnostics endpoint.
+        """
+        return {
+            "build_count": len(self._clients),
+            "providers": {pid: 1 for pid in self._clients},
+        }
 
     async def close(self) -> None:
         """Close all clients."""

@@ -53,6 +53,7 @@ The Runtime dashboard page (`/runtime`) shows a Network section with:
 - Cache entries and hit rate
 - Miss count and resolver errors
 - Outbound client build count and request counts
+- Provider client build count (per-provider)
 
 ### API
 
@@ -61,10 +62,21 @@ The Runtime dashboard page (`/runtime`) shows a Network section with:
 ```json
 {
   "outbound_clients": {
-    "builds_total": 1,
+    "builds_total": 4,
+    "scopes": {
+      "global": 1,
+      "provider:openai": 1,
+      "provider:anthropic": 1,
+      "provider:opencode-go": 1
+    },
     "request_count": 1204,
     "error_count": 0,
-    "has_client": true
+    "has_client": true,
+    "per_host_requests": {
+      "pypi.org": 3,
+      "api.github.com": 1
+    },
+    "per_host_errors": {}
   },
   "dns_cache": {
     "enabled": true,
@@ -80,15 +92,30 @@ The Runtime dashboard page (`/runtime`) shows a Network section with:
   },
   "hosts": [
     {
-      "host": "api.example-provider.com",
+      "host": "api.openai.com",
       "family": "ipv4",
-      "hits": 500,
-      "misses": 3,
-      "hit_rate": 0.994
+      "state": "positive",
+      "expires_in_seconds": 241.0,
+      "stale_available": true,
+      "last_error_kind": null
+    },
+    {
+      "host": "api.anthropic.com",
+      "family": "ipv4",
+      "state": "negative",
+      "expires_in_seconds": 30.0,
+      "stale_available": false,
+      "last_error_kind": "ConnectError"
     }
   ]
 }
 ```
+
+Key fields:
+
+- **`outbound_clients.scopes`**: per-scope build counts. `global` is the shared `OutboundClientManager` client; `provider:*` entries are per-provider clients from `ProviderClientPool`.
+- **`outbound_clients.per_host_requests`**: request counts by target host for the shared outbound client (update checks, catalog fetches).
+- **`hosts`**: per-cache-entry metadata including `state` (positive/negative), `expires_in_seconds` (TTL remaining), `stale_available` (stale-if-error window), and `last_error_kind` (for negative entries).
 
 This endpoint is always auth-gated regardless of `dashboard.public` setting.
 
@@ -106,6 +133,13 @@ Network:
   Outbound builds:   1
   Outbound requests: 1204
   Outbound errors:   0
+  Provider clients:  3
+    anthropic: 1
+    openai: 1
+    opencode-go: 1
+  DNS cache entries:
+    api.openai.com (ipv4) state=positive expires=241s stale_ok
+    api.anthropic.com (ipv4) state=negative expires=30s error=ConnectError
 ```
 
 Use `--json` for machine-readable output.

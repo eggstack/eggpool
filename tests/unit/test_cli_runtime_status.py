@@ -454,6 +454,13 @@ def test_print_runtime_status_network_section() -> None:
             "request_count": 42,
             "error_count": 2,
             "has_client": True,
+            "scopes": {"global": 1},
+            "per_host_requests": {},
+            "per_host_errors": {},
+        },
+        "provider_client_pool": {
+            "build_count": 3,
+            "providers": {"openai": 1, "anthropic": 1, "opencode-go": 1},
         },
         "dns_cache": {
             "enabled": True,
@@ -464,6 +471,7 @@ def test_print_runtime_status_network_section() -> None:
             "stale_hits": 0,
             "evictions": 0,
             "resolution_errors": {},
+            "hosts": [],
         },
         "probe_errors": [],
     }
@@ -478,6 +486,7 @@ def test_print_runtime_status_network_section() -> None:
     assert "Outbound requests:" in output
     assert "DNS cache:" in output
     assert "DNS hit rate:" in output
+    assert "Provider clients:" in output
 
 
 def test_print_runtime_status_network_disabled() -> None:
@@ -563,7 +572,8 @@ def test_runtime_status_includes_network_in_json() -> None:
         "db": {},
         "routing_runtime": {},
         "outbound_client": {"build_count": 1, "request_count": 5, "error_count": 0},
-        "dns_cache": {"enabled": True, "hits": 10, "misses": 2},
+        "provider_client_pool": {"build_count": 2, "providers": {"a": 1, "b": 1}},
+        "dns_cache": {"enabled": True, "hits": 10, "misses": 2, "hosts": []},
         "probe_errors": [],
     }
 
@@ -589,3 +599,82 @@ def test_runtime_status_includes_network_in_json() -> None:
             parsed = json.loads(result.output)
             assert "outbound_client" in parsed
             assert "dns_cache" in parsed
+            assert "provider_client_pool" in parsed
+
+
+def test_print_runtime_status_dns_cache_hosts() -> None:
+    """DNS cache hosts are rendered when present."""
+    data: dict[str, Any] = {
+        "server": {"pid": 1, "uptime_seconds": 0, "configured_server_threads": 1},
+        "memory": {},
+        "processes": {},
+        "background_tasks": [],
+        "db": {},
+        "routing_runtime": {},
+        "outbound_client": {"build_count": 1, "request_count": 0, "error_count": 0},
+        "provider_client_pool": {"build_count": 0, "providers": {}},
+        "dns_cache": {
+            "enabled": True,
+            "size": 2,
+            "hits": 50,
+            "misses": 5,
+            "resolution_errors": {},
+            "hosts": [
+                {
+                    "host": "api.openai.com",
+                    "family": "ipv4",
+                    "state": "positive",
+                    "expires_in_seconds": 241.0,
+                    "stale_available": True,
+                    "last_error_kind": None,
+                },
+                {
+                    "host": "api.anthropic.com",
+                    "family": "ipv4",
+                    "state": "negative",
+                    "expires_in_seconds": 30.0,
+                    "stale_available": False,
+                    "last_error_kind": "ConnectError",
+                },
+            ],
+        },
+        "probe_errors": [],
+    }
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        _print_runtime_status(data)
+    output = buf.getvalue()
+    assert "DNS cache entries:" in output
+    assert "api.openai.com (ipv4) state=positive" in output
+    assert "stale_ok" in output
+    assert "api.anthropic.com (ipv4) state=negative" in output
+    assert "error=ConnectError" in output
+
+
+def test_print_runtime_status_provider_clients() -> None:
+    """Provider client counts are rendered."""
+    data: dict[str, Any] = {
+        "server": {"pid": 1, "uptime_seconds": 0, "configured_server_threads": 1},
+        "memory": {},
+        "processes": {},
+        "background_tasks": [],
+        "db": {},
+        "routing_runtime": {},
+        "outbound_client": {"build_count": 1, "request_count": 0, "error_count": 0},
+        "provider_client_pool": {
+            "build_count": 3,
+            "providers": {"anthropic": 1, "openai": 1, "opencode-go": 1},
+        },
+        "dns_cache": {"enabled": True, "hosts": []},
+        "probe_errors": [],
+    }
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        _print_runtime_status(data)
+    output = buf.getvalue()
+    assert "Provider clients:" in output
+    assert "anthropic: 1" in output
+    assert "openai: 1" in output
+    assert "opencode-go: 1" in output

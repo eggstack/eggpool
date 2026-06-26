@@ -807,6 +807,7 @@ class TestSnapshot:
             "entries": {"positive": 0, "negative": 0},
             "resolution_errors": {},
             "by_host": {},
+            "hosts": [],
         }
 
     @pytest.mark.asyncio
@@ -943,6 +944,56 @@ class TestSnapshot:
         host_stats = snap["by_host"]["host.com/ipv4"]
         assert host_stats["stale_hits"] == 1
         assert host_stats["misses"] == 2
+
+    @pytest.mark.asyncio
+    async def test_snapshot_hosts_positive_entry(self) -> None:
+        cfg = _make_config(positive_ttl_seconds=300, stale_if_error_seconds=60)
+        cache = DnsCache(cfg)
+        with patch(
+            "eggpool.providers.dns_cache.socket.getaddrinfo",
+            return_value=[(socket.AF_INET, 0, 0, "", ("1.2.3.4", 0))],
+        ):
+            await cache.resolve("test.com", socket.AF_INET)
+        snap = cache.snapshot()
+        hosts = snap["hosts"]
+        assert len(hosts) == 1
+        entry = hosts[0]
+        assert entry["host"] == "test.com"
+        assert entry["family"] == "ipv4"
+        assert entry["state"] == "positive"
+        assert entry["expires_in_seconds"] > 0
+        assert entry["stale_available"] is True
+        assert entry["last_error_kind"] is None
+
+    @pytest.mark.asyncio
+    async def test_snapshot_hosts_negative_entry(self) -> None:
+        cfg = _make_config(negative_ttl_seconds=300)
+        cache = DnsCache(cfg)
+        with (
+            patch(
+                "eggpool.providers.dns_cache.socket.getaddrinfo",
+                side_effect=socket.gaierror("name error"),
+            ),
+            pytest.raises(httpcore.ConnectError),
+        ):
+            await cache.resolve("fail.com", socket.AF_INET)
+        snap = cache.snapshot()
+        hosts = snap["hosts"]
+        assert len(hosts) == 1
+        entry = hosts[0]
+        assert entry["host"] == "fail.com"
+        assert entry["family"] == "ipv4"
+        assert entry["state"] == "negative"
+        assert entry["expires_in_seconds"] > 0
+        assert entry["stale_available"] is False
+        assert entry["last_error_kind"] == "ConnectError"
+
+    @pytest.mark.asyncio
+    async def test_snapshot_hosts_empty_when_no_entries(self) -> None:
+        cfg = _make_config()
+        cache = DnsCache(cfg)
+        snap = cache.snapshot()
+        assert snap["hosts"] == []
 
 
 class TestPreferIpv6:

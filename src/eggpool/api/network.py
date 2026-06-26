@@ -21,14 +21,25 @@ async def handle_network_diagnostics(request: Request) -> JSONResponse:
     runtime_metrics = request.app.state.runtime_metrics
     snapshot = await runtime_metrics.snapshot()
     outbound = snapshot.get("outbound_client", {})
+    provider_pool = snapshot.get("provider_client_pool", {})
     dns = snapshot.get("dns_cache", {})
+
+    total_builds = outbound.get("build_count", 0) + provider_pool.get("build_count", 0)
+    scopes: dict[str, int] = {}
+    scopes.update(outbound.get("scopes", {}))
+    provider_builds = provider_pool.get("providers", {})
+    for pid, count in provider_builds.items():
+        scopes[f"provider:{pid}"] = count
 
     result: dict[str, Any] = {
         "outbound_clients": {
-            "builds_total": outbound.get("build_count", 0),
+            "builds_total": total_builds,
+            "scopes": scopes,
             "request_count": outbound.get("request_count", 0),
             "error_count": outbound.get("error_count", 0),
             "has_client": outbound.get("has_client", False),
+            "per_host_requests": outbound.get("per_host_requests", {}),
+            "per_host_errors": outbound.get("per_host_errors", {}),
         },
         "dns_cache": {
             "enabled": dns.get("enabled", False),
@@ -44,32 +55,9 @@ async def handle_network_diagnostics(request: Request) -> JSONResponse:
             if isinstance(dns.get("resolution_errors"), dict)
             else 0,
         },
-        "hosts": _build_host_entries(dns),
+        "hosts": dns.get("hosts", []),
     }
     return JSONResponse(content=result)
-
-
-def _build_host_entries(dns: dict[str, Any]) -> list[dict[str, Any]]:
-    """Build per-host diagnostics entries from DNS cache snapshot."""
-    by_host: dict[str, dict[str, int]] = dns.get("by_host", {})
-    entries: list[dict[str, Any]] = []
-    for label, counters in sorted(by_host.items()):
-        parts = label.split("/", 1)
-        host = parts[0]
-        family = parts[1] if len(parts) > 1 else "any"
-        hits = counters.get("hits", 0)
-        misses = counters.get("misses", 0)
-        total = hits + misses
-        entries.append(
-            {
-                "host": host,
-                "family": family,
-                "hits": hits,
-                "misses": misses,
-                "hit_rate": round(hits / total, 4) if total > 0 else 0.0,
-            }
-        )
-    return entries
 
 
 def register_network_routes(

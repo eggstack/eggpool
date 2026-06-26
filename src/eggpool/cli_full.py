@@ -3150,6 +3150,7 @@ def _print_runtime_status(data: dict[str, Any]) -> None:
 
     # Network diagnostics
     outbound = cast("dict[str, Any]", data.get("outbound_client", {}))
+    provider_pool = cast("dict[str, Any]", data.get("provider_client_pool", {}))
     dns = cast("dict[str, Any]", data.get("dns_cache", {}))
     click.echo()
     click.echo("  Network:")
@@ -3166,6 +3167,8 @@ def _print_runtime_status(data: dict[str, Any]) -> None:
     ob_builds = outbound.get("build_count", 0)
     ob_requests = outbound.get("request_count", 0)
     ob_errors = outbound.get("error_count", 0)
+    provider_builds = provider_pool.get("build_count", 0)
+    provider_list = provider_pool.get("providers", {})
     click.echo(f"    DNS cache:         {'enabled' if dns_enabled else 'disabled'}")
     click.echo(f"    DNS entries:       {dns_size}")
     click.echo(f"    DNS hit rate:      {dns_hit_rate}")
@@ -3174,6 +3177,29 @@ def _print_runtime_status(data: dict[str, Any]) -> None:
     click.echo(f"    Outbound builds:   {ob_builds}")
     click.echo(f"    Outbound requests: {ob_requests}")
     click.echo(f"    Outbound errors:   {ob_errors}")
+    click.echo(f"    Provider clients:  {provider_builds}")
+    if provider_list:
+        for pid in sorted(provider_list):
+            click.echo(f"      {pid}: {provider_list[pid]}")
+
+    # DNS cache hosts (if any)
+    hosts = dns.get("hosts", [])
+    if hosts:
+        click.echo("    DNS cache entries:")
+        for entry in hosts:
+            host = entry.get("host", "?")
+            family = entry.get("family", "?")
+            state = entry.get("state", "?")
+            expires = entry.get("expires_in_seconds", 0)
+            stale = entry.get("stale_available", False)
+            err_kind = entry.get("last_error_kind")
+            parts = [f"{host} ({family}) state={state}"]
+            parts.append(f"expires={expires:.0f}s")
+            if stale:
+                parts.append("stale_ok")
+            if err_kind:
+                parts.append(f"error={err_kind}")
+            click.echo(f"      {' '.join(parts)}")
 
     # Probe errors
     if probe_errors:

@@ -98,6 +98,8 @@ class OutboundClientManager:
         self._request_count: int = 0
         self._error_count: int = 0
         self._lock: asyncio.Lock = asyncio.Lock()
+        self._per_host_requests: dict[str, int] = {}
+        self._per_host_errors: dict[str, int] = {}
 
     def _build_client(self) -> httpx.AsyncClient:
         """Build the shared outbound HTTP client.
@@ -146,7 +148,7 @@ class OutboundClientManager:
             follow_redirects=True,
             transport=transport,
         )
-        logger.info(
+        logger.debug(
             "Outbound client manager: built shared HTTP client "
             "(build #%d, max_connections=%d)",
             self._build_count,
@@ -177,16 +179,21 @@ class OutboundClientManager:
         """
         self._client = client
 
-    def record_request(self, *, success: bool = True) -> None:
+    def record_request(self, *, success: bool = True, host: str | None = None) -> None:
         """Record a completed outbound request for metrics.
 
         Call this after a request made through the shared client
         completes.  ``success`` should be False for connection errors,
-        timeouts, and unexpected status classes.
+        timeouts, and unexpected status classes.  ``host`` optionally
+        identifies the target host for per-host diagnostics.
         """
         self._request_count += 1
+        if host is not None:
+            self._per_host_requests[host] = self._per_host_requests.get(host, 0) + 1
         if not success:
             self._error_count += 1
+            if host is not None:
+                self._per_host_errors[host] = self._per_host_errors.get(host, 0) + 1
 
     @property
     def build_count(self) -> int:
@@ -215,6 +222,9 @@ class OutboundClientManager:
             "request_count": self._request_count,
             "error_count": self._error_count,
             "has_client": self._client is not None,
+            "scopes": {"global": self._build_count},
+            "per_host_requests": dict(self._per_host_requests),
+            "per_host_errors": dict(self._per_host_errors),
         }
 
     async def aclose(self) -> None:

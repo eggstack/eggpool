@@ -3155,6 +3155,10 @@ class TestRenderRuntimeNetwork:
                 "error_count": 2,
                 "has_client": True,
             },
+            "provider_client_pool": {
+                "build_count": 3,
+                "providers": {"openai": 1, "anthropic": 1, "opencode-go": 1},
+            },
             "dns_cache": {
                 "enabled": True,
                 "size": 7,
@@ -3164,6 +3168,7 @@ class TestRenderRuntimeNetwork:
                 "stale_hits": 0,
                 "evictions": 0,
                 "resolution_errors": {},
+                "hosts": [],
             },
         }
         html = render_runtime(snapshot)
@@ -3173,6 +3178,7 @@ class TestRenderRuntimeNetwork:
         assert "Outbound requests" in html
         assert "DNS cache" in html
         assert "DNS hit rate" in html
+        assert "Provider clients" in html
 
     def test_renders_dns_disabled(self) -> None:
         snapshot: dict[str, Any] = {
@@ -3183,6 +3189,7 @@ class TestRenderRuntimeNetwork:
             "db": {},
             "routing_runtime": {},
             "outbound_client": {"build_count": 0, "request_count": 0, "error_count": 0},
+            "provider_client_pool": {"build_count": 0, "providers": {}},
             "dns_cache": {"enabled": False},
         }
         html = render_runtime(snapshot)
@@ -3211,6 +3218,7 @@ class TestRenderRuntimeNetwork:
             "db": {},
             "routing_runtime": {},
             "outbound_client": {"build_count": 1, "request_count": 0, "error_count": 0},
+            "provider_client_pool": {"build_count": 0, "providers": {}},
             "dns_cache": {
                 "enabled": True,
                 "size": 3,
@@ -3230,6 +3238,7 @@ class TestRenderRuntimeNetwork:
             "db": {},
             "routing_runtime": {},
             "outbound_client": {"build_count": 1, "request_count": 0, "error_count": 0},
+            "provider_client_pool": {"build_count": 0, "providers": {}},
             "dns_cache": {
                 "enabled": True,
                 "size": 0,
@@ -3250,6 +3259,7 @@ class TestRenderRuntimeNetwork:
             "db": {},
             "routing_runtime": {},
             "outbound_client": {"build_count": 1, "request_count": 0, "error_count": 0},
+            "provider_client_pool": {"build_count": 0, "providers": {}},
             "dns_cache": {"enabled": True, "size": 0, "hits": 0, "misses": 0},
         }
         html = render_runtime(snapshot)

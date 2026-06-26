@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import ipaddress
+import logging
 import socket
 import time
 from dataclasses import dataclass
@@ -16,6 +17,8 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from eggpool.models.config import DnsCacheConfig
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +66,15 @@ class DnsCache:
             if config.lookup_timeout_seconds
             else None
         )
+        logger.debug(
+            "DNS cache init: enabled=%s max_entries=%d positive_ttl=%ds "
+            "negative_ttl=%ds stale_if_error=%ds",
+            config.enabled,
+            config.max_entries,
+            config.positive_ttl_seconds,
+            config.negative_ttl_seconds,
+            config.stale_if_error_seconds,
+        )
 
     def _record(self, key: DnsCacheKey, field: str) -> None:
         counter_key = (key.hostname, key.address_family)
@@ -105,6 +117,7 @@ class DnsCache:
             fam_label = "ipv4" if fam == socket.AF_INET else "ipv6"
             label = f"{host}/{fam_label}/{kind}"
             resolution_errors[label] = count
+        hosts = self._snapshot_hosts()
         return {
             "hits": self.hits,
             "misses": self.misses,
@@ -115,7 +128,42 @@ class DnsCache:
             "entries": self.entries,
             "resolution_errors": resolution_errors,
             "by_host": by_host,
+            "hosts": hosts,
         }
+
+    def _snapshot_hosts(self) -> list[dict[str, object]]:
+        """Build per-host entry metadata for diagnostics."""
+        now = time.monotonic()
+        hosts: list[dict[str, object]] = []
+        for key, entry in self._cache.items():
+            fam_label = "ipv4" if key.address_family == socket.AF_INET else "ipv6"
+            if isinstance(entry, PositiveCacheEntry):
+                expires_in = max(0.0, entry.expires_at - now)
+                stale_available = now < entry.stale_until
+                hosts.append(
+                    {
+                        "host": key.hostname,
+                        "family": fam_label,
+                        "state": "positive",
+                        "expires_in_seconds": round(expires_in, 1),
+                        "stale_available": stale_available,
+                        "last_error_kind": None,
+                    }
+                )
+            else:
+                expires_in = max(0.0, entry.expires_at - now)
+                error_kind = entry.error_class.__name__ if entry.error_class else None
+                hosts.append(
+                    {
+                        "host": key.hostname,
+                        "family": fam_label,
+                        "state": "negative",
+                        "expires_in_seconds": round(expires_in, 1),
+                        "stale_available": False,
+                        "last_error_kind": error_kind,
+                    }
+                )
+        return hosts
 
     @property
     def enabled(self) -> bool:
@@ -159,6 +207,11 @@ class DnsCache:
                     if now < entry.stale_until:
                         self.stale_hits += 1
                         self._record(key, "stale_hits")
+                        logger.debug(
+                            "DNS cache stale-if-error hit for %s (%s)",
+                            key.hostname,
+                            "ipv4" if key.address_family == socket.AF_INET else "ipv6",
+                        )
                         return entry.addresses
                     del self._cache[key]
                 else:
@@ -191,6 +244,11 @@ class DnsCache:
             error_msg = f"DNS lookup timed out after {self._lookup_timeout_s}s"
             self._record_error(key.hostname, key.address_family, "timeout")
             self._store_negative(key, httpcore.ConnectTimeout, error_msg)
+            logger.debug(
+                "DNS resolver error for %s: timeout after %ss",
+                key.hostname,
+                self._lookup_timeout_s,
+            )
             async with self._lock:
                 self._singleflight.pop(key, None)
             exc = httpcore.ConnectTimeout(error_msg)
@@ -232,6 +290,7 @@ class DnsCache:
                 httpcore.ConnectError,
                 msg,
             )
+            logger.debug("DNS resolver error for %s: %s", hostname, msg)
             raise httpcore.ConnectError(msg) from exc
         except TimeoutError as exc:
             msg = str(exc)
@@ -241,6 +300,7 @@ class DnsCache:
                 httpcore.ConnectTimeout,
                 msg,
             )
+            logger.debug("DNS resolver timeout for %s: %s", hostname, msg)
             raise httpcore.ConnectTimeout(msg) from exc
         except OSError as exc:
             msg = str(exc)
@@ -250,6 +310,7 @@ class DnsCache:
                 httpcore.ConnectError,
                 msg,
             )
+            logger.debug("DNS resolver OS error for %s: %s", hostname, msg)
             raise httpcore.ConnectError(msg) from exc
 
         if addresses:
@@ -301,6 +362,8 @@ class DnsCache:
         while len(self._cache) >= self._config.max_entries:
             self._cache.popitem(last=False)
             self.evictions += 1
+        if self.evictions > 0 and self.evictions % 10 == 0:
+            logger.debug("DNS cache: %d total evictions", self.evictions)
 
 
 class DnsNetworkBackend(httpcore.AsyncNetworkBackend):

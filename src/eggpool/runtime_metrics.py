@@ -93,6 +93,7 @@ class RuntimeMetricsService:
         metrics_coalescer: Any | None = None,  # noqa: ANN401
         outbound_manager: Any | None = None,  # noqa: ANN401
         dns_backend: Any | None = None,  # noqa: ANN401
+        provider_client_pool: Any | None = None,  # noqa: ANN401
     ) -> None:
         self._config = config
         self._db = db
@@ -106,6 +107,7 @@ class RuntimeMetricsService:
         self._metrics_coalescer = metrics_coalescer
         self._outbound_manager = outbound_manager
         self._dns_backend = dns_backend
+        self._provider_client_pool = provider_client_pool
 
     async def snapshot(self) -> dict[str, Any]:
         """Return a best-effort runtime snapshot.
@@ -143,6 +145,11 @@ class RuntimeMetricsService:
 
         # Outbound client manager health
         result["outbound_client"] = self._snapshot_outbound_client(probe_errors)
+
+        # Provider client pool health
+        result["provider_client_pool"] = self._snapshot_provider_client_pool(
+            probe_errors
+        )
 
         # DNS cache health
         result["dns_cache"] = self._snapshot_dns_cache(probe_errors)
@@ -542,6 +549,18 @@ class RuntimeMetricsService:
         except Exception as exc:
             probe_errors.append(
                 _truncate_probe_error(f"Outbound client snapshot failed: {exc}")
+            )
+            return {"error": str(exc)}
+
+    def _snapshot_provider_client_pool(self, probe_errors: list[str]) -> dict[str, Any]:
+        """Best-effort snapshot of the provider client pool state."""
+        if self._provider_client_pool is None:
+            return {"build_count": 0, "providers": {}}
+        try:
+            return self._provider_client_pool.snapshot()
+        except Exception as exc:
+            probe_errors.append(
+                _truncate_probe_error(f"Provider client pool snapshot failed: {exc}")
             )
             return {"error": str(exc)}
 

@@ -88,11 +88,15 @@ class TestOutboundClientManager:
         assert snap["request_count"] == 0
         assert snap["error_count"] == 0
         assert snap["has_client"] is False
+        assert snap["scopes"] == {"global": 0}
+        assert snap["per_host_requests"] == {}
+        assert snap["per_host_errors"] == {}
 
         await manager.get_client()
         snap = manager.snapshot()
         assert snap["build_count"] == 1
         assert snap["has_client"] is True
+        assert snap["scopes"] == {"global": 1}
         await manager.aclose()
 
     @pytest.mark.anyio
@@ -103,6 +107,20 @@ class TestOutboundClientManager:
         manager.record_request(success=False)
         assert manager.request_count == 3
         assert manager.error_count == 1
+        await manager.aclose()
+
+    @pytest.mark.anyio
+    async def test_record_request_per_host(self) -> None:
+        manager = OutboundClientManager()
+        manager.record_request(success=True, host="api.example.com")
+        manager.record_request(success=True, host="api.example.com")
+        manager.record_request(success=False, host="api.other.com")
+        snap = manager.snapshot()
+        assert snap["per_host_requests"] == {
+            "api.example.com": 2,
+            "api.other.com": 1,
+        }
+        assert snap["per_host_errors"] == {"api.other.com": 1}
         await manager.aclose()
 
 
