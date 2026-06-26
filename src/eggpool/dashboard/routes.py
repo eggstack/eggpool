@@ -103,6 +103,47 @@ def _get_theme_data(
     return theme.to_css_variables(), theme.heatmap_colors(), theme_name, available
 
 
+def _collect_account_options(request: Request) -> list[str]:
+    """Collect configured account names for the timeseries filter dropdown.
+
+    Returns an empty list when no config is loaded so the renderer can
+    still emit a valid (any-account) dropdown.  Order matches the
+    provider-priority order from ``config.all_accounts()`` so the
+    dropdown mirrors the routing tier order operators see elsewhere.
+    """
+    config = getattr(request.app.state, "config", None)
+    if config is None:
+        return []
+    return [acct.name for acct in config.all_accounts() if acct.name]
+
+
+def _collect_model_options(request: Request) -> list[str]:
+    """Collect exposed model IDs for the timeseries filter dropdown.
+
+    Pulls the same model list the public ``/v1/models`` endpoint serves
+    so the dropdown options track what the catalog currently knows
+    about, including provider-suffixed IDs when ``collapse_models`` is
+    false (the default).  Falls back to an empty list when no catalog
+    is attached yet — e.g. early in startup before the first refresh.
+    """
+    catalog = getattr(request.app.state, "catalog", None)
+    if catalog is None:
+        return []
+    try:
+        models = catalog.get_models_for_exposure()
+    except Exception:
+        return []
+    seen: set[str] = set()
+    options: list[str] = []
+    for entry in models:
+        model_id = str(entry.get("model_id") or "").strip()
+        if not model_id or model_id in seen:
+            continue
+        seen.add(model_id)
+        options.append(model_id)
+    return options
+
+
 async def handle_overview(
     request: Request, period: str | None = "24h", theme: str | None = None
 ) -> Response:
@@ -402,7 +443,7 @@ async def handle_timeseries(
     account: str | None = None,
     model: str | None = None,
     group_by: str = "provider_model",
-    metric: str = "requests",
+    metric: str = "tokens",
     limit: int = 12,
     theme: str | None = None,
 ) -> Response:
@@ -437,6 +478,8 @@ async def handle_timeseries(
         ),
     )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
+    account_options = _collect_account_options(request)
+    model_options = _collect_model_options(request)
     return HTMLResponse(
         content=render_timeseries(
             series if series is not None else [],
@@ -451,6 +494,8 @@ async def handle_timeseries(
             limit=bounded_limit,
             account_filter=account or "",
             model_filter=model or "",
+            account_options=account_options,
+            model_options=model_options,
         )
     )
 

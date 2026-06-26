@@ -445,9 +445,10 @@ def _render_period_selector(current: str, current_theme: str = "") -> str:
         )
     selector = "".join(items)
     return (
-        f'<form method="get" class="period-selector">'
+        f'<form method="get" class="period-selector" '
+        f'data-period-selector aria-label="Period selector">'
         f'<label for="period">Period: </label>'
-        f'<select id="period" name="period" onchange="this.form.submit()">'
+        f'<select id="period" name="period">'
         f"{selector}"
         f"</select>"
         f"</form>"
@@ -1720,6 +1721,11 @@ def _render_grouped_timeseries_chart(
     the canvas is touched, and so that ``_render_auto_refresh_script``
     can call ``initGroupedTimeseriesCharts`` after the dashboard content
     is replaced without re-executing inline scripts.
+
+    The canvas is always emitted (even when the initial payload is empty)
+    so the dashboard.js handler can update the chart in place when the
+    filter form's selects change.  An empty-state paragraph is shown or
+    hidden by JS based on the live payload.
     """
     points = list(grouped.get("points") or [])
     buckets = list(grouped.get("buckets") or [])
@@ -1736,17 +1742,12 @@ def _render_grouped_timeseries_chart(
     account_attr = escape_attr(account_filter)
     model_attr = escape_attr(model_filter)
     payload_json = json.dumps(grouped)
-    if not has_data:
-        return (
-            '<section class="panel timeseries-chart-panel">'
-            "<h3>Usage breakdown</h3>"
-            '<p class="empty">No requests in this window.</p>'
-            "</section>"
-        )
+    empty_state_style = ' style="display: none;"' if has_data else ""
+    canvas_style = "" if has_data else ' style="display: none;"'
     return f"""
 <section class="panel timeseries-chart-panel">
   <h3>Usage breakdown</h3>
-  <div class="{container_class}">
+  <div class="{container_class}"{canvas_style}>
     <canvas class="grouped-timeseries-chart"
             data-chart-id="{chart_id}"
             data-period="{period_attr}"
@@ -1757,6 +1758,9 @@ def _render_grouped_timeseries_chart(
             data-account="{account_attr}"
             data-model="{model_attr}"></canvas>
   </div>
+  <p class="empty grouped-timeseries-empty"{empty_state_style}>
+    No requests in this window.
+  </p>
   <script type="application/json" class="grouped-timeseries-data"
           data-chart-id="{chart_id}">{payload_json}</script>
 </section>
@@ -1837,16 +1841,23 @@ def _render_grouped_timeseries_table(grouped: dict[str, Any]) -> str:
 
 def _render_timeseries_controls(
     *,
-    period: str,
     bucket: str,
     group_by: str,
     metric: str,
     limit: int,
     account_filter: str,
     model_filter: str,
+    account_options: list[str] | None = None,
+    model_options: list[str] | None = None,
     current_theme: str,
 ) -> str:
-    """Render the timeseries filter form with period, bucket, group, etc."""
+    """Render the timeseries filter form with bucket, group, metric, etc.
+
+    ``account_options`` and ``model_options`` populate dropdowns so
+    operators don't have to type account names or model IDs by hand.
+    The form auto-submits on change so chart updates feel instant; the
+    Apply button is preserved as a keyboard / no-JS fallback.
+    """
 
     def _select(name: str, current: str, options: list[tuple[str, str]]) -> str:
         items: list[str] = []
@@ -1857,12 +1868,6 @@ def _render_timeseries_controls(
             )
         return f'<select name="{name}">{"".join(items)}</select>'
 
-    period_options: list[tuple[str, str]] = [
-        ("1h", "Last hour"),
-        ("24h", "Last 24 hours"),
-        ("7d", "Last 7 days"),
-        ("30d", "Last 30 days"),
-    ]
     bucket_options: list[tuple[str, str]] = [
         ("hour", "Hour"),
         ("day", "Day"),
@@ -1874,8 +1879,8 @@ def _render_timeseries_controls(
         ("account", "Account"),
     ]
     metric_options: list[tuple[str, str]] = [
-        ("requests", "Requests"),
         ("tokens", "Tokens"),
+        ("requests", "Requests"),
         ("cost", "Cost"),
         ("errors", "Errors"),
         ("bytes", "Bandwidth"),
@@ -1886,22 +1891,28 @@ def _render_timeseries_controls(
         (str(n), f"Top {n}") for n in (6, 8, 12, 16, 20, 25)
     ]
     selected_limit = str(limit if limit in {int(v) for v, _ in limit_options} else 12)
+
+    account_choice = account_filter or ""
+    account_select_options: list[tuple[str, str]] = [("", "(any account)")]
+    for name in account_options or []:
+        if name:
+            account_select_options.append((name, name))
+    model_choice = model_filter or ""
+    model_select_options: list[tuple[str, str]] = [("", "(any model)")]
+    for model_id in model_options or []:
+        if model_id:
+            model_select_options.append((model_id, model_id))
+
     return f"""
 <form method="get" class="filter-form timeseries-controls"
+      data-timeseries-controls
       aria-label="Timeseries filters">
-  <label>Period: {_select("period", period, period_options)}</label>
   <label>Bucket: {_select("bucket", bucket, bucket_options)}</label>
   <label>Group by: {_select("group_by", group_by, group_options)}</label>
   <label>Metric: {_select("metric", metric, metric_options)}</label>
   <label>Limit: {_select("limit", selected_limit, limit_options)}</label>
-  <label>Account:
-    <input type="text" name="account" value="{escape_attr(account_filter)}"
-           placeholder="(any)">
-  </label>
-  <label>Model:
-    <input type="text" name="model" value="{escape_attr(model_filter)}"
-           placeholder="(any)">
-  </label>
+  <label>Account: {_select("account", account_choice, account_select_options)}</label>
+  <label>Model: {_select("model", model_choice, model_select_options)}</label>
   <input type="hidden" name="theme" value="{escape_attr(current_theme)}">
   <button type="submit">Apply</button>
 </form>
@@ -1918,10 +1929,12 @@ def render_timeseries(
     *,
     grouped: dict[str, Any] | None = None,
     group_by: str = "provider_model",
-    metric: str = "requests",
+    metric: str = "tokens",
     limit: int = 12,
     account_filter: str = "",
     model_filter: str = "",
+    account_options: list[str] | None = None,
+    model_options: list[str] | None = None,
 ) -> str:
     """Render the timeseries page.
 
@@ -1932,13 +1945,14 @@ def render_timeseries(
     the older single-bucket totals view.
     """
     controls = _render_timeseries_controls(
-        period=period,
         bucket=bucket,
         group_by=group_by,
         metric=metric,
         limit=limit,
         account_filter=account_filter,
         model_filter=model_filter,
+        account_options=account_options,
+        model_options=model_options,
         current_theme=current_theme,
     )
     chart_panel = _render_grouped_timeseries_chart(

@@ -882,6 +882,69 @@ class TestRenderTimeseries:
         assert '<th data-priority="2">Total tokens</th>' in html
         assert "300" in html
 
+    def test_default_metric_is_tokens(self) -> None:
+        """Tokens is the operator-first default so the chart reads as a usage view."""
+        html = render_timeseries(series=[], bucket="hour", period="24h")
+        assert 'data-metric="tokens"' in html
+        assert 'value="tokens" selected' in html
+        assert 'value="requests" selected' not in html
+
+    def test_controls_form_has_no_period_dropdown(self) -> None:
+        """The canonical period selector lives outside the controls form.
+
+        Re-rendering it inside ``form.timeseries-controls`` would give
+        operators two period dropdowns that drift out of sync.
+        """
+        html = render_timeseries(series=[], bucket="hour", period="24h")
+        controls_start = html.index('class="filter-form timeseries-controls"')
+        controls_end = html.index("</form>", controls_start)
+        controls_section = html[controls_start:controls_end]
+        assert 'name="period"' not in controls_section
+        # Period dropdown still lives outside the controls form.
+        assert 'id="period"' in html
+
+    def test_account_and_model_are_dropdowns(self) -> None:
+        """Operators pick accounts and models from a list, not free-text."""
+        html = render_timeseries(
+            series=[],
+            bucket="hour",
+            period="24h",
+            account_options=["acct_a", "acct_b"],
+            model_options=["claude-sonnet-4/opencode-go", "gpt-5/openai"],
+        )
+        controls_start = html.index('class="filter-form timeseries-controls"')
+        controls_end = html.index("</form>", controls_start)
+        controls_section = html[controls_start:controls_end]
+        # No free-text inputs remain.
+        assert '<input type="text"' not in controls_section
+        # Both account and model are selects.
+        assert 'name="account"' in controls_section
+        assert 'name="model"' in controls_section
+        # Option values come from the lists passed in.
+        assert 'value="acct_a"' in controls_section
+        assert 'value="acct_b"' in controls_section
+        assert 'value="claude-sonnet-4/opencode-go"' in controls_section
+        assert 'value="gpt-5/openai"' in controls_section
+        # Dropdowns include an "(any …)" option so the filter can be cleared.
+        assert "(any account)" in controls_section
+        assert "(any model)" in controls_section
+
+    def test_controls_form_is_tagged_for_live_wire_up(self) -> None:
+        """The form carries the hook the dashboard.js handler looks for."""
+        html = render_timeseries(series=[], bucket="hour", period="24h")
+        assert "data-timeseries-controls" in html
+
+    def test_period_selector_tagged_for_live_wire_up(self) -> None:
+        """The canonical period selector opts into the live wire-up."""
+        html = render_timeseries(series=[], bucket="hour", period="24h")
+        assert "data-period-selector" in html
+
+    def test_empty_chart_panel_still_emits_canvas(self) -> None:
+        """Empty payload still emits the canvas so JS can update after a filter."""
+        html = render_timeseries(series=[], bucket="hour", period="24h")
+        assert 'class="grouped-timeseries-chart"' in html
+        assert "grouped-timeseries-empty" in html
+
 
 class TestHtmlParseability:
     """Verify rendered HTML parses as valid HTML."""

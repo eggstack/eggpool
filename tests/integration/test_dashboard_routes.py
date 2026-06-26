@@ -407,6 +407,65 @@ async def test_timeseries_page_loads_with_grouped_chart(
 
 
 @pytest.mark.asyncio()
+async def test_timeseries_page_default_metric_is_tokens(
+    migrated_app: FastAPI,
+) -> None:
+    """``/timeseries`` opens on the tokens view so the chart reads as usage."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    response = client.get("/timeseries")
+    assert response.status_code == 200
+    body = response.text
+    assert 'value="tokens" selected' in body
+    assert 'data-metric="tokens"' in body
+
+
+@pytest.mark.asyncio()
+async def test_timeseries_page_has_no_duplicate_period_dropdown(
+    migrated_app: FastAPI,
+) -> None:
+    """The period selector lives outside the filter form so there is only one."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    response = client.get("/timeseries")
+    assert response.status_code == 200
+    body = response.text
+    # Canonical period selector remains.
+    assert "data-period-selector" in body
+    assert 'id="period"' in body
+    # Only one <select name="period"> exists in the document.
+    assert body.count('<select id="period" name="period">') == 1
+    # The filter form opts into the JS wire-up so changes update the chart live.
+    assert "data-timeseries-controls" in body
+
+
+@pytest.mark.asyncio()
+async def test_timeseries_page_account_and_model_are_dropdowns(
+    migrated_app: FastAPI,
+) -> None:
+    """Accounts and models are <select> dropdowns, not free-text inputs."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    response = client.get("/timeseries")
+    assert response.status_code == 200
+    body = response.text
+    controls_start = body.index('class="filter-form timeseries-controls"')
+    controls_end = body.index("</form>", controls_start)
+    controls_section = body[controls_start:controls_end]
+    # Account and model must be selects inside the controls form.
+    assert 'select name="account"' in controls_section
+    assert 'select name="model"' in controls_section
+    # No free-text inputs remain in the controls form.
+    assert '<input type="text"' not in controls_section
+    # Dropdowns include an "(any …)" option so the filter can be cleared.
+    assert "(any account)" in controls_section
+    assert "(any model)" in controls_section
+
+
+@pytest.mark.asyncio()
 async def test_timeseries_page_with_group_by_query(
     migrated_app: FastAPI,
 ) -> None:

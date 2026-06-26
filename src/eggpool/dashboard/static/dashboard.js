@@ -543,6 +543,14 @@
       );
     }
     try {
+      namespace.initTimeseriesControls();
+    } catch (err) {
+      console.error(
+        "EggPoolDashboard: initTimeseriesControls failed",
+        err
+      );
+    }
+    try {
       if (document.getElementById("timeseries-chart")) {
         namespace.reinitTimeseriesChart();
       }
@@ -550,6 +558,169 @@
       console.error("EggPoolDashboard: reinitTimeseriesChart failed", err);
     }
   }
+
+  function fetchGroupedTimeseries(params) {
+    const search = new URLSearchParams();
+    for (const key in params) {
+      if (!Object.prototype.hasOwnProperty.call(params, key)) continue;
+      const value = params[key];
+      if (value === null || value === undefined || value === "") continue;
+      search.set(key, String(value));
+    }
+    const url = "/api/timeseries/grouped" + (search.toString() ? "?" + search.toString() : "");
+    return fetch(url, {
+      cache: "no-store",
+      headers: { "x-dashboard-refresh": "1" },
+    })
+      .then(function (response) {
+        if (!response.ok) {
+          throw new Error(
+            "grouped timeseries fetch failed: " + response.status
+          );
+        }
+        return response.json();
+      });
+  }
+
+  function readTimeseriesParams(form) {
+    const data = new FormData(form);
+    const get = function (name) {
+      const value = data.get(name);
+      return value === null ? "" : String(value);
+    };
+    const periodSelect = document.querySelector(
+      'form[data-period-selector] select[name="period"]'
+    );
+    const period =
+      (periodSelect && periodSelect.value) ||
+      new URLSearchParams(window.location.search).get("period") ||
+      "24h";
+    return {
+      period: period,
+      bucket: get("bucket") || "hour",
+      group_by: get("group_by") || "provider_model",
+      metric: get("metric") || "tokens",
+      limit: get("limit") || "12",
+      account: get("account") || "",
+      model: get("model") || "",
+    };
+  }
+
+  function setChartData(chartId, payload) {
+    const script = document.querySelector(
+      'script.grouped-timeseries-data[data-chart-id="' + chartId + '"]'
+    );
+    if (script) {
+      script.textContent = JSON.stringify(payload);
+    }
+    const panel = script ? script.closest(".timeseries-chart-panel") : null;
+    const container = panel
+      ? panel.querySelector(".chart-container, .chart-container-compact")
+      : null;
+    const empty = panel ? panel.querySelector(".grouped-timeseries-empty") : null;
+    const points = payload && Array.isArray(payload.points) ? payload.points : [];
+    const buckets = payload && Array.isArray(payload.buckets) ? payload.buckets : [];
+    const hasData = points.length > 0 && buckets.length > 0;
+    if (container) {
+      container.style.display = hasData ? "" : "none";
+    }
+    if (empty) {
+      empty.style.display = hasData ? "none" : "";
+    }
+  }
+
+  namespace.refreshGroupedTimeseriesChart = function refreshGroupedTimeseriesChart(
+    form
+  ) {
+    const params = readTimeseriesParams(form);
+    const canvas = document.querySelector(
+      'canvas.grouped-timeseries-chart[data-chart-id="grouped-timeseries-chart"]'
+    );
+    if (!canvas) return Promise.resolve();
+    const chartId = canvas.getAttribute("data-chart-id");
+    if (form.dataset && form.dataset.timeseriesBusy === "1") {
+      return Promise.resolve();
+    }
+    if (form.dataset) form.dataset.timeseriesBusy = "1";
+    return fetchGroupedTimeseries(params)
+      .then(function (payload) {
+        setChartData(chartId, payload || {});
+        if (typeof namespace.initGroupedTimeseriesCharts === "function") {
+          namespace.initGroupedTimeseriesCharts();
+        }
+      })
+      .catch(function (err) {
+        console.error("Failed to refresh grouped timeseries chart:", err);
+      })
+      .then(function () {
+        if (form.dataset) form.dataset.timeseriesBusy = "0";
+      });
+  };
+
+  namespace.initTimeseriesControls = function initTimeseriesControls() {
+    const forms = document.querySelectorAll("form[data-timeseries-controls]");
+    for (let i = 0; i < forms.length; i++) {
+      const form = forms[i];
+      if (form.__eggpoolTimeseriesWired) continue;
+      form.__eggpoolTimeseriesWired = true;
+      const onChange = function () {
+        namespace.refreshGroupedTimeseriesChart(form);
+      };
+      const selects = form.querySelectorAll("select");
+      for (let s = 0; s < selects.length; s++) {
+        selects[s].addEventListener("change", onChange);
+      }
+      const accountInput = form.querySelector(
+        'input[name="account"], select[name="account"]'
+      );
+      const modelInput = form.querySelector(
+        'input[name="model"], select[name="model"]'
+      );
+      if (accountInput && accountInput.tagName === "INPUT") {
+        let lastValue = accountInput.value;
+        accountInput.addEventListener("input", function () {
+          const value = accountInput.value;
+          if (value === lastValue) return;
+          lastValue = value;
+          onChange();
+        });
+      }
+      if (modelInput && modelInput.tagName === "INPUT") {
+        let lastValue = modelInput.value;
+        modelInput.addEventListener("input", function () {
+          const value = modelInput.value;
+          if (value === lastValue) return;
+          lastValue = value;
+          onChange();
+        });
+      }
+      form.addEventListener("submit", function (event) {
+        event.preventDefault();
+        namespace.refreshGroupedTimeseriesChart(form);
+      });
+    }
+
+    const periodForms = document.querySelectorAll(
+      "form[data-period-selector]"
+    );
+    const timeseriesForm = document.querySelector(
+      "form[data-timeseries-controls]"
+    );
+    for (let p = 0; p < periodForms.length; p++) {
+      const periodForm = periodForms[p];
+      if (periodForm.__eggpoolPeriodWired) continue;
+      periodForm.__eggpoolPeriodWired = true;
+      const select = periodForm.querySelector('select[name="period"]');
+      if (!select) continue;
+      select.addEventListener("change", function () {
+        if (timeseriesForm && typeof namespace.refreshGroupedTimeseriesChart === "function") {
+          namespace.refreshGroupedTimeseriesChart(timeseriesForm);
+        } else {
+          periodForm.submit();
+        }
+      });
+    }
+  };
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", bootstrap);
