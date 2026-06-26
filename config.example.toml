@@ -78,6 +78,41 @@ retain_request_stats_days = 30
 store_request_content = false
 refresh_interval_s = 60
 
+[metrics]
+# Controls observability write buffering for reduced microSD wear.
+# - "immediate": existing direct-write behavior (best for debugging).
+# - "balanced" (default): buffer lossy analytics with short flush intervals.
+# - "low_wear": longer flush interval, coarser buckets, optional trace
+#   sampling — designed for microSD / Raspberry Pi deployments.
+#
+# Buffered analytics may lose at most flush_interval_s seconds of data
+# after abrupt power loss. Correctness-critical request state (request
+# rows, reservations, attempts, routing) is never buffered.
+write_mode = "balanced"
+flush_interval_s = 30
+max_buffered_events = 500
+timeseries_bucket_s = 60
+trace_sample_rate = 1.0
+aggregate_only = false
+rollup_retain_days = 90
+cleanup_interval_s = 86400
+cleanup_max_rows_per_pass = 5000
+
+# ─── Low-wear profile for microSD / Raspberry Pi ──────────────────
+# Uncomment this block when running from microSD and dashboard traces
+# are not critical. Trades detailed trace fidelity and dashboard
+# freshness for materially fewer writes.
+# [metrics]
+# write_mode = "low_wear"
+# flush_interval_s = 120
+# max_buffered_events = 250
+# timeseries_bucket_s = 300
+# trace_sample_rate = 0.05
+# aggregate_only = true
+# rollup_retain_days = 90
+# cleanup_interval_s = 86400
+# cleanup_max_rows_per_pass = 5000
+
 [security]
 allowed_hosts = []
 cors_origins = []

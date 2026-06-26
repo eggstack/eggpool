@@ -75,6 +75,17 @@ See `architecture/README.md` for the full design overview.
 - Every DML write must run inside `async with db.transaction():`; write helpers refuse to operate outside an owned transaction
 - `Database.vacuum()` is the only sanctioned path for `VACUUM` in production code
 
+## Metrics Buffering
+
+- `MetricsWriteCoalescer` buffers lossy analytics events in memory and flushes to `usage_rollups` periodically
+- Correctness-critical writes (request state, reservations, routing) remain immediate and are never buffered
+- Three `write_mode` values: `immediate` (direct write), `balanced` (30s flush), `low_wear` (120s flush, coarser buckets)
+- The coalescer emits one `UsageMetricEvent` per terminal request transition from `RequestFinalizer.finalize()`
+- Shutdown flush has a 5-second timeout; lossy analytics are best-effort
+- `usage_rollups` table uses additive upserts (`INSERT ... ON CONFLICT DO UPDATE SET col = col + excluded.col`)
+- Rollup retention is configurable via `metrics.rollup_retain_days` (default 90)
+- Runtime diagnostics expose buffer health via `/api/stats/runtime` (`metrics_buffer` section)
+
 ## Concurrency
 
 - Readiness probes use `probe_writable()` with owned transactions, never interfere with request lifecycle work

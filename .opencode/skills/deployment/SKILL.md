@@ -112,6 +112,21 @@ fails cleanly. This includes changes to `routing_priority`,
 `collapse_models`, `expose_mode`, `model_overrides`, and any other
 config field.
 
+### Low-wear metrics for microSD
+
+When running on microSD storage (Raspberry Pi, etc.), add a `[metrics]` section to reduce write wear:
+
+```toml
+[metrics]
+write_mode = "low_wear"
+flush_interval_s = 120
+timeseries_bucket_s = 300
+trace_sample_rate = 0.05
+aggregate_only = true
+```
+
+This trades dashboard freshness and trace detail for materially fewer database writes. Correctness-critical state (requests, reservations, routing) is never affected.
+
 ```bash
 sudo systemctl restart eggpool
 sudo systemctl status eggpool

@@ -95,6 +95,7 @@ class RequestFinalizer:
         registry: AccountRegistry | None = None,
         health_manager: HealthManager | None = None,
         persist_error_detail: bool = False,
+        metrics_coalescer: Any | None = None,  # noqa: ANN401
     ) -> None:
         self._db = db
         self._request_repo = request_repo
@@ -106,6 +107,7 @@ class RequestFinalizer:
         self._registry = registry
         self._health_manager = health_manager
         self._persist_error_detail = persist_error_detail
+        self._metrics_coalescer = metrics_coalescer
 
     async def finalize(
         self,
@@ -362,6 +364,40 @@ class RequestFinalizer:
                             data.error_class, data.status_code
                         )
                         state.record_failure(category.value)
+
+        # 6. Emit analytics event to the metrics coalescer (non-blocking).
+        #    Only emit when this call performed the terminal transition to
+        #    avoid double-counting from stale/crash-recovery finalizers.
+        if transitioned and self._metrics_coalescer is not None:
+            try:
+                from datetime import UTC, datetime
+
+                from eggpool.metrics.buffer import UsageMetricEvent
+
+                event = UsageMetricEvent(
+                    timestamp=datetime.now(UTC),
+                    provider_id=getattr(selected, "provider_id", "unknown"),
+                    model_id=_get_model_id(selected),
+                    account_id=getattr(selected, "account_id", None),
+                    protocol="openai",  # protocol is not on SelectedAttempt
+                    streamed=False,
+                    status=self._outcome_to_status(data.outcome),
+                    retry_count=max(0, getattr(selected, "attempt_number", 1) - 1),
+                    input_tokens=data.input_tokens,
+                    output_tokens=data.output_tokens,
+                    cache_read_tokens=data.cache_read_tokens,
+                    cache_write_tokens=data.cache_write_tokens,
+                    reasoning_tokens=data.reasoning_tokens,
+                    thinking_characters=data.thinking_characters,
+                    cost_microdollars=cost_microdollars,
+                    bytes_received=data.bytes_received,
+                    bytes_emitted=data.bytes_emitted,
+                    latency_ms=data.upstream_latency_ms or 0,
+                    first_byte_ms=data.first_byte_ms,
+                )
+                self._metrics_coalescer.record_usage(event)
+            except Exception:
+                logger.debug("Failed to emit usage metric event", exc_info=True)
 
         return transitioned
 

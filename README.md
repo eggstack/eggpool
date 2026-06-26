@@ -479,6 +479,29 @@ Merge the generated provider definition into your OpenCode configuration. OpenCo
 
 Model limit changes require a service restart.
 
+### Low-wear metrics buffering
+
+EggPool buffers lossy analytics writes (timeseries, bandwidth, token/cost aggregates) in memory and flushes them periodically to reduce microSD wear. Correctness-critical state (requests, reservations, routing) is never buffered.
+
+Three write modes are available:
+
+- **`immediate`** (default for debugging): existing direct-write behavior.
+- **`balanced`** (default): buffers analytics with 30s flush intervals.
+- **`low_wear`**: 120s flush intervals, coarser 300s buckets, 5% trace sampling, aggregate-only mode — designed for microSD / Raspberry Pi.
+
+Example low-wear configuration:
+
+```toml
+[metrics]
+write_mode = "low_wear"
+flush_interval_s = 120
+timeseries_bucket_s = 300
+trace_sample_rate = 0.05
+aggregate_only = true
+```
+
+Buffered analytics may lose at most `flush_interval_s` seconds of data after abrupt power loss. For sustained multi-session use on flash media, a high-endurance microSD or USB SSD is recommended.
+
 ## Development
 
 ```bash

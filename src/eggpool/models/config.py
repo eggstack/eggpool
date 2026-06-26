@@ -211,6 +211,33 @@ class LimitsConfig(BaseModel):
     monthly_microdollars: int = Field(default=60_000_000, gt=0)
 
 
+class MetricsConfig(BaseModel):
+    """Controls observability write buffering for reduced microSD wear.
+
+    ``write_mode`` selects the buffering strategy:
+    - ``immediate``: existing direct-write behavior (best for debugging).
+    - ``balanced``: buffer lossy analytics with short flush intervals.
+    - ``low_wear``: longer flush interval, coarser buckets, optional
+      trace sampling — designed for microSD / SBC deployments.
+
+    Buffered analytics may lose at most ``flush_interval_s`` seconds of
+    data after abrupt power loss. Correctness-critical request state
+    (request rows, reservations, attempts, routing) is never buffered.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    write_mode: Literal["immediate", "balanced", "low_wear"] = "balanced"
+    flush_interval_s: int = Field(default=30, ge=1, le=600)
+    max_buffered_events: int = Field(default=500, ge=1, le=100_000)
+    timeseries_bucket_s: int = Field(default=60, ge=10, le=3600)
+    trace_sample_rate: float = Field(default=1.0, ge=0.0, le=1.0)
+    aggregate_only: bool = False
+    rollup_retain_days: int = Field(default=90, gt=0)
+    cleanup_interval_s: int = Field(default=86_400, gt=0)
+    cleanup_max_rows_per_pass: int = Field(default=5000, gt=0)
+
+
 class DashboardConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -603,6 +630,7 @@ class AppConfig(BaseModel):
     pricing: PricingConfig = Field(default_factory=PricingConfig)
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
+    metrics: MetricsConfig = Field(default_factory=MetricsConfig)
     proxies: dict[str, ProxyConfig] = Field(default_factory=dict)
     accounts: list[AccountConfig] = Field(default_factory=list[AccountConfig])
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)

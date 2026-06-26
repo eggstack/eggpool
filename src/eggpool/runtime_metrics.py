@@ -90,6 +90,7 @@ class RuntimeMetricsService:
         health_manager: HealthManager | None,
         started_monotonic: float,
         started_epoch: float,
+        metrics_coalescer: Any | None = None,  # noqa: ANN401
     ) -> None:
         self._config = config
         self._db = db
@@ -100,6 +101,7 @@ class RuntimeMetricsService:
         self._health_manager = health_manager
         self._started_monotonic = started_monotonic
         self._started_epoch = started_epoch
+        self._metrics_coalescer = metrics_coalescer
 
     async def snapshot(self) -> dict[str, Any]:
         """Return a best-effort runtime snapshot.
@@ -131,6 +133,9 @@ class RuntimeMetricsService:
 
         # Routing / in-flight
         result["routing_runtime"] = await self._snapshot_routing_runtime(probe_errors)
+
+        # Metrics buffer health
+        result["metrics_buffer"] = self._snapshot_metrics_buffer(probe_errors)
 
         return result
 
@@ -512,6 +517,29 @@ class RuntimeMetricsService:
             "health_states_by_account": health_states,
             "active_backoff_count": active_backoff_count,
         }
+
+    def _snapshot_metrics_buffer(self, probe_errors: list[str]) -> dict[str, Any]:
+        """Best-effort snapshot of the metrics write coalescer state."""
+        if self._metrics_coalescer is None:
+            return {
+                "write_mode": getattr(self._config.metrics, "write_mode", "balanced"),
+                "buffered_keys": 0,
+                "buffered_events": 0,
+                "total_events_received": 0,
+                "total_events_flushed": 0,
+                "total_events_dropped": 0,
+                "last_flush_ts": None,
+                "last_flush_rows": 0,
+                "last_flush_duration_ms": 0,
+                "last_flush_error": None,
+            }
+        try:
+            return self._metrics_coalescer.snapshot()
+        except Exception as exc:
+            probe_errors.append(
+                _truncate_probe_error(f"Metrics buffer snapshot failed: {exc}")
+            )
+            return {"error": str(exc)}
 
 
 # -- Helpers ----------------------------------------------------------------

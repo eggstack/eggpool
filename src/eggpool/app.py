@@ -50,6 +50,7 @@ from eggpool.db.repositories import (
     ReservationRepository,
     UsageWindowRepository,
 )
+from eggpool.db.rollup_repository import UsageRollupRepository
 from eggpool.errors import (
     AggregatorError,
     CatalogUnavailableError,
@@ -59,6 +60,7 @@ from eggpool.errors import (
 )
 from eggpool.health.health_manager import HealthManager
 from eggpool.logging import configure_logging
+from eggpool.metrics.buffer import MetricsWriteCoalescer
 from eggpool.models.api import HealthResponse
 from eggpool.models.config import AppConfig
 from eggpool.providers.client_pool import ProviderClientPool
@@ -693,7 +695,16 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         account_backoff_repo=account_backoff_repo,
     )
 
-    # 18. Request coordinator
+    # 18b. Metrics write coalescer for buffered analytics
+    rollup_repo = UsageRollupRepository(db)
+    metrics_coalescer = MetricsWriteCoalescer(
+        config=config.metrics,
+        db=db,
+        rollup_repo=rollup_repo,
+    )
+    app.state.metrics_coalescer = metrics_coalescer
+
+    # 18c. Request coordinator
     coordinator = RequestCoordinator(
         registry=registry,
         catalog=catalog,
@@ -712,6 +723,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         persist_error_detail=config.security.persist_redacted_error_detail,
         config=config,
         account_backoff_repo=account_backoff_repo,
+        metrics_coalescer=metrics_coalescer,
     )
     app.state.coordinator = coordinator
 
@@ -746,6 +758,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         health_manager=health_manager,
         started_monotonic=app.state.started_monotonic,
         started_epoch=app.state.started_epoch,
+        metrics_coalescer=metrics_coalescer,
     )
 
     # Register catalog refresh task
@@ -762,6 +775,11 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             await cleanup_old_requests(db, config.dashboard.retain_request_stats_days)
             await cleanup_old_events(db, config.dashboard.retain_event_days)
             await ping_repo.cleanup_old_pings(config.models.ping_retain_days)
+            # Rollup retention cleanup
+            await rollup_repo.cleanup_old_rollups(
+                config.metrics.rollup_retain_days,
+                max_rows=config.metrics.cleanup_max_rows_per_pass,
+            )
             # Reconcile expired reservations and sync in-memory state
             await reconcile_expired_reservations(
                 db,
@@ -806,6 +824,15 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
 
     supervisor.register("stale_request_finalizer", _stale_request_loop)
 
+    # Register metrics flush task for buffered modes
+    metrics_stop_event = asyncio.Event()
+    app.state.metrics_stop_event = metrics_stop_event
+    if config.metrics.write_mode != "immediate":
+        supervisor.register(
+            "metrics_flush",
+            lambda: metrics_coalescer.run(metrics_stop_event),
+        )
+
     # Periodic PyPI update check (default 24h). Drives the dashboard
     # footer indicator and the /api/stats/update endpoint; never
     # auto-installs.  Runs an initial check immediately so the first
@@ -841,6 +868,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             yield
     finally:
         logger.info("Application shutting down")
+
+        # Signal metrics coalescer to stop and flush remaining data
+        metrics_stop_event: asyncio.Event | None = getattr(
+            app.state, "metrics_stop_event", None
+        )
+        if metrics_stop_event is not None:
+            metrics_stop_event.set()
+        metrics_coalescer: MetricsWriteCoalescer | None = getattr(
+            app.state, "metrics_coalescer", None
+        )
+        if metrics_coalescer is not None:
+            try:
+                await asyncio.wait_for(
+                    metrics_coalescer.flush(reason="shutdown"), timeout=5.0
+                )
+            except Exception:
+                logger.exception("Error flushing metrics buffer during shutdown")
+
         supervisor: TaskSupervisor | None = getattr(app.state, "supervisor", None)
         if supervisor is not None:
             try:

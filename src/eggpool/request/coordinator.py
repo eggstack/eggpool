@@ -207,6 +207,7 @@ class RequestCoordinator:
         config: AppConfig | None = None,
         account_backoff_repo: AccountBackoffRepository | None = None,
         routing_decision_repo: RoutingDecisionRepository | None = None,
+        metrics_coalescer: Any | None = None,  # noqa: ANN401
     ) -> None:
         self._registry = registry
         self._catalog = catalog
@@ -238,6 +239,7 @@ class RequestCoordinator:
             if routing_decision_repo is not None
             else RoutingDecisionRepository(db)
         )
+        self._metrics_coalescer = metrics_coalescer
 
         # Build the attempt finalizer with all dependencies
         self._attempt_finalizer = AttemptFinalizer(
@@ -259,6 +261,7 @@ class RequestCoordinator:
             registry=registry,
             health_manager=health_manager,
             persist_error_detail=persist_error_detail,
+            metrics_coalescer=metrics_coalescer,
         )
 
     def _get_client(
