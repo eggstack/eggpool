@@ -966,48 +966,59 @@ def _render_bandwidth_heatmap(
             f'text-anchor="start">{month_labels.get(month_num, "")}</text>'
         )
 
-    # Day cells
+    # Day cells and overlay hitboxes.  Hitboxes are emitted for every
+    # grid slot (week x day_of_week) in column-major order so the
+    # CSS grid's column-first auto-flow places each hitbox at the SVG
+    # coordinates of the day it represents.  Out-of-range days
+    # (before start_date or after today) get empty hitboxes that take
+    # up the right grid slot but show no tooltip on hover; without
+    # this, every visible hitbox shifts to the wrong row/column and
+    # the tooltip for the day being hovered no longer matches the
+    # highlighted day.
     hitboxes: list[str] = []
     for week in range(num_weeks):
         for day_of_week in range(7):
             cell_date = grid_start + timedelta(weeks=week, days=day_of_week)
-            if cell_date < start_date or cell_date > today:
-                continue
-            day_str = cell_date.isoformat()
-            value = day_values.get(day_str, 0)
-            color = _get_color(value)
-            x = left_margin + week * step
-            y = top_margin + day_of_week * step
-            tooltip = f"{day_str}: {formatter(value)}"
-            request_count = day_requests.get(day_str, 0)
-            request_count_text = (
-                f"{request_count:,} request{'s' if request_count != 1 else ''}"
-            )
-            pretty_date = _format_tooltip_date(day_str)
-            if value_field == "bytes":
-                in_bytes, out_bytes = in_out.get(day_str, (0, 0))
-                tooltip_text = (
-                    f"{pretty_date}\n"
-                    f"{format_bytes(in_bytes)} in · "
-                    f"{format_bytes(out_bytes)} out · "
-                    f"{request_count_text}"
+            in_visible_range = start_date <= cell_date <= today
+            if in_visible_range:
+                day_str = cell_date.isoformat()
+                value = day_values.get(day_str, 0)
+                color = _get_color(value)
+                x = left_margin + week * step
+                y = top_margin + day_of_week * step
+                tooltip = f"{day_str}: {formatter(value)}"
+                request_count = day_requests.get(day_str, 0)
+                request_count_text = (
+                    f"{request_count:,} request{'s' if request_count != 1 else ''}"
+                )
+                pretty_date = _format_tooltip_date(day_str)
+                if value_field == "bytes":
+                    in_bytes, out_bytes = in_out.get(day_str, (0, 0))
+                    tooltip_text = (
+                        f"{pretty_date}\n"
+                        f"{format_bytes(in_bytes)} in · "
+                        f"{format_bytes(out_bytes)} out · "
+                        f"{request_count_text}"
+                    )
+                else:
+                    tooltip_text = (
+                        f"{pretty_date}\n{formatter(value)} tokens · "
+                        f"{request_count_text}"
+                    )
+                tooltip_attr = _html_escape(tooltip_text, quote=True)
+                cells.append(
+                    f'<rect x="{x}" y="{y}" width="{cell_size}" '
+                    f'height="{cell_size}" rx="2" fill="{color}" '
+                    f'class="heatmap-cell" pointer-events="none">'
+                    f"<title>{_html_escape(tooltip)}</title></rect>"
+                )
+                hitboxes.append(
+                    f'<div class="heatmap-hitbox" '
+                    f'data-tooltip="{tooltip_attr}" '
+                    f'aria-label="{tooltip_attr}"></div>'
                 )
             else:
-                tooltip_text = (
-                    f"{pretty_date}\n{formatter(value)} tokens · {request_count_text}"
-                )
-            tooltip_attr = _html_escape(tooltip_text, quote=True)
-            cells.append(
-                f'<rect x="{x}" y="{y}" width="{cell_size}" '
-                f'height="{cell_size}" rx="2" fill="{color}" '
-                f'class="heatmap-cell" pointer-events="none">'
-                f"<title>{_html_escape(tooltip)}</title></rect>"
-            )
-            hitboxes.append(
-                f'<div class="heatmap-hitbox" '
-                f'data-tooltip="{tooltip_attr}" '
-                f'aria-label="{tooltip_attr}"></div>'
-            )
+                hitboxes.append('<div class="heatmap-hitbox"></div>')
 
     svg = (
         f'<svg width="{svg_width}" height="{svg_height}" '
@@ -1016,7 +1027,9 @@ def _render_bandwidth_heatmap(
         f"{''.join(cells)}</svg>"
     )
     overlay = (
-        f'<div class="heatmap-overlay" aria-hidden="true">{"".join(hitboxes)}</div>'
+        f'<div class="heatmap-overlay" '
+        f'style="--heatmap-weeks: {num_weeks}" '
+        f'aria-hidden="true">{"".join(hitboxes)}</div>'
     )
 
     return f'<div class="heatmap">{svg}{overlay}</div>'

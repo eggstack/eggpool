@@ -634,13 +634,22 @@ td.no { color: var(--color-error); font-weight: 600; }
    Hitboxes are appended in column-major order (outer loop = week/column,
    inner loop = day-of-week/row), matching the SVG's (x, y) coords, so the
    grid must auto-flow by column. Default row-flow would transpose rows and
-   columns and mis-anchor every tooltip. */
+   columns and mis-anchor every tooltip.
+
+   The column count is passed in via the `--heatmap-weeks` custom property
+   (set inline on the overlay element) because the 90-day window rounds up
+   to either 13 or 14 weeks depending on which weekday "today" is — a
+   hardcoded 13-column template left the 14th week without hitboxes
+   (5 out of every 7 days), so tooltips on the most recent week drifted
+   to whatever slot the overflow happened to land in.  Empty hitboxes for
+   days outside the visible window keep the partial first/last weeks
+   aligned as well. */
 .heatmap-overlay {
   position: absolute;
   top: 20px;
   left: 36px;
   display: grid;
-  grid-template-columns: repeat(13, 13px);
+  grid-template-columns: repeat(var(--heatmap-weeks, 13), 13px);
   grid-template-rows: repeat(7, 13px);
   grid-auto-flow: column;
   gap: 3px;

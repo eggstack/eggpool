@@ -1860,7 +1860,10 @@ class TestHeatmapTooltipSystem:
         html = _render_bandwidth_heatmap(daily)
         assert html.count('class="heatmap-overlay"') == 1
         # The heatmap renders the full 90-day window even with sparse data;
-        # hitboxes are emitted once per visible day, not once per data row.
+        # hitboxes are emitted once per (week, day_of_week) grid slot —
+        # both visible days (with data-tooltip) and out-of-range padding
+        # days (empty hitbox) — so the column-major grid flow stays aligned
+        # with the SVG cell coordinates.
         assert html.count('class="heatmap-hitbox"') >= 5
         assert html.count('class="heatmap-overlay"') == 1
 
@@ -1881,7 +1884,157 @@ class TestHeatmapTooltipSystem:
         ]
         html = _render_bandwidth_heatmap(daily)
         assert html.count('class="heatmap-overlay"') == 1
-        assert html.count('class="heatmap-hitbox"') == n_days
+        # One hitbox per (week, day_of_week) grid slot — visible days
+        # carry data-tooltip, out-of-range days (before start_date or
+        # after today) carry no data-tooltip.  The exact count is
+        # num_weeks * 7, where num_weeks depends on the weekday of
+        # `today - 89 days`.
+        start_date = today - _td(days=89)
+        padding_days = (start_date.weekday() + 1) % 7
+        grid_start = start_date - _td(days=padding_days)
+        expected_grid = ((today - grid_start).days // 7 + 1) * 7
+        assert html.count('class="heatmap-hitbox"') == expected_grid
+        assert html.count("data-tooltip=") == n_days
+
+    def test_overlay_uses_dynamic_week_count(self) -> None:
+        """The overlay exposes the week count via ``--heatmap-weeks`` so
+        the CSS grid columns can grow to 14 when the 90-day window
+        rounds up across two Sunday boundaries (5 out of 7 days of the
+        week).  Previously a hardcoded 13-column template left the
+        current week without hitboxes."""
+        from datetime import date as _date
+
+        today = _date.today()
+        html = _render_bandwidth_heatmap(
+            [
+                {
+                    "day": today.isoformat(),
+                    "bytes_received": 100,
+                    "bytes_emitted": 50,
+                    "request_count": 1,
+                }
+            ]
+        )
+        import re
+
+        match = re.search(r"--heatmap-weeks:\s*(\d+)", html)
+        assert match is not None, "expected --heatmap-weeks on overlay"
+        weeks = int(match.group(1))
+        assert weeks in (13, 14)
+        # 90-day window always renders either 13 or 14 weeks.
+        assert weeks >= 13
+
+    def test_fourteen_week_heatmap_aligns_hitboxes_with_svg(self) -> None:
+        """Regression: when the 90-day window crosses a Sunday boundary
+        and rounds up to 14 weeks (true on Sun/Mon/Tue/Wed/Thu), the
+        overlay's CSS grid must expose enough columns for every SVG
+        cell to have a hitbox at the matching row/column — otherwise
+        the tooltip for the most recent day(s) drifts to whatever
+        grid slot the column overflow happens to land in."""
+        from datetime import date as _date
+        from datetime import timedelta as _td
+
+        from eggpool.dashboard import render as _render_module
+
+        # Force "today" to a Sunday so the 90-day window produces 14
+        # weeks (5 out of 7 days of the week hit this case).
+        sunday = _date(2026, 6, 28)
+        assert sunday.weekday() == 6  # Sunday in Mon=0 convention
+
+        daily = [
+            {
+                "day": (sunday - _td(days=i)).isoformat(),
+                "bytes_received": 100,
+                "bytes_emitted": 50,
+                "request_count": 1,
+            }
+            for i in range(90)
+        ]
+
+        class _FrozenDate(_date):
+            @classmethod
+            def today(cls) -> _date:
+                return sunday
+
+        original_date = _render_module.date
+        _render_module.date = _FrozenDate  # type: ignore[assignment]
+        try:
+            html = _render_bandwidth_heatmap(daily)
+        finally:
+            _render_module.date = original_date  # type: ignore[assignment]
+
+        import re
+
+        weeks_match = re.search(r"--heatmap-weeks:\s*(\d+)", html)
+        assert weeks_match is not None
+        assert int(weeks_match.group(1)) == 14
+
+        # Every visible SVG cell must have a hitbox with a data-tooltip
+        # in the DOM, and the total hitbox count must match the grid
+        # size (14 weeks * 7 days = 98).
+        rect_count = html.count('class="heatmap-cell"')
+        data_tooltip_count = html.count("data-tooltip=")
+        hitbox_count = html.count('class="heatmap-hitbox"')
+        assert rect_count == 90
+        assert data_tooltip_count == 90
+        assert hitbox_count == 98  # 14 * 7
+
+        # The Sunday at the end of the window must have its tooltip
+        # reachable; the previous bug orphaned it because the overlay
+        # only had 13 columns and the 14th SVG column had no hitbox.
+        assert sunday.isoformat() in html
+
+    def test_empty_hitboxes_for_out_of_range_days(self) -> None:
+        """Days before start_date or after today still get a hitbox
+        so the column-major grid flow doesn't shift visible hitboxes
+        into the wrong (week, day_of_week) slot.  Empty hitboxes have
+        no data-tooltip so they fire no tooltip on hover."""
+        from datetime import date as _date
+        from datetime import timedelta as _td
+
+        from eggpool.dashboard import render as _render_module
+
+        # Pick a Sunday-to-Sunday window so we know exactly which
+        # days are inside vs. outside the visible range.
+        today = _date(2026, 6, 28)  # Sunday
+        start_date = today - _td(days=89)
+        daily = [
+            {
+                "day": (today - _td(days=i)).isoformat(),
+                "bytes_received": 100,
+                "bytes_emitted": 50,
+                "request_count": 1,
+            }
+            for i in range(90)
+        ]
+
+        class _FrozenDate(_date):
+            @classmethod
+            def today(cls) -> _date:
+                return today
+
+        original_date = _render_module.date
+        _render_module.date = _FrozenDate  # type: ignore[assignment]
+        try:
+            html = _render_bandwidth_heatmap(daily)
+        finally:
+            _render_module.date = original_date  # type: ignore[assignment]
+
+        # Out-of-range days: those before start_date AND after today
+        # in the 14-week grid.
+        out_of_range = 0
+        grid_start = start_date - _td(days=(start_date.weekday() + 1) % 7)
+        for w in range(((today - grid_start).days // 7) + 1):
+            for d in range(7):
+                cell = grid_start + _td(weeks=w, days=d)
+                if cell < start_date or cell > today:
+                    out_of_range += 1
+        assert out_of_range == 8  # 2 in week 0, 6 in week 13
+
+        # Empty hitboxes are rendered as <div class="heatmap-hitbox"></div>
+        # with no attributes other than the class.
+        empty_hitbox_count = html.count('<div class="heatmap-hitbox"></div>')
+        assert empty_hitbox_count == out_of_range
 
     def test_pointer_events_none_on_heatmap_rect(self) -> None:
         daily = [
@@ -1970,9 +2123,13 @@ class TestTooltipStylesheet:
         assert "position: relative" in css
 
     def test_heatmap_overlay_grid_geometry(self) -> None:
+        """The overlay grid uses a custom property so the column count
+        grows to 14 when the 90-day window rounds up across two
+        Sunday boundaries.  Hardcoding ``repeat(13, …)`` would leave
+        the most recent week orphaned (5 out of 7 days of the week)."""
         css = self._load_css()
         assert ".heatmap-overlay" in css
-        assert "repeat(13, 13px)" in css
+        assert "var(--heatmap-weeks, 13)" in css
         assert "repeat(7, 13px)" in css
 
     def test_heatmap_overlay_uses_column_auto_flow(self) -> None:
