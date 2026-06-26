@@ -606,6 +606,11 @@
       );
     }
     try {
+      namespace.initUpdateCommandCopy();
+    } catch (err) {
+      console.error("EggPoolDashboard: initUpdateCommandCopy failed", err);
+    }
+    try {
       if (document.getElementById("timeseries-chart")) {
         namespace.reinitTimeseriesChart();
       }
@@ -772,6 +777,83 @@
           namespace.refreshGroupedTimeseriesChart(timeseriesForm);
         } else {
           periodForm.submit();
+        }
+      });
+    }
+  };
+
+  // Wire click-to-copy on every element marked with
+  // ``data-update-command``.  Each click selects the text and copies
+  // it via the async Clipboard API; falls back to the legacy
+  // ``document.execCommand("copy")`` path when the modern API is
+  // unavailable (older browsers, insecure contexts).  A short
+  // "copied!" affordance fades in next to the command for ~1.6s and
+  // also announces the success to assistive tech via the role=status
+  // sibling.
+  namespace.initUpdateCommandCopy = function initUpdateCommandCopy() {
+    const commands = document.querySelectorAll("[data-update-command]");
+    for (let i = 0; i < commands.length; i++) {
+      const el = commands[i];
+      if (el.__eggpoolCopyWired) continue;
+      el.__eggpoolCopyWired = true;
+      const handle = function (event) {
+        if (event) {
+          event.preventDefault();
+        }
+        const text = el.textContent || "";
+        const indicator =
+          el.parentElement &&
+          el.parentElement.querySelector("[data-update-copied]");
+        const flash = function (label) {
+          if (!indicator) return;
+          indicator.textContent = label;
+          indicator.classList.add("is-visible");
+          window.setTimeout(function () {
+            indicator.classList.remove("is-visible");
+            window.setTimeout(function () {
+              indicator.textContent = "";
+            }, 200);
+          }, 1400);
+        };
+        const fallback = function () {
+          try {
+            const range = document.createRange();
+            range.selectNodeContents(el);
+            const selection = window.getSelection();
+            if (selection) {
+              selection.removeAllRanges();
+              selection.addRange(range);
+            }
+            const ok = document.execCommand && document.execCommand("copy");
+            if (selection) {
+              selection.removeAllRanges();
+            }
+            flash(ok ? "copied!" : "press Ctrl+C");
+          } catch (_err) {
+            flash("press Ctrl+C");
+          }
+        };
+        if (
+          typeof navigator !== "undefined" &&
+          navigator.clipboard &&
+          typeof navigator.clipboard.writeText === "function"
+        ) {
+          navigator.clipboard.writeText(text).then(
+            function () {
+              flash("copied!");
+            },
+            function () {
+              fallback();
+            }
+          );
+        } else {
+          fallback();
+        }
+      };
+      el.addEventListener("click", handle);
+      el.addEventListener("keydown", function (event) {
+        if (event.key === "Enter" || event.key === " ") {
+          handle(event);
         }
       });
     }

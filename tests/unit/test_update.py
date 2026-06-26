@@ -15,14 +15,6 @@ from eggpool.cli import _detect_install_method, cli
 # ---------------------------------------------------------------------------
 
 
-def _fake_pypi(version: str = "0.2.0") -> MagicMock:
-    """Return a mock httpx.get that returns *version* from PyPI."""
-    mock_resp = MagicMock()
-    mock_resp.json.return_value = {"info": {"version": version}}
-    mock_resp.raise_for_status = MagicMock()
-    return MagicMock(return_value=mock_resp)
-
-
 def _invoke_update(
     args: list[str] | None = None,
     *,
@@ -31,6 +23,7 @@ def _invoke_update(
     method: str = "pip",
     run_returncode: int = 0,
     run_stderr: str = "",
+    pypi_error: str | None = None,
 ) -> tuple[int, str, list[list[str]] | None]:
     """Invoke ``eggpool update`` with fully mocked dependencies.
 
@@ -38,10 +31,17 @@ def _invoke_update(
     """
     call_log: list[list[str]] | None = None
 
+    if pypi_error is not None:
+        check_result = (current, "", pypi_error)
+    else:
+        check_result = (current, latest, "")
+
     runner = CliRunner()
     with (
-        patch("httpx.get", _fake_pypi(latest)),
-        patch("importlib.metadata.version", return_value=current),
+        patch(
+            "eggpool.cli_full.async_check_for_update",
+            return_value=check_result,
+        ),
         patch("eggpool.cli_full._detect_install_method", return_value=method),
         patch("subprocess.run") as mock_run,
     ):
@@ -289,20 +289,10 @@ class TestUpdateFromSource:
 class TestUpdateFailures:
     def test_pypi_error(self) -> None:
         """Exits 1 when PyPI request fails."""
-        runner = CliRunner()
-        import httpx
-
-        def fake_get(_url: str, **_kw: object) -> None:
-            raise httpx.HTTPError("network error")
-
-        with (
-            patch("httpx.get", fake_get),
-            patch("importlib.metadata.version", return_value="0.1.0"),
-        ):
-            result = runner.invoke(cli, ["update"])
-
-        assert result.exit_code == 1
-        assert "Error checking for updates" in result.output
+        code, output, _ = _invoke_update(pypi_error="pypi: network error")
+        assert code == 1
+        assert "Error checking for updates" in output
+        assert "network error" in output
 
     def test_subprocess_failure(self) -> None:
         """Exits 1 when subprocess returns non-zero."""
@@ -315,19 +305,9 @@ class TestUpdateFailures:
 
     def test_empty_pypi_version(self) -> None:
         """Exits 1 when PyPI returns empty version."""
-        runner = CliRunner()
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {"info": {"version": ""}}
-        mock_resp.raise_for_status = MagicMock()
-
-        with (
-            patch("httpx.get", MagicMock(return_value=mock_resp)),
-            patch("importlib.metadata.version", return_value="0.1.0"),
-        ):
-            result = runner.invoke(cli, ["update"])
-
-        assert result.exit_code == 1
-        assert "Could not determine latest version" in result.output
+        code, output, _ = _invoke_update(latest="")
+        assert code == 1
+        assert "Could not determine latest version" in output
 
 
 # ---------------------------------------------------------------------------

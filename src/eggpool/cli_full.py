@@ -52,6 +52,7 @@ from eggpool.toml_edit import (
     section_has_key,
     update_section_value,
 )
+from eggpool.update_checker import async_check_for_update
 
 
 class _ConfigPathGroup(click.Group):
@@ -2714,25 +2715,16 @@ def update(ctx: click.Context, check_only: bool, from_source: bool) -> None:
     import importlib.metadata
     import subprocess
 
-    import httpx
-
     from eggpool.providers.connect import restart_server
 
     config_path: str = ctx.obj["config_path"]
-    current_version = importlib.metadata.version("eggpool")
+    current_version, latest_version, error = async_check_for_update()
     click.echo(f"Current version: {current_version}")
 
-    # Query PyPI for the latest version
-    pypi_url = "https://pypi.org/pypi/eggpool/json"
-    try:
-        resp = httpx.get(pypi_url, timeout=15, follow_redirects=True)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as exc:
-        click.echo(f"Error checking for updates: {exc}", err=True)
+    if error:
+        click.echo(f"Error checking for updates: {error}", err=True)
         sys.exit(1)
 
-    latest_version: str = data.get("info", {}).get("version", "")
     if not latest_version:
         click.echo("Could not determine latest version from PyPI.", err=True)
         sys.exit(1)

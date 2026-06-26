@@ -802,6 +802,19 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
 
     supervisor.register("stale_request_finalizer", _stale_request_loop)
 
+    # Periodic PyPI update check (default 24h). Drives the dashboard
+    # footer indicator and the /api/stats/update endpoint; never
+    # auto-installs.  Runs an initial check immediately so the first
+    # dashboard render shows the latest state.
+    from eggpool.update_checker import UpdateChecker
+
+    update_checker = UpdateChecker()
+    app.state.update_checker = update_checker
+    supervisor.register(
+        "update_checker",
+        update_checker.run_periodic,
+    )
+
     # 21. Start background tasks
     await supervisor.start_all()
 
@@ -1026,8 +1039,10 @@ def create_app(
 
     # Runtime metrics endpoint — always auth-gated regardless of dashboard.public
     from eggpool.api.runtime import register_runtime_routes
+    from eggpool.api.update import register_update_routes
 
     register_runtime_routes(app)
+    register_update_routes(app)
 
     @app.get(f"{API_V1_PREFIX}/healthz")
     async def healthz() -> HealthResponse:  # pyright: ignore[reportUnusedFunction]

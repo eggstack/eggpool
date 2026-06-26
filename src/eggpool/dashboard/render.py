@@ -44,6 +44,34 @@ _DEFAULT_HEATMAP_COLORS = [
 ]
 
 
+_UPDATE_INDICATOR_TEMPLATE = (
+    '<span class="update-indicator" '
+    "data-update-indicator "
+    'data-tooltip="A newer eggpool version is available. '
+    'Click the command to copy it." '
+    'aria-label="Update available">'
+    "Update available"
+    ' <span class="update-versions">{current} &rarr; {latest}</span>'
+    ' &middot; run <code class="update-command" '
+    'data-update-command data-update-command-target="update-cmd" '
+    'role="button" tabindex="0" '
+    'aria-label="Copy update command">'
+    "{command}"
+    "</code>"
+    '<span class="update-copied" data-update-copied role="status" '
+    'aria-live="polite"></span>'
+    "</span>"
+)
+"""Footer indicator shown only when an update is available.
+
+Renders an inline `<code>` carrying the update command.  The bundled
+``dashboard.js`` hook installs a click-to-copy handler on any element
+with ``data-update-command`` so operators can grab the command with a
+single click.  The visible text is escaped via :func:`escape`; the
+command itself is never user-supplied, so escaping is purely defensive.
+"""
+
+
 _STATUS_BADGE_TOOLTIPS: dict[str, str] = {
     "disabled": "Account disabled by operator",
     "auth_error": "Upstream rejected the credentials",
@@ -215,7 +243,9 @@ def get_available_themes(themes_dir: str | None = None) -> list[str]:
 
     Results are cached per ``themes_dir`` because the on-disk theme set
     is stable for the lifetime of the process; ``eggpool rehash`` and
-    other config-changing operations restart the server.
+    other config-changing operations restart the server.  The cached
+    entry stores a defensive copy so caller-side mutations do not
+    corrupt the cache.
     """
     key = _themes_dir_key(themes_dir)
     cached = _THEMES_LIST_CACHE.get(key)
@@ -226,6 +256,31 @@ def get_available_themes(themes_dir: str | None = None) -> list[str]:
         available.insert(0, "default")
     _THEMES_LIST_CACHE[key] = list(available)
     return available
+
+
+def _render_update_indicator(update_info: Any | None) -> str:
+    """Render the footer update indicator or empty string.
+
+    Accepts the same shape as :class:`UpdateInfo` plus ``None`` so
+    routes can pass the live snapshot directly without constructing a
+    dataclass instance.  Returns ``""`` whenever no update is
+    advertised — the dashboard contract is "render nothing when there
+    is no update" so the rest of the footer stays unchanged.
+    """
+    if update_info is None:
+        return ""
+    if not getattr(update_info, "update_available", False):
+        return ""
+    current = str(getattr(update_info, "current_version", "") or "")
+    latest = str(getattr(update_info, "latest_version", "") or "")
+    command = str(getattr(update_info, "update_command", "") or "eggpool update")
+    if not latest:
+        return ""
+    return _UPDATE_INDICATOR_TEMPLATE.format(
+        current=escape(current or "?"),
+        latest=escape(latest),
+        command=escape(command),
+    )
 
 
 def _render_layout(
@@ -239,6 +294,7 @@ def _render_layout(
     current_theme: str = "",
     auto_refresh: bool = False,
     include_chart_js: bool = False,
+    update_info: Any | None = None,
 ) -> str:
     """Wrap a page body in the standard layout.
 
@@ -259,6 +315,7 @@ def _render_layout(
         if include_chart_js
         else ""
     )
+    update_indicator = _render_update_indicator(update_info)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -297,7 +354,7 @@ def _render_layout(
 <footer>
   <small>Period: <span class="period-label">{_html_escape(period)}</span>
     &middot; auto-refresh {refresh_interval_s}s
-    &middot; <span id="dashboard-updated">ready</span></small>
+    &middot; <span id="dashboard-updated">ready</span>{update_indicator}</small>
 </footer>
 {script_block}
 {chart_script}
@@ -1054,6 +1111,7 @@ def render_overview(
     pending_health: dict[str, Any] | None = None,
     attempt_stats: dict[str, Any] | None = None,
     operational_summary: list[dict[str, Any]] | None = None,
+    update_info: Any | None = None,
 ) -> str:
     """Render the overview dashboard page."""
     summary = overview.get("summary", {})
@@ -1234,6 +1292,7 @@ def render_overview(
         current_theme=current_theme,
         auto_refresh=True,
         include_chart_js=True,
+        update_info=update_info,
     )
 
 
@@ -1419,6 +1478,7 @@ def render_accounts(
     theme_css: str = "",
     available_themes: list[str] | None = None,
     current_theme: str = "",
+    update_info: Any | None = None,
 ) -> str:
     """Render the accounts page."""
     body = f"""
@@ -1437,6 +1497,7 @@ def render_accounts(
         theme_css=theme_css,
         available_themes=available_themes,
         current_theme=current_theme,
+        update_info=update_info,
     )
 
 
@@ -1447,6 +1508,7 @@ def render_models(
     theme_css: str = "",
     available_themes: list[str] | None = None,
     current_theme: str = "",
+    update_info: Any | None = None,
 ) -> str:
     """Render the models page."""
     if not models:
@@ -1588,6 +1650,7 @@ def render_models(
         theme_css=theme_css,
         available_themes=available_themes,
         current_theme=current_theme,
+        update_info=update_info,
     )
 
 
@@ -1598,6 +1661,7 @@ def render_events(
     theme_css: str = "",
     available_themes: list[str] | None = None,
     current_theme: str = "",
+    update_info: Any | None = None,
 ) -> str:
     """Render the events page."""
     if not events:
@@ -1666,6 +1730,7 @@ def render_events(
         theme_css=theme_css,
         available_themes=available_themes,
         current_theme=current_theme,
+        update_info=update_info,
     )
 
 
@@ -1948,6 +2013,7 @@ def render_timeseries(
     model_filter: str = "",
     account_options: list[str] | None = None,
     model_options: list[str] | None = None,
+    update_info: Any | None = None,
 ) -> str:
     """Render the timeseries page.
 
@@ -2007,6 +2073,7 @@ def render_timeseries(
         available_themes=available_themes,
         current_theme=current_theme,
         include_chart_js=True,
+        update_info=update_info,
     )
 
 
@@ -2050,6 +2117,7 @@ def render_bandwidth(
     heatmap_colors: list[str] | None = None,
     available_themes: list[str] | None = None,
     current_theme: str = "",
+    update_info: Any | None = None,
 ) -> str:
     """Render the bandwidth page."""
     bytes_in = format_bytes(summary.get("total_bytes_received", 0))
@@ -2104,6 +2172,7 @@ def render_bandwidth(
         theme_css=theme_css,
         available_themes=available_themes,
         current_theme=current_theme,
+        update_info=update_info,
     )
 
 
@@ -2114,6 +2183,7 @@ def render_pings(
     theme_css: str = "",
     available_themes: list[str] | None = None,
     current_theme: str = "",
+    update_info: Any | None = None,
 ) -> str:
     """Render the provider pings health page."""
     # Provider health summary cards
@@ -2212,6 +2282,7 @@ def render_pings(
         theme_css=theme_css,
         available_themes=available_themes,
         current_theme=current_theme,
+        update_info=update_info,
     )
 
 
@@ -2220,6 +2291,7 @@ def render_runtime(
     theme_css: str = "",
     available_themes: list[str] | None = None,
     current_theme: str = "",
+    update_info: Any | None = None,
 ) -> str:
     """Render the runtime metrics page."""
     server = _as_dict(snapshot.get("server"))
@@ -2496,6 +2568,7 @@ def render_runtime(
         available_themes=available_themes,
         current_theme=current_theme,
         auto_refresh=True,
+        update_info=update_info,
     )
 
 
@@ -2584,6 +2657,7 @@ def render_reliability(
     theme_css: str = "",
     available_themes: list[str] | None = None,
     current_theme: str = "",
+    update_info: Any | None = None,
 ) -> str:
     """Render the Reliability page.
 
@@ -2664,6 +2738,7 @@ def render_reliability(
         available_themes=available_themes,
         current_theme=current_theme,
         include_chart_js=True,
+        update_info=update_info,
     )
 
 
@@ -2891,6 +2966,7 @@ def render_routing(
     theme_css: str = "",
     available_themes: list[str] | None = None,
     current_theme: str = "",
+    update_info: Any | None = None,
 ) -> str:
     """Render the Routing page.
 
@@ -2978,6 +3054,7 @@ def render_routing(
         available_themes=available_themes,
         current_theme=current_theme,
         include_chart_js=True,
+        update_info=update_info,
     )
 
 
@@ -3159,6 +3236,7 @@ def render_traces(
     theme_css: str = "",
     available_themes: list[str] | None = None,
     current_theme: str = "",
+    update_info: Any | None = None,
 ) -> str:
     """Render the recent-request trace table.
 
@@ -3258,6 +3336,7 @@ def render_traces(
         theme_css=theme_css,
         available_themes=available_themes,
         current_theme=current_theme,
+        update_info=update_info,
     )
 
 
@@ -3270,6 +3349,7 @@ def render_latency(
     current_theme: str = "",
     *,
     phases: dict[str, Any] | None = None,
+    update_info: Any | None = None,
 ) -> str:
     """Render the latency breakdown page.
 
@@ -3372,6 +3452,7 @@ def render_latency(
         available_themes=available_themes,
         current_theme=current_theme,
         include_chart_js=include_chart_js,
+        update_info=update_info,
     )
 
 

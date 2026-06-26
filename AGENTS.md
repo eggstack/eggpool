@@ -119,6 +119,19 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 - New pages opt into Chart.js via `include_chart_js=True` in `_render_layout`
 - Frontend helpers in `src/eggpool/dashboard/static/dashboard.js` under `window.EggPoolDashboard`
 - Full page list and chart lifecycle details are in the `architecture` skill
+- **`header.topbar` is `position: sticky; top: 0; z-index: 5`** with a subtle backdrop blur so the page nav stays visible while scrolling on desktop. Mobile layout is unchanged — the topnav disclosure still wraps cleanly under 480px. Use `header.topbar` selectors when overriding; do not collapse the existing z-index above the value used by `body::before` (2) or the egg background (0)
+- **Footer update indicator**: `_render_update_indicator(update_info)` renders an empty string when `update_info is None` or `update_info.update_available is False`. The indicator is appended to the footer after `<span id="dashboard-updated">ready</span>` and contains a `data-update-command` markup hook consumed by `dashboard.js` `initUpdateCommandCopy()`. The hook uses Clipboard API with `document.execCommand("copy")` fallback for older browsers and surfaces a transient "copied!" indicator on Enter/Space/click
+
+### Update Checker
+
+- `src/eggpool/update_checker.py` is the single source of truth for "is there a newer eggpool release available?"
+- `UpdateChecker` (frozen `UpdateInfo` dataclass) holds the latest snapshot; `snapshot()` returns `dataclasses.replace(self._info)` so callers cannot mutate the cached state. Writes are serialized through an `asyncio.Lock` so the periodic background task and synchronous `snapshot()` calls from request handlers do not tear
+- `async_check_for_update()` is the shared helper used by both the dashboard background task and the `eggpool update` CLI — they MUST go through it instead of inlining their own PyPI lookup so the two paths cannot drift
+- Default check interval is 24h (`_DEFAULT_CHECK_INTERVAL_S = 24 * 60 * 60`), timeout 15s (`_CHECK_TIMEOUT_S = 15.0`)
+- The background task is registered in `src/eggpool/app.py` via `supervisor.register("update_checker", update_checker.run_periodic)` and uses the default supervisor `max_restarts` so transient PyPI failures do not give up
+- On PyPI failure, the checker preserves the previous `latest_version` so the indicator still surfaces a known-newer release during momentary outages
+- `/api/stats/update` (`src/eggpool/api/update.py`) returns the JSON snapshot — always auth-gated regardless of `dashboard.public`
+- Add new dashboard footer UI by extending `_UPDATE_INDICATOR_TEMPLATE` in `src/eggpool/dashboard/render.py:259`; ensure `_render_update_indicator` continues to return `""` whenever an update is not available so the footer does not show a stale or "no update" pill
 
 ### Responsive / mobile
 

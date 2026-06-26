@@ -79,6 +79,19 @@ def _get_dashboard_config(request: Request) -> Any:
     return config.dashboard
 
 
+def _get_update_info(request: Request) -> Any | None:
+    """Return the latest :class:`UpdateInfo` snapshot or ``None``.
+
+    Returns ``None`` when no checker is attached — the renderer
+    interprets that as "do not render any indicator", matching the
+    dashboard contract.
+    """
+    checker = getattr(request.app.state, "update_checker", None)
+    if checker is None:
+        return None
+    return checker.snapshot()
+
+
 def _get_theme_data(
     request: Request, theme_override: str | None = None
 ) -> tuple[str, list[str], str, list[str]]:
@@ -209,6 +222,7 @@ async def handle_overview(
         pending_health=pending_health,
         attempt_stats=attempt_stats,
         operational_summary=operational_summary,
+        update_info=_get_update_info(request),
     )
     return HTMLResponse(content=html)
 
@@ -229,6 +243,7 @@ async def handle_accounts(
             theme_css=theme_css,
             available_themes=available,
             current_theme=current_theme,
+            update_info=_get_update_info(request),
         )
     )
 
@@ -255,6 +270,7 @@ async def handle_models(
             theme_css=theme_css,
             available_themes=available,
             current_theme=current_theme,
+            update_info=_get_update_info(request),
         )
     )
 
@@ -284,6 +300,7 @@ async def handle_latency(
             available_themes=available,
             current_theme=current_theme,
             phases=phases,
+            update_info=_get_update_info(request),
         )
     )
 
@@ -326,6 +343,7 @@ async def handle_reliability(
             theme_css=theme_css,
             available_themes=available,
             current_theme=current_theme,
+            update_info=_get_update_info(request),
         )
     )
 
@@ -359,6 +377,7 @@ async def handle_routing(
             theme_css=theme_css,
             available_themes=available,
             current_theme=current_theme,
+            update_info=_get_update_info(request),
         )
     )
 
@@ -387,6 +406,7 @@ async def handle_traces(
             theme_css=theme_css,
             available_themes=available,
             current_theme=current_theme,
+            update_info=_get_update_info(request),
         )
     )
 
@@ -409,6 +429,7 @@ async def handle_pings(
             theme_css=theme_css,
             available_themes=available,
             current_theme=current_theme,
+            update_info=_get_update_info(request),
         )
     )
 
@@ -432,6 +453,7 @@ async def handle_events(
             theme_css=theme_css,
             available_themes=available,
             current_theme=current_theme,
+            update_info=_get_update_info(request),
         )
     )
 
@@ -496,6 +518,7 @@ async def handle_timeseries(
             model_filter=model or "",
             account_options=account_options,
             model_options=model_options,
+            update_info=_get_update_info(request),
         )
     )
 
@@ -537,6 +560,7 @@ async def handle_bandwidth(
             heatmap_colors=heatmap_colors,
             available_themes=available,
             current_theme=current_theme,
+            update_info=_get_update_info(request),
         )
     )
 
@@ -613,6 +637,7 @@ async def handle_runtime(request: Request, theme: str | None = None) -> Response
             theme_css=theme_css,
             available_themes=available,
             current_theme=current_theme,
+            update_info=_get_update_info(request),
         )
     )
 

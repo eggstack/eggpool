@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Sticky dashboard topbar**: `header.topbar` is `position: sticky; top: 0; z-index: 5` with a subtle backdrop blur, so the page navigation stays visible while scrolling on desktop. Mobile layout is unchanged (the topnav disclosure still wraps cleanly under 480px).
+- **Footer update indicator**: periodic PyPI check (default 24h interval, 15s timeout) drives a footer pill that appears only when a newer `eggpool` release is available. The pill shows the current and latest versions side-by-side and the one-liner command (`eggpool update`) in an inline-code block. Clicking the command copies it to the clipboard via the bundled `dashboard.js` (Clipboard API with `execCommand("copy")` fallback); a transient "copied!" indicator confirms success. The new `src/eggpool/update_checker.py` module is the single source of truth for PyPI lookups — both the dashboard background task and the `eggpool update` CLI share `async_check_for_update()` so the two paths cannot drift.
+- **`/api/stats/update` endpoint**: auth-gated JSON snapshot of the latest `UpdateChecker` state (`current_version`, `latest_version`, `update_available`, `last_checked_at`, `last_error`). Returns an empty payload if the checker has not yet produced a snapshot. Always auth-gated regardless of `dashboard.public`.
+
 ## [0.3.0] - 2026-06-25
 
 ### Added

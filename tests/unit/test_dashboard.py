@@ -3006,3 +3006,131 @@ class TestStaticChartDataIsland:
             {"label": "x", "data": [1, 2, 3], "backgroundColor": "red"}
         ]
         assert payload["options"] == {"plugins": {"legend": {"display": False}}}
+
+
+class TestUpdateIndicator:
+    """Footer update indicator is only rendered when an update is available."""
+
+    def test_no_indicator_when_update_info_is_none(self) -> None:
+        from eggpool.dashboard.render import _render_update_indicator
+
+        assert _render_update_indicator(None) == ""
+
+    def test_no_indicator_when_update_not_available(self) -> None:
+        from eggpool.dashboard.render import _render_update_indicator
+        from eggpool.update_checker import UpdateInfo
+
+        info = UpdateInfo(
+            current_version="0.1.0",
+            latest_version="0.1.0",
+            update_available=False,
+        )
+        assert _render_update_indicator(info) == ""
+
+    def test_indicator_rendered_when_update_available(self) -> None:
+        from eggpool.dashboard.render import _render_update_indicator
+        from eggpool.update_checker import UpdateInfo
+
+        info = UpdateInfo(
+            current_version="0.1.0",
+            latest_version="0.2.0",
+            update_available=True,
+            update_command="eggpool update",
+        )
+        html = _render_update_indicator(info)
+        assert "update-indicator" in html
+        assert "data-update-command" in html
+        assert "eggpool update" in html
+        assert "0.1.0" in html
+        assert "0.2.0" in html
+
+    def test_indicator_escapes_special_chars(self) -> None:
+        """Defense-in-depth — the command is not user-supplied today, but
+        the renderer must escape it so a future change cannot smuggle
+        markup into the footer."""
+        from eggpool.dashboard.render import _render_update_indicator
+        from eggpool.update_checker import UpdateInfo
+
+        info = UpdateInfo(
+            current_version="0.1.0",
+            latest_version="0.2.0",
+            update_available=True,
+            update_command="<script>alert(1)</script>",
+        )
+        html = _render_update_indicator(info)
+        assert "<script>" not in html
+        assert "&lt;script&gt;" in html
+
+    def test_overview_renders_footer_indicator_when_update_available(self) -> None:
+        from eggpool.update_checker import UpdateInfo
+
+        html = render_overview(
+            overview={"summary": {}, "imbalance": {}},
+            accounts=[],
+            models=[],
+            events=[],
+            update_info=UpdateInfo(
+                current_version="0.1.0",
+                latest_version="0.2.0",
+                update_available=True,
+                update_command="eggpool update",
+            ),
+        )
+        assert "update-indicator" in html
+        assert "data-update-command" in html
+
+    def test_overview_omits_indicator_when_no_update(self) -> None:
+        html = render_overview(
+            overview={"summary": {}, "imbalance": {}},
+            accounts=[],
+            models=[],
+            events=[],
+        )
+        assert "update-indicator" not in html
+        assert "data-update-command" not in html
+
+    def test_overview_omits_indicator_with_explicit_none(self) -> None:
+        html = render_overview(
+            overview={"summary": {}, "imbalance": {}},
+            accounts=[],
+            models=[],
+            events=[],
+            update_info=None,
+        )
+        assert "update-indicator" not in html
+
+
+class TestStickyTopbarStylesheet:
+    """The topbar must use sticky positioning so it stays reachable on
+    desktop viewports while scrolling long tables."""
+
+    @staticmethod
+    def _load_css() -> str:
+        from pathlib import Path
+
+        return (
+            Path(__file__).parent.parent.parent
+            / "src"
+            / "eggpool"
+            / "dashboard"
+            / "static"
+            / "dashboard.css"
+        ).read_text()
+
+    def test_topbar_uses_position_sticky(self) -> None:
+        css = self._load_css()
+        # Find the `header.topbar { ... }` block and assert it sets `position: sticky`.
+        match = re.search(
+            r"header\.topbar\s*\{([^}]*)\}",
+            css,
+            flags=re.DOTALL,
+        )
+        assert match is not None, "header.topbar rule not found"
+        block = match.group(1)
+        assert "position: sticky" in block
+        assert "top: 0" in block
+        # z-index must beat the body::before overlay (z-index: 2) and the
+        # egg-background watermark (z-index: 0) so the bar is never occluded.
+        z_match = re.search(r"z-index:\s*(\d+)", block)
+        assert z_match is not None
+        assert int(z_match.group(1)) > 2
