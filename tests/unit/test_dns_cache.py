@@ -460,6 +460,50 @@ class TestStaleIfError:
                 await cache.resolve("example.com", socket.AF_INET)
         assert cache.stale_hits == 0
 
+    @pytest.mark.asyncio
+    async def test_stale_window_starts_after_positive_ttl(self) -> None:
+        cfg = _make_config(
+            positive_ttl_seconds=10,
+            negative_ttl_seconds=10,
+            stale_if_error_seconds=10,
+        )
+        cache = DnsCache(cfg)
+        fake_time = [1000.0]
+        call_count = 0
+
+        def _monotonic() -> float:
+            return fake_time[0]
+
+        def _mock_getaddrinfo(host, port, family):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return [(socket.AF_INET, 0, 0, "", ("1.2.3.4", 0))]
+            raise socket.gaierror("resolver down")
+
+        with (
+            patch(
+                "eggpool.providers.dns_cache.time.monotonic",
+                side_effect=_monotonic,
+            ),
+            patch(
+                "eggpool.providers.dns_cache.socket.getaddrinfo",
+                side_effect=_mock_getaddrinfo,
+            ),
+        ):
+            await cache.resolve("example.com", socket.AF_INET)
+            # expires_at=1010, stale_until=1020
+            # T=1015: expired but within stale window
+            fake_time[0] += 15
+            result = await cache.resolve("example.com", socket.AF_INET)
+            assert result == ["1.2.3.4"]
+            assert cache.stale_hits == 1
+            # T=1025: expired and stale window expired
+            fake_time[0] += 10
+            with pytest.raises(httpcore.ConnectError):
+                await cache.resolve("example.com", socket.AF_INET)
+            assert cache.stale_hits == 1
+
 
 class TestLruEviction:
     @pytest.mark.asyncio
@@ -574,16 +618,33 @@ class TestDisabledCache:
         assert cache._config.enabled is False
 
     @pytest.mark.asyncio
-    async def test_disabled_cache_still_caches(self) -> None:
+    async def test_disabled_backend_bypasses_cache(self) -> None:
         cfg = _make_config(enabled=False, positive_ttl_seconds=300)
-        cache = DnsCache(cfg)
+        wrapped = MagicMock(spec=httpcore.AsyncNetworkBackend)
+        mock_stream = MagicMock(spec=httpcore.AsyncNetworkStream)
+
+        async def _fake_connect_tcp(*args: object, **kwargs: object) -> MagicMock:
+            return mock_stream
+
+        wrapped.connect_tcp = _fake_connect_tcp
+        backend = DnsNetworkBackend(cfg, wrapped)
+        captured_host: list[str] = []
+
+        async def _capture_connect_tcp(
+            host: str, *args: object, **kwargs: object
+        ) -> MagicMock:
+            captured_host.append(host)
+            return mock_stream
+
+        wrapped.connect_tcp = _capture_connect_tcp
         with patch(
             "eggpool.providers.dns_cache.socket.getaddrinfo",
             return_value=[(socket.AF_INET, 0, 0, "", ("1.2.3.4", 0))],
         ) as mock_lookup:
-            await cache.resolve("example.com", socket.AF_INET)
-            await cache.resolve("example.com", socket.AF_INET)
-        assert mock_lookup.call_count == 1
+            await backend.connect_tcp("example.com", 443)
+            await backend.connect_tcp("example.com", 443)
+        assert captured_host == ["example.com", "example.com"]
+        assert mock_lookup.call_count == 0
 
     def test_enabled_flag_defaults_true(self) -> None:
         cfg = _make_config()
@@ -656,6 +717,62 @@ class TestConcurrentResolution:
             await cache.resolve("example.com", socket.AF_INET)
         assert call_count == 1
 
+    @pytest.mark.asyncio
+    async def test_concurrent_singleflight_deduplicates(self) -> None:
+        cfg = _make_config(positive_ttl_seconds=300)
+        cache = DnsCache(cfg)
+        call_count = 0
+
+        def _mock_getaddrinfo(host, port, family):
+            nonlocal call_count
+            call_count += 1
+            return [(socket.AF_INET, 0, 0, "", ("1.2.3.4", 0))]
+
+        with patch(
+            "eggpool.providers.dns_cache.socket.getaddrinfo",
+            side_effect=_mock_getaddrinfo,
+        ):
+            results = await asyncio.gather(
+                cache.resolve("example.com", socket.AF_INET),
+                cache.resolve("example.com", socket.AF_INET),
+                cache.resolve("example.com", socket.AF_INET),
+                cache.resolve("example.com", socket.AF_INET),
+                cache.resolve("example.com", socket.AF_INET),
+                cache.resolve("example.com", socket.AF_INET),
+                cache.resolve("example.com", socket.AF_INET),
+                cache.resolve("example.com", socket.AF_INET),
+                cache.resolve("example.com", socket.AF_INET),
+                cache.resolve("example.com", socket.AF_INET),
+            )
+        assert call_count == 1
+        for r in results:
+            assert r == ["1.2.3.4"]
+
+    @pytest.mark.asyncio
+    async def test_concurrent_singleflight_on_failure(self) -> None:
+        cfg = _make_config(positive_ttl_seconds=300)
+        cache = DnsCache(cfg)
+        call_count = 0
+
+        def _mock_getaddrinfo(host, port, family):
+            nonlocal call_count
+            call_count += 1
+            raise socket.gaierror("resolver down")
+
+        with patch(
+            "eggpool.providers.dns_cache.socket.getaddrinfo",
+            side_effect=_mock_getaddrinfo,
+        ):
+            results = await asyncio.gather(
+                cache.resolve("fail.com", socket.AF_INET),
+                cache.resolve("fail.com", socket.AF_INET),
+                cache.resolve("fail.com", socket.AF_INET),
+                return_exceptions=True,
+            )
+        assert call_count == 1
+        for r in results:
+            assert isinstance(r, httpcore.ConnectError)
+
 
 class TestSnapshot:
     def test_initial_snapshot(self) -> None:
@@ -669,6 +786,7 @@ class TestSnapshot:
             "stale_hits": 0,
             "evictions": 0,
             "size": 0,
+            "by_host": {},
         }
 
     @pytest.mark.asyncio

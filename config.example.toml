@@ -75,9 +75,11 @@ monthly_microdollars = 60000000
 # keepalive_expiry_s = 30
 #
 # [network.dns_cache]
-# enabled = true              # enable in-memory DNS cache (default: true)
-# ttl_s = 300                 # cache entry lifetime in seconds (default: 300)
-# max_size = 256              # max cached DNS entries (default: 256)
+# enabled = true                   # enable in-memory DNS cache (default: true)
+# max_entries = 50                 # max cached host entries (default: 50)
+# positive_ttl_seconds = 300       # upper cap for positive DNS answers (default: 300)
+# negative_ttl_seconds = 30        # how long to cache lookup failures (default: 30)
+# stale_if_error_seconds = 3600    # max age for stale records usable on resolver failure (default: 3600)
 
 [dashboard]
 enabled = true

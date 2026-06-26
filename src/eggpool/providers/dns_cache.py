@@ -42,6 +42,8 @@ class NegativeCacheEntry:
 
 
 class DnsCache:
+    _MAX_TRACKED_HOSTS = 256
+
     def __init__(self, config: DnsCacheConfig) -> None:
         self._config = config
         self._cache: collections.OrderedDict[
@@ -54,8 +56,27 @@ class DnsCache:
         self.negative_hits = 0
         self.stale_hits = 0
         self.evictions = 0
+        self._per_host: dict[tuple[str, int], dict[str, int]] = {}
 
-    def snapshot(self) -> dict[str, int]:
+    def _record(self, key: DnsCacheKey, field: str) -> None:
+        counter_key = (key.hostname, key.address_family)
+        if counter_key not in self._per_host:
+            if len(self._per_host) >= self._MAX_TRACKED_HOSTS:
+                return
+            self._per_host[counter_key] = {
+                "hits": 0,
+                "misses": 0,
+                "negative_hits": 0,
+                "stale_hits": 0,
+            }
+        self._per_host[counter_key][field] += 1
+
+    def snapshot(self) -> dict[str, object]:
+        by_host: dict[str, dict[str, int]] = {}
+        for (host, fam), counters in self._per_host.items():
+            fam_label = "ipv4" if fam == socket.AF_INET else "ipv6"
+            label = f"{host}/{fam_label}"
+            by_host[label] = dict(counters)
         return {
             "hits": self.hits,
             "misses": self.misses,
@@ -63,7 +84,12 @@ class DnsCache:
             "stale_hits": self.stale_hits,
             "evictions": self.evictions,
             "size": len(self._cache),
+            "by_host": by_host,
         }
+
+    @property
+    def enabled(self) -> bool:
+        return self._config.enabled
 
     def _is_ip(self, hostname: str) -> bool:
         try:
@@ -98,46 +124,46 @@ class DnsCache:
                 if isinstance(entry, PositiveCacheEntry):
                     if now < entry.expires_at:
                         self.hits += 1
+                        self._record(key, "hits")
                         return entry.addresses
                     if now < entry.stale_until:
                         self.stale_hits += 1
+                        self._record(key, "stale_hits")
                         return entry.addresses
                     del self._cache[key]
                 else:
                     if now < entry.expires_at:
                         self.negative_hits += 1
+                        self._record(key, "negative_hits")
                         raise entry.error_class(entry.error_message)
                     del self._cache[key]
 
             self.misses += 1
+            self._record(key, "misses")
 
-            if key in self._singleflight:
-                future = self._singleflight[key]
-            else:
+            is_owner = key not in self._singleflight
+            if is_owner:
                 future = asyncio.get_event_loop().create_future()
                 self._singleflight[key] = future
+            else:
+                future = self._singleflight[key]
 
-        if future.cancelled():
-            async with self._lock:
-                self._singleflight.pop(key, None)
-            raise httpcore.ConnectError("DNS lookup cancelled")
+        if not is_owner:
+            return await future
 
-        if not future.done():
-            try:
-                addresses = await self._dns_lookup(key.hostname, key.address_family)
-            except Exception:
-                async with self._lock:
-                    self._singleflight.pop(key, None)
-                if not future.cancelled():
-                    future.set_result(None)
-                raise
+        try:
+            addresses = await self._dns_lookup(key.hostname, key.address_family)
+        except Exception as exc:
             async with self._lock:
                 self._singleflight.pop(key, None)
             if not future.cancelled():
-                future.set_result(addresses)
-            return addresses
-
-        return await future
+                future.set_exception(exc)
+            raise
+        async with self._lock:
+            self._singleflight.pop(key, None)
+        if not future.cancelled():
+            future.set_result(addresses)
+        return addresses
 
     async def _dns_lookup(
         self,
@@ -197,10 +223,11 @@ class DnsCache:
         addresses: list[str],
     ) -> None:
         now = time.monotonic()
+        expires_at = now + self._config.positive_ttl_seconds
         entry = PositiveCacheEntry(
             addresses=addresses,
-            expires_at=now + self._config.positive_ttl_seconds,
-            stale_until=now + self._config.stale_if_error_seconds,
+            expires_at=expires_at,
+            stale_until=expires_at + self._config.stale_if_error_seconds,
         )
         self._evict_if_needed()
         self._cache[key] = entry
@@ -249,8 +276,11 @@ class DnsNetworkBackend(httpcore.AsyncNetworkBackend):
         local_address: str | None = None,
         socket_options: (Iterable[httpcore.SOCKET_OPTION] | None) = None,
     ) -> httpcore.AsyncNetworkStream:
-        addresses = await self._cache.resolve(host, socket.AF_UNSPEC)
-        resolved = addresses[0] if addresses else host
+        if self._cache.enabled:
+            addresses = await self._cache.resolve(host, socket.AF_UNSPEC)
+            resolved = addresses[0] if addresses else host
+        else:
+            resolved = host
         return await self._wrapped.connect_tcp(
             resolved,
             port,
