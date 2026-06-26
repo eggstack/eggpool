@@ -111,7 +111,9 @@ See `architecture/README.md` for the full design overview.
 ## Multi-Provider
 
 - Provider-suffixed model IDs: `model-id/provider-id` format
-- `ProviderClientPool` manages per-provider `httpx.AsyncClient` instances
+- `ProviderClientPool` manages per-provider `httpx.AsyncClient` instances for upstream LLM forwarding and catalog model-list fetches
+- `OutboundClientManager` owns a shared `httpx.AsyncClient` for non-provider network paths: update checks (PyPI), external catalog fetches (OpenRouter), and future background/CLI network operations. Initialized once at startup, reused by all background tasks. The `build_count` property should stabilize at 1; growth with request volume indicates a hot-path client construction bug
+- Hot-path provider requests must **never** construct fresh HTTP clients. Background and CLI paths should use the shared outbound client from `OutboundClientManager` rather than calling `httpx.get()` or building ad-hoc clients
 - Per-provider upstream paths: `openai_path`, `anthropic_path`, `models_endpoint` (a `[providers.<id>.models_endpoint]` table with `method`, `path`, `query`, `body`, `required`; `method = "DISABLED"` skips live model listing). Legacy `models_path` / `models_method` scalars are auto-synthesized into a default `models_endpoint`.
 - **`static_models`** — providers may declare `[[providers.<id>.static_models]]` rows (`ProviderStaticModelConfig`) that seed the catalog at refresh time. Required when `models_endpoint.method = "DISABLED"`. Static rows participate in the same protocol/limit machinery as live rows; static-source fields (`protocol`, `protocol_source == "static_config"`, `supports_tools`, `supports_vision`) are preserved by `ModelCatalogCache._preserve_static_fields` when live rows arrive without them.
 - Legacy flat `[[accounts]]` auto-normalizes to default `opencode-go` provider

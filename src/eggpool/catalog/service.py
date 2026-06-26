@@ -142,6 +142,7 @@ class CatalogService:
         db: Database,
         client_pool: ProviderClientPool | httpx.AsyncClient,
         ping_repo: PingRepository | None = None,
+        outbound_client: httpx.AsyncClient | None = None,
     ) -> None:
         self._config = config
         self._registry = registry
@@ -153,6 +154,11 @@ class CatalogService:
         else:
             self._client_pool = None
             self._httpx_client = client_pool
+        # Shared outbound client for catalog resolvers when no default
+        # provider client is available.  Provided by the
+        # OutboundClientManager so resolvers reuse a long-lived
+        # connection pool instead of constructing fresh clients.
+        self._outbound_client = outbound_client
         self._cache = ModelCatalogCache()
         self._cache_loaded = False
         self._refresh_lock = asyncio.Lock()
@@ -208,10 +214,13 @@ class CatalogService:
                 options=entry.options,
             )
             if name == "openrouter":
+                # Use the default provider client if available, otherwise
+                # fall back to the shared outbound client from the manager.
+                resolver_client = self._httpx_client or self._outbound_client
                 resolvers.append(
                     OpenRouterCatalogResolver(
                         config=catalog_config,
-                        client=self._httpx_client,
+                        client=resolver_client,
                     )
                 )
         if resolvers:

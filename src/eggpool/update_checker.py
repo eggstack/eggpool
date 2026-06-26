@@ -78,11 +78,17 @@ class UpdateChecker:
     The default ``check_interval_s`` of 86400 (24h) keeps PyPI traffic
     well under their anonymous rate limit while still surfacing new
     releases within a day.  Tests override it via the constructor.
+
+    When ``_client`` is provided (an ``httpx.AsyncClient``), the
+    periodic checker reuses it instead of constructing a fresh
+    connection per check.  This avoids repeated DNS lookups, TCP
+    handshakes, and TLS negotiations on SBC / Pi-hole deployments.
     """
 
     package_name: str = "eggpool"
     check_interval_s: float = _DEFAULT_CHECK_INTERVAL_S
     _http_get: Callable[..., httpx.Response] | None = None
+    _client: httpx.AsyncClient | None = None
     _version_lookup: Callable[[str], str] | None = None
     _install_method_lookup: Callable[[], str] | None = None
     _info: UpdateInfo = field(default_factory=UpdateInfo)
@@ -201,9 +207,16 @@ class UpdateChecker:
         previous latest_version (so callers can still detect an update
         that was found on an earlier successful check) and an error
         string for diagnostics.
+
+        When ``_client`` is provided, uses the shared async client
+        directly (no thread offload).  Falls back to synchronous
+        ``httpx.get`` via ``asyncio.to_thread`` otherwise.
         """
         try:
-            response = await asyncio.to_thread(self._http_get_sync)
+            if self._client is not None:
+                response = await self._client.get(PYPI_URL, timeout=_CHECK_TIMEOUT_S)
+            else:
+                response = await asyncio.to_thread(self._http_get_sync)
         except Exception as exc:  # noqa: BLE001
             return self._info.latest_version, f"pypi: {exc}"
         if response is None:
@@ -336,6 +349,10 @@ def async_check_for_update(
     least one of the three will be empty on success and on failure.
     Kept module-public so :mod:`cli_full` can call it without
     instantiating an :class:`UpdateChecker`.
+
+    This is a synchronous helper for CLI paths only.  Background checks
+    go through :class:`UpdateChecker` which reuses the shared async
+    client from the :class:`OutboundClientManager`.
     """
     try:
         current = importlib.metadata.version(package_name)

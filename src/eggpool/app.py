@@ -64,6 +64,7 @@ from eggpool.metrics.buffer import MetricsWriteCoalescer
 from eggpool.models.api import HealthResponse
 from eggpool.models.config import AppConfig
 from eggpool.providers.client_pool import ProviderClientPool
+from eggpool.providers.outbound import OutboundClientManager
 from eggpool.request.coordinator import RequestCoordinator
 from eggpool.routing.router import Router
 from eggpool.stats import StatsService
@@ -449,18 +450,31 @@ async def _hydrate_health_from_backoffs(
             health.last_check = time.time()
 
 
-def _register_update_checker(app: FastAPI, supervisor: TaskSupervisor) -> UpdateChecker:
+def _register_update_checker(
+    app: FastAPI,
+    supervisor: TaskSupervisor,
+    outbound_manager: OutboundClientManager,
+) -> UpdateChecker:
     """Register the periodic PyPI update checker as a supervised background task.
 
     Returns the checker instance so callers can attach it to app.state
     or use it for tests.  The checker runs an initial PyPI probe at
     startup and repeats every 24 hours; it never auto-installs.
+
+    The shared outbound client from *outbound_manager* is used for the
+    periodic check so repeated probes reuse the same connection pool
+    rather than constructing fresh clients.
     """
     from eggpool.update_checker import UpdateChecker
 
     update_checker = UpdateChecker()
     app.state.update_checker = update_checker
-    supervisor.register("update_checker", update_checker.run_periodic)
+
+    async def _run_with_client() -> None:
+        update_checker._client = await outbound_manager.get_client()  # pyright: ignore[reportPrivateUsage]
+        await update_checker.run_periodic()
+
+    supervisor.register("update_checker", _run_with_client)
     return update_checker
 
 
@@ -542,6 +556,12 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     if legacy_client is not None:
         app.state.httpx_client = legacy_client
 
+    # 7b. Outbound client manager (shared client for background/CLI network paths)
+    outbound_manager = OutboundClientManager()
+    app.state.outbound_manager = outbound_manager
+    # Pre-initialize the shared client so it's ready for catalog resolvers
+    outbound_client = await outbound_manager.get_client()
+
     # 8. Account registry (runtime state)
     registry = AccountRegistry(config)
     app.state.registry = registry
@@ -566,7 +586,14 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         )
 
     # 10. Catalog service
-    catalog = CatalogService(config, registry, db, client_pool, ping_repo=ping_repo)
+    catalog = CatalogService(
+        config,
+        registry,
+        db,
+        client_pool,
+        ping_repo=ping_repo,
+        outbound_client=outbound_client,
+    )
     app.state.catalog = catalog
 
     # 11. Load cached catalog
@@ -855,7 +882,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # footer indicator and the /api/stats/update endpoint; never
     # auto-installs.  Runs an initial check immediately so the first
     # dashboard render shows the latest state.
-    _register_update_checker(app, supervisor)
+    _register_update_checker(app, supervisor, outbound_manager)
 
     # Register automatic backup task (default: daily, retain 14).
     if config.backup.enabled and config.backup.interval_s > 0:
@@ -932,6 +959,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
                 await client_pool.close()
             except Exception:
                 logger.exception("Error closing client pool during shutdown")
+
+        outbound_manager: OutboundClientManager | None = getattr(
+            app.state, "outbound_manager", None
+        )
+        if outbound_manager is not None:
+            try:
+                await outbound_manager.aclose()
+            except Exception:
+                logger.exception(
+                    "Error closing outbound client manager during shutdown"
+                )
 
         db: Database | None = getattr(app.state, "db", None)
         stats_db: Database | None = getattr(app.state, "stats_db", None)

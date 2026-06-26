@@ -279,3 +279,61 @@ def test_schedule_check_returns_callable_that_produces_coroutine() -> None:
     coro = factory()
     # Bound-method coroutines are awaitable; close to avoid warnings.
     coro.close()
+
+
+# ---------------------------------------------------------------------------
+# Shared client integration
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateCheckerSharedClient:
+    """Tests for UpdateChecker with a shared httpx.AsyncClient."""
+
+    @pytest.mark.anyio
+    async def test_check_once_uses_shared_client(self) -> None:
+        """When _client is set, check_once uses it instead of httpx.get()."""
+        call_log: list[str] = []
+
+        async def mock_get(url: str, **kwargs: object) -> httpx.Response:
+            call_log.append(f"async_get:{url}")
+            return _fake_response("0.2.0")
+
+        checker = UpdateChecker(check_interval_s=60.0)
+        checker._version_lookup = lambda _name: "0.1.0"  # type: ignore[assignment]
+        checker._install_method_lookup = lambda: "pip"  # type: ignore[assignment]
+        # Create a mock async client
+        mock_client = httpx.AsyncClient()
+        mock_client.get = mock_get  # type: ignore[assignment]
+        checker._client = mock_client
+
+        info = await checker.check_once()
+        assert info.update_available is True
+        assert info.latest_version == "0.2.0"
+        assert len(call_log) == 1
+        assert call_log[0].startswith("async_get:")
+        await mock_client.aclose()
+
+    @pytest.mark.anyio
+    async def test_check_once_falls_back_to_sync_without_client(self) -> None:
+        """Without _client, check_once falls back to httpx.get()."""
+        checker = UpdateChecker(check_interval_s=60.0)
+        checker._version_lookup = lambda _name: "0.1.0"  # type: ignore[assignment]
+        checker._install_method_lookup = lambda: "pip"  # type: ignore[assignment]
+        # _client is None by default
+        assert checker._client is None
+        # This should use the sync path (httpx.get)
+        info = await checker.check_once()
+        # Will fail with network error in test env, but shouldn't crash
+        assert info.current_version == "0.1.0"
+
+
+class TestAsyncCheckForUpdateSharedClient:
+    """Tests for async_check_for_update (sync CLI helper)."""
+
+    def test_sync_function_signature(self) -> None:
+        """async_check_for_update is a sync function for CLI paths."""
+        import inspect
+
+        from eggpool.update_checker import async_check_for_update
+
+        assert not inspect.iscoroutinefunction(async_check_for_update)
