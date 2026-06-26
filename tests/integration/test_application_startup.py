@@ -137,6 +137,36 @@ class TestApplicationStartup:
             await db2.disconnect()
 
     @pytest.mark.asyncio
+    async def test_update_checker_registered(
+        self,
+        config_file_db: AppConfig,
+    ) -> None:
+        """The update_checker supervised task is registered at startup."""
+        from eggpool.update_checker import UpdateChecker
+
+        app = create_app(config_file_db)
+
+        with respx.mock:
+            respx.get(f"{UPSTREAM_BASE}/models").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={"object": "list", "data": []},
+                )
+            )
+            # Mock PyPI to avoid real network calls during startup check
+            respx.get("https://pypi.org/pypi/eggpool/json").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={"info": {"version": "0.0.0"}},
+                )
+            )
+
+            async with app.router.lifespan_context(app):
+                assert isinstance(app.state.update_checker, UpdateChecker)
+                supervisor = app.state.supervisor
+                assert supervisor.get_task("update_checker") is not None
+
+    @pytest.mark.asyncio
     async def test_worker_threads_two_opens_separate_stats_connection(
         self,
         config_file_db: AppConfig,

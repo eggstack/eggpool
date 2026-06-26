@@ -74,6 +74,7 @@ if TYPE_CHECKING:
     from starlette.requests import Request as StarletteRequest
 
     from eggpool.quota.estimation import QuotaEstimator
+    from eggpool.update_checker import UpdateChecker
 
 logger = logging.getLogger(__name__)
 
@@ -446,6 +447,21 @@ async def _hydrate_health_from_backoffs(
             health.is_healthy = False
             health.consecutive_failures = consecutive_failures
             health.last_check = time.time()
+
+
+def _register_update_checker(app: FastAPI, supervisor: TaskSupervisor) -> UpdateChecker:
+    """Register the periodic PyPI update checker as a supervised background task.
+
+    Returns the checker instance so callers can attach it to app.state
+    or use it for tests.  The checker runs an initial PyPI probe at
+    startup and repeats every 24 hours; it never auto-installs.
+    """
+    from eggpool.update_checker import UpdateChecker
+
+    update_checker = UpdateChecker()
+    app.state.update_checker = update_checker
+    supervisor.register("update_checker", update_checker.run_periodic)
+    return update_checker
 
 
 @asynccontextmanager
@@ -839,14 +855,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # footer indicator and the /api/stats/update endpoint; never
     # auto-installs.  Runs an initial check immediately so the first
     # dashboard render shows the latest state.
-    from eggpool.update_checker import UpdateChecker
-
-    update_checker = UpdateChecker()
-    app.state.update_checker = update_checker
-    supervisor.register(
-        "update_checker",
-        update_checker.run_periodic,
-    )
+    _register_update_checker(app, supervisor)
 
     # 21. Start background tasks
     await supervisor.start_all()

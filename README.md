@@ -273,8 +273,8 @@ appropriate cache headers.
 JSON stats endpoints are available under `/api/stats/*`, including summary,
 accounts, models, timeseries, errors, latency, pings, bandwidth, attempts,
 retries, routing, routing-selections, routing-exclusions, operational,
-pending-health, runtime, recent-requests, recent/{request_id}, and
-`/api/events`. The recent-requests, recent/{request_id}, pending-health,
+pending-health, runtime, recent-requests, recent/{request_id},
+`/api/stats/update`, and `/api/events`. The recent-requests, recent/{request_id}, pending-health,
 and runtime endpoints are always auth-gated (even when the dashboard is
 public) because they expose per-request metadata (model, prompt volume,
 error class), operational state (pending reservations, reserved cost),
@@ -329,6 +329,11 @@ dashboard's public/auth setting.
   `source_confidence` (exact external ID vs. curated alias vs. unknown).
   Used by the dashboard to render the cost-exactness badge and the
   high-spend estimated warning.
+- **Update checker** (`/api/stats/update`): the server checks PyPI at startup
+  and approximately every 24 hours for newer eggpool releases. When an update
+  is found, the dashboard footer shows a non-intrusive indicator with the
+  current and latest versions and a copyable `eggpool update` command. The
+  JSON snapshot is also available at `GET /api/stats/update`.
 
 ## Configuration
 

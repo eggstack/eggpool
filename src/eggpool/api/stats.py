@@ -19,6 +19,7 @@ Endpoints:
 - GET /api/stats/pricing-provenance
 - GET /api/stats/recent/{request_id}  (always auth-gated)
 - GET /api/stats/recent-requests  (always auth-gated)
+- GET /api/stats/update  (always auth-gated, in api/update.py)
 - GET /api/events
 """
 

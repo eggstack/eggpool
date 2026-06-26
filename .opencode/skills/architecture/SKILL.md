@@ -203,6 +203,19 @@ The `/timeseries` page replaces the old "table of bucket counts" with a stacked-
 - `_status_badge_tooltip()` at `src/eggpool/dashboard/render.py:61` maps status badge names (`cooldown_active`, `auth_failed`, `rate_limited`, `quota_exhausted`, `circuit_open`, ...) to human descriptions; status badges in event tables carry `data-tooltip` from the same mapping
 - Topbar opt-ins: theme selector (`Switch dashboard theme`), period selector (`Select time range`), refresh `↻` button (`Reload this page`)
 
+## Update Checker
+
+- `UpdateChecker` is the single source of truth for "is there a newer eggpool release available?"
+- Background task registered via `TaskSupervisor` under the exact name `update_checker`
+- `_register_update_checker()` helper in `app.py` creates the checker, stores it on `app.state.update_checker`, and registers it with the supervisor
+- Default check interval is 24h; PyPI request timeout is 15s
+- `UpdateInfo` is a frozen dataclass that holds the snapshot; `snapshot()` returns an isolated copy via `dataclasses.replace` so callers cannot mutate the cached state
+- `async_check_for_update()` is the shared one-shot helper used by both the background periodic task and the `eggpool update` CLI — both paths MUST go through this helper instead of inlining their own PyPI lookup
+- `GET /api/stats/update` returns the JSON snapshot; always auth-gated regardless of `dashboard.public`
+- Dashboard footer renders the update indicator only when `update_available=True`; renders nothing otherwise
+- PyPI failures are non-fatal and reflected in `last_check_error`; the checker preserves the previous `latest_version` on failure so the indicator still surfaces a known-newer release during momentary outages
+- The checker never auto-installs; it is passive notification only
+
 ## Model Context Limits
 
 - `ModelLimitOverrideConfig` provides reusable limit fields (context, input, output, enforcement)
