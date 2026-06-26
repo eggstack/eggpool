@@ -1171,11 +1171,13 @@ def create_app(
                 headers={"Cache-Control": "public, max-age=300"},
             )
 
-    # Runtime metrics endpoint — always auth-gated regardless of dashboard.public
+    # Runtime metrics and network diagnostics endpoints — always auth-gated
+    from eggpool.api.network import register_network_routes
     from eggpool.api.runtime import register_runtime_routes
     from eggpool.api.update import register_update_routes
 
     register_runtime_routes(app)
+    register_network_routes(app)
     register_update_routes(app)
 
     @app.get(f"{API_V1_PREFIX}/healthz")

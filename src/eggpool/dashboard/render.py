@@ -2301,6 +2301,8 @@ def render_runtime(
     db = _as_dict(snapshot.get("db"))
     routing = _as_dict(snapshot.get("routing_runtime"))
     probe_errors: list[str] = snapshot.get("probe_errors") or []
+    outbound = _as_dict(snapshot.get("outbound_client"))
+    dns_cache = _as_dict(snapshot.get("dns_cache"))
 
     # Server section
     pid = server.get("pid", "—")
@@ -2525,6 +2527,65 @@ def render_runtime(
     else:
         health_table = '<p class="empty">No health state data.</p>'
 
+    # Network diagnostics section
+    dns_enabled = dns_cache.get("enabled", False)
+    dns_entries = dns_cache.get("size", 0)
+    dns_hits = dns_cache.get("hits", 0)
+    dns_misses = dns_cache.get("misses", 0)
+    dns_total_lookups = dns_hits + dns_misses
+    dns_hit_rate = (
+        f"{dns_hits / dns_total_lookups * 100:.1f}%" if dns_total_lookups > 0 else "—"
+    )
+    dns_negative = dns_cache.get("negative_hits", 0)
+    dns_stale = dns_cache.get("stale_hits", 0)
+    dns_errors_dict: dict[str, int] = cast(
+        "dict[str, int]", dns_cache.get("resolution_errors") or {}
+    )
+    dns_errors = sum(dns_errors_dict.values())
+    ob_builds = format_int(outbound.get("build_count", 0))
+    ob_requests = format_int(outbound.get("request_count", 0))
+    ob_errors = format_int(outbound.get("error_count", 0))
+
+    network_cards = f"""
+<section class="panel">
+  <h3>Network</h3>
+  <section class="cards">
+    <div class="card">
+      <h3>DNS cache</h3>
+      <p class="metric">{"enabled" if dns_enabled else "disabled"}</p>
+      <p class="sub">entries {format_int(dns_entries)}</p>
+    </div>
+    <div class="card">
+      <h3>DNS hit rate</h3>
+      <p class="metric">{dns_hit_rate}</p>
+      <p class="sub">
+        {format_int(dns_hits)} hits / {format_int(dns_total_lookups)} total
+      </p>
+    </div>
+    <div class="card">
+      <h3>DNS misses</h3>
+      <p class="metric">{format_int(dns_misses)}</p>
+      <p class="sub">resolver calls</p>
+    </div>
+    <div class="card">
+      <h3>DNS errors</h3>
+      <p class="metric">{format_int(dns_errors)}</p>
+      <p class="sub">stale {format_int(dns_stale)} · neg {format_int(dns_negative)}</p>
+    </div>
+    <div class="card">
+      <h3>Outbound builds</h3>
+      <p class="metric">{ob_builds}</p>
+      <p class="sub">client lifecycle</p>
+    </div>
+    <div class="card">
+      <h3>Outbound requests</h3>
+      <p class="metric">{ob_requests}</p>
+      <p class="sub">errors {ob_errors}</p>
+    </div>
+  </section>
+</section>
+"""
+
     # Probe errors
     probe_section = ""
     if probe_errors:
@@ -2552,6 +2613,8 @@ def render_runtime(
 {db_cards}
 
 {routing_cards}
+
+{network_cards}
 
 <section class="panel">
   <h3>Health states</h3>

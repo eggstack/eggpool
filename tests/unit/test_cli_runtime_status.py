@@ -435,3 +435,157 @@ def test_runtime_status_normalizes_bind_address() -> None:
             req = call_args[0][0]
             assert "127.0.0.1" in req.full_url
             assert "0.0.0.0" not in req.full_url
+
+
+# -- Network diagnostics rendering -----------------------------------------
+
+
+def test_print_runtime_status_network_section() -> None:
+    """_print_runtime_status renders the network section."""
+    data: dict[str, Any] = {
+        "server": {"pid": 1, "uptime_seconds": 0, "configured_server_threads": 1},
+        "memory": {},
+        "processes": {},
+        "background_tasks": [],
+        "db": {},
+        "routing_runtime": {},
+        "outbound_client": {
+            "build_count": 1,
+            "request_count": 42,
+            "error_count": 2,
+            "has_client": True,
+        },
+        "dns_cache": {
+            "enabled": True,
+            "size": 7,
+            "hits": 100,
+            "misses": 10,
+            "negative_hits": 0,
+            "stale_hits": 0,
+            "evictions": 0,
+            "resolution_errors": {},
+        },
+        "probe_errors": [],
+    }
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        _print_runtime_status(data)
+    output = buf.getvalue()
+    assert "Network:" in output
+    assert "enabled" in output
+    assert "Outbound builds:" in output
+    assert "Outbound requests:" in output
+    assert "DNS cache:" in output
+    assert "DNS hit rate:" in output
+
+
+def test_print_runtime_status_network_disabled() -> None:
+    """Network section shows 'disabled' when DNS cache is off."""
+    data: dict[str, Any] = {
+        "server": {"pid": 1, "uptime_seconds": 0, "configured_server_threads": 1},
+        "memory": {},
+        "processes": {},
+        "background_tasks": [],
+        "db": {},
+        "routing_runtime": {},
+        "outbound_client": {"build_count": 0, "request_count": 0, "error_count": 0},
+        "dns_cache": {"enabled": False},
+        "probe_errors": [],
+    }
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        _print_runtime_status(data)
+    output = buf.getvalue()
+    assert "disabled" in output
+
+
+def test_print_runtime_status_network_empty_data() -> None:
+    """Network section handles missing outbound_client/dns_cache gracefully."""
+    data: dict[str, Any] = {
+        "server": {"pid": 1, "uptime_seconds": 0, "configured_server_threads": 1},
+        "memory": {},
+        "processes": {},
+        "background_tasks": [],
+        "db": {},
+        "routing_runtime": {},
+        "probe_errors": [],
+    }
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        _print_runtime_status(data)
+    output = buf.getvalue()
+    assert "Network:" in output
+    assert "0" in output
+
+
+def test_print_runtime_status_dns_hit_rate_calculation() -> None:
+    """DNS hit rate is calculated correctly."""
+    data: dict[str, Any] = {
+        "server": {"pid": 1, "uptime_seconds": 0, "configured_server_threads": 1},
+        "memory": {},
+        "processes": {},
+        "background_tasks": [],
+        "db": {},
+        "routing_runtime": {},
+        "outbound_client": {"build_count": 1, "request_count": 0, "error_count": 0},
+        "dns_cache": {
+            "enabled": True,
+            "size": 3,
+            "hits": 90,
+            "misses": 10,
+            "negative_hits": 0,
+            "stale_hits": 0,
+            "evictions": 0,
+            "resolution_errors": {},
+        },
+        "probe_errors": [],
+    }
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        _print_runtime_status(data)
+    output = buf.getvalue()
+    assert "90.0%" in output
+
+
+def test_runtime_status_includes_network_in_json() -> None:
+    """JSON output includes outbound_client and dns_cache keys."""
+    from eggpool.cli import cli
+
+    response_data = {
+        "server": {"pid": 1, "uptime_seconds": 0, "configured_server_threads": 1},
+        "memory": {},
+        "processes": {},
+        "background_tasks": [],
+        "db": {},
+        "routing_runtime": {},
+        "outbound_client": {"build_count": 1, "request_count": 5, "error_count": 0},
+        "dns_cache": {"enabled": True, "hits": 10, "misses": 2},
+        "probe_errors": [],
+    }
+
+    mock_response = MagicMock()
+    mock_response.read.return_value = json.dumps(response_data).encode()
+    mock_response.__enter__ = lambda s: s
+    mock_response.__exit__ = MagicMock(return_value=False)
+
+    runner = CliRunner()
+    with patch("eggpool.cli_full.AppConfig.from_toml") as mock_config:
+        mock_config.return_value = MagicMock(
+            server=MagicMock(host="127.0.0.1", port=1, resolved_api_key=None)
+        )
+        with (
+            patch("urllib.request.urlopen", return_value=mock_response),
+            patch(
+                "eggpool.deploy_user.resolve_config_path",
+                return_value="/tmp/fake-config.toml",
+            ),
+        ):
+            result = runner.invoke(cli, ["runtime-status", "--json"])
+            assert result.exit_code == 0
+            parsed = json.loads(result.output)
+            assert "outbound_client" in parsed
+            assert "dns_cache" in parsed

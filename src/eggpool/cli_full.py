@@ -3148,6 +3148,33 @@ def _print_runtime_status(data: dict[str, Any]) -> None:
     )
     click.echo(f"  Reserved (μ$):      {reserved if reserved is not None else 'N/A'}")
 
+    # Network diagnostics
+    outbound = cast("dict[str, Any]", data.get("outbound_client", {}))
+    dns = cast("dict[str, Any]", data.get("dns_cache", {}))
+    click.echo()
+    click.echo("  Network:")
+    dns_enabled = dns.get("enabled", False)
+    dns_size = dns.get("size", 0)
+    dns_hits = dns.get("hits", 0)
+    dns_misses = dns.get("misses", 0)
+    dns_total = dns_hits + dns_misses
+    dns_hit_rate = f"{dns_hits / dns_total * 100:.1f}%" if dns_total > 0 else "—"
+    dns_errors_dict: dict[str, int] = cast(
+        "dict[str, int]", dns.get("resolution_errors") or {}
+    )
+    dns_errors = sum(dns_errors_dict.values())
+    ob_builds = outbound.get("build_count", 0)
+    ob_requests = outbound.get("request_count", 0)
+    ob_errors = outbound.get("error_count", 0)
+    click.echo(f"    DNS cache:         {'enabled' if dns_enabled else 'disabled'}")
+    click.echo(f"    DNS entries:       {dns_size}")
+    click.echo(f"    DNS hit rate:      {dns_hit_rate}")
+    click.echo(f"    DNS misses:        {dns_misses}")
+    click.echo(f"    DNS errors:        {dns_errors}")
+    click.echo(f"    Outbound builds:   {ob_builds}")
+    click.echo(f"    Outbound requests: {ob_requests}")
+    click.echo(f"    Outbound errors:   {ob_errors}")
+
     # Probe errors
     if probe_errors:
         click.echo()

@@ -116,6 +116,7 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 - **Recent request metadata**: bounded list of recent request rows with metadata only (no body, no auth headers, no error_detail). Auth-gated
 - **Cost/cache/reasoning exactness**: per-account and per-model `exact_count`, `partial_count`, `derived_count`, `estimated_count`, `cache_read_ratio`, `cache_write_ratio`, `reasoning_output_ratio`
 - **Metrics buffer health**: `metrics.write_mode`, `metrics.flush_interval_s`, `metrics.buffered_keys`, `metrics.buffered_events`, `metrics.total_events_received`, `metrics.total_events_flushed`, `metrics.total_events_dropped`, `metrics.last_flush_ts`, `metrics.last_flush_rows`, `metrics.last_flush_duration_ms`, `metrics.last_flush_error`. Exposed via `/api/stats/runtime` and `eggpool runtime-status`
+- **Network diagnostics** (`/api/network/diagnostics`): sanitized outbound client lifecycle (build count, request count, error count) and DNS cache behavior (hits, misses, negative hits, stale hits, evictions, per-host breakdown, resolution errors). Always auth-gated. Also displayed on the `/runtime` dashboard page and in `eggpool runtime-status` output. No API keys, auth headers, request bodies, or full URLs are exposed
 - Full API surface is documented in the `architecture` skill
 
 ## Dashboard

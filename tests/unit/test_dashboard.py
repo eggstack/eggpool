@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from html.parser import HTMLParser
+from typing import Any
 
 from eggpool.dashboard.escape import (
     escape,
@@ -32,6 +33,7 @@ from eggpool.dashboard.render import (
     render_pings,
     render_reliability,
     render_routing,
+    render_runtime,
     render_timeseries,
     render_traces,
 )
@@ -3134,3 +3136,122 @@ class TestStickyTopbarStylesheet:
         z_match = re.search(r"z-index:\s*(\d+)", block)
         assert z_match is not None
         assert int(z_match.group(1)) > 2
+
+
+class TestRenderRuntimeNetwork:
+    """Tests for the network diagnostics section on the runtime page."""
+
+    def test_renders_network_section(self) -> None:
+        snapshot: dict[str, Any] = {
+            "server": {"pid": 1, "uptime_seconds": 0, "configured_server_threads": 1},
+            "memory": {},
+            "processes": {},
+            "background_tasks": [],
+            "db": {},
+            "routing_runtime": {},
+            "outbound_client": {
+                "build_count": 1,
+                "request_count": 100,
+                "error_count": 2,
+                "has_client": True,
+            },
+            "dns_cache": {
+                "enabled": True,
+                "size": 7,
+                "hits": 500,
+                "misses": 10,
+                "negative_hits": 0,
+                "stale_hits": 0,
+                "evictions": 0,
+                "resolution_errors": {},
+            },
+        }
+        html = render_runtime(snapshot)
+        assert "Network" in html
+        assert "enabled" in html
+        assert "Outbound builds" in html
+        assert "Outbound requests" in html
+        assert "DNS cache" in html
+        assert "DNS hit rate" in html
+
+    def test_renders_dns_disabled(self) -> None:
+        snapshot: dict[str, Any] = {
+            "server": {"pid": 1, "uptime_seconds": 0, "configured_server_threads": 1},
+            "memory": {},
+            "processes": {},
+            "background_tasks": [],
+            "db": {},
+            "routing_runtime": {},
+            "outbound_client": {"build_count": 0, "request_count": 0, "error_count": 0},
+            "dns_cache": {"enabled": False},
+        }
+        html = render_runtime(snapshot)
+        assert "disabled" in html
+
+    def test_renders_empty_network_data(self) -> None:
+        """Runtime page renders without outbound_client/dns_cache keys."""
+        snapshot: dict[str, Any] = {
+            "server": {"pid": 1, "uptime_seconds": 0, "configured_server_threads": 1},
+            "memory": {},
+            "processes": {},
+            "background_tasks": [],
+            "db": {},
+            "routing_runtime": {},
+        }
+        html = render_runtime(snapshot)
+        assert "Network" in html
+        assert "<html" in html
+
+    def test_dns_hit_rate_calculation(self) -> None:
+        snapshot: dict[str, Any] = {
+            "server": {"pid": 1, "uptime_seconds": 0, "configured_server_threads": 1},
+            "memory": {},
+            "processes": {},
+            "background_tasks": [],
+            "db": {},
+            "routing_runtime": {},
+            "outbound_client": {"build_count": 1, "request_count": 0, "error_count": 0},
+            "dns_cache": {
+                "enabled": True,
+                "size": 3,
+                "hits": 90,
+                "misses": 10,
+            },
+        }
+        html = render_runtime(snapshot)
+        assert "90.0%" in html
+
+    def test_dns_hit_rate_zero_lookups(self) -> None:
+        snapshot: dict[str, Any] = {
+            "server": {"pid": 1, "uptime_seconds": 0, "configured_server_threads": 1},
+            "memory": {},
+            "processes": {},
+            "background_tasks": [],
+            "db": {},
+            "routing_runtime": {},
+            "outbound_client": {"build_count": 1, "request_count": 0, "error_count": 0},
+            "dns_cache": {
+                "enabled": True,
+                "size": 0,
+                "hits": 0,
+                "misses": 0,
+            },
+        }
+        html = render_runtime(snapshot)
+        assert "—" in html
+
+    def test_no_api_keys_in_html(self) -> None:
+        """Network section does not expose API keys."""
+        snapshot: dict[str, Any] = {
+            "server": {"pid": 1, "uptime_seconds": 0, "configured_server_threads": 1},
+            "memory": {},
+            "processes": {},
+            "background_tasks": [],
+            "db": {},
+            "routing_runtime": {},
+            "outbound_client": {"build_count": 1, "request_count": 0, "error_count": 0},
+            "dns_cache": {"enabled": True, "size": 0, "hits": 0, "misses": 0},
+        }
+        html = render_runtime(snapshot)
+        assert "test-key" not in html
+        assert "OPENCODE" not in html

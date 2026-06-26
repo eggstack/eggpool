@@ -347,6 +347,12 @@ dashboard's public/auth setting.
   is found, the dashboard footer shows a non-intrusive indicator with the
   current and latest versions and a copyable `eggpool update` command. The
   JSON snapshot is also available at `GET /api/stats/update`.
+- **Network diagnostics** (`/api/network/diagnostics`): sanitized outbound
+  client lifecycle (build count, request count, error count) and DNS cache
+  behavior (hits, misses, negative hits, stale hits, evictions, per-host
+  breakdown, resolution errors). Always auth-gated. Also displayed on the
+  `/runtime` dashboard page and in `eggpool runtime-status` output. No API
+  keys, auth headers, request bodies, or full URLs are exposed.
 
 ## Configuration
 
