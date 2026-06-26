@@ -41,10 +41,10 @@ def escape_attr(value: Any) -> str:
 
 
 def format_microdollars(value: int | float | None) -> str:
-    """Format a microdollar value as $X.XXXXXX."""
+    """Format a microdollar value as $X.XX."""
     if value is None:
         value = 0
-    return f"${value / 1_000_000:.6f}"
+    return f"${value / 1_000_000:,.2f}"
 
 
 def format_scaled_count(value: int | float | None) -> str:

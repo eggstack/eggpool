@@ -135,7 +135,7 @@
     if (value === null || value === undefined || Number.isNaN(Number(value))) {
       return "—";
     }
-    return "$" + (Number(value) / 1_000_000).toFixed(6);
+    return "$" + (Number(value) / 1_000_000).toFixed(2);
   };
 
   namespace.formatTokens = function formatTokens(tokens) {
@@ -171,7 +171,7 @@
     ) {
       return "—";
     }
-    return "$" + (Number(microdollars) / 1_000_000).toFixed(6);
+    return "$" + (Number(microdollars) / 1_000_000).toFixed(2);
   };
 
   const GROUPED_TIMESERIES_PALETTE = [

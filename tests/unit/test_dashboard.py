@@ -75,9 +75,15 @@ class TestEscape:
         assert "&amp;" in result
 
     def test_format_microdollars(self) -> None:
-        assert format_microdollars(1_000_000) == "$1.000000"
-        assert format_microdollars(0) == "$0.000000"
-        assert format_microdollars(None) == "$0.000000"
+        assert format_microdollars(1_000_000) == "$1.00"
+        assert format_microdollars(0) == "$0.00"
+        assert format_microdollars(None) == "$0.00"
+
+    def test_format_microdollars_rounds_half_even(self) -> None:
+        assert format_microdollars(123_456) == "$0.12"
+        assert format_microdollars(1_234_567) == "$1.23"
+        assert format_microdollars(99_999) == "$0.10"
+        assert format_microdollars(999) == "$0.00"
 
     def test_format_tokens(self) -> None:
         assert format_tokens(1_000_000) == "1.00 M"
@@ -159,7 +165,7 @@ class TestRenderOverview:
         assert "<html" in html
         assert "</html>" in html
         assert "10" in html
-        assert "$1.500000" in html
+        assert "$1.50" in html
         assert "20.00%" in html
         assert 'id="dashboard-content"' in html
         assert "setInterval" in html
@@ -315,7 +321,7 @@ class TestRenderOverview:
             accounts=accounts,
         )
         assert "acct_a" in html
-        assert "$1.000000" in html
+        assert "$1.00" in html
 
     def test_overview_renders_provider_column(self) -> None:
         accounts = [
@@ -807,7 +813,7 @@ class TestRenderModels:
         ]
         html = render_models(models=models, period="24h")
         assert "gpt-x" in html
-        assert "$1.000000" in html
+        assert "$1.00" in html
         assert "<th>Total tokens</th>" in html
         assert "<th>TPS</th>" in html
         assert "300" in html
@@ -909,7 +915,7 @@ class TestHtmlParseability:
         parser.feed(html)
         text = "".join(parser.text_parts)
         assert "10" in text
-        assert "$1.500000" in text
+        assert "$1.50" in text
 
 
 class TestRenderNav:

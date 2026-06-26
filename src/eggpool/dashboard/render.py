@@ -1278,7 +1278,7 @@ def _render_account_table(accounts: list[dict[str, Any]]) -> str:
         if avg_cost_per_1k_microdollars is None:
             avg_cost_per_1k = "—"
         else:
-            avg_cost_per_1k = format_microdollars(avg_cost_per_1k_microdollars * 1000)
+            avg_cost_per_1k = format_microdollars(avg_cost_per_1k_microdollars)
         parts.append(
             f"<tr>"
             f"<td>{name}</td>"
@@ -1450,9 +1450,7 @@ def render_models(
             if avg_cost_per_1k_microdollars is None:
                 avg_cost_per_1k = "—"
             else:
-                avg_cost_per_1k = format_microdollars(
-                    avg_cost_per_1k_microdollars * 1000
-                )
+                avg_cost_per_1k = format_microdollars(avg_cost_per_1k_microdollars)
             parts.append(
                 f"<tr>"
                 f"<td>{escape(row.get('model_id', ''))}</td>"
