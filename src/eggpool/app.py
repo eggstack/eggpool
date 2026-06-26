@@ -687,16 +687,18 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             offset_30d_microdollars=acct_cfg.monthly_offset_microdollars,
         )
 
+    # 18b. Metrics write coalescer for buffered analytics
+    rollup_repo = UsageRollupRepository(db)
+
     # 17. Statistics service
     app.state.stats = StatsService(
         stats_db,
         health_manager=health_manager,
         ping_repo=PingRepository(stats_db),
         account_backoff_repo=account_backoff_repo,
+        rollup_repo=rollup_repo,
     )
 
-    # 18b. Metrics write coalescer for buffered analytics
-    rollup_repo = UsageRollupRepository(db)
     metrics_coalescer = MetricsWriteCoalescer(
         config=config.metrics,
         db=db,

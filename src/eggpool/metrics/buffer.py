@@ -159,6 +159,7 @@ class MetricsWriteCoalescer:
         self._flush_interval_s = config.flush_interval_s
         self._max_buffered = config.max_buffered_events
         self._bucket_size_s = config.timeseries_bucket_s
+        self._aggregate_only = config.aggregate_only
         self._db = db
         self._rollup_repo = rollup_repo
 
@@ -291,6 +292,7 @@ class MetricsWriteCoalescer:
         return {
             "write_mode": self._write_mode,
             "flush_interval_s": self._flush_interval_s,
+            "aggregate_only": self._aggregate_only,
             "buffered_keys": len(self._buffer),
             "buffered_events": self._pending_events,
             "total_events_received": self._total_received,

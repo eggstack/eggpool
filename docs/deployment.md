@@ -50,7 +50,72 @@ then symlinks `eggpool` into `~/.local/bin/`. This is the same end
 state as `pipx install eggpool` — `eggpool` works as a bare command
 from any directory once `~/.local/bin` is on your PATH.
 
-### 3. Cron fallback (no systemd)
+### 3. Raspberry Pi / microSD deployment
+
+EggPool is designed to run on small single-board computers including
+Raspberry Pi. The following guidance helps optimize for microSD storage
+longevity.
+
+#### Storage recommendations
+
+- Use a **high-endurance microSD card** (64GB+ rated for continuous writes)
+- Prefer a **USB SSD** for sustained multi-session workloads
+- Avoid cheap microSD cards for production use — they wear out quickly
+  under continuous write patterns
+
+#### Low-wear metrics configuration
+
+The default `balanced` mode buffers analytics writes and flushes every
+30 seconds. For microSD deployments, switch to `low_wear` mode:
+
+```toml
+[metrics]
+write_mode = "low_wear"
+flush_interval_s = 120
+max_buffered_events = 250
+timeseries_bucket_s = 300
+trace_sample_rate = 0.05
+aggregate_only = true
+```
+
+This configuration:
+- Flushes analytics every 2 minutes instead of 30 seconds
+- Uses 5-minute time buckets instead of 1-minute
+- Samples only 5% of detailed traces
+- Skips optional detailed analytics rows
+
+**Trade-off**: Dashboard data will be less fresh and detailed traces
+will be incomplete, but database write frequency is significantly
+reduced.
+
+#### Log management
+
+Keep logs under logrotate to prevent unbounded growth:
+
+```bash
+eggpool deploy logrotate --install
+```
+
+#### Avoid frequent vacuuming
+
+Do not run `eggpool db vacuum` frequently on flash media. SQLite's WAL
+mode handles concurrent access well without manual vacuuming. Only
+vacuum when you need to reclaim space after large data deletions.
+
+#### Backups
+
+Backups are useful for recovery but are not a substitute for durable
+storage. The daily backup cron can be installed with:
+
+```bash
+eggpool deploy backup-cron --install
+```
+
+Note that buffered analytics may lose at most the configured flush
+window (`flush_interval_s` seconds) of data after abrupt power loss.
+Correctness-critical request state is always persisted immediately.
+
+### 4. Cron fallback (no systemd)
 
 For systems without systemd, install a personal crontab watchdog
 instead of the systemd unit:
@@ -77,7 +142,7 @@ instance, and uses the stdlib-only fast-path CLI so the cron tick is
 cheap enough to run every five minutes on Raspberry Pi-class hardware.
 See `plans/lightweight-cli-watchdog.md` for the design rationale.
 
-### 4. Manual run (debug foreground)
+### 5. Manual run (debug foreground)
 
 For development or quick trials:
 
@@ -90,7 +155,7 @@ eggpool serve --daemon    # detached supervisor; log -> ~/.local/state/eggpool/e
 instance, then spawns a detached child and returns promptly. See
 [Daemon Mode](#daemon-mode) below for the full contract.
 
-### 5. Daily backup
+### 6. Daily backup
 
 Install the daily backup script and cron entry separately so the
 watchdog and the backup schedule don't compete:
@@ -103,7 +168,7 @@ This writes `/usr/local/bin/eggpool-backup` (a sqlite3-based snapshot
 script) and a `0 2 * * *` crontab entry. Backups land in
 `~/backups/eggpool/` and retain 30 days of archives.
 
-### 6. Verify
+### 7. Verify
 
 ```bash
 eggpool accounts status
@@ -111,7 +176,7 @@ eggpool croncheck
 curl http://localhost:11300/v1/healthz
 ```
 
-### 7. Other deploy commands
+### 8. Other deploy commands
 
 ```bash
 sudo env "PATH=$PATH" "$(command -v eggpool)" deploy logrotate --install
@@ -128,7 +193,7 @@ intentionally separate.
 Without `--install`, each command prints the snippet and manual
 instructions for you to copy-paste.
 
-### 8. Configuration changes
+### 9. Configuration changes
 
 Live reload is not supported. Restart after any config change:
 
@@ -136,7 +201,7 @@ Live reload is not supported. Restart after any config change:
 sudo systemctl restart eggpool
 ```
 
-### 9. Logs
+### 10. Logs
 
 ```bash
 sudo journalctl -u eggpool -f

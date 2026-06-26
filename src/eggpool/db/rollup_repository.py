@@ -219,23 +219,23 @@ class UsageRollupRepository:
         start: str,
         end: str,
     ) -> dict[str, object]:
-        """Query aggregate summary from rollups.
-
-        Returns a single dict with total_requests, total_input_tokens,
-        total_output_tokens, total_cost_microdollars, total_bytes_received,
-        total_bytes_emitted, total_latency_ms_sum, total_latency_count,
-        and avg_latency_ms.
-        """
+        """Query aggregate summary from rollups."""
         sql = (
             "SELECT "
             "COALESCE(SUM(request_count), 0) AS total_requests, "
+            "COALESCE(SUM(error_count), 0) AS error_requests, "
             "COALESCE(SUM(input_tokens), 0) AS total_input_tokens, "
             "COALESCE(SUM(output_tokens), 0) AS total_output_tokens, "
+            "COALESCE(SUM(cache_read_tokens), 0) AS total_cache_read_tokens, "
+            "COALESCE(SUM(cache_write_tokens), 0) AS total_cache_write_tokens, "
+            "COALESCE(SUM(reasoning_tokens), 0) AS total_reasoning_tokens, "
             "COALESCE(SUM(cost_microdollars), 0) AS total_cost_microdollars, "
             "COALESCE(SUM(bytes_received), 0) AS total_bytes_received, "
             "COALESCE(SUM(bytes_emitted), 0) AS total_bytes_emitted, "
-            "COALESCE(SUM(latency_ms_sum), 0) AS total_latency_ms_sum, "
-            "COALESCE(SUM(request_count), 0) AS total_latency_count, "
+            "COALESCE(SUM(streamed), 0) AS streamed_requests, "
+            "CASE WHEN SUM(request_count) > 0 "
+            "  THEN CAST(SUM(request_count) - SUM(streamed) AS REAL) "
+            "  ELSE 0 END AS non_streamed_requests, "
             "CASE WHEN SUM(request_count) > 0 "
             "  THEN CAST(SUM(latency_ms_sum) AS REAL) / SUM(request_count) "
             "  ELSE 0 END AS avg_latency_ms "
@@ -246,16 +246,63 @@ class UsageRollupRepository:
         if row is None:
             return {
                 "total_requests": 0,
+                "error_requests": 0,
                 "total_input_tokens": 0,
                 "total_output_tokens": 0,
+                "total_cache_read_tokens": 0,
+                "total_cache_write_tokens": 0,
+                "total_reasoning_tokens": 0,
                 "total_cost_microdollars": 0,
                 "total_bytes_received": 0,
                 "total_bytes_emitted": 0,
-                "total_latency_ms_sum": 0,
-                "total_latency_count": 0,
+                "streamed_requests": 0,
+                "non_streamed_requests": 0,
                 "avg_latency_ms": 0.0,
             }
         return dict(row)
+
+    async def query_flat_timeseries(
+        self,
+        *,
+        start: str,
+        end: str,
+        bucket_size_s: int,
+    ) -> list[dict[str, object]]:
+        """Query rollups for flat (non-grouped) timeseries.
+
+        Returns one row per bucket with sums across all series.
+        """
+        sql = (
+            "SELECT "
+            "bucket_start AS bucket, "
+            "SUM(request_count) AS request_count, "
+            "SUM(error_count) AS error_count, "
+            "SUM(retry_count) AS retry_count, "
+            "SUM(input_tokens) AS input_tokens, "
+            "SUM(output_tokens) AS output_tokens, "
+            "SUM(cache_read_tokens) AS cache_read_tokens, "
+            "SUM(cache_write_tokens) AS cache_write_tokens, "
+            "SUM(reasoning_tokens) AS reasoning_tokens, "
+            "SUM(cost_microdollars) AS cost_microdollars, "
+            "SUM(bytes_received) AS bytes_received, "
+            "SUM(bytes_emitted) AS bytes_emitted, "
+            "SUM(latency_ms_sum) AS latency_ms_sum, "
+            "CASE WHEN SUM(request_count) > 0 "
+            "  THEN CAST(SUM(latency_ms_sum) AS REAL) "
+            "       / SUM(request_count) "
+            "  ELSE 0 END AS avg_latency_ms, "
+            "CASE WHEN SUM(first_byte_ms_count) > 0 "
+            "  THEN CAST(SUM(first_byte_ms_sum) AS REAL) "
+            "       / SUM(first_byte_ms_count) "
+            "  ELSE 0 END AS avg_ttft_ms "
+            "FROM usage_rollups "
+            "WHERE bucket_start >= ? AND bucket_start < ? "
+            "  AND bucket_size_s = ? "
+            "GROUP BY bucket_start "
+            "ORDER BY bucket_start"
+        )
+        rows = await self._db.fetch_all(sql, (start, end, bucket_size_s))
+        return [dict(row) for row in rows]
 
     async def cleanup_old_rollups(self, retain_days: int, max_rows: int = 5000) -> int:
         """Delete old rollup buckets. Returns rows deleted.

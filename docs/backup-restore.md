@@ -219,3 +219,44 @@ eggpool uninstall --yes
 # Keep backups and config, only remove the binary and shell PATH entries
 eggpool uninstall --keep-config --keep-data --yes
 ```
+
+## Power Loss and Data Durability
+
+EggPool uses SQLite with WAL mode and `synchronous = NORMAL` for a
+balance of performance and durability.
+
+### Correctness-critical state
+
+The following state is persisted immediately during request processing:
+
+- Request creation and final status
+- Reservation creation and release
+- Attempt creation and completion
+- Upstream error/suppression/backoff state
+
+This state survives power loss with the same durability as the
+underlying storage device.
+
+### Buffered analytics
+
+When using `write_mode = "balanced"` or `write_mode = "low_wear"`,
+analytics data (timeseries, bandwidth, model/account aggregates) is
+buffered in memory and flushed periodically to the `usage_rollups`
+table.
+
+After abrupt power loss, at most `flush_interval_s` seconds of
+analytics data may be lost. The default flush interval is 30 seconds
+for `balanced` mode and 120 seconds for `low_wear` mode.
+
+Correctness-critical request state is never affected by analytics
+buffering.
+
+### Recovery
+
+After power loss, EggPool automatically recovers:
+
+1. Pending requests are marked as interrupted
+2. Active reservations are released
+3. In-memory state is rebuilt from the database
+
+No manual intervention is required.

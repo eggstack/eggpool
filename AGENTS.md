@@ -111,6 +111,7 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 - **Per-request trace**: parent request row, full attempt chain, and per-attempt routing decisions. Returns account name, model, protocol, status, error class (never raw error_detail), and timing. Auth-gated
 - **Recent request metadata**: bounded list of recent request rows with metadata only (no body, no auth headers, no error_detail). Auth-gated
 - **Cost/cache/reasoning exactness**: per-account and per-model `exact_count`, `partial_count`, `derived_count`, `estimated_count`, `cache_read_ratio`, `cache_write_ratio`, `reasoning_output_ratio`
+- **Metrics buffer health**: `metrics.write_mode`, `metrics.flush_interval_s`, `metrics.buffered_keys`, `metrics.buffered_events`, `metrics.total_events_received`, `metrics.total_events_flushed`, `metrics.total_events_dropped`, `metrics.last_flush_ts`, `metrics.last_flush_rows`, `metrics.last_flush_duration_ms`, `metrics.last_flush_error`. Exposed via `/api/stats/runtime` and `eggpool runtime-status`
 - Full API surface is documented in the `architecture` skill
 
 ## Dashboard
