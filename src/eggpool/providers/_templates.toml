@@ -32,18 +32,21 @@ require_models = true
 # MiniMax International — Anthropic-compatible endpoint for token-plan keys.
 # Token-plan keys from minimax.io use the Anthropic-compatible transport
 # (x-api-key + anthropic-version) at /anthropic/v1/messages, not the
-# legacy OpenAI-compatible /v1/chat/completions surface.
+# legacy OpenAI-compatible /v1/chat/completions surface. Live model
+# discovery is supported via the documented /v1/models endpoint.
 id = "minimax"
 base_url = "https://api.minimax.io/anthropic"
 protocols = ["anthropic"]
 anthropic_path = "/v1/messages"
+models_method = "GET"
+models_path = "/v1/models"
 api_key_env = "API_KEY"
 display_name = "MiniMax International"
 status = "experimental"
 category = "direct"
 region = "global"
 recommended = false
-notes = "Uses MiniMax Anthropic-compatible endpoint for minimax.io token-plan keys; static model seed required"
+notes = "Uses MiniMax Anthropic-compatible endpoint; live model discovery via /v1/models"
 
 [providers.minimax.auth]
 mode = "api_key"
@@ -54,65 +57,33 @@ name = "anthropic-version"
 value = "2023-06-01"
 
 [providers.minimax.models_endpoint]
-method = "DISABLED"
-required = false
+method = "GET"
+path = "/v1/models"
+required = true
 
 [providers.minimax.verify]
-probe_model = "minimax/MiniMax-2.7"
+probe_model = "MiniMax-M3"
 probe_protocol = "anthropic"
-require_models = false
+require_models = true
 
 [[providers.minimax.static_models]]
-id = "minimax/MiniMax-2.7"
-display_name = "minimax/MiniMax-2.7"
+id = "MiniMax-M3"
+display_name = "MiniMax-M3"
 protocol = "anthropic"
-max_context_tokens = 204800
-max_output_tokens = 32000
 supports_tools = true
 supports_vision = false
 
 [[providers.minimax.static_models]]
-id = "minimax/MiniMax-2.7-highspeed"
-display_name = "minimax/MiniMax-2.7-highspeed"
+id = "MiniMax-M2.7"
+display_name = "MiniMax-M2.7"
 protocol = "anthropic"
-max_context_tokens = 204800
-max_output_tokens = 32000
 supports_tools = true
 supports_vision = false
 
 [[providers.minimax.static_models]]
-id = "minimax/MiniMax-2.5"
-display_name = "minimax/MiniMax-2.5"
+id = "MiniMax-M2.5"
+display_name = "MiniMax-M2.5"
 protocol = "anthropic"
-max_context_tokens = 204800
-max_output_tokens = 32000
-supports_tools = true
-supports_vision = false
-
-[[providers.minimax.static_models]]
-id = "minimax/MiniMax-2.5-highspeed"
-display_name = "minimax/MiniMax-2.5-highspeed"
-protocol = "anthropic"
-max_context_tokens = 204800
-max_output_tokens = 32000
-supports_tools = true
-supports_vision = false
-
-[[providers.minimax.static_models]]
-id = "minimax/MiniMax-2.1"
-display_name = "minimax/MiniMax-2.1"
-protocol = "anthropic"
-max_context_tokens = 204800
-max_output_tokens = 32000
-supports_tools = true
-supports_vision = false
-
-[[providers.minimax.static_models]]
-id = "minimax/MiniMax-2.1-highspeed"
-display_name = "minimax/MiniMax-2.1-highspeed"
-protocol = "anthropic"
-max_context_tokens = 204800
-max_output_tokens = 32000
 supports_tools = true
 supports_vision = false
 

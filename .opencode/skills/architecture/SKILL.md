@@ -135,7 +135,7 @@ present; only the no-config fallback returns bare paths.
 
 ### MiniMax Templates
 
-- `minimax` — international host `https://api.minimax.io/anthropic` (default for `minimax.io` token-plan keys). Uses the Anthropic-compatible transport (`x-api-key` header, `anthropic-version: 2023-06-01` static header). Model listing is `DISABLED`; the catalog is seeded from `[[providers.minimax.static_models]]`.
+- `minimax` — international host `https://api.minimax.io/anthropic` (default for `minimax.io` token-plan keys). Uses the Anthropic-compatible transport (`x-api-key` header, `anthropic-version: 2023-06-01` static header). Live model discovery via documented `/v1/models` endpoint; static seeds serve as fallback.
 - `minimax-cn` — China host `https://api.minimaxi.com/v1`. Plain OpenAI-compatible. Live verification is required before production use because the China endpoint family has not been confirmed against the Anthropic-compatible transport.
 
 API keys must be raw tokens; EggPool prepends the configured auth scheme automatically. An optional `[providers.<id>.verify]` block controls live verification probes.

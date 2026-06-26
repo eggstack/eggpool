@@ -45,7 +45,7 @@ uv run python scripts/verify_upstream_auth.py --config config.toml --provider <p
 |----------|----|----------|-----------|-------|
 | Z.AI (ZhipuAI) | `zai` | `https://api.z.ai/api/paas/v4` | OpenAI | Confirm base URL and model listing |
 | Novita AI | `novita` | `https://api.novita.ai/openai` | OpenAI | Base URL may need correction |
-| MiniMax International | `minimax` | `https://api.minimax.io/anthropic` | Anthropic | Anthropic-compatible endpoint for token-plan keys; static model seed required |
+| MiniMax International | `minimax` | `https://api.minimax.io/anthropic` | Anthropic | Anthropic-compatible endpoint for token-plan keys; live model discovery via `/v1/models` |
 | MiniMax China | `minimax-cn` | `https://api.minimaxi.com/v1` | OpenAI | Live verification required before production use |
 | GeneralCompute | `generalcompute` | `https://api.generalcompute.com/v1` | OpenAI | Plain OpenAI-compatible PAYG; verify `/models` and chat live |
 | NeuralWatt | `neuralwatt` | `https://api.neuralwatt.com/v1` | OpenAI | Energy-based pricing; verify endpoints |
@@ -124,7 +124,8 @@ value = "2023-06-01"
 Token-plan API keys from `minimax.io` are valid for the MiniMax
 Anthropic-compatible surface, **not** the OpenAI-compatible
 `/v1/chat/completions` endpoint. The bundled `minimax` template configures
-the Anthropic-compatible contract by default:
+the Anthropic-compatible contract by default and uses Anthropic-style
+model discovery (`GET /v1/models`):
 
 ```toml
 [providers.minimax]
@@ -132,6 +133,8 @@ id = "minimax"
 base_url = "https://api.minimax.io/anthropic"
 protocols = ["anthropic"]
 anthropic_path = "/v1/messages"
+models_method = "GET"
+models_path = "/v1/models"
 
 [[providers.minimax.accounts]]
 name = "default"
@@ -146,18 +149,16 @@ name = "anthropic-version"
 value = "2023-06-01"
 
 [providers.minimax.models_endpoint]
-method = "DISABLED"
-required = false
+method = "GET"
+path = "/v1/models"
+required = true
 
-# Static model seed: required because the MiniMax Anthropic endpoint
-# does not expose a /models listing. Override or extend this list to
-# match the models your token-plan key actually supports.
+# Static model seeds are used as fallback when live discovery is
+# unavailable. The listed models match MiniMax's documented IDs.
 [[providers.minimax.static_models]]
-id = "minimax/MiniMax-2.7"
-display_name = "minimax/MiniMax-2.7"
+id = "MiniMax-M3"
+display_name = "MiniMax-M3"
 protocol = "anthropic"
-max_context_tokens = 204800
-max_output_tokens = 32000
 supports_tools = true
 supports_vision = false
 ```
@@ -165,6 +166,9 @@ supports_vision = false
 The composed upstream URL is
 `https://api.minimax.io/anthropic/v1/messages`, sent with
 `x-api-key: <token-plan-key>` and `anthropic-version: 2023-06-01`.
+Live model discovery fetches the catalog from the MiniMax `/v1/models`
+endpoint using the documented Anthropic-compatible listing. The static
+seeds serve only as a fallback when live discovery is unavailable.
 
 `minimax-cn` (China console) is intentionally still configured as plain
 OpenAI-compatible in the bundled template because the China endpoint
@@ -203,17 +207,17 @@ account type, implement it as an opt-in alternate template (for example
 
 ### Static Model Seeds
 
-Some providers do not expose a usable `/models` listing (for example,
-the MiniMax Anthropic-compatible endpoint). For those providers,
-declare a static model seed under `[[providers.<id>.static_models]]`:
+When a provider's live model discovery is unavailable (e.g. the endpoint
+does not expose a `/models` listing, or discovery is temporarily down),
+static model seeds act as a fallback. Declare them under
+`[[providers.<id>.static_models]]`. MiniMax now uses live discovery
+by default, so its static seeds serve only as a safety net:
 
 ```toml
 [[providers.minimax.static_models]]
-id = "minimax/MiniMax-2.7"
-display_name = "minimax/MiniMax-2.7"
+id = "MiniMax-M3"
+display_name = "MiniMax-M3"
 protocol = "anthropic"
-max_context_tokens = 204800
-max_output_tokens = 32000
 supports_tools = true
 supports_vision = false
 ```
@@ -375,9 +379,10 @@ for the Anthropic-compatible transport at
 Update `base_url` to `https://api.minimax.io/anthropic`, `protocols`
 to `["anthropic"]`, `auth.mode` to `api_key`, `auth.header` to
 `x-api-key`, `anthropic_path` to `/v1/messages`, and add the
-`anthropic-version` static header. Also add `[[providers.minimax.static_models]]`
-entries because the MiniMax Anthropic endpoint does not advertise a
-`/models` listing.
+`anthropic-version` static header. MiniMax now supports live model
+discovery via `GET /v1/models`, so the bundled template uses
+`models_endpoint.method = "GET"` by default. Static model seeds are
+only a fallback if live discovery is unavailable.
 
 ### GeneralCompute 404 on `/models/list`
 

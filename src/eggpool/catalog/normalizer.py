@@ -98,6 +98,33 @@ def normalize_anthropic_models(
     return models
 
 
+_ANTHROPIC_PAGINATION_KEYS = frozenset({"first_id", "has_more", "last_id"})
+
+
+def _is_anthropic_shaped(raw_response: dict[str, Any]) -> bool:
+    """Heuristically detect Anthropic-compatible model list responses.
+
+    Anthropic's native ``/v1/models`` returns ``{"type": "list", ...}``
+    but some compatible providers (e.g. MiniMax) may omit the ``type``
+    marker.  We fall back to additional structural signals so that the
+    response is still normalised with ``protocol = "anthropic"``.
+    """
+    if raw_response.get("type") == "list":
+        return True
+
+    if _ANTHROPIC_PAGINATION_KEYS & raw_response.keys():
+        return True
+
+    data_value = raw_response.get("data")
+    if isinstance(data_value, list) and data_value:
+        items = cast("list[dict[str, Any]]", data_value)
+        first_item = items[0]
+        if "display_name" in first_item and "object" not in first_item:
+            return True
+
+    return False
+
+
 def normalize_models(
     raw_response: dict[str, Any],
     protocol: str | None = None,
@@ -111,8 +138,7 @@ def normalize_models(
     if protocol == "openai":
         return normalize_openai_models(raw_response)
 
-    # Auto-detect: Anthropic responses have "type": "list"
-    if raw_response.get("type") == "list":
+    if _is_anthropic_shaped(raw_response):
         return normalize_anthropic_models(raw_response)
 
     # Default to OpenAI format

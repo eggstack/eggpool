@@ -434,9 +434,11 @@ class TestFormatProviderBlock:
         assert provider.protocols == ["anthropic"]
         assert provider.auth.mode == "api_key"
         assert provider.auth.header == "x-api-key"
-        assert provider.models_endpoint.method == "DISABLED"
-        assert len(provider.static_models) == 6
-        assert any(sm.id == "minimax/MiniMax-2.7" for sm in provider.static_models)
+        assert provider.models_endpoint.method == "GET"
+        assert provider.models_endpoint.path == "/v1/models"
+        assert len(provider.static_models) == 3
+        static_ids = {sm.id for sm in provider.static_models}
+        assert static_ids == {"MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5"}
         header_names = {h.name for h in provider.headers}
         assert "anthropic-version" in header_names
         provider_level_metadata = [

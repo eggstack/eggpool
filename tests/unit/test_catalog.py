@@ -85,6 +85,34 @@ def test_normalize_models_auto_detect() -> None:
     assert models[0]["protocol"] is None
 
 
+def test_normalize_models_auto_detect_anthropic_pagination_keys() -> None:
+    """Responses with Anthropic pagination keys are detected as Anthropic."""
+    raw = {"first_id": "model-a", "has_more": True, "data": [{"id": "model-a"}]}
+    models = normalize_models(raw)
+    assert models[0]["protocol"] == "anthropic"
+
+
+def test_normalize_models_auto_detect_display_name_without_object() -> None:
+    """Items with display_name and no object field signal Anthropic shape."""
+    raw = {"data": [{"id": "model-a", "display_name": "Model A"}]}
+    models = normalize_models(raw)
+    assert models[0]["protocol"] == "anthropic"
+
+
+def test_normalize_models_auto_detect_openai_object_field_not_anthropic() -> None:
+    """Items with object field are OpenAI-shaped even if they have display_name."""
+    raw = {"data": [{"id": "model-a", "display_name": "Model A", "object": "model"}]}
+    models = normalize_models(raw)
+    assert models[0]["protocol"] is None
+
+
+def test_normalize_models_auto_detect_empty_data_falls_back_to_openai() -> None:
+    """Empty data list should not trigger Anthropic detection."""
+    raw = {"data": []}
+    models = normalize_models(raw)
+    assert models == []
+
+
 def test_normalizers_skip_malformed_rows_without_losing_valid_models() -> None:
     raw = {
         "data": [
