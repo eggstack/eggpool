@@ -309,6 +309,7 @@ td.no { color: var(--color-error); font-weight: 600; }
 }
 
 .period-selector select,
+.filter-form select,
 .filter-form input,
 .filter-form button {
   font: inherit;
@@ -317,6 +318,10 @@ td.no { color: var(--color-error); font-weight: 600; }
   border-radius: 2px;
   background: var(--card-bg);
   color: var(--page-text);
+}
+
+.filter-form select {
+  cursor: pointer;
 }
 
 .filter-form button {
