@@ -372,6 +372,18 @@ def _render_nav(
         ("runtime", "/runtime", "Runtime"),
     ]
     parts = ['<nav class="topnav">']
+    # Wrap the page links in a hamburger <details> on phone viewports.
+    # The CSS layer shows the <summary> as a Menu chip below 480px and
+    # reveals `.topnav-links` when open; on wider viewports the summary
+    # is hidden and the links are always visible inline. Theme selector
+    # and refresh button stay outside the disclosure so they remain
+    # reachable on every viewport size.
+    parts.append('<details class="topnav-hamburger">')
+    parts.append(
+        '<summary data-tooltip="Open page menu" '
+        'aria-label="Open page menu">Menu</summary>'
+    )
+    parts.append('<div class="topnav-links">')
     for key, href, label in items:
         cls = "active" if key == active_nav else ""
         parts.append(
@@ -379,6 +391,8 @@ def _render_nav(
             f'&amp;theme={_html_escape(current_theme)}">'
             f"{_html_escape(label)}</a>"
         )
+    parts.append("</div>")
+    parts.append("</details>")
 
     # Theme selector dropdown
     themes: list[str] = available_themes or []
@@ -441,6 +455,40 @@ def _render_period_selector(current: str, current_theme: str = "") -> str:
 
 
 _HIGH_SPEND_ESTIMATED_DOLLARS = 10.0
+
+
+def _th(label: str, *, priority: int = 1) -> str:
+    """Render a ``<th>`` tagged with a responsive ``data-priority``.
+
+    The CSS layer (see ``dashboard.css`` ``@media (max-width: …)``)
+    hides ``data-priority="3"`` columns below 760px and
+    ``data-priority="2"`` columns below 480px so wide tables fit phone
+    viewports without forcing horizontal scroll on the most common
+    column sets. ``data-priority="1"`` is always shown.
+
+    Helper exists so every table renderer emits identical markup and
+    the responsive contract is enforced at the source rather than
+    relying on each renderer to remember the convention.
+    """
+    safe_label = _html_escape(label)
+    return f'<th data-priority="{priority}">{safe_label}</th>'
+
+
+def _td_priority(content: str, priority: int, *, class_: str | None = None) -> str:
+    """Render a ``<td>`` with the same responsive priority as its ``<th>``.
+
+    The CSS responsive rules key on the priority attribute; the matching
+    ``<td>`` must carry it too or the row misaligns when a column is
+    hidden. Renderers that produce rows cell-by-cell must pair every
+    ``_th(..., priority=N)`` with ``_td_priority(..., priority=N)``.
+
+    ``class_`` is the optional CSS class (e.g. ``"yes"``/``"no"`` for
+    boolean glyphs). Pass an empty string when none is wanted; pass
+    ``None`` (default) to omit the attribute entirely.
+    """
+    if class_:
+        return f'<td data-priority="{priority}" class="{class_}">{content}</td>'
+    return f'<td data-priority="{priority}">{content}</td>'
 
 
 def _render_pricing_exactness_badge(
@@ -530,12 +578,12 @@ def _render_provider_health(ping_summary: list[dict[str, Any]]) -> str:
         status = "healthy" if float(success_rate or 0) >= 90 else "degraded"
         rows.append(
             f"<tr>"
-            f"<td>{pid}</td>"
-            f'<td class="{status}">{status}</td>'
-            f"<td>{avg_lat}</td>"
-            f"<td>{success_rate}%</td>"
-            f"<td>{model_count}</td>"
-            f"<td>{last_at}</td>"
+            f"{_td_priority(pid, 1)}"
+            f"{_td_priority(status, 1, class_=status)}"
+            f"{_td_priority(avg_lat, 2)}"
+            f"{_td_priority(f'{success_rate}%', 2)}"
+            f"{_td_priority(str(model_count), 3)}"
+            f"{_td_priority(last_at, 3)}"
             f"</tr>"
         )
     return (
@@ -543,16 +591,16 @@ def _render_provider_health(ping_summary: list[dict[str, Any]]) -> str:
         "<h3>Provider health</h3>"
         '<table class="data">'
         "<thead><tr>"
-        "<th>Provider</th>"
-        "<th>Status</th>"
-        "<th>Avg latency</th>"
-        "<th>Success rate</th>"
-        "<th>Models</th>"
-        "<th>Last ping</th>"
-        "</tr></thead><tbody>"
-        f"{''.join(rows)}"
-        "</tbody></table>"
-        "</section>"
+        + _th("Provider")
+        + _th("Status")
+        + _th("Avg latency", priority=2)
+        + _th("Success rate", priority=2)
+        + _th("Models", priority=3)
+        + _th("Last ping", priority=3)
+        + "</tr></thead><tbody>"
+        + f"{''.join(rows)}"
+        + "</tbody></table>"
+        + "</section>"
     )
 
 
@@ -656,15 +704,15 @@ def _render_ip_stats(ip_stats: list[dict[str, Any]]) -> str:
         unique_models = int(row.get("unique_models", 0))
         rows.append(
             f"<tr>"
-            f"<td>{ip}</td>"
-            f"<td>{req_count:,}</td>"
-            f"<td>{in_tok}</td>"
-            f"<td>{out_tok}</td>"
-            f"<td>{total_tok}</td>"
-            f"<td>{cost}</td>"
-            f"<td>{avg_lat}</td>"
-            f"<td>{error_count:,}</td>"
-            f"<td>{unique_models}</td>"
+            f"{_td_priority(ip, 1)}"
+            f"{_td_priority(f'{req_count:,}', 1)}"
+            f"{_td_priority(cost, 1)}"
+            f"{_td_priority(avg_lat, 2)}"
+            f"{_td_priority(f'{error_count:,}', 2)}"
+            f"{_td_priority(in_tok, 3)}"
+            f"{_td_priority(out_tok, 3)}"
+            f"{_td_priority(total_tok, 3)}"
+            f"{_td_priority(str(unique_models), 3)}"
             f"</tr>"
         )
     return (
@@ -672,19 +720,22 @@ def _render_ip_stats(ip_stats: list[dict[str, Any]]) -> str:
         "<h3>Request breakdown by IP</h3>"
         '<table class="data compact">'
         "<thead><tr>"
-        "<th>IP Address</th>"
-        "<th>Requests</th>"
-        "<th>Input tokens</th>"
-        "<th>Output tokens</th>"
-        "<th>Total tokens</th>"
-        "<th>Cost</th>"
-        "<th>Avg latency</th>"
-        "<th>Errors</th>"
-        "<th>Models</th>"
-        "</tr></thead><tbody>"
-        f"{''.join(rows)}"
-        "</tbody></table>"
-        "</section>"
+        # Priority 1 — always shown
+        + _th("IP Address")
+        + _th("Requests")
+        + _th("Cost")
+        # Priority 2 — shown on tablet+
+        + _th("Avg latency", priority=2)
+        + _th("Errors", priority=2)
+        # Priority 3 — desktop only
+        + _th("Input tokens", priority=3)
+        + _th("Output tokens", priority=3)
+        + _th("Total tokens", priority=3)
+        + _th("Models", priority=3)
+        + "</tr></thead><tbody>"
+        + f"{''.join(rows)}"
+        + "</tbody></table>"
+        + "</section>"
     )
 
 
@@ -705,7 +756,7 @@ def _render_timeseries_chart(
     return f"""
 <section class="panel">
   <h3>Request timeseries</h3>
-  <div style="height: 300px; position: relative;">
+  <div class="chart-wrap" style="height: 300px;">
     <canvas id="timeseries-chart" data-period="{period_attr}"></canvas>
   </div>
 </section>
@@ -721,30 +772,35 @@ def _render_model_glance(models: list[dict[str, Any]]) -> str:
     rows: list[str] = []
     for row in models[:10]:
         total_tok = format_tokens(row.get("total_tokens", 0))
+        req_count = int(row.get("request_count", 0))
+        err_count = int(row.get("error_count", 0))
         rows.append(
             f"<tr>"
-            f"<td>{escape(row.get('model_id', ''))}</td>"
-            f"<td>{escape(row.get('provider_id', ''))}</td>"
-            f"<td>{int(row.get('request_count', 0)):,}</td>"
-            f"<td>{int(row.get('error_count', 0)):,}</td>"
-            f"<td>{total_tok}</td>"
-            f"<td>{format_microdollars(row.get('cost_microdollars', 0))}</td>"
-            f"<td>{format_latency(row.get('avg_latency_ms', 0.0))}</td>"
+            f"{_td_priority(escape(row.get('model_id', '')), 1)}"
+            f"{_td_priority(escape(row.get('provider_id', '')), 2)}"
+            f"{_td_priority(f'{req_count:,}', 1)}"
+            f"{_td_priority(f'{err_count:,}', 2)}"
+            f"{_td_priority(total_tok, 3)}"
+            f"{_td_priority(format_microdollars(row.get('cost_microdollars', 0)), 1)}"
+            f"{_td_priority(format_latency(row.get('avg_latency_ms', 0.0)), 2)}"
             f"</tr>"
         )
     return (
         '<table class="data compact">'
-        "<thead><tr>"
-        "<th>Model</th>"
-        "<th>Provider</th>"
-        "<th>Reqs</th>"
-        "<th>Errs</th>"
-        "<th>Total tokens</th>"
-        "<th>Cost</th>"
-        "<th>Latency</th>"
-        "</tr></thead><tbody>"
-        f"{''.join(rows)}"
-        "</tbody></table>"
+        + "<thead><tr>"
+        # Priority 1 — always shown
+        + _th("Model")
+        + _th("Reqs")
+        + _th("Cost")
+        # Priority 2 — shown on tablet+
+        + _th("Provider", priority=2)
+        + _th("Errs", priority=2)
+        + _th("Latency", priority=2)
+        # Priority 3 — desktop only
+        + _th("Total tokens", priority=3)
+        + "</tr></thead><tbody>"
+        + f"{''.join(rows)}"
+        + "</tbody></table>"
     )
 
 
@@ -762,26 +818,28 @@ def _render_event_glance(events: list[dict[str, Any]]) -> str:
             if badge_tooltip
             else ""
         )
+        badge_html = (
+            f'<span class="event-tag {sanitize_class_name(event_type)}"'
+            f"{badge_attrs}>{escape(event_type)}</span>"
+        )
         rows.append(
             f"<tr>"
-            f"<td>{format_timestamp(row.get('created_at', ''))}</td>"
-            f"<td>{escape(row.get('account_name', ''))}</td>"
-            f'<td><span class="event-tag {sanitize_class_name(event_type)}"'
-            f"{badge_attrs}>"
-            f"{escape(event_type)}</span></td>"
-            f"<td>{truncate(row.get('details', ''), 120)}</td>"
+            f"{_td_priority(format_timestamp(row.get('created_at', '')), 1)}"
+            f"{_td_priority(escape(row.get('account_name', '')), 1)}"
+            f"{_td_priority(badge_html, 1)}"
+            f"{_td_priority(truncate(row.get('details', ''), 120), 2)}"
             f"</tr>"
         )
     return (
         '<table class="data compact">'
-        "<thead><tr>"
-        "<th>When</th>"
-        "<th>Account</th>"
-        "<th>Type</th>"
-        "<th>Details</th>"
-        "</tr></thead><tbody>"
-        f"{''.join(rows)}"
-        "</tbody></table>"
+        + "<thead><tr>"
+        + _th("When")
+        + _th("Account")
+        + _th("Type")
+        + _th("Details", priority=2)
+        + "</tr></thead><tbody>"
+        + f"{''.join(rows)}"
+        + "</tbody></table>"
     )
 
 
@@ -1172,38 +1230,41 @@ def _render_account_table(accounts: list[dict[str, Any]]) -> str:
     parts = [
         '<table class="data">',
         "<thead><tr>",
-        "<th>Account</th>",
-        "<th>Provider</th>",
-        "<th>Enabled</th>",
-        "<th>Health</th>",
-        "<th>Requests</th>",
-        "<th>Errors</th>",
-        "<th>Input tokens</th>",
-        "<th>Output tokens</th>",
-        "<th>Total tokens</th>",
-        "<th>Cost</th>",
-        "<th>Avg latency</th>",
-        "<th>TPS</th>",
-        "<th>Reserved</th>",
-        "<th>Resv.</th>",
-        "<th>5h rate</th>",
-        "<th>7d rate</th>",
-        "<th>30d rate</th>",
-        "<th>BW received</th>",
-        "<th>BW emitted</th>",
-        "<th>Over budget</th>",
-        "<th>Upstream backoff</th>",
-        "<th>Backoff until</th>",
-        "<th>Failures</th>",
-        "<th>Auth fail</th>",
-        "<th>Disabled</th>",
-        "<th>Exactness</th>",
-        "<th>Est. cost</th>",
-        "<th>Cache R</th>",
-        "<th>Cache W</th>",
-        "<th>Reasoning</th>",
-        "<th>Avg cost/req</th>",
-        "<th>Avg cost/1k tok</th>",
+        # Priority 1 — always shown (the operator's quick-glance columns)
+        _th("Account"),
+        _th("Provider"),
+        _th("Enabled"),
+        _th("Requests"),
+        _th("Cost"),
+        # Priority 2 — shown on tablet+ (the diagnostic core)
+        _th("Health", priority=2),
+        _th("Errors", priority=2),
+        _th("Input tokens", priority=2),
+        _th("Output tokens", priority=2),
+        _th("Total tokens", priority=2),
+        _th("Avg latency", priority=2),
+        _th("TPS", priority=2),
+        _th("Exactness", priority=2),
+        # Priority 3 — desktop-only (the deep diagnostic tail)
+        _th("Reserved", priority=3),
+        _th("Resv.", priority=3),
+        _th("5h rate", priority=3),
+        _th("7d rate", priority=3),
+        _th("30d rate", priority=3),
+        _th("BW received", priority=3),
+        _th("BW emitted", priority=3),
+        _th("Over budget", priority=3),
+        _th("Upstream backoff", priority=3),
+        _th("Backoff until", priority=3),
+        _th("Failures", priority=3),
+        _th("Auth fail", priority=3),
+        _th("Disabled", priority=3),
+        _th("Est. cost", priority=3),
+        _th("Cache R", priority=3),
+        _th("Cache W", priority=3),
+        _th("Reasoning", priority=3),
+        _th("Avg cost/req", priority=3),
+        _th("Avg cost/1k tok", priority=3),
         "</tr></thead><tbody>",
     ]
     for row in accounts:
@@ -1279,44 +1340,48 @@ def _render_account_table(accounts: list[dict[str, Any]]) -> str:
             avg_cost_per_1k = "—"
         else:
             avg_cost_per_1k = format_microdollars(avg_cost_per_1k_microdollars)
+        enabled_cls = "yes" if enabled else "no"
+        health_cls = sanitize_class_name(health)
+        over_budget_cls = "yes" if over_budget else "no"
+        auth_failed_cls = "yes" if auth_failed else "no"
+        disabled_str = "yes" if operator_disabled else "no"
+        disabled_cls = "yes" if operator_disabled else "no"
+        req_count = int(row.get("request_count", 0))
+        err_count = int(row.get("error_count", 0))
         parts.append(
             f"<tr>"
-            f"<td>{name}</td>"
-            f"<td>{provider}</td>"
-            f'<td class="{"yes" if enabled else "no"}">'
-            f"{'yes' if enabled else 'no'}</td>"
-            f'<td class="{sanitize_class_name(health)}">{escape(health)}</td>'
-            f"<td>{int(row.get('request_count', 0)):,}</td>"
-            f"<td>{int(row.get('error_count', 0)):,}</td>"
-            f"<td>{in_tok}</td>"
-            f"<td>{out_tok}</td>"
-            f"<td>{total_tok}</td>"
-            f"<td>{cost}</td>"
-            f"<td>{latency}</td>"
-            f"<td>{tps}</td>"
-            f"<td>{reserved}</td>"
-            f"<td>{active_resv}</td>"
-            f"<td>{util_5h}</td>"
-            f"<td>{util_7d}</td>"
-            f"<td>{util_30d}</td>"
-            f"<td>{format_bytes(row.get('bytes_received', 0))}</td>"
-            f"<td>{format_bytes(row.get('bytes_emitted', 0))}</td>"
-            f'<td class="{"yes" if over_budget else "no"}">'
-            f"{'yes' if over_budget else 'no'}</td>"
-            f"<td>{backoff_reason}</td>"
-            f"<td>{backoff_until}</td>"
-            f"<td>{consecutive_failures}</td>"
-            f'<td class="{"yes" if auth_failed else "no"}">'
-            f"{'yes' if auth_failed else 'no'}</td>"
-            f'<td class="{"yes" if operator_disabled else "no"}">'
-            f"{'yes' if operator_disabled else 'no'}</td>"
-            f"<td>{exactness}</td>"
-            f"<td>{est_cost_pct}</td>"
-            f"<td>{cache_read_str}</td>"
-            f"<td>{cache_write_str}</td>"
-            f"<td>{reasoning_str}</td>"
-            f"<td>{avg_cost_per_req}</td>"
-            f"<td>{avg_cost_per_1k}</td>"
+            f"{_td_priority(name, 1)}"
+            f"{_td_priority(provider, 1)}"
+            f"{_td_priority('yes' if enabled else 'no', 1, class_=enabled_cls)}"
+            f"{_td_priority(f'{req_count:,}', 1)}"
+            f"{_td_priority(cost, 1)}"
+            f"{_td_priority(escape(health), 2, class_=health_cls)}"
+            f"{_td_priority(f'{err_count:,}', 2)}"
+            f"{_td_priority(in_tok, 2)}"
+            f"{_td_priority(out_tok, 2)}"
+            f"{_td_priority(total_tok, 2)}"
+            f"{_td_priority(latency, 2)}"
+            f"{_td_priority(tps, 2)}"
+            f"{_td_priority(exactness, 2)}"
+            f"{_td_priority(reserved, 3)}"
+            f"{_td_priority(f'{active_resv}', 3)}"
+            f"{_td_priority(util_5h, 3)}"
+            f"{_td_priority(util_7d, 3)}"
+            f"{_td_priority(util_30d, 3)}"
+            f"{_td_priority(format_bytes(row.get('bytes_received', 0)), 3)}"
+            f"{_td_priority(format_bytes(row.get('bytes_emitted', 0)), 3)}"
+            f"{_td_priority('yes' if over_budget else 'no', 3, class_=over_budget_cls)}"
+            f"{_td_priority(backoff_reason, 3)}"
+            f"{_td_priority(backoff_until, 3)}"
+            f"{_td_priority(f'{consecutive_failures}', 3)}"
+            f"{_td_priority('yes' if auth_failed else 'no', 3, class_=auth_failed_cls)}"
+            f"{_td_priority(disabled_str, 3, class_=disabled_cls)}"
+            f"{_td_priority(est_cost_pct, 3)}"
+            f"{_td_priority(cache_read_str, 3)}"
+            f"{_td_priority(cache_write_str, 3)}"
+            f"{_td_priority(reasoning_str, 3)}"
+            f"{_td_priority(avg_cost_per_req, 3)}"
+            f"{_td_priority(avg_cost_per_1k, 3)}"
             f"</tr>"
         )
     parts.append("</tbody></table>")
@@ -1376,24 +1441,27 @@ def render_models(
         parts = [
             '<table class="data">',
             "<thead><tr>",
-            "<th>Model</th>",
-            "<th>Provider</th>",
-            "<th>Requests</th>",
-            "<th>Errors</th>",
-            "<th>Input tokens</th>",
-            "<th>Output tokens</th>",
-            "<th>Total tokens</th>",
-            "<th>Cost</th>",
-            "<th>Avg latency</th>",
-            "<th>Avg TTFT</th>",
-            "<th>TPS</th>",
-            "<th>Exactness</th>",
-            "<th>Est. cost</th>",
-            "<th>Cache R</th>",
-            "<th>Cache W</th>",
-            "<th>Reasoning</th>",
-            "<th>Avg cost/req</th>",
-            "<th>Avg cost/1k tok</th>",
+            # Priority 1 — always shown
+            _th("Model"),
+            _th("Provider"),
+            _th("Requests"),
+            _th("Cost"),
+            _th("Exactness"),
+            # Priority 2 — shown on tablet+
+            _th("Errors", priority=2),
+            _th("Input tokens", priority=2),
+            _th("Output tokens", priority=2),
+            _th("Total tokens", priority=2),
+            _th("Avg latency", priority=2),
+            _th("Avg TTFT", priority=2),
+            _th("TPS", priority=2),
+            # Priority 3 — desktop-only
+            _th("Est. cost", priority=3),
+            _th("Cache R", priority=3),
+            _th("Cache W", priority=3),
+            _th("Reasoning", priority=3),
+            _th("Avg cost/req", priority=3),
+            _th("Avg cost/1k tok", priority=3),
             "</tr></thead><tbody>",
         ]
         for row in models:
@@ -1451,26 +1519,28 @@ def render_models(
                 avg_cost_per_1k = "—"
             else:
                 avg_cost_per_1k = format_microdollars(avg_cost_per_1k_microdollars)
+            req_count = int(row.get("request_count", 0))
+            err_count = int(row.get("error_count", 0))
             parts.append(
                 f"<tr>"
-                f"<td>{escape(row.get('model_id', ''))}</td>"
-                f"<td>{provider}</td>"
-                f"<td>{int(row.get('request_count', 0)):,}</td>"
-                f"<td>{int(row.get('error_count', 0)):,}</td>"
-                f"<td>{in_tok}</td>"
-                f"<td>{out_tok}</td>"
-                f"<td>{total_tok}</td>"
-                f"<td>{cost}</td>"
-                f"<td>{latency}</td>"
-                f"<td>{ttft}</td>"
-                f"<td>{tps}</td>"
-                f"<td>{exactness}</td>"
-                f"<td>{est_cost_pct}</td>"
-                f"<td>{cache_read_str}</td>"
-                f"<td>{cache_write_str}</td>"
-                f"<td>{reasoning_str}</td>"
-                f"<td>{avg_cost_per_req}</td>"
-                f"<td>{avg_cost_per_1k}</td>"
+                f"{_td_priority(escape(row.get('model_id', '')), 1)}"
+                f"{_td_priority(provider, 1)}"
+                f"{_td_priority(f'{req_count:,}', 1)}"
+                f"{_td_priority(cost, 1)}"
+                f"{_td_priority(exactness, 1)}"
+                f"{_td_priority(f'{err_count:,}', 2)}"
+                f"{_td_priority(in_tok, 2)}"
+                f"{_td_priority(out_tok, 2)}"
+                f"{_td_priority(total_tok, 2)}"
+                f"{_td_priority(latency, 2)}"
+                f"{_td_priority(ttft, 2)}"
+                f"{_td_priority(tps, 2)}"
+                f"{_td_priority(est_cost_pct, 3)}"
+                f"{_td_priority(cache_read_str, 3)}"
+                f"{_td_priority(cache_write_str, 3)}"
+                f"{_td_priority(reasoning_str, 3)}"
+                f"{_td_priority(avg_cost_per_req, 3)}"
+                f"{_td_priority(avg_cost_per_1k, 3)}"
                 f"</tr>"
             )
         parts.append("</tbody></table>")
@@ -1522,10 +1592,10 @@ def render_events(
         parts = [
             '<table class="data">',
             "<thead><tr>",
-            "<th>When</th>",
-            "<th>Account</th>",
-            "<th>Type</th>",
-            "<th>Details</th>",
+            _th("When"),
+            _th("Account"),
+            _th("Type"),
+            _th("Details", priority=2),
             "</tr></thead><tbody>",
         ]
         for row in events:
@@ -1542,13 +1612,13 @@ def render_events(
                 if badge_tooltip
                 else ""
             )
+            badge_html = f'<span class="event-tag {cls}"{badge_attrs}>{etype}</span>'
             parts.append(
                 f"<tr>"
-                f"<td>{ts}</td>"
-                f"<td>{name}</td>"
-                f'<td><span class="event-tag {cls}"{badge_attrs}>'
-                f"{etype}</span></td>"
-                f"<td>{details}</td>"
+                f"{_td_priority(ts, 1)}"
+                f"{_td_priority(name, 1)}"
+                f"{_td_priority(badge_html, 1)}"
+                f"{_td_priority(details, 2)}"
                 f"</tr>"
             )
         parts.append("</tbody></table>")
@@ -1592,15 +1662,18 @@ def _render_aggregate_timeseries_table(series: list[dict[str, Any]]) -> str:
     parts = [
         '<table class="data">',
         "<thead><tr>",
-        "<th>Bucket</th>",
-        "<th>Requests</th>",
-        "<th>Errors</th>",
-        "<th>Input tokens</th>",
-        "<th>Output tokens</th>",
-        "<th>Total tokens</th>",
-        "<th>Cost</th>",
-        "<th>BW received</th>",
-        "<th>BW emitted</th>",
+        # Priority 1 — always shown
+        _th("Bucket"),
+        _th("Requests"),
+        _th("Cost"),
+        # Priority 2 — shown on tablet+
+        _th("Errors", priority=2),
+        _th("Total tokens", priority=2),
+        # Priority 3 — desktop only
+        _th("Input tokens", priority=3),
+        _th("Output tokens", priority=3),
+        _th("BW received", priority=3),
+        _th("BW emitted", priority=3),
         "</tr></thead><tbody>",
     ]
     for row in series:
@@ -1608,17 +1681,19 @@ def _render_aggregate_timeseries_table(series: list[dict[str, Any]]) -> str:
         in_tok = format_tokens(row.get("input_tokens", 0))
         out_tok = format_tokens(row.get("output_tokens", 0))
         total_tok = format_tokens(row.get("total_tokens", 0))
+        req_count = int(row.get("request_count", 0))
+        err_count = int(row.get("error_count", 0))
         parts.append(
             f"<tr>"
-            f"<td>{escape(row.get('bucket', ''))}</td>"
-            f"<td>{int(row.get('request_count', 0)):,}</td>"
-            f"<td>{int(row.get('error_count', 0)):,}</td>"
-            f"<td>{in_tok}</td>"
-            f"<td>{out_tok}</td>"
-            f"<td>{total_tok}</td>"
-            f"<td>{cost}</td>"
-            f"<td>{format_bytes(row.get('bytes_received', 0))}</td>"
-            f"<td>{format_bytes(row.get('bytes_emitted', 0))}</td>"
+            f"{_td_priority(escape(row.get('bucket', '')), 1)}"
+            f"{_td_priority(f'{req_count:,}', 1)}"
+            f"{_td_priority(cost, 1)}"
+            f"{_td_priority(f'{err_count:,}', 2)}"
+            f"{_td_priority(total_tok, 2)}"
+            f"{_td_priority(in_tok, 3)}"
+            f"{_td_priority(out_tok, 3)}"
+            f"{_td_priority(format_bytes(row.get('bytes_received', 0)), 3)}"
+            f"{_td_priority(format_bytes(row.get('bytes_emitted', 0)), 3)}"
             f"</tr>"
         )
     parts.append("</tbody></table>")
@@ -1698,28 +1773,29 @@ def _render_grouped_timeseries_table(grouped: dict[str, Any]) -> str:
         row.get("account_name") for row in points
     )
     header_cells = [
-        "<th>Bucket</th>",
-        "<th>Series</th>",
-        "<th>Provider</th>",
-        "<th>Model</th>",
+        _th("Bucket"),
+        _th("Series"),
+        _th("Provider"),
+        _th("Model"),
     ]
     if include_account:
-        header_cells.append("<th>Account</th>")
+        header_cells.append(_th("Account", priority=2))
     header_cells.extend(
         [
-            "<th>Requests</th>",
-            "<th>Errors</th>",
-            "<th>Input tokens</th>",
-            "<th>Output tokens</th>",
-            "<th>Cache read</th>",
-            "<th>Cache write</th>",
-            "<th>Reasoning</th>",
-            "<th>Total tokens</th>",
-            "<th>Cost</th>",
-            "<th>BW received</th>",
-            "<th>BW emitted</th>",
-            "<th>Avg latency</th>",
-            "<th>Avg TTFT</th>",
+            _th("Requests"),
+            _th("Cost", priority=2),
+            _th("Errors", priority=2),
+            _th("Total tokens", priority=2),
+            _th("Avg latency", priority=2),
+            # Priority 3 — desktop only
+            _th("Input tokens", priority=3),
+            _th("Output tokens", priority=3),
+            _th("Cache read", priority=3),
+            _th("Cache write", priority=3),
+            _th("Reasoning", priority=3),
+            _th("BW received", priority=3),
+            _th("BW emitted", priority=3),
+            _th("Avg TTFT", priority=3),
         ]
     )
     parts = [
@@ -1730,28 +1806,28 @@ def _render_grouped_timeseries_table(grouped: dict[str, Any]) -> str:
     ]
     for row in points:
         cells = [
-            f"<td>{escape(row.get('bucket', ''))}</td>",
-            f"<td>{escape(row.get('label', ''))}</td>",
-            f"<td>{escape(row.get('provider_id') or '')}</td>",
-            f"<td>{escape(row.get('model_id') or '')}</td>",
+            _td_priority(escape(row.get("bucket", "")), 1),
+            _td_priority(escape(row.get("label", "")), 1),
+            _td_priority(escape(row.get("provider_id") or ""), 1),
+            _td_priority(escape(row.get("model_id") or ""), 1),
         ]
         if include_account:
-            cells.append(f"<td>{escape(row.get('account_name') or '')}</td>")
+            cells.append(_td_priority(escape(row.get("account_name") or ""), 2))
         cells.extend(
             [
-                f"<td>{format_int(row.get('request_count', 0))}</td>",
-                f"<td>{format_int(row.get('error_count', 0))}</td>",
-                f"<td>{format_tokens(row.get('input_tokens', 0))}</td>",
-                f"<td>{format_tokens(row.get('output_tokens', 0))}</td>",
-                f"<td>{format_tokens(row.get('cache_read_tokens', 0))}</td>",
-                f"<td>{format_tokens(row.get('cache_write_tokens', 0))}</td>",
-                f"<td>{format_tokens(row.get('reasoning_tokens', 0))}</td>",
-                f"<td>{format_tokens(row.get('total_tokens', 0))}</td>",
-                f"<td>{format_microdollars(row.get('cost_microdollars', 0))}</td>",
-                f"<td>{format_bytes(row.get('bytes_received', 0))}</td>",
-                f"<td>{format_bytes(row.get('bytes_emitted', 0))}</td>",
-                f"<td>{format_latency(row.get('avg_latency_ms', 0.0))}</td>",
-                f"<td>{format_latency(row.get('avg_ttft_ms', 0.0))}</td>",
+                _td_priority(format_int(row.get("request_count", 0)), 1),
+                _td_priority(format_microdollars(row.get("cost_microdollars", 0)), 2),
+                _td_priority(format_int(row.get("error_count", 0)), 2),
+                _td_priority(format_tokens(row.get("total_tokens", 0)), 2),
+                _td_priority(format_latency(row.get("avg_latency_ms", 0.0)), 2),
+                _td_priority(format_tokens(row.get("input_tokens", 0)), 3),
+                _td_priority(format_tokens(row.get("output_tokens", 0)), 3),
+                _td_priority(format_tokens(row.get("cache_read_tokens", 0)), 3),
+                _td_priority(format_tokens(row.get("cache_write_tokens", 0)), 3),
+                _td_priority(format_tokens(row.get("reasoning_tokens", 0)), 3),
+                _td_priority(format_bytes(row.get("bytes_received", 0)), 3),
+                _td_priority(format_bytes(row.get("bytes_emitted", 0)), 3),
+                _td_priority(format_latency(row.get("avg_ttft_ms", 0.0)), 3),
             ]
         )
         parts.append(f"<tr>{''.join(cells)}</tr>")
@@ -1916,19 +1992,20 @@ def _render_bandwidth_timeseries_table(
     parts = [
         '<table class="data">',
         "<thead><tr>",
-        "<th>Bucket</th>",
-        "<th>Requests</th>",
-        "<th>BW received</th>",
-        "<th>BW emitted</th>",
+        _th("Bucket"),
+        _th("Requests"),
+        _th("BW received"),
+        _th("BW emitted"),
         "</tr></thead><tbody>",
     ]
     for row in series:
+        req_count = int(row.get("request_count", 0))
         parts.append(
             f"<tr>"
-            f"<td>{escape(row.get('bucket', row.get('day', '')))}</td>"
-            f"<td>{int(row.get('request_count', 0)):,}</td>"
-            f"<td>{format_bytes(row.get('bytes_received', 0))}</td>"
-            f"<td>{format_bytes(row.get('bytes_emitted', 0))}</td>"
+            f"{_td_priority(escape(row.get('bucket', row.get('day', ''))), 1)}"
+            f"{_td_priority(f'{req_count:,}', 1)}"
+            f"{_td_priority(format_bytes(row.get('bytes_received', 0)), 1)}"
+            f"{_td_priority(format_bytes(row.get('bytes_emitted', 0)), 1)}"
             f"</tr>"
         )
     parts.append("</tbody></table>")
@@ -2046,13 +2123,16 @@ def render_pings(
         ping_parts = [
             '<table class="data">',
             "<thead><tr>",
-            "<th>Provider</th>",
-            "<th>Account</th>",
-            "<th>Time</th>",
-            "<th>Latency</th>",
-            "<th>Status</th>",
-            "<th>Models</th>",
-            "<th>Error</th>",
+            # Priority 1 — always shown
+            _th("Provider"),
+            _th("Time"),
+            _th("Latency"),
+            _th("Status"),
+            # Priority 2 — shown on tablet+
+            _th("Account", priority=2),
+            _th("Models", priority=2),
+            # Priority 3 — desktop only
+            _th("Error", priority=3),
             "</tr></thead><tbody>",
         ]
         for row in recent_pings:
@@ -2066,13 +2146,13 @@ def render_pings(
             error = escape(str(row.get("error") or ""))
             ping_parts.append(
                 f"<tr>"
-                f"<td>{pid}</td>"
-                f"<td>{acct}</td>"
-                f"<td>{ts}</td>"
-                f"<td>{lat}</td>"
-                f"<td>{status_str}</td>"
-                f"<td>{model_count}</td>"
-                f"<td>{error}</td>"
+                f"{_td_priority(pid, 1)}"
+                f"{_td_priority(ts, 1)}"
+                f"{_td_priority(lat, 1)}"
+                f"{_td_priority(status_str, 1)}"
+                f"{_td_priority(acct, 2)}"
+                f"{_td_priority(str(model_count), 2)}"
+                f"{_td_priority(error, 3)}"
                 f"</tr>"
             )
         ping_parts.append("</tbody></table>")
@@ -2238,24 +2318,27 @@ def render_runtime(
             max_str = format_int(max_restarts) if max_restarts is not None else "—"
             task_rows.append(
                 f"<tr>"
-                f"<td>{name}</td>"
-                f'<td class="{status_cls}">{status}</td>'
-                f"<td>{restarts}</td>"
-                f"<td>{max_str}</td>"
-                f"<td>{'yes' if done else 'no'}</td>"
+                f"{_td_priority(escape(name), 1)}"
+                f"{_td_priority(status, 1, class_=status_cls)}"
+                f"{_td_priority(str(restarts), 2)}"
+                f"{_td_priority(max_str, 2)}"
+                f"{_td_priority('yes' if done else 'no', 3)}"
                 f"</tr>"
             )
         tasks_table = (
             '<table class="data compact">'
-            "<thead><tr>"
-            "<th>Task</th>"
-            "<th>Status</th>"
-            "<th>Restarts</th>"
-            "<th>Max restarts</th>"
-            "<th>Done</th>"
-            "</tr></thead><tbody>"
-            f"{''.join(task_rows)}"
-            "</tbody></table>"
+            + "<thead><tr>"
+            # Priority 1 — always shown
+            + _th("Task")
+            + _th("Status")
+            # Priority 2 — shown on tablet+
+            + _th("Restarts", priority=2)
+            + _th("Max restarts", priority=2)
+            # Priority 3 — desktop only
+            + _th("Done", priority=3)
+            + "</tr></thead><tbody>"
+            + f"{''.join(task_rows)}"
+            + "</tbody></table>"
         )
     else:
         tasks_table = '<p class="empty">No background tasks registered.</p>'
@@ -2326,18 +2409,18 @@ def render_runtime(
         for acct, state in sorted(health_states.items()):
             health_rows.append(
                 f"<tr>"
-                f"<td>{escape(acct)}</td>"
-                f'<td class="{sanitize_class_name(state)}">{escape(state)}</td>'
+                f"{_td_priority(escape(acct), 1)}"
+                f"{_td_priority(escape(state), 1, class_=sanitize_class_name(state))}"
                 f"</tr>"
             )
         health_table = (
             '<table class="data compact">'
-            "<thead><tr>"
-            "<th>Account</th>"
-            "<th>Health state</th>"
-            "</tr></thead><tbody>"
-            f"{''.join(health_rows)}"
-            "</tbody></table>"
+            + "<thead><tr>"
+            + _th("Account")
+            + _th("Health state")
+            + "</tr></thead><tbody>"
+            + f"{''.join(health_rows)}"
+            + "</tbody></table>"
         )
     else:
         health_table = '<p class="empty">No health state data.</p>'
@@ -2410,7 +2493,7 @@ def _render_chart_canvas(
     canvas_id_json = json.dumps(canvas_id)
     chart_type_json = json.dumps(chart_type)
     return f"""
-<div style="height: {height_px}px; position: relative;">
+<div class="chart-wrap" style="height: {height_px}px;">
   <canvas id="{canvas_id}"></canvas>
 </div>
 <script>
@@ -2656,26 +2739,29 @@ def _render_retry_distribution_table(
         avg_lat = float(row.get("avg_attempt_latency_ms", 0.0) or 0.0)
         rows.append(
             f"<tr>"
-            f"<td>{escape(_error_category_label(category))}</td>"
-            f"<td>{attempt_count:,}</td>"
-            f"<td>{retry_outcome_count:,}</td>"
-            f"<td>{success_count:,}</td>"
-            f"<td>{failure_count:,}</td>"
-            f"<td>{avg_lat:.1f} ms</td>"
+            f"{_td_priority(escape(_error_category_label(category)), 1)}"
+            f"{_td_priority(f'{attempt_count:,}', 1)}"
+            f"{_td_priority(f'{retry_outcome_count:,}', 2)}"
+            f"{_td_priority(f'{success_count:,}', 2)}"
+            f"{_td_priority(f'{failure_count:,}', 2)}"
+            f"{_td_priority(f'{avg_lat:.1f} ms', 3)}"
             f"</tr>"
         )
     return (
         '<table class="data">'
-        "<thead><tr>"
-        "<th>Category</th>"
-        "<th>Attempts</th>"
-        "<th>Retry outcomes</th>"
-        "<th>Successes</th>"
-        "<th>Failures</th>"
-        "<th>Avg attempt latency</th>"
-        "</tr></thead><tbody>"
-        f"{''.join(rows)}"
-        "</tbody></table>"
+        + "<thead><tr>"
+        # Priority 1 — always shown
+        + _th("Category")
+        + _th("Attempts")
+        # Priority 2 — shown on tablet+
+        + _th("Retry outcomes", priority=2)
+        + _th("Successes", priority=2)
+        + _th("Failures", priority=2)
+        # Priority 3 — desktop only
+        + _th("Avg attempt latency", priority=3)
+        + "</tr></thead><tbody>"
+        + f"{''.join(rows)}"
+        + "</tbody></table>"
     )
 
 
@@ -2699,24 +2785,27 @@ def _render_operational_events_table(
         released = int(row.get("total_released_reservations", 0) or 0)
         summary_rows.append(
             f"<tr>"
-            f"<td>{escape(event_type)}</td>"
-            f"<td>{event_count:,}</td>"
-            f"<td>{escape(last_at)}</td>"
-            f"<td>{interrupted:,}</td>"
-            f"<td>{released:,}</td>"
+            f"{_td_priority(escape(event_type), 1)}"
+            f"{_td_priority(f'{event_count:,}', 1)}"
+            f"{_td_priority(escape(last_at), 2)}"
+            f"{_td_priority(f'{interrupted:,}', 2)}"
+            f"{_td_priority(f'{released:,}', 3)}"
             f"</tr>"
         )
     summary_table = (
         '<table class="data compact">'
-        "<thead><tr>"
-        "<th>Event type</th>"
-        "<th>Count</th>"
-        "<th>Last seen</th>"
-        "<th>Interrupted</th>"
-        "<th>Released</th>"
-        "</tr></thead><tbody>"
-        f"{''.join(summary_rows)}"
-        "</tbody></table>"
+        + "<thead><tr>"
+        # Priority 1 — always shown
+        + _th("Event type")
+        + _th("Count")
+        # Priority 2 — shown on tablet+
+        + _th("Last seen", priority=2)
+        + _th("Interrupted", priority=2)
+        # Priority 3 — desktop only
+        + _th("Released", priority=3)
+        + "</tr></thead><tbody>"
+        + f"{''.join(summary_rows)}"
+        + "</tbody></table>"
     )
     if not summary_rows:
         summary_table = '<p class="empty">No operational events in this window.</p>'
@@ -2735,20 +2824,20 @@ def _render_operational_events_table(
             truncated_details = truncate(details_text, 200)
             recent_rows.append(
                 f"<tr>"
-                f"<td>{escape(str(row.get('occurred_at', '')))}</td>"
-                f"<td>{escape(event_type)}</td>"
-                f"<td>{truncated_details}</td>"
+                f"{_td_priority(escape(str(row.get('occurred_at', ''))), 1)}"
+                f"{_td_priority(escape(event_type), 1)}"
+                f"{_td_priority(truncated_details, 2)}"
                 f"</tr>"
             )
         recent_table = (
             '<table class="data compact">'
-            "<thead><tr>"
-            "<th>When</th>"
-            "<th>Type</th>"
-            "<th>Details</th>"
-            "</tr></thead><tbody>"
-            f"{''.join(recent_rows)}"
-            "</tbody></table>"
+            + "<thead><tr>"
+            + _th("When")
+            + _th("Type")
+            + _th("Details", priority=2)
+            + "</tr></thead><tbody>"
+            + f"{''.join(recent_rows)}"
+            + "</tbody></table>"
         )
 
     return f"""
@@ -2930,30 +3019,33 @@ def _render_routing_distribution_table(
         distinct_accounts = int(row.get("distinct_selected_accounts", 0) or 0)
         rows.append(
             f"<tr>"
-            f"<td>{model_id}</td>"
-            f"<td>{provider_id}</td>"
-            f"<td>{decision_count:,}</td>"
-            f"<td>{avg_eligible:.2f}</td>"
-            f"<td>{avg_scored:.2f}</td>"
-            f"<td>{avg_excluded:.2f}</td>"
-            f"<td>{avg_selected_score:.3f}</td>"
-            f"<td>{distinct_accounts}</td>"
+            f"{_td_priority(model_id, 1)}"
+            f"{_td_priority(provider_id, 1)}"
+            f"{_td_priority(f'{decision_count:,}', 1)}"
+            f"{_td_priority(f'{avg_eligible:.2f}', 2)}"
+            f"{_td_priority(f'{avg_scored:.2f}', 2)}"
+            f"{_td_priority(f'{avg_excluded:.2f}', 2)}"
+            f"{_td_priority(f'{avg_selected_score:.3f}', 3)}"
+            f"{_td_priority(str(distinct_accounts), 3)}"
             f"</tr>"
         )
     return (
         '<table class="data">'
-        "<thead><tr>"
-        "<th>Model</th>"
-        "<th>Provider</th>"
-        "<th>Decisions</th>"
-        "<th>Avg eligible</th>"
-        "<th>Avg scored</th>"
-        "<th>Avg excluded</th>"
-        "<th>Avg score</th>"
-        "<th>Distinct accounts</th>"
-        "</tr></thead><tbody>"
-        f"{''.join(rows)}"
-        "</tbody></table>"
+        + "<thead><tr>"
+        # Priority 1 — always shown
+        + _th("Model")
+        + _th("Provider")
+        + _th("Decisions")
+        # Priority 2 — shown on tablet+
+        + _th("Avg eligible", priority=2)
+        + _th("Avg scored", priority=2)
+        + _th("Avg excluded", priority=2)
+        # Priority 3 — desktop only
+        + _th("Avg score", priority=3)
+        + _th("Distinct accounts", priority=3)
+        + "</tr></thead><tbody>"
+        + f"{''.join(rows)}"
+        + "</tbody></table>"
     )
 
 
@@ -2973,26 +3065,29 @@ def _render_selection_breakdown_table(
         avg_eligible = float(row.get("avg_eligible_count", 0.0) or 0.0)
         rows.append(
             f"<tr>"
-            f"<td>{account_name}</td>"
-            f"<td>{provider_id}</td>"
-            f"<td>{selection_count:,}</td>"
-            f"<td>{avg_tier:.2f}</td>"
-            f"<td>{avg_score:.3f}</td>"
-            f"<td>{avg_eligible:.2f}</td>"
+            f"{_td_priority(account_name, 1)}"
+            f"{_td_priority(provider_id, 1)}"
+            f"{_td_priority(f'{selection_count:,}', 1)}"
+            f"{_td_priority(f'{avg_tier:.2f}', 2)}"
+            f"{_td_priority(f'{avg_score:.3f}', 2)}"
+            f"{_td_priority(f'{avg_eligible:.2f}', 3)}"
             f"</tr>"
         )
     return (
         '<table class="data">'
-        "<thead><tr>"
-        "<th>Account</th>"
-        "<th>Provider</th>"
-        "<th>Selections</th>"
-        "<th>Avg tier</th>"
-        "<th>Avg score</th>"
-        "<th>Avg eligible</th>"
-        "</tr></thead><tbody>"
-        f"{''.join(rows)}"
-        "</tbody></table>"
+        + "<thead><tr>"
+        # Priority 1 — always shown
+        + _th("Account")
+        + _th("Provider")
+        + _th("Selections")
+        # Priority 2 — shown on tablet+
+        + _th("Avg tier", priority=2)
+        + _th("Avg score", priority=2)
+        # Priority 3 — desktop only
+        + _th("Avg eligible", priority=3)
+        + "</tr></thead><tbody>"
+        + f"{''.join(rows)}"
+        + "</tbody></table>"
     )
 
 
@@ -3008,22 +3103,22 @@ def _render_exclusion_table(exclusion_breakdown: list[dict[str, Any]]) -> str:
         category = _classify_exclusion(str(row.get("reason", "")))
         rows.append(
             f"<tr>"
-            f'<td class="{sanitize_class_name(category)}">{escape(category)}</td>'
-            f"<td>{account_name}</td>"
-            f"<td>{reason}</td>"
-            f"<td>{count:,}</td>"
+            f"{_td_priority(escape(category), 1, class_=sanitize_class_name(category))}"
+            f"{_td_priority(account_name, 1)}"
+            f"{_td_priority(reason, 2)}"
+            f"{_td_priority(f'{count:,}', 1)}"
             f"</tr>"
         )
     return (
         '<table class="data">'
-        "<thead><tr>"
-        "<th>Category</th>"
-        "<th>Account</th>"
-        "<th>Reason</th>"
-        "<th>Count</th>"
-        "</tr></thead><tbody>"
-        f"{''.join(rows)}"
-        "</tbody></table>"
+        + "<thead><tr>"
+        + _th("Category")
+        + _th("Account")
+        + _th("Count")
+        + _th("Reason", priority=2)
+        + "</tr></thead><tbody>"
+        + f"{''.join(rows)}"
+        + "</tbody></table>"
     )
 
 
@@ -3049,17 +3144,20 @@ def render_traces(
         parts = [
             '<table class="data">',
             "<thead><tr>",
-            "<th>Time</th>",
-            "<th>Account</th>",
-            "<th>Provider</th>",
-            "<th>Model</th>",
-            "<th>Protocol</th>",
-            "<th>Status</th>",
-            "<th>Error class</th>",
-            "<th>In</th>",
-            "<th>Out</th>",
-            "<th>Latency</th>",
-            "<th>ID</th>",
+            # Priority 1 — always shown
+            _th("Time"),
+            _th("Account"),
+            _th("Model"),
+            _th("Status"),
+            _th("Latency"),
+            # Priority 2 — shown on tablet+
+            _th("Provider", priority=2),
+            _th("Protocol", priority=2),
+            _th("Error class", priority=2),
+            _th("In", priority=2),
+            _th("Out", priority=2),
+            # Priority 3 — desktop only
+            _th("ID", priority=3),
             "</tr></thead><tbody>",
         ]
         for row in recent_requests:
@@ -3083,17 +3181,17 @@ def render_traces(
             proxy_id = short_id(str(row.get("proxy_request_id", "") or ""))
             parts.append(
                 f"<tr>"
-                f"<td>{ts}</td>"
-                f"<td>{account}</td>"
-                f"<td>{provider}</td>"
-                f"<td>{model}</td>"
-                f"<td>{protocol}</td>"
-                f"<td>{escape(status_str)}</td>"
-                f"<td>{error_class}</td>"
-                f"<td>{in_tok}</td>"
-                f"<td>{out_tok}</td>"
-                f"<td>{latency_str}</td>"
-                f"<td>{proxy_id}</td>"
+                f"{_td_priority(ts, 1)}"
+                f"{_td_priority(account, 1)}"
+                f"{_td_priority(model, 1)}"
+                f"{_td_priority(escape(status_str), 1)}"
+                f"{_td_priority(latency_str, 1)}"
+                f"{_td_priority(provider, 2)}"
+                f"{_td_priority(protocol, 2)}"
+                f"{_td_priority(error_class, 2)}"
+                f"{_td_priority(in_tok, 2)}"
+                f"{_td_priority(out_tok, 2)}"
+                f"{_td_priority(proxy_id, 3)}"
                 f"</tr>"
             )
         parts.append("</tbody></table>")
@@ -3179,15 +3277,17 @@ def render_latency(
         model_parts = [
             '<table class="data">',
             "<thead><tr>",
-            "<th>Provider</th>",
-            "<th>Model</th>",
-            "<th>Requests</th>",
-            "<th>Avg TTFT</th>",
-            "<th>P50 TTFT</th>",
-            "<th>P99 TTFT</th>",
+            # Priority 1 — always shown
+            _th("Provider"),
+            _th("Model"),
+            _th("Requests"),
+            _th("Avg TTFT"),
+            # Priority 2 — shown on tablet+
+            _th("P50 TTFT", priority=2),
+            _th("P99 TTFT", priority=2),
         ]
         if phases:
-            model_parts.append("<th>Phases ms (c/r/o)</th>")
+            model_parts.append(_th("Phases ms (c/r/o)", priority=3))
         model_parts.append("</tr></thead><tbody>")
         for row in model_ttft:
             pid = escape(str(row.get("provider_id", "")))
@@ -3198,15 +3298,15 @@ def render_latency(
             count = int(row.get("request_count", 0))
             tr = (
                 f"<tr>"
-                f"<td>{pid}</td>"
-                f"<td>{mid}</td>"
-                f"<td>{count:,}</td>"
-                f"<td>{avg}</td>"
-                f"<td>{p50}</td>"
-                f"<td>{p99}</td>"
+                f"{_td_priority(pid, 1)}"
+                f"{_td_priority(mid, 1)}"
+                f"{_td_priority(f'{count:,}', 1)}"
+                f"{_td_priority(avg, 1)}"
+                f"{_td_priority(p50, 2)}"
+                f"{_td_priority(p99, 2)}"
             )
             if phases:
-                tr += f"<td>{_format_phase_cell(row)}</td>"
+                tr += _td_priority(_format_phase_cell(row), 3)
             tr += "</tr>"
             model_parts.append(tr)
         model_parts.append("</tbody></table>")

@@ -120,6 +120,16 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 - Frontend helpers in `src/eggpool/dashboard/static/dashboard.js` under `window.EggPoolDashboard`
 - Full page list and chart lifecycle details are in the `architecture` skill
 
+### Responsive / mobile
+
+- Dashboard targets a **320px minimum** viewport (iPhone SE / small Android). All 12 pages are mobile-equally
+- Topnav wraps page links in a `<details class="topnav-hamburger">` disclosure; below 480px the `<summary>` becomes a Menu chip and the 12 links collapse into it. Theme selector and refresh button stay **outside** the disclosure so they remain reachable on every viewport
+- Tables use `data-priority="N"` on every `<th>` and matching `<td>` to drive responsive column hiding: `P1` always shown, `P2` hidden below 480px, `P3` hidden below 760px. Renderers MUST use the `_th(label, *, priority=1)` and `_td_priority(content, priority, *, class_=None)` helpers in `src/eggpool/dashboard/render.py:460` — never emit a bare `<th>` for a tabular column
+- Chart.js canvases MUST sit inside a `<div class="chart-wrap" style="height: …">` (not an inline-style `<div style="position: relative; height: …">`). `.chart-wrap` sets `position: relative; width: 100%` so the canvas respects its parent panel's width on every viewport
+- `html { overflow-x: hidden }` is a deliberate safety net in `dashboard.css` to prevent chart-canvas resize races from causing horizontal scroll on the body. It hides real overflow bugs, so any new layout code should still design for `clientWidth == scrollWidth` even though it's masked
+- New tables: pick priority mappings that put operator-glance columns in P1, diagnostic core in P2, and deep-tail columns in P3. Update `tests/unit/test_dashboard.py` `TestResponsiveColumns` with a snapshot test
+- Adding a new topnav link requires updating both `_render_nav` and the breakpoints in `dashboard.css` (`@media (max-width: 480px)` and `topnav-hamburger > .topnav-links { … }`)
+
 ## Fast-Path CLI
 
 - `src/eggpool/cli.py` is a tiny bootstrap (74 lines)

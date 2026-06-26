@@ -688,8 +688,8 @@ class TestRenderAccounts:
             }
         ]
         html = render_accounts(accounts=accounts, period="24h")
-        assert "<th>Total tokens</th>" in html
-        assert "<th>TPS</th>" in html
+        assert '<th data-priority="2">Total tokens</th>' in html
+        assert '<th data-priority="2">TPS</th>' in html
         assert "350" in html  # total_tokens rendered
         assert "70.0 tok/s" in html
 
@@ -745,12 +745,12 @@ class TestRenderAccounts:
             }
         ]
         html = render_accounts(accounts=accounts, period="24h")
-        assert "<th>Over budget</th>" in html
-        assert "<th>Upstream backoff</th>" in html
-        assert "<th>Backoff until</th>" in html
-        assert "<th>Failures</th>" in html
-        assert "<th>Auth fail</th>" in html
-        assert "<th>Disabled</th>" in html
+        assert '<th data-priority="3">Over budget</th>' in html
+        assert '<th data-priority="3">Upstream backoff</th>' in html
+        assert '<th data-priority="3">Backoff until</th>' in html
+        assert '<th data-priority="3">Failures</th>' in html
+        assert '<th data-priority="3">Auth fail</th>' in html
+        assert '<th data-priority="3">Disabled</th>' in html
         assert "rate_limited" in html
         assert ">3</td>" in html
         assert "2025-01-01" in html
@@ -814,8 +814,8 @@ class TestRenderModels:
         html = render_models(models=models, period="24h")
         assert "gpt-x" in html
         assert "$1.00" in html
-        assert "<th>Total tokens</th>" in html
-        assert "<th>TPS</th>" in html
+        assert '<th data-priority="2">Total tokens</th>' in html
+        assert '<th data-priority="2">TPS</th>' in html
         assert "300" in html
         assert "25.0 tok/s" in html
 
@@ -879,7 +879,7 @@ class TestRenderTimeseries:
         ]
         html = render_timeseries(series=series, bucket="hour", period="24h")
         assert "2024-01-01 12:00:00" in html
-        assert "<th>Total tokens</th>" in html
+        assert '<th data-priority="2">Total tokens</th>' in html
         assert "300" in html
 
 
@@ -2257,7 +2257,7 @@ class TestRenderLatencyExtension:
                 "phases": {"upstream_connect_ms": {"sample_count": 1, "avg_ms": 30.0}}
             },
         )
-        assert "<th>Phases ms (c/r/o)</th>" in html
+        assert '<th data-priority="3">Phases ms (c/r/o)</th>' in html
         assert "30/200/25" in html
 
 
@@ -2291,15 +2291,15 @@ class TestRenderAccountsExtension:
             }
         ]
         html = render_accounts(accounts=accounts, period="24h")
-        assert "<th>Exactness</th>" in html
+        assert '<th data-priority="2">Exactness</th>' in html
         assert 'class="exactness-badge' in html
         assert "e:5,d:2,p:0,~:1,?:2" in html
-        assert "<th>Est. cost</th>" in html
-        assert "<th>Cache R</th>" in html
-        assert "<th>Cache W</th>" in html
-        assert "<th>Reasoning</th>" in html
-        assert "<th>Avg cost/req</th>" in html
-        assert "<th>Avg cost/1k tok</th>" in html
+        assert '<th data-priority="3">Est. cost</th>' in html
+        assert '<th data-priority="3">Cache R</th>' in html
+        assert '<th data-priority="3">Cache W</th>' in html
+        assert '<th data-priority="3">Reasoning</th>' in html
+        assert '<th data-priority="3">Avg cost/req</th>' in html
+        assert '<th data-priority="3">Avg cost/1k tok</th>' in html
         assert "25.0%" in html  # cache_read_ratio
         assert "5.0%" in html  # cache_write_ratio
 
@@ -2354,7 +2354,7 @@ class TestRenderModelsExtension:
             }
         ]
         html = render_models(models=models, period="24h")
-        assert "<th>Exactness</th>" in html
+        assert '<th data-priority="1">Exactness</th>' in html
         assert 'class="exactness-badge' in html
         assert "e:3,d:1,p:0,~:1,?:0" in html
         assert "40.0%" in html
@@ -2430,3 +2430,229 @@ class TestRenderNavUpdated:
         html = _render_nav("routing", "24h")
         assert html.count('class="active"') == 1
         assert 'href="/routing' in html
+
+
+class TestHamburgerNav:
+    """Mobile navigation: page links wrapped in a `<details>` disclosure.
+
+    The hamburger wrapper lets the 12 topnav links collapse into a single
+    Menu chip on phone viewports (≤480px) without JavaScript. Theme
+    selector and refresh button stay outside the disclosure so they
+    remain reachable on every viewport.
+    """
+
+    def test_hamburger_details_wrapper_present(self) -> None:
+        html = _render_nav("overview", "24h")
+        assert '<details class="topnav-hamburger">' in html
+        assert "<summary" in html
+        assert ">Menu</summary>" in html
+
+    def test_topnav_links_live_inside_details(self) -> None:
+        html = _render_nav("overview", "24h")
+        # The link wrapper must appear AFTER the <summary> so the
+        # disclosure contents are not rendered when closed.
+        summary_pos = html.find("<summary")
+        links_open_pos = html.find('<div class="topnav-links">')
+        assert summary_pos != -1
+        assert links_open_pos > summary_pos
+        assert links_open_pos != -1
+
+    def test_theme_selector_outside_hamburger(self) -> None:
+        html = _render_nav("overview", "24h", available_themes=["dark"])
+        details_close = html.find("</details>")
+        theme_pos = html.find("theme-selector")
+        assert details_close != -1
+        assert theme_pos > details_close
+
+    def test_refresh_button_outside_hamburger(self) -> None:
+        html = _render_nav("overview", "24h")
+        details_close = html.find("</details>")
+        refresh_pos = html.find("topnav-refresh")
+        assert details_close != -1
+        assert refresh_pos > details_close
+
+    def test_all_page_links_inside_hamburger(self) -> None:
+        html = _render_nav("overview", "24h")
+        details_start = html.find('<details class="topnav-hamburger">')
+        details_end = html.find("</details>")
+        for path in ("/reliability", "/routing", "/accounts", "/models"):
+            assert html.find(path) > details_start
+            assert html.find(path) < details_end
+
+
+class TestResponsiveColumns:
+    """`data-priority` attribute drives responsive column hiding.
+
+    P1 = always shown, P2 = hidden below 480px, P3 = hidden below 760px.
+    Every <th> must carry the attribute and every <td> must match the
+    priority of its <th> or rows misalign when the column is hidden.
+    """
+
+    def _th(self, label: str, *, priority: int = 1) -> str:
+        return f'<th data-priority="{priority}">{label}</th>'
+
+    def test_accounts_table_priority_breakdown(self) -> None:
+        accounts = [
+            {
+                "account_name": "acct_a",
+                "account_enabled": 1,
+                "request_count": 5,
+                "error_count": 1,
+                "input_tokens": 100,
+                "output_tokens": 250,
+                "total_tokens": 350,
+                "tokens_per_second": 70.0,
+                "cost_microdollars": 1_000_000,
+                "avg_latency_ms": 200.0,
+                "reserved_microdollars": 0,
+                "bytes_received": 0,
+                "bytes_emitted": 0,
+                "health_state": "healthy",
+            }
+        ]
+        html = render_accounts(accounts=accounts, period="24h")
+        # P1 — operator quick-glance
+        for label in ("Account", "Provider", "Enabled", "Requests", "Cost"):
+            assert self._th(label) in html
+        # P2 — diagnostic core
+        for label in (
+            "Health",
+            "Errors",
+            "Input tokens",
+            "Output tokens",
+            "Total tokens",
+            "Avg latency",
+            "TPS",
+            "Exactness",
+        ):
+            assert self._th(label, priority=2) in html
+        # P3 — deep diagnostic tail
+        for label in (
+            "Reserved",
+            "Over budget",
+            "Upstream backoff",
+            "Backoff until",
+            "Failures",
+            "Auth fail",
+            "Disabled",
+        ):
+            assert self._th(label, priority=3) in html
+
+    def test_td_matches_th_priority_in_accounts(self) -> None:
+        accounts = [
+            {
+                "account_name": "acct_a",
+                "account_enabled": 1,
+                "request_count": 5,
+                "error_count": 1,
+                "input_tokens": 100,
+                "output_tokens": 250,
+                "total_tokens": 350,
+                "tokens_per_second": 70.0,
+                "cost_microdollars": 1_000_000,
+                "avg_latency_ms": 200.0,
+                "reserved_microdollars": 0,
+                "bytes_received": 0,
+                "bytes_emitted": 0,
+                "health_state": "healthy",
+            }
+        ]
+        html = render_accounts(accounts=accounts, period="24h")
+        # Each <th data-priority="N"> must have a matching <td data-priority="N">
+        assert html.count('<td data-priority="1"') >= 1
+        assert html.count('<td data-priority="2"') >= 1
+        assert html.count('<td data-priority="3"') >= 1
+        assert html.count('<th data-priority="1">') >= 1
+        assert html.count('<th data-priority="2">') >= 1
+        assert html.count('<th data-priority="3">') >= 1
+
+    def test_models_table_priority_breakdown(self) -> None:
+        models = [
+            {
+                "model_id": "gpt-x",
+                "provider_id": "openai",
+                "request_count": 5,
+                "error_count": 0,
+                "cost_microdollars": 1_000_000,
+                "exact_count": 1,
+                "avg_latency_ms": 200.0,
+                "avg_ttft_ms": 50.0,
+            }
+        ]
+        html = render_models(models=models, period="24h")
+        for label in ("Model", "Provider", "Requests", "Cost", "Exactness"):
+            assert self._th(label) in html
+        for label in ("Errors", "Total tokens", "Avg latency", "TPS"):
+            assert self._th(label, priority=2) in html
+        for label in ("Est. cost", "Cache R", "Cache W", "Reasoning"):
+            assert self._th(label, priority=3) in html
+
+    def test_traces_table_priority_breakdown(self) -> None:
+        traces = [
+            {
+                "started_at": "2024-01-01 12:00:00",
+                "account_name": "acct_a",
+                "provider_id": "openai",
+                "model_id": "gpt-x",
+                "protocol": "openai_chat",
+                "status": "ok",
+                "status_code": 200,
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "upstream_latency_ms": 200.0,
+                "proxy_request_id": "abc123def456",
+            }
+        ]
+        html = render_traces(
+            period="24h",
+            limit=10,
+            recent_requests=traces,
+        )
+        for label in ("Time", "Account", "Model", "Status", "Latency"):
+            assert self._th(label) in html
+        for label in ("Provider", "Protocol", "In", "Out"):
+            assert self._th(label, priority=2) in html
+        assert self._th("ID", priority=3) in html
+
+    def test_pings_table_priority_breakdown(self) -> None:
+        pings = [
+            {
+                "provider_id": "openai",
+                "account_name": "acct_a",
+                "probed_at": "2024-01-01 12:00:00",
+                "latency_ms": 200.0,
+                "status_code": 200,
+                "model_count": 5,
+                "error": None,
+            }
+        ]
+        html = render_pings(ping_summary=[], recent_pings=pings, period="24h")
+        for label in ("Provider", "Time", "Latency", "Status"):
+            assert self._th(label) in html
+        for label in ("Account", "Models"):
+            assert self._th(label, priority=2) in html
+        assert self._th("Error", priority=3) in html
+
+
+class TestChartWrap:
+    """Chart.js canvases must sit inside a `.chart-wrap` div.
+
+    `.chart-wrap { position: relative; width: 100% }` is the responsive
+    container for all Chart.js canvases. Inline-style wrappers with
+    `position: relative` are a regression because they create a fixed
+    width that escapes the panel scroll behaviour.
+    """
+
+    def test_timeseries_chart_uses_chart_wrap(self) -> None:
+        html = render_overview(
+            overview={
+                "summary": {"total_requests": 0},
+                "imbalance": {"imbalance_ratio": 0.0},
+            },
+            accounts=[],
+            timeseries=[{"bucket": "2024-01-01 12:00:00", "request_count": 3}],
+        )
+        assert 'class="chart-wrap"' in html
+        assert 'id="timeseries-chart"' in html
+        # No inline `position: relative;` should remain
+        assert "position: relative" not in html
