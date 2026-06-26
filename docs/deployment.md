@@ -110,6 +110,15 @@ archives every 24 hours with count-based retention (default 14). Backups
 use `sqlite3.Connection.backup()` for consistent snapshots and atomic
 archive publication.
 
+The default backup directory depends on the installation type:
+
+- **Production** (`/var/lib/eggpool` exists): `/var/lib/eggpool/backups`
+- **Personal**: `~/backups/eggpool/` (or `$XDG_BACKUP_HOME/eggpool`)
+
+The production systemd unit grants write access to both `/var/lib/eggpool`
+and `/var/lib/eggpool/backups`, so automatic backups work out of the box.
+Override with `[backup].directory` if needed.
+
 The `eggpool deploy backup-cron` path remains available for operators
 who prefer external scheduling or want backups even when the server
 process is not running:
@@ -166,6 +175,11 @@ instance, then spawns a detached child and returns promptly. See
 
 EggPool creates automatic daily backups by default under the
 `automatic_backup` supervised task. No additional setup is required.
+
+In production, backups are written to `/var/lib/eggpool/backups` (the
+systemd unit grants write access to this directory). For personal
+installs, the default is `~/backups/eggpool/`. Override with
+`[backup].directory` if needed.
 
 If you prefer external cron-based scheduling (e.g. backups when the
 server is not running), install the backup cron separately:

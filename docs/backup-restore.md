@@ -18,6 +18,11 @@ startup_delay_s = 300      # wait 5 min after boot before first backup
 include_env = true         # include .env file (may contain API keys)
 ```
 
+The default backup directory depends on the installation type:
+
+- **Production** (`/var/lib/eggpool` exists): `/var/lib/eggpool/backups`
+- **Personal**: `~/backups/eggpool/` (or `$XDG_BACKUP_HOME/eggpool`)
+
 The automatic task uses `sqlite3.Connection.backup()` for consistent
 snapshots and writes archives atomically (write-to-temp + rename).
 No external `sqlite3` binary is required.

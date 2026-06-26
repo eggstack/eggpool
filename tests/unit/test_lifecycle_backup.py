@@ -70,9 +70,36 @@ class TestDefaultBackupDir:
         monkeypatch.setenv("XDG_BACKUP_HOME", "/custom/backup/root")
         assert default_backup_dir() == Path("/custom/backup/root/eggpool")
 
-    def test_falls_back_to_home_backups(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Without XDG, falls back to ~/backups/eggpool."""
+    def test_uses_production_data_dir(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Production /var/lib/eggpool uses backups/ subdirectory."""
         monkeypatch.delenv("XDG_BACKUP_HOME", raising=False)
+        prod_dir = tmp_path / "var" / "lib" / "eggpool"
+        prod_dir.mkdir(parents=True)
+
+        original_is_dir = Path.is_dir
+
+        def fake_is_dir(self: Path) -> bool:
+            if str(self) == "/var/lib/eggpool":
+                return True
+            return original_is_dir(self)
+
+        monkeypatch.setattr(Path, "is_dir", fake_is_dir)
+        result = default_backup_dir()
+        assert result == Path("/var/lib/eggpool/backups")
+
+    def test_falls_back_to_home_backups(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Without XDG and without production dir, falls back to ~/backups/eggpool."""
+        monkeypatch.delenv("XDG_BACKUP_HOME", raising=False)
+        original_is_dir = Path.is_dir
+
+        def fake_is_dir(self: Path) -> bool:
+            if self == Path("/var/lib/eggpool"):
+                return False
+            return original_is_dir(self)
+
+        monkeypatch.setattr(Path, "is_dir", fake_is_dir)
         assert default_backup_dir() == Path.home() / "backups" / "eggpool"
 
 

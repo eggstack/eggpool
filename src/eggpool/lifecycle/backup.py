@@ -54,13 +54,20 @@ META_BASENAME = "META"
 def default_backup_dir() -> Path:
     """Return the default directory in which backups are stored.
 
-    Uses ``$XDG_BACKUP_HOME/eggpool`` when set, otherwise
-    ``$HOME/backups/eggpool`` (matching the existing ``deploy cron``
-    convention for personal-use installs).
+    Uses ``$XDG_BACKUP_HOME/eggpool`` when set, otherwise checks for
+    a production data directory at ``/var/lib/eggpool`` and uses its
+    ``backups/`` subdirectory. Falls back to ``$HOME/backups/eggpool``
+    for personal-use installs.
+
+    This ensures automatic backups are compatible with the production
+    systemd hardening (``ProtectHome=yes`` + ``ReadWritePaths``).
     """
     xdg = os.environ.get("XDG_BACKUP_HOME", "")
     if xdg:
         return Path(xdg) / "eggpool"
+    prod_data = Path("/var/lib/eggpool")
+    if prod_data.is_dir():
+        return prod_data / "backups"
     return Path.home() / "backups" / "eggpool"
 
 
