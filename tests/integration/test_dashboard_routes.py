@@ -141,6 +141,8 @@ async def test_overview_loads_chart_js_with_defer(
 @pytest.mark.asyncio()
 async def test_reliability_route_loads(migrated_app: FastAPI) -> None:
     """The Reliability page returns 200 and pulls in Chart.js."""
+    import re
+
     from fastapi.testclient import TestClient
 
     client = TestClient(migrated_app)
@@ -148,11 +150,25 @@ async def test_reliability_route_loads(migrated_app: FastAPI) -> None:
     assert response.status_code == 200
     assert '<script defer src="/static/chart.js"></script>' in response.text
     assert "reliability-attempts-by-provider" in response.text
+    # The chart must be seeded from a JSON data island so deferred
+    # dashboard.js can initialise it after Chart.js has loaded, with no
+    # inline `new Chart(...)` that would race the deferred load.
+    assert (
+        re.search(
+            r'<script type="application/json"\s+class="static-chart-data"\s+'
+            r'data-chart-id="reliability-attempts-by-provider">',
+            response.text,
+        )
+        is not None
+    )
+    assert "new Chart(ctx" not in response.text
 
 
 @pytest.mark.asyncio()
 async def test_routing_route_loads(migrated_app: FastAPI) -> None:
     """The Routing page returns 200 and pulls in Chart.js."""
+    import re
+
     from fastapi.testclient import TestClient
 
     client = TestClient(migrated_app)
@@ -160,6 +176,18 @@ async def test_routing_route_loads(migrated_app: FastAPI) -> None:
     assert response.status_code == 200
     assert '<script defer src="/static/chart.js"></script>' in response.text
     assert "routing-exclusion-taxonomy" in response.text
+    # The chart must be seeded from a JSON data island so deferred
+    # dashboard.js can initialise it after Chart.js has loaded, with no
+    # inline `new Chart(...)` that would race the deferred load.
+    assert (
+        re.search(
+            r'<script type="application/json"\s+class="static-chart-data"\s+'
+            r'data-chart-id="routing-exclusion-taxonomy">',
+            response.text,
+        )
+        is not None
+    )
+    assert "new Chart(ctx" not in response.text
 
 
 @pytest.mark.asyncio()

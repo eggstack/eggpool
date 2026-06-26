@@ -2496,34 +2496,36 @@ def _render_chart_canvas(
     include_chart_js: bool = True,
     height_px: int = 280,
 ) -> str:
-    """Render a Chart.js canvas with an inline initialisation script.
+    """Render a Chart.js canvas with a sibling JSON data island.
 
-    ``include_chart_js`` mirrors the page-level helper flag; the helper
-    always emits the inline script (so the chart renders on first
-    paint), but the caller still decides whether the page's layout
-    pulls in the Chart.js library itself.
+    The chart is seeded from an inlined ``<script type="application/json">``
+    payload (``class="static-chart-data"``) so the deferred
+    ``dashboard.js`` can initialise it after Chart.js has loaded. Emitting
+    an inline ``new Chart(...)`` script would race the deferred
+    ``/static/chart.js`` tag appended at the end of ``<body>`` and leave
+    the canvas empty (``Chart is not defined``).
+
+    ``include_chart_js`` mirrors the page-level helper flag; the caller
+    still decides whether the page's layout pulls in the Chart.js library
+    itself. ``canvas_id_json`` is kept as a local so the data island is
+    self-describing even when the helper is reused across pages.
     """
     del include_chart_js
     canvas_id_json = json.dumps(canvas_id)
-    chart_type_json = json.dumps(chart_type)
+    payload = json.dumps(
+        {
+            "type": chart_type,
+            "labels": json.loads(labels_json),
+            "datasets": json.loads(datasets_json),
+            "options": json.loads(options_json),
+        }
+    )
     return f"""
 <div class="chart-wrap" style="height: {height_px}px;">
   <canvas id="{canvas_id}"></canvas>
 </div>
-<script>
-(() => {{
-  const ctx = document.getElementById({canvas_id_json});
-  if (!ctx) return;
-  new Chart(ctx, {{
-    type: {chart_type_json},
-    data: {{
-      labels: {labels_json},
-      datasets: {datasets_json},
-    }},
-    options: {options_json}
-  }});
-}})();
-</script>
+<script type="application/json" class="static-chart-data"
+        data-chart-id={canvas_id_json}>{payload}</script>
 """
 
 

@@ -533,7 +533,62 @@
     }, 60000);
   };
 
+  namespace.initStaticCharts = function initStaticCharts() {
+    if (typeof window.Chart === "undefined") {
+      console.warn("EggPoolDashboard: Chart.js not loaded");
+      return;
+    }
+    const dataScripts = document.querySelectorAll(
+      "script.static-chart-data[data-chart-id]"
+    );
+    for (let i = 0; i < dataScripts.length; i++) {
+      const script = dataScripts[i];
+      const chartId = script.getAttribute("data-chart-id");
+      if (!chartId) continue;
+      const canvas = document.getElementById(chartId);
+      if (!canvas) {
+        console.warn(
+          "EggPoolDashboard: no canvas found for static chart",
+          chartId
+        );
+        continue;
+      }
+      let payload;
+      try {
+        payload = JSON.parse(script.textContent || "{}");
+      } catch (err) {
+        console.error(
+          "EggPoolDashboard: failed to parse static chart payload",
+          chartId,
+          err
+        );
+        continue;
+      }
+      const chartType = String(payload.type || "bar");
+      const labels = Array.isArray(payload.labels) ? payload.labels : [];
+      const datasets = Array.isArray(payload.datasets) ? payload.datasets : [];
+      const options =
+        payload.options && typeof payload.options === "object"
+          ? payload.options
+          : {};
+      destroyChartOn(canvas);
+      canvas.__eggpoolChart = new window.Chart(canvas, {
+        type: chartType,
+        data: { labels: labels, datasets: datasets },
+        options: options,
+      });
+    }
+  };
+
   function bootstrap() {
+    try {
+      namespace.initStaticCharts();
+    } catch (err) {
+      console.error(
+        "EggPoolDashboard: initStaticCharts failed",
+        err
+      );
+    }
     try {
       namespace.initGroupedTimeseriesCharts();
     } catch (err) {

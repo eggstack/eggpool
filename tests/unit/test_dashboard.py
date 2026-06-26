@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 from html.parser import HTMLParser
 
 from eggpool.dashboard.escape import (
@@ -2077,6 +2079,39 @@ class TestRenderReliability:
         )
         assert 'class="card warning"' in html
 
+    def test_attempts_chart_uses_data_island(self) -> None:
+        """The ``Attempts by provider`` chart must be seeded from an
+        inlined JSON data island, not an inline ``new Chart(...)`` script
+        that would race the deferred Chart.js load and leave the canvas
+        empty (``Chart is not defined``).
+        """
+        html = render_reliability(
+            period="24h",
+            attempt_stats={
+                "total_attempts": 10,
+                "success_attempts": 8,
+                "retry_attempts": 1,
+                "failed_attempts": 1,
+            },
+            retry_distribution=[],
+            pending_health=None,
+            operational_summary=[],
+            recent_operational_events=[],
+            timeseries=[],
+        )
+        assert 'id="reliability-attempts-by-provider"' in html
+        assert (
+            re.search(
+                r'<script type="application/json"\s+class="static-chart-data"\s+'
+                r'data-chart-id="reliability-attempts-by-provider">',
+                html,
+            )
+            is not None
+        )
+        assert "new Chart(" not in html
+        assert "Success" in html
+        assert "Failed" in html
+
 
 class TestRenderRouting:
     """Tests for the Routing page renderer."""
@@ -2166,6 +2201,35 @@ class TestRenderRouting:
         assert "suppressive" in html
         assert "advisory" in html
         assert "unknown" in html
+
+    def test_exclusion_chart_uses_data_island(self) -> None:
+        """The ``Exclusion taxonomy`` doughnut must be seeded from an
+        inlined JSON data island, not an inline ``new Chart(...)`` script
+        that would race the deferred Chart.js load and leave the canvas
+        empty (``Chart is not defined``).
+        """
+        html = render_routing(
+            period="24h",
+            routing_distribution=[],
+            routing_selection_breakdown=[],
+            routing_exclusion_breakdown=[
+                {
+                    "account_name": "alpha",
+                    "reason": "rate_limit_backoff",
+                    "exclusion_count": 5,
+                },
+            ],
+        )
+        assert 'id="routing-exclusion-taxonomy"' in html
+        assert (
+            re.search(
+                r'<script type="application/json"\s+class="static-chart-data"\s+'
+                r'data-chart-id="routing-exclusion-taxonomy">',
+                html,
+            )
+            is not None
+        )
+        assert "new Chart(" not in html
 
 
 class TestRenderTraces:
@@ -2279,6 +2343,15 @@ class TestRenderLatencyExtension:
         assert "latency-phases" in html
         assert "Latency phases" in html
         assert "/static/chart.js" in html
+        assert (
+            re.search(
+                r'<script type="application/json"\s+class="static-chart-data"\s+'
+                r'data-chart-id="latency-phases">',
+                html,
+            )
+            is not None
+        )
+        assert "new Chart(" not in html
 
     def test_no_chart_when_phases_empty(self) -> None:
         html = render_latency(
@@ -2719,3 +2792,60 @@ class TestChartWrap:
         assert 'id="timeseries-chart"' in html
         # No inline `position: relative;` should remain
         assert "position: relative" not in html
+
+
+class TestStaticChartDataIsland:
+    """``_render_chart_canvas`` must defer initialisation to dashboard.js.
+
+    Charts rendered through this helper are loaded with Chart.js via a
+    ``defer`` ``<script>`` at the end of ``<body>``. An inline
+    ``new Chart(...)`` would race that defer and throw
+    ``ReferenceError: Chart is not defined`` on first paint, leaving the
+    canvas empty. The chart payload must instead live in a sibling
+    ``<script type="application/json">`` data island that
+    ``EggPoolDashboard.initStaticCharts`` consumes on ``DOMContentLoaded``.
+    """
+
+    def test_emits_data_island_not_inline_init(self) -> None:
+        from eggpool.dashboard.render import _render_chart_canvas
+
+        labels = json.dumps(["a", "b", "c"])
+        datasets = json.dumps([{"label": "x", "data": [1, 2, 3]}])
+        options = json.dumps({"responsive": True})
+        html = _render_chart_canvas("example-chart", "bar", labels, datasets, options)
+        assert 'id="example-chart"' in html
+        assert (
+            re.search(
+                r'<script type="application/json"\s+'
+                r'class="static-chart-data"\s+'
+                r'data-chart-id="example-chart">',
+                html,
+            )
+            is not None
+        )
+        assert "new Chart(" not in html
+
+    def test_data_island_round_trips_payload(self) -> None:
+        from eggpool.dashboard.render import _render_chart_canvas
+
+        labels = json.dumps(["a", "b", "c"])
+        datasets = json.dumps(
+            [{"label": "x", "data": [1, 2, 3], "backgroundColor": "red"}]
+        )
+        options = json.dumps({"plugins": {"legend": {"display": False}}})
+        html = _render_chart_canvas(
+            "example-chart", "doughnut", labels, datasets, options
+        )
+        match = re.search(
+            r'<script type="application/json"\s+class="static-chart-data"\s+'
+            r'data-chart-id="example-chart">([^<]+)</script>',
+            html,
+        )
+        assert match is not None
+        payload = json.loads(match.group(1))
+        assert payload["type"] == "doughnut"
+        assert payload["labels"] == ["a", "b", "c"]
+        assert payload["datasets"] == [
+            {"label": "x", "data": [1, 2, 3], "backgroundColor": "red"}
+        ]
+        assert payload["options"] == {"plugins": {"legend": {"display": False}}}
