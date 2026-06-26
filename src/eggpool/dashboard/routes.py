@@ -134,7 +134,7 @@ async def handle_overview(
         stats.get_bandwidth_timeseries(heatmap_range, use_cache=True),
         stats.get_ping_summary(time_range, use_cache=True),
         stats.get_ip_stats(time_range, use_cache=True),
-        stats.get_timeseries(time_range, bucket="hour"),
+        stats.get_timeseries(time_range, bucket="hour", use_cache=True),
         stats.get_attempt_stats(time_range),
         stats.get_operational_event_summary(time_range),
         stats.get_pending_health_snapshot(),
@@ -269,7 +269,7 @@ async def handle_reliability(
             stats.get_pending_health_snapshot(),
             stats.get_operational_event_summary(time_range),
             stats.get_recent_operational_events(limit=25),
-            stats.get_timeseries(time_range, bucket="hour"),
+            stats.get_timeseries(time_range, bucket="hour", use_cache=True),
         ),
     )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
@@ -423,6 +423,7 @@ async def handle_timeseries(
                 bucket=bucket,
                 account_name=account or None,
                 model_id=model or None,
+                use_cache=True,
             ),
             stats.get_grouped_timeseries(
                 time_range,
@@ -474,7 +475,7 @@ async def handle_bandwidth(
         time_range, account_name=account or None
     )
     timeseries = await stats.get_timeseries(
-        time_range, bucket=bucket, account_name=account or None
+        time_range, bucket=bucket, account_name=account or None, use_cache=True
     )
     theme_css, heatmap_colors, current_theme, available = _get_theme_data(
         request, theme
@@ -513,6 +514,7 @@ async def handle_timeseries_json(
         bucket=bucket,
         account_name=account or None,
         model_id=model or None,
+        use_cache=True,
     )
     return JSONResponse(content=series or [])
 

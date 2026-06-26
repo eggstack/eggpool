@@ -177,7 +177,10 @@ class TestRenderOverview:
         assert '<script defer src="/static/chart.js"></script>' in html
 
     def test_chart_preloads_inlined_timeseries_data(self) -> None:
-        """The chart script must seed itself from the inlined payload."""
+        """The chart must be seeded from an inlined JSON data island so
+        the deferred dashboard.js can initialise Chart.js without an
+        inline ``new Chart(...)`` script.
+        """
         timeseries = [
             {
                 "bucket": "2024-01-01 12:00:00",
@@ -195,7 +198,8 @@ class TestRenderOverview:
         )
         assert "Request timeseries" in html
         assert '"2024-01-01 12:00:00"' in html
-        assert "/api/timeseries" in html  # refresh URL preserved
+        assert 'id="timeseries-initial-data"' in html
+        assert 'id="timeseries-chart"' in html
 
     def test_escapes_account_name_in_overview(self) -> None:
         html = render_overview(

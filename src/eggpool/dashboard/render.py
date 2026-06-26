@@ -693,88 +693,24 @@ def _render_timeseries_chart(
 ) -> str:
     """Render an interactive timeseries chart using Chart.js.
 
-    When ``initial_data`` is provided, the chart renders immediately with
-    the data already inlined; the script then re-fetches every 60s to
-    pick up new buckets. When ``initial_data`` is ``None`` (or empty)
-    the chart fetches its data on load.
+    The chart is initialised client-side from a sibling JSON data island
+    so that Chart.js (loaded with ``defer``) is available before the
+    canvas is touched. ``window.EggPoolDashboard.reinitTimeseriesChart``
+    consumes the data island and falls back to ``GET /api/timeseries``
+    when no inlined payload is available.
     """
-    initial_json = json.dumps(initial_data or [])
+    payload = list(initial_data or [])
+    payload_json = json.dumps(payload)
+    period_attr = escape_attr(period)
     return f"""
 <section class="panel">
   <h3>Request timeseries</h3>
   <div style="height: 300px; position: relative;">
-    <canvas id="timeseries-chart"></canvas>
+    <canvas id="timeseries-chart" data-period="{period_attr}"></canvas>
   </div>
 </section>
-<script>
-(() => {{
-  const period = {json.dumps(period)};
-  const initialData = {initial_json};
-  const ctx = document.getElementById('timeseries-chart');
-  if (!ctx) return;
-
-  const labels0 = initialData.map(d => d.bucket);
-  const requests0 = initialData.map(d => d.request_count || 0);
-  const errors0 = initialData.map(d => d.error_count || 0);
-
-  const chart = new Chart(ctx, {{
-    type: 'line',
-    data: {{
-      labels: labels0,
-      datasets: [
-        {{
-          label: 'Requests',
-          data: requests0,
-          borderColor: 'rgb(75, 192, 192)',
-          tension: 0.1
-        }},
-        {{
-          label: 'Errors',
-          data: errors0,
-          borderColor: 'rgb(255, 99, 132)',
-          tension: 0.1
-        }}
-      ]
-    }},
-    options: {{
-      responsive: true,
-      maintainAspectRatio: false,
-      scales: {{
-        x: {{
-          title: {{
-            display: true,
-            text: 'Time'
-          }}
-        }},
-        y: {{
-          title: {{
-            display: true,
-            text: 'Count'
-          }},
-          beginAtZero: true
-        }}
-      }}
-    }}
-  }});
-
-  async function loadData() {{
-    try {{
-      const response = await fetch('/api/timeseries?period=' + period);
-      if (!response.ok) return;
-      const data = await response.json();
-
-      chart.data.labels = data.map(d => d.bucket);
-      chart.data.datasets[0].data = data.map(d => d.request_count || 0);
-      chart.data.datasets[1].data = data.map(d => d.error_count || 0);
-      chart.update();
-    }} catch (err) {{
-      console.error('Failed to load timeseries data:', err);
-    }}
-  }}
-
-  window.setInterval(loadData, 60000);
-}})();
-</script>
+<script type="application/json" id="timeseries-initial-data"
+        data-period="{period_attr}">{payload_json}</script>
 """
 
 

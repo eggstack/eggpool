@@ -433,19 +433,30 @@ class StatsService:
         bucket: str = "hour",
         account_name: str | None = None,
         model_id: str | None = None,
+        *,
+        use_cache: bool = False,
     ) -> list[dict[str, Any]] | None:
         """Get time-bucketed time series data.
 
         Returns None when an account filter was provided but the account
         was not found in the database.
         """
+        key = self._dashboard_cache_key(
+            "timeseries",
+            time_range,
+            bucket,
+            account_name or "",
+            model_id or "",
+        )
+        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
+            return cast("list[dict[str, Any]]", cached)
         account_id: int | None = None
         if account_name is not None and account_name != "":
             account_id = await fetch_account_id(self._db, account_name)
             if account_id is None:
                 return None
         model_filter: str | None = model_id if model_id else None
-        return await fetch_timeseries(
+        result = await fetch_timeseries(
             self._db,
             time_range.start_str(),
             time_range.end_str(),
@@ -453,6 +464,9 @@ class StatsService:
             account_id=account_id,
             model_id=model_filter,
         )
+        if use_cache:
+            self._set_dashboard_cache(key, result)
+        return result
 
     async def get_bandwidth_timeseries(
         self,

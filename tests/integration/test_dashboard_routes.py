@@ -228,11 +228,11 @@ async def test_overview_inlines_timeseries_data(
     assert response.status_code == 200
     body = response.text
     assert "Request timeseries" in body
-    # Chart still polls /api/timeseries for updates every 60s.
-    assert "/api/timeseries" in body
-    # ``initialData`` must be present in the chart script so the chart
-    # can render before any background fetch resolves.
-    assert "initialData" in body
+    # The chart must be seeded from a JSON data island so the canvas can
+    # be initialised by deferred dashboard.js after Chart.js has loaded,
+    # without depending on the legacy inline ``new Chart(...)`` script.
+    assert 'id="timeseries-initial-data"' in body
+    assert 'id="timeseries-chart"' in body
 
 
 @pytest.mark.asyncio()

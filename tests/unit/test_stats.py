@@ -143,9 +143,9 @@ class TestFetchSummary:
         result = await queries.fetch_summary(
             seeded_db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
         )
-        total_tokens = 3 * (100 + 200) + 2 * (50 + 75)
+        total_output_tokens = 3 * 200 + 2 * 75
         total_latency_ms = 3 * 150.0 + 2 * 300.0
-        expected = total_tokens * 1000.0 / total_latency_ms
+        expected = total_output_tokens * 1000.0 / total_latency_ms
         assert result["tokens_per_second"] == pytest.approx(expected)
 
     @pytest.mark.asyncio()
@@ -204,17 +204,19 @@ class TestFetchAccountStats:
         by_name = {r["account_name"]: r for r in rows}
         # acct_a: 3 completed, 100 in / 200 out, 150ms latency each
         a_total = 3 * (100 + 200)
+        a_output = 3 * 200
         a_latency_ms = 3 * 150.0
         assert by_name["acct_a"]["total_tokens"] == a_total
         assert by_name["acct_a"]["tokens_per_second"] == pytest.approx(
-            a_total * 1000.0 / a_latency_ms
+            a_output * 1000.0 / a_latency_ms
         )
         # acct_b: 2 error, 50 in / 75 out, 300ms latency each
         b_total = 2 * (50 + 75)
+        b_output = 2 * 75
         b_latency_ms = 2 * 300.0
         assert by_name["acct_b"]["total_tokens"] == b_total
         assert by_name["acct_b"]["tokens_per_second"] == pytest.approx(
-            b_total * 1000.0 / b_latency_ms
+            b_output * 1000.0 / b_latency_ms
         )
 
     @pytest.mark.asyncio()
@@ -281,16 +283,18 @@ class TestFetchModelStats:
         )
         by_model = {r["model_id"]: r for r in rows}
         x_total = 3 * (100 + 200)
+        x_output = 3 * 200
         x_latency = 3 * 150.0
         assert by_model["model_x"]["total_tokens"] == x_total
         assert by_model["model_x"]["tokens_per_second"] == pytest.approx(
-            x_total * 1000.0 / x_latency
+            x_output * 1000.0 / x_latency
         )
         y_total = 2 * (50 + 75)
+        y_output = 2 * 75
         y_latency = 2 * 300.0
         assert by_model["model_y"]["total_tokens"] == y_total
         assert by_model["model_y"]["tokens_per_second"] == pytest.approx(
-            y_total * 1000.0 / y_latency
+            y_output * 1000.0 / y_latency
         )
 
 
@@ -1259,6 +1263,45 @@ class TestDashboardStatsCache:
 
         assert second is first
         fetch.assert_awaited_once()
+
+    @pytest.mark.asyncio()
+    async def test_timeseries_cache_serves_repeated_lookups(self, db: Database) -> None:
+        """``get_timeseries`` participates in the dashboard cache when opted in."""
+        service = StatsService(db)
+        time_range = TimeRange(
+            start=datetime(2025, 1, 1, tzinfo=UTC),
+            end=datetime(2025, 1, 2, tzinfo=UTC),
+            label="24h",
+        )
+
+        with patch(
+            "eggpool.stats.service.fetch_timeseries",
+            new=AsyncMock(return_value=[{"bucket": "2025-01-01 00:00"}]),
+        ) as fetch:
+            first = await service.get_timeseries(time_range, use_cache=True)
+            second = await service.get_timeseries(time_range, use_cache=True)
+
+        assert second is first
+        fetch.assert_awaited_once()
+
+    @pytest.mark.asyncio()
+    async def test_timeseries_cache_bypassed_when_disabled(self, db: Database) -> None:
+        """``get_timeseries`` hits SQLite on every call when ``use_cache`` is off."""
+        service = StatsService(db)
+        time_range = TimeRange(
+            start=datetime(2025, 1, 1, tzinfo=UTC),
+            end=datetime(2025, 1, 2, tzinfo=UTC),
+            label="24h",
+        )
+
+        with patch(
+            "eggpool.stats.service.fetch_timeseries",
+            new=AsyncMock(return_value=[{"bucket": "2025-01-01 00:00"}]),
+        ) as fetch:
+            await service.get_timeseries(time_range)
+            await service.get_timeseries(time_range)
+
+        assert fetch.await_count == 2
 
     @pytest.mark.asyncio()
     async def test_ping_summary_cache(self, db: Database) -> None:

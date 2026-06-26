@@ -391,70 +391,146 @@
   };
 
   namespace.reinitTimeseriesChart = function reinitTimeseriesChart() {
-    const ctx = document.getElementById("timeseries-chart");
-    if (!ctx) return;
+    const canvas = document.getElementById("timeseries-chart");
+    if (!canvas) return;
     if (typeof window.Chart === "undefined") return;
 
-    destroyChartOn(ctx);
+    destroyChartOn(canvas);
 
-    const params = new URLSearchParams(window.location.search);
-    const period = params.get("period") || "24h";
-    fetch("/api/timeseries?period=" + encodeURIComponent(period), {
-      cache: "no-store",
-      headers: { "x-dashboard-refresh": "1" },
-    })
-      .then(function (response) {
-        if (!response.ok) {
-          throw new Error("timeseries fetch failed: " + response.status);
-        }
-        return response.json();
-      })
-      .then(function (data) {
-        const rows = Array.isArray(data) ? data : [];
-        const labels = rows.map(function (d) {
-          return d.bucket;
-        });
-        const requests = rows.map(function (d) {
-          return Number(d.request_count || 0);
-        });
-        const errors = rows.map(function (d) {
-          return Number(d.error_count || 0);
-        });
-        ctx.__eggpoolChart = new window.Chart(ctx, {
-          type: "line",
-          data: {
-            labels: labels,
-            datasets: [
-              {
-                label: "Requests",
-                data: requests,
-                borderColor: "rgb(75, 192, 192)",
-                tension: 0.1,
-              },
-              {
-                label: "Errors",
-                data: errors,
-                borderColor: "rgb(255, 99, 132)",
-                tension: 0.1,
-              },
-            ],
-          },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-              x: { title: { display: true, text: "Time" } },
-              y: {
-                title: { display: true, text: "Count" },
-                beginAtZero: true,
-              },
+    function periodForFetch() {
+      const fromCanvas =
+        (canvas && canvas.getAttribute("data-period")) || "";
+      const fromScript = document
+        .getElementById("timeseries-initial-data")
+        ?.getAttribute("data-period");
+      const fromUrl =
+        new URLSearchParams(window.location.search).get("period") || "";
+      return fromCanvas || fromScript || fromUrl || "24h";
+    }
+
+    function renderRows(rows) {
+      const list = Array.isArray(rows) ? rows : [];
+      const labels = list.map(function (d) {
+        return d.bucket;
+      });
+      const requests = list.map(function (d) {
+        return Number(d.request_count || 0);
+      });
+      const errors = list.map(function (d) {
+        return Number(d.error_count || 0);
+      });
+      destroyChartOn(canvas);
+      canvas.__eggpoolChart = new window.Chart(canvas, {
+        type: "line",
+        data: {
+          labels: labels,
+          datasets: [
+            {
+              label: "Requests",
+              data: requests,
+              borderColor: "rgb(75, 192, 192)",
+              tension: 0.1,
+            },
+            {
+              label: "Errors",
+              data: errors,
+              borderColor: "rgb(255, 99, 132)",
+              tension: 0.1,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            x: { title: { display: true, text: "Time" } },
+            y: {
+              title: { display: true, text: "Count" },
+              beginAtZero: true,
             },
           },
-        });
-      })
-      .catch(function (err) {
-        console.error("Failed to load timeseries:", err);
+        },
       });
+    }
+
+    const dataScript = document.getElementById("timeseries-initial-data");
+    let inlineRows = null;
+    if (dataScript && dataScript.textContent) {
+      try {
+        const parsed = JSON.parse(dataScript.textContent);
+        if (Array.isArray(parsed)) {
+          inlineRows = parsed;
+        }
+      } catch (err) {
+        console.error(
+          "EggPoolDashboard: failed to parse timeseries payload",
+          err
+        );
+      }
+    }
+
+    if (inlineRows !== null) {
+      renderRows(inlineRows);
+    } else {
+      const period = periodForFetch();
+      fetch("/api/timeseries?period=" + encodeURIComponent(period), {
+        cache: "no-store",
+        headers: { "x-dashboard-refresh": "1" },
+      })
+        .then(function (response) {
+          if (!response.ok) {
+            throw new Error("timeseries fetch failed: " + response.status);
+          }
+          return response.json();
+        })
+        .then(function (data) {
+          renderRows(data);
+        })
+        .catch(function (err) {
+          console.error("Failed to load timeseries:", err);
+        });
+    }
+
+    // Re-arm the in-place 60s refresh that the original inline IIFE
+    // registered. Cleared and re-registered on each reinit so successive
+    // auto-refresh ticks do not stack intervals on the same canvas.
+    if (canvas.__eggpoolRefreshHandle) {
+      window.clearInterval(canvas.__eggpoolRefreshHandle);
+      canvas.__eggpoolRefreshHandle = null;
+    }
+    canvas.__eggpoolRefreshHandle = window.setInterval(function () {
+      const period = periodForFetch();
+      fetch("/api/timeseries?period=" + encodeURIComponent(period), {
+        cache: "no-store",
+        headers: { "x-dashboard-refresh": "1" },
+      })
+        .then(function (response) {
+          if (!response.ok) {
+            throw new Error("timeseries fetch failed: " + response.status);
+          }
+          return response.json();
+        })
+        .then(function (data) {
+          if (!canvas.__eggpoolChart) return;
+          const list = Array.isArray(data) ? data : [];
+          const labels = list.map(function (d) {
+            return d.bucket;
+          });
+          const requests = list.map(function (d) {
+            return Number(d.request_count || 0);
+          });
+          const errors = list.map(function (d) {
+            return Number(d.error_count || 0);
+          });
+          canvas.__eggpoolChart.data.labels = labels;
+          canvas.__eggpoolChart.data.datasets[0].data = requests;
+          canvas.__eggpoolChart.data.datasets[1].data = errors;
+          canvas.__eggpoolChart.update();
+        })
+        .catch(function (err) {
+          console.error("Failed to refresh timeseries:", err);
+        });
+    }, 60000);
   };
 
   function bootstrap() {
@@ -465,6 +541,13 @@
         "EggPoolDashboard: initGroupedTimeseriesCharts failed",
         err
       );
+    }
+    try {
+      if (document.getElementById("timeseries-chart")) {
+        namespace.reinitTimeseriesChart();
+      }
+    } catch (err) {
+      console.error("EggPoolDashboard: reinitTimeseriesChart failed", err);
     }
   }
 
