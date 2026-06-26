@@ -429,7 +429,12 @@ td.no { color: var(--color-error); font-weight: 600; }
 }
 
 /* Transparent overlay grid that mirrors the SVG cell layout. Its sole
-   purpose is hover detection and tooltip anchoring. */
+   purpose is hover detection and tooltip anchoring.
+
+   Hitboxes are appended in column-major order (outer loop = week/column,
+   inner loop = day-of-week/row), matching the SVG's (x, y) coords, so the
+   grid must auto-flow by column. Default row-flow would transpose rows and
+   columns and mis-anchor every tooltip. */
 .heatmap-overlay {
   position: absolute;
   top: 20px;
@@ -437,6 +442,7 @@ td.no { color: var(--color-error); font-weight: 600; }
   display: grid;
   grid-template-columns: repeat(13, 13px);
   grid-template-rows: repeat(7, 13px);
+  grid-auto-flow: column;
   gap: 3px;
 }
 

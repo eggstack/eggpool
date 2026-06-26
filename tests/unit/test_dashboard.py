@@ -1900,6 +1900,14 @@ class TestTooltipStylesheet:
         assert "repeat(13, 13px)" in css
         assert "repeat(7, 13px)" in css
 
+    def test_heatmap_overlay_uses_column_auto_flow(self) -> None:
+        """Hitboxes are appended in column-major order (outer loop = week,
+        inner loop = day-of-week) so the overlay grid must flow by column;
+        otherwise the rows/columns get transposed and tooltips misfire."""
+        css = self._load_css()
+        assert ".heatmap-overlay" in css
+        assert "grid-auto-flow: column" in css
+
     def test_tooltip_pointer_events_none(self) -> None:
         css = self._load_css()
         assert "pointer-events: none" in css
