@@ -366,6 +366,7 @@ See `config.example.toml` for all available options.
 - `[security]` — Allowed hosts, CORS, header redaction
 - `[providers.*]` — Provider configurations with accounts and `routing_priority`
 - `[proxies.*]` — Named outbound proxy definitions (pproxy URI syntax)
+- `[network]` — Outbound client transport tuning and `[network.dns_cache]` for in-memory DNS caching (enabled by default; reduces connection latency for repeated upstream requests)
 - `[model_overrides.*]` — Per-model protocol or path overrides
 
 ### Provider Configuration

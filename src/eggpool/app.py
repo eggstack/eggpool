@@ -64,7 +64,8 @@ from eggpool.metrics.buffer import MetricsWriteCoalescer
 from eggpool.models.api import HealthResponse
 from eggpool.models.config import AppConfig
 from eggpool.providers.client_pool import ProviderClientPool
-from eggpool.providers.outbound import OutboundClientManager
+from eggpool.providers.dns_cache import DnsNetworkBackend
+from eggpool.providers.outbound import OutboundClientManager, default_network_backend
 from eggpool.request.coordinator import RequestCoordinator
 from eggpool.routing.router import Router
 from eggpool.stats import StatsService
@@ -72,6 +73,7 @@ from eggpool.stats import StatsService
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
+    import httpcore
     from starlette.requests import Request as StarletteRequest
 
     from eggpool.quota.estimation import QuotaEstimator
@@ -549,7 +551,15 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     ping_repo = PingRepository(db)
 
     # 7. HTTPX client pool
-    client_pool = ProviderClientPool.from_app_config(config)
+    dns_backend: httpcore.AsyncNetworkBackend | None = None
+    if config.network.dns_cache.enabled:
+        dns_backend = DnsNetworkBackend(
+            config.network.dns_cache, default_network_backend()
+        )
+        app.state.dns_backend = dns_backend
+    client_pool = ProviderClientPool.from_app_config(
+        config, network_backend=dns_backend
+    )
     app.state.client_pool = client_pool
     # Keep backward-compatible alias during transition
     legacy_client = client_pool.get_default_client()
@@ -557,7 +567,9 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         app.state.httpx_client = legacy_client
 
     # 7b. Outbound client manager (shared client for background/CLI network paths)
-    outbound_manager = OutboundClientManager(config=config.network)
+    outbound_manager = OutboundClientManager(
+        config=config.network, network_backend=dns_backend
+    )
     app.state.outbound_manager = outbound_manager
     # Pre-initialize the shared client so it's ready for catalog resolvers
     outbound_client = await outbound_manager.get_client()
@@ -805,6 +817,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         started_epoch=app.state.started_epoch,
         metrics_coalescer=metrics_coalescer,
         outbound_manager=outbound_manager,
+        dns_backend=dns_backend,
     )
 
     # Register catalog refresh task

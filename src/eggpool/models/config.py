@@ -618,6 +618,23 @@ class ModelOverrideConfig(ModelLimitOverrideConfig):
         return parse_microdollars_per_million(value)
 
 
+class DnsCacheConfig(BaseModel):
+    """Bounded in-memory DNS cache settings.
+
+    Reduces repeated resolver queries for the small set of
+    hostnames eggpool connects to, with conservative TTL bounds
+    and stale-if-error fallback.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    max_entries: int = Field(default=50, ge=1)
+    positive_ttl_seconds: int = Field(default=300, gt=0)
+    negative_ttl_seconds: int = Field(default=30, gt=0)
+    stale_if_error_seconds: int = Field(default=3600, ge=0)
+
+
 class NetworkConfig(BaseModel):
     """Outbound HTTP client transport settings for background/CLI paths.
 
@@ -634,6 +651,7 @@ class NetworkConfig(BaseModel):
     max_connections: int = Field(default=10, gt=0)
     max_keepalive: int = Field(default=4, gt=0)
     keepalive_expiry_s: float = Field(default=90.0, ge=0)
+    dns_cache: DnsCacheConfig = Field(default_factory=DnsCacheConfig)
 
     @model_validator(mode="after")
     def validate_keepalive(self) -> NetworkConfig:
@@ -677,6 +695,7 @@ class AppConfig(BaseModel):
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     metrics: MetricsConfig = Field(default_factory=MetricsConfig)
     backup: BackupConfig = Field(default_factory=BackupConfig)
+    dns_cache: DnsCacheConfig = Field(default_factory=DnsCacheConfig)
     network: NetworkConfig = Field(default_factory=NetworkConfig)
     proxies: dict[str, ProxyConfig] = Field(default_factory=dict)
     accounts: list[AccountConfig] = Field(default_factory=list[AccountConfig])

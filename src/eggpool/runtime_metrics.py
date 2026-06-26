@@ -92,6 +92,7 @@ class RuntimeMetricsService:
         started_epoch: float,
         metrics_coalescer: Any | None = None,  # noqa: ANN401
         outbound_manager: Any | None = None,  # noqa: ANN401
+        dns_backend: Any | None = None,  # noqa: ANN401
     ) -> None:
         self._config = config
         self._db = db
@@ -104,6 +105,7 @@ class RuntimeMetricsService:
         self._started_epoch = started_epoch
         self._metrics_coalescer = metrics_coalescer
         self._outbound_manager = outbound_manager
+        self._dns_backend = dns_backend
 
     async def snapshot(self) -> dict[str, Any]:
         """Return a best-effort runtime snapshot.
@@ -141,6 +143,9 @@ class RuntimeMetricsService:
 
         # Outbound client manager health
         result["outbound_client"] = self._snapshot_outbound_client(probe_errors)
+
+        # DNS cache health
+        result["dns_cache"] = self._snapshot_dns_cache(probe_errors)
 
         return result
 
@@ -537,6 +542,18 @@ class RuntimeMetricsService:
         except Exception as exc:
             probe_errors.append(
                 _truncate_probe_error(f"Outbound client snapshot failed: {exc}")
+            )
+            return {"error": str(exc)}
+
+    def _snapshot_dns_cache(self, probe_errors: list[str]) -> dict[str, Any]:
+        """Best-effort snapshot of the DNS cache state."""
+        if self._dns_backend is None:
+            return {"enabled": False}
+        try:
+            return {"enabled": True, **self._dns_backend.cache.snapshot()}
+        except Exception as exc:
+            probe_errors.append(
+                _truncate_probe_error(f"DNS cache snapshot failed: {exc}")
             )
             return {"error": str(exc)}
 

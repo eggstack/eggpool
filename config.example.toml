@@ -63,6 +63,22 @@ five_hour_microdollars = 12000000
 weekly_microdollars = 30000000
 monthly_microdollars = 60000000
 
+# ─── Network ─────────────────────────────────────────────────────────
+# Outbound client transport tuning and DNS caching. The DNS cache wraps
+# the default httpcore transport to cache resolved DNS entries in memory,
+# reducing latency for repeated connections to the same upstream hosts.
+# [network]
+# connect_timeout_s = 5
+# read_timeout_s = 300
+# max_connections = 100
+# max_keepalive = 20
+# keepalive_expiry_s = 30
+#
+# [network.dns_cache]
+# enabled = true              # enable in-memory DNS cache (default: true)
+# ttl_s = 300                 # cache entry lifetime in seconds (default: 300)
+# max_size = 256              # max cached DNS entries (default: 256)
+
 [dashboard]
 enabled = true
 public = true

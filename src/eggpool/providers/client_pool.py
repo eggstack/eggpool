@@ -5,10 +5,12 @@ from __future__ import annotations
 import contextlib
 from typing import TYPE_CHECKING
 
+import httpcore
 import httpx
 
 from eggpool.constants import DEFAULT_PROVIDER_ID
 from eggpool.errors import UpstreamError
+from eggpool.providers.outbound import HttpcoreTransport
 from eggpool.providers.pproxy_transport import AsyncPProxyTransport
 
 if TYPE_CHECKING:
@@ -78,18 +80,28 @@ class ProviderClientPool:
                     await client.aclose()
 
     @classmethod
-    def from_config(cls, providers: dict[str, ProviderConfig]) -> ProviderClientPool:
+    def from_config(
+        cls,
+        providers: dict[str, ProviderConfig],
+        *,
+        network_backend: httpcore.AsyncNetworkBackend | None = None,
+    ) -> ProviderClientPool:
         """Create a client pool from provider configurations."""
         pool = cls()
         for provider_id, cfg in providers.items():
-            client = _build_client(cfg)
+            client = _build_client(cfg, network_backend=network_backend)
             pool.register(provider_id, client)
         return pool
 
     @classmethod
-    def from_app_config(cls, config: AppConfig) -> ProviderClientPool:
+    def from_app_config(
+        cls,
+        config: AppConfig,
+        *,
+        network_backend: httpcore.AsyncNetworkBackend | None = None,
+    ) -> ProviderClientPool:
         """Create a client pool from full app config, including account proxies."""
-        pool = cls.from_config(config.providers)
+        pool = cls.from_config(config.providers, network_backend=network_backend)
         for provider_id, cfg in config.providers.items():
             for account in cfg.accounts:
                 proxy_url = config.resolve_account_proxy_url(account)
@@ -106,6 +118,8 @@ class ProviderClientPool:
 def _build_client(
     cfg: ProviderConfig,
     proxy_url: str | None = None,
+    *,
+    network_backend: httpcore.AsyncNetworkBackend | None = None,
 ) -> httpx.AsyncClient:
     """Build an HTTPX client with provider timeouts and optional proxy."""
     limits = httpx.Limits(
@@ -118,6 +132,14 @@ def _build_client(
         if proxy_url is not None
         else None
     )
+    if transport is None and network_backend is not None:
+        pool = httpcore.AsyncConnectionPool(
+            max_connections=cfg.max_connections,
+            max_keepalive_connections=cfg.max_keepalive,
+            keepalive_expiry=cfg.keepalive_timeout_s,
+            network_backend=network_backend,
+        )
+        transport = HttpcoreTransport(pool)
     return httpx.AsyncClient(
         base_url=cfg.base_url,
         timeout=httpx.Timeout(
