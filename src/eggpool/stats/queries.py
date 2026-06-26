@@ -1015,19 +1015,25 @@ def _build_summary(row: dict[str, Any]) -> dict[str, Any]:
     total = int(row.get("total_requests", 0))
     errors = int(row.get("error_requests", 0))
     error_rate = (errors / total) if total > 0 else 0.0
+    total_input_tokens = int(row.get("total_input_tokens", 0))
+    total_cache_read_tokens = int(row.get("total_cache_read_tokens", 0))
+    cache_read_ratio = (
+        total_cache_read_tokens / total_input_tokens if total_input_tokens > 0 else None
+    )
     return {
         "total_requests": total,
         "successful_requests": int(row.get("successful_requests", 0)),
         "error_requests": errors,
         "error_rate": error_rate,
-        "total_input_tokens": int(row.get("total_input_tokens", 0)),
+        "total_input_tokens": total_input_tokens,
         "total_output_tokens": int(row.get("total_output_tokens", 0)),
         "total_tokens": int(row.get("total_tokens", 0)),
         "total_cost_microdollars": int(row.get("total_cost_microdollars", 0)),
         "avg_latency_ms": float(row.get("avg_latency_ms", 0.0)),
-        "total_cache_read_tokens": int(row.get("total_cache_read_tokens", 0)),
+        "total_cache_read_tokens": total_cache_read_tokens,
         "total_cache_write_tokens": int(row.get("total_cache_write_tokens", 0)),
         "total_reasoning_tokens": int(row.get("total_reasoning_tokens", 0)),
+        "cache_read_ratio": cache_read_ratio,
         "streamed_requests": int(row.get("streamed_requests", 0)),
         "non_streamed_requests": int(row.get("non_streamed_requests", 0)),
         "exact_count": int(row.get("exact_count", 0)),
@@ -1058,6 +1064,7 @@ def _empty_summary() -> dict[str, Any]:
         "total_cache_read_tokens": 0,
         "total_cache_write_tokens": 0,
         "total_reasoning_tokens": 0,
+        "cache_read_ratio": None,
         "streamed_requests": 0,
         "non_streamed_requests": 0,
         "exact_count": 0,

@@ -429,6 +429,112 @@ class TestRenderOverview:
         assert "<detail>" not in html
         assert "&lt;detail&gt;" in html
 
+    def test_overview_total_tokens_card_renders(self) -> None:
+        """A 'Total tokens' card surfaces Σtokens across all providers near the top."""
+        html = render_overview(
+            overview={
+                "summary": {
+                    "total_requests": 2,
+                    "successful_requests": 2,
+                    "error_requests": 0,
+                    "error_rate": 0.0,
+                    "total_input_tokens": 1000,
+                    "total_output_tokens": 2500,
+                    "total_tokens": 3500,
+                    "total_cache_read_tokens": 250,
+                    "total_cache_write_tokens": 0,
+                    "total_reasoning_tokens": 0,
+                    "total_cost_microdollars": 0,
+                    "avg_latency_ms": 50.0,
+                },
+                "imbalance": {
+                    "imbalance_ratio": 0.0,
+                    "active_accounts": 1,
+                    "most_used": None,
+                    "least_used": None,
+                },
+            },
+            accounts=[],
+        )
+        assert ">Total tokens<" in html
+        total_tok_card_idx = html.index(">Total tokens<")
+        cache_card_idx = html.index(">Cache tokens<")
+        assert total_tok_card_idx < cache_card_idx
+        # Total tokens = 3500 → format_tokens → "3,500" (exact formatting
+        # below 1M). The metric line of the new card carries the total.
+        assert ">3,500</p>" in html
+        # The new card's sub-line mirrors input/output (total now sits on the
+        # metric line itself).
+        total_card_section = html[total_tok_card_idx:cache_card_idx]
+        assert "in 1,000" in total_card_section
+        assert "out 2,500" in total_card_section
+
+    def test_overview_cache_tokens_card_shows_percent_of_input(self) -> None:
+        """Cache tokens card sub-line reports cache_read / input as a percent."""
+        html = render_overview(
+            overview={
+                "summary": {
+                    "total_requests": 2,
+                    "successful_requests": 2,
+                    "error_requests": 0,
+                    "error_rate": 0.0,
+                    "total_input_tokens": 1000,
+                    "total_output_tokens": 500,
+                    "total_tokens": 1500,
+                    "total_cache_read_tokens": 250,
+                    "total_cache_write_tokens": 50,
+                    "total_reasoning_tokens": 0,
+                    "total_cost_microdollars": 0,
+                    "avg_latency_ms": 50.0,
+                },
+                "imbalance": {
+                    "imbalance_ratio": 0.0,
+                    "active_accounts": 1,
+                    "most_used": None,
+                    "least_used": None,
+                },
+            },
+            accounts=[],
+        )
+        cache_idx = html.index(">Cache tokens<")
+        next_card_idx = html.index(">Reasoning tokens<")
+        cache_section = html[cache_idx:next_card_idx]
+        assert "25.0% of input" in cache_section
+        # Write token sub-line still renders alongside the percent.
+        assert "write 50" in cache_section
+
+    def test_overview_cache_tokens_percent_dash_when_no_input(self) -> None:
+        """When there are no input tokens the percent collapses to an em-dash."""
+        html = render_overview(
+            overview={
+                "summary": {
+                    "total_requests": 0,
+                    "successful_requests": 0,
+                    "error_requests": 0,
+                    "error_rate": 0.0,
+                    "total_input_tokens": 0,
+                    "total_output_tokens": 0,
+                    "total_tokens": 0,
+                    "total_cache_read_tokens": 0,
+                    "total_cache_write_tokens": 0,
+                    "total_reasoning_tokens": 0,
+                    "total_cost_microdollars": 0,
+                    "avg_latency_ms": 0.0,
+                },
+                "imbalance": {
+                    "imbalance_ratio": 0.0,
+                    "active_accounts": 0,
+                    "most_used": None,
+                    "least_used": None,
+                },
+            },
+            accounts=[],
+        )
+        cache_idx = html.index(">Cache tokens<")
+        next_card_idx = html.index(">Reasoning tokens<")
+        cache_section = html[cache_idx:next_card_idx]
+        assert "— of input" in cache_section
+
     def test_escapes_period_in_timeseries_chart(self) -> None:
         """Regression test: ``period`` is interpolated into a JS literal;
         a malicious value must not escape the string literal.

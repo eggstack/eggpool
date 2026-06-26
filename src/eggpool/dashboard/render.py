@@ -1064,6 +1064,13 @@ def render_overview(
 
     cache_read = format_tokens(summary.get("total_cache_read_tokens", 0))
     cache_write = format_tokens(summary.get("total_cache_write_tokens", 0))
+    total_cache_read_tokens = int(summary.get("total_cache_read_tokens", 0))
+    total_input_tokens = int(summary.get("total_input_tokens", 0))
+    if total_input_tokens > 0:
+        cache_read_ratio = total_cache_read_tokens / total_input_tokens
+    else:
+        cache_read_ratio = summary.get("cache_read_ratio")
+    cache_read_pct = _format_percent_unit(cache_read_ratio, digits=1)
     reasoning = format_tokens(summary.get("total_reasoning_tokens", 0))
     streamed = int(summary.get("streamed_requests", 0))
     non_streamed = int(summary.get("non_streamed_requests", 0))
@@ -1113,9 +1120,14 @@ def render_overview(
 
 <section class="cards">
   <div class="card">
+    <h3>Total tokens</h3>
+    <p class="metric">{total_tok}</p>
+    <p class="sub">in {in_tok} · out {out_tok}</p>
+  </div>
+  <div class="card">
     <h3>Cache tokens</h3>
     <p class="metric">{cache_read}</p>
-    <p class="sub">read · write {cache_write}</p>
+    <p class="sub">{cache_read_pct} of input · write {cache_write}</p>
   </div>
   <div class="card">
     <h3>Reasoning tokens</h3>
