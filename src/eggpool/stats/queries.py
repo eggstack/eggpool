@@ -86,7 +86,7 @@ async def fetch_summary(
             WHEN COALESCE(SUM(CASE WHEN status != 'pending'
                 THEN upstream_latency_ms ELSE 0 END), 0) > 0
             THEN CAST(SUM(CASE WHEN status != 'pending'
-                THEN input_tokens + output_tokens ELSE 0 END) AS REAL) * 1000.0
+                THEN output_tokens ELSE 0 END) AS REAL) * 1000.0
                 / SUM(CASE WHEN status != 'pending'
                     THEN upstream_latency_ms ELSE 0 END)
             ELSE 0
@@ -195,8 +195,7 @@ async def fetch_account_stats(
         COALESCE(ps.avg_ttft_ms, 0) as avg_ttft_ms,
         CASE
             WHEN COALESCE(ps.sum_latency_ms, 0) > 0
-            THEN CAST(COALESCE(ps.input_tokens, 0)
-                + COALESCE(ps.output_tokens, 0) AS REAL) * 1000.0
+            THEN CAST(COALESCE(ps.output_tokens, 0) AS REAL) * 1000.0
                 / ps.sum_latency_ms
             ELSE 0
         END as tokens_per_second,
@@ -296,8 +295,7 @@ async def fetch_model_stats(
         CASE
             WHEN COALESCE(SUM(CASE WHEN r.status != 'pending'
                 THEN r.upstream_latency_ms ELSE 0 END), 0) > 0
-            THEN CAST(COALESCE(SUM(r.input_tokens), 0)
-                + COALESCE(SUM(r.output_tokens), 0) AS REAL) * 1000.0
+            THEN CAST(COALESCE(SUM(r.output_tokens), 0) AS REAL) * 1000.0
                 / SUM(CASE WHEN r.status != 'pending'
                     THEN r.upstream_latency_ms ELSE 0 END)
             ELSE 0

@@ -486,7 +486,7 @@ td.no { color: var(--color-error); font-weight: 600; }
   text-transform: none;
   letter-spacing: normal;
   min-width: max-content;
-  max-width: 320px;
+  max-width: min(320px, calc(100vw - 2rem));
   box-shadow: 0 2px 6px
     color-mix(in srgb, var(--page-text) 12%, transparent);
   opacity: 0;
@@ -522,6 +522,23 @@ td.no { color: var(--color-error); font-weight: 600; }
 }
 
 [data-tooltip][data-tooltip-pos="bottom"]::before {
+  top: calc(100% + 2px);
+  bottom: auto;
+  border-top-color: transparent;
+  border-bottom-color: var(--card-border);
+}
+
+/* The top navigation sits inside header.topbar at the top of the
+   viewport, so tooltips anchored to elements inside nav.topnav render
+   below their anchor by default to avoid being clipped by the
+   viewport's top edge. The data-tooltip-pos="bottom" attribute still
+   works as an explicit per-element override. */
+nav.topnav [data-tooltip]::after {
+  top: calc(100% + 8px);
+  bottom: auto;
+}
+
+nav.topnav [data-tooltip]::before {
   top: calc(100% + 2px);
   bottom: auto;
   border-top-color: transparent;
