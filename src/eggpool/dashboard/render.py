@@ -575,18 +575,27 @@ def _render_nav(
         ("runtime", "/runtime", "Runtime"),
     ]
     parts = ['<nav class="topnav">']
-    # Wrap the page links in a hamburger <details> on phone viewports.
-    # The CSS layer shows the <summary> as a Menu chip below 480px and
-    # reveals `.topnav-links` when open; on wider viewports the summary
-    # is hidden and the links are always visible inline. Theme selector
-    # and refresh button stay outside the disclosure so they remain
-    # reachable on every viewport size.
-    parts.append('<details class="topnav-hamburger">')
+    # Mobile burger button + collapsible menu panel. The CSS layer hides
+    # the burger and reveals `.topnav-menu` inline on viewports ≥761px;
+    # on narrower viewports the burger is shown and the menu only opens
+    # when JS toggles `.topnav-open` on the nav (see
+    # `dashboard.js#initNavToggle`). Theme selector and refresh button
+    # stay outside the menu so they remain reachable on every viewport
+    # size.
     parts.append(
-        '<summary data-tooltip="Open page menu" '
-        'aria-label="Open page menu">Menu</summary>'
+        '<button class="topnav-burger" type="button" '
+        'data-tooltip="Open page menu" '
+        'aria-label="Open page menu" '
+        'aria-expanded="false" aria-controls="topnav-menu">'
+        '<svg class="topnav-burger-icon" viewBox="0 0 22 16" '
+        'width="22" height="16" aria-hidden="true" focusable="false">'
+        '<rect class="bar bar-1" x="0" y="0" width="22" height="2" rx="1"/>'
+        '<rect class="bar bar-2" x="0" y="7" width="22" height="2" rx="1"/>'
+        '<rect class="bar bar-3" x="0" y="14" width="22" height="2" rx="1"/>'
+        "</svg>"
+        "</button>"
     )
-    parts.append('<div class="topnav-links">')
+    parts.append('<div class="topnav-menu" id="topnav-menu">')
     for key, href, label in items:
         cls = "active" if key == active_nav else ""
         parts.append(
@@ -595,7 +604,6 @@ def _render_nav(
             f"{_html_escape(label)}</a>"
         )
     parts.append("</div>")
-    parts.append("</details>")
 
     # Theme selector dropdown
     themes: list[str] = available_themes or []

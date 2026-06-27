@@ -2813,51 +2813,60 @@ class TestRenderNavUpdated:
 
 
 class TestHamburgerNav:
-    """Mobile navigation: page links wrapped in a `<details>` disclosure.
+    """Mobile navigation: burger button toggles a vertical dropdown menu.
 
-    The hamburger wrapper lets the 12 topnav links collapse into a single
-    Menu chip on phone viewports (≤480px) without JavaScript. Theme
-    selector and refresh button stay outside the disclosure so they
-    remain reachable on every viewport.
+    On viewports ≥761px the burger is hidden via CSS and the 12 page
+    links render inline inside `.topnav-menu`.  On narrower viewports
+    the burger is visible and the menu opens when JS toggles
+    `.topnav-open` on the ancestor `nav.topnav`.  Theme selector and
+    refresh button stay outside the menu so they remain reachable on
+    every viewport.
     """
 
-    def test_hamburger_details_wrapper_present(self) -> None:
+    def test_burger_button_with_inline_svg_present(self) -> None:
         html = _render_nav("overview", "24h")
-        assert '<details class="topnav-hamburger">' in html
-        assert "<summary" in html
-        assert ">Menu</summary>" in html
+        assert '<button class="topnav-burger"' in html
+        assert 'class="topnav-burger-icon"' in html
+        assert 'class="bar bar-1"' in html
+        assert 'class="bar bar-2"' in html
+        assert 'class="bar bar-3"' in html
 
-    def test_topnav_links_live_inside_details(self) -> None:
+    def test_burger_initial_aria_state(self) -> None:
         html = _render_nav("overview", "24h")
-        # The link wrapper must appear AFTER the <summary> so the
-        # disclosure contents are not rendered when closed.
-        summary_pos = html.find("<summary")
-        links_open_pos = html.find('<div class="topnav-links">')
-        assert summary_pos != -1
-        assert links_open_pos > summary_pos
-        assert links_open_pos != -1
+        burger_open = html.find('<button class="topnav-burger"')
+        assert burger_open != -1
+        assert 'aria-expanded="false"' in html[burger_open:]
+        assert 'aria-controls="topnav-menu"' in html
 
-    def test_theme_selector_outside_hamburger(self) -> None:
+    def test_topnav_menu_lives_after_burger(self) -> None:
+        html = _render_nav("overview", "24h")
+        burger_pos = html.find('<button class="topnav-burger"')
+        menu_open_pos = html.find('<div class="topnav-menu" id="topnav-menu">')
+        assert burger_pos != -1
+        assert menu_open_pos > burger_pos
+        assert menu_open_pos != -1
+
+    def test_theme_selector_outside_menu(self) -> None:
         html = _render_nav("overview", "24h", available_themes=["dark"])
-        details_close = html.find("</details>")
+        menu_close = html.find("</div>", html.find('<div class="topnav-menu"'))
         theme_pos = html.find("theme-selector")
-        assert details_close != -1
-        assert theme_pos > details_close
+        assert menu_close != -1
+        assert theme_pos > menu_close
 
-    def test_refresh_button_outside_hamburger(self) -> None:
+    def test_refresh_button_outside_menu(self) -> None:
         html = _render_nav("overview", "24h")
-        details_close = html.find("</details>")
+        menu_close = html.find("</div>", html.find('<div class="topnav-menu"'))
         refresh_pos = html.find("topnav-refresh")
-        assert details_close != -1
-        assert refresh_pos > details_close
+        assert menu_close != -1
+        assert refresh_pos > menu_close
 
-    def test_all_page_links_inside_hamburger(self) -> None:
+    def test_all_page_links_inside_menu(self) -> None:
         html = _render_nav("overview", "24h")
-        details_start = html.find('<details class="topnav-hamburger">')
-        details_end = html.find("</details>")
+        menu_start = html.find('<div class="topnav-menu" id="topnav-menu">')
+        menu_end = html.find("</div>", menu_start)
         for path in ("/reliability", "/routing", "/accounts", "/models"):
-            assert html.find(path) > details_start
-            assert html.find(path) < details_end
+            assert html.find(path) > menu_start
+            assert html.find(path) < menu_end
 
 
 class TestResponsiveColumns:

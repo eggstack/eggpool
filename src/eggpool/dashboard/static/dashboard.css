@@ -533,6 +533,75 @@ td.no { color: var(--color-error); font-weight: 600; }
   background: var(--nav-hover-bg);
 }
 
+/* Mobile burger button + collapsible menu panel.
+
+   `.topnav-burger` is hidden by default and only shown below 761px
+   (see the `@media (max-width: 760px)` block).  When the JS handler
+   in `dashboard.js#initNavToggle` toggles `.topnav-open` on the
+   ancestor `nav.topnav`, `.topnav-menu` becomes visible as a
+   full-width vertical dropdown.
+
+   On wider viewports the menu collapses into an inline row (see the
+   `@media (min-width: 761px)` block below). */
+.topnav-burger {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  font: inherit;
+  cursor: pointer;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--topbar-border);
+  border-radius: 3px;
+  background: var(--topbar-bg);
+  color: var(--topbar-text);
+  min-height: 44px;
+  min-width: 44px;
+}
+
+.topnav-burger:hover {
+  background: var(--nav-hover-bg);
+}
+
+.topnav-burger:focus-visible {
+  outline: 2px solid var(--nav-active-text);
+  outline-offset: 2px;
+}
+
+.topnav-burger-icon {
+  display: block;
+  fill: currentColor;
+}
+
+/* Animate the three bars into an X when the burger is expanded.  Pure
+   CSS so the toggle does not need to manage additional classes — the
+   JS only flips `aria-expanded` on the button. */
+.topnav-burger[aria-expanded="true"] .topnav-burger-icon .bar-1 {
+  transform: translateY(7px) rotate(45deg);
+  transform-origin: 50% 50%;
+}
+
+.topnav-burger[aria-expanded="true"] .topnav-burger-icon .bar-2 {
+  opacity: 0;
+}
+
+.topnav-burger[aria-expanded="true"] .topnav-burger-icon .bar-3 {
+  transform: translateY(-7px) rotate(-45deg);
+  transform-origin: 50% 50%;
+}
+
+.topnav-burger-icon .bar {
+  transition: transform 160ms ease, opacity 120ms ease;
+}
+
+.topnav-menu {
+  display: none;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  width: auto;
+  margin-top: 0;
+}
+
 @media (max-width: 760px) {
   header.topbar {
     align-items: flex-start;
@@ -565,6 +634,37 @@ td.no { color: var(--color-error); font-weight: 600; }
   table.data td[data-priority="3"] {
     display: none;
   }
+
+  /* Nav links collapse into a burger-driven dropdown on narrow
+     viewports.  The burger button stays visible and the menu only
+     opens when JS toggles `.topnav-open` on the ancestor
+     `nav.topnav`.  This replaces the older `<details>/<summary>`
+     disclosure pattern because the `<details>` element hides its
+     non-summary children at the user-agent level when not `open`,
+     and no CSS rule can override that — leaving fullscreen viewports
+     with no visible nav links.  The button+menu+class pattern gives
+     CSS full control of visibility across all viewports. */
+  .topnav-burger {
+    display: inline-flex;
+  }
+
+  .topnav-menu {
+    display: none;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.25rem;
+    width: 100%;
+    margin-top: 0.5rem;
+  }
+
+  nav.topnav.topnav-open .topnav-menu {
+    display: flex;
+  }
+
+  .topnav-menu a {
+    padding: 0.6rem 0.75rem;
+    min-height: 44px;
+  }
 }
 
 /* Phone-sized viewports: drop secondary columns and tighten spacing. */
@@ -584,50 +684,6 @@ td.no { color: var(--color-error); font-weight: 600; }
 
   nav.topnav {
     gap: 0.35rem;
-  }
-
-  /* Nav links collapse into a hamburger disclosure on phone viewports.
-     `.topnav-links` (the inner <details> body) is hidden by default on
-     phones and revealed when the <details> element is open. The
-     <details> summary shows as a small Menu button. On wider screens
-     the rules below hide the <details> wrapper entirely and restore
-     the always-visible inline nav. */
-  .topnav-hamburger > summary {
-    display: inline-flex;
-    align-items: center;
-    list-style: none;
-    cursor: pointer;
-    padding: 0.4rem 0.7rem;
-    border: 1px solid var(--topbar-border);
-    border-radius: 3px;
-    background: var(--topbar-bg);
-    color: var(--topbar-text);
-    font: inherit;
-    font-size: 0.85rem;
-    text-transform: uppercase;
-    min-height: 44px;
-  }
-
-  .topnav-hamburger > summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .topnav-hamburger .topnav-links {
-    display: none;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 0.25rem;
-    width: 100%;
-    margin-top: 0.5rem;
-  }
-
-  .topnav-hamburger[open] .topnav-links {
-    display: flex;
-  }
-
-  .topnav-hamburger .topnav-links a {
-    padding: 0.6rem 0.75rem;
-    min-height: 44px;
   }
 
   /* Touch-friendly targets for the persistent theme selector and
@@ -663,14 +719,16 @@ td.no { color: var(--color-error); font-weight: 600; }
   }
 }
 
-/* Wide viewports: hide the hamburger wrapper entirely and reveal the
-   inline nav links. The <details> summary is also hidden so it does
-   not double up with the inline links. */
-@media (min-width: 481px) {
-  .topnav-hamburger > summary {
+/* Wide viewports: hide the burger button and reveal the page-link
+   menu as an inline flex row.  The menu renders unconditionally here
+   so desktop users see every link without needing the JS toggle to
+   run first. */
+@media (min-width: 761px) {
+  .topnav-burger {
     display: none;
   }
-  .topnav-hamburger .topnav-links {
+
+  .topnav-menu {
     display: flex;
     flex-direction: row;
     flex-wrap: wrap;

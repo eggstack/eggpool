@@ -606,6 +606,11 @@
       );
     }
     try {
+      namespace.initNavToggle();
+    } catch (err) {
+      console.error("EggPoolDashboard: initNavToggle failed", err);
+    }
+    try {
       namespace.initUpdateCommandCopy();
     } catch (err) {
       console.error("EggPoolDashboard: initUpdateCommandCopy failed", err);
@@ -780,6 +785,76 @@
         }
       });
     }
+  };
+
+  // Wire the mobile burger button that toggles the page-link menu
+  // dropdown.  On viewports ≥761px the burger is hidden via CSS and
+  // the menu is always rendered inline, so the JS is a no-op there.
+  // On narrower viewports the burger is visible and the menu only
+  // shows when `.topnav-open` is set on the ancestor `nav.topnav`.
+  //
+  // Dismissal rules:
+  // - click the burger again to close
+  // - press Escape inside the nav to close and return focus to the
+  //   burger
+  // - click any menu link to close (lets navigation proceed)
+  // - click anywhere outside the nav to close
+  //
+  // Re-init is idempotent via the `__eggpoolNavWired` flag, matching
+  // the pattern used by `initUpdateCommandCopy` and the timeseries
+  // controls so the auto-refresh loop does not stack handlers.
+  namespace.initNavToggle = function initNavToggle() {
+    const burger = document.querySelector("nav.topnav .topnav-burger");
+    const menu = document.querySelector("nav.topnav .topnav-menu");
+    if (!burger || !menu) return;
+    const nav = burger.closest("nav.topnav");
+    if (!nav) return;
+    if (burger.__eggpoolNavWired) return;
+    burger.__eggpoolNavWired = true;
+
+    const setOpen = function (open) {
+      if (open) {
+        nav.classList.add("topnav-open");
+        burger.setAttribute("aria-expanded", "true");
+      } else {
+        nav.classList.remove("topnav-open");
+        burger.setAttribute("aria-expanded", "false");
+      }
+    };
+
+    burger.addEventListener("click", function (event) {
+      event.preventDefault();
+      const expanded = burger.getAttribute("aria-expanded") === "true";
+      setOpen(!expanded);
+    });
+
+    nav.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" || event.key === "Esc") {
+        const wasOpen = burger.getAttribute("aria-expanded") === "true";
+        if (!wasOpen) return;
+        event.preventDefault();
+        setOpen(false);
+        try {
+          burger.focus();
+        } catch (_err) {
+          /* ignore */
+        }
+      }
+    });
+
+    const links = menu.querySelectorAll("a");
+    for (let i = 0; i < links.length; i++) {
+      links[i].addEventListener("click", function () {
+        setOpen(false);
+      });
+    }
+
+    document.addEventListener("click", function (event) {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (nav.contains(target)) return;
+      setOpen(false);
+    });
   };
 
   // Wire click-to-copy on every element marked with
