@@ -175,18 +175,21 @@ async def test_routing_route_loads(migrated_app: FastAPI) -> None:
     response = client.get("/routing")
     assert response.status_code == 200
     assert '<script defer src="/static/chart.js"></script>' in response.text
-    assert "routing-exclusion-taxonomy" in response.text
-    # The chart must be seeded from a JSON data island so deferred
-    # dashboard.js can initialise it after Chart.js has loaded, with no
-    # inline `new Chart(...)` that would race the deferred load.
+    # The migrated fixture database has no routing decisions, so the
+    # exclusion-taxonomy panel falls back to its empty-state paragraph
+    # rather than emitting the canvas + data island (see
+    # ``_render_exclusion_taxonomy_chart``).  The canvas wiring itself
+    # is exercised by ``tests/unit/test_dashboard.py``.
     assert (
         re.search(
-            r'<script type="application/json"\s+class="static-chart-data"\s+'
-            r'data-chart-id="routing-exclusion-taxonomy">',
+            r'<p class="empty">No exclusion data in this period\.</p>',
             response.text,
         )
         is not None
     )
+    # No inline ``new Chart(...)`` script — the chart must be seeded
+    # from a JSON data island so deferred dashboard.js can initialise
+    # it after Chart.js has loaded.
     assert "new Chart(ctx" not in response.text
 
 

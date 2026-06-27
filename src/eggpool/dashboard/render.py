@@ -94,6 +94,13 @@ _STATUS_BADGE_TOOLTIPS: dict[str, str] = {
 # signals).  This split lets the dashboard verify the design rule that
 # upstream-observed failures control exclusion while local accounting
 # only influences priority.
+#
+# ``circuit_breaker`` is the only reason the coordinator actually writes
+# to ``exclude_reasons_json`` (see
+# ``eggpool.request.coordinator._score_and_select``).  ``circuit_open``
+# is kept for backwards compatibility with rows written before the
+# coordinator rename and to align semantically with the
+# ``_STATUS_BADGE_TOOLTIPS`` mapping above.
 SUPPRESSIVE_EXCLUSION_REASONS: frozenset[str] = frozenset(
     {
         "authentication_failed",
@@ -107,6 +114,7 @@ SUPPRESSIVE_EXCLUSION_REASONS: frozenset[str] = frozenset(
         "account_disabled",
         "protocol_mismatch",
         "circuit_open",
+        "circuit_breaker",
     }
 )
 
@@ -3635,6 +3643,9 @@ def _render_exclusion_taxonomy_chart(
         count = int(row.get("exclusion_count", 0) or 0)
         category = _classify_exclusion(reason)
         category_totals[category] = category_totals.get(category, 0) + count
+
+    if sum(category_totals.values()) == 0:
+        return '<p class="empty">No exclusion data in this period.</p>'
 
     labels = json.dumps(["Suppressive", "Advisory", "Unknown"])
     datasets = json.dumps(

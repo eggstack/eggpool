@@ -2559,6 +2559,60 @@ class TestRenderRouting:
         )
         assert "new Chart(" not in html
 
+    def test_exclusion_chart_empty_state(self) -> None:
+        """When no exclusions have been recorded the doughnut must be
+        suppressed entirely.  Chart.js v4 renders an empty ring with the
+        legend visible when ``data`` is all zeros, which manifests as a
+        ``key but no graph`` artefact in the panel.  The renderer should
+        instead emit the same empty-state paragraph the table uses so
+        both panels stay consistent.
+        """
+        html = render_routing(
+            period="24h",
+            routing_distribution=[],
+            routing_selection_breakdown=[],
+            routing_exclusion_breakdown=[],
+        )
+        assert 'id="routing-exclusion-taxonomy"' not in html
+        assert '<p class="empty">No exclusion data in this period.</p>' in html
+        assert 'class="static-chart-data"' not in html
+
+    def test_exclusion_chart_classifies_circuit_breaker(self) -> None:
+        """``circuit_breaker`` is the only reason the coordinator writes
+        to ``exclude_reasons_json`` (see ``request/coordinator.py``), so
+        it must map to the ``suppressive`` bucket — otherwise every
+        real-world exclusion silently lands in the ``unknown`` bucket.
+        """
+        html = render_routing(
+            period="24h",
+            routing_distribution=[],
+            routing_selection_breakdown=[],
+            routing_exclusion_breakdown=[
+                {
+                    "account_name": "alpha",
+                    "reason": "circuit_breaker",
+                    "exclusion_count": 4,
+                },
+            ],
+        )
+        match = re.search(
+            r'<script type="application/json"\s+class="static-chart-data"\s+'
+            r'data-chart-id="routing-exclusion-taxonomy">(?P<payload>.*?)</script>',
+            html,
+            re.DOTALL,
+        )
+        assert match is not None
+        payload = json.loads(match.group("payload"))
+        dataset = payload["datasets"][0]
+        data = dataset["data"]
+        labels = payload["labels"]
+        suppressive_index = labels.index("Suppressive")
+        advisory_index = labels.index("Advisory")
+        unknown_index = labels.index("Unknown")
+        assert data[suppressive_index] == 4
+        assert data[advisory_index] == 0
+        assert data[unknown_index] == 0
+
 
 class TestRenderTraces:
     """Tests for the Traces page renderer."""
