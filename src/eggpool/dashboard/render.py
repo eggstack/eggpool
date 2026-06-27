@@ -1427,8 +1427,22 @@ def render_overview(
     attempt_stats: dict[str, Any] | None = None,
     operational_summary: list[dict[str, Any]] | None = None,
     update_info: Any | None = None,
+    *,
+    show_disabled: bool = False,
+    disabled_count: int = 0,
 ) -> str:
-    """Render the overview dashboard page."""
+    """Render the overview dashboard page.
+
+    ``show_disabled`` toggles whether disabled (soft-deleted) accounts
+    appear in the Account breakdown table. Defaults to False so the
+    overview matches the operator's mental model after
+    ``eggpool logout``: only active accounts are visible by default.
+
+    ``disabled_count`` is the total disabled-row count, used only when
+    ``accounts`` is empty AND ``show_disabled`` is False: the empty
+    state becomes a one-click "N disabled — show them?" hint instead
+    of the generic "No accounts configured." message.
+    """
     summary = overview.get("summary", {})
     imbalance = overview.get("imbalance", {})
 
@@ -1580,10 +1594,13 @@ def render_overview(
     }
 </section>
 
-<details class="panel panel-collapsible">
-  <summary><h3>Account breakdown</h3></summary>
-  {_render_account_table(accounts)}
-</details>
+<section class="panel">
+  <div class="panel-header">
+    <h3>Account breakdown</h3>
+    {_render_account_breakdown_filter(period, current_theme, show_disabled)}
+  </div>
+  {_render_account_breakdown_body(accounts, show_disabled, disabled_count)}
+</section>
 
 {_render_timeseries_chart(period, initial_data=timeseries)}
 
@@ -1638,6 +1655,73 @@ def render_overview(
         include_chart_js=True,
         update_info=update_info,
     )
+
+
+def _render_account_breakdown_filter(
+    period: str,
+    current_theme: str,
+    show_disabled: bool,
+) -> str:
+    """Render the Show/Hide disabled toggle for the overview's Account
+    breakdown section.
+
+    The form auto-submits on change via ``data-auto-submit`` and
+    preserves ``period`` and ``theme`` via hidden inputs so the
+    operator's other URL state survives the toggle. Lives in its own
+    ``form[data-period-selector]`` so the existing dashboard.js
+    auto-submit wiring picks it up without extra JS. Disabled rows are
+    hidden by default to match the operator's mental model after
+    ``eggpool logout``; the toggle is opt-in via
+    ``?show_disabled=1`` and survives refresh / bookmarking.
+    """
+    show_value = "1" if show_disabled else "0"
+    options = [
+        ("0", "Hide disabled accounts"),
+        ("1", "Show disabled accounts"),
+    ]
+    items: list[str] = []
+    for value, label in options:
+        selected = ' selected="selected"' if value == show_value else ""
+        items.append(
+            f'<option value="{escape(value)}"{selected}>{escape(label)}</option>'
+        )
+    show_selector = "".join(items)
+    period_hidden = f'<input type="hidden" name="period" value="{escape_attr(period)}">'
+    theme_hidden = (
+        f'<input type="hidden" name="theme" value="{escape_attr(current_theme)}">'
+        if current_theme
+        else ""
+    )
+    return (
+        f'<form method="get" class="period-selector account-breakdown-filter" '
+        f'data-period-selector aria-label="Account breakdown filters">'
+        f'<label for="overview_show_disabled">Disabled: </label>'
+        f'<select id="overview_show_disabled" name="show_disabled" '
+        f'data-auto-submit="1">'
+        f"{show_selector}"
+        f"</select>"
+        f"{period_hidden}"
+        f"{theme_hidden}"
+        f"</form>"
+    )
+
+
+def _render_account_breakdown_body(
+    accounts: list[dict[str, Any]],
+    show_disabled: bool,
+    disabled_count: int,
+) -> str:
+    """Render the body of the Account breakdown section.
+
+    When the operator has filtered disabled rows out and there are no
+    enabled rows left, offer a one-click opt-in to the historical view
+    instead of the generic "No accounts configured." message. The
+    link preserves the current period + theme so the toggle does not
+    reset the rest of the operator's view.
+    """
+    if not accounts:
+        return _render_accounts_empty_state(show_disabled, disabled_count)
+    return _render_account_table(accounts)
 
 
 def _render_account_table(accounts: list[dict[str, Any]]) -> str:

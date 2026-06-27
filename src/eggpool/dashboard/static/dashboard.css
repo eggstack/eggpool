@@ -352,24 +352,26 @@ h3 {
   overflow-x: auto;
 }
 
-/* Collapsible variant of .panel that uses the native <details>
-   element. The summary line carries the heading and acts as the
-   toggle; collapsed by default (no `open` attribute). The disclosure
-   triangle is suppressed because the heading already reads as a
-   clickable affordance. */
-.panel-collapsible > summary {
-  list-style: none;
-  cursor: pointer;
-  margin: -1rem -1.25rem;
-  padding: 1rem 1.25rem;
+/* Inline heading + filter layout for panels that combine a heading
+   with a right-aligned filter control (currently the Account
+   breakdown section on the overview page). The filter form is
+   rendered as a sibling of the heading so the heading keeps its
+   natural left alignment while the toggle stays close to the table
+   it controls. */
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 0 0 0.75rem;
 }
 
-.panel-collapsible > summary::-webkit-details-marker {
-  display: none;
+.panel-header > h3 {
+  margin: 0;
 }
 
-.panel-collapsible > summary > h3 {
-  display: inline-block;
+.panel-header form.account-breakdown-filter {
   margin: 0;
 }
 

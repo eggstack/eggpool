@@ -183,13 +183,30 @@ def _collect_model_options(request: Request) -> list[str]:
 
 
 async def handle_overview(
-    request: Request, period: str | None = "24h", theme: str | None = None
+    request: Request,
+    period: str | None = "24h",
+    theme: str | None = None,
+    show_disabled: bool = False,
 ) -> Response:
-    """Render the overview page."""
+    """Render the overview page.
+
+    ``show_disabled`` toggles whether disabled (soft-deleted) accounts
+    appear in the Account breakdown table. Defaults to False so the
+    page matches the operator's mental model after ``eggpool logout``:
+    only enabled accounts are visible by default. Pass
+    ``?show_disabled=1`` to opt in to the historical view.
+    """
     dashboard_config = _get_dashboard_config(request)
     time_range = resolve_time_range(period)
     stats = request.app.state.stats
     heatmap_range = _heatmap_time_range(dashboard_config.retain_request_stats_days)
+
+    # Always fetch the disabled count so the Account breakdown empty
+    # state can offer a one-click opt-in even when no rows are
+    # currently visible. Cheap one-row aggregate; safe on every render.
+    disabled_count = 0
+    if not show_disabled:
+        disabled_count = await fetch_disabled_account_count(request.app.state.stats_db)
 
     # Fan out the independent stat reads concurrently.  The single
     # shared connection lock serializes per-query execution, so without
@@ -207,7 +224,9 @@ async def handle_overview(
         operational_summary,
         pending_health,
     ) = await asyncio.gather(
-        stats.get_account_stats(time_range, use_cache=True),
+        stats.get_account_stats(
+            time_range, include_disabled=show_disabled, use_cache=True
+        ),
         stats.get_model_stats(time_range, use_cache=True),
         stats.get_recent_events(limit=10),
         stats.get_bandwidth_timeseries(heatmap_range, use_cache=True),
@@ -248,6 +267,8 @@ async def handle_overview(
         attempt_stats=attempt_stats,
         operational_summary=operational_summary,
         update_info=_get_update_info(request),
+        show_disabled=show_disabled,
+        disabled_count=disabled_count,
     )
     return HTMLResponse(content=html)
 

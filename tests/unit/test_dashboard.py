@@ -623,6 +623,112 @@ class TestRenderOverview:
         assert "');alert(1)//" not in html
         assert r"\'" in html or r"\u0027" in html or '"' in html
 
+    def test_account_breakdown_renders_show_disabled_filter(self) -> None:
+        """The Account breakdown section exposes a Show/Hide disabled toggle."""
+        html = render_overview(
+            overview={
+                "summary": {"total_requests": 0},
+                "imbalance": {"imbalance_ratio": 0.0},
+            },
+            accounts=[],
+        )
+        assert "account-breakdown-filter" in html
+        assert 'id="overview_show_disabled"' in html
+        assert 'name="show_disabled"' in html
+        # Default state: "Hide disabled accounts" is selected.
+        assert (
+            '<option value="0" selected="selected">Hide disabled accounts</option>'
+            in html
+        )
+
+    def test_account_breakdown_filter_reflects_state(self) -> None:
+        """``show_disabled=True`` selects the show option on the overview."""
+        html = render_overview(
+            overview={
+                "summary": {"total_requests": 0},
+                "imbalance": {"imbalance_ratio": 0.0},
+            },
+            accounts=[],
+            show_disabled=True,
+        )
+        assert (
+            '<option value="1" selected="selected">Show disabled accounts</option>'
+            in html
+        )
+
+    def test_account_breakdown_filter_preserves_period_and_theme(self) -> None:
+        """The toggle form preserves period and theme via hidden inputs."""
+        html = render_overview(
+            overview={
+                "summary": {"total_requests": 0},
+                "imbalance": {"imbalance_ratio": 0.0},
+            },
+            accounts=[],
+            period="7d",
+            current_theme="midnight",
+        )
+        assert 'class="period-selector account-breakdown-filter"' in html
+        assert 'name="period" value="7d"' in html
+        assert 'name="theme" value="midnight"' in html
+
+    def test_account_breakdown_empty_state_with_disabled_count(self) -> None:
+        """When only disabled rows exist, offer a one-click opt-in link."""
+        html = render_overview(
+            overview={
+                "summary": {"total_requests": 0},
+                "imbalance": {"imbalance_ratio": 0.0},
+            },
+            accounts=[],
+            show_disabled=False,
+            disabled_count=3,
+        )
+        assert "No enabled accounts." in html
+        assert "3 disabled accounts hidden" in html
+        assert 'href="?show_disabled=1"' in html
+        assert "show them" in html
+
+    def test_account_breakdown_empty_state_singular(self) -> None:
+        """Pluralization is correct when only one disabled account exists."""
+        html = render_overview(
+            overview={
+                "summary": {"total_requests": 0},
+                "imbalance": {"imbalance_ratio": 0.0},
+            },
+            accounts=[],
+            show_disabled=False,
+            disabled_count=1,
+        )
+        assert "1 disabled account hidden" in html
+        assert "3 disabled" not in html
+
+    def test_account_breakdown_no_hint_when_show_disabled(self) -> None:
+        """With ``show_disabled=True`` an empty result is a clean empty state."""
+        html = render_overview(
+            overview={
+                "summary": {"total_requests": 0},
+                "imbalance": {"imbalance_ratio": 0.0},
+            },
+            accounts=[],
+            show_disabled=True,
+            disabled_count=3,
+        )
+        assert "No accounts configured." in html
+        assert "show them" not in html
+
+    def test_account_breakdown_no_hint_when_no_disabled(self) -> None:
+        """No disabled rows means no opt-in hint even when accounts is empty."""
+        html = render_overview(
+            overview={
+                "summary": {"total_requests": 0},
+                "imbalance": {"imbalance_ratio": 0.0},
+            },
+            accounts=[],
+            show_disabled=False,
+            disabled_count=0,
+        )
+        assert "No accounts configured." in html
+        assert "show them" not in html
+
 
 class TestRenderAccounts:
     """Tests for the accounts page renderer."""

@@ -337,6 +337,42 @@ async def test_accounts_page_show_disabled_query(
 
 
 @pytest.mark.asyncio()
+async def test_overview_page_hides_disabled_by_default(
+    migrated_app: FastAPI,
+) -> None:
+    """The overview Account breakdown exposes the show-disabled filter."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    response = client.get("/")
+    assert response.status_code == 200
+    body = response.text
+    assert "account-breakdown-filter" in body
+    assert 'id="overview_show_disabled"' in body
+    # Default state must hide disabled rows so the page matches the
+    # operator's mental model after ``eggpool logout``.
+    assert (
+        '<option value="0" selected="selected">Hide disabled accounts</option>' in body
+    )
+
+
+@pytest.mark.asyncio()
+async def test_overview_page_show_disabled_query(
+    migrated_app: FastAPI,
+) -> None:
+    """``?show_disabled=1`` flips the overview toggle."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    response = client.get("/?show_disabled=1")
+    assert response.status_code == 200
+    body = response.text
+    assert (
+        '<option value="1" selected="selected">Show disabled accounts</option>' in body
+    )
+
+
+@pytest.mark.asyncio()
 async def test_accounts_api_supports_include_disabled(
     migrated_app: FastAPI,
 ) -> None:
