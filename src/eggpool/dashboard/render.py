@@ -1150,12 +1150,12 @@ def _render_model_glance(models: list[dict[str, Any]]) -> str:
         rows.append(
             f"<tr>"
             f"{_td_priority(escape(row.get('model_id', '')), 1)}"
-            f"{_td_priority(escape(row.get('provider_id', '')), 2)}"
             f"{_td_priority(f'{req_count:,}', 1)}"
-            f"{_td_priority(f'{err_count:,}', 2)}"
-            f"{_td_priority(total_tok, 3)}"
             f"{_td_priority(format_microdollars(row.get('cost_microdollars', 0)), 1)}"
+            f"{_td_priority(escape(row.get('provider_id', '')), 2)}"
+            f"{_td_priority(f'{err_count:,}', 2)}"
             f"{_td_priority(format_latency(row.get('avg_latency_ms', 0.0)), 2)}"
+            f"{_td_priority(total_tok, 3)}"
             f"</tr>"
         )
     return (

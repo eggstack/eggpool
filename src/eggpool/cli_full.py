@@ -1085,6 +1085,8 @@ def configsetup_opencode(ctx: click.Context) -> None:
 
     # Try to load catalog from the database
     models_data: list[dict[str, Any]] = []
+    config: AppConfig | None = None
+    collapse_models = False
     try:
         import asyncio
 
@@ -1121,9 +1123,36 @@ def configsetup_opencode(ctx: click.Context) -> None:
                     return out
 
                 rows = await db.fetch_all(
-                    "SELECT model_id, provider_id, display_name, "
-                    "capabilities, source_metadata FROM provider_model_metadata"
+                    """
+                    SELECT DISTINCT
+                        am.model_id,
+                        a.provider_id,
+                        COALESCE(pmm.display_name, m.display_name) AS display_name,
+                        COALESCE(pmm.capabilities, m.capabilities) AS capabilities,
+                        COALESCE(pmm.source_metadata, m.source_metadata)
+                            AS source_metadata
+                    FROM account_models am
+                    JOIN accounts a ON a.id = am.account_id
+                    JOIN models m ON m.model_id = am.model_id
+                    LEFT JOIN provider_model_metadata pmm
+                        ON pmm.model_id = am.model_id
+                       AND pmm.provider_id = a.provider_id
+                    WHERE am.enabled = 1
+                      AND a.enabled = 1
+                      AND am.model_id <> '__deprecated__'
+                      AND COALESCE(pmm.protocol, m.protocol) IN ('openai', 'anthropic')
+                    """
                 )
+                if not rows:
+                    rows = await db.fetch_all(
+                        """
+                        SELECT model_id, provider_id, display_name,
+                               capabilities, source_metadata
+                        FROM provider_model_metadata
+                        WHERE model_id <> '__deprecated__'
+                          AND protocol IN ('openai', 'anthropic')
+                        """
+                    )
                 out = []
                 for row in rows:
                     caps_raw = row["capabilities"]
@@ -1152,68 +1181,6 @@ def configsetup_opencode(ctx: click.Context) -> None:
                 await db.disconnect()
 
         models_data = asyncio.run(_load_catalog())
-
-        # Re-apply current config overrides
-        if models_data:
-            resolver = ModelLimitResolver(config)
-            if collapse_models:
-                for m in models_data:
-                    eff = resolver.resolve(
-                        provider_id=None,
-                        model_id=m["model_id"],
-                        capabilities=m.get("capabilities", {}),
-                        source_metadata=m.get("source_metadata", {}),
-                    )
-                    m["effective_limits"] = {
-                        "context_tokens": eff.context_tokens,
-                        "input_tokens": eff.input_tokens,
-                        "output_tokens": eff.output_tokens,
-                        "enforce": eff.enforce,
-                        "context_source": eff.context_source,
-                        "input_source": eff.input_source,
-                        "output_source": eff.output_source,
-                    }
-            else:
-                # Group by base model_id and apply conservative merge
-                # so OpenCode compacts before any single provider's
-                # limit is exceeded.
-                grouped: dict[str, list[dict[str, Any]]] = {}
-                for m in models_data:
-                    base = m.get("base_model_id", m["model_id"])
-                    grouped.setdefault(base, []).append(m)
-                for entries in grouped.values():
-                    limits_list: list[EffectiveModelLimits] = []
-                    for m in entries:
-                        provider_id = m.get("provider_id")
-                        eff = resolver.resolve(
-                            provider_id=provider_id,
-                            model_id=m.get("base_model_id", m["model_id"]),
-                            capabilities=m.get("capabilities", {}),
-                            source_metadata=m.get("source_metadata", {}),
-                        )
-                        limits_list.append(
-                            EffectiveModelLimits(
-                                context_tokens=eff.context_tokens,
-                                input_tokens=eff.input_tokens,
-                                output_tokens=eff.output_tokens,
-                                enforce=eff.enforce,
-                                context_source=eff.context_source,
-                                input_source=eff.input_source,
-                                output_source=eff.output_source,
-                            )
-                        )
-                    merged = conservative_limits(limits_list)
-                    merged_dict = {
-                        "context_tokens": merged.context_tokens,
-                        "input_tokens": merged.input_tokens,
-                        "output_tokens": merged.output_tokens,
-                        "enforce": merged.enforce,
-                        "context_source": merged.context_source,
-                        "input_source": merged.input_source,
-                        "output_source": merged.output_source,
-                    }
-                    for m in entries:
-                        m["effective_limits"] = merged_dict
     except Exception:
         click.echo(
             "Warning: Could not load catalog. Run 'eggpool models refresh' "
@@ -1221,6 +1188,107 @@ def configsetup_opencode(ctx: click.Context) -> None:
             "model-specific limits.",
             err=True,
         )
+
+    if config is not None:
+        seen_model_keys = {str(m.get("model_id")) for m in models_data}
+        for provider_id, provider_cfg in config.providers.items():
+            if not provider_cfg.static_models:
+                continue
+            if not any(account.enabled for account in provider_cfg.accounts):
+                continue
+            for static in provider_cfg.static_models:
+                exposed_id = (
+                    static.id if collapse_models else f"{static.id}/{provider_id}"
+                )
+                if exposed_id in seen_model_keys:
+                    continue
+                capabilities: dict[str, Any] = {}
+                if static.supports_tools is not None:
+                    capabilities["supports_tools"] = static.supports_tools
+                if static.supports_vision is not None:
+                    capabilities["supports_vision"] = static.supports_vision
+                if static.max_context_tokens is not None:
+                    capabilities["max_context_tokens"] = static.max_context_tokens
+                if static.max_input_tokens is not None:
+                    capabilities["max_input_tokens"] = static.max_input_tokens
+                if static.max_output_tokens is not None:
+                    capabilities["max_output_tokens"] = static.max_output_tokens
+                models_data.append(
+                    {
+                        "model_id": exposed_id,
+                        "base_model_id": static.id,
+                        "provider_id": provider_id,
+                        "display_name": static.display_name or static.id,
+                        "capabilities": capabilities,
+                        "source_metadata": {
+                            **static.source_metadata,
+                            "source": "static_config",
+                        },
+                        "effective_limits": {},
+                    }
+                )
+                seen_model_keys.add(exposed_id)
+
+    # Re-apply current config overrides.
+    if models_data and config is not None:
+        resolver = ModelLimitResolver(config)
+        if collapse_models:
+            for m in models_data:
+                eff = resolver.resolve(
+                    provider_id=None,
+                    model_id=m["model_id"],
+                    capabilities=m.get("capabilities", {}),
+                    source_metadata=m.get("source_metadata", {}),
+                )
+                m["effective_limits"] = {
+                    "context_tokens": eff.context_tokens,
+                    "input_tokens": eff.input_tokens,
+                    "output_tokens": eff.output_tokens,
+                    "enforce": eff.enforce,
+                    "context_source": eff.context_source,
+                    "input_source": eff.input_source,
+                    "output_source": eff.output_source,
+                }
+        else:
+            # Group by base model_id and apply conservative merge so OpenCode
+            # compacts before any single provider's limit is exceeded.
+            grouped: dict[str, list[dict[str, Any]]] = {}
+            for m in models_data:
+                base = m.get("base_model_id", m["model_id"])
+                grouped.setdefault(base, []).append(m)
+            for entries in grouped.values():
+                limits_list: list[EffectiveModelLimits] = []
+                for m in entries:
+                    provider_id = m.get("provider_id")
+                    eff = resolver.resolve(
+                        provider_id=provider_id,
+                        model_id=m.get("base_model_id", m["model_id"]),
+                        capabilities=m.get("capabilities", {}),
+                        source_metadata=m.get("source_metadata", {}),
+                    )
+                    limits_list.append(
+                        EffectiveModelLimits(
+                            context_tokens=eff.context_tokens,
+                            input_tokens=eff.input_tokens,
+                            output_tokens=eff.output_tokens,
+                            enforce=eff.enforce,
+                            context_source=eff.context_source,
+                            input_source=eff.input_source,
+                            output_source=eff.output_source,
+                        )
+                    )
+                merged = conservative_limits(limits_list)
+                merged_dict = {
+                    "context_tokens": merged.context_tokens,
+                    "input_tokens": merged.input_tokens,
+                    "output_tokens": merged.output_tokens,
+                    "enforce": merged.enforce,
+                    "context_source": merged.context_source,
+                    "input_source": merged.input_source,
+                    "output_source": merged.output_source,
+                }
+                for m in entries:
+                    m["effective_limits"] = merged_dict
 
     config_json = build_opencode_config_json(
         base_url=base_url,

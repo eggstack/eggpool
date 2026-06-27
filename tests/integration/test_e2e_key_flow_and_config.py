@@ -660,6 +660,18 @@ class TestConfigSetup:
                         "(model_id, provider_id, protocol) VALUES (?, ?, ?)",
                         ("gpt-4", "minimax", "openai"),
                     )
+                    await db.execute_write(
+                        "INSERT INTO account_models "
+                        "(account_id, model_id, enabled) "
+                        "SELECT id, ?, 1 FROM accounts WHERE name = ?",
+                        ("gpt-4", "oc-acct"),
+                    )
+                    await db.execute_write(
+                        "INSERT INTO account_models "
+                        "(account_id, model_id, enabled) "
+                        "SELECT id, ?, 1 FROM accounts WHERE name = ?",
+                        ("gpt-4", "mm-acct"),
+                    )
             finally:
                 await db.disconnect()
 
@@ -716,6 +728,61 @@ class TestConfigSetup:
         assert "gpt-4" in models
         assert "gpt-4/opencode-go" not in models
         assert "gpt-4/minimax" not in models
+
+    def test_configsetup_opencode_adds_configured_minimax_static_models(
+        self, tmp_path
+    ) -> None:
+        import json
+
+        from click.testing import CliRunner
+
+        db_path = tmp_path / "eggpool.db"
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            textwrap.dedent(f"""\
+                [server]
+                api_key = "ep_test_key"
+                port = 11300
+
+                [models]
+                collapse_models = false
+
+                [database]
+                path = "{db_path}"
+
+                [providers.minimax]
+                id = "minimax"
+                base_url = "https://api.minimax.io/anthropic"
+                protocols = ["anthropic"]
+                anthropic_path = "/v1/messages"
+
+                [[providers.minimax.accounts]]
+                name = "mm-acct"
+                api_key = "sk-mm"
+
+                [providers.minimax.auth]
+                mode = "api_key"
+                header = "x-api-key"
+
+                [[providers.minimax.static_models]]
+                id = "MiniMax-M3"
+                display_name = "MiniMax-M3"
+                protocol = "anthropic"
+                max_context_tokens = 1000000
+            """)
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "configsetup", "opencode"],
+        )
+
+        assert result.exit_code == 0, result.stdout + result.stderr
+        snippet = json.loads(result.stdout)
+        models = snippet["provider"]["eggpool"]["models"]
+        assert "MiniMax-M3/minimax" in models
+        assert "MiniMax-M3" not in models
 
     def test_configsetup_claude_code_with_existing_key(self, tmp_path):
         """configsetup claude-code uses existing key and LAN IP.

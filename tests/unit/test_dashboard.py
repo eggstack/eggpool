@@ -444,6 +444,47 @@ class TestRenderOverview:
         assert "<detail>" not in html
         assert "&lt;detail&gt;" in html
 
+    def test_overview_top_models_cells_match_header_order(self) -> None:
+        html = render_overview(
+            overview={
+                "summary": {
+                    "total_requests": 1,
+                    "successful_requests": 1,
+                    "error_requests": 0,
+                    "error_rate": 0.0,
+                    "total_cost_microdollars": 250_000,
+                    "total_tokens": 1234,
+                },
+                "extremes": {},
+                "efficiency": {},
+            },
+            period="24h",
+            accounts=[],
+            models=[
+                {
+                    "model_id": "MiniMax-M3",
+                    "provider_id": "minimax",
+                    "request_count": 12,
+                    "error_count": 1,
+                    "total_tokens": 3456,
+                    "cost_microdollars": 250_000,
+                    "avg_latency_ms": 50.0,
+                }
+            ],
+            events=[],
+        )
+
+        assert '<th data-priority="1">Model</th>' in html
+        assert (
+            '<td data-priority="1">MiniMax-M3</td>'
+            '<td data-priority="1">12</td>'
+            '<td data-priority="1">$0.25</td>'
+            '<td data-priority="2">minimax</td>'
+            '<td data-priority="2">1</td>'
+            '<td data-priority="2">50.0 ms</td>'
+            '<td data-priority="3">3,456</td>'
+        ) in html
+
     def test_overview_total_tokens_card_renders(self) -> None:
         """A 'Total tokens' card surfaces Σtokens across all providers near the top."""
         html = render_overview(
