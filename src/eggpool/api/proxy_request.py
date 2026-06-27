@@ -31,6 +31,7 @@ from eggpool.request.coordinator import (
 )
 from eggpool.request.limits import check_context_limits as _check_context_limits
 from eggpool.routing.provider import parse_model_provider
+from eggpool.transcoder.context import TranscodeContext
 
 if TYPE_CHECKING:
     from fastapi import Request
@@ -171,8 +172,15 @@ async def handle_proxy_request(
         )
     is_stream = bool(stream_value)
 
+    request_id = str(uuid.uuid4())
+    transcode_ctx = TranscodeContext(
+        request_id=request_id,
+        client_protocol=endpoint.protocol,
+        upstream_protocol=endpoint.protocol,
+    )
+
     context = ProxyRequestContext(
-        request_id=str(uuid.uuid4()),
+        request_id=request_id,
         protocol=endpoint.protocol,
         model_id=model_id,
         streaming=is_stream,
@@ -184,6 +192,7 @@ async def handle_proxy_request(
         upstream_body=_rewrite_upstream_model(payload, model_id),
         upstream_protocol=endpoint.protocol,
         transcode_required=False,
+        transcode_context=transcode_ctx,
     )
 
     logger.info(

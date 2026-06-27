@@ -57,7 +57,7 @@ All four must pass with zero errors.
 - **Request lifecycle**: `RequestCoordinator` orchestrates endpoint → routing → persistence → dispatch → finalization. See `architecture/README.md` § Request Lifecycle.
 - **Multi-provider architecture**: provider-suffixed model IDs (`model-id/provider-id`), `ProviderClientPool`, `OutboundClientManager`. See `architecture/README.md` § Multi-Provider Architecture.
 - **Provider contracts**: `compose_provider_url()` is the single source of truth for upstream URLs. See `architecture/README.md` § Provider Contracts and § Provider Contract Rendering.
-- **Protocol transcoding**: transparent request/response format conversion between OpenAI and Anthropic protocols. See `architecture/README.md` § Protocol Transcoding.
+- **Protocol transcoding**: transparent request/response format conversion between OpenAI and Anthropic protocols. Phase 2 body translation is implemented in `src/eggpool/transcoder/`. See `architecture/README.md` § Protocol Transcoding.
 - **Database invariants**: SQLite WAL, single-connection serialization, `async with db.transaction():` for all DML. See `architecture/README.md` § Database.
 - **Quota and routing**: tier-based routing via `routing_priority`, `QuotaFairScorer`, upstream-authoritative suppression. See `architecture/README.md` § Quota and Routing.
 - **Error hierarchy**: `AggregatorError` → `UpstreamError` → specific subclasses. See `architecture/README.md` § Error Hierarchy.
@@ -79,6 +79,7 @@ All four must pass with zero errors.
 - **`eggpool stats recompute-costs [--dry-run|--apply] [--limit N]`**: walks the requests table in started_at DESC order, recomputes cost from the current price snapshots, and reports / applies the change. Default is `--dry-run`. Use after upgrading the resolver to fix inflated totals on cached-token-heavy models (e.g. MiMo 2.5). Implemented in `src/eggpool/cost_recompute.py` and reuses the live `CostCalculator` so the new values match what the finalizer would write today.
 - **Automatic backups**: in-process daily backups run by default under the `automatic_backup` supervised task (`src/eggpool/background/backup.py`). Uses stdlib `sqlite3.Connection.backup()` for consistent snapshots, atomic archive publication (write-to-temp + rename), and count-based retention (default 14). Controlled by `[backup]` config section. The `eggpool deploy backup-cron` path remains available for operators who prefer external scheduling.
 - **DNS cache**: `OutboundClientManager` and `ProviderClientPool` both integrate a `DnsNetworkBackend` that caches resolved DNS entries in memory. The cache reduces connection latency for repeated requests to the same upstream hosts. Controlled by `[network.dns_cache]` config. When a proxy is configured for an account, that account's client uses the proxy transport instead of the cached backend.
+- **Transcoder body translation**: `select_transcoder()` in `src/eggpool/transcoder/protocol.py` is the single source of truth for translator dispatch. When `client_protocol != upstream_protocol`, the coordinator pre-translates the request body before dispatch, decodes the response body after success, and re-renders non-retryable errors in the client protocol. Loss-of-information warnings are accumulated on `TranscodeContext.loss_warnings` and logged at request completion.
 
 ## Error Handling
 

@@ -144,8 +144,16 @@ helper modules without changing runtime behaviour:
 - Helper modules: `ids.py` (tool-call ID map), `usage.py` (usage
   canonicalisation), `errors.py` (upstream error envelope parser)
 
-**Later phases** add body translation (phase 2), streaming translation
-(phase 3), widened routing (phase 4), and operator rollout (phase 5).
+**Phase 2 — Body translation**: text-only, non-streaming request/response
+body translation is implemented in `src/eggpool/transcoder/`. The
+`BodyTranscoder` Protocol (`protocol.py`) defines the interface;
+`OpenAIToAnthropic` and `AnthropicToOpenAI` are the concrete translators.
+`select_transcoder()` is the single source of truth for dispatch. The
+coordinator pre-translates the request body before dispatch, decodes the
+response body on success, and re-renders non-retryable errors in the client
+protocol. Loss-of-information warnings are accumulated on
+`TranscodeContext.loss_warnings` and logged at request completion. Tool calls,
+vision, thinking, streaming, and routing widening are out of scope (phases 3–6).
 
 Token counts are mapped between protocol-specific fields (e.g.,
 `input_tokens` → `prompt_tokens`, `cache_creation_input_tokens` →

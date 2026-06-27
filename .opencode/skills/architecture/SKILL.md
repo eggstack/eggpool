@@ -25,7 +25,7 @@ See `architecture/README.md` for the full design overview.
 - `_crash_recovery` runs at every startup and recovers ALL pending requests and active reservations (no time threshold); a process restart is a definitive boundary, so leaked state from the previous process is unconditionally cleaned up
 - **Structured observability persistence (migrations 0026-0029)**: every `request_attempts` row carries `provider_id/model_id/protocol/retry_category/release_reason/bytes_received/latency_ms/streamed/is_retry_outcome`; every routing decision is persisted as a `routing_decisions` row inside the same transaction as the `request_attempts` INSERT so the audit trail cannot diverge from durable state; the safety-net tasks (`_crash_recovery`, `_finalize_stale_requests_once`, `reconcile_expired_reservations`) record `operational_events` rows in the same transaction as the durable state mutation; latency is decomposed into `upstream_connect_ms / upstream_read_ms / coordinator_overhead_ms` so the dashboard can tell whether slowness is network, upstream, or eggpool-side
 - **Runtime metrics**: `eggpool runtime-status` (CLI) and `GET /api/stats/runtime` (API) expose live operational health — process topology, memory usage, active thread count, background task status, DB health, OS load average (`load` section: 1m/5m/15m + normalized per-core), a bounded rolling-window upstream dispatch overhead (`dispatch_overhead` section: avg/min/max/p50/p95 over the last 100 attempts), and in-flight request counts. The `/runtime` dashboard page renders these metrics for operator visibility. Runtime metrics are always auth-gated regardless of dashboard public/private setting
-- **Protocol transcoding**: when a client sends a request in one protocol but the routed provider only supports another, the transcoder module translates the request/response body. Controlled by `[transcoder]` config; disabled by default.
+- **Protocol transcoding**: when a client sends a request in one protocol but the routed provider only supports another, the transcoder module translates the request/response body. Phase 2 body translation is now implemented in `src/eggpool/transcoder/`; `select_transcoder()` in `protocol.py` is the dispatch source of truth. Controlled by `[transcoder]` config; disabled by default.
 
 ## Runtime Observability
 
@@ -138,7 +138,9 @@ See `architecture/README.md` for the full design overview.
 
 ### Protocol Transcoding
 
-When a provider-suffixed model routes to a provider whose `protocols` list does not include the client's request protocol, the `RequestCoordinator` invokes the transcoder to convert between formats. The `upstream_protocol` field on `ProxyRequestContext` carries the provider-side protocol for upstream dispatch. Supported directions and body translation land in later phases.
+When a provider-suffixed model routes to a provider whose `protocols` list does not include the client's request protocol, the `RequestCoordinator` invokes the transcoder to convert between formats. The `upstream_protocol` field on `ProxyRequestContext` carries the provider-side protocol for upstream dispatch.
+
+**Phase 2 — Body translation**: text-only, non-streaming request/response body translation is implemented in `src/eggpool/transcoder/`. The `BodyTranscoder` Protocol (`protocol.py`) defines the interface; `OpenAIToAnthropic` and `AnthropicToOpenAI` are the concrete translators. `select_transcoder()` is the single source of truth for dispatch. The coordinator pre-translates the request body before dispatch, decodes the response body on success, and re-renders non-retryable errors in the client protocol. Loss-of-information warnings are accumulated on `TranscodeContext.loss_warnings` and logged at request completion. Tool calls, vision, thinking, streaming, and routing widening are out of scope (phases 3–6).
 
 ### Provider Contract Rendering
 

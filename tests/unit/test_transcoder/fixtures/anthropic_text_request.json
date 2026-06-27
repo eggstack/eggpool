@@ -1,0 +1,13 @@
+{
+    "model": "claude-3-opus",
+    "system": "You are a helpful assistant.",
+    "messages": [
+        {"role": "user", "content": "Hello!"},
+        {"role": "assistant", "content": "Hi there!"},
+        {"role": "user", "content": "How are you?"}
+    ],
+    "temperature": 0.7,
+    "max_tokens": 1024,
+    "top_p": 0.9,
+    "stream": false
+}

@@ -64,6 +64,7 @@ from eggpool.request.limits import estimate_reservation_tokens
 from eggpool.retry.classification import RetryCategory, RetryClassifier
 from eggpool.routing.router import RoutingDecisionTrace, RoutingExclusion
 from eggpool.security.redaction import redact_error_detail
+from eggpool.transcoder.protocol import BodyTranscoder, select_transcoder
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -76,6 +77,8 @@ if TYPE_CHECKING:
     from eggpool.models.config import AppConfig
     from eggpool.quota.estimation import QuotaEstimator
     from eggpool.routing.router import Router
+    from eggpool.transcoder.context import TranscodeContext
+    from eggpool.transcoder.policy import TranscoderPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +137,7 @@ class ProxyRequestContext:
     upstream_connect_ms: int | None = None
     upstream_protocol: str = ""
     transcode_required: bool = False
+    transcode_context: TranscodeContext | None = None
 
     def __post_init__(self) -> None:
         if not self.upstream_protocol:
@@ -217,6 +221,7 @@ class RequestCoordinator:
         routing_decision_repo: RoutingDecisionRepository | None = None,
         metrics_coalescer: Any | None = None,  # noqa: ANN401
         dispatch_overhead_recorder: Any | None = None,  # noqa: ANN401
+        transcoder_policy: TranscoderPolicy | None = None,
     ) -> None:
         self._registry = registry
         self._catalog = catalog
@@ -250,6 +255,7 @@ class RequestCoordinator:
         )
         self._metrics_coalescer = metrics_coalescer
         self._dispatch_overhead_recorder = dispatch_overhead_recorder
+        self._transcoder_policy = transcoder_policy
 
         # Build the attempt finalizer with all dependencies
         self._attempt_finalizer = AttemptFinalizer(
@@ -291,6 +297,21 @@ class RequestCoordinator:
             raise UpstreamError("No HTTP client available for upstream requests")
         return self._client
 
+    def _log_transcode_warnings(self, context: ProxyRequestContext) -> None:
+        """Emit structured logs for any transcode loss-of-information warnings."""
+        if context.transcode_context is None:
+            return
+        warnings = context.transcode_context.loss_warnings
+        if warnings:
+            logger.info(
+                "transcode.loss_warnings request_id=%s "
+                "client=%s upstream=%s warnings=%s",
+                context.request_id,
+                context.protocol,
+                context.upstream_protocol,
+                warnings,
+            )
+
     async def execute(self, context: ProxyRequestContext) -> PreparedProxyResponse:
         """Execute a request through the full lifecycle.
 
@@ -302,6 +323,30 @@ class RequestCoordinator:
         # Reject mismatched protocol endpoints before creating any
         # request, reservation, or attempt row.
         self._validate_endpoint(context)
+
+        # Phase 2: select the body transcoder when client and upstream
+        # protocols differ and transcoding is enabled.
+        transcoder: BodyTranscoder | None = None
+        if (
+            context.transcode_context is not None
+            and not context.transcode_context.is_native()
+        ):
+            transcoder = select_transcoder(
+                client_protocol=context.transcode_context.client_protocol,
+                upstream_protocol=context.transcode_context.upstream_protocol,
+            )
+            if transcoder is not None:
+                try:
+                    payload = json.loads(context.body_for_upstream)
+                except (json.JSONDecodeError, ValueError):
+                    payload = None
+                if isinstance(payload, dict):
+                    translated, warnings = transcoder.encode_request(
+                        cast("dict[str, Any]", payload),
+                        context.transcode_context,
+                    )
+                    context.upstream_body = encode_json_body(translated)
+                    context.transcode_context.loss_warnings.extend(warnings)
 
         last_error: Exception | None = None
         last_upstream_response: tuple[int, list[tuple[str, str]], bytes] | None = None
@@ -367,7 +412,11 @@ class RequestCoordinator:
 
             last_selected = selected
             try:
-                return await self._execute_upstream(context, selected, attempt_num)
+                result = await self._execute_upstream(
+                    context, selected, attempt_num, transcoder=transcoder
+                )
+                self._log_transcode_warnings(context)
+                return result
             except _RetryableUpstreamError as err:
                 last_error = err
                 # Track the last useful upstream response
@@ -479,7 +528,7 @@ class RequestCoordinator:
         actual_attempts = (
             last_selected.attempt_number if last_selected is not None else 0
         )
-        return await self._handle_exhausted(
+        result = await self._handle_exhausted(
             context,
             last_error,
             last_upstream_response,
@@ -487,6 +536,8 @@ class RequestCoordinator:
             last_selected,
             health_applied=health_applied,
         )
+        self._log_transcode_warnings(context)
+        return result
 
     async def _select_and_persist_attempt(
         self,
@@ -831,13 +882,19 @@ class RequestCoordinator:
         context: ProxyRequestContext,
         selected: SelectedAttempt,
         attempt_num: int,
+        *,
+        transcoder: BodyTranscoder | None = None,
     ) -> PreparedProxyResponse:
         """Execute the upstream HTTP call using the selected attempt."""
         try:
             if context.streaming:
-                return await self._execute_streaming(context, selected, attempt_num)
+                return await self._execute_streaming(
+                    context, selected, attempt_num, transcoder=transcoder
+                )
             else:
-                return await self._execute_non_streaming(context, selected, attempt_num)
+                return await self._execute_non_streaming(
+                    context, selected, attempt_num, transcoder=transcoder
+                )
         except asyncio.CancelledError:
             # Client cancellation after selection - finalize the attempt
             elapsed_ms = self._elapsed_ms(context)
@@ -858,6 +915,8 @@ class RequestCoordinator:
         context: ProxyRequestContext,
         selected: SelectedAttempt,
         attempt_num: int,
+        *,
+        transcoder: BodyTranscoder | None = None,
     ) -> PreparedProxyResponse:
         """Execute a non-streaming request."""
         headers = self._build_upstream_headers(context, selected)
@@ -952,6 +1011,20 @@ class RequestCoordinator:
                 await self._finalize_non_retryable(
                     context, selected, response.status_code, resp_headers, resp_body
                 )
+                # Phase 2: re-render upstream error in client protocol
+                if transcoder is not None and context.transcode_context is not None:
+                    try:
+                        err_payload = json.loads(resp_body)
+                    except (json.JSONDecodeError, ValueError):
+                        err_payload = None
+                    if isinstance(err_payload, dict) or err_payload is None:
+                        _status, err_body, err_warnings = transcoder.reencode_error(
+                            response.status_code,
+                            cast("dict[str, Any] | None", err_payload),
+                            context.transcode_context,
+                        )
+                        resp_body = encode_json_body(err_body)
+                        context.transcode_context.loss_warnings.extend(err_warnings)
                 elapsed_ms = self._elapsed_ms(context)
                 resp_headers.append(("x-proxy-request-id", context.request_id))
                 resp_headers.append(("x-proxy-attempt-count", str(attempt_num)))
@@ -1033,6 +1106,20 @@ class RequestCoordinator:
                 ],
             )
 
+            # Phase 2: decode upstream success response to client protocol
+            if transcoder is not None and context.transcode_context is not None:
+                try:
+                    upstream_payload = json.loads(body)
+                except (json.JSONDecodeError, ValueError):
+                    upstream_payload = None
+                if isinstance(upstream_payload, dict):
+                    translated, decode_warnings = transcoder.decode_response(
+                        cast("dict[str, Any]", upstream_payload),
+                        context.transcode_context,
+                    )
+                    body = encode_json_body(translated)
+                    context.transcode_context.loss_warnings.extend(decode_warnings)
+
             resp_headers.append(("x-proxy-request-id", context.request_id))
             resp_headers.append(("x-proxy-attempt-count", str(attempt_num)))
             return PreparedProxyResponse(
@@ -1057,6 +1144,8 @@ class RequestCoordinator:
         context: ProxyRequestContext,
         selected: SelectedAttempt,
         attempt_num: int,
+        *,
+        transcoder: BodyTranscoder | None = None,
     ) -> PreparedProxyResponse:
         """Execute a streaming request."""
         headers = self._build_upstream_headers(context, selected)
