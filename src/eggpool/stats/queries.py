@@ -79,6 +79,14 @@ async def fetch_summary(
             as estimated_count,
         COALESCE(SUM(CASE WHEN exactness = 'unknown' THEN 1 ELSE 0 END), 0)
             as unknown_count,
+        COALESCE(SUM(CASE WHEN exactness = 'provider_reported' THEN 1 ELSE 0 END), 0)
+            as provider_reported_count,
+        COALESCE(SUM(CASE WHEN exactness = 'provider_reported'
+            THEN cost_microdollars ELSE 0 END), 0)
+            as provider_reported_cost_microdollars,
+        COALESCE(SUM(CASE WHEN exactness = 'estimated'
+            THEN cost_microdollars ELSE 0 END), 0)
+            as estimated_cost_sum_microdollars,
         COALESCE(SUM(bytes_received), 0) as total_bytes_received,
         COALESCE(SUM(bytes_emitted), 0) as total_bytes_emitted,
         (SELECT COUNT(DISTINCT provider_id) FROM accounts) as total_providers,
@@ -155,7 +163,15 @@ async def fetch_account_stats(
             COALESCE(SUM(CASE WHEN r.exactness = 'estimated' THEN 1 ELSE 0 END), 0)
                 as estimated_count,
             COALESCE(SUM(CASE WHEN r.exactness = 'unknown' OR r.exactness IS NULL
-                THEN 1 ELSE 0 END), 0) as unknown_count
+                THEN 1 ELSE 0 END), 0) as unknown_count,
+            COALESCE(SUM(CASE WHEN r.exactness = 'provider_reported'
+                THEN 1 ELSE 0 END), 0) as provider_reported_count,
+            COALESCE(SUM(CASE WHEN r.exactness = 'provider_reported'
+                THEN r.cost_microdollars ELSE 0 END), 0)
+                as provider_reported_cost_microdollars,
+            COALESCE(SUM(CASE WHEN r.exactness = 'estimated'
+                THEN r.cost_microdollars ELSE 0 END), 0)
+                as estimated_cost_sum_microdollars
         FROM requests r
         WHERE r.started_at >= ? AND r.started_at < ?
         GROUP BY r.account_id
@@ -209,6 +225,11 @@ async def fetch_account_stats(
         COALESCE(ps.partial_count, 0) as partial_count,
         COALESCE(ps.estimated_count, 0) as estimated_count,
         COALESCE(ps.unknown_count, 0) as unknown_count,
+        COALESCE(ps.provider_reported_count, 0) as provider_reported_count,
+        COALESCE(ps.provider_reported_cost_microdollars, 0)
+            as provider_reported_cost_microdollars,
+        COALESCE(ps.estimated_cost_sum_microdollars, 0)
+            as estimated_cost_sum_microdollars,
         CASE
             WHEN COALESCE(ps.request_count, 0) > 0
             THEN CAST(COALESCE(ps.estimated_count, 0) AS REAL)
@@ -315,6 +336,14 @@ async def fetch_model_stats(
             as estimated_count,
         COALESCE(SUM(CASE WHEN r.exactness = 'unknown' OR r.exactness IS NULL
             THEN 1 ELSE 0 END), 0) as unknown_count,
+        COALESCE(SUM(CASE WHEN r.exactness = 'provider_reported' THEN 1 ELSE 0 END), 0)
+            as provider_reported_count,
+        COALESCE(SUM(CASE WHEN r.exactness = 'provider_reported'
+            THEN r.cost_microdollars ELSE 0 END), 0)
+            as provider_reported_cost_microdollars,
+        COALESCE(SUM(CASE WHEN r.exactness = 'estimated'
+            THEN r.cost_microdollars ELSE 0 END), 0)
+            as estimated_cost_sum_microdollars,
         CASE
             WHEN COUNT(*) > 0
             THEN CAST(COALESCE(SUM(CASE WHEN r.exactness = 'estimated'
@@ -710,6 +739,13 @@ def _build_summary(row: dict[str, Any]) -> dict[str, Any]:
         "partial_count": int(row.get("partial_count", 0)),
         "estimated_count": int(row.get("estimated_count", 0)),
         "unknown_count": int(row.get("unknown_count", 0)),
+        "provider_reported_count": int(row.get("provider_reported_count", 0)),
+        "provider_reported_cost_microdollars": int(
+            row.get("provider_reported_cost_microdollars", 0)
+        ),
+        "estimated_cost_sum_microdollars": int(
+            row.get("estimated_cost_sum_microdollars", 0)
+        ),
         "total_bytes_received": int(row.get("total_bytes_received", 0)),
         "total_bytes_emitted": int(row.get("total_bytes_emitted", 0)),
         "total_providers": int(row.get("total_providers", 0)),
@@ -741,6 +777,9 @@ def _empty_summary() -> dict[str, Any]:
         "partial_count": 0,
         "estimated_count": 0,
         "unknown_count": 0,
+        "provider_reported_count": 0,
+        "provider_reported_cost_microdollars": 0,
+        "estimated_cost_sum_microdollars": 0,
         "total_bytes_received": 0,
         "total_bytes_emitted": 0,
         "total_providers": 0,

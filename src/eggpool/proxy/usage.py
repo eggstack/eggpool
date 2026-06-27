@@ -6,6 +6,10 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 from eggpool.catalog.pricing import coerce_token_count
+from eggpool.proxy.cost_reporting import (
+    ProviderReportedCost,
+    extract_provider_reported_cost,
+)
 
 
 def safe_dict(value: Any) -> dict[str, Any] | None:
@@ -26,10 +30,42 @@ class StreamUsageResult:
     reasoning_tokens: int = 0
     thinking_characters: int = 0
     is_complete: bool = False
+    # Authoritative provider-reported billed cost, in microdollars.
+    # ``None`` when the upstream did not expose an unambiguous value.
+    # The finalizer prefers this over locally derived cost whenever it
+    # is set so the dashboard reflects actual spend rather than a local
+    # estimate.
+    reported_cost_microdollars: int | None = None
+    # Short label identifying the response field that produced
+    # ``reported_cost_microdollars`` (e.g. ``usage.cost_usd`` or the
+    # provider-prefixed alias). ``None`` when no provider cost was found.
+    reported_cost_source: str | None = None
+
+
+def _reported_cost(
+    data: Any,
+    *,
+    provider_id: str | None,
+    protocol: str,
+) -> ProviderReportedCost | None:
+    """Extract provider-reported cost from a usage payload.
+
+    The parser is defensive: any unparseable structure returns ``None``
+    and never raises, so a malformed cost field cannot break stream
+    finalization.
+    """
+    return extract_provider_reported_cost(
+        data,
+        provider_id=provider_id,
+        protocol=protocol,
+    )
 
 
 class OpenAIStreamUsageExtractor:
     """Extracts usage from OpenAI SSE stream events."""
+
+    def __init__(self, *, provider_id: str | None = None) -> None:
+        self._provider_id = provider_id
 
     def extract(self, data: dict[str, Any]) -> StreamUsageResult | None:
         """Extract usage from an OpenAI streaming chunk.
@@ -43,6 +79,13 @@ class OpenAIStreamUsageExtractor:
 
         prompt_details = safe_dict(usage_data.get("prompt_tokens_details"))
         completion_details = safe_dict(usage_data.get("completion_tokens_details"))
+
+        # Provider-reported cost (when present) is preferred. The finalizer
+        # treats this as authoritative and overrides any locally derived
+        # cost so the dashboard reflects actual spend.
+        reported = _reported_cost(
+            data, provider_id=self._provider_id, protocol="openai"
+        )
 
         return StreamUsageResult(
             input_tokens=coerce_token_count(usage_data.get("prompt_tokens", 0)),
@@ -58,11 +101,18 @@ class OpenAIStreamUsageExtractor:
                 else 0
             ),
             is_complete=True,
+            reported_cost_microdollars=(
+                reported.microdollars if reported is not None else None
+            ),
+            reported_cost_source=reported.source if reported is not None else None,
         )
 
 
 class AnthropicStreamUsageExtractor:
     """Extracts usage from Anthropic SSE stream events."""
+
+    def __init__(self, *, provider_id: str | None = None) -> None:
+        self._provider_id = provider_id
 
     def extract(self, data: dict[str, Any]) -> StreamUsageResult | None:
         """Extract usage from an Anthropic streaming event.
@@ -95,9 +145,24 @@ class AnthropicStreamUsageExtractor:
             usage = safe_dict(data.get("usage"))
             if usage is None:
                 return None
+            # message_delta is the canonical Anthropic location for
+            # end-of-stream cost.  Inspect the parent event payload too,
+            # because Anthropic vendors may place billing fields under
+            # ``usage.billing`` rather than ``usage`` directly.
+            reported = _reported_cost(
+                data,
+                provider_id=self._provider_id,
+                protocol="anthropic",
+            )
             return StreamUsageResult(
                 output_tokens=coerce_token_count(usage.get("output_tokens", 0)),
                 is_complete=True,
+                reported_cost_microdollars=(
+                    reported.microdollars if reported is not None else None
+                ),
+                reported_cost_source=(
+                    reported.source if reported is not None else None
+                ),
             )
 
         if event_type == "content_block_delta":

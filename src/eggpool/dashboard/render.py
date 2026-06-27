@@ -162,8 +162,12 @@ _CARD_TOOLTIPS: dict[str, str] = {
         "Fraction of requests in the selected period that ended in an error."
     ),
     "Total cost": (
-        "Total recorded request cost in the selected period, using the current "
-        "cost exactness pipeline."
+        "Total recorded request cost in the selected period. When the upstream "
+        "provider reports a cost (e.g. OpenCode Go's usage.cost field), that "
+        "value takes precedence over locally computed rates; otherwise eggpool "
+        "falls back to per-token rates from the catalog. Reservation-derived "
+        "estimates are advisory and never inflate the totals when more "
+        "trustworthy data is available."
     ),
     "Utilization imbalance": (
         "Coefficient of variation across active accounts. Higher values mean "
@@ -744,16 +748,19 @@ def _render_pricing_exactness_badge(
     partial: int,
     estimated: int,
     unknown_exc: int,
+    provider_reported: int = 0,
 ) -> str:
     """Render a compact exactness badge.
 
     The badge is colored by the worst-case exactness observed: green when
-    every row is ``exact`` or ``derived``, yellow when any ``partial``
-    row exists, red when ``estimated`` or ``unknown`` dominates. Used
-    on the Accounts / Models tables so operators can spot rows whose
-    cost numbers are advisory at a glance.
+    every row is ``exact``, ``derived``, or ``provider_reported``, yellow
+    when any ``partial`` row exists, red when ``estimated`` or ``unknown``
+    dominates. Used on the Accounts / Models tables so operators can spot
+    rows whose cost numbers are advisory at a glance. ``provider_reported``
+    is the most-trusted category because it reflects the upstream's own
+    billing record.
     """
-    total = exact + derived + partial + estimated + unknown_exc
+    total = exact + derived + partial + estimated + unknown_exc + provider_reported
     if total == 0:
         return '<span class="exactness-badge empty">—</span>'
     if estimated == total or unknown_exc == total:
@@ -762,7 +769,10 @@ def _render_pricing_exactness_badge(
         css_class = "exactness-badge partial-mix"
     else:
         css_class = "exactness-badge derived"
-    summary = f"e:{exact},d:{derived},p:{partial},~:{estimated},?:{unknown_exc}"
+    summary = (
+        f"u:{provider_reported},e:{exact},d:{derived},"
+        f"p:{partial},~:{estimated},?:{unknown_exc}"
+    )
     return f'<span class="{css_class}" title="{escape(summary)}">{summary}</span>'
 
 
@@ -1341,6 +1351,7 @@ def render_overview(
     derived = int(summary.get("derived_count", 0))
     estimated = int(summary.get("estimated_count", 0))
     unknown_exc = int(summary.get("unknown_count", 0))
+    provider_reported = int(summary.get("provider_reported_count", 0))
     bytes_in = format_bytes(summary.get("total_bytes_received", 0))
     bytes_out = format_bytes(summary.get("total_bytes_emitted", 0))
 
@@ -1375,7 +1386,14 @@ def render_overview(
                 _render_metric_card(
                     title="Total cost",
                     metric=cost,
-                    sub=f"in {in_tok} · out {out_tok} · total {total_tok}",
+                    sub=(
+                        f"in {in_tok} · out {out_tok} · total {total_tok}"
+                        + (
+                            f" · {provider_reported:,} provider-billed"
+                            if provider_reported > 0
+                            else ""
+                        )
+                    ),
                 ),
                 _render_metric_card(
                     title="Utilization imbalance",
@@ -1420,8 +1438,9 @@ def render_overview(
                     title="Exactness",
                     metric=f"{exact:,}",
                     sub=(
-                        f"exact · {derived:,} derived · {estimated:,} est · "
-                        f"{unknown_exc:,} unk"
+                        f"exact · {derived:,} derived · "
+                        f"{provider_reported:,} upstream · "
+                        f"{estimated:,} est · {unknown_exc:,} unk"
                     ),
                 ),
             ]
@@ -1589,12 +1608,14 @@ def _render_account_table(accounts: list[dict[str, Any]]) -> str:
         partial_count = int(row.get("partial_count", 0) or 0)
         estimated = int(row.get("estimated_count", 0) or 0)
         unknown_exc = int(row.get("unknown_count", 0) or 0)
+        provider_reported = int(row.get("provider_reported_count", 0) or 0)
         exactness = _render_pricing_exactness_badge(
             exact=exact,
             derived=derived,
             partial=partial_count,
             estimated=estimated,
             unknown_exc=unknown_exc,
+            provider_reported=provider_reported,
         )
         est_cost_fraction = row.get("estimated_cost_fraction")
         est_cost_pct = (
@@ -1771,12 +1792,14 @@ def render_models(
             partial_count = int(row.get("partial_count", 0) or 0)
             estimated = int(row.get("estimated_count", 0) or 0)
             unknown_exc = int(row.get("unknown_count", 0) or 0)
+            provider_reported = int(row.get("provider_reported_count", 0) or 0)
             exactness = _render_pricing_exactness_badge(
                 exact=exact,
                 derived=derived,
                 partial=partial_count,
                 estimated=estimated,
                 unknown_exc=unknown_exc,
+                provider_reported=provider_reported,
             )
             est_cost_fraction = row.get("estimated_cost_fraction")
             est_cost_pct = (

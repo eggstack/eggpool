@@ -331,11 +331,22 @@ dashboard's public/auth setting.
   no error_detail). Auth-gated.
 - **Cost/cache/reasoning exactness** (extended fields on `/api/stats/accounts`
   and `/api/stats/models`): per-account and per-model `exact_count`,
-  `partial_count`, `derived_count`, `estimated_count`, `cache_read_ratio`,
-  `cache_write_ratio`, `reasoning_output_ratio`, `estimated_cost_fraction`,
-  `avg_cost_per_request`, `avg_cost_per_1k_tokens`. Lets you see which
-  accounts/models/providers report exact usage versus partially-priced
-  versus locally estimated cost.
+  `partial_count`, `derived_count`, `estimated_count`, `provider_reported_count`,
+  `cache_read_ratio`, `cache_write_ratio`, `reasoning_output_ratio`,
+  `estimated_cost_fraction`, `avg_cost_per_request`, `avg_cost_per_1k_tokens`.
+  Lets you see which accounts/models/providers report exact usage versus
+  partially-priced versus locally estimated cost versus upstream-billed cost.
+- **Provider-reported cost precedence**: when an upstream provider includes a
+  billing field in its response (`usage.cost_microdollars`, `usage.cost_usd`,
+  `usage.billing.cost_usd`, OpenCode Go's `usage.cost`/`usage.total_cost`),
+  that value is recorded on the `requests` row in `provider_cost_microdollars`
+  (with `provider_cost_source` recording the field path) and the request
+  exactness is labelled `provider_reported`. Provider-reported cost is the
+  most-trusted tier in the cost precedence ladder — it precedes locally
+  derived rates (per-token pricing) and reservation-derived estimates
+  (`estimated`), and is never overridden by them. Locally calculated values
+  are still stored in `local_cost_microdollars` and `local_cost_exactness`
+  for diagnostics comparison.
 - **Pricing provenance** (`/api/stats/pricing-provenance`): per-`(model,
   provider)` snapshot breakdown of `source_detail` (operator override vs.
   upstream metadata vs. OpenRouter catalog vs. curated alias) and

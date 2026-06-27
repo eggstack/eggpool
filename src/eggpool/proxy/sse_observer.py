@@ -58,8 +58,9 @@ class IncrementalSSEObserver:
     synchronization is not required.
     """
 
-    def __init__(self, protocol: str) -> None:
+    def __init__(self, protocol: str, *, provider_id: str | None = None) -> None:
         self._protocol = protocol
+        self._provider_id = provider_id
         self._buffer = ""
         self._bytes_emitted = 0
         self._usage_result = StreamUsageResult()
@@ -76,9 +77,9 @@ class IncrementalSSEObserver:
         self._discarding_event = False
 
         if protocol == "anthropic":
-            self._extractor = AnthropicStreamUsageExtractor()
+            self._extractor = AnthropicStreamUsageExtractor(provider_id=provider_id)
         else:
-            self._extractor = OpenAIStreamUsageExtractor()
+            self._extractor = OpenAIStreamUsageExtractor(provider_id=provider_id)
 
     def observe(self, chunk: bytes) -> None:
         """Process a chunk of bytes from the upstream stream.
@@ -218,7 +219,16 @@ class IncrementalSSEObserver:
         self._discarding_event = discarding
 
     def _merge_usage(self, incoming: StreamUsageResult) -> None:
-        """Merge incoming usage into the accumulated result."""
+        """Merge incoming usage into the accumulated result.
+
+        Token counters are additive. Provider-reported cost is replaced
+        with the latest non-null value when the incoming event is
+        marked ``is_complete``; otherwise the existing authoritative
+        value is preserved. This matches the convention that final
+        stream events supersede intermediate deltas — most providers
+        publish a single authoritative cost figure in the final usage
+        event rather than emitting incremental deltas across chunks.
+        """
         self._usage_result.input_tokens += incoming.input_tokens
         self._usage_result.output_tokens += incoming.output_tokens
         self._usage_result.cache_read_tokens += incoming.cache_read_tokens
@@ -227,6 +237,18 @@ class IncrementalSSEObserver:
         self._usage_result.thinking_characters += incoming.thinking_characters
         if incoming.is_complete:
             self._usage_result.is_complete = True
+            if incoming.reported_cost_microdollars is not None:
+                self._usage_result.reported_cost_microdollars = (
+                    incoming.reported_cost_microdollars
+                )
+                self._usage_result.reported_cost_source = incoming.reported_cost_source
+        elif incoming.reported_cost_microdollars is not None:
+            # Intermediate chunk surfaced a cost. Take it but keep
+            # tracking; a later ``is_complete`` chunk may supersede it.
+            self._usage_result.reported_cost_microdollars = (
+                incoming.reported_cost_microdollars
+            )
+            self._usage_result.reported_cost_source = incoming.reported_cost_source
 
     @property
     def usage(self) -> StreamUsageResult:

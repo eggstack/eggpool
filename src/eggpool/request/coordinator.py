@@ -47,6 +47,7 @@ from eggpool.providers.contract import (
     compose_provider_url,
 )
 from eggpool.proxy.client import filter_response_headers
+from eggpool.proxy.cost_reporting import extract_provider_reported_cost
 from eggpool.proxy.sse_observer import IncrementalSSEObserver
 from eggpool.proxy.usage import StreamUsageResult, safe_dict
 from eggpool.request.attempt_finalizer import (
@@ -961,7 +962,9 @@ class RequestCoordinator:
             resp_headers = filter_response_headers(response.headers)
             elapsed_ms = self._elapsed_ms(context)
 
-            usage = self._extract_non_stream_usage(context.protocol, body)
+            usage = self._extract_non_stream_usage(
+                context.protocol, body, provider_id=selected.provider_id
+            )
             upstream_req_id = self._get_header_value(
                 resp_headers, _UPSTREAM_REQUEST_ID_HEADERS
             )
@@ -995,6 +998,12 @@ class RequestCoordinator:
                     upstream_read_ms=upstream_read_ms,
                     coordinator_overhead_ms=coordinator_overhead_ms,
                     bytes_received=len(context.original_body),
+                    provider_cost_microdollars=(
+                        usage.reported_cost_microdollars if usage else None
+                    ),
+                    provider_cost_source=(
+                        usage.reported_cost_source if usage else None
+                    ),
                 ),
             )
 
@@ -1207,7 +1216,9 @@ class RequestCoordinator:
         """Build an async generator that streams upstream bytes downstream,
         extracts usage via IncrementalSSEObserver, and finalizes the request
         on completion."""
-        observer = IncrementalSSEObserver(context.protocol)
+        observer = IncrementalSSEObserver(
+            context.protocol, provider_id=selected.provider_id
+        )
         bytes_emitted = 0
         first_byte_ms = 0.0
         started = time.monotonic()
@@ -1278,6 +1289,8 @@ class RequestCoordinator:
                         upstream_connect_ms=upstream_connect_ms_value,
                         upstream_read_ms=upstream_read_ms_value,
                         coordinator_overhead_ms=coordinator_overhead_ms_value,
+                        provider_cost_microdollars=usage_result.reported_cost_microdollars,
+                        provider_cost_source=usage_result.reported_cost_source,
                     ),
                 )
 
@@ -1362,6 +1375,12 @@ class RequestCoordinator:
                                         upstream_connect_ms=cancel_connect_ms_value,
                                         upstream_read_ms=cancel_read_ms_value,
                                         coordinator_overhead_ms=cancel_overhead_ms_value,
+                                        provider_cost_microdollars=(
+                                            usage_result.reported_cost_microdollars
+                                        ),
+                                        provider_cost_source=(
+                                            usage_result.reported_cost_source
+                                        ),
                                     ),
                                 )
                             ),
@@ -1419,6 +1438,10 @@ class RequestCoordinator:
                         upstream_connect_ms=mid_connect_ms_value,
                         upstream_read_ms=mid_read_ms_value,
                         coordinator_overhead_ms=mid_overhead_ms_value,
+                        provider_cost_microdollars=(
+                            usage_result.reported_cost_microdollars
+                        ),
+                        provider_cost_source=usage_result.reported_cost_source,
                     ),
                 )
                 raise
@@ -1431,9 +1454,20 @@ class RequestCoordinator:
         return _stream()
 
     def _extract_non_stream_usage(
-        self, protocol: str, body: bytes
+        self,
+        protocol: str,
+        body: bytes,
+        *,
+        provider_id: str | None = None,
     ) -> StreamUsageResult | None:
-        """Extract usage from a non-streaming response body."""
+        """Extract usage from a non-streaming response body.
+
+        ``provider_id`` enables provider-specific aliases when parsing
+        an authoritative cost field (e.g. OpenCode Go's bare
+        ``usage.cost`` field). The parser is defensive and returns
+        ``None`` for absent or unparseable cost values; the finalizer
+        will fall back to locally derived cost in that case.
+        """
         try:
             data = json.loads(body)
         except (json.JSONDecodeError, ValueError):
@@ -1458,6 +1492,11 @@ class RequestCoordinator:
             usage_raw = safe_dict(data_dict.get("usage"))
             if usage_raw is None:
                 return None
+            reported = extract_provider_reported_cost(
+                data_dict,
+                provider_id=provider_id,
+                protocol="anthropic",
+            )
             return StreamUsageResult(
                 input_tokens=coerce_token_count(usage_raw.get("input_tokens", 0)),
                 output_tokens=coerce_token_count(usage_raw.get("output_tokens", 0)),
@@ -1468,6 +1507,12 @@ class RequestCoordinator:
                     usage_raw.get("cache_creation_input_tokens", 0)
                 ),
                 is_complete=True,
+                reported_cost_microdollars=(
+                    reported.microdollars if reported is not None else None
+                ),
+                reported_cost_source=(
+                    reported.source if reported is not None else None
+                ),
             )
         else:
             usage_raw = safe_dict(data_dict.get("usage"))
@@ -1475,6 +1520,11 @@ class RequestCoordinator:
                 return None
             prompt_details = safe_dict(usage_raw.get("prompt_tokens_details"))
             completion_details = safe_dict(usage_raw.get("completion_tokens_details"))
+            reported = extract_provider_reported_cost(
+                data_dict,
+                provider_id=provider_id,
+                protocol="openai",
+            )
             return StreamUsageResult(
                 input_tokens=coerce_token_count(usage_raw.get("prompt_tokens", 0)),
                 output_tokens=coerce_token_count(usage_raw.get("completion_tokens", 0)),
@@ -1489,6 +1539,12 @@ class RequestCoordinator:
                     else 0
                 ),
                 is_complete=True,
+                reported_cost_microdollars=(
+                    reported.microdollars if reported is not None else None
+                ),
+                reported_cost_source=(
+                    reported.source if reported is not None else None
+                ),
             )
 
     @staticmethod

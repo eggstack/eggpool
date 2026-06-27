@@ -31,6 +31,7 @@
         "0029_latency_phases.sql": "500c1a666bf42a26b20fbaaf91b71a54bf7f527dd31c627f7769703da220ba76",
         "0030_model_pricing_aliases.sql": "0280856caa1607dd0afe65509e48c3553c33afa1c90a4ab741ef59ac17440f88",
         "0031_price_snapshot_provenance.sql": "1442daeb0da32048fe27b2aef99c825af6f33d370bea88e40053c479726808ea",
-        "0032_usage_rollups.sql": "a06bbafccede276d459fe8f60ac07735fe7d73ad7172742a8c24103dfe75fe41"
+        "0032_usage_rollups.sql": "a06bbafccede276d459fe8f60ac07735fe7d73ad7172742a8c24103dfe75fe41",
+        "0033_request_provider_local_cost.sql": "4e044ab78bc27c76bc32c16f8c3b9f5e071762d796760a0b57fd9a1352653fad"
     }
 }

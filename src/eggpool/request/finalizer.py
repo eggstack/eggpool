@@ -69,6 +69,14 @@ class FinalizationData:
     upstream_connect_ms: int | None = None
     upstream_read_ms: int | None = None
     coordinator_overhead_ms: int | None = None
+    # Authoritative provider-reported billed cost, in microdollars.
+    # ``None`` when the upstream did not surface an unambiguous value.
+    # When set, this value overrides any locally derived cost so the
+    # dashboard reflects actual spend rather than a reservation
+    # estimate. ``provider_cost_source`` records the JSON path that
+    # produced the value for audit/observability.
+    provider_cost_microdollars: int | None = None
+    provider_cost_source: str | None = None
 
 
 class RequestFinalizer:
@@ -124,6 +132,96 @@ class RequestFinalizer:
         cost_microdollars = 0
         exactness = "unknown"
 
+        # Cost-precedence ladder for the canonical ``cost_microdollars``
+        # value persisted to the requests table:
+        #
+        #   1. ``provider_reported``  — authoritative upstream-reported
+        #      billed cost from the response payload.
+        #   2. ``derived`` / ``partial`` / ``exact`` — EggPool's local
+        #      CostCalculator produced a value from a trusted price
+        #      snapshot. Preserve the calculator's exactness label.
+        #   3. ``estimated`` — the calculator returned zero/unknown
+        #      but billable work likely occurred; fall back to the
+        #      conservative reservation estimate. Distinct from a real
+        #      provider figure so the dashboard can attribute spend
+        #      correctly.
+        #   4. ``unknown`` — no usage and no billable work, so cost
+        #      stays at zero.
+        #
+        # The reservation estimate is recorded for routing/failover
+        # scoring and is preserved as a separate audit field. It MUST
+        # NOT inflate provider-reported or derived cost — those values
+        # already reflect actual or near-actual spend.
+        has_usage = any(
+            (
+                data.input_tokens,
+                data.output_tokens,
+                data.cache_read_tokens,
+                data.cache_write_tokens,
+            )
+        )
+        may_have_billable_work = data.outcome in (FinalizationOutcome.COMPLETED,) or (
+            data.outcome
+            in (
+                FinalizationOutcome.CLIENT_CANCELLED,
+                FinalizationOutcome.MIDSTREAM_ERROR,
+            )
+            and (has_usage or data.bytes_emitted > 0)
+        )
+
+        # Local calculator result — preserved as an audit field even
+        # when the canonical value is overridden by a provider report.
+        local_cost_microdollars: int | None = None
+        local_cost_exactness: str | None = None
+        if self._cost_calculator is not None and has_usage:
+            (
+                local_cost_microdollars,
+                local_cost_exactness,
+            ) = await self._cost_calculator.calculate_cost(
+                _get_model_id(selected),
+                data.input_tokens,
+                data.output_tokens,
+                data.cache_read_tokens,
+                data.cache_write_tokens,
+                provider_id=selected.provider_id,
+            )
+
+        # 1. Provider-reported cost wins outright when present.
+        if data.provider_cost_microdollars is not None:
+            cost_microdollars = data.provider_cost_microdollars
+            exactness = "provider_reported"
+        # 2. Trusted local calculation: derived / partial / exact.
+        elif local_cost_microdollars is not None and (
+            local_cost_microdollars > 0
+            or local_cost_exactness in {"derived", "partial", "exact"}
+        ):
+            cost_microdollars = local_cost_microdollars
+            exactness = local_cost_exactness or "derived"
+        # 3. Conservative reservation fallback only when billable work
+        #    is plausible AND no trusted value is available.
+        elif may_have_billable_work:
+            cost_microdollars = selected.estimated_microdollars
+            exactness = "estimated"
+            local_cost_microdollars = cost_microdollars
+            local_cost_exactness = "estimated"
+        else:
+            cost_microdollars = 0
+            exactness = "unknown"
+
+        # 4. Estimated-cost floor: even when a calculator produced a
+        #    positive-but-trivially-small value under the ``estimated``
+        #    label, the dashboard must reflect at least the conservative
+        #    reservation amount so quota accounting never reports less
+        #    spend than the routing layer pre-reserved. This applies
+        #    only when exactness stayed at ``estimated``; derived /
+        #    partial / exact values reflect real pricing and must not
+        #    be inflated by a reservation floor.
+        if (
+            exactness == "estimated"
+            and cost_microdollars < selected.estimated_microdollars
+        ):
+            cost_microdollars = selected.estimated_microdollars
+
         # Default is fail-closed: do not persist arbitrary provider
         # error detail. When ``persist_error_detail`` is enabled the
         # shared redactor already returns a bounded string.
@@ -133,65 +231,6 @@ class RequestFinalizer:
             error_detail = None
 
         async with self._db.transaction():
-            # 1. Calculate cost if we have usable usage
-            if self._cost_calculator is not None and any(
-                (
-                    data.input_tokens,
-                    data.output_tokens,
-                    data.cache_read_tokens,
-                    data.cache_write_tokens,
-                )
-            ):
-                (
-                    cost_microdollars,
-                    exactness,
-                ) = await self._cost_calculator.calculate_cost(
-                    _get_model_id(selected),
-                    data.input_tokens,
-                    data.output_tokens,
-                    data.cache_read_tokens,
-                    data.cache_write_tokens,
-                    provider_id=selected.provider_id,
-                )
-
-            # 2. Use reservation estimate as fallback when cost is unknown
-            #    or the calculator returned zero, but only for outcomes
-            #    that may have billable work (success, or cancellation/
-            #    midstream error with observed bytes). Pure upstream
-            #    failures with no usage must not consume quota.
-            has_usage = any(
-                (
-                    data.input_tokens,
-                    data.output_tokens,
-                    data.cache_read_tokens,
-                    data.cache_write_tokens,
-                )
-            )
-            may_have_billable_work = data.outcome in (
-                FinalizationOutcome.COMPLETED,
-            ) or (
-                data.outcome
-                in (
-                    FinalizationOutcome.CLIENT_CANCELLED,
-                    FinalizationOutcome.MIDSTREAM_ERROR,
-                )
-                and (has_usage or data.bytes_emitted > 0)
-            )
-            if (
-                cost_microdollars == 0
-                and exactness != "exact"
-                and may_have_billable_work
-            ):
-                cost_microdollars = selected.estimated_microdollars
-                exactness = "estimated"
-
-            # 2b. Ensure estimated cost never falls below reservation estimate
-            if (
-                exactness == "estimated"
-                and cost_microdollars < selected.estimated_microdollars
-            ):
-                cost_microdollars = selected.estimated_microdollars
-
             # 3. Finalize request only if pending (idempotent)
             db_request_id = selected.db_request_id
             status = self._outcome_to_status(data.outcome)
@@ -222,6 +261,10 @@ class RequestFinalizer:
                 upstream_connect_ms=data.upstream_connect_ms,
                 upstream_read_ms=data.upstream_read_ms,
                 coordinator_overhead_ms=data.coordinator_overhead_ms,
+                provider_cost_microdollars=data.provider_cost_microdollars,
+                provider_cost_source=data.provider_cost_source,
+                local_cost_microdollars=local_cost_microdollars,
+                local_cost_exactness=local_cost_exactness,
             )
 
             # 4. Finalize attempt only if request transitioned and attempt

@@ -237,6 +237,10 @@ class RequestRepository:
         reasoning_tokens: int | None = None,
         thinking_characters: int | None = None,
         retry_count: int = 0,
+        provider_cost_microdollars: int | None = None,
+        provider_cost_source: str | None = None,
+        local_cost_microdollars: int | None = None,
+        local_cost_exactness: str | None = None,
     ) -> None:
         """Update request after completion (non-streaming)."""
         await self._db.execute_write(
@@ -247,7 +251,9 @@ class RequestRepository:
             "error_class = ?, error_detail = ?, upstream_request_id = ?, "
             "cache_read_tokens = ?, cache_write_tokens = ?, "
             "reasoning_tokens = ?, thinking_characters = ?, "
-            "retry_count = ?, status_code = ? "
+            "retry_count = ?, status_code = ?, "
+            "provider_cost_microdollars = ?, provider_cost_source = ?, "
+            "local_cost_microdollars = ?, local_cost_exactness = ? "
             "WHERE id = ? AND status = 'pending'",
             (
                 status,
@@ -266,6 +272,10 @@ class RequestRepository:
                 thinking_characters,
                 retry_count,
                 status_code,
+                provider_cost_microdollars,
+                provider_cost_source,
+                local_cost_microdollars,
+                local_cost_exactness,
                 request_id,
             ),
         )
@@ -288,6 +298,10 @@ class RequestRepository:
         reasoning_tokens: int | None = None,
         thinking_characters: int | None = None,
         retry_count: int = 0,
+        provider_cost_microdollars: int | None = None,
+        provider_cost_source: str | None = None,
+        local_cost_microdollars: int | None = None,
+        local_cost_exactness: str | None = None,
     ) -> None:
         """Update request after streaming completes."""
         await self._db.execute_write(
@@ -298,7 +312,9 @@ class RequestRepository:
             "error_class = ?, error_detail = ?, upstream_request_id = ?, "
             "cache_read_tokens = ?, cache_write_tokens = ?, "
             "reasoning_tokens = ?, thinking_characters = ?, "
-            "retry_count = ?, status_code = ? "
+            "retry_count = ?, status_code = ?, "
+            "provider_cost_microdollars = ?, provider_cost_source = ?, "
+            "local_cost_microdollars = ?, local_cost_exactness = ? "
             "WHERE id = ? AND status = 'pending'",
             (
                 status,
@@ -316,6 +332,10 @@ class RequestRepository:
                 thinking_characters,
                 retry_count,
                 status_code,
+                provider_cost_microdollars,
+                provider_cost_source,
+                local_cost_microdollars,
+                local_cost_exactness,
                 request_id,
             ),
         )
@@ -344,6 +364,10 @@ class RequestRepository:
         upstream_connect_ms: int | None = None,
         upstream_read_ms: int | None = None,
         coordinator_overhead_ms: int | None = None,
+        provider_cost_microdollars: int | None = None,
+        provider_cost_source: str | None = None,
+        local_cost_microdollars: int | None = None,
+        local_cost_exactness: str | None = None,
     ) -> bool:
         """Finalize a request only if it is still pending.
 
@@ -361,7 +385,9 @@ class RequestRepository:
             "retry_count = ?, status_code = ?, upstream_latency_ms = ?, "
             "bytes_received = ?, bytes_emitted = ?, "
             "upstream_connect_ms = ?, upstream_read_ms = ?, "
-            "coordinator_overhead_ms = ? "
+            "coordinator_overhead_ms = ?, "
+            "provider_cost_microdollars = ?, provider_cost_source = ?, "
+            "local_cost_microdollars = ?, local_cost_exactness = ? "
             "WHERE id = ? AND status = 'pending'",
             (
                 status,
@@ -385,6 +411,10 @@ class RequestRepository:
                 upstream_connect_ms,
                 upstream_read_ms,
                 coordinator_overhead_ms,
+                provider_cost_microdollars,
+                provider_cost_source,
+                local_cost_microdollars,
+                local_cost_exactness,
                 request_id,
             ),
         )
