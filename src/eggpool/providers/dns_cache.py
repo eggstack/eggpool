@@ -59,6 +59,7 @@ class DnsCache:
         self.negative_hits = 0
         self.stale_hits = 0
         self.evictions = 0
+        self._evictions_by_reason: dict[str, int] = {"capacity": 0, "ttl_expiry": 0}
         self._per_host: dict[tuple[str, int], dict[str, int]] = {}
         self._resolution_errors: dict[tuple[str, int, str], int] = {}
         self._lookup_timeout_s: float | None = (
@@ -119,11 +120,13 @@ class DnsCache:
             resolution_errors[label] = count
         hosts = self._snapshot_hosts()
         return {
+            "max_entries": self._config.max_entries,
             "hits": self.hits,
             "misses": self.misses,
             "negative_hits": self.negative_hits,
             "stale_hits": self.stale_hits,
             "evictions": self.evictions,
+            "evictions_by_reason": dict(self._evictions_by_reason),
             "size": len(self._cache),
             "entries": self.entries,
             "resolution_errors": resolution_errors,
@@ -214,12 +217,14 @@ class DnsCache:
                         )
                         return entry.addresses
                     del self._cache[key]
+                    self._evictions_by_reason["ttl_expiry"] += 1
                 else:
                     if now < entry.expires_at:
                         self.negative_hits += 1
                         self._record(key, "negative_hits")
                         raise entry.error_class(entry.error_message)
                     del self._cache[key]
+                    self._evictions_by_reason["ttl_expiry"] += 1
 
             self.misses += 1
             self._record(key, "misses")
@@ -362,6 +367,7 @@ class DnsCache:
         while len(self._cache) >= self._config.max_entries:
             self._cache.popitem(last=False)
             self.evictions += 1
+            self._evictions_by_reason["capacity"] += 1
         if self.evictions > 0 and self.evictions % 10 == 0:
             logger.debug("DNS cache: %d total evictions", self.evictions)
 

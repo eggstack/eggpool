@@ -597,6 +597,47 @@ class TestLruEviction:
         assert cache.evictions == 1
         assert len(cache._cache) == 2
 
+    @pytest.mark.asyncio
+    async def test_eviction_reason_capacity(self) -> None:
+        cfg = _make_config(max_entries=2, positive_ttl_seconds=300)
+        cache = DnsCache(cfg)
+        with patch(
+            "eggpool.providers.dns_cache.socket.getaddrinfo",
+            return_value=[(socket.AF_INET, 0, 0, "", ("1.2.3.4", 0))],
+        ):
+            await cache.resolve("a.com", socket.AF_INET)
+            await cache.resolve("b.com", socket.AF_INET)
+            await cache.resolve("c.com", socket.AF_INET)
+        snap = cache.snapshot()
+        assert snap["evictions_by_reason"]["capacity"] == 1
+        assert snap["evictions_by_reason"]["ttl_expiry"] == 0
+
+    @pytest.mark.asyncio
+    async def test_eviction_reason_ttl_expiry(self) -> None:
+        cfg = _make_config(positive_ttl_seconds=10, stale_if_error_seconds=0)
+        cache = DnsCache(cfg)
+        fake_time = [1000.0]
+
+        def _monotonic() -> float:
+            return fake_time[0]
+
+        with (
+            patch(
+                "eggpool.providers.dns_cache.time.monotonic",
+                side_effect=_monotonic,
+            ),
+            patch(
+                "eggpool.providers.dns_cache.socket.getaddrinfo",
+                return_value=[(socket.AF_INET, 0, 0, "", ("1.2.3.4", 0))],
+            ),
+        ):
+            await cache.resolve("a.com", socket.AF_INET)
+            assert cache._evictions_by_reason["ttl_expiry"] == 0
+            fake_time[0] += 20
+            await cache.resolve("a.com", socket.AF_INET)
+        assert cache._evictions_by_reason["ttl_expiry"] == 1
+        assert cache._evictions_by_reason["capacity"] == 0
+
 
 class TestIpBypass:
     @pytest.mark.asyncio
@@ -798,11 +839,13 @@ class TestSnapshot:
         cache = DnsCache(cfg)
         snap = cache.snapshot()
         assert snap == {
+            "max_entries": 50,
             "hits": 0,
             "misses": 0,
             "negative_hits": 0,
             "stale_hits": 0,
             "evictions": 0,
+            "evictions_by_reason": {"capacity": 0, "ttl_expiry": 0},
             "size": 0,
             "entries": {"positive": 0, "negative": 0},
             "resolution_errors": {},

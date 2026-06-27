@@ -185,16 +185,21 @@ def test_dns_cache_shape(app_with_key: FastAPI) -> None:
     data = response.json()
     dns = data["dns_cache"]
     assert "enabled" in dns
+    assert "max_entries" in dns
     assert "entries" in dns
     assert "hits_total" in dns
     assert "misses_total" in dns
     assert "negative_hits_total" in dns
     assert "stale_hits_total" in dns
     assert "evictions_total" in dns
+    assert "evictions_by_reason" in dns
     assert "resolutions_total" in dns
     assert "errors_total" in dns
+    assert "by_host" in dns
     assert isinstance(dns["enabled"], bool)
     assert isinstance(dns["entries"], int)
+    assert isinstance(dns["evictions_by_reason"], dict)
+    assert isinstance(dns["by_host"], dict)
 
 
 def test_hosts_is_list(app_with_key: FastAPI) -> None:

@@ -2531,6 +2531,13 @@ def render_runtime(
     # Network diagnostics section
     dns_enabled = dns_cache.get("enabled", False)
     dns_entries = dns_cache.get("size", 0)
+    dns_max_entries = dns_cache.get("max_entries")
+    if dns_max_entries is not None:
+        dns_entries_label = (
+            f"entries {format_int(dns_entries)} / {format_int(dns_max_entries)}"
+        )
+    else:
+        dns_entries_label = f"entries {format_int(dns_entries)}"
     dns_hits = dns_cache.get("hits", 0)
     dns_misses = dns_cache.get("misses", 0)
     dns_total_lookups = dns_hits + dns_misses
@@ -2555,7 +2562,7 @@ def render_runtime(
     <div class="card">
       <h3>DNS cache</h3>
       <p class="metric">{"enabled" if dns_enabled else "disabled"}</p>
-      <p class="sub">entries {format_int(dns_entries)}</p>
+      <p class="sub">{dns_entries_label}</p>
     </div>
     <div class="card">
       <h3>DNS hit rate</h3>

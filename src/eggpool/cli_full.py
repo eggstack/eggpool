@@ -3156,6 +3156,7 @@ def _print_runtime_status(data: dict[str, Any]) -> None:
     click.echo("  Network:")
     dns_enabled = dns.get("enabled", False)
     dns_size = dns.get("size", 0)
+    dns_max = dns.get("max_entries")
     dns_hits = dns.get("hits", 0)
     dns_misses = dns.get("misses", 0)
     dns_total = dns_hits + dns_misses
@@ -3170,7 +3171,8 @@ def _print_runtime_status(data: dict[str, Any]) -> None:
     provider_builds = provider_pool.get("build_count", 0)
     provider_list = provider_pool.get("providers", {})
     click.echo(f"    DNS cache:         {'enabled' if dns_enabled else 'disabled'}")
-    click.echo(f"    DNS entries:       {dns_size}")
+    dns_entries_str = f"{dns_size}" + (f" / {dns_max}" if dns_max is not None else "")
+    click.echo(f"    DNS entries:       {dns_entries_str}")
     click.echo(f"    DNS hit rate:      {dns_hit_rate}")
     click.echo(f"    DNS misses:        {dns_misses}")
     click.echo(f"    DNS errors:        {dns_errors}")

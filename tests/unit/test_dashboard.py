@@ -3265,3 +3265,25 @@ class TestRenderRuntimeNetwork:
         html = render_runtime(snapshot)
         assert "test-key" not in html
         assert "OPENCODE" not in html
+
+    def test_dns_max_entries_display(self) -> None:
+        """DNS cache card shows entries / max when max_entries is present."""
+        snapshot: dict[str, Any] = {
+            "server": {"pid": 1, "uptime_seconds": 0, "configured_server_threads": 1},
+            "memory": {},
+            "processes": {},
+            "background_tasks": [],
+            "db": {},
+            "routing_runtime": {},
+            "outbound_client": {"build_count": 1, "request_count": 0, "error_count": 0},
+            "provider_client_pool": {"build_count": 0, "providers": {}},
+            "dns_cache": {
+                "enabled": True,
+                "size": 7,
+                "max_entries": 50,
+                "hits": 0,
+                "misses": 0,
+            },
+        }
+        html = render_runtime(snapshot)
+        assert "7 / 50" in html
