@@ -457,9 +457,15 @@ Production (`eggpool deploy systemd --install --production`):
 
 ## Background Tasks
 
-`TaskSupervisor` (`background/__init__.py`) manages long-running loops with restart-on-failure and exponential backoff:
-- Catalog refresh (configurable interval, default 300s)
-- Retention cleanup (old requests, events, pings)
-- Periodic checkpoint
-- Usage window refresh
-- Reservation expiry reconciliation
+`TaskSupervisor` (`background/__init__.py`) manages long-running loops with restart-on-failure and exponential backoff. All tasks are registered in `app.py` during lifespan setup:
+
+| Task | Condition | Description |
+|------|-----------|-------------|
+| `catalog_refresh` | `refresh_interval_s > 0` | Periodic upstream model catalog refresh |
+| `retention_cleanup` | Always | Hourly cleanup of old requests, events, pings, rollups, and expired reservations |
+| `checkpoint` | Always | Periodic SQLite WAL checkpoint (every 4h) |
+| `usage_window_refresh` | Always | Refreshes persisted usage windows every 60s |
+| `stale_request_finalizer` | Always | Safety net for leaked streaming requests (every 60s) |
+| `metrics_flush` | `write_mode != "immediate"` | Buffered analytics flush to `usage_rollups` |
+| `update_checker` | Always | Periodic PyPI update check (default 24h); see `update_checker.py` |
+| `automatic_backup` | `backup.enabled` | In-process SQLite backup with count-based retention; see `background/backup.py` |

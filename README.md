@@ -618,7 +618,8 @@ src/eggpool/
 │   ├── routes.py        # Dashboard HTTP routes
 │   ├── theme.py         # TOML theme to CSS variable translation
 │   ├── escape.py        # HTML escaping utilities
-│   └── static/          # CSS, JavaScript, and favicon
+│   ├── static/          # CSS, JavaScript, and favicon
+│   └── themes/          # 50+ Halloy-format .toml theme files
 ├── integrations/        # External tool config generation (OpenCode, Claude Code)
 ├── security/            # Header redaction and security utilities
 ├── lifecycle/           # Backup and uninstall orchestration
@@ -631,8 +632,6 @@ scripts/                 # Operational scripts
 ├── check_database.py    # Read-only database invariant checker
 ├── smoke_test.py        # Deployment smoke test
 └── verify_upstream_auth.py  # Direct-upstream auth verifier
-
-themes/                  # 50+ Halloy-format .toml theme files
 
 tests/
 ├── unit/                # Unit tests

@@ -50,51 +50,25 @@ All four must pass with zero errors.
 - Scripts: `scripts/` (operational, also type-checked by pyright)
 - Deployment: `deploy/`
 
-## Multi-Provider Architecture
+## Architecture Index
 
-> See `architecture/README.md` and the `architecture` skill for the full design.
+> Full design details are in `architecture/README.md` and the `architecture` skill.
 
-- Provider-suffixed model IDs: `model-id/provider-id` (e.g., `claude-sonnet-4/opencode-go`)
-- `ProviderClientPool` manages per-provider `httpx.AsyncClient` instances
-- `OutboundClientManager` owns a shared `httpx.AsyncClient` for non-provider network paths. `build_count` should stabilize at 1; growth indicates a bug
-- Hot-path provider requests must **never** construct fresh HTTP clients
-- Flat `[[accounts]]` configs auto-normalize to a default `opencode-go` provider
-- `parse_model_provider()` and `format_model_provider()` in `routing/provider.py`
-
-## Provider Contracts
-
-Key design rules that are easy to get wrong:
-
-- `compose_provider_url()` is the single source of truth for upstream URLs — catalog fetch, non-streaming chat, and streaming chat all call it
-- `build_auth_headers()` reads from `ProviderConfig.auth` — never hardcode Bearer
-- `base_url` ending `/v1` + path beginning `/v1/` is rejected (duplicate version prefix)
-- `auth.mode = "none"` sends no upstream auth (Ollama local)
-- All outbound dispatch paths use `compose_provider_url()` so providers cannot list at one host and dispatch to another
-- **`models_endpoint.method = "DISABLED"`** skips live model listing. Providers using this must declare `[[providers.<id>.static_models]]` rows; otherwise `eggpool check-config` warns and the catalog will be empty for the provider
-- **`static_models` lifecycle**: rows are seeded by `CatalogService._seed_static_models` BEFORE live fetch tasks run. Static-source fields (`protocol`, `protocol_source == "static_config"`, `supports_tools`, `supports_vision`) are preserved by `ModelCatalogCache._preserve_static_fields` when live rows arrive without them
-- **`eggpool check-config`** runs `_check_stale_contracts` after a successful load and emits advisory warnings for: `DISABLED` without static seeds, `DISABLED` with `require_models = true`, declared path fields ignored by protocol mismatch, duplicate `/v1` segments, `Authorization` in static headers when `auth.mode != "none"`, legacy `models_method`/`models_path` fields, and Anthropic providers using `auth.header = "Authorization"` instead of `x-api-key`. Warnings do not change the exit code
-
-## Bearer-prefix Guard
-
-`AppConfig.validate_account_credentials()` rejects API keys beginning with `Bearer` for `auth.mode = "bearer"` providers. EggPool prepends `Bearer ` automatically; storing `Bearer <token>` produces `Authorization: Bearer Bearer <token>` and causes 401s. Providers using `auth.mode = "raw_authorization"` are unaffected.
-
-## Error Handling
-
-Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or `raise ... from None`.
-
-- `AggregatorError` → `ConfigError`, `DatabaseError`, `ProxyError`
-- `UpstreamError` (has `status_code`) → `TemporaryUpstreamError`, `TransientUpstreamError`, `AuthenticationError`, `QuotaExhaustedError`, `RateLimitError` (has `retry_after`), `ModelUnavailableError`
-- `ModelNotFoundError` (has `model_id`), `NoEligibleAccountError`, `CatalogUnavailableError`, `AuthenticationUnavailableError`, `UpstreamExhaustedError`, `AccountSuspendedError`, `RequestTooLargeError`, `ContextLimitExceededError`
+- **Request lifecycle**: `RequestCoordinator` orchestrates endpoint → routing → persistence → dispatch → finalization. See `architecture/README.md` § Request Lifecycle.
+- **Multi-provider architecture**: provider-suffixed model IDs (`model-id/provider-id`), `ProviderClientPool`, `OutboundClientManager`. See `architecture/README.md` § Multi-Provider Architecture.
+- **Provider contracts**: `compose_provider_url()` is the single source of truth for upstream URLs. See `architecture/README.md` § Provider Contracts and § Provider Contract Rendering.
+- **Database invariants**: SQLite WAL, single-connection serialization, `async with db.transaction():` for all DML. See `architecture/README.md` § Database.
+- **Quota and routing**: tier-based routing via `routing_priority`, `QuotaFairScorer`, upstream-authoritative suppression. See `architecture/README.md` § Quota and Routing.
+- **Error hierarchy**: `AggregatorError` → `UpstreamError` → specific subclasses. See `architecture/README.md` § Error Hierarchy.
+- **Process model**: supervisor + Granian worker, PID file lifecycle, daemon mode. See `architecture/README.md` § Daemon Mode.
+- **Dashboard**: server-rendered HTML, 12 pages, Chart.js v4, grouped timeseries, CSS tooltips. See `architecture` skill § Dashboard.
+- **Observability**: attempt analytics, routing analytics, latency phases, pending health, runtime metrics. See `architecture` skill § Runtime Observability.
 
 ## Gotchas
 
 - Configuration changes require a service restart; live reload is intentionally not supported
 - No pre-commit hooks are configured in this repo; CI runs ruff, pyright, and pytest via GitHub Actions
 - **`static_models` is the source of truth for provider-specific protocol** — `FAMILY_PROTOCOLS` (`src/eggpool/catalog/protocols.py`) is a global fallback that applies when no explicit override exists. Providers like `minimax-cn` that serve MiniMax models on the OpenAI-compatible surface **must** ship `[[providers.<id>.static_models]]` rows with `protocol = "openai"`, otherwise the live `/v1/models` fetch resolves `MiniMax-M*` via the `minimax-` family prefix to `anthropic` and the provider protocol constraint check (`src/eggpool/catalog/service.py:533-545`) clears the protocol to `None`, producing `ModelUnavailableError("Model 'MiniMax-M3' has unresolved protocol")` instead of the more obvious 400 `ProtocolMismatchError`. Static seeds with `protocol_source = "static_config"` survive the live merge via `ModelCatalogCache._preserve_static_fields` (`src/eggpool/catalog/cache.py:146-187`). The same model ID may also be flipped on a per-provider basis via `[providers.<id>.model_overrides."<model-id>"].protocol = "openai"` for operator overrides that go beyond the bundled template.
-- `Database.vacuum()` is the only sanctioned path for `VACUUM` in production code
-- Every DML write must run inside `async with db.transaction():`
-- SQLite transactions are serialized across concurrent tasks via a single connection lock + ContextVar
-- Requests must be persisted before upstream dispatch; pre-body failures can retry, but no retry after first downstream byte
 - **Upstream-authoritative suppression**: local quota estimates are advisory by default (`local_quota_mode = "score_only"`). Above-capacity accounts stay eligible; only upstream-observed failures (429/402/5xx/auth) and explicit operator disablement suppress routing. Switch to `hard_cap` only as an opt-in escape hatch.
 - **Backoff persistence**: upstream-derived backoffs survive restarts via the `account_backoffs` table (`src/eggpool/db/schema/0024_account_backoffs.sql`). Hydration runs at startup after account sync, best-effort (never blocks boot). Local cost overruns must never be persisted as backoff rows.
 - **Synthetic 503 vs 502**: `ModelUnavailableError` (503) is reserved for genuine pre-dispatch unavailability. `UpstreamExhaustedError` (502) is raised when every candidate account was attempted and exhausted mid-request. Single-account upstream errors pass through to the client rather than becoming synthetic 503s.
@@ -105,55 +79,13 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 - **Automatic backups**: in-process daily backups run by default under the `automatic_backup` supervised task (`src/eggpool/background/backup.py`). Uses stdlib `sqlite3.Connection.backup()` for consistent snapshots, atomic archive publication (write-to-temp + rename), and count-based retention (default 14). Controlled by `[backup]` config section. The `eggpool deploy backup-cron` path remains available for operators who prefer external scheduling.
 - **DNS cache**: `OutboundClientManager` and `ProviderClientPool` both integrate a `DnsNetworkBackend` that caches resolved DNS entries in memory. The cache reduces connection latency for repeated requests to the same upstream hosts. Controlled by `[network.dns_cache]` config. When a proxy is configured for an account, that account's client uses the proxy transport instead of the cached backend.
 
-## Observability
+## Error Handling
 
-> Full API surface, attempt analytics, routing analytics, and latency phase details are in the `architecture` skill.
+Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or `raise ... from None`.
 
-- **Attempt analytics**: per-attempt aggregates including latency percentiles, byte totals, retry rate, and the `retry_category` distribution. Every `request_attempts` row carries `provider_id/model_id/protocol/retry_category/release_reason/bytes_received/latency_ms/streamed/is_retry_outcome`
-- **Routing analytics**: per-`(model, provider)` decision aggregates, account-level selection counts, and per-`(account, reason)` exclusion counts. Every routing decision is persisted as a `routing_decisions` row inside the same transaction as the `request_attempts` INSERT
-- **Latency phases**: decomposes each request into `upstream_connect_ms`, `upstream_read_ms`, and `coordinator_overhead_ms`
-- **Operational health**: `crash_recovery`, `stale_request_finalizer`, and `reservation_reconcile` safety-net events are recorded as `operational_events` rows in the same transaction as the durable state mutation
-- **Pending health**: instantaneous snapshot of pending request count, oldest pending age, stale-pending count (>15 min), active reservations, total reserved microdollars, and oldest reservation age. Auth-gated
-- **Per-request trace**: parent request row, full attempt chain, and per-attempt routing decisions. Returns account name, model, protocol, status, error class (never raw error_detail), and timing. Auth-gated
-- **Recent request metadata**: bounded list of recent request rows with metadata only (no body, no auth headers, no error_detail). Auth-gated
-- **Cost/cache/reasoning exactness**: per-account and per-model `exact_count`, `partial_count`, `derived_count`, `estimated_count`, `cache_read_ratio`, `cache_write_ratio`, `reasoning_output_ratio`
-- **Metrics buffer health**: `metrics.write_mode`, `metrics.flush_interval_s`, `metrics.buffered_keys`, `metrics.buffered_events`, `metrics.total_events_received`, `metrics.total_events_flushed`, `metrics.total_events_dropped`, `metrics.last_flush_ts`, `metrics.last_flush_rows`, `metrics.last_flush_duration_ms`, `metrics.last_flush_error`. Exposed via `/api/stats/runtime` and `eggpool runtime-status`
-- **Network diagnostics** (`/api/network/diagnostics`): sanitized outbound client lifecycle (build count, request count, error count, per-scope builds, per-host requests/errors) and DNS cache behavior (hits, misses, negative hits, stale hits, evictions, per-host breakdown, resolution errors, per-entry metadata with state/TTL/staleness). Always auth-gated. Also displayed on the `/runtime` dashboard page and in `eggpool runtime-status` output. No API keys, auth headers, request bodies, or full URLs are exposed
-- Full API surface is documented in the `architecture` skill
-
-## Dashboard
-
-> Full page list, chart lifecycle, grouped timeseries, tooltip system, and responsive/mobile details are in the `architecture` skill.
-
-- Server-rendered HTML pages in `src/eggpool/dashboard/render.py`
-- Overview page auto-refreshes in place (every `[dashboard].refresh_interval_s`); all other pages are static
-- Charts use bundled Chart.js v4 at `/static/chart.js` with `Cache-Control: public, max-age=86400`
-- New pages opt into Chart.js via `include_chart_js=True` in `_render_layout`
-- Frontend helpers in `src/eggpool/dashboard/static/dashboard.js` under `window.EggPoolDashboard`
-- Full page list and chart lifecycle details are in the `architecture` skill
-- **`header.topbar` is `position: sticky; top: 0; z-index: 5`** with a subtle backdrop blur so the page nav stays visible while scrolling on desktop. Mobile layout is unchanged — the topnav disclosure still wraps cleanly under 480px. Use `header.topbar` selectors when overriding; do not collapse the existing z-index above the value used by `body::before` (2) or the egg background (0)
-- **Footer update indicator**: `_render_update_indicator(update_info)` renders an empty string when `update_info is None` or `update_info.update_available is False`. The indicator is appended to the footer after `<span id="dashboard-updated">ready</span>` and contains a `data-update-command` markup hook consumed by `dashboard.js` `initUpdateCommandCopy()`. The hook uses Clipboard API with `document.execCommand("copy")` fallback for older browsers and surfaces a transient "copied!" indicator on Enter/Space/click
-
-### Update Checker
-
-- `src/eggpool/update_checker.py` is the single source of truth for "is there a newer eggpool release available?"
-- `UpdateChecker` (frozen `UpdateInfo` dataclass) holds the latest snapshot; `snapshot()` returns `dataclasses.replace(self._info)` so callers cannot mutate the cached state. Writes are serialized through an `asyncio.Lock` so the periodic background task and synchronous `snapshot()` calls from request handlers do not tear
-- `async_check_for_update()` is the shared helper used by both the dashboard background task and the `eggpool update` CLI — they MUST go through it instead of inlining their own PyPI lookup so the two paths cannot drift
-- Default check interval is 24h (`_DEFAULT_CHECK_INTERVAL_S = 24 * 60 * 60`), timeout 15s (`_CHECK_TIMEOUT_S = 15.0`)
-- The background task is registered in `src/eggpool/app.py` via `supervisor.register("update_checker", update_checker.run_periodic)` and uses the default supervisor `max_restarts` so transient PyPI failures do not give up
-- On PyPI failure, the checker preserves the previous `latest_version` so the indicator still surfaces a known-newer release during momentary outages
-- `/api/stats/update` (`src/eggpool/api/update.py`) returns the JSON snapshot — always auth-gated regardless of `dashboard.public`
-- Add new dashboard footer UI by extending `_UPDATE_INDICATOR_TEMPLATE` in `src/eggpool/dashboard/render.py:259`; ensure `_render_update_indicator` continues to return `""` whenever an update is not available so the footer does not show a stale or "no update" pill
-
-### Responsive / mobile
-
-- Dashboard targets a **320px minimum** viewport (iPhone SE / small Android). All 12 pages are mobile-equally
-- Topnav wraps page links in a `<details class="topnav-hamburger">` disclosure; below 480px the `<summary>` becomes a Menu chip and the 12 links collapse into it. Theme selector and refresh button stay **outside** the disclosure so they remain reachable on every viewport
-- Tables use `data-priority="N"` on every `<th>` and matching `<td>` to drive responsive column hiding: `P1` always shown, `P2` hidden below 480px, `P3` hidden below 760px. Renderers MUST use the `_th(label, *, priority=1)` and `_td_priority(content, priority, *, class_=None)` helpers in `src/eggpool/dashboard/render.py:460` — never emit a bare `<th>` for a tabular column
-- Chart.js canvases MUST sit inside a `<div class="chart-wrap" style="height: …">` (not an inline-style `<div style="position: relative; height: …">`). `.chart-wrap` sets `position: relative; width: 100%` so the canvas respects its parent panel's width on every viewport
-- `html { overflow-x: hidden }` is a deliberate safety net in `dashboard.css` to prevent chart-canvas resize races from causing horizontal scroll on the body. It hides real overflow bugs, so any new layout code should still design for `clientWidth == scrollWidth` even though it's masked
-- New tables: pick priority mappings that put operator-glance columns in P1, diagnostic core in P2, and deep-tail columns in P3. Update `tests/unit/test_dashboard.py` `TestResponsiveColumns` with a snapshot test
-- Adding a new topnav link requires updating both `_render_nav` and the breakpoints in `dashboard.css` (`@media (max-width: 480px)` and `topnav-hamburger > .topnav-links { … }`)
+- `AggregatorError` → `ConfigError`, `DatabaseError`, `ProxyError`
+- `UpstreamError` (has `status_code`) → `TemporaryUpstreamError`, `TransientUpstreamError`, `AuthenticationError`, `QuotaExhaustedError`, `RateLimitError` (has `retry_after`), `ModelUnavailableError`
+- `ModelNotFoundError` (has `model_id`), `NoEligibleAccountError`, `CatalogUnavailableError`, `AuthenticationUnavailableError`, `UpstreamExhaustedError`, `AccountSuspendedError`, `RequestTooLargeError`, `ContextLimitExceededError`
 
 ## Fast-Path CLI
 
@@ -163,27 +95,6 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 - Unrecognized commands fall through to `eggpool.cli_full`, which holds the heavy Click CLI
 - Public symbols (`cli`, helpers used by tests) are lazily forwarded from `cli_full` via PEP 562 `__getattr__` — so `from eggpool.cli import cli` and existing test imports still work without loading the full graph
 - See `plans/lightweight-cli-watchdog.md` for the full design
-
-## Process Model
-
-- `eggpool serve` runs as a single supervisor process that invokes `Granian` with `workers=1`; Granian spawns one worker process, so exactly **two** processes appear under the canonical name
-- The Granian worker is launched with `process_name="eggpool"`, so `ps` / `top` / `pgrep` show the canonical name for both supervisor and worker (not a generic `python` entry)
-- `[server].threads` (int, default `1`, min `1`, max `64`) controls Granian `runtime_threads` — the number of worker event-loop threads. Default is `1` for SBC / Raspberry Pi; raise on capable hardware
-- PID path resolution lives in `eggpool.runtime_paths` and is the single source of truth (`default_pid_file()`). Precedence: `$EGGPOOL_PID_FILE` → `$XDG_RUNTIME_DIR/eggpool.pid` → `~/.local/state/eggpool/eggpool.pid` → `/tmp/eggpool-<UID>.pid`. The PID file is owned by the **supervisor**, written before `Granian.serve()` and cleared in a `finally` block. The FastAPI lifespan no longer touches the PID file
-- `eggpool serve` refuses to start a second instance: first checks `runtime.read_pid()` + `runtime.is_process_running()`; if no live PID, probes `GET /v1/healthz` via stdlib `urllib.request` (bind `0.0.0.0` / `::` is rewritten to `127.0.0.1`). A live PID or a 200 from the probe exits `1`. Stale PID files (PID not running) are cleared before starting
-- `eggpool restart` delegates to `runtime.restart_server` which calls `runtime.send_sigterm` and `runtime.start_server` (which `subprocess.Popen`s a new supervisor)
-- `eggpool ensure-running` is the canonical cron watchdog command — it atomically checks-and-starts without ever spawning a duplicate instance. Use it from `@reboot` and `*/5 * * * *` crontab lines, not `croncheck || eggpool serve &`
-
-### Daemon Mode
-
-- Foreground `eggpool serve` remains the debugging/operator path and prints Granian logs to the calling terminal
-- `eggpool serve --daemon` validates the config, refuses to start a second instance, then spawns a detached child and returns promptly with a short success message pointing at the log file
-- The detached child runs the normal foreground `serve` command (Granian supervisor + worker). The `--daemon` flag is **never** forwarded to the child; detachment is purely a parent-side concern. The child owns its own PID file lifecycle via `runtime.write_pid_file()` / `runtime.clear_pid_file()`
-- Default log destination is `~/.local/state/eggpool/eggpool.log`, resolvable via `eggpool.runtime_paths.default_log_file()`. Override with `--log-file PATH` or `$EGGPOOL_LOG_FILE`. A log file beats `/dev/null` by default because a silent background failure is hard to diagnose
-- The child is launched with `start_new_session=True`, `stdin=subprocess.DEVNULL`, and `stdout`/`stderr` redirected to the log file (or `/dev/null` when `--quiet` is set without `--log-file`). The child survives shell exit and signals to the parent CLI do not propagate
-- `runtime.start_server()` signature: `start_server(config_path, *, cwd=None, daemon=True, log_path=None, quiet=True, verify=False, verify_timeout_s=3.0)`. `runtime.restart_server()` accepts the same `daemon`, `log_path`, `quiet` options
-- `serve --daemon` refuses to daemonize when the effective UID is 0 unless `--as-root` is passed (prevents accidental root personal deployment)
-- Systemd should **not** use `--daemon`. The systemd unit already owns the process lifecycle; run foreground `serve` and let systemd manage the PID, journal logs, and restart policy
 
 ## Git Workflow
 
