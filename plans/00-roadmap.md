@@ -293,7 +293,7 @@ mergeable, testable PR.
 
 | # | Phase | Plan file | Deliverable |
 |---|---|---|---|
-| 1 | Foundation | `phase-1-foundation.md` | `TranscoderPolicy` config, `upstream_protocol` field on `ProxyRequestContext`, selector parameter on routing, helper modules (`ids.py`, `usage.py`, `errors.py`) with unit tests. No behavioural change yet. |
+| 1 | Foundation ✅ | `phase-1-foundation.md` | `TranscoderPolicy` config, `upstream_protocol` field on `ProxyRequestContext`, selector parameter on routing, helper modules (`ids.py`, `usage.py`, `errors.py`) with unit tests. No behavioural change yet. |
 | 2 | Body translation | `phase-2-body-translation.md` | `OpenAIToAnthropic` and `AnthropicToOpenAI` body translators for text-only requests/responses, with full unit test coverage. Coordinator wired to call them when `transcode_required`. Error envelope translation for non-streaming pass-through. |
 | 3 | Streaming translation | `phase-3-streaming-translation.md` | `StreamingTranscoder` for both directions, fed by the existing observer, with backpressure and frame-level correctness tests. Replaces `yield chunk` in `_build_stream_generator`. |
 | 4 | Routing and eligibility | `phase-4-routing-eligibility.md` | Widened account selector, native-preference ordering, integration tests proving models reach transcodable accounts. |
