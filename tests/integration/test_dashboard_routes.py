@@ -122,6 +122,58 @@ def test_static_chart_js_is_long_cached(client: TestClient) -> None:
     assert response.headers["cache-control"] == "public, max-age=86400"
 
 
+def test_static_theme_css_uses_configured_themes_dir(tmp_path) -> None:
+    """``/static/theme.css`` serves custom themes from dashboard.themes_dir."""
+    themes_dir = tmp_path / "themes"
+    themes_dir.mkdir()
+    (themes_dir / "Operator Custom.toml").write_text(
+        "\n".join(
+            [
+                "[general]",
+                'background = "#123456"',
+                'border = "#234567"',
+                'horizontal_rule = "#345678"',
+                'unread_indicator = "#456789"',
+                "",
+                "[text]",
+                'primary = "#abcdef"',
+                'secondary = "#bcdef0"',
+                'tertiary = "#cdef01"',
+                'success = "#00ff00"',
+                'error = "#ff0000"',
+                "",
+                "[buffer]",
+                'background = "#102030"',
+                'background_text_input = "#203040"',
+                'background_title_bar = "#304050"',
+                'border = "#405060"',
+                'border_selected = "#506070"',
+                'code = "#607080"',
+                'highlight = "#708090"',
+                'nickname = "#8090a0"',
+                'selection = "#90a0b0"',
+                'timestamp = "#a0b0c0"',
+                'topic = "#b0c0d0"',
+                'url = "#c0d0e0"',
+            ]
+        )
+    )
+    config = _build_config(tmp_path)
+    config.dashboard.theme = "Operator Custom"
+    config.dashboard.themes_dir = str(themes_dir)
+    application = create_app(config)
+
+    from fastapi.testclient import TestClient
+
+    with TestClient(application) as theme_client:
+        response = theme_client.get("/static/theme.css?theme=Operator%20Custom")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "public, max-age=300"
+    assert "--page-bg: #102030;" in response.text
+    assert "--page-text: #abcdef;" in response.text
+
+
 @pytest.mark.asyncio()
 async def test_overview_loads_chart_js_with_defer(
     migrated_app: FastAPI,

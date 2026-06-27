@@ -1125,23 +1125,20 @@ def create_app(
             def __init__(self, max_size: int = 3, ttl_s: int = 300) -> None:
                 self._max_size = max_size
                 self._ttl_s = ttl_s
-                self._cache: dict[str, tuple[str, float]] = {}
-                self._last_used: str = ""
+                self._cache: dict[tuple[str, str | None], tuple[str, float]] = {}
+                self._last_used: tuple[str, str | None] | None = None
 
-            def get(self, theme_name: str) -> str | None:
-                if theme_name in self._cache:
-                    css, ts = self._cache[theme_name]
-                    if (
-                        time.monotonic() - ts < self._ttl_s
-                        or theme_name == self._last_used
-                    ):
-                        self._last_used = theme_name
+            def get(self, key: tuple[str, str | None]) -> str | None:
+                if key in self._cache:
+                    css, ts = self._cache[key]
+                    if time.monotonic() - ts < self._ttl_s or key == self._last_used:
+                        self._last_used = key
                         return css
-                    del self._cache[theme_name]
+                    del self._cache[key]
                 return None
 
-            def put(self, theme_name: str, css: str) -> None:
-                if len(self._cache) >= self._max_size and theme_name not in self._cache:
+            def put(self, key: tuple[str, str | None], css: str) -> None:
+                if len(self._cache) >= self._max_size and key not in self._cache:
                     now = time.monotonic()
                     to_evict = [
                         k
@@ -1157,15 +1154,17 @@ def create_app(
                         )
                         if oldest != self._last_used:
                             del self._cache[oldest]
-                self._cache[theme_name] = (css, time.monotonic())
-                self._last_used = theme_name
+                self._cache[key] = (css, time.monotonic())
+                self._last_used = key
 
         _theme_css_cache = _ThemeCssCache()
 
         @app.get("/static/theme.css")
         async def theme_css(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
             theme_name = request.query_params.get("theme", "default")
-            cached = _theme_css_cache.get(theme_name)
+            themes_dir = config.dashboard.themes_dir
+            cache_key = (theme_name, themes_dir)
+            cached = _theme_css_cache.get(cache_key)
             if cached is not None:
                 return Response(
                     content=cached,
@@ -1174,8 +1173,8 @@ def create_app(
                 )
             from eggpool.dashboard.render import get_theme_css
 
-            css = get_theme_css(theme_name)
-            _theme_css_cache.put(theme_name, css)
+            css = get_theme_css(theme_name, themes_dir)
+            _theme_css_cache.put(cache_key, css)
             return Response(
                 content=css,
                 media_type="text/css",
