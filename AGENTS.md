@@ -52,12 +52,12 @@ All four must pass with zero errors.
 
 ## Multi-Provider Architecture
 
-> See `architecture/README.md` and the `architecture` skill for the full design, worked examples, and MiniMax template details.
+> See `architecture/README.md` and the `architecture` skill for the full design.
 
 - Provider-suffixed model IDs: `model-id/provider-id` (e.g., `claude-sonnet-4/opencode-go`)
-- `ProviderClientPool` manages per-provider `httpx.AsyncClient` with independent connection pools for upstream LLM forwarding and catalog model-list fetches
-- `OutboundClientManager` owns a shared `httpx.AsyncClient` for non-provider network paths (update checks, external catalog fetches). Initialized once at startup; `build_count` should stabilize at 1. Accepts `[network]` config for transport tuning and `[network.dns_cache]` for in-memory DNS caching (enabled by default, TTL 300s, max 50 entries). The DNS cache wraps the default httpcore transport so resolved entries are reused across requests. Exposes `snapshot()` with `build_count`, `request_count`, `error_count` for runtime diagnostics. `inject_client()` is the test escape hatch
-- Hot-path provider requests must **never** construct fresh HTTP clients. Background and CLI paths should use the shared outbound client. `warn_adhoc_clientConstruction()` emits a runtime warning after startup when fresh clients are built outside managed paths
+- `ProviderClientPool` manages per-provider `httpx.AsyncClient` instances
+- `OutboundClientManager` owns a shared `httpx.AsyncClient` for non-provider network paths. `build_count` should stabilize at 1; growth indicates a bug
+- Hot-path provider requests must **never** construct fresh HTTP clients
 - Flat `[[accounts]]` configs auto-normalize to a default `opencode-go` provider
 - `parse_model_provider()` and `format_model_provider()` in `routing/provider.py`
 
@@ -100,13 +100,8 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 - **Synthetic 503 vs 502**: `ModelUnavailableError` (503) is reserved for genuine pre-dispatch unavailability. `UpstreamExhaustedError` (502) is raised when every candidate account was attempted and exhausted mid-request. Single-account upstream errors pass through to the client rather than becoming synthetic 503s.
 - **Streaming finalizer shielding**: streaming `_build_stream_generator` finalization runs under `asyncio.shield(asyncio.wait_for(..., timeout=10))` so ASGI task cancellation cannot kill the finalizer while it holds the DB lock. Leaks that escape this path are caught by the periodic `stale_request_finalizer` background task (`app._finalize_stale_requests`, runs every 60s) which force-finalizes any request that has been `pending` longer than `upstream.read_timeout_s`.
 - **Startup crash recovery**: `_crash_recovery` runs at every startup and recovers ALL pending requests and ALL active reservations with no time threshold. A process restart is a definitive boundary, so leaked state from the previous process is unconditionally cleaned up. If `Crash recovery: marked N stale requests` appears in logs, the safety net caught leaks from the previous run.
-- **Pricing resolution pipeline**: prices flow TOML override → upstream metadata → external catalog (OpenRouter / OpenCode Zen via the alias registry). `ResolvedPricing` records `source_detail` (`operator_override` / `provider_metadata` / `openrouter` / `opencode_zen`) and `source_confidence` (`exact_external_id` / `curated_alias` / `provider_metadata`). Cost rows are then labelled `derived` (every category trusted), `partial` (some categories filled by per-category fallback), `estimated` (no trusted rates), or `unknown` (no token usage). `partial_count` is a new exactness value exposed via `/api/stats/summary`, `/api/stats/accounts`, and `/api/stats/models`. The dashboard renders a per-row cost-exactness badge and a high-spend estimated warning banner (>$10 estimated) on the Accounts page.
-- **Provider-reported cost precedence**: when an upstream includes a billing field (e.g. `usage.cost`, `usage.cost_usd`, `usage.cost_microdollars`, `usage.billing.cost_usd`), `eggpool.proxy.cost_reporting.extract_provider_reported_cost()` parses it and the `RequestFinalizer` records it on the `requests` row as `provider_cost_microdollars` (with `provider_cost_source` storing the field path). That value takes precedence over locally computed rates — the cost precedence ladder is `provider_reported > derived/partial/exact > estimated (reservation fallback) > unknown (zero)`. Locally calculated cost is still persisted to `local_cost_microdollars` / `local_cost_exactness` for diagnostics, never overrides provider-reported. The new `provider_reported_count` and `provider_reported_cost_microdollars` fields are exposed via `/api/stats/summary`, `/api/stats/accounts`, and `/api/stats/models` and surface in the dashboard's exactness badge and Total-cost card. Migration `0033_request_provider_local_cost.sql` adds the four nullable audit columns. The parser is allowlisted (no arbitrary nested keys) and is defensive — `TypeError`/`ValueError`/`AttributeError`/`RecursionError` yield `None`, so finalization never breaks on a malformed response body.
+- **Pricing pipeline**: prices flow TOML override → upstream metadata → external catalog (OpenRouter / OpenCode Zen via the alias registry). Cost precedence: `provider_reported > derived/partial/exact > estimated (reservation fallback) > unknown (zero)`. See the `architecture` skill for the full pricing resolution details.
 - **`eggpool stats recompute-costs [--dry-run|--apply] [--limit N]`**: walks the requests table in started_at DESC order, recomputes cost from the current price snapshots, and reports / applies the change. Default is `--dry-run`. Use after upgrading the resolver to fix inflated totals on cached-token-heavy models (e.g. MiMo 2.5). Implemented in `src/eggpool/cost_recompute.py` and reuses the live `CostCalculator` so the new values match what the finalizer would write today.
-- **Migration 0030 (`model_pricing_aliases`) + 0031 (`price_snapshot_provenance`)**: 0030 introduces the alias registry that maps upstream model IDs (e.g. `mimo-v2.5`) onto external catalog IDs (e.g. `xiaomi/mimo-v2.5`) with an `exact`/`curated_alias`/`ambiguous_skip` confidence enum. 0031 adds `source_detail`, `source_confidence`, `catalog_source` columns to `model_price_snapshots` so the dashboard can attribute prices back to the resolver that produced them. Seed data lives in `seed_default_aliases()` (`src/eggpool/catalog/pricing_aliases.py`) and runs idempotently at startup via `CatalogService.attach_pricing_resolvers()`.
-- **Migration 0032 (`usage_rollups`)**: introduces the rollup table for buffered analytics. Counter fields are designed for additive upserts (`INSERT ... ON CONFLICT DO UPDATE SET col = col + excluded.col`). Latency min/max use `CASE/WHEN` to converge monotonically within each bucket. The `UsageRollupRepository` provides `upsert_many()`, `query_timeseries()`, `query_summary()`, and `cleanup_old_rollups()`.
-- **Low-wear metrics buffering**: `MetricsWriteCoalescer` buffers lossy analytics events in memory and periodically flushes to `usage_rollups`. Correctness-critical writes (request state, reservations, routing) remain immediate. `write_mode = "balanced"` (default) uses 30s flush intervals; `write_mode = "low_wear"` uses 120s with coarser buckets. Buffered data may lose at most `flush_interval_s` seconds after abrupt power loss. The coalescer is wired into `RequestFinalizer.finalize()` and emits one `UsageMetricEvent` per terminal transition. Runtime diagnostics expose buffer health via `/api/stats/runtime`.
-- **Dispatch overhead and OS load average on `/runtime`**: `DispatchOverheadRecorder` (`src/eggpool/runtime_dispatch.py`) records `time.perf_counter_ns() - context.started_monotonic_ns` immediately before `client.send(...)` in both `_execute_non_streaming` and `_execute_streaming`, on every upstream attempt (so retries contribute). The recorder is bounded (`deque(maxlen=100)`, thread-safe), stores only integer nanoseconds (no body, model ID, account name, auth header, or client IP), and never writes to SQLite. `RuntimeMetricsService.snapshot()` exposes `dispatch_overhead` (avg/min/max/p50/p95) and `load` (`os.getloadavg` 1m/5m/15m + normalized per-core; `available: false` on platforms without it). The Runtime dashboard drops the configured-thread and process-count cards in favor of `Active threads`, `Load average`, and `Dispatch overhead`; process-count anomalies still surface as a warning-only panel
 - **Automatic backups**: in-process daily backups run by default under the `automatic_backup` supervised task (`src/eggpool/background/backup.py`). Uses stdlib `sqlite3.Connection.backup()` for consistent snapshots, atomic archive publication (write-to-temp + rename), and count-based retention (default 14). Controlled by `[backup]` config section. The `eggpool deploy backup-cron` path remains available for operators who prefer external scheduling.
 - **DNS cache**: `OutboundClientManager` and `ProviderClientPool` both integrate a `DnsNetworkBackend` that caches resolved DNS entries in memory. The cache reduces connection latency for repeated requests to the same upstream hosts. Controlled by `[network.dns_cache]` config. When a proxy is configured for an account, that account's client uses the proxy transport instead of the cached backend.
 
@@ -189,52 +184,6 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 - `runtime.start_server()` signature: `start_server(config_path, *, cwd=None, daemon=True, log_path=None, quiet=True, verify=False, verify_timeout_s=3.0)`. `runtime.restart_server()` accepts the same `daemon`, `log_path`, `quiet` options
 - `serve --daemon` refuses to daemonize when the effective UID is 0 unless `--as-root` is passed (prevents accidental root personal deployment)
 - Systemd should **not** use `--daemon`. The systemd unit already owns the process lifecycle; run foreground `serve` and let systemd manage the PID, journal logs, and restart policy
-
-## CLI Commands
-
-| Command | Description |
-|---------|-------------|
-| `eggpool help` | Show help message and available commands |
-| `eggpool version` | Print the installed version |
-| `eggpool serve` | Start the aggregation proxy server (default command). Flags: `--daemon`, `--log-file PATH`, `--quiet`, `--as-root` |
-| `eggpool check-config` | Validate the configuration file |
-| `eggpool migrate` | Run database migrations |
-| `eggpool onboard` | Run the interactive onboarding setup (connect providers, start server) |
-| `eggpool connect` | Connect to a new provider interactively |
-| `eggpool connect list` | List available providers |
-| `eggpool logout` | Remove a configured provider account |
-| `eggpool rehash` | Restart to apply config changes |
-| `eggpool restart` | Fully restart the server (stop then start) |
-| `eggpool stop` | Stop the running server |
-| `eggpool set` | Set a server configuration value and restart |
-| `eggpool getkey` | Print the current server API key |
-| `eggpool newkey` | Generate a new server API key |
-| `eggpool edit` | Open the configuration file in the default editor |
-| `eggpool configsetup` | Print configuration snippets for code editors |
-| `eggpool configsetup opencode` | Print OpenCode provider config JSON with model limits |
-| `eggpool configsetup claude-code` | Print Claude Code config snippet |
-| `eggpool update` | Check for updates and reinstall if newer |
-| `eggpool croncheck` | Lightweight check: exit 0 if server is running, exit 1 if not |
-| `eggpool ensure-running` | Repair: start the server if it is not running; no-op when alive. Fast-path. |
-| `eggpool runtime-status` | Print compact runtime health summary from running server |
-| `eggpool models refresh` | Refresh model catalog from upstream |
-| `eggpool accounts status` | Show configured account status |
-| `eggpool accounts list` | List configured provider accounts |
-| `eggpool dashboard public` | Toggle dashboard public access |
-| `eggpool db vacuum` | Reclaim SQLite space |
-| `eggpool init-config` | Write bundled config.example.toml to current directory or TARGET |
-| `eggpool stats recompute-costs [--dry-run\|--apply] [--limit N]` | Recompute historical `cost_microdollars` from current price snapshots. Default `--dry-run`. |
-| `eggpool deploy systemd` | Print systemd unit; `--install` writes it (personal by default; `--production` for the dedicated-system layout; `--as-root` for a root-owned personal unit) |
-| `eggpool deploy cron` | Print / install / uninstall the watchdog crontab (`@reboot` + `*/N * * * *` `eggpool ensure-running`). `--interval N` (1-59, default 5) |
-| `eggpool deploy backup-cron` | Print / install / uninstall the daily backup cron (personal user cron or production `/etc/cron.d/`). Optional — in-process automatic backup runs by default |
-| `eggpool deploy logrotate` | Print / install / logrotate config (validated via `logrotate -d`) |
-| `eggpool deploy all` | Print / install systemd + logrotate + watchdog cron (backup-cron is separate) |
-| `eggpool backup` | Create a timestamped `.zip` backup of config, `.env`, and database |
-| `eggpool recover [path]` | Restore from a backup archive (interactive menu if no path) |
-| `eggpool uninstall` | Remove binary, config, database, and shell PATH entries; `--deploy-artifacts` also removes the systemd unit, logrotate config, watchdog + backup cron blocks, and backup script |
-
-All commands accept `--config /path/to/config.toml` (defaults to `config.toml`; resolution: `--config` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`).
-Running `eggpool` with no arguments prints the help message.
 
 ## Git Workflow
 
