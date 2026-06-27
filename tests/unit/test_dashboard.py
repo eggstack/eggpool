@@ -793,6 +793,87 @@ class TestRenderAccounts:
         assert ">0</td>" in html  # failure count defaults to 0
         assert "—" in html  # backoff reason and timestamp placeholders
 
+    def test_renders_show_disabled_selector(self) -> None:
+        """The accounts filter bar exposes a show-disabled toggle."""
+        html = render_accounts(accounts=[], period="24h")
+        assert 'name="show_disabled"' in html
+        assert 'name="period"' in html
+        # Default state: "Hide disabled accounts" is selected.
+        assert (
+            '<option value="0" selected="selected">Hide disabled accounts</option>'
+            in html
+        )
+        assert "Show disabled accounts" in html
+
+    def test_show_disabled_selector_reflects_state(self) -> None:
+        """``show_disabled=True`` selects the show option."""
+        html = render_accounts(accounts=[], period="24h", show_disabled=True)
+        assert (
+            '<option value="1" selected="selected">Show disabled accounts</option>'
+            in html
+        )
+        assert 'value="0">Hide disabled accounts</option>' in html
+
+    def test_disabled_count_one_uses_singular(self) -> None:
+        """Pluralization is correct when only one disabled account exists."""
+        html = render_accounts(
+            accounts=[],
+            period="24h",
+            show_disabled=False,
+            disabled_count=1,
+        )
+        assert "1 disabled account hidden" in html
+        assert "show them" in html
+        # The link must point at the toggle-on URL, not the bare page.
+        assert 'href="?show_disabled=1"' in html
+
+    def test_disabled_count_many_uses_plural(self) -> None:
+        """Pluralization switches for multiple disabled accounts."""
+        html = render_accounts(
+            accounts=[],
+            period="24h",
+            show_disabled=False,
+            disabled_count=3,
+        )
+        assert "3 disabled accounts hidden" in html
+
+    def test_no_empty_state_hint_when_show_disabled(self) -> None:
+        """The opt-in hint is suppressed when the toggle is on."""
+        html = render_accounts(
+            accounts=[],
+            period="24h",
+            show_disabled=True,
+            disabled_count=3,
+        )
+        assert "show them" not in html
+        # Falls back to the original generic empty state.
+        assert "No accounts configured" in html
+
+    def test_no_empty_state_hint_when_disabled_count_zero(self) -> None:
+        """The opt-in hint is suppressed when nothing is hidden."""
+        html = render_accounts(
+            accounts=[],
+            period="24h",
+            show_disabled=False,
+            disabled_count=0,
+        )
+        assert "show them" not in html
+        assert "No accounts configured" in html
+
+    def test_show_disabled_xss_safe(self) -> None:
+        """The disabled-count empty state escapes interpolated values."""
+        # Render with a normal integer count to confirm there are no
+        # injection vectors in the new helper. (Account names already
+        # have their own XSS tests in TestRenderAccounts.)
+        html = render_accounts(
+            accounts=[],
+            period="24h",
+            show_disabled=False,
+            disabled_count=2,
+        )
+        assert "2 disabled accounts hidden" in html
+        assert "<script" not in html
+
 
 class TestRenderModels:
     """Tests for the models page renderer."""

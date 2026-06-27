@@ -45,13 +45,30 @@ async def handle_summary(request: Request, period: str | None = "24h") -> Respon
 
 
 async def handle_account_stats(
-    request: Request, period: str | None = "24h"
+    request: Request,
+    period: str | None = "24h",
+    include_disabled: bool = True,
 ) -> Response:
-    """GET /api/stats/accounts."""
+    """GET /api/stats/accounts.
+
+    ``include_disabled`` defaults to True so existing API consumers
+    continue to see soft-deleted (``enabled = 0``) accounts — their
+    historical request/cost rows must still be attributable to the
+    account that produced them. Pass ``?include_disabled=0`` to hide
+    them, mirroring the dashboard's "Show disabled accounts" toggle.
+    """
     time_range = resolve_time_range(period)
     stats = request.app.state.stats
-    accounts = await stats.get_account_stats(time_range)
-    return JSONResponse(content={"period": time_range.label, "accounts": accounts})
+    accounts = await stats.get_account_stats(
+        time_range, include_disabled=include_disabled
+    )
+    return JSONResponse(
+        content={
+            "period": time_range.label,
+            "include_disabled": include_disabled,
+            "accounts": accounts,
+        }
+    )
 
 
 async def handle_model_stats(

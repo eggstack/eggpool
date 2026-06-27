@@ -31,6 +31,7 @@ from eggpool.dashboard.render import (
 )
 from eggpool.errors import ConfigError
 from eggpool.stats import TimeRange, resolve_time_range
+from eggpool.stats.queries import fetch_disabled_account_count
 
 if TYPE_CHECKING:
     from fastapi.responses import Response  # noqa: TCH004
@@ -252,13 +253,35 @@ async def handle_overview(
 
 
 async def handle_accounts(
-    request: Request, period: str | None = "24h", theme: str | None = None
+    request: Request,
+    period: str | None = "24h",
+    theme: str | None = None,
+    show_disabled: bool = False,
 ) -> Response:
-    """Render the accounts page."""
+    """Render the accounts page.
+
+    ``show_disabled`` defaults to False so the page matches the
+    operator's mental model after ``eggpool logout``: disabled rows
+    are hidden by default. Pass ``?show_disabled=1`` to opt in to the
+    historical view (soft-deleted accounts still appear with
+    ``Enabled = no``).  When the operator filters disabled rows out and
+    the empty result set hides disabled tombstones, the renderer shows
+    a one-click "N disabled — show them?" hint instead of the generic
+    "No accounts configured." empty state.
+    """
     _get_dashboard_config(request)
     time_range = resolve_time_range(period)
     stats = request.app.state.stats
-    accounts = await stats.get_account_stats(time_range, use_cache=True)
+
+    # Always fetch the disabled count so the empty state can offer the
+    # one-click opt-in even when no rows are currently visible.
+    disabled_count = 0
+    if not show_disabled:
+        disabled_count = await fetch_disabled_account_count(request.app.state.stats_db)
+
+    accounts = await stats.get_account_stats(
+        time_range, include_disabled=show_disabled, use_cache=True
+    )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
     return HTMLResponse(
         content=render_accounts(
@@ -268,6 +291,8 @@ async def handle_accounts(
             available_themes=available,
             current_theme=current_theme,
             update_info=_get_update_info(request),
+            show_disabled=show_disabled,
+            disabled_count=disabled_count,
         )
     )
 

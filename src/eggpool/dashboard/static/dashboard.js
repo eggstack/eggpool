@@ -784,6 +784,27 @@
           periodForm.submit();
         }
       });
+      // Auto-submit any other `data-auto-submit` selects inside the
+      // same form (e.g. the "Show disabled accounts" toggle on the
+      // Accounts page).  Lets a single GET-form filter bar submit
+      // immediately when either dropdown changes.
+      const autoSubmits = periodForm.querySelectorAll(
+        "select[data-auto-submit]"
+      );
+      for (let s = 0; s < autoSubmits.length; s++) {
+        const autoSelect = autoSubmits[s];
+        if (autoSelect === select) continue;
+        autoSelect.addEventListener("change", function () {
+          if (
+            timeseriesForm
+            && typeof namespace.refreshGroupedTimeseriesChart === "function"
+          ) {
+            namespace.refreshGroupedTimeseriesChart(timeseriesForm);
+          } else {
+            periodForm.submit();
+          }
+        });
+      }
     }
   };
 

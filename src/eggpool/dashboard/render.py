@@ -676,6 +676,92 @@ def _render_period_selector(current: str, current_theme: str = "") -> str:
     )
 
 
+def _render_account_filters(
+    period: str,
+    current_theme: str,
+    show_disabled: bool,
+) -> str:
+    """Render a single GET-form filter bar for the Accounts page.
+
+    Bundles the period selector and the ``show_disabled`` toggle into
+    one form so either change preserves the other via hidden inputs.
+    Disabled rows are hidden by default so the page matches the
+    operator's mental model after ``eggpool logout``; the toggle is
+    opt-in and lives server-side in the URL (``?show_disabled=1``) so
+    it survives refresh, is bookmarkable, and works without JS.
+    """
+    period_options = [
+        ("1h", "Last hour"),
+        ("24h", "Last 24 hours"),
+        ("7d", "Last 7 days"),
+        ("30d", "Last 30 days"),
+    ]
+    period_items: list[str] = []
+    for value, label in period_options:
+        selected = ' selected="selected"' if value == period else ""
+        period_items.append(
+            f'<option value="{escape(value)}"{selected}>{escape(label)}</option>'
+        )
+    period_selector = "".join(period_items)
+
+    show_options = [
+        ("0", "Hide disabled accounts"),
+        ("1", "Show disabled accounts"),
+    ]
+    show_items: list[str] = []
+    show_value = "1" if show_disabled else "0"
+    for value, label in show_options:
+        selected = ' selected="selected"' if value == show_value else ""
+        show_items.append(
+            f'<option value="{escape(value)}"{selected}>{escape(label)}</option>'
+        )
+    show_selector = "".join(show_items)
+
+    theme_hidden = (
+        f'<input type="hidden" name="theme" value="{escape_attr(current_theme)}">'
+        if current_theme
+        else ""
+    )
+    return (
+        f'<form method="get" class="period-selector account-filters" '
+        f'data-period-selector aria-label="Account filters">'
+        f'<label for="period">Period: </label>'
+        f'<select id="period" name="period" data-auto-submit="1">'
+        f"{period_selector}"
+        f"</select>"
+        f'<label for="show_disabled">Disabled: </label>'
+        f'<select id="show_disabled" name="show_disabled" '
+        f'data-auto-submit="1">'
+        f"{show_selector}"
+        f"</select>"
+        f"{theme_hidden}"
+        f"</form>"
+    )
+
+
+def _render_accounts_empty_state(
+    show_disabled: bool,
+    disabled_count: int,
+) -> str:
+    """Render the empty-state hint for the Accounts page.
+
+    When the operator has filtered disabled rows out and there are no
+    enabled rows left, offer a one-click opt-in to the historical view
+    instead of the generic "No accounts configured." message. The link
+    is plain anchor navigation, so it works without JS.
+    """
+    if show_disabled or disabled_count <= 0:
+        return '<p class="empty">No accounts configured.</p>'
+    plural = "s" if disabled_count != 1 else ""
+    return (
+        '<p class="empty">'
+        "No enabled accounts. "
+        f"{disabled_count} disabled account{plural} hidden — "
+        '<a href="?show_disabled=1">show them</a>.'
+        "</p>"
+    )
+
+
 _HIGH_SPEND_ESTIMATED_DOLLARS = 10.0
 
 
@@ -1717,14 +1803,33 @@ def render_accounts(
     available_themes: list[str] | None = None,
     current_theme: str = "",
     update_info: Any | None = None,
+    *,
+    show_disabled: bool = False,
+    disabled_count: int = 0,
 ) -> str:
-    """Render the accounts page."""
+    """Render the accounts page.
+
+    ``show_disabled`` controls whether soft-deleted accounts (those
+    ``sync_from_config`` marked ``enabled = 0`` after ``eggpool logout``)
+    are listed. Defaults to False so the page matches the operator's
+    mental model after logout.
+
+    ``disabled_count`` is the total disabled-row count, used only when
+    ``accounts`` is empty AND ``show_disabled`` is False: the empty
+    state becomes a one-click "N disabled — show them?" hint instead
+    of the generic "No accounts configured." message.
+    """
+    table_html = (
+        _render_accounts_empty_state(show_disabled, disabled_count)
+        if not accounts
+        else _render_account_table(accounts)
+    )
     body = f"""
 <h2>Accounts</h2>
-{_render_period_selector(period, current_theme)}
+{_render_account_filters(period, current_theme, show_disabled)}
 {_render_pricing_warnings(accounts)}
 <section class="panel">
-  {_render_account_table(accounts)}
+  {table_html}
 </section>
 """
     return _render_layout(

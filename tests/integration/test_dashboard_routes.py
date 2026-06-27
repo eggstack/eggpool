@@ -245,6 +245,63 @@ async def test_non_overview_pages_skip_chart_js(
 
 
 @pytest.mark.asyncio()
+async def test_accounts_page_hides_disabled_by_default(
+    migrated_app: FastAPI,
+) -> None:
+    """The accounts page renders the show-disabled filter and defaults to hiding."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    response = client.get("/accounts")
+    assert response.status_code == 200
+    body = response.text
+    assert 'name="show_disabled"' in body
+    # Default state must hide disabled rows so the page matches the
+    # operator's mental model after ``eggpool logout``.
+    assert (
+        '<option value="0" selected="selected">Hide disabled accounts</option>' in body
+    )
+
+
+@pytest.mark.asyncio()
+async def test_accounts_page_show_disabled_query(
+    migrated_app: FastAPI,
+) -> None:
+    """``?show_disabled=1`` flips the toggle and renders tombstones."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    response = client.get("/accounts?show_disabled=1")
+    assert response.status_code == 200
+    body = response.text
+    assert (
+        '<option value="1" selected="selected">Show disabled accounts</option>' in body
+    )
+    # The hide option must still render so the toggle remains reversible.
+    assert 'value="0">Hide disabled accounts</option>' in body
+
+
+@pytest.mark.asyncio()
+async def test_accounts_api_supports_include_disabled(
+    migrated_app: FastAPI,
+) -> None:
+    """``/api/stats/accounts`` honours ``?include_disabled=0``."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    response = client.get("/api/stats/accounts?include_disabled=0")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["include_disabled"] is False
+    assert payload["accounts"] == []
+
+    response_all = client.get("/api/stats/accounts")
+    assert response_all.status_code == 200
+    payload_all = response_all.json()
+    assert payload_all["include_disabled"] is True
+
+
+@pytest.mark.asyncio()
 async def test_overview_inlines_timeseries_data(
     migrated_app: FastAPI,
 ) -> None:

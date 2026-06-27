@@ -249,6 +249,81 @@ class TestFetchAccountStats:
         assert by_name["acct_b"]["cost_7d"] == 250_000
         assert by_name["acct_b"]["cost_30d"] == 250_000
 
+    @pytest.mark.asyncio()
+    async def test_include_disabled_default_returns_all(
+        self, seeded_db: Database
+    ) -> None:
+        """Default behaviour preserves the historical view (all rows)."""
+        async with seeded_db.transaction():
+            await seeded_db.execute_write(
+                "UPDATE accounts SET enabled = 0 WHERE name = ?",
+                ("acct_b",),
+            )
+
+        rows = await queries.fetch_account_stats(
+            seeded_db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+        names = {r["account_name"] for r in rows}
+        assert names == {"acct_a", "acct_b"}
+
+    @pytest.mark.asyncio()
+    async def test_include_disabled_false_hides_disabled(
+        self, seeded_db: Database
+    ) -> None:
+        """``include_disabled=False`` mirrors the dashboard filter."""
+        async with seeded_db.transaction():
+            await seeded_db.execute_write(
+                "UPDATE accounts SET enabled = 0 WHERE name = ?",
+                ("acct_b",),
+            )
+
+        rows = await queries.fetch_account_stats(
+            seeded_db,
+            "2000-01-01 00:00:00",
+            "2099-12-31 23:59:59",
+            include_disabled=False,
+        )
+        names = {r["account_name"] for r in rows}
+        assert names == {"acct_a"}
+
+    @pytest.mark.asyncio()
+    async def test_include_disabled_true_keeps_disabled(
+        self, seeded_db: Database
+    ) -> None:
+        """``include_disabled=True`` is the explicit opt-in for history."""
+        async with seeded_db.transaction():
+            await seeded_db.execute_write(
+                "UPDATE accounts SET enabled = 0 WHERE name = ?",
+                ("acct_b",),
+            )
+
+        rows = await queries.fetch_account_stats(
+            seeded_db,
+            "2000-01-01 00:00:00",
+            "2099-12-31 23:59:59",
+            include_disabled=True,
+        )
+        names = {r["account_name"] for r in rows}
+        assert names == {"acct_a", "acct_b"}
+
+    @pytest.mark.asyncio()
+    async def test_disabled_account_count(self, seeded_db: Database) -> None:
+        """``fetch_disabled_account_count`` reports enabled = 0 rows."""
+        assert await queries.fetch_disabled_account_count(seeded_db) == 0
+
+        async with seeded_db.transaction():
+            await seeded_db.execute_write(
+                "UPDATE accounts SET enabled = 0 WHERE name = ?",
+                ("acct_a",),
+            )
+
+        assert await queries.fetch_disabled_account_count(seeded_db) == 1
+
+    @pytest.mark.asyncio()
+    async def test_disabled_account_count_empty_db(self, db: Database) -> None:
+        """``fetch_disabled_account_count`` returns 0 for an empty DB."""
+        assert await queries.fetch_disabled_account_count(db) == 0
+
 
 class TestFetchModelStats:
     """Tests for fetch_model_stats."""
@@ -556,6 +631,81 @@ class TestStatsService:
         )
         by_name = {r["account_name"]: r for r in rows}
         assert by_name["acct_a"]["reserved_microdollars"] == 500_000
+
+    @pytest.mark.asyncio()
+    async def test_get_account_stats_include_disabled_default(
+        self, seeded_db: Database
+    ) -> None:
+        """``StatsService.get_account_stats`` defaults to include_disabled=True."""
+        async with seeded_db.transaction():
+            await seeded_db.execute_write(
+                "UPDATE accounts SET enabled = 0 WHERE name = ?",
+                ("acct_b",),
+            )
+
+        service = StatsService(seeded_db)
+        rows = await service.get_account_stats(
+            TimeRange(
+                start=datetime.fromisoformat("2000-01-01"),
+                end=datetime.fromisoformat("2099-12-31"),
+                label="custom",
+            )
+        )
+        names = {r["account_name"] for r in rows}
+        assert names == {"acct_a", "acct_b"}
+
+    @pytest.mark.asyncio()
+    async def test_get_account_stats_include_disabled_false(
+        self, seeded_db: Database
+    ) -> None:
+        """``include_disabled=False`` matches the dashboard filter behaviour."""
+        async with seeded_db.transaction():
+            await seeded_db.execute_write(
+                "UPDATE accounts SET enabled = 0 WHERE name = ?",
+                ("acct_b",),
+            )
+
+        service = StatsService(seeded_db)
+        rows = await service.get_account_stats(
+            TimeRange(
+                start=datetime.fromisoformat("2000-01-01"),
+                end=datetime.fromisoformat("2099-12-31"),
+                label="custom",
+            ),
+            include_disabled=False,
+        )
+        names = {r["account_name"] for r in rows}
+        assert names == {"acct_a"}
+
+    @pytest.mark.asyncio()
+    async def test_get_account_stats_cache_key_partitions_by_flag(
+        self, seeded_db: Database
+    ) -> None:
+        """The cache key includes the include_disabled flag."""
+        async with seeded_db.transaction():
+            await seeded_db.execute_write(
+                "UPDATE accounts SET enabled = 0 WHERE name = ?",
+                ("acct_b",),
+            )
+
+        service = StatsService(seeded_db)
+        time_range = TimeRange(
+            start=datetime.fromisoformat("2000-01-01"),
+            end=datetime.fromisoformat("2099-12-31"),
+            label="custom",
+        )
+        # Warm both caches.
+        await service.get_account_stats(time_range, include_disabled=True)
+        await service.get_account_stats(time_range, include_disabled=False)
+        # The two cached results must be independent — toggling the
+        # flag cannot leak rows from the "all" cache into the "enabled"
+        # cache.
+        all_rows = await service.get_account_stats(time_range, include_disabled=True)
+        enabled_rows = await service.get_account_stats(
+            time_range, include_disabled=False
+        )
+        assert {r["account_name"] for r in all_rows} == {"acct_a", "acct_b"}
+        assert {r["account_name"] for r in enabled_rows} == {"acct_a"}
 
     @pytest.mark.asyncio()
     async def test_get_model_stats_with_filter(self, seeded_db: Database) -> None:

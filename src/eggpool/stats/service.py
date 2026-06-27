@@ -244,14 +244,28 @@ class StatsService:
         )
 
     async def get_account_stats(
-        self, time_range: TimeRange, *, use_cache: bool = False
+        self,
+        time_range: TimeRange,
+        *,
+        include_disabled: bool = True,
+        use_cache: bool = False,
     ) -> list[dict[str, Any]]:
-        """Get per-account aggregates including reservations and utilization."""
-        key = self._dashboard_cache_key("accounts", time_range)
+        """Get per-account aggregates including reservations and utilization.
+
+        ``include_disabled`` toggles whether accounts that
+        ``sync_from_config`` marked ``enabled = 0`` (typically after a
+        ``eggpool logout`` round-trip) are returned. The dashboard hides
+        them by default; the JSON API keeps the historical view.
+        """
+        cache_flag = "all" if include_disabled else "enabled"
+        key = self._dashboard_cache_key("accounts", time_range, cache_flag)
         if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
             return cast("list[dict[str, Any]]", cached)
         rows = await queries.fetch_account_stats(
-            self._db, time_range.start_str(), time_range.end_str()
+            self._db,
+            time_range.start_str(),
+            time_range.end_str(),
+            include_disabled=include_disabled,
         )
         reservations = await fetch_active_reservations(self._db)
         reserved_by_account: dict[str, int] = {}

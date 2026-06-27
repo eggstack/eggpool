@@ -121,6 +121,8 @@ async def fetch_account_stats(
     db: Database,
     start: str,
     end: str,
+    *,
+    include_disabled: bool = True,
 ) -> list[dict[str, Any]]:
     """Get per-account statistics for a time window.
 
@@ -133,8 +135,16 @@ async def fetch_account_stats(
         avg_cost_per_request / avg_cost_per_1k_tokens
     Ratios are NULL (not 0) when the denominator is zero so the dashboard
     can distinguish "no usage" from "0.0 ratio on real usage".
+
+    ``include_disabled`` defaults to True so the JSON API keeps returning
+    every account (including soft-deleted ones — their historical rows
+    still need to attribute costs/tokens). The dashboard passes False to
+    hide accounts that ``sync_from_config`` marked ``enabled = 0`` after
+    a ``eggpool logout`` round-trip, so the page matches the operator's
+    mental model while preserving tombstones for history.
     """
-    sql = """
+    where_clause = "" if include_disabled else "WHERE a.enabled = 1"
+    sql = f"""
     WITH period_stats AS (
         SELECT
             r.account_id,
@@ -276,10 +286,27 @@ async def fetch_account_stats(
     FROM accounts a
     LEFT JOIN period_stats ps ON ps.account_id = a.id
     LEFT JOIN rolling_stats rs ON rs.account_id = a.id
+    {where_clause}
     ORDER BY a.name
     """
     rows = await db.fetch_all(sql, (_format_dt(start), _format_dt(end)))
     return [dict(row) for row in rows]
+
+
+async def fetch_disabled_account_count(db: Database) -> int:
+    """Return the count of accounts marked ``enabled = 0`` by sync_from_config.
+
+    Used by the dashboard to render the "N disabled — show them?" empty
+    state when the operator has filtered disabled rows out. Cheap one-row
+    aggregate; safe to call on every render.
+    """
+    row = await db.fetch_one(
+        "SELECT COUNT(*) AS disabled_count FROM accounts WHERE enabled = 0",
+        (),
+    )
+    if row is None:
+        return 0
+    return int(row["disabled_count"])
 
 
 async def fetch_model_stats(
