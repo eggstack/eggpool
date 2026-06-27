@@ -609,17 +609,20 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     )
     app.state.catalog = catalog
 
-    # 11. Load cached catalog
+    # 11. Attach external pricing resolvers before refresh/persistence
+    await catalog.attach_pricing_resolvers()
+
+    # 12. Load cached catalog
     await catalog._load_cached_models()  # pyright: ignore[reportPrivateUsage]
 
-    # 12. Refresh catalog from enabled accounts
+    # 13. Refresh catalog from enabled accounts
     if config.models.startup_refresh:
         try:
             await catalog.refresh()
         except Exception:
             logger.exception("Initial catalog refresh failed")
 
-    # 13. Enforce catalog staleness policy
+    # 14. Enforce catalog staleness policy
     if catalog.cache.is_stale(config.models.stale_after_s):
         if not config.models.allow_stale_catalog:
             msg = (
@@ -634,13 +637,13 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             config.models.stale_after_s,
         )
 
-    # 14. Price repository and cost calculator
+    # 15. Price repository and cost calculator
     price_repo = PriceRepository(db)
     cost_calculator = CostCalculator(price_repo)
     catalog.set_price_change_callback(cost_calculator.invalidate_price)
     app.state.cost_calculator = cost_calculator
 
-    # 15. Router (with health manager for circuit breaker integration)
+    # 16. Router (with health manager for circuit breaker integration)
     router = Router(
         registry,
         catalog,
@@ -650,7 +653,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     )
     app.state.router = router
 
-    # 16. Wire routing config into scorer and estimator
+    # 17. Wire routing config into scorer and estimator
     five_hour_capacity = float(config.limits.five_hour_microdollars)
     router._scorer.tiebreaker_range = config.routing.near_tie_epsilon  # pyright: ignore[reportPrivateUsage]
     if not config.routing.randomize_near_ties:
@@ -666,7 +669,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         config.routing.unknown_request_reservation_microdollars
     )
 
-    # 17b. Load configured model price overrides into estimator
+    # 18. Load configured model price overrides into estimator
     for model_id, override in config.model_overrides.items():
         input_price = override.input_price_per_1k
         output_price = override.output_price_per_1k
@@ -708,7 +711,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
                     output_price * 1000,
                 )
 
-    # 18. Load persisted usage windows and set account weights/offsets
+    # 19. Load persisted usage windows and set account weights/offsets
     router.quota_estimator.set_usage_window_repo(usage_window_repo)
     config_offsets: dict[str, dict[str, int]] = {}
     for acct_cfg in config.all_accounts():
@@ -743,10 +746,10 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             offset_30d_microdollars=acct_cfg.monthly_offset_microdollars,
         )
 
-    # 18b. Metrics write coalescer for buffered analytics
+    # 20. Metrics write coalescer for buffered analytics
     rollup_repo = UsageRollupRepository(db)
 
-    # 17. Statistics service
+    # 21. Statistics service
     app.state.stats = StatsService(
         stats_db,
         health_manager=health_manager,

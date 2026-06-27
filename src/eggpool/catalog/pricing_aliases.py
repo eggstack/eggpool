@@ -214,34 +214,35 @@ async def seed_default_aliases(db: Database) -> int:
         },
     ]
     inserted = 0
-    for row in defaults:
-        existing = await db.fetch_one(
-            """
-            SELECT 1 FROM model_pricing_aliases
-            WHERE provider_id = ? AND upstream_model_id = ?
-              AND catalog_source = ?
-            """,
-            (row["provider_id"], row["upstream_model_id"], row["catalog_source"]),
-        )
-        if existing is not None:
-            continue
-        await db.execute_write(
-            """
-            INSERT INTO model_pricing_aliases
-                (provider_id, upstream_model_id, catalog_source,
-                 catalog_model_id, confidence, notes)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                row["provider_id"],
-                row["upstream_model_id"],
-                row["catalog_source"],
-                row["catalog_model_id"],
-                row["confidence"],
-                row["notes"],
-            ),
-        )
-        inserted += 1
+    async with db.transaction():
+        for row in defaults:
+            existing = await db.fetch_one(
+                """
+                SELECT 1 FROM model_pricing_aliases
+                WHERE provider_id = ? AND upstream_model_id = ?
+                  AND catalog_source = ?
+                """,
+                (row["provider_id"], row["upstream_model_id"], row["catalog_source"]),
+            )
+            if existing is not None:
+                continue
+            await db.execute_write(
+                """
+                INSERT INTO model_pricing_aliases
+                    (provider_id, upstream_model_id, catalog_source,
+                     catalog_model_id, confidence, notes)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["provider_id"],
+                    row["upstream_model_id"],
+                    row["catalog_source"],
+                    row["catalog_model_id"],
+                    row["confidence"],
+                    row["notes"],
+                ),
+            )
+            inserted += 1
     if inserted:
         logger.info("Seeded %d pricing-alias rows", inserted)
     return inserted

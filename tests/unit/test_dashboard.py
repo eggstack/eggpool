@@ -1180,6 +1180,17 @@ class TestRenderBandwidthPage:
         )
         assert "/static/chart.js" not in html
 
+    def test_cards_have_metric_tooltips(self) -> None:
+        html = render_bandwidth(
+            summary={"total_bytes_received": 0, "total_bytes_emitted": 0},
+            daily=[],
+            timeseries=[],
+        )
+        assert (
+            'data-tooltip="Total bytes received from clients by EggPool in the '
+            'selected period."'
+        ) in html
+
 
 class TestRenderOverviewBandwidth:
     """Tests for bandwidth integration in overview page."""
@@ -1353,6 +1364,31 @@ class TestRenderOverviewBandwidth:
         # The metric slot itself should hold the dash rather than "0.0 tok/s".
         assert "0.0 tok/s" not in html
 
+    def test_overview_cards_have_metric_tooltips(self) -> None:
+        html = render_overview(
+            overview={
+                "summary": {
+                    "total_requests": 1,
+                    "successful_requests": 1,
+                    "error_requests": 0,
+                    "error_rate": 0.0,
+                    "total_input_tokens": 100,
+                    "total_output_tokens": 200,
+                    "total_tokens": 300,
+                    "tokens_per_second": 10.0,
+                    "total_cost_microdollars": 1000,
+                    "avg_latency_ms": 50.0,
+                },
+                "imbalance": {"imbalance_ratio": 0.0},
+            },
+            accounts=[],
+        )
+        assert 'data-tooltip="Total proxied requests in the selected period.' in html
+        assert (
+            'data-tooltip="Aggregate token throughput across requests, '
+            'computed from total tokens divided by total latency."'
+        ) in html
+
 
 class TestRenderLatency:
     """Tests for the latency page renderer."""
@@ -1417,6 +1453,19 @@ class TestRenderLatency:
         assert "<script>" not in html
         assert "&lt;script&gt;" in html
 
+    def test_provider_cards_have_tooltips(self) -> None:
+        provider_ttft = [
+            {
+                "provider_id": "opencode-go",
+                "request_count": 10,
+                "avg_ttft_ms": 100.0,
+                "p50_ttft_ms": 80.0,
+                "p99_ttft_ms": 300.0,
+            }
+        ]
+        html = render_latency(provider_ttft=provider_ttft, model_ttft=[], period="24h")
+        assert 'data-tooltip="Provider TTFT summary.' in html
+
 
 class TestRenderPings:
     """Tests for the pings page renderer."""
@@ -1445,6 +1494,18 @@ class TestRenderPings:
         assert "142.0 ms" in html
         assert "healthy" in html
         assert "100.0% success" in html
+
+    def test_provider_cards_have_tooltips(self) -> None:
+        ping_summary = [
+            {
+                "provider_id": "opencode-go",
+                "avg_latency_ms": 142,
+                "success_rate": 100.0,
+                "last_model_count": 47,
+            }
+        ]
+        html = render_pings(ping_summary=ping_summary, recent_pings=[], period="24h")
+        assert 'data-tooltip="Provider ping latency summary.' in html
 
     def test_degraded_provider(self) -> None:
         ping_summary = [
@@ -2219,6 +2280,8 @@ class TestRenderReliability:
         assert "Operational events" in html
         assert "crash_recovery" in html
         assert "Transient upstream" in html
+        assert 'data-tooltip="Total upstream attempts in the selected period' in html
+        assert 'data-tooltip="Explanation of the pending-request snapshot' in html
 
     def test_pending_health_warning_when_stale(self) -> None:
         html = render_reliability(
@@ -2333,6 +2396,7 @@ class TestRenderRouting:
         assert "quota_exhausted_backoff" in html
         assert "suppressive" in html
         assert "advisory" in html
+        assert 'data-tooltip="Total routing decisions recorded in the selected period."' in html
 
     def test_exclusion_category_coloring(self) -> None:
         html = render_routing(
@@ -3346,6 +3410,7 @@ class TestRenderRuntimeDispatchAndLoad:
         html = render_runtime(snapshot)
         assert "Dispatch overhead" in html
         assert "p95" in html
+        assert 'data-tooltip="EggPool-local time spent before each upstream ' in html
 
     def test_load_unavailable_card(self) -> None:
         snapshot = self._base_snapshot()
@@ -3362,6 +3427,12 @@ class TestRenderRuntimeDispatchAndLoad:
         html = render_runtime(snapshot)
         assert "Load average" in html
         assert "load average unavailable" in html
+
+    def test_network_cards_have_tooltips(self) -> None:
+        snapshot = self._base_snapshot()
+        snapshot["dns_cache"] = {"enabled": True, "size": 5, "hits": 2, "misses": 1}
+        html = render_runtime(snapshot)
+        assert 'data-tooltip="Whether outbound DNS caching is enabled' in html
 
     def test_dispatch_overhead_no_samples(self) -> None:
         snapshot = self._base_snapshot()

@@ -34,6 +34,25 @@ class _FakeDB:
     def __init__(self, rows: list[_FakeRow]) -> None:
         self._rows = rows
         self._writes: list[tuple[str, tuple]] = []
+        self.transaction_count = 0
+
+    class _Transaction:
+        def __init__(self, db: _FakeDB) -> None:
+            self._db = db
+
+        async def __aenter__(self) -> None:
+            self._db.transaction_count += 1
+
+        async def __aexit__(
+            self,
+            exc_type: object,
+            exc: object,
+            traceback: object,
+        ) -> None:
+            return None
+
+    def transaction(self) -> _Transaction:
+        return self._Transaction(self)
 
     async def fetch_all(self, query: str) -> list[_FakeRow]:
         return list(self._rows)

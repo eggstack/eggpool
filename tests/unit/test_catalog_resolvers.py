@@ -7,6 +7,7 @@ import pytest
 
 from eggpool.catalog.catalog_resolvers import (
     CatalogConfig,
+    CatalogEntry,
     CatalogFetchError,
     CatalogResolverPipeline,
     OpenRouterCatalogResolver,
@@ -18,6 +19,7 @@ from eggpool.catalog.pricing_aliases import (
 )
 from eggpool.catalog.pricing_resolver import (
     SOURCE_DETAIL_OPENROUTER,
+    ResolvedPricing,
 )
 
 
@@ -25,13 +27,42 @@ class _StubClient:
     def __init__(self, payload: dict | Exception) -> None:
         self._payload = payload
         self.calls = 0
+        self.paths: list[str] = []
+        self.headers: list[dict[str, str]] = []
 
-    async def get(self, path: str) -> httpx.Response:
+    async def get(
+        self, path: str, *, headers: dict[str, str] | None = None
+    ) -> httpx.Response:
         self.calls += 1
+        self.paths.append(path)
+        self.headers.append(headers or {})
         if isinstance(self._payload, Exception):
             raise self._payload
         request = httpx.Request("GET", path)
         return httpx.Response(200, json=self._payload, request=request)
+
+
+class _PriorityResolver:
+    def __init__(self, name: str, priority: int) -> None:
+        self.name = name
+        self._priority = priority
+
+    @property
+    def priority(self) -> int:
+        return self._priority
+
+    async def fetch_catalog(self) -> dict[str, CatalogEntry]:
+        return {}
+
+    def to_resolved_pricing(
+        self,
+        *,
+        entry: CatalogEntry,
+        provider_id: str,
+        model_id: str,
+        alias: PricingAlias,
+    ) -> ResolvedPricing:
+        raise AssertionError("priority-order test should not fetch catalog entries")
 
 
 class TestTTLCache:
@@ -132,6 +163,23 @@ class TestOpenRouterFetchCatalog:
         with pytest.raises(CatalogFetchError):
             await resolver.fetch_catalog()
 
+    @pytest.mark.asyncio
+    async def test_fetch_uses_absolute_catalog_url_and_headers(self) -> None:
+        client = _StubClient({"data": []})
+        cfg = CatalogConfig(
+            name="openrouter",
+            base_url="https://openrouter.example/api/v1/",
+            api_key="catalog-key",
+        )
+        resolver = OpenRouterCatalogResolver(config=cfg, client=client)  # type: ignore[arg-type]
+
+        await resolver.fetch_catalog()
+
+        assert client.paths == ["https://openrouter.example/api/v1/models"]
+        assert client.headers == [
+            {"User-Agent": "eggpool/1.0", "Authorization": "Bearer catalog-key"}
+        ]
+
 
 class TestOpenRouterToResolvedPricing:
     def test_curated_alias_uses_curated_confidence(self) -> None:
@@ -189,6 +237,25 @@ class _StubAliasResolver:
 
 
 class TestCatalogResolverPipeline:
+    @pytest.mark.asyncio
+    async def test_consults_resolvers_by_configured_priority(self) -> None:
+        alias_resolver = _StubAliasResolver({})
+        pipeline = CatalogResolverPipeline(
+            resolvers=[
+                _PriorityResolver("late", priority=100),
+                _PriorityResolver("early", priority=10),
+            ],
+            alias_resolver=alias_resolver,  # type: ignore[arg-type]
+        )
+
+        result = await pipeline.resolve(provider_id="opencode-go", model_id="m1")
+
+        assert result is None
+        assert alias_resolver.calls == [
+            ("opencode-go", "m1", "early"),
+            ("opencode-go", "m1", "late"),
+        ]
+
     @pytest.mark.asyncio
     async def test_resolves_via_alias(self) -> None:
         cfg = CatalogConfig(name="openrouter", base_url="https://example.invalid")

@@ -75,6 +75,11 @@ class PricingCatalogResolver(Protocol):
 
     name: str
 
+    @property
+    def priority(self) -> int:
+        """Return lower-first ordering priority for this resolver."""
+        ...
+
     async def fetch_catalog(self) -> dict[str, CatalogEntry]:
         """Fetch the full catalog and index entries by catalog model ID.
 
@@ -167,13 +172,23 @@ class OpenRouterCatalogResolver:
         self._owns_client = client is None
         self._client = client or self._build_client()
 
+    @property
+    def priority(self) -> int:
+        return self._config.priority
+
     def _build_client(self) -> httpx.AsyncClient:
         warn_adhoc_client_construction("OpenRouterCatalogResolver._build_client")
+        return httpx.AsyncClient(timeout=15.0, follow_redirects=True)
+
+    def _headers(self) -> dict[str, str]:
         headers = {"User-Agent": "eggpool/1.0"}
         if self._config.api_key:
             headers["Authorization"] = f"Bearer {self._config.api_key}"
+        return headers
+
+    def _url(self, path: str) -> str:
         base_url = self._config.base_url or "https://openrouter.ai/api/v1"
-        return httpx.AsyncClient(base_url=base_url, headers=headers, timeout=15.0)
+        return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -186,7 +201,10 @@ class OpenRouterCatalogResolver:
             if self._cache.is_fresh:
                 return dict(self._cache.snapshot())
             try:
-                response = await self._client.get("/models")
+                response = await self._client.get(
+                    self._url("/models"),
+                    headers=self._headers(),
+                )
                 response.raise_for_status()
                 # response.json() returns object; carry that through.
                 payload_obj: object = response.json()
@@ -296,9 +314,9 @@ class CatalogResolverPipeline:
         resolvers: list[PricingCatalogResolver],
         alias_resolver: PricingAliasResolver,
     ) -> None:
-        # Sort resolvers by priority ascending so the lowest priority
-        # number is consulted first.
-        self._resolvers = sorted(resolvers, key=lambda r: r.name)
+        # Sort resolvers by configured priority ascending so operators
+        # control which catalog wins when several can price the same model.
+        self._resolvers = sorted(resolvers, key=lambda r: (r.priority, r.name))
         self._aliases = alias_resolver
 
     async def resolve(

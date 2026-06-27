@@ -214,13 +214,10 @@ class CatalogService:
                 options=entry.options,
             )
             if name == "openrouter":
-                # Use the default provider client if available, otherwise
-                # fall back to the shared outbound client from the manager.
-                resolver_client = self._httpx_client or self._outbound_client
                 resolvers.append(
                     OpenRouterCatalogResolver(
                         config=catalog_config,
-                        client=resolver_client,
+                        client=self._outbound_client,
                     )
                 )
         if resolvers:

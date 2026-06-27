@@ -136,6 +136,176 @@ _ERROR_CATEGORY_LABELS: dict[str, str] = {
     "unclassified": "Other",
 }
 
+_CARD_TOOLTIPS: dict[str, str] = {
+    "Pending requests": (
+        "Requests still in progress right now. The subtext shows the oldest "
+        "pending age and how many are already stale."
+    ),
+    "Active reservations": (
+        "Reservations currently holding estimated quota or spend for in-flight "
+        "work. The subtext shows reserved cost and age."
+    ),
+    "Finalizer (24h)": (
+        "Reliability cleanup activity over the last 24 hours, including stale "
+        "request cleanup, timeout cases, and crash recovery runs."
+    ),
+    "Retry rate": (
+        "Share of upstream attempts that required another try instead of "
+        "succeeding or failing terminally on the first attempt."
+    ),
+    "First-attempt success": (
+        "Share of attempts that completed without any retry."
+    ),
+    "Requests": (
+        "Total proxied requests in the selected period. The subtext splits "
+        "them into successful and error requests."
+    ),
+    "Error rate": (
+        "Fraction of requests in the selected period that ended in an error."
+    ),
+    "Total cost": (
+        "Total recorded request cost in the selected period, using the current "
+        "cost exactness pipeline."
+    ),
+    "Utilization imbalance": (
+        "Coefficient of variation across active accounts. Higher values mean "
+        "load is concentrated unevenly."
+    ),
+    "Total tokens": (
+        "Combined input and output tokens processed in the selected period."
+    ),
+    "Cache tokens": (
+        "Prompt-cache token activity. The metric shows cache reads; the "
+        "subtext shows read share of input and cache writes."
+    ),
+    "Reasoning tokens": (
+        "Tokens reported by upstreams as reasoning or extended-thinking output."
+    ),
+    "Throughput": (
+        "Aggregate token throughput across requests, computed from total tokens "
+        "divided by total latency."
+    ),
+    "Streaming": (
+        "How many requests used streaming responses versus non-streaming "
+        "responses."
+    ),
+    "Exactness": (
+        "Count of requests whose cost was exact. The subtext also shows "
+        "derived, estimated, and unknown-cost rows."
+    ),
+    "Bandwidth received": (
+        "Total bytes received from clients by EggPool in the selected period."
+    ),
+    "Bandwidth emitted": (
+        "Total bytes emitted by EggPool toward clients in the selected period."
+    ),
+    "Avg TTFT (streamed)": (
+        "Average time to first token for streamed requests, with P50 and P99 "
+        "shown below."
+    ),
+    "Total received": (
+        "Total bytes received from clients by EggPool in the selected period."
+    ),
+    "Total emitted": (
+        "Total bytes emitted by EggPool toward clients in the selected period."
+    ),
+    "Server PID": (
+        "Process identity for the running EggPool supervisor, including parent "
+        "PID and daemon mode."
+    ),
+    "Uptime": "Elapsed time since the current EggPool process started.",
+    "Python": "Python runtime version and platform for the running process.",
+    "RSS memory": (
+        "Resident memory currently held by the EggPool process."
+    ),
+    "Open FDs": (
+        "Open file descriptors currently held by the process."
+    ),
+    "Active threads": (
+        "Current number of active Python threads in the process."
+    ),
+    "Load average": (
+        "Host OS load average. The primary metric is 1-minute load; the "
+        "subtext shows normalized load or longer windows."
+    ),
+    "Dispatch overhead": (
+        "EggPool-local time spent before each upstream dispatch attempt begins."
+    ),
+    "Database": (
+        "Primary SQLite database path and on-disk size."
+    ),
+    "WAL": (
+        "SQLite write-ahead log size and whether WAL mode is active."
+    ),
+    "Sync": (
+        "SQLite synchronous mode and whether the primary DB connection is live."
+    ),
+    "Stats DB": (
+        "Whether stats use a separate SQLite connection and how many worker "
+        "threads are configured."
+    ),
+    "In-flight requests": (
+        "Requests currently active against upstream providers."
+    ),
+    "Active backoffs": (
+        "Persisted account backoff rows currently suppressing or delaying "
+        "eligible accounts."
+    ),
+    "DNS cache": (
+        "Whether outbound DNS caching is enabled and how many cached entries "
+        "are currently stored."
+    ),
+    "DNS hit rate": (
+        "Share of DNS lookups served from the in-memory cache instead of "
+        "triggering a fresh resolver call."
+    ),
+    "DNS misses": "DNS lookups that required a resolver call.",
+    "DNS errors": (
+        "DNS lookup failures and degraded cache behavior such as stale or "
+        "negative-cache hits."
+    ),
+    "Outbound builds": (
+        "How many times the shared outbound client manager has built a client."
+    ),
+    "Outbound requests": (
+        "Requests sent through the shared outbound client manager, with error "
+        "count in the subtext."
+    ),
+    "Provider clients": (
+        "How many per-provider HTTP clients were built in the provider client "
+        "pool."
+    ),
+    "Total attempts": (
+        "Total upstream attempts in the selected period, including retries."
+    ),
+    "Success attempts": (
+        "Attempts that completed successfully. The subtext highlights the "
+        "first-attempt success rate."
+    ),
+    "Retry attempts": (
+        "Attempts that were retries rather than initial tries."
+    ),
+    "Failed attempts": (
+        "Attempts that ended in failure. The subtext shows average attempt "
+        "latency."
+    ),
+    "Pending window": (
+        "Explanation of the pending-request snapshot and stale threshold used "
+        "by the reliability view."
+    ),
+    "Routing decisions": (
+        "Total routing decisions recorded in the selected period."
+    ),
+    "Avg eligible / decision": (
+        "Average number of accounts that remained eligible for each routing "
+        "decision."
+    ),
+    "Distinct selected accounts": (
+        "Count of different accounts chosen across routing decisions in the "
+        "selected period."
+    ),
+}
+
 
 def _error_category_label(category: str) -> str:
     """Return a human label for a retry_category value."""
@@ -549,6 +719,34 @@ def _td_priority(content: str, priority: int, *, class_: str | None = None) -> s
     return f'<td data-priority="{priority}">{content}</td>'
 
 
+def _render_metric_card(
+    *,
+    title: str,
+    metric: str | None = None,
+    sub: str | None = None,
+    tooltip: str | None = None,
+    warning: bool = False,
+    extra_subs: tuple[str, ...] = (),
+) -> str:
+    """Render a dashboard metric card with the shared tooltip contract."""
+    tooltip_text = tooltip or _CARD_TOOLTIPS.get(title, title)
+    tooltip_attr = _html_escape(tooltip_text, quote=True)
+    card_class = "card warning" if warning else "card"
+    parts = [
+        f'<div class="{card_class}" data-tooltip="{tooltip_attr}" '
+        f'aria-label="{tooltip_attr}">',
+        f"<h3>{_html_escape(title)}</h3>",
+    ]
+    if metric is not None:
+        parts.append(f'<p class="metric">{metric}</p>')
+    if sub is not None:
+        parts.append(f'<p class="sub">{sub}</p>')
+    for line in extra_subs:
+        parts.append(f'<p class="sub">{line}</p>')
+    parts.append("</div>")
+    return "".join(parts)
+
+
 def _render_pricing_exactness_badge(
     *,
     exact: int,
@@ -714,33 +912,43 @@ def _render_system_health(
         return ""
 
     pending_warn = pending_count > 0 and stale_pending_count > 0
+    cards = "".join(
+        [
+            _render_metric_card(
+                title="Pending requests",
+                metric=f"{pending_count:,}",
+                sub=f"oldest {pending_age} · stale {stale_pending_count}",
+                warning=pending_warn,
+            ),
+            _render_metric_card(
+                title="Active reservations",
+                metric=f"{reservation_count:,}",
+                sub=f"reserved {reserved_cost}",
+            ),
+            _render_metric_card(
+                title="Finalizer (24h)",
+                metric=format_int(stale_finalizer_cleaned),
+                sub=(
+                    "cleaned · "
+                    f"{finalizer_timeout} timeout · {crash_recovery} recovery"
+                ),
+                warning=finalizer_timeout > 0,
+            ),
+            _render_metric_card(
+                title="Retry rate",
+                metric=format_percent(retry_rate, digits=1),
+                sub=f"of {format_int(total_attempts)} attempts",
+            ),
+            _render_metric_card(
+                title="First-attempt success",
+                metric=format_percent(first_attempt_success_rate, digits=1),
+                sub="no retry needed",
+            ),
+        ]
+    )
     return f"""
 <section class="cards system-health">
-  <div class="card{" warning" if pending_warn else ""}">
-    <h3>Pending requests</h3>
-    <p class="metric">{pending_count:,}</p>
-    <p class="sub">oldest {pending_age} · stale {stale_pending_count}</p>
-  </div>
-  <div class="card">
-    <h3>Active reservations</h3>
-    <p class="metric">{reservation_count:,}</p>
-    <p class="sub">reserved {reserved_cost}</p>
-  </div>
-  <div class="card{" warning" if finalizer_timeout > 0 else ""}">
-    <h3>Finalizer (24h)</h3>
-    <p class="metric">{format_int(stale_finalizer_cleaned)}</p>
-    <p class="sub">cleaned · {finalizer_timeout} timeout · {crash_recovery} recovery</p>
-  </div>
-  <div class="card">
-    <h3>Retry rate</h3>
-    <p class="metric">{format_percent(retry_rate, digits=1)}</p>
-    <p class="sub">of {format_int(total_attempts)} attempts</p>
-  </div>
-  <div class="card">
-    <h3>First-attempt success</h3>
-    <p class="metric">{format_percent(first_attempt_success_rate, digits=1)}</p>
-    <p class="sub">no retry needed</p>
-  </div>
+  {cards}
 </section>
 """
 
@@ -1162,78 +1370,98 @@ def render_overview(
 {_render_system_health(pending_health, attempt_stats, operational_summary)}
 
 <section class="cards">
-  <div class="card">
-    <h3>Requests</h3>
-    <p class="metric">{total:,}</p>
-    <p class="sub">Success {success:,} · Errors {errors:,}</p>
-  </div>
-  <div class="card">
-    <h3>Error rate</h3>
-    <p class="metric">{format_percent(error_rate)}</p>
-    <p class="sub">avg latency {latency}</p>
-  </div>
-  <div class="card">
-    <h3>Total cost</h3>
-    <p class="metric">{cost}</p>
-    <p class="sub">in {in_tok} · out {out_tok} · total {total_tok}</p>
-  </div>
-  <div class="card">
-    <h3>Utilization imbalance</h3>
-    <p class="metric">{imb_pct}</p>
-    <p class="sub">CV across active accounts</p>
-  </div>
+  {
+    "".join(
+        [
+            _render_metric_card(
+                title="Requests",
+                metric=f"{total:,}",
+                sub=f"Success {success:,} · Errors {errors:,}",
+            ),
+            _render_metric_card(
+                title="Error rate",
+                metric=format_percent(error_rate),
+                sub=f"avg latency {latency}",
+            ),
+            _render_metric_card(
+                title="Total cost",
+                metric=cost,
+                sub=f"in {in_tok} · out {out_tok} · total {total_tok}",
+            ),
+            _render_metric_card(
+                title="Utilization imbalance",
+                metric=imb_pct,
+                sub="CV across active accounts",
+            ),
+        ]
+    )
+  }
 </section>
 
 <section class="cards">
-  <div class="card">
-    <h3>Total tokens</h3>
-    <p class="metric">{total_tok}</p>
-    <p class="sub">in {in_tok} · out {out_tok}</p>
-  </div>
-  <div class="card">
-    <h3>Cache tokens</h3>
-    <p class="metric">{cache_read}</p>
-    <p class="sub">{cache_read_pct} of input · write {cache_write}</p>
-  </div>
-  <div class="card">
-    <h3>Reasoning tokens</h3>
-    <p class="metric">{reasoning}</p>
-    <p class="sub">extended thinking</p>
-  </div>
-  <div class="card">
-    <h3>Throughput</h3>
-    <p class="metric">{throughput}</p>
-    <p class="sub">aggregate Σtokens / Σlatency</p>
-  </div>
-  <div class="card">
-    <h3>Streaming</h3>
-    <p class="metric">{streamed:,}</p>
-    <p class="sub">streamed · {non_streamed:,} non-streamed</p>
-  </div>
-  <div class="card">
-    <h3>Exactness</h3>
-    <p class="metric">{exact:,}</p>
-    <p class="sub">exact · {derived:,} derived
-     · {estimated:,} est · {unknown_exc:,} unk</p>
-  </div>
+  {
+    "".join(
+        [
+            _render_metric_card(
+                title="Total tokens",
+                metric=total_tok,
+                sub=f"in {in_tok} · out {out_tok}",
+            ),
+            _render_metric_card(
+                title="Cache tokens",
+                metric=cache_read,
+                sub=f"{cache_read_pct} of input · write {cache_write}",
+            ),
+            _render_metric_card(
+                title="Reasoning tokens",
+                metric=reasoning,
+                sub="extended thinking",
+            ),
+            _render_metric_card(
+                title="Throughput",
+                metric=throughput,
+                sub="aggregate Σtokens / Σlatency",
+            ),
+            _render_metric_card(
+                title="Streaming",
+                metric=f"{streamed:,}",
+                sub=f"streamed · {non_streamed:,} non-streamed",
+            ),
+            _render_metric_card(
+                title="Exactness",
+                metric=f"{exact:,}",
+                sub=(
+                    f"exact · {derived:,} derived · {estimated:,} est · "
+                    f"{unknown_exc:,} unk"
+                ),
+            ),
+        ]
+    )
+  }
 </section>
 
 <section class="cards">
-  <div class="card">
-    <h3>Bandwidth received</h3>
-    <p class="metric">{bytes_in}</p>
-    <p class="sub">client → proxy</p>
-  </div>
-  <div class="card">
-    <h3>Bandwidth emitted</h3>
-    <p class="metric">{bytes_out}</p>
-    <p class="sub">upstream → proxy</p>
-  </div>
-  <div class="card">
-    <h3>Avg TTFT (streamed)</h3>
-    <p class="metric">{avg_ttft}</p>
-    <p class="sub">P50 {p50_ttft} · P99 {p99_ttft}</p>
-  </div>
+  {
+    "".join(
+        [
+            _render_metric_card(
+                title="Bandwidth received",
+                metric=bytes_in,
+                sub="client → proxy",
+            ),
+            _render_metric_card(
+                title="Bandwidth emitted",
+                metric=bytes_out,
+                sub="upstream → proxy",
+            ),
+            _render_metric_card(
+                title="Avg TTFT (streamed)",
+                metric=avg_ttft,
+                sub=f"P50 {p50_ttft} · P99 {p99_ttft}",
+            ),
+        ]
+    )
+  }
 </section>
 
 <section class="panel">
@@ -2142,16 +2370,22 @@ def render_bandwidth(
 {_render_period_selector(period, current_theme)}
 
 <section class="cards">
-  <div class="card">
-    <h3>Total received</h3>
-    <p class="metric">{bytes_in}</p>
-    <p class="sub">client → proxy</p>
-  </div>
-  <div class="card">
-    <h3>Total emitted</h3>
-    <p class="metric">{bytes_out}</p>
-    <p class="sub">upstream → proxy</p>
-  </div>
+  {
+    "".join(
+        [
+            _render_metric_card(
+                title="Total received",
+                metric=bytes_in,
+                sub="client → proxy",
+            ),
+            _render_metric_card(
+                title="Total emitted",
+                metric=bytes_out,
+                sub="upstream → proxy",
+            ),
+        ]
+    )
+  }
 </section>
 
 <section class="panel">
@@ -2196,15 +2430,20 @@ def render_pings(
             model_count = int(row.get("last_model_count", 0))
             status = "healthy" if float(success_rate or 0) >= 90 else "degraded"
             cards.append(
-                f'<div class="card">'
-                f"<h3>{pid}</h3>"
-                f'<p class="metric">{avg_lat}</p>'
-                f'<p class="sub">'
-                f'<span class="{status}">{status}</span>'
-                f" · {success_rate}% success"
-                f" · {model_count} models"
-                f"</p>"
-                f"</div>"
+                _render_metric_card(
+                    title=str(row.get("provider_id", "")),
+                    metric=avg_lat,
+                    sub=(
+                        f'<span class="{status}">{status}</span>'
+                        f" · {success_rate}% success"
+                        f" · {model_count} models"
+                    ),
+                    tooltip=(
+                        "Provider ping latency summary. The metric is average "
+                        "ping latency; the subtext shows health status, "
+                        "success rate, and last seen model count."
+                    ),
+                )
             )
         provider_cards = f'<section class="cards">{"".join(cards)}</section>'
     elif recent_pings:
@@ -2415,52 +2654,64 @@ def render_runtime(
     # Server info cards
     server_cards = f"""
 <section class="cards">
-  <div class="card">
-    <h3>Server PID</h3>
-    <p class="metric">{pid}</p>
-    <p class="sub">PPID {ppid} · daemon {daemon_label}</p>
-  </div>
-  <div class="card">
-    <h3>Uptime</h3>
-    <p class="metric">{uptime}</p>
-    <p class="sub">uptime since start</p>
-  </div>
-  <div class="card">
-    <h3>Python</h3>
-    <p class="metric">{python_ver}</p>
-    <p class="sub">{platform_str}</p>
-  </div>
+  {
+    "".join(
+        [
+            _render_metric_card(
+                title="Server PID",
+                metric=str(pid),
+                sub=f"PPID {ppid} · daemon {daemon_label}",
+            ),
+            _render_metric_card(
+                title="Uptime",
+                metric=uptime,
+                sub="uptime since start",
+            ),
+            _render_metric_card(
+                title="Python",
+                metric=python_ver,
+                sub=platform_str,
+            ),
+        ]
+    )
+  }
 </section>
 """
 
     # Process & memory cards
     memory_cards = f"""
 <section class="cards">
-  <div class="card">
-    <h3>RSS memory</h3>
-    <p class="metric">{rss}</p>
-    <p class="sub">resident set size</p>
-  </div>
-  <div class="card">
-    <h3>Open FDs</h3>
-    <p class="metric">{open_fds}</p>
-    <p class="sub">file descriptors</p>
-  </div>
-  <div class="card">
-    <h3>Active threads</h3>
-    <p class="metric">{thread_count}</p>
-    <p class="sub">threading.active_count()</p>
-  </div>
-  <div class="card">
-    <h3>Load average</h3>
-    <p class="metric">{load_metric}</p>
-    <p class="sub">{load_sub}</p>
-  </div>
-  <div class="card">
-    <h3>Dispatch overhead</h3>
-    <p class="metric">{dispatch_metric}</p>
-    <p class="sub">{dispatch_sub}</p>
-  </div>
+  {
+    "".join(
+        [
+            _render_metric_card(
+                title="RSS memory",
+                metric=rss,
+                sub="resident set size",
+            ),
+            _render_metric_card(
+                title="Open FDs",
+                metric=open_fds,
+                sub="file descriptors",
+            ),
+            _render_metric_card(
+                title="Active threads",
+                metric=thread_count,
+                sub="threading.active_count()",
+            ),
+            _render_metric_card(
+                title="Load average",
+                metric=load_metric,
+                sub=load_sub,
+            ),
+            _render_metric_card(
+                title="Dispatch overhead",
+                metric=dispatch_metric,
+                sub=dispatch_sub,
+            ),
+        ]
+    )
+  }
 </section>
 """
 
@@ -2517,26 +2768,32 @@ def render_runtime(
     # Database info cards
     db_cards = f"""
 <section class="cards">
-  <div class="card">
-    <h3>Database</h3>
-    <p class="metric">{db_path}</p>
-    <p class="sub">file size {db_file_size}</p>
-  </div>
-  <div class="card">
-    <h3>WAL</h3>
-    <p class="metric">{db_wal_size}</p>
-    <p class="sub">enabled {escape(str(db_wal_enabled))} · mode {db_wal_live}</p>
-  </div>
-  <div class="card">
-    <h3>Sync</h3>
-    <p class="metric">{db_sync}</p>
-    <p class="sub">connected {escape(str(db_primary_connected))}</p>
-  </div>
-  <div class="card">
-    <h3>Stats DB</h3>
-    <p class="metric">{"separate" if db_separate_stats else "shared"}</p>
-    <p class="sub">{db_worker_threads} configured SQLite worker threads</p>
-  </div>
+  {
+    "".join(
+        [
+            _render_metric_card(
+                title="Database",
+                metric=db_path,
+                sub=f"file size {db_file_size}",
+            ),
+            _render_metric_card(
+                title="WAL",
+                metric=db_wal_size,
+                sub=f"enabled {escape(str(db_wal_enabled))} · mode {db_wal_live}",
+            ),
+            _render_metric_card(
+                title="Sync",
+                metric=db_sync,
+                sub=f"connected {escape(str(db_primary_connected))}",
+            ),
+            _render_metric_card(
+                title="Stats DB",
+                metric="separate" if db_separate_stats else "shared",
+                sub=f"{db_worker_threads} configured SQLite worker threads",
+            ),
+        ]
+    )
+  }
 </section>
 """
 
@@ -2551,26 +2808,32 @@ def render_runtime(
     )
     routing_cards = f"""
 <section class="cards">
-  <div class="card">
-    <h3>Pending requests</h3>
-    <p class="metric">{pending_count_str}</p>
-    <p class="sub">oldest {oldest_pending_age}</p>
-  </div>
-  <div class="card">
-    <h3>Active reservations</h3>
-    <p class="metric">{active_res_str}</p>
-    <p class="sub">reserved {reserved_microdollars}</p>
-  </div>
-  <div class="card">
-    <h3>In-flight requests</h3>
-    <p class="metric">{active_req_str}</p>
-    <p class="sub">active upstream</p>
-  </div>
-  <div class="card">
-    <h3>Active backoffs</h3>
-    <p class="metric">{backoff_str}</p>
-    <p class="sub">account backoff rows</p>
-  </div>
+  {
+    "".join(
+        [
+            _render_metric_card(
+                title="Pending requests",
+                metric=pending_count_str,
+                sub=f"oldest {oldest_pending_age}",
+            ),
+            _render_metric_card(
+                title="Active reservations",
+                metric=active_res_str,
+                sub=f"reserved {reserved_microdollars}",
+            ),
+            _render_metric_card(
+                title="In-flight requests",
+                metric=active_req_str,
+                sub="active upstream",
+            ),
+            _render_metric_card(
+                title="Active backoffs",
+                metric=backoff_str,
+                sub="account backoff rows",
+            ),
+        ]
+    )
+  }
 </section>
 """
 
@@ -2627,43 +2890,53 @@ def render_runtime(
 <section class="panel">
   <h3>Network</h3>
   <section class="cards">
-    <div class="card">
-      <h3>DNS cache</h3>
-      <p class="metric">{"enabled" if dns_enabled else "disabled"}</p>
-      <p class="sub">{dns_entries_label}</p>
-    </div>
-    <div class="card">
-      <h3>DNS hit rate</h3>
-      <p class="metric">{dns_hit_rate}</p>
-      <p class="sub">
-        {format_int(dns_hits)} hits / {format_int(dns_total_lookups)} total
-      </p>
-    </div>
-    <div class="card">
-      <h3>DNS misses</h3>
-      <p class="metric">{format_int(dns_misses)}</p>
-      <p class="sub">resolver calls</p>
-    </div>
-    <div class="card">
-      <h3>DNS errors</h3>
-      <p class="metric">{format_int(dns_errors)}</p>
-      <p class="sub">stale {format_int(dns_stale)} · neg {format_int(dns_negative)}</p>
-    </div>
-    <div class="card">
-      <h3>Outbound builds</h3>
-      <p class="metric">{ob_builds}</p>
-      <p class="sub">client lifecycle</p>
-    </div>
-    <div class="card">
-      <h3>Outbound requests</h3>
-      <p class="metric">{ob_requests}</p>
-      <p class="sub">errors {ob_errors}</p>
-    </div>
-    <div class="card">
-      <h3>Provider clients</h3>
-      <p class="metric">{provider_builds}</p>
-      <p class="sub">per-provider builds</p>
-    </div>
+    {
+      "".join(
+          [
+              _render_metric_card(
+                  title="DNS cache",
+                  metric="enabled" if dns_enabled else "disabled",
+                  sub=dns_entries_label,
+              ),
+              _render_metric_card(
+                  title="DNS hit rate",
+                  metric=dns_hit_rate,
+                  sub=(
+                      f"{format_int(dns_hits)} hits / "
+                      f"{format_int(dns_total_lookups)} total"
+                  ),
+              ),
+              _render_metric_card(
+                  title="DNS misses",
+                  metric=format_int(dns_misses),
+                  sub="resolver calls",
+              ),
+              _render_metric_card(
+                  title="DNS errors",
+                  metric=format_int(dns_errors),
+                  sub=(
+                      f"stale {format_int(dns_stale)} · "
+                      f"neg {format_int(dns_negative)}"
+                  ),
+              ),
+              _render_metric_card(
+                  title="Outbound builds",
+                  metric=ob_builds,
+                  sub="client lifecycle",
+              ),
+              _render_metric_card(
+                  title="Outbound requests",
+                  metric=ob_requests,
+                  sub=f"errors {ob_errors}",
+              ),
+              _render_metric_card(
+                  title="Provider clients",
+                  metric=provider_builds,
+                  sub="per-provider builds",
+              ),
+          ]
+      )
+    }
   </section>
 </section>
 """
@@ -2828,26 +3101,32 @@ def render_reliability(
 
     summary_cards = f"""
 <section class="cards">
-  <div class="card">
-    <h3>Total attempts</h3>
-    <p class="metric">{_format_int(total_attempts)}</p>
-    <p class="sub">{period}</p>
-  </div>
-  <div class="card">
-    <h3>Success attempts</h3>
-    <p class="metric">{_format_int(success_attempts)}</p>
-    <p class="sub">first-attempt success rate {first_attempt_pct}</p>
-  </div>
-  <div class="card">
-    <h3>Retry attempts</h3>
-    <p class="metric">{_format_int(retry_attempts)}</p>
-    <p class="sub">retry rate {_format_percent_unit(retry_rate, digits=1)}</p>
-  </div>
-  <div class="card">
-    <h3>Failed attempts</h3>
-    <p class="metric">{_format_int(failed_attempts)}</p>
-    <p class="sub">avg attempt latency {avg_attempt_latency:.1f} ms</p>
-  </div>
+  {
+    "".join(
+        [
+            _render_metric_card(
+                title="Total attempts",
+                metric=_format_int(total_attempts),
+                sub=period,
+            ),
+            _render_metric_card(
+                title="Success attempts",
+                metric=_format_int(success_attempts),
+                sub=f"first-attempt success rate {first_attempt_pct}",
+            ),
+            _render_metric_card(
+                title="Retry attempts",
+                metric=_format_int(retry_attempts),
+                sub=f"retry rate {_format_percent_unit(retry_rate, digits=1)}",
+            ),
+            _render_metric_card(
+                title="Failed attempts",
+                metric=_format_int(failed_attempts),
+                sub=f"avg attempt latency {avg_attempt_latency:.1f} ms",
+            ),
+        ]
+    )
+  }
 </section>
 """
 
@@ -2956,21 +3235,28 @@ def _render_pending_health_table(pending_health: dict[str, Any] | None) -> str:
     pending_warn = pending_count > 0 and stale_pending > 0
     return f"""
 <section class="cards system-health">
-  <div class="card{" warning" if pending_warn else ""}">
-    <h3>Pending requests</h3>
-    <p class="metric">{pending_count:,}</p>
-    <p class="sub">oldest {oldest_pending_age} · stale {stale_pending}</p>
-  </div>
-  <div class="card">
-    <h3>Active reservations</h3>
-    <p class="metric">{active_reservation_count:,}</p>
-    <p class="sub">reserved {active_reserved} · oldest {oldest_reservation_age}</p>
-  </div>
-  <div class="card">
-    <h3>Pending window</h3>
-    <p class="sub">stale &gt; 15 minutes are flagged for cleanup</p>
-    <p class="sub">snapshot is instantaneous; reload to refresh</p>
-  </div>
+  {
+    "".join(
+        [
+            _render_metric_card(
+                title="Pending requests",
+                metric=f"{pending_count:,}",
+                sub=f"oldest {oldest_pending_age} · stale {stale_pending}",
+                warning=pending_warn,
+            ),
+            _render_metric_card(
+                title="Active reservations",
+                metric=f"{active_reservation_count:,}",
+                sub=f"reserved {active_reserved} · oldest {oldest_reservation_age}",
+            ),
+            _render_metric_card(
+                title="Pending window",
+                sub="stale &gt; 15 minutes are flagged for cleanup",
+                extra_subs=("snapshot is instantaneous; reload to refresh",),
+            ),
+        ]
+    )
+  }
 </section>
 """
 
@@ -3144,21 +3430,27 @@ def render_routing(
 
     summary_cards = f"""
 <section class="cards">
-  <div class="card">
-    <h3>Routing decisions</h3>
-    <p class="metric">{_format_int(total_decisions)}</p>
-    <p class="sub">in selected period</p>
-  </div>
-  <div class="card">
-    <h3>Avg eligible / decision</h3>
-    <p class="metric">{avg_eligible:.2f}</p>
-    <p class="sub">candidate accounts per decision</p>
-  </div>
-  <div class="card">
-    <h3>Distinct selected accounts</h3>
-    <p class="metric">{_format_int(distinct_accounts)}</p>
-    <p class="sub">across all (model, provider) groups</p>
-  </div>
+  {
+    "".join(
+        [
+            _render_metric_card(
+                title="Routing decisions",
+                metric=_format_int(total_decisions),
+                sub="in selected period",
+            ),
+            _render_metric_card(
+                title="Avg eligible / decision",
+                metric=f"{avg_eligible:.2f}",
+                sub="candidate accounts per decision",
+            ),
+            _render_metric_card(
+                title="Distinct selected accounts",
+                metric=_format_int(distinct_accounts),
+                sub="across all (model, provider) groups",
+            ),
+        ]
+    )
+  }
 </section>
 """
 
@@ -3517,11 +3809,16 @@ def render_latency(
             p99 = format_latency(row.get("p99_ttft_ms", 0.0))
             count = int(row.get("request_count", 0))
             cards.append(
-                f'<div class="card">'
-                f"<h3>{pid}</h3>"
-                f'<p class="metric">{avg}</p>'
-                f'<p class="sub">P50 {p50} · P99 {p99} · {count:,} reqs</p>'
-                f"</div>"
+                _render_metric_card(
+                    title=str(row.get("provider_id", "")),
+                    metric=avg,
+                    sub=f"P50 {p50} · P99 {p99} · {count:,} reqs",
+                    tooltip=(
+                        "Provider TTFT summary. The metric is average time to "
+                        "first token; the subtext shows P50, P99, and request "
+                        "count."
+                    ),
+                )
             )
         provider_cards = f'<section class="cards">{"".join(cards)}</section>'
     else:
