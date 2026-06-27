@@ -69,6 +69,20 @@ def _parse_proc_stat_memory(stat: str, page_size: int) -> tuple[int | None, int 
     return vms_bytes, rss_bytes
 
 
+def _parse_proc_stat_ids(stat: str) -> tuple[int | None, int | None]:
+    """Parse parent PID and session ID from Linux ``/proc/<pid>/stat`` content."""
+    parts = stat.split(")", maxsplit=1)
+    if len(parts) < 2:
+        return None, None
+
+    fields = parts[1].split()
+    # After the comm field, fields[0] is state. Linux stat field numbers
+    # therefore map as: ppid field 4 -> fields[1], session field 6 -> fields[3].
+    if len(fields) <= 3:
+        return None, None
+    return _safe_int(fields[1]), _safe_int(fields[3])
+
+
 class RuntimeMetricsService:
     """Collects runtime/operations metrics for the running EggPool process.
 
@@ -306,19 +320,11 @@ class RuntimeMetricsService:
                 # Check parent-child relationship
                 try:
                     stat_text = (entry / "stat").read_text()
-                    stat_fields = stat_text.split(")")
-                    if len(stat_fields) >= 2:
-                        after_paren = stat_fields[1].split()
-                        # field 1 (0-indexed after split on ')') = state
-                        # field 3 = ppid
-                        if len(after_paren) > 3:
-                            child_ppid = _safe_int(after_paren[3])
-                            if child_ppid == my_pid:
-                                child_pids.append(pid)
-                            if my_session is not None:
-                                child_session = _safe_int(after_paren[4])
-                                if child_session == my_session:
-                                    same_session_pids.append(pid)
+                    child_ppid, child_session = _parse_proc_stat_ids(stat_text)
+                    if child_ppid == my_pid:
+                        child_pids.append(pid)
+                    if my_session is not None and child_session == my_session:
+                        same_session_pids.append(pid)
                 except (OSError, FileNotFoundError):
                     pass
         except Exception as exc:

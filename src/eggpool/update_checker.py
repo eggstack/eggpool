@@ -15,14 +15,14 @@ co-exist without tearing.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import importlib.metadata
 import logging
+import re
 import shutil
 import sys
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 
@@ -35,6 +35,15 @@ logger = logging.getLogger(__name__)
 PYPI_URL = "https://pypi.org/pypi/eggpool/json"
 _CHECK_TIMEOUT_S = 15.0
 _DEFAULT_CHECK_INTERVAL_S = 24 * 60 * 60
+_VERSION_RE = re.compile(
+    r"^\s*v?"
+    r"(?P<release>\d+(?:\.\d+)*)"
+    r"(?:[-_.]?(?P<pre_l>a|b|rc)[-_.]?(?P<pre_n>\d*))?"
+    r"(?:[-_.]?post[-_.]?(?P<post_n>\d*))?"
+    r"(?:[-_.]?dev[-_.]?(?P<dev_n>\d*))?",
+    re.IGNORECASE,
+)
+_PRE_RELEASE_RANK = {"a": 1, "b": 2, "rc": 3}
 
 
 class UpdateCheckError(RuntimeError):
@@ -222,12 +231,9 @@ class UpdateChecker:
         if response is None:
             return self._info.latest_version, "pypi: empty response"
         try:
-            data = response.json()
-        except Exception as exc:  # noqa: BLE001
+            latest = _latest_version_from_response(response)
+        except UpdateCheckError as exc:
             return self._info.latest_version, f"pypi: {exc}"
-        latest = str(data.get("info", {}).get("version") or "")
-        if not latest:
-            return self._info.latest_version, "pypi: empty version"
         return latest, ""
 
     def _http_get_sync(self) -> httpx.Response | None:
@@ -307,35 +313,60 @@ def _default_install_method() -> str:
 
 
 def _pep440_key(version: str) -> tuple[int, ...]:
-    """Best-effort PEP 440 ordering key.
+    """Best-effort PEP 440 ordering key for the project's release tags.
 
-    Falls back to a single-element tuple when parsing fails so an
-    unparseable PyPI release does not crash the check.  Strips common
-    pre-release suffixes (``a``, ``b``, ``rc``) into the same numeric
-    space as the release — pre-releases sort before the final release
-    with the same numeric components, matching ``packaging.version``.
+    The project publishes simple ``X.Y.Z`` releases, but local checkouts
+    and PyPI may still expose common prerelease or postrelease suffixes.
+    This helper deliberately handles only the subset needed here without
+    adding a runtime dependency on ``packaging``:
+
+    ``.dev`` < ``a`` < ``b`` < ``rc`` < final < ``.post``.
     """
-    cleaned = version.strip()
-    if not cleaned:
-        return (0,)
-    parts: list[int] = []
-    buf = ""
-    for char in cleaned:
-        if char.isdigit():
-            buf += char
-            continue
-        if buf:
-            parts.append(int(buf))
-            buf = ""
-        if char in {".", "-", "+"}:
-            if parts:
-                parts[-1] = parts[-1]
-            continue
-        break
-    if buf:
-        with contextlib.suppress(ValueError):
-            parts.append(int(buf))
-    return tuple(parts) or (0,)
+    match = _VERSION_RE.match(version)
+    if match is None:
+        return (0, 0, 0, 0, 4, 0)
+
+    release = [int(part) for part in match.group("release").split(".")]
+    while len(release) > 1 and release[-1] == 0:
+        release.pop()
+    release = release[:4]
+    release.extend([0] * (4 - len(release)))
+
+    if match.group("dev_n") is not None:
+        rank = 0
+        suffix_number = int(match.group("dev_n") or "0")
+    elif match.group("pre_l") is not None:
+        rank = _PRE_RELEASE_RANK[match.group("pre_l").lower()]
+        suffix_number = int(match.group("pre_n") or "0")
+    elif match.group("post_n") is not None:
+        rank = 5
+        suffix_number = int(match.group("post_n") or "0")
+    else:
+        rank = 4
+        suffix_number = 0
+
+    return (*release, rank, suffix_number)
+
+
+def _latest_version_from_response(response: httpx.Response) -> str:
+    """Extract the PyPI ``info.version`` field from a successful response."""
+    try:
+        response.raise_for_status()
+        data_raw: object = response.json()
+    except Exception as exc:  # noqa: BLE001
+        raise UpdateCheckError(str(exc)) from exc
+
+    if not isinstance(data_raw, dict):
+        raise UpdateCheckError("invalid response")
+    data = cast("dict[str, object]", data_raw)
+    info = data.get("info")
+    if not isinstance(info, dict):
+        raise UpdateCheckError("empty version")
+    info_data = cast("dict[str, object]", info)
+    latest = str(info_data.get("version") or "")
+    if not latest:
+        raise UpdateCheckError("empty version")
+    return latest
 
 
 def async_check_for_update(
@@ -360,13 +391,9 @@ def async_check_for_update(
         return "", "", f"version: {exc}"
     try:
         response = httpx.get(PYPI_URL, timeout=timeout_s, follow_redirects=True)
-        response.raise_for_status()
-        data = response.json()
+        latest = _latest_version_from_response(response)
     except Exception as exc:  # noqa: BLE001
         return current, "", f"pypi: {exc}"
-    latest = str(data.get("info", {}).get("version") or "")
-    if not latest:
-        return current, "", "pypi: empty version"
     return current, latest, ""
 
 

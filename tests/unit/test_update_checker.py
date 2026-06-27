@@ -13,16 +13,17 @@ from eggpool.update_checker import (
     PYPI_URL,
     UpdateChecker,
     UpdateInfo,
+    _pep440_key,
     async_check_for_update,
 )
 
 
-def _fake_response(version: str) -> httpx.Response:
+def _fake_response(version: str, *, status_code: int = 200) -> httpx.Response:
     """Build a real httpx.Response carrying *version* as the PyPI latest."""
     request = httpx.Request("GET", PYPI_URL)
     payload = json.dumps({"info": {"version": version}}).encode("utf-8")
     return httpx.Response(
-        status_code=200,
+        status_code=status_code,
         request=request,
         content=payload,
         headers={"content-type": "application/json"},
@@ -125,6 +126,14 @@ class TestCheckOnce:
         info = asyncio.run(checker.check_once())
         assert info.update_available is False
         assert "empty version" in info.last_check_error
+
+    def test_records_error_when_pypi_returns_bad_status(self) -> None:
+        response = _fake_response("9.9.9", status_code=503)
+        checker = _make_checker(current="0.1.0", http_get=lambda _u, **_k: response)
+        info = asyncio.run(checker.check_once())
+        assert info.update_available is False
+        assert info.latest_version == ""
+        assert "503" in info.last_check_error
 
     def test_preserves_previous_latest_after_failure(self) -> None:
         """A failed check keeps the previously known latest_version so
@@ -263,6 +272,19 @@ class TestAsyncCheckForUpdate:
         assert current == "0.4.0"
         assert latest == ""
         assert "empty version" in error
+
+
+class TestPep440Key:
+    def test_orders_common_release_suffixes(self) -> None:
+        assert _pep440_key("1.0.0.dev1") < _pep440_key("1.0.0a1")
+        assert _pep440_key("1.0.0a1") < _pep440_key("1.0.0b1")
+        assert _pep440_key("1.0.0b1") < _pep440_key("1.0.0rc1")
+        assert _pep440_key("1.0.0rc1") < _pep440_key("1.0.0")
+        assert _pep440_key("1.0.0") < _pep440_key("1.0.0.post1")
+
+    def test_normalizes_trailing_release_zeroes(self) -> None:
+        assert _pep440_key("1.0") == _pep440_key("1.0.0")
+        assert _pep440_key("1.0.1") > _pep440_key("1.0")
 
 
 # ---------------------------------------------------------------------------

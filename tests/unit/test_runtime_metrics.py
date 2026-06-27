@@ -17,6 +17,7 @@ from eggpool.models.config import AppConfig
 from eggpool.runtime_metrics import (
     _MAX_PROBE_ERROR_LEN,
     RuntimeMetricsService,
+    _parse_proc_stat_ids,
     _parse_proc_stat_memory,
     _safe_int,
     _truncate_probe_error,
@@ -148,6 +149,23 @@ def test_parse_proc_stat_memory_uses_rss_pages_not_vsize() -> None:
     assert vms_bytes == vsize_bytes
     assert rss_bytes == rss_pages * page_size
     assert rss_bytes != vsize_bytes * page_size
+
+
+def test_parse_proc_stat_ids_uses_linux_stat_field_numbers() -> None:
+    """PPID and session must use fields 4 and 6 from /proc/<pid>/stat."""
+    fields = [
+        "S",  # 3 state
+        "4321",  # 4 ppid
+        "1111",  # 5 pgrp
+        "2222",  # 6 session
+        "0",  # 7 tty_nr
+    ]
+    stat = f"12345 (eggpool worker) {' '.join(fields)}"
+
+    ppid, session_id = _parse_proc_stat_ids(stat)
+
+    assert ppid == 4321
+    assert session_id == 2222
 
 
 # -- snapshot() top-level structure -----------------------------------------
