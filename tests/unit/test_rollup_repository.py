@@ -197,6 +197,26 @@ class TestQueryTimeseriesBasic:
         assert rows[1]["bucket"] == "2025-06-15T12:01:00Z"
         assert "series_key" in rows[0]
 
+    @pytest.mark.asyncio()
+    async def test_streamed_counts_use_request_count(
+        self, repo: UsageRollupRepository
+    ) -> None:
+        await repo.upsert_many(
+            [
+                _row(streamed=1, request_count=4),
+                _row(streamed=0, request_count=2),
+            ]
+        )
+
+        rows = await repo.query_timeseries(
+            start="2000-01-01T00:00:00Z",
+            end="2099-12-31T23:59:59Z",
+            bucket_size_s=60,
+        )
+        assert len(rows) == 1
+        assert rows[0]["request_count"] == 6
+        assert rows[0]["streamed"] == 4
+
 
 class TestQueryTimeseriesProviderFilter:
     @pytest.mark.asyncio()
@@ -353,6 +373,25 @@ class TestQuerySummaryBasic:
         assert summary["total_input_tokens"] == 500
         assert summary["total_output_tokens"] == 1000
         assert summary["total_cost_microdollars"] == 5000
+
+    @pytest.mark.asyncio()
+    async def test_streamed_totals_use_request_count(
+        self, repo: UsageRollupRepository
+    ) -> None:
+        await repo.upsert_many(
+            [
+                _row(streamed=1, request_count=3),
+                _row(streamed=0, request_count=2),
+            ]
+        )
+
+        summary = await repo.query_summary(
+            start="2000-01-01T00:00:00Z",
+            end="2099-12-31T23:59:59Z",
+        )
+        assert summary["total_requests"] == 5
+        assert summary["streamed_requests"] == 3
+        assert summary["non_streamed_requests"] == 2
 
 
 class TestQuerySummaryEmpty:
