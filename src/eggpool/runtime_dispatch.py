@@ -24,6 +24,7 @@ class DispatchOverheadSnapshot:
     max_ms: float | None
     p50_ms: float | None
     p95_ms: float | None
+    p99_ms: float | None
 
 
 class DispatchOverheadRecorder:
@@ -60,6 +61,7 @@ class DispatchOverheadRecorder:
                 "max_ms": None,
                 "p50_ms": None,
                 "p95_ms": None,
+                "p99_ms": None,
             }
         samples.sort()
         count = len(samples)
@@ -77,4 +79,5 @@ class DispatchOverheadRecorder:
             "max_ms": samples[-1] / 1_000_000,
             "p50_ms": percentile(0.50),
             "p95_ms": percentile(0.95),
+            "p99_ms": percentile(0.99),
         }

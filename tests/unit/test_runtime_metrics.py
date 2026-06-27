@@ -698,6 +698,7 @@ class TestDispatchOverheadRecorder:
         assert snap["max_ms"] is None
         assert snap["p50_ms"] is None
         assert snap["p95_ms"] is None
+        assert snap["p99_ms"] is None
 
     def test_bounded_window_drops_oldest(self) -> None:
         from eggpool.runtime_dispatch import DispatchOverheadRecorder
@@ -740,6 +741,9 @@ class TestDispatchOverheadRecorder:
         assert snap["p50_ms"] <= snap["max_ms"]
         assert snap["p95_ms"] >= snap["p50_ms"]
         assert snap["p95_ms"] <= snap["max_ms"]
+        assert snap["p99_ms"] is not None
+        assert snap["p99_ms"] >= snap["p95_ms"]
+        assert snap["p99_ms"] <= snap["max_ms"]
 
 
 # -- RuntimeMetricsService dispatch overhead / load sections ----------------
@@ -774,6 +778,7 @@ async def test_snapshot_dispatch_overhead_no_recorder(db: Database) -> None:
     assert dispatch["max_ms"] is None
     assert dispatch["p50_ms"] is None
     assert dispatch["p95_ms"] is None
+    assert dispatch["p99_ms"] is None
 
 
 @pytest.mark.asyncio
@@ -792,6 +797,7 @@ async def test_snapshot_dispatch_overhead_aggregates(db: Database) -> None:
     assert dispatch["min_ms"] == 10.0
     assert dispatch["p50_ms"] is not None
     assert dispatch["p95_ms"] is not None
+    assert dispatch["p99_ms"] is not None
 
 
 @pytest.mark.asyncio

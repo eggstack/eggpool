@@ -628,6 +628,7 @@ class RuntimeMetricsService:
                 "max_ms": None,
                 "p50_ms": None,
                 "p95_ms": None,
+                "p99_ms": None,
             }
         try:
             return self._dispatch_overhead_recorder.snapshot()
