@@ -647,6 +647,11 @@ def _render_period_selector(current: str, current_theme: str = "") -> str:
             f'<option value="{escape(value)}"{selected}>{escape(label)}</option>'
         )
     selector = "".join(items)
+    theme_hidden = (
+        f'<input type="hidden" name="theme" value="{escape_attr(current_theme)}">'
+        if current_theme
+        else ""
+    )
     return (
         f'<form method="get" class="period-selector" '
         f'data-period-selector aria-label="Period selector">'
@@ -654,6 +659,7 @@ def _render_period_selector(current: str, current_theme: str = "") -> str:
         f'<select id="period" name="period">'
         f"{selector}"
         f"</select>"
+        f"{theme_hidden}"
         f"</form>"
     )
 

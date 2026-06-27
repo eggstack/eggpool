@@ -23,6 +23,7 @@ from eggpool.dashboard.render import (
     _format_tooltip_date,
     _render_bandwidth_heatmap,
     _render_nav,
+    _render_period_selector,
     _render_system_health,
     render_accounts,
     render_bandwidth,
@@ -942,6 +943,23 @@ class TestRenderTimeseries:
         """The canonical period selector opts into the live wire-up."""
         html = render_timeseries(series=[], bucket="hour", period="24h")
         assert "data-period-selector" in html
+
+    def test_period_selector_preserves_theme(self) -> None:
+        """The period selector's form must carry the active theme as a hidden input.
+
+        The JS handler intercepts ``change`` on the timeseries page, but
+        on every other page the form is submitted normally — without a
+        hidden ``theme`` field the user's theme selection is dropped on
+        every period change.
+        """
+        html = _render_period_selector("24h", current_theme="dark")
+        assert 'name="theme"' in html
+        assert 'value="dark"' in html
+
+    def test_period_selector_omits_theme_when_unset(self) -> None:
+        """No hidden ``theme`` input is emitted when no theme is active."""
+        html = _render_period_selector("24h")
+        assert 'name="theme"' not in html
 
     def test_empty_chart_panel_still_emits_canvas(self) -> None:
         """Empty payload still emits the canvas so JS can update after a filter."""
