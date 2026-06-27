@@ -459,12 +459,17 @@ def _render_layout(
     script_block = (
         _render_auto_refresh_script(refresh_interval_s) if auto_refresh else ""
     )
+    # `dashboard.js` is intentionally always-on: it wires the mobile
+    # burger menu, the update-command copy affordance, and the
+    # timeseries controls. Its init functions guard themselves with
+    # empty-result DOM queries so they are no-ops on pages that do not
+    # use charts or timeseries. Only `chart.js` is gated behind
+    # `include_chart_js` because it is ~200 KB and we want to keep it
+    # off the critical path for non-chart pages.
     chart_script = (
-        '<script defer src="/static/chart.js"></script>'
-        '<script defer src="/static/dashboard.js"></script>'
-        if include_chart_js
-        else ""
+        '<script defer src="/static/chart.js"></script>' if include_chart_js else ""
     )
+    dashboard_script = '<script defer src="/static/dashboard.js"></script>'
     update_indicator = _render_update_indicator(update_info)
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -508,6 +513,7 @@ def _render_layout(
 </footer>
 {script_block}
 {chart_script}
+{dashboard_script}
 </body>
 </html>"""
 

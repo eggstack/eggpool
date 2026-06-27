@@ -864,7 +864,10 @@ class TestRenderAccounts:
         """The disabled-count empty state escapes interpolated values."""
         # Render with a normal integer count to confirm there are no
         # injection vectors in the new helper. (Account names already
-        # have their own XSS tests in TestRenderAccounts.)
+        # have their own XSS tests in TestRenderAccounts.) We check for
+        # a bare ``<script>`` rather than the broader ``<script`` so the
+        # always-on ``<script defer src="/static/dashboard.js">`` tag
+        # does not trigger a false positive.
         html = render_accounts(
             accounts=[],
             period="24h",
@@ -872,7 +875,7 @@ class TestRenderAccounts:
             disabled_count=2,
         )
         assert "2 disabled accounts hidden" in html
-        assert "<script" not in html
+        assert "<script>" not in html
 
 
 class TestRenderModels:
@@ -2948,6 +2951,114 @@ class TestHamburgerNav:
         for path in ("/reliability", "/routing", "/accounts", "/models"):
             assert html.find(path) > menu_start
             assert html.find(path) < menu_end
+
+
+class TestDashboardScriptAlwaysLoaded:
+    """`dashboard.js` must load on every page so the burger menu and
+    update-command copy work even on non-chart pages.
+
+    `chart.js` is ~200 KB and stays gated behind ``include_chart_js``;
+    `dashboard.js` is small and unconditionally required because it
+    wires ``initNavToggle`` (the mobile burger), ``initUpdateCommandCopy``,
+    and the timeseries/timeseries-grouped init functions (each guards
+    its own work with empty-result DOM queries, so they are safe to
+    call on every page).
+
+    Regression for the bug where bundling both scripts behind the
+    chart flag left the burger click handler unattached on /accounts,
+    /models, /events, /bandwidth, /pings, /runtime, and /traces —
+    the menu never opened and no console errors were raised because
+    the script never loaded in the first place.
+    """
+
+    @staticmethod
+    def _assert_dashboard_js_loaded(html: str) -> None:
+        assert '<script defer src="/static/dashboard.js"></script>' in html, (
+            "dashboard.js must load on every page so the burger menu works"
+        )
+
+    def test_dashboard_js_loads_on_accounts(self) -> None:
+        html = render_accounts(accounts=[], period="24h")
+        self._assert_dashboard_js_loaded(html)
+        assert '<script defer src="/static/chart.js"></script>' not in html
+
+    def test_dashboard_js_loads_on_models(self) -> None:
+        html = render_models(models=[], period="24h")
+        self._assert_dashboard_js_loaded(html)
+        assert '<script defer src="/static/chart.js"></script>' not in html
+
+    def test_dashboard_js_loads_on_events(self) -> None:
+        html = render_events(events=[], period="24h")
+        self._assert_dashboard_js_loaded(html)
+        assert '<script defer src="/static/chart.js"></script>' not in html
+
+    def test_dashboard_js_loads_on_bandwidth(self) -> None:
+        html = render_bandwidth(
+            summary={},
+            daily=[],
+            timeseries=[],
+            period="24h",
+        )
+        self._assert_dashboard_js_loaded(html)
+        assert '<script defer src="/static/chart.js"></script>' not in html
+
+    def test_dashboard_js_loads_on_pings(self) -> None:
+        html = render_pings(ping_summary=[], recent_pings=[], period="24h")
+        self._assert_dashboard_js_loaded(html)
+        assert '<script defer src="/static/chart.js"></script>' not in html
+
+    def test_dashboard_js_loads_on_runtime(self) -> None:
+        html = render_runtime(snapshot={})
+        self._assert_dashboard_js_loaded(html)
+        assert '<script defer src="/static/chart.js"></script>' not in html
+
+    def test_dashboard_js_loads_on_traces(self) -> None:
+        html = render_traces(period="recent", limit=50, recent_requests=[])
+        self._assert_dashboard_js_loaded(html)
+        assert '<script defer src="/static/chart.js"></script>' not in html
+
+    def test_dashboard_js_loads_on_overview(self) -> None:
+        html = render_overview(
+            overview={
+                "summary": {"total_requests": 0},
+                "imbalance": {"imbalance_ratio": 0.0},
+            },
+            accounts=[],
+        )
+        self._assert_dashboard_js_loaded(html)
+        assert '<script defer src="/static/chart.js"></script>' in html
+
+    def test_dashboard_js_loads_on_reliability(self) -> None:
+        html = render_reliability(
+            period="24h",
+            attempt_stats=None,
+            retry_distribution=[],
+            pending_health=None,
+            operational_summary=[],
+            recent_operational_events=[],
+            timeseries=[],
+        )
+        self._assert_dashboard_js_loaded(html)
+        assert '<script defer src="/static/chart.js"></script>' in html
+
+    def test_dashboard_js_loads_on_routing(self) -> None:
+        html = render_routing(
+            period="24h",
+            routing_distribution=[],
+            routing_selection_breakdown=[],
+            routing_exclusion_breakdown=[],
+        )
+        self._assert_dashboard_js_loaded(html)
+        assert '<script defer src="/static/chart.js"></script>' in html
+
+    def test_dashboard_js_loads_on_timeseries(self) -> None:
+        html = render_timeseries(series=[], bucket="hour", period="24h")
+        self._assert_dashboard_js_loaded(html)
+        assert '<script defer src="/static/chart.js"></script>' in html
+
+    def test_dashboard_js_loads_on_latency(self) -> None:
+        html = render_latency(provider_ttft=[], model_ttft=[], period="24h")
+        self._assert_dashboard_js_loaded(html)
 
 
 class TestResponsiveColumns:
