@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-06-27
+
+### Changed
+
+- **README rewrite**: condensed the README from 870 lines to a concise, user-focused overview with quick start, CLI reference, configuration summary, API endpoints, and a documentation table linking to dedicated docs. Detailed content (deployment, providers, proxy, backup, model limits, Raspberry Pi, firewall, filesystem layout, network diagnostics) now lives in `docs/` and is linked from the README where it makes sense.
+
 ## [0.3.4] - 2026-06-27
 
 ### Fixed
