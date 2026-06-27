@@ -152,23 +152,16 @@ value = "2023-06-01"
 method = "GET"
 path = "/v1/models"
 required = true
-
-# Static model seeds are used as fallback when live discovery is
-# unavailable. The listed models match MiniMax's documented IDs.
-[[providers.minimax.static_models]]
-id = "MiniMax-M3"
-display_name = "MiniMax-M3"
-protocol = "anthropic"
-supports_tools = true
-supports_vision = false
 ```
 
 The composed upstream URL is
 `https://api.minimax.io/anthropic/v1/messages`, sent with
 `x-api-key: <token-plan-key>` and `anthropic-version: 2023-06-01`.
 Live model discovery fetches the catalog from the MiniMax `/v1/models`
-endpoint using the documented Anthropic-compatible listing. The static
-seeds serve only as a fallback when live discovery is unavailable.
+endpoint using the documented Anthropic-compatible listing. No static
+seeds ship with the international template; the provider already accepts
+the anthropic value produced by the family mapping, and live discovery is
+the source of truth.
 
 `minimax-cn` (China console) is intentionally configured as plain
 OpenAI-compatible in the bundled template because the China endpoint
@@ -227,17 +220,25 @@ account type, implement it as an opt-in alternate template (for example
 When a provider's live model discovery is unavailable (e.g. the endpoint
 does not expose a `/models` listing, or discovery is temporarily down),
 static model seeds act as a fallback. Declare them under
-`[[providers.<id>.static_models]]`. MiniMax now uses live discovery
-by default, so its static seeds serve only as a safety net:
+`[[providers.<id>.static_models]]`. The international MiniMax template
+ships without static seeds because live discovery is the source of
+truth; providers like `minimax-cn` that need to pin a specific protocol
+(where the family mapping would otherwise clear it) ship seeds as part
+of the bundled template:
 
 ```toml
-[[providers.minimax.static_models]]
+[[providers.minimax-cn.static_models]]
 id = "MiniMax-M3"
 display_name = "MiniMax-M3"
-protocol = "anthropic"
+protocol = "openai"
 supports_tools = true
 supports_vision = false
 ```
+
+Always mirror the live `id` / `display_name` exactly when adding fallback
+seeds so the cache stays consistent with dynamic loading (for example,
+`id = "MiniMax-M2.7-highspeed"` ships from the live endpoint as
+`display_name = "MiniMax-M2.7-Highspeed"`).
 
 Static rows participate in the same protocol, limit, and exposure
 machinery as live-discovered entries. When the provider's

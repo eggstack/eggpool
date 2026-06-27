@@ -70,7 +70,7 @@ EggPool supports 27+ upstream providers (OpenCode Go, OpenAI, Anthropic, Groq, D
 
 ### MiniMax templates
 
-- **`minimax`** — international host `https://api.minimax.io/anthropic`. Anthropic-compatible transport (key sent as `x-api-key` plus `anthropic-version: 2023-06-01`). Model listing uses live discovery via `/v1/models` endpoint; static `[[providers.minimax.static_models]]` rows serve as fallback only. The Anthropic model-list normalizer auto-detects MiniMax's response shape. Default for keys from `minimax.io`.
+- **`minimax`** — international host `https://api.minimax.io/anthropic`. Anthropic-compatible transport (key sent as `x-api-key` plus `anthropic-version: 2023-06-01`). Model listing is exclusively live via `/v1/models`; no static seeds are shipped because the provider already accepts the anthropic value produced by the family mapping. The Anthropic model-list normalizer auto-detects MiniMax's hybrid response shape. Default for keys from `minimax.io`.
 - **`minimax-cn`** — China host `https://api.minimaxi.com/v1` with the same OpenAI paths as a standard provider. Live verification is required because the China endpoint family has not been confirmed against EggPool's Anthropic-compatible transport.
 
 The stored key must be the raw token; EggPool prepends the configured auth scheme automatically. An optional `[providers.<id>.verify]` block lets the verifier know which model to probe when neither `--openai-model` nor `--anthropic-model` is passed on the CLI.

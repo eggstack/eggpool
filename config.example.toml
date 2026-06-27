@@ -503,28 +503,13 @@ persist_redacted_error_detail = false
 # path = "/v1/models"
 # required = true
 #
-# # Static model seeds are used as fallback when live discovery is
-# # unavailable. The listed models match MiniMax's documented IDs.
-# [[providers.minimax.static_models]]
-# id = "MiniMax-M3"
-# display_name = "MiniMax-M3"
-# protocol = "anthropic"
-# supports_tools = true
-# supports_vision = false
-#
-# [[providers.minimax.static_models]]
-# id = "MiniMax-M2.7"
-# display_name = "MiniMax-M2.7"
-# protocol = "anthropic"
-# supports_tools = true
-# supports_vision = false
-#
-# [[providers.minimax.static_models]]
-# id = "MiniMax-M2.5"
-# display_name = "MiniMax-M2.5"
-# protocol = "anthropic"
-# supports_tools = true
-# supports_vision = false
+# # Live discovery is the source of truth for the international
+# # endpoint; no static model seeds are needed because the provider
+# # already accepts the anthropic value produced by the family mapping.
+# # Add [[providers.minimax.static_models]] rows here only if you want
+# # a fallback when /v1/models is unreachable, and mirror the live
+# # id / display_name exactly (e.g. "MiniMax-M2.7-highspeed" id with
+# # display_name "MiniMax-M2.7-Highspeed").
 
 # MiniMax China — live verification required before production use.
 # The China endpoint family and auth shape have not been confirmed against

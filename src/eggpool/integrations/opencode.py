@@ -26,14 +26,27 @@ def build_opencode_provider_config(
     models:
         Sequence of model dicts from the catalog cache. Each must have
         at least ``model_id`` and may have ``effective_limits``,
-        ``display_name``, ``base_model_id``, and ``provider_id``.
+        ``display_name``, ``base_model_id``, and ``provider_id``. When
+        ``provider_id`` is set and ``display_name`` differs from
+        ``model_id``, the rendered ``name`` is suffixed with
+        ``/provider_id`` so OpenCode's model picker disambiguates
+        providers serving the same upstream model.
     """
     model_map: dict[str, Any] = {}
     for m in models:
         model_id = m["model_id"]
         entry: dict[str, Any] = {}
         display = m.get("display_name") or model_id
-        if display and display != model_id:
+        if not display:
+            continue
+        provider_id = m.get("provider_id")
+        if provider_id:
+            if display.endswith(f"/{provider_id}"):
+                if display != model_id:
+                    entry["name"] = display
+            else:
+                entry["name"] = f"{display}/{provider_id}"
+        elif display != model_id:
             entry["name"] = display
 
         effective = m.get("effective_limits", {})

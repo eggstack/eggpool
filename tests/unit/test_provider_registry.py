@@ -189,10 +189,7 @@ class TestRegistryPydanticParsing:
         models_endpoint = entry.get("models_endpoint", {})
         assert models_endpoint.get("method") == "GET"
         assert models_endpoint.get("path") == "/v1/models"
-        static_models = entry.get("static_models", [])
-        assert len(static_models) >= 1
-        ids = {sm.get("id") for sm in static_models}
-        assert "MiniMax-M3" in ids
+        assert entry.get("static_models", []) == []
 
     def test_experimental_providers_not_recommended(
         self, provider_entries: dict[str, dict[str, Any]]

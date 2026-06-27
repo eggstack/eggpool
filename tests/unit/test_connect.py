@@ -418,7 +418,13 @@ class TestFormatProviderBlock:
         assert cfg.providers["existing"].routing_priority == 0
 
     def test_minimax_template_round_trips_with_static_seeds(self, tmp_path) -> None:
-        """Anthropic-compatible providers with static_models + headers round-trip."""
+        """Anthropic-compatible providers with live discovery round-trip.
+
+        The bundled international MiniMax template relies on the documented
+        /v1/models endpoint for catalog population; no static model seeds
+        are needed because the provider already accepts the anthropic value
+        produced by the family mapping.
+        """
         from eggpool.models.config import AppConfig
 
         data = load_provider_templates()["minimax"]["data"]
@@ -436,9 +442,8 @@ class TestFormatProviderBlock:
         assert provider.auth.header == "x-api-key"
         assert provider.models_endpoint.method == "GET"
         assert provider.models_endpoint.path == "/v1/models"
-        assert len(provider.static_models) == 3
-        static_ids = {sm.id for sm in provider.static_models}
-        assert static_ids == {"MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5"}
+        assert provider.models_endpoint.required is True
+        assert provider.static_models == []
         header_names = {h.name for h in provider.headers}
         assert "anthropic-version" in header_names
         provider_level_metadata = [

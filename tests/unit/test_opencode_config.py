@@ -30,6 +30,7 @@ def test_model_with_limits() -> None:
         {
             "model_id": "MiniMax-M3/opencode-go",
             "display_name": "MiniMax M3",
+            "provider_id": "opencode-go",
             "effective_limits": {
                 "context_tokens": 220000,
                 "input_tokens": None,
@@ -44,7 +45,7 @@ def test_model_with_limits() -> None:
         models=models,
     )
     m = result["provider"]["eggpool"]["models"]["MiniMax-M3/opencode-go"]
-    assert m["name"] == "MiniMax M3"
+    assert m["name"] == "MiniMax M3/opencode-go"
     assert m["limit"]["context"] == 220000
     assert m["limit"]["output"] == 16384
     assert "input" not in m["limit"]
@@ -131,6 +132,8 @@ def test_provider_suffixed_id_preserved() -> None:
     models = [
         {
             "model_id": "MiniMax-M3/opencode-go",
+            "provider_id": "opencode-go",
+            "display_name": "MiniMax M3",
             "effective_limits": {"context_tokens": 220000},
         }
     ]
@@ -139,7 +142,111 @@ def test_provider_suffixed_id_preserved() -> None:
         api_key="ep_key",
         models=models,
     )
-    assert "MiniMax-M3/opencode-go" in result["provider"]["eggpool"]["models"]
+    entry = result["provider"]["eggpool"]["models"]["MiniMax-M3/opencode-go"]
+    assert entry["name"] == "MiniMax M3/opencode-go"
+    assert entry["limit"]["context"] == 220000
+
+
+def test_provider_suffix_added_to_name() -> None:
+    """When the catalog entry has provider_id and a bare display_name, the
+    rendered ``name`` field is suffixed with ``/provider_id`` so OpenCode's
+    model picker disambiguates providers serving the same model id."""
+    models = [
+        {
+            "model_id": "MiniMax-M3/minimax",
+            "provider_id": "minimax",
+            "display_name": "MiniMax-M3",
+            "effective_limits": {"context_tokens": 160000},
+        }
+    ]
+    result = build_opencode_provider_config(
+        base_url="http://host:8080/v1",
+        api_key="ep_key",
+        models=models,
+    )
+    entry = result["provider"]["eggpool"]["models"]["MiniMax-M3/minimax"]
+    assert entry["name"] == "MiniMax-M3/minimax"
+
+
+def test_provider_suffix_skipped_when_already_present() -> None:
+    """If the catalog's display_name already ends with /provider_id the
+    rendered name is left unchanged (no duplicate suffix)."""
+    models = [
+        {
+            "model_id": "MiniMax-M3/minimax",
+            "provider_id": "minimax",
+            "display_name": "MiniMax-M3/minimax",
+            "effective_limits": {"context_tokens": 160000},
+        }
+    ]
+    result = build_opencode_provider_config(
+        base_url="http://host:8080/v1",
+        api_key="ep_key",
+        models=models,
+    )
+    entry = result["provider"]["eggpool"]["models"]["MiniMax-M3/minimax"]
+    assert "name" not in entry
+
+
+def test_provider_suffix_skipped_when_collapse_models() -> None:
+    """collapse_models=True leaves provider_id unset; the bare display_name
+    is used as-is."""
+    models = [
+        {
+            "model_id": "MiniMax-M3",
+            "display_name": "MiniMax-M3",
+            "effective_limits": {"context_tokens": 160000},
+        }
+    ]
+    result = build_opencode_provider_config(
+        base_url="http://host:8080/v1",
+        api_key="ep_key",
+        models=models,
+    )
+    entry = result["provider"]["eggpool"]["models"]["MiniMax-M3"]
+    assert "name" not in entry
+
+
+def test_collapse_models_merges_providers_under_one_id() -> None:
+    """In collapse mode the catalog flattens entries across providers, so the
+    rendered config has a single bare-id entry without a provider suffix in
+    the displayed name (the gateway picks a provider per request based on
+    ranking)."""
+    models = [
+        {
+            "model_id": "MiniMax-M3",
+            "display_name": "MiniMax M3",
+            "effective_limits": {"context_tokens": 160000},
+        }
+    ]
+    result = build_opencode_provider_config(
+        base_url="http://host:8080/v1",
+        api_key="ep_key",
+        models=models,
+    )
+    models_block = result["provider"]["eggpool"]["models"]
+    assert list(models_block.keys()) == ["MiniMax-M3"]
+    assert models_block["MiniMax-M3"]["name"] == "MiniMax M3"
+    assert "/" not in models_block["MiniMax-M3"]["name"]
+
+
+def test_collapse_models_without_display_name_omits_name() -> None:
+    """In collapse mode, when the catalog's display_name matches the bare
+    model_id no ``name`` field is emitted (OpenCode falls back to the key)."""
+    models = [
+        {
+            "model_id": "gpt-4",
+            "display_name": "gpt-4",
+            "effective_limits": {"context_tokens": 100000},
+        }
+    ]
+    result = build_opencode_provider_config(
+        base_url="http://host:8080/v1",
+        api_key="ep_key",
+        models=models,
+    )
+    entry = result["provider"]["eggpool"]["models"]["gpt-4"]
+    assert "name" not in entry
 
 
 def test_all_limit_fields() -> None:
