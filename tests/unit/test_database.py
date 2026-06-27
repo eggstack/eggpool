@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from contextvars import ContextVar
 
 import aiosqlite
@@ -243,6 +244,38 @@ async def test_concurrent_readers_during_write() -> None:
     finally:
         await conn1.close()
         await conn2.close()
+
+
+def test_idle_connection_lock_rebinds_across_event_loops(tmp_path: object) -> None:
+    """A contended DB lock from one loop must not poison later app reuse."""
+    import pathlib
+
+    db_path = str(pathlib.Path(str(tmp_path)) / "loop_reuse.sqlite3")
+    database = Database(path=db_path)
+
+    async def bind_lock_to_first_loop() -> None:
+        await database.connect()
+        async with database.transaction():
+            waiter = asyncio.create_task(database.fetch_one("SELECT 1"))
+            await asyncio.sleep(0)
+            assert not waiter.done()
+            waiter.cancel()
+            with suppress(asyncio.CancelledError):
+                await waiter
+
+    async def reuse_from_second_loop() -> None:
+        first, second = await asyncio.gather(
+            database.fetch_one("SELECT 1 AS value"),
+            database.fetch_one("SELECT 2 AS value"),
+        )
+        assert first is not None
+        assert second is not None
+        assert first["value"] == 1
+        assert second["value"] == 2
+        await database.disconnect()
+
+    asyncio.run(bind_lock_to_first_loop())
+    asyncio.run(reuse_from_second_loop())
 
 
 @pytest.mark.asyncio()

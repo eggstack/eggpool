@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
@@ -44,6 +45,7 @@ class Database:
         self._read_only = read_only
         self._conn: aiosqlite.Connection | None = None
         self._connection_lock = asyncio.Lock()
+        self._connection_lock_guard = threading.Lock()
         self._transaction_depth: ContextVar[int] = ContextVar(
             "database_transaction_depth",
             default=0,
@@ -156,6 +158,33 @@ class Database:
                 "use 'async with db.transaction():'"
             )
 
+    def _refresh_idle_connection_lock(self) -> None:
+        """Recreate an idle connection lock if it was bound to another loop.
+
+        ``asyncio.Lock`` binds itself to the first event loop that has
+        to wait for it. TestClient and multi-loop hosts can reuse the
+        same Database instance across event loops, so an idle lock from
+        an old loop must not poison the next request.  Held locks are
+        never replaced; serialization remains intact.
+        """
+        if self._connection_lock.locked():
+            return
+        current_loop = asyncio.get_running_loop()
+        lock_loop = getattr(self._connection_lock, "_loop", None)
+        if lock_loop is None or lock_loop is current_loop:
+            return
+
+        guard = getattr(self, "_connection_lock_guard", None)
+        if guard is None:
+            guard = threading.Lock()
+            self._connection_lock_guard = guard
+        with guard:
+            if self._connection_lock.locked():
+                return
+            lock_loop = getattr(self._connection_lock, "_loop", None)
+            if lock_loop is not None and lock_loop is not current_loop:
+                self._connection_lock = asyncio.Lock()
+
     @asynccontextmanager
     async def _connection_access(self) -> AsyncGenerator[None]:
         """Acquire the connection lock for a SQL operation.
@@ -172,6 +201,7 @@ class Database:
             return
 
         t0 = time.monotonic()
+        self._refresh_idle_connection_lock()
         async with self._connection_lock:
             elapsed = time.monotonic() - t0
             self._cumulative_lock_wait_s += elapsed
@@ -334,6 +364,7 @@ class Database:
             raise DatabaseError("VACUUM cannot run on a read-only database")
         if self._current_task_owns_transaction():
             raise DatabaseError("VACUUM cannot run while a transaction is active")
+        self._refresh_idle_connection_lock()
         async with self._connection_lock:
             try:
                 cursor = await self.connection.execute("VACUUM")
@@ -431,6 +462,7 @@ class Database:
 
         # Outer transaction: hold the connection lock for the entire
         # transaction lifetime so no other task can interleave SQL.
+        self._refresh_idle_connection_lock()
         async with self._connection_lock:
             depth_token = self._transaction_depth.set(1)
             owner_token = self._transaction_owner.set(owner)

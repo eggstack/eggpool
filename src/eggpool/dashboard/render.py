@@ -153,9 +153,7 @@ _CARD_TOOLTIPS: dict[str, str] = {
         "Share of upstream attempts that required another try instead of "
         "succeeding or failing terminally on the first attempt."
     ),
-    "First-attempt success": (
-        "Share of attempts that completed without any retry."
-    ),
+    "First-attempt success": ("Share of attempts that completed without any retry."),
     "Requests": (
         "Total proxied requests in the selected period. The subtext splits "
         "them into successful and error requests."
@@ -186,8 +184,7 @@ _CARD_TOOLTIPS: dict[str, str] = {
         "divided by total latency."
     ),
     "Streaming": (
-        "How many requests used streaming responses versus non-streaming "
-        "responses."
+        "How many requests used streaming responses versus non-streaming responses."
     ),
     "Exactness": (
         "Count of requests whose cost was exact. The subtext also shows "
@@ -215,15 +212,9 @@ _CARD_TOOLTIPS: dict[str, str] = {
     ),
     "Uptime": "Elapsed time since the current EggPool process started.",
     "Python": "Python runtime version and platform for the running process.",
-    "RSS memory": (
-        "Resident memory currently held by the EggPool process."
-    ),
-    "Open FDs": (
-        "Open file descriptors currently held by the process."
-    ),
-    "Active threads": (
-        "Current number of active Python threads in the process."
-    ),
+    "RSS memory": ("Resident memory currently held by the EggPool process."),
+    "Open FDs": ("Open file descriptors currently held by the process."),
+    "Active threads": ("Current number of active Python threads in the process."),
     "Load average": (
         "Host OS load average. The primary metric is 1-minute load; the "
         "subtext shows normalized load or longer windows."
@@ -231,22 +222,14 @@ _CARD_TOOLTIPS: dict[str, str] = {
     "Dispatch overhead": (
         "EggPool-local time spent before each upstream dispatch attempt begins."
     ),
-    "Database": (
-        "Primary SQLite database path and on-disk size."
-    ),
-    "WAL": (
-        "SQLite write-ahead log size and whether WAL mode is active."
-    ),
-    "Sync": (
-        "SQLite synchronous mode and whether the primary DB connection is live."
-    ),
+    "Database": ("Primary SQLite database path and on-disk size."),
+    "WAL": ("SQLite write-ahead log size and whether WAL mode is active."),
+    "Sync": ("SQLite synchronous mode and whether the primary DB connection is live."),
     "Stats DB": (
         "Whether stats use a separate SQLite connection and how many worker "
         "threads are configured."
     ),
-    "In-flight requests": (
-        "Requests currently active against upstream providers."
-    ),
+    "In-flight requests": ("Requests currently active against upstream providers."),
     "Active backoffs": (
         "Persisted account backoff rows currently suppressing or delaying "
         "eligible accounts."
@@ -272,8 +255,7 @@ _CARD_TOOLTIPS: dict[str, str] = {
         "count in the subtext."
     ),
     "Provider clients": (
-        "How many per-provider HTTP clients were built in the provider client "
-        "pool."
+        "How many per-provider HTTP clients were built in the provider client pool."
     ),
     "Total attempts": (
         "Total upstream attempts in the selected period, including retries."
@@ -282,23 +264,17 @@ _CARD_TOOLTIPS: dict[str, str] = {
         "Attempts that completed successfully. The subtext highlights the "
         "first-attempt success rate."
     ),
-    "Retry attempts": (
-        "Attempts that were retries rather than initial tries."
-    ),
+    "Retry attempts": ("Attempts that were retries rather than initial tries."),
     "Failed attempts": (
-        "Attempts that ended in failure. The subtext shows average attempt "
-        "latency."
+        "Attempts that ended in failure. The subtext shows average attempt latency."
     ),
     "Pending window": (
         "Explanation of the pending-request snapshot and stale threshold used "
         "by the reliability view."
     ),
-    "Routing decisions": (
-        "Total routing decisions recorded in the selected period."
-    ),
+    "Routing decisions": ("Total routing decisions recorded in the selected period."),
     "Avg eligible / decision": (
-        "Average number of accounts that remained eligible for each routing "
-        "decision."
+        "Average number of accounts that remained eligible for each routing decision."
     ),
     "Distinct selected accounts": (
         "Count of different accounts chosen across routing decisions in the "
@@ -929,8 +905,7 @@ def _render_system_health(
                 title="Finalizer (24h)",
                 metric=format_int(stale_finalizer_cleaned),
                 sub=(
-                    "cleaned · "
-                    f"{finalizer_timeout} timeout · {crash_recovery} recovery"
+                    f"cleaned · {finalizer_timeout} timeout · {crash_recovery} recovery"
                 ),
                 warning=finalizer_timeout > 0,
             ),
@@ -1371,97 +1346,97 @@ def render_overview(
 
 <section class="cards">
   {
-    "".join(
-        [
-            _render_metric_card(
-                title="Requests",
-                metric=f"{total:,}",
-                sub=f"Success {success:,} · Errors {errors:,}",
-            ),
-            _render_metric_card(
-                title="Error rate",
-                metric=format_percent(error_rate),
-                sub=f"avg latency {latency}",
-            ),
-            _render_metric_card(
-                title="Total cost",
-                metric=cost,
-                sub=f"in {in_tok} · out {out_tok} · total {total_tok}",
-            ),
-            _render_metric_card(
-                title="Utilization imbalance",
-                metric=imb_pct,
-                sub="CV across active accounts",
-            ),
-        ]
-    )
-  }
-</section>
-
-<section class="cards">
-  {
-    "".join(
-        [
-            _render_metric_card(
-                title="Total tokens",
-                metric=total_tok,
-                sub=f"in {in_tok} · out {out_tok}",
-            ),
-            _render_metric_card(
-                title="Cache tokens",
-                metric=cache_read,
-                sub=f"{cache_read_pct} of input · write {cache_write}",
-            ),
-            _render_metric_card(
-                title="Reasoning tokens",
-                metric=reasoning,
-                sub="extended thinking",
-            ),
-            _render_metric_card(
-                title="Throughput",
-                metric=throughput,
-                sub="aggregate Σtokens / Σlatency",
-            ),
-            _render_metric_card(
-                title="Streaming",
-                metric=f"{streamed:,}",
-                sub=f"streamed · {non_streamed:,} non-streamed",
-            ),
-            _render_metric_card(
-                title="Exactness",
-                metric=f"{exact:,}",
-                sub=(
-                    f"exact · {derived:,} derived · {estimated:,} est · "
-                    f"{unknown_exc:,} unk"
+        "".join(
+            [
+                _render_metric_card(
+                    title="Requests",
+                    metric=f"{total:,}",
+                    sub=f"Success {success:,} · Errors {errors:,}",
                 ),
-            ),
-        ]
-    )
-  }
+                _render_metric_card(
+                    title="Error rate",
+                    metric=format_percent(error_rate),
+                    sub=f"avg latency {latency}",
+                ),
+                _render_metric_card(
+                    title="Total cost",
+                    metric=cost,
+                    sub=f"in {in_tok} · out {out_tok} · total {total_tok}",
+                ),
+                _render_metric_card(
+                    title="Utilization imbalance",
+                    metric=imb_pct,
+                    sub="CV across active accounts",
+                ),
+            ]
+        )
+    }
 </section>
 
 <section class="cards">
   {
-    "".join(
-        [
-            _render_metric_card(
-                title="Bandwidth received",
-                metric=bytes_in,
-                sub="client → proxy",
-            ),
-            _render_metric_card(
-                title="Bandwidth emitted",
-                metric=bytes_out,
-                sub="upstream → proxy",
-            ),
-            _render_metric_card(
-                title="Avg TTFT (streamed)",
-                metric=avg_ttft,
-                sub=f"P50 {p50_ttft} · P99 {p99_ttft}",
-            ),
-        ]
-    )
-  }
+        "".join(
+            [
+                _render_metric_card(
+                    title="Total tokens",
+                    metric=total_tok,
+                    sub=f"in {in_tok} · out {out_tok}",
+                ),
+                _render_metric_card(
+                    title="Cache tokens",
+                    metric=cache_read,
+                    sub=f"{cache_read_pct} of input · write {cache_write}",
+                ),
+                _render_metric_card(
+                    title="Reasoning tokens",
+                    metric=reasoning,
+                    sub="extended thinking",
+                ),
+                _render_metric_card(
+                    title="Throughput",
+                    metric=throughput,
+                    sub="aggregate Σtokens / Σlatency",
+                ),
+                _render_metric_card(
+                    title="Streaming",
+                    metric=f"{streamed:,}",
+                    sub=f"streamed · {non_streamed:,} non-streamed",
+                ),
+                _render_metric_card(
+                    title="Exactness",
+                    metric=f"{exact:,}",
+                    sub=(
+                        f"exact · {derived:,} derived · {estimated:,} est · "
+                        f"{unknown_exc:,} unk"
+                    ),
+                ),
+            ]
+        )
+    }
+</section>
+
+<section class="cards">
+  {
+        "".join(
+            [
+                _render_metric_card(
+                    title="Bandwidth received",
+                    metric=bytes_in,
+                    sub="client → proxy",
+                ),
+                _render_metric_card(
+                    title="Bandwidth emitted",
+                    metric=bytes_out,
+                    sub="upstream → proxy",
+                ),
+                _render_metric_card(
+                    title="Avg TTFT (streamed)",
+                    metric=avg_ttft,
+                    sub=f"P50 {p50_ttft} · P99 {p99_ttft}",
+                ),
+            ]
+        )
+    }
 </section>
 
 <section class="panel">
@@ -2371,21 +2346,21 @@ def render_bandwidth(
 
 <section class="cards">
   {
-    "".join(
-        [
-            _render_metric_card(
-                title="Total received",
-                metric=bytes_in,
-                sub="client → proxy",
-            ),
-            _render_metric_card(
-                title="Total emitted",
-                metric=bytes_out,
-                sub="upstream → proxy",
-            ),
-        ]
-    )
-  }
+        "".join(
+            [
+                _render_metric_card(
+                    title="Total received",
+                    metric=bytes_in,
+                    sub="client → proxy",
+                ),
+                _render_metric_card(
+                    title="Total emitted",
+                    metric=bytes_out,
+                    sub="upstream → proxy",
+                ),
+            ]
+        )
+    }
 </section>
 
 <section class="panel">
@@ -2655,26 +2630,26 @@ def render_runtime(
     server_cards = f"""
 <section class="cards">
   {
-    "".join(
-        [
-            _render_metric_card(
-                title="Server PID",
-                metric=str(pid),
-                sub=f"PPID {ppid} · daemon {daemon_label}",
-            ),
-            _render_metric_card(
-                title="Uptime",
-                metric=uptime,
-                sub="uptime since start",
-            ),
-            _render_metric_card(
-                title="Python",
-                metric=python_ver,
-                sub=platform_str,
-            ),
-        ]
-    )
-  }
+        "".join(
+            [
+                _render_metric_card(
+                    title="Server PID",
+                    metric=str(pid),
+                    sub=f"PPID {ppid} · daemon {daemon_label}",
+                ),
+                _render_metric_card(
+                    title="Uptime",
+                    metric=uptime,
+                    sub="uptime since start",
+                ),
+                _render_metric_card(
+                    title="Python",
+                    metric=python_ver,
+                    sub=platform_str,
+                ),
+            ]
+        )
+    }
 </section>
 """
 
@@ -2682,36 +2657,36 @@ def render_runtime(
     memory_cards = f"""
 <section class="cards">
   {
-    "".join(
-        [
-            _render_metric_card(
-                title="RSS memory",
-                metric=rss,
-                sub="resident set size",
-            ),
-            _render_metric_card(
-                title="Open FDs",
-                metric=open_fds,
-                sub="file descriptors",
-            ),
-            _render_metric_card(
-                title="Active threads",
-                metric=thread_count,
-                sub="threading.active_count()",
-            ),
-            _render_metric_card(
-                title="Load average",
-                metric=load_metric,
-                sub=load_sub,
-            ),
-            _render_metric_card(
-                title="Dispatch overhead",
-                metric=dispatch_metric,
-                sub=dispatch_sub,
-            ),
-        ]
-    )
-  }
+        "".join(
+            [
+                _render_metric_card(
+                    title="RSS memory",
+                    metric=rss,
+                    sub="resident set size",
+                ),
+                _render_metric_card(
+                    title="Open FDs",
+                    metric=open_fds,
+                    sub="file descriptors",
+                ),
+                _render_metric_card(
+                    title="Active threads",
+                    metric=thread_count,
+                    sub="threading.active_count()",
+                ),
+                _render_metric_card(
+                    title="Load average",
+                    metric=load_metric,
+                    sub=load_sub,
+                ),
+                _render_metric_card(
+                    title="Dispatch overhead",
+                    metric=dispatch_metric,
+                    sub=dispatch_sub,
+                ),
+            ]
+        )
+    }
 </section>
 """
 
@@ -2769,31 +2744,31 @@ def render_runtime(
     db_cards = f"""
 <section class="cards">
   {
-    "".join(
-        [
-            _render_metric_card(
-                title="Database",
-                metric=db_path,
-                sub=f"file size {db_file_size}",
-            ),
-            _render_metric_card(
-                title="WAL",
-                metric=db_wal_size,
-                sub=f"enabled {escape(str(db_wal_enabled))} · mode {db_wal_live}",
-            ),
-            _render_metric_card(
-                title="Sync",
-                metric=db_sync,
-                sub=f"connected {escape(str(db_primary_connected))}",
-            ),
-            _render_metric_card(
-                title="Stats DB",
-                metric="separate" if db_separate_stats else "shared",
-                sub=f"{db_worker_threads} configured SQLite worker threads",
-            ),
-        ]
-    )
-  }
+        "".join(
+            [
+                _render_metric_card(
+                    title="Database",
+                    metric=db_path,
+                    sub=f"file size {db_file_size}",
+                ),
+                _render_metric_card(
+                    title="WAL",
+                    metric=db_wal_size,
+                    sub=f"enabled {escape(str(db_wal_enabled))} · mode {db_wal_live}",
+                ),
+                _render_metric_card(
+                    title="Sync",
+                    metric=db_sync,
+                    sub=f"connected {escape(str(db_primary_connected))}",
+                ),
+                _render_metric_card(
+                    title="Stats DB",
+                    metric="separate" if db_separate_stats else "shared",
+                    sub=f"{db_worker_threads} configured SQLite worker threads",
+                ),
+            ]
+        )
+    }
 </section>
 """
 
@@ -2809,31 +2784,31 @@ def render_runtime(
     routing_cards = f"""
 <section class="cards">
   {
-    "".join(
-        [
-            _render_metric_card(
-                title="Pending requests",
-                metric=pending_count_str,
-                sub=f"oldest {oldest_pending_age}",
-            ),
-            _render_metric_card(
-                title="Active reservations",
-                metric=active_res_str,
-                sub=f"reserved {reserved_microdollars}",
-            ),
-            _render_metric_card(
-                title="In-flight requests",
-                metric=active_req_str,
-                sub="active upstream",
-            ),
-            _render_metric_card(
-                title="Active backoffs",
-                metric=backoff_str,
-                sub="account backoff rows",
-            ),
-        ]
-    )
-  }
+        "".join(
+            [
+                _render_metric_card(
+                    title="Pending requests",
+                    metric=pending_count_str,
+                    sub=f"oldest {oldest_pending_age}",
+                ),
+                _render_metric_card(
+                    title="Active reservations",
+                    metric=active_res_str,
+                    sub=f"reserved {reserved_microdollars}",
+                ),
+                _render_metric_card(
+                    title="In-flight requests",
+                    metric=active_req_str,
+                    sub="active upstream",
+                ),
+                _render_metric_card(
+                    title="Active backoffs",
+                    metric=backoff_str,
+                    sub="account backoff rows",
+                ),
+            ]
+        )
+    }
 </section>
 """
 
@@ -2891,51 +2866,51 @@ def render_runtime(
   <h3>Network</h3>
   <section class="cards">
     {
-      "".join(
-          [
-              _render_metric_card(
-                  title="DNS cache",
-                  metric="enabled" if dns_enabled else "disabled",
-                  sub=dns_entries_label,
-              ),
-              _render_metric_card(
-                  title="DNS hit rate",
-                  metric=dns_hit_rate,
-                  sub=(
-                      f"{format_int(dns_hits)} hits / "
-                      f"{format_int(dns_total_lookups)} total"
-                  ),
-              ),
-              _render_metric_card(
-                  title="DNS misses",
-                  metric=format_int(dns_misses),
-                  sub="resolver calls",
-              ),
-              _render_metric_card(
-                  title="DNS errors",
-                  metric=format_int(dns_errors),
-                  sub=(
-                      f"stale {format_int(dns_stale)} · "
-                      f"neg {format_int(dns_negative)}"
-                  ),
-              ),
-              _render_metric_card(
-                  title="Outbound builds",
-                  metric=ob_builds,
-                  sub="client lifecycle",
-              ),
-              _render_metric_card(
-                  title="Outbound requests",
-                  metric=ob_requests,
-                  sub=f"errors {ob_errors}",
-              ),
-              _render_metric_card(
-                  title="Provider clients",
-                  metric=provider_builds,
-                  sub="per-provider builds",
-              ),
-          ]
-      )
+        "".join(
+            [
+                _render_metric_card(
+                    title="DNS cache",
+                    metric="enabled" if dns_enabled else "disabled",
+                    sub=dns_entries_label,
+                ),
+                _render_metric_card(
+                    title="DNS hit rate",
+                    metric=dns_hit_rate,
+                    sub=(
+                        f"{format_int(dns_hits)} hits / "
+                        f"{format_int(dns_total_lookups)} total"
+                    ),
+                ),
+                _render_metric_card(
+                    title="DNS misses",
+                    metric=format_int(dns_misses),
+                    sub="resolver calls",
+                ),
+                _render_metric_card(
+                    title="DNS errors",
+                    metric=format_int(dns_errors),
+                    sub=(
+                        f"stale {format_int(dns_stale)} · "
+                        f"neg {format_int(dns_negative)}"
+                    ),
+                ),
+                _render_metric_card(
+                    title="Outbound builds",
+                    metric=ob_builds,
+                    sub="client lifecycle",
+                ),
+                _render_metric_card(
+                    title="Outbound requests",
+                    metric=ob_requests,
+                    sub=f"errors {ob_errors}",
+                ),
+                _render_metric_card(
+                    title="Provider clients",
+                    metric=provider_builds,
+                    sub="per-provider builds",
+                ),
+            ]
+        )
     }
   </section>
 </section>
@@ -3102,31 +3077,31 @@ def render_reliability(
     summary_cards = f"""
 <section class="cards">
   {
-    "".join(
-        [
-            _render_metric_card(
-                title="Total attempts",
-                metric=_format_int(total_attempts),
-                sub=period,
-            ),
-            _render_metric_card(
-                title="Success attempts",
-                metric=_format_int(success_attempts),
-                sub=f"first-attempt success rate {first_attempt_pct}",
-            ),
-            _render_metric_card(
-                title="Retry attempts",
-                metric=_format_int(retry_attempts),
-                sub=f"retry rate {_format_percent_unit(retry_rate, digits=1)}",
-            ),
-            _render_metric_card(
-                title="Failed attempts",
-                metric=_format_int(failed_attempts),
-                sub=f"avg attempt latency {avg_attempt_latency:.1f} ms",
-            ),
-        ]
-    )
-  }
+        "".join(
+            [
+                _render_metric_card(
+                    title="Total attempts",
+                    metric=_format_int(total_attempts),
+                    sub=period,
+                ),
+                _render_metric_card(
+                    title="Success attempts",
+                    metric=_format_int(success_attempts),
+                    sub=f"first-attempt success rate {first_attempt_pct}",
+                ),
+                _render_metric_card(
+                    title="Retry attempts",
+                    metric=_format_int(retry_attempts),
+                    sub=f"retry rate {_format_percent_unit(retry_rate, digits=1)}",
+                ),
+                _render_metric_card(
+                    title="Failed attempts",
+                    metric=_format_int(failed_attempts),
+                    sub=f"avg attempt latency {avg_attempt_latency:.1f} ms",
+                ),
+            ]
+        )
+    }
 </section>
 """
 
@@ -3236,27 +3211,27 @@ def _render_pending_health_table(pending_health: dict[str, Any] | None) -> str:
     return f"""
 <section class="cards system-health">
   {
-    "".join(
-        [
-            _render_metric_card(
-                title="Pending requests",
-                metric=f"{pending_count:,}",
-                sub=f"oldest {oldest_pending_age} · stale {stale_pending}",
-                warning=pending_warn,
-            ),
-            _render_metric_card(
-                title="Active reservations",
-                metric=f"{active_reservation_count:,}",
-                sub=f"reserved {active_reserved} · oldest {oldest_reservation_age}",
-            ),
-            _render_metric_card(
-                title="Pending window",
-                sub="stale &gt; 15 minutes are flagged for cleanup",
-                extra_subs=("snapshot is instantaneous; reload to refresh",),
-            ),
-        ]
-    )
-  }
+        "".join(
+            [
+                _render_metric_card(
+                    title="Pending requests",
+                    metric=f"{pending_count:,}",
+                    sub=f"oldest {oldest_pending_age} · stale {stale_pending}",
+                    warning=pending_warn,
+                ),
+                _render_metric_card(
+                    title="Active reservations",
+                    metric=f"{active_reservation_count:,}",
+                    sub=f"reserved {active_reserved} · oldest {oldest_reservation_age}",
+                ),
+                _render_metric_card(
+                    title="Pending window",
+                    sub="stale &gt; 15 minutes are flagged for cleanup",
+                    extra_subs=("snapshot is instantaneous; reload to refresh",),
+                ),
+            ]
+        )
+    }
 </section>
 """
 
@@ -3431,26 +3406,26 @@ def render_routing(
     summary_cards = f"""
 <section class="cards">
   {
-    "".join(
-        [
-            _render_metric_card(
-                title="Routing decisions",
-                metric=_format_int(total_decisions),
-                sub="in selected period",
-            ),
-            _render_metric_card(
-                title="Avg eligible / decision",
-                metric=f"{avg_eligible:.2f}",
-                sub="candidate accounts per decision",
-            ),
-            _render_metric_card(
-                title="Distinct selected accounts",
-                metric=_format_int(distinct_accounts),
-                sub="across all (model, provider) groups",
-            ),
-        ]
-    )
-  }
+        "".join(
+            [
+                _render_metric_card(
+                    title="Routing decisions",
+                    metric=_format_int(total_decisions),
+                    sub="in selected period",
+                ),
+                _render_metric_card(
+                    title="Avg eligible / decision",
+                    metric=f"{avg_eligible:.2f}",
+                    sub="candidate accounts per decision",
+                ),
+                _render_metric_card(
+                    title="Distinct selected accounts",
+                    metric=_format_int(distinct_accounts),
+                    sub="across all (model, provider) groups",
+                ),
+            ]
+        )
+    }
 </section>
 """
 

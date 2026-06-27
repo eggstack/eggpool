@@ -48,6 +48,12 @@ _RoutingPayload = tuple[
     list[dict[str, Any]],
     list[dict[str, Any]],
 ]
+_BandwidthPayload = tuple[
+    dict[str, Any],
+    list[dict[str, Any]],
+    list[dict[str, Any]] | None,
+]
+_PingsPayload = tuple[list[dict[str, Any]], list[dict[str, Any]]]
 
 
 DEFAULT_REFRESH_S = 15
@@ -57,14 +63,32 @@ DEFAULT_REFRESH_S = 15
 # scans rows the retention job will purge.  Recomputed per request so
 # the dashboard cache key naturally advances with wall-clock time.
 _HEATMAP_MAX_DAYS = 90
+_VALID_BUCKETS = frozenset({"hour", "day"})
+_VALID_GROUP_BY = frozenset({"provider", "model", "provider_model", "account"})
+
+
+def _normalize_bucket(bucket: str) -> str:
+    """Return a supported dashboard bucket, falling back to hourly."""
+    return bucket if bucket in _VALID_BUCKETS else "hour"
+
+
+def _normalize_group_by(group_by: str) -> str:
+    """Return a supported grouped-timeseries dimension."""
+    return group_by if group_by in _VALID_GROUP_BY else "provider_model"
+
+
+def _clamp_int(value: int, *, minimum: int, maximum: int) -> int:
+    """Clamp an integer query value to an inclusive range."""
+    return max(minimum, min(value, maximum))
 
 
 def _heatmap_time_range(retain_days: int) -> TimeRange:
     """Return a TimeRange for the heatmap bounded by retention + max."""
     days = max(1, min(_HEATMAP_MAX_DAYS, retain_days))
+    now = datetime.now(UTC)
     return TimeRange(
-        start=datetime.now(UTC) - timedelta(days=days),
-        end=datetime.now(UTC),
+        start=now - timedelta(days=days),
+        end=now,
         label=f"{days}d",
     )
 
@@ -394,7 +418,7 @@ async def handle_traces(
     request metadata only — never ``error_detail`` or ``client_ip``.
     """
     _get_dashboard_config(request)
-    bounded_limit = max(10, min(int(limit), 500))
+    bounded_limit = _clamp_int(limit, minimum=10, maximum=500)
     stats = request.app.state.stats
     recent_requests = await stats.get_recent_requests(limit=bounded_limit)
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
@@ -418,8 +442,13 @@ async def handle_pings(
     _get_dashboard_config(request)
     time_range = resolve_time_range(period)
     stats = request.app.state.stats
-    ping_summary = await stats.get_ping_summary(time_range)
-    recent_pings = await stats.get_ping_recent(limit=50)
+    ping_summary, recent_pings = cast(
+        "_PingsPayload",
+        await asyncio.gather(
+            stats.get_ping_summary(time_range),
+            stats.get_ping_recent(limit=50),
+        ),
+    )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
     return HTMLResponse(
         content=render_pings(
@@ -472,11 +501,9 @@ async def handle_timeseries(
     """Render the timeseries page."""
     _get_dashboard_config(request)
     time_range = resolve_time_range(period)
-    if bucket not in ("hour", "day"):
-        bucket = "hour"
-    if group_by not in ("provider", "model", "provider_model", "account"):
-        group_by = "provider_model"
-    bounded_limit = max(1, min(int(limit), 25))
+    bucket = _normalize_bucket(bucket)
+    group_by = _normalize_group_by(group_by)
+    bounded_limit = _clamp_int(limit, minimum=1, maximum=25)
     stats = request.app.state.stats
     series, grouped = cast(
         "tuple[list[dict[str, Any]] | None, dict[str, Any]]",
@@ -533,17 +560,20 @@ async def handle_bandwidth(
     """Render the bandwidth page."""
     _get_dashboard_config(request)
     time_range = resolve_time_range(period)
-    if bucket not in ("hour", "day"):
-        bucket = "hour"
+    bucket = _normalize_bucket(bucket)
     stats = request.app.state.stats
-    summary = await stats.get_summary(
-        time_range, account_name=account or None, use_cache=True
-    )
-    daily = await stats.get_bandwidth_timeseries(
-        time_range, account_name=account or None
-    )
-    timeseries = await stats.get_timeseries(
-        time_range, bucket=bucket, account_name=account or None, use_cache=True
+    summary, daily, timeseries = cast(
+        _BandwidthPayload,  # noqa: TC006 — pyright needs the TypeAlias to propagate through gather()
+        await asyncio.gather(
+            stats.get_summary(time_range, account_name=account or None, use_cache=True),
+            stats.get_bandwidth_timeseries(time_range, account_name=account or None),
+            stats.get_timeseries(
+                time_range,
+                bucket=bucket,
+                account_name=account or None,
+                use_cache=True,
+            ),
+        ),
     )
     theme_css, heatmap_colors, current_theme, available = _get_theme_data(
         request, theme
@@ -575,8 +605,7 @@ async def handle_timeseries_json(
     """Return timeseries data as JSON for Chart.js."""
     _get_dashboard_config(request)
     time_range = resolve_time_range(period)
-    if bucket not in ("hour", "day"):
-        bucket = "hour"
+    bucket = _normalize_bucket(bucket)
     stats = request.app.state.stats
     series = await stats.get_timeseries(
         time_range,
@@ -607,11 +636,9 @@ async def handle_grouped_timeseries_json(
     """
     _get_dashboard_config(request)
     time_range = resolve_time_range(period)
-    if bucket not in ("hour", "day"):
-        bucket = "hour"
-    if group_by not in ("provider", "model", "provider_model", "account"):
-        group_by = "provider_model"
-    bounded_limit = max(1, min(int(limit), 25))
+    bucket = _normalize_bucket(bucket)
+    group_by = _normalize_group_by(group_by)
+    bounded_limit = _clamp_int(limit, minimum=1, maximum=25)
     stats = request.app.state.stats
     payload = await stats.get_grouped_timeseries(
         time_range,
@@ -654,104 +681,29 @@ def register_dashboard_routes(app: Any, require_auth: bool = False) -> None:
     from eggpool.auth import require_auth as _require_auth
 
     dependencies = [Depends(_require_auth)] if require_auth else None
-    app.add_api_route(
-        path="/",
-        endpoint=handle_overview,
-        methods=["GET"],
-        response_class=HTMLResponse,
-        dependencies=dependencies,
-    )
-    app.add_api_route(
-        path="/accounts",
-        endpoint=handle_accounts,
-        methods=["GET"],
-        response_class=HTMLResponse,
-        dependencies=dependencies,
-    )
-    app.add_api_route(
-        path="/models",
-        endpoint=handle_models,
-        methods=["GET"],
-        response_class=HTMLResponse,
-        dependencies=dependencies,
-    )
-    app.add_api_route(
-        path="/latency",
-        endpoint=handle_latency,
-        methods=["GET"],
-        response_class=HTMLResponse,
-        dependencies=dependencies,
-    )
-    app.add_api_route(
-        path="/events",
-        endpoint=handle_events,
-        methods=["GET"],
-        response_class=HTMLResponse,
-        dependencies=dependencies,
-    )
-    app.add_api_route(
-        path="/timeseries",
-        endpoint=handle_timeseries,
-        methods=["GET"],
-        response_class=HTMLResponse,
-        dependencies=dependencies,
-    )
-    app.add_api_route(
-        path="/bandwidth",
-        endpoint=handle_bandwidth,
-        methods=["GET"],
-        response_class=HTMLResponse,
-        dependencies=dependencies,
-    )
-    app.add_api_route(
-        path="/pings",
-        endpoint=handle_pings,
-        methods=["GET"],
-        response_class=HTMLResponse,
-        dependencies=dependencies,
-    )
-    app.add_api_route(
-        path="/reliability",
-        endpoint=handle_reliability,
-        methods=["GET"],
-        response_class=HTMLResponse,
-        dependencies=dependencies,
-    )
-    app.add_api_route(
-        path="/routing",
-        endpoint=handle_routing,
-        methods=["GET"],
-        response_class=HTMLResponse,
-        dependencies=dependencies,
-    )
-    app.add_api_route(
-        path="/traces",
-        endpoint=handle_traces,
-        methods=["GET"],
-        response_class=HTMLResponse,
-        dependencies=dependencies,
-    )
-    app.add_api_route(
-        path="/runtime",
-        endpoint=handle_runtime,
-        methods=["GET"],
-        response_class=HTMLResponse,
-        dependencies=dependencies,
-    )
-    app.add_api_route(
-        path="/api/timeseries",
-        endpoint=handle_timeseries_json,
-        methods=["GET"],
-        response_class=JSONResponse,
-        dependencies=dependencies,
-    )
-    app.add_api_route(
-        path="/api/timeseries/grouped",
-        endpoint=handle_grouped_timeseries_json,
-        methods=["GET"],
-        response_class=JSONResponse,
-        dependencies=dependencies,
-    )
+    for path, endpoint, response_class in (
+        ("/", handle_overview, HTMLResponse),
+        ("/accounts", handle_accounts, HTMLResponse),
+        ("/models", handle_models, HTMLResponse),
+        ("/latency", handle_latency, HTMLResponse),
+        ("/events", handle_events, HTMLResponse),
+        ("/timeseries", handle_timeseries, HTMLResponse),
+        ("/bandwidth", handle_bandwidth, HTMLResponse),
+        ("/pings", handle_pings, HTMLResponse),
+        ("/reliability", handle_reliability, HTMLResponse),
+        ("/routing", handle_routing, HTMLResponse),
+        ("/traces", handle_traces, HTMLResponse),
+        ("/runtime", handle_runtime, HTMLResponse),
+        ("/api/timeseries", handle_timeseries_json, JSONResponse),
+        ("/api/timeseries/grouped", handle_grouped_timeseries_json, JSONResponse),
+    ):
+        app.add_api_route(
+            path=path,
+            endpoint=endpoint,
+            methods=["GET"],
+            response_class=response_class,
+            dependencies=dependencies,
+        )
 
 
 __all__ = [

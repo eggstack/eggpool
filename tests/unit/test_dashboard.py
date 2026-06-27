@@ -2396,7 +2396,10 @@ class TestRenderRouting:
         assert "quota_exhausted_backoff" in html
         assert "suppressive" in html
         assert "advisory" in html
-        assert 'data-tooltip="Total routing decisions recorded in the selected period."' in html
+        assert (
+            'data-tooltip="Total routing decisions recorded in the selected period."'
+            in html
+        )
 
     def test_exclusion_category_coloring(self) -> None:
         html = render_routing(
