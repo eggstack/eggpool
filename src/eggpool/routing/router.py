@@ -150,6 +150,7 @@ class Router:
         exclude_accounts: set[str] | None = None,
         provider_id: str | None = None,
         protocol: str | None = None,
+        transcode_eligibility: set[str] | None = None,
     ) -> AccountRuntimeState | None:
         """Select an account for the given model.
 
@@ -158,7 +159,7 @@ class Router:
         ``QuotaFairScorer`` is used to load balance within it.
         """
         candidates = self._selection_candidates(
-            model_id, exclude_accounts, provider_id, protocol
+            model_id, exclude_accounts, provider_id, protocol, transcode_eligibility
         )
         tiers = candidates.tiered()
         if not tiers:
@@ -183,6 +184,7 @@ class Router:
         exclude_accounts: set[str] | None = None,
         provider_id: str | None = None,
         protocol: str | None = None,
+        transcode_eligibility: set[str] | None = None,
     ) -> list[str]:
         """Get eligible account names for a model.
 
@@ -191,7 +193,7 @@ class Router:
         eligibility order, not priority order.
         """
         candidates = self._selection_candidates(
-            model_id, exclude_accounts, provider_id, protocol
+            model_id, exclude_accounts, provider_id, protocol, transcode_eligibility
         )
         return candidates.names
 
@@ -203,6 +205,7 @@ class Router:
         exclude_accounts: set[str] | None = None,
         provider_id: str | None = None,
         protocol: str | None = None,
+        transcode_eligibility: set[str] | None = None,
     ) -> list[tuple[AccountRuntimeState, RoutingScore]]:
         """Select multiple accounts for failover, ranked by score.
 
@@ -218,7 +221,7 @@ class Router:
             return []
 
         candidates = self._selection_candidates(
-            model_id, exclude_accounts, provider_id, protocol
+            model_id, exclude_accounts, provider_id, protocol, transcode_eligibility
         )
         tiers = candidates.tiered()
         if not tiers:
@@ -249,6 +252,7 @@ class Router:
         exclude_accounts: set[str] | None,
         provider_id: str | None,
         protocol: str | None,
+        transcode_eligibility: set[str] | None = None,
     ) -> RoutingCandidates:
         """Return eligible runtime states and indexes for a routing decision."""
         eligible = get_eligible_accounts(
@@ -259,6 +263,7 @@ class Router:
             stale_after_s=self._stale_after_s,
             provider_id=provider_id,
             protocol=protocol,
+            transcode_eligibility=transcode_eligibility,
             account_supports_protocol=self._registry.account_supports_protocol,
             quota_estimator=self._quota_estimator,
             local_quota_mode=self._local_quota_mode,

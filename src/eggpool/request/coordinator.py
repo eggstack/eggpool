@@ -132,6 +132,12 @@ class ProxyRequestContext:
     client_ip: str = ""
     upstream_body: bytes | None = None
     upstream_connect_ms: int | None = None
+    upstream_protocol: str = ""
+    transcode_required: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.upstream_protocol:
+            self.upstream_protocol = self.protocol
 
     @property
     def body_for_upstream(self) -> bytes:
@@ -855,7 +861,9 @@ class RequestCoordinator:
     ) -> PreparedProxyResponse:
         """Execute a non-streaming request."""
         headers = self._build_upstream_headers(context, selected)
-        upstream_url = self._get_upstream_url(context.protocol, selected.provider_id)
+        upstream_url = self._get_upstream_url(
+            context.upstream_protocol, selected.provider_id
+        )
 
         response: httpx.Response | None = None
         try:
@@ -963,7 +971,7 @@ class RequestCoordinator:
             elapsed_ms = self._elapsed_ms(context)
 
             usage = self._extract_non_stream_usage(
-                context.protocol, body, provider_id=selected.provider_id
+                context.upstream_protocol, body, provider_id=selected.provider_id
             )
             upstream_req_id = self._get_header_value(
                 resp_headers, _UPSTREAM_REQUEST_ID_HEADERS
@@ -1052,11 +1060,13 @@ class RequestCoordinator:
     ) -> PreparedProxyResponse:
         """Execute a streaming request."""
         headers = self._build_upstream_headers(context, selected)
-        upstream_url = self._get_upstream_url(context.protocol, selected.provider_id)
+        upstream_url = self._get_upstream_url(
+            context.upstream_protocol, selected.provider_id
+        )
 
         # Inject stream_options.include_usage for OpenAI
         body_to_send = context.body_for_upstream
-        if context.protocol == "openai":
+        if context.upstream_protocol == "openai":
             payload_obj: object
             try:
                 payload_obj = json.loads(body_to_send)
@@ -1217,7 +1227,7 @@ class RequestCoordinator:
         extracts usage via IncrementalSSEObserver, and finalizes the request
         on completion."""
         observer = IncrementalSSEObserver(
-            context.protocol, provider_id=selected.provider_id
+            context.upstream_protocol, provider_id=selected.provider_id
         )
         bytes_emitted = 0
         first_byte_ms = 0.0

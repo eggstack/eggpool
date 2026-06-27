@@ -10,6 +10,8 @@ from eggpool.accounts.state import AccountRuntimeState
 from eggpool.errors import ConfigError
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from eggpool.models.config import AppConfig
 
 logger = logging.getLogger(__name__)
@@ -157,6 +159,18 @@ class AccountRegistry:
         if provider_id is None:
             return False
         return protocol in self.get_provider_protocols(provider_id)
+
+    def account_supports_protocol_any(
+        self,
+        account_name: str,
+        protocols: Iterable[str],
+    ) -> bool:
+        """Return whether an account supports any of the given protocols."""
+        provider_id = self.get_provider_for_account(account_name)
+        if provider_id is None:
+            return False
+        provider_protocols = self.get_provider_protocols(provider_id)
+        return any(p in provider_protocols for p in protocols)
 
     def get_accounts_for_provider(self, provider_id: str) -> list[AccountRuntimeState]:
         """Get all account states belonging to a provider."""

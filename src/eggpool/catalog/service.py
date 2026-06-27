@@ -163,6 +163,7 @@ class CatalogService:
         # connection pool instead of constructing fresh clients.
         self._outbound_client = outbound_client
         self._cache = ModelCatalogCache()
+        self._cache.set_config(config)
         self._cache_loaded = False
         self._refresh_lock = asyncio.Lock()
         self._protocol_resolver = ModelProtocolResolver(config)

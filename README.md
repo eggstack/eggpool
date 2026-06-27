@@ -16,6 +16,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Tracks requests, tokens, latency, errors, and estimated costs in SQLite
 - Multi-page dashboard with 50+ themes, reliability, routing, and runtime views
 - Designed for lightweight deployments (Raspberry Pi, SBCs)
+- Transparent protocol transcoding between OpenAI and Anthropic request formats
 
 ## Quick Start
 
@@ -87,6 +88,7 @@ Use `eggpool connect` for interactive provider setup. See [docs/providers.md](do
 | `[dashboard]` | Dashboard toggle, theme, refresh interval |
 | `[providers.*]` | Provider configs with accounts and routing priority |
 | `[network]` | Outbound transport, DNS cache |
+| `[transcoder]` | Protocol transcoding between OpenAI and Anthropic formats |
 
 Full config reference: [`config.example.toml`](config.example.toml) | [docs/providers.md](docs/providers.md)
 

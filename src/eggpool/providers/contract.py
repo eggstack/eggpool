@@ -103,12 +103,25 @@ def build_static_headers(provider: ProviderConfig) -> dict[str, str]:
 def build_upstream_headers(
     provider: ProviderConfig,
     api_key: str,
+    *,
+    protocol: str | None = None,
 ) -> dict[str, str]:
-    """Build all upstream headers: auth + static provider headers."""
-    # Authentication is authoritative. ProviderConfig rejects a static
-    # header with the same name, but applying auth last is defense in depth
-    # for programmatically mutated config objects.
+    """Build all upstream headers: auth + static provider headers.
+
+    When ``protocol`` is supplied and the provider does not already
+    declare protocol-required static headers, inject them from the
+    built-in table in ``transcoder.static_headers``.
+    """
+    from eggpool.transcoder.static_headers import PROTOCOL_REQUIRED_STATIC_HEADERS
+
     headers = build_static_headers(provider)
+    # Inject protocol-required static headers when not already declared
+    if protocol is not None:
+        required = PROTOCOL_REQUIRED_STATIC_HEADERS.get(protocol, {})
+        existing_names = {name.casefold() for name in headers}
+        for name, value in required.items():
+            if name.casefold() not in existing_names:
+                headers[name] = value
     auth_headers = build_auth_headers(provider, api_key)
     auth_names = {name.casefold() for name in auth_headers}
     headers = {

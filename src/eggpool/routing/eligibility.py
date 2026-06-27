@@ -38,6 +38,7 @@ def get_eligible_accounts(
     stale_after_s: float | None = None,
     provider_id: str | None = None,
     protocol: str | None = None,
+    transcode_eligibility: set[str] | None = None,
     account_supports_protocol: Callable[[str, str], bool] | None = None,
     quota_estimator: QuotaEstimator | None = None,
     local_quota_mode: str = "score_only",
@@ -89,6 +90,13 @@ def get_eligible_accounts(
             protocol is not None
             and account_supports_protocol is not None
             and not account_supports_protocol(state.name, protocol)
+            and (
+                transcode_eligibility is None
+                or not any(
+                    account_supports_protocol(state.name, p)
+                    for p in transcode_eligibility
+                )
+            )
         ):
             continue
 

@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from eggpool.catalog.limits import EffectiveModelLimits, conservative_limits
 from eggpool.constants import DEPRECATED_MODEL_ID
 from eggpool.routing.provider import parse_model_provider
+
+if TYPE_CHECKING:
+    from eggpool.models.config import AppConfig
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +41,9 @@ class ModelCatalogCache:
         # account_name -> provider_id
         self._account_providers: dict[str, str] = {}
         self._last_refresh: float = 0.0
+        # Optional reference to the app config, used to look up
+        # provider-level protocol lists for transcoding decisions.
+        self._config: AppConfig | None = None
         # Per-account last successful refresh timestamp
         self._account_last_refresh: dict[str, float] = {}
         # Per-account set of (model_id, provider_id) keys the account
@@ -46,6 +52,10 @@ class ModelCatalogCache:
         # a model from a single account, so the in-memory cache can
         # converge with the live catalog.
         self._account_provider_keys: dict[str, set[tuple[str, str]]] = {}
+
+    def set_config(self, config: AppConfig) -> None:
+        """Set the application config reference for provider lookups."""
+        self._config = config
 
     def update_from_account(
         self,
@@ -538,6 +548,31 @@ class ModelCatalogCache:
     def get_supporting_accounts(self, model_id: str) -> set[str]:
         """Get set of account names that support a model."""
         return self._account_support.get(model_id, set()).copy()
+
+    def get_transcodable_protocols(
+        self,
+        model_id: str,
+        *,
+        client_protocol: str,
+    ) -> set[str]:
+        """Return the set of protocols a model can reach, minus the client protocol.
+
+        Uses the union of all account provider.protocols to determine
+        which protocols can reach this model.
+        """
+        supporting = self.get_supporting_accounts(model_id)
+        protocols: set[str] = set()
+        for account_name in supporting:
+            provider_id = self._account_providers.get(account_name)
+            if provider_id is None:
+                continue
+            if self._config is not None:
+                provider = self._config.providers.get(provider_id)
+                if provider is not None:
+                    for proto in provider.protocols:
+                        protocols.add(proto)
+        protocols.discard(client_protocol)
+        return protocols
 
     def is_model_available(self, model_id: str, eligible_accounts: set[str]) -> bool:
         """Check if a model is available from any eligible account."""

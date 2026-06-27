@@ -17,6 +17,7 @@ src/eggpool/
 ├── models/            # Pydantic config, domain, API, and database models
 ├── providers/         # ProviderClientPool, pproxy transport, connect CLI
 ├── proxy/             # Transparent proxy, SSE observer, usage extraction
+├── transcoder/        # Protocol transcoding (OpenAI ↔ Anthropic request/response)
 ├── quota/             # Quota estimation, reservations, scoring
 ├── request/           # RequestCoordinator, finalizers, body reader, limit enforcement
 ├── retry/             # Error classification and failover
@@ -49,7 +50,8 @@ All data-plane requests flow through `RequestCoordinator`:
 2. **Routing** selects an eligible account via quota-aware scoring (`routing/router.py`)
 3. **Attempt** is persisted to SQLite before upstream dispatch
 4. **Provider Contract** renders absolute URL (`compose_provider_url()`) and auth headers (`build_upstream_headers()`) from `providers/contract.py`
-5. **Proxy** sends the request via the provider's `httpx.AsyncClient` from `ProviderClientPool`
+5. **Protocol Transcoding** (if enabled) translates the request body when the client protocol differs from the upstream protocol
+6. **Proxy** sends the request via the provider's `httpx.AsyncClient` from `ProviderClientPool`
 6. **Streaming** is handled by `proxy/sse_observer.py` with chunk-level usage extraction
 7. **Finalization** records usage, releases reservations, updates health state
 
@@ -123,6 +125,31 @@ The coordinator calls `_build_upstream_headers()` and `_get_upstream_url()` whic
 #### Bearer-prefix guard
 
 `AppConfig.validate_account_credentials()` rejects API keys that begin with the `Bearer` scheme for providers configured with `auth.mode = "bearer"`. EggPool adds the scheme automatically, so a stored `Bearer <token>` would produce `Authorization: Bearer Bearer <token>` upstream and cause 401s. The same guard runs in `scripts/verify_upstream_auth.py` so the operator gets an explicit error before any upstream call. Providers using `auth.mode = "raw_authorization"` are unaffected because they pass the value verbatim.
+
+## Protocol Transcoding
+
+When a client sends a request in one protocol (e.g., Anthropic Messages API)
+but the routed provider only supports another (e.g., OpenAI Chat Completions
+API), the `transcoder` module translates the request body before dispatch and
+the response body (including streaming chunks) after receipt.
+
+**Phase 1 (foundation)** lands the data model, configuration surface, and
+helper modules without changing runtime behaviour:
+- `TranscoderPolicy` config model (`[transcoder]` section)
+- `TranscodeContext` per-request state dataclass
+- `upstream_protocol` field on `ProxyRequestContext`
+- Mechanical refactor: upstream-side reads in the coordinator use
+  `context.upstream_protocol` instead of `context.protocol`
+- Routing eligibility accepts a `transcode_eligibility` parameter
+- Helper modules: `ids.py` (tool-call ID map), `usage.py` (usage
+  canonicalisation), `errors.py` (upstream error envelope parser)
+
+**Later phases** add body translation (phase 2), streaming translation
+(phase 3), widened routing (phase 4), and operator rollout (phase 5).
+
+Token counts are mapped between protocol-specific fields (e.g.,
+`input_tokens` → `prompt_tokens`, `cache_creation_input_tokens` →
+separate cache counters). Controlled by `[transcoder]` config.
 
 ## Database
 

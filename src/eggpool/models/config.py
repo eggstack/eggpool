@@ -23,6 +23,7 @@ from eggpool.constants import (
 )
 from eggpool.errors import ConfigError
 from eggpool.providers.auth import has_auth_scheme_prefix
+from eggpool.transcoder.policy import TranscoderPolicy
 
 _HTTP_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 _PROXY_MANAGED_HEADERS = frozenset(
@@ -727,6 +728,7 @@ class AppConfig(BaseModel):
     accounts: list[AccountConfig] = Field(default_factory=list[AccountConfig])
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
     model_overrides: dict[str, ModelOverrideConfig] = Field(default_factory=dict)
+    transcoder: TranscoderPolicy = Field(default_factory=TranscoderPolicy)
 
     @model_validator(mode="after")
     def _normalize_providers(self) -> AppConfig:

@@ -579,6 +579,9 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     registry = AccountRegistry(config)
     app.state.registry = registry
 
+    # 8b. Transcoder policy (protocol transcoding configuration)
+    app.state.transcoder_policy = config.transcoder
+
     # 9. Health manager
     health_manager = HealthManager()
     app.state.health_manager = health_manager

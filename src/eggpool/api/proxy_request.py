@@ -182,6 +182,8 @@ async def handle_proxy_request(
         provider_id=provider_id,
         client_ip=get_client_ip(request),
         upstream_body=_rewrite_upstream_model(payload, model_id),
+        upstream_protocol=endpoint.protocol,
+        transcode_required=False,
     )
 
     logger.info(
