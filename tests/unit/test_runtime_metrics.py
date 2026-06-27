@@ -65,6 +65,7 @@ def _make_service(
     health_manager: Any = None,
     started_monotonic: float | None = None,
     started_epoch: float | None = None,
+    dispatch_overhead_recorder: Any | None = None,
 ) -> RuntimeMetricsService:
     if config is None:
         config = _build_config()
@@ -82,6 +83,7 @@ def _make_service(
         health_manager=health_manager,
         started_monotonic=started_monotonic,
         started_epoch=started_epoch,
+        dispatch_overhead_recorder=dispatch_overhead_recorder,
     )
 
 
@@ -676,3 +678,170 @@ async def test_db_contention_transactions_increment(db: Database) -> None:
     snap_after = await service.snapshot()
     txn_after = snap_after["db"]["contention"]["total_transactions"]
     assert txn_after > txn_before
+
+
+# -- DispatchOverheadRecorder ------------------------------------------------
+
+
+class TestDispatchOverheadRecorder:
+    """Tests for the in-memory dispatch-overhead recorder."""
+
+    def test_empty_snapshot(self) -> None:
+        from eggpool.runtime_dispatch import DispatchOverheadRecorder
+
+        recorder = DispatchOverheadRecorder(window_size=100)
+        snap = recorder.snapshot()
+        assert snap["window_size"] == 100
+        assert snap["sample_count"] == 0
+        assert snap["avg_ms"] is None
+        assert snap["min_ms"] is None
+        assert snap["max_ms"] is None
+        assert snap["p50_ms"] is None
+        assert snap["p95_ms"] is None
+
+    def test_bounded_window_drops_oldest(self) -> None:
+        from eggpool.runtime_dispatch import DispatchOverheadRecorder
+
+        recorder = DispatchOverheadRecorder(window_size=3)
+        recorder.record_ns(1_000_000)
+        recorder.record_ns(2_000_000)
+        recorder.record_ns(3_000_000)
+        recorder.record_ns(4_000_000)
+        snap = recorder.snapshot()
+        assert snap["sample_count"] == 3
+        assert snap["min_ms"] == 2.0
+        assert snap["max_ms"] == 4.0
+        assert snap["avg_ms"] == 3.0
+
+    def test_ignores_negative_samples(self) -> None:
+        from eggpool.runtime_dispatch import DispatchOverheadRecorder
+
+        recorder = DispatchOverheadRecorder()
+        recorder.record_ns(-1)
+        recorder.record_ns(-100_000)
+        snap = recorder.snapshot()
+        assert snap["sample_count"] == 0
+        assert snap["avg_ms"] is None
+
+    def test_aggregates_percentiles(self) -> None:
+        from eggpool.runtime_dispatch import DispatchOverheadRecorder
+
+        recorder = DispatchOverheadRecorder(window_size=10)
+        for ms in range(10, 110, 10):
+            recorder.record_ns(ms * 1_000_000)
+        snap = recorder.snapshot()
+        assert snap["sample_count"] == 10
+        assert snap["min_ms"] == 10.0
+        assert snap["max_ms"] == 100.0
+        assert snap["avg_ms"] == 55.0
+        assert snap["p50_ms"] is not None
+        assert snap["p95_ms"] is not None
+        assert snap["p50_ms"] >= snap["min_ms"]
+        assert snap["p50_ms"] <= snap["max_ms"]
+        assert snap["p95_ms"] >= snap["p50_ms"]
+        assert snap["p95_ms"] <= snap["max_ms"]
+
+
+# -- RuntimeMetricsService dispatch overhead / load sections ----------------
+
+
+@pytest.mark.asyncio
+async def test_snapshot_dispatch_overhead_section_present(db: Database) -> None:
+    from eggpool.runtime_dispatch import DispatchOverheadRecorder
+
+    recorder = DispatchOverheadRecorder(window_size=100)
+    recorder.record_ns(2_000_000)
+    service = _make_service(db, dispatch_overhead_recorder=recorder)
+    snapshot = await service.snapshot()
+    assert "dispatch_overhead" in snapshot
+    dispatch = snapshot["dispatch_overhead"]
+    assert dispatch["window_size"] == 100
+    assert dispatch["sample_count"] == 1
+    assert dispatch["avg_ms"] == 2.0
+    assert dispatch["min_ms"] == 2.0
+    assert dispatch["max_ms"] == 2.0
+
+
+@pytest.mark.asyncio
+async def test_snapshot_dispatch_overhead_no_recorder(db: Database) -> None:
+    service = _make_service(db)
+    snapshot = await service.snapshot()
+    dispatch = snapshot["dispatch_overhead"]
+    assert dispatch["window_size"] == 100
+    assert dispatch["sample_count"] == 0
+    assert dispatch["avg_ms"] is None
+    assert dispatch["min_ms"] is None
+    assert dispatch["max_ms"] is None
+    assert dispatch["p50_ms"] is None
+    assert dispatch["p95_ms"] is None
+
+
+@pytest.mark.asyncio
+async def test_snapshot_dispatch_overhead_aggregates(db: Database) -> None:
+    from eggpool.runtime_dispatch import DispatchOverheadRecorder
+
+    recorder = DispatchOverheadRecorder(window_size=10)
+    for ms in range(10, 110, 10):
+        recorder.record_ns(ms * 1_000_000)
+    service = _make_service(db, dispatch_overhead_recorder=recorder)
+    snapshot = await service.snapshot()
+    dispatch = snapshot["dispatch_overhead"]
+    assert dispatch["sample_count"] == 10
+    assert dispatch["avg_ms"] == 55.0
+    assert dispatch["max_ms"] == 100.0
+    assert dispatch["min_ms"] == 10.0
+    assert dispatch["p50_ms"] is not None
+    assert dispatch["p95_ms"] is not None
+
+
+@pytest.mark.asyncio
+async def test_snapshot_load_section_present(db: Database) -> None:
+    with (
+        patch("eggpool.runtime_metrics.os.getloadavg", return_value=(0.5, 0.3, 0.2)),
+        patch("eggpool.runtime_metrics.os.cpu_count", return_value=4),
+    ):
+        service = _make_service(db)
+        snapshot = await service.snapshot()
+    load = snapshot["load"]
+    assert load["available"] is True
+    assert load["cpu_count"] == 4
+    assert load["load_1m"] == 0.5
+    assert load["load_5m"] == 0.3
+    assert load["load_15m"] == 0.2
+    assert load["normalized_1m"] == 0.125
+    assert load["normalized_5m"] == 0.075
+    assert load["normalized_15m"] == 0.05
+
+
+@pytest.mark.asyncio
+async def test_snapshot_load_unavailable(db: Database) -> None:
+    with (
+        patch(
+            "eggpool.runtime_metrics.os.getloadavg",
+            side_effect=OSError("not available"),
+        ),
+        patch("eggpool.runtime_metrics.os.cpu_count", return_value=4),
+    ):
+        service = _make_service(db)
+        snapshot = await service.snapshot()
+    load = snapshot["load"]
+    assert load["available"] is False
+    assert load["cpu_count"] == 4
+    assert load["load_1m"] is None
+    assert load["load_5m"] is None
+    assert load["load_15m"] is None
+    assert load["normalized_1m"] is None
+
+
+@pytest.mark.asyncio
+async def test_snapshot_load_zero_cpu_count(db: Database) -> None:
+    with (
+        patch("eggpool.runtime_metrics.os.getloadavg", return_value=(1.0, 1.0, 1.0)),
+        patch("eggpool.runtime_metrics.os.cpu_count", return_value=0),
+    ):
+        service = _make_service(db)
+        snapshot = await service.snapshot()
+    load = snapshot["load"]
+    assert load["available"] is True
+    assert load["cpu_count"] == 0
+    assert load["normalized_1m"] is None

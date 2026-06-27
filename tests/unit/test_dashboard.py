@@ -3287,3 +3287,114 @@ class TestRenderRuntimeNetwork:
         }
         html = render_runtime(snapshot)
         assert "7 / 50" in html
+
+
+class TestRenderRuntimeDispatchAndLoad:
+    """Tests for the dispatch-overhead and load cards on the runtime page."""
+
+    def _base_snapshot(self) -> dict[str, Any]:
+        return {
+            "server": {"pid": 1, "uptime_seconds": 0, "configured_server_threads": 4},
+            "memory": {},
+            "processes": {},
+            "background_tasks": [],
+            "db": {},
+            "routing_runtime": {},
+            "outbound_client": {"build_count": 0, "request_count": 0, "error_count": 0},
+            "provider_client_pool": {"build_count": 0, "providers": {}},
+            "dns_cache": {"enabled": False},
+            "load": {
+                "available": True,
+                "cpu_count": 2,
+                "load_1m": 0.5,
+                "load_5m": 0.3,
+                "load_15m": 0.2,
+                "normalized_1m": 0.25,
+                "normalized_5m": 0.15,
+                "normalized_15m": 0.1,
+            },
+            "dispatch_overhead": {
+                "window_size": 100,
+                "sample_count": 50,
+                "avg_ms": 1.5,
+                "p50_ms": 1.2,
+                "p95_ms": 4.2,
+                "p99_ms": 8.0,
+                "max_ms": 12.0,
+                "min_ms": 0.8,
+            },
+        }
+
+    def test_drops_configured_thread_card(self) -> None:
+        snapshot = self._base_snapshot()
+        html = render_runtime(snapshot)
+        assert "configured server threads" not in html
+        assert "<h3>Threads</h3>" not in html
+        assert "Active threads" in html
+        assert "Load average" in html
+        assert "Dispatch overhead" in html
+        assert "<h3>Processes</h3>" not in html
+
+    def test_renders_load_average_card_with_data(self) -> None:
+        snapshot = self._base_snapshot()
+        html = render_runtime(snapshot)
+        assert "Load average" in html
+        assert "0.50" in html
+
+    def test_renders_dispatch_overhead_card_with_data(self) -> None:
+        snapshot = self._base_snapshot()
+        html = render_runtime(snapshot)
+        assert "Dispatch overhead" in html
+        assert "p95" in html
+
+    def test_load_unavailable_card(self) -> None:
+        snapshot = self._base_snapshot()
+        snapshot["load"] = {
+            "available": False,
+            "cpu_count": None,
+            "load_1m": None,
+            "load_5m": None,
+            "load_15m": None,
+            "normalized_1m": None,
+            "normalized_5m": None,
+            "normalized_15m": None,
+        }
+        html = render_runtime(snapshot)
+        assert "Load average" in html
+        assert "load average unavailable" in html
+
+    def test_dispatch_overhead_no_samples(self) -> None:
+        snapshot = self._base_snapshot()
+        snapshot["dispatch_overhead"] = {
+            "window_size": 100,
+            "sample_count": 0,
+            "avg_ms": None,
+            "p50_ms": None,
+            "p95_ms": None,
+            "p99_ms": None,
+            "max_ms": None,
+            "min_ms": None,
+        }
+        html = render_runtime(snapshot)
+        assert "Dispatch overhead" in html
+        assert "0 / 100 attempts" in html
+
+    def test_process_count_warning_panel(self) -> None:
+        snapshot = self._base_snapshot()
+        snapshot["processes"] = {
+            "process_count_warning": True,
+            "eggpool_process_count": 5,
+            "expected_worker_process_count": 2,
+        }
+        html = render_runtime(snapshot)
+        assert "Process count warning" in html
+
+    def test_no_process_warning_panel_when_no_warning(self) -> None:
+        snapshot = self._base_snapshot()
+        snapshot["processes"] = {
+            "process_count_warning": False,
+            "eggpool_process_count": 2,
+            "expected_worker_process_count": 2,
+        }
+        html = render_runtime(snapshot)
+        assert "Process count warning" not in html

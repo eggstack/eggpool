@@ -2304,12 +2304,13 @@ def render_runtime(
     outbound = _as_dict(snapshot.get("outbound_client"))
     provider_pool = _as_dict(snapshot.get("provider_client_pool"))
     dns_cache = _as_dict(snapshot.get("dns_cache"))
+    load = _as_dict(snapshot.get("load"))
+    dispatch = _as_dict(snapshot.get("dispatch_overhead"))
 
     # Server section
     pid = server.get("pid", "—")
     uptime_s = server.get("uptime_seconds")
     uptime = format_age_seconds(uptime_s)
-    threads = server.get("configured_server_threads", "—")
     python_ver = escape(str(server.get("python_version", "—")))
     platform_str = escape(str(server.get("platform", "—")))
     ppid = server.get("ppid", "—")
@@ -2326,6 +2327,64 @@ def render_runtime(
     rss = format_bytes(rss_bytes) if rss_bytes is not None else "—"
     open_fds = format_int(memory.get("open_fd_count"))
     thread_count = format_int(memory.get("thread_count"))
+
+    # Load average
+    load_available = bool(load.get("available", False))
+    load_1m = load.get("load_1m")
+    load_5m = load.get("load_5m")
+    load_15m = load.get("load_15m")
+    norm_1m = load.get("normalized_1m")
+    cpu_count = load.get("cpu_count")
+
+    if (
+        load_available
+        and load_1m is not None
+        and load_5m is not None
+        and load_15m is not None
+    ):
+        load_metric = f"{float(load_1m):.2f}"
+        if norm_1m is not None:
+            load_sub = f"{float(norm_1m):.2f}/core · {format_int(cpu_count)} CPUs"
+        else:
+            load_sub = f"5m {float(load_5m):.2f} · 15m {float(load_15m):.2f}"
+    else:
+        load_metric = "—"
+        load_sub = "load average unavailable"
+
+    # Dispatch overhead
+    avg_dispatch_ms = dispatch.get("avg_ms")
+    p95_dispatch_ms = dispatch.get("p95_ms")
+    p99_dispatch_ms = dispatch.get("p99_ms")
+    max_dispatch_ms = dispatch.get("max_ms")
+    sample_count = dispatch.get("sample_count", 0)
+    window_size = dispatch.get("window_size", 100)
+
+    def _format_small_ms(value: Any) -> str:
+        if value is None:
+            return "—"
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+        if number < 1:
+            return f"{number:.2f} ms"
+        if number < 10:
+            return f"{number:.1f} ms"
+        return f"{number:.0f} ms"
+
+    if avg_dispatch_ms is None:
+        dispatch_metric = "—"
+        dispatch_sub = (
+            f"last {format_int(sample_count)} / {format_int(window_size)} attempts"
+        )
+    else:
+        dispatch_metric = _format_small_ms(avg_dispatch_ms)
+        dispatch_sub = (
+            f"p95 {_format_small_ms(p95_dispatch_ms)} · "
+            f"p99 {_format_small_ms(p99_dispatch_ms)} · "
+            f"max {_format_small_ms(max_dispatch_ms)} · "
+            f"n={format_int(sample_count)}"
+        )
 
     # Database
     db_path = escape(str(db.get("path") or ":memory:"))
@@ -2348,7 +2407,6 @@ def render_runtime(
     health_states: dict[str, str] = routing.get("health_states_by_account") or {}
 
     # Process count warning card
-    process_warn_class = "warning" if process_warning else ""
     process_count_display = (
         format_int(process_count) if process_count is not None else "—"
     )
@@ -2368,11 +2426,6 @@ def render_runtime(
     <p class="sub">uptime since start</p>
   </div>
   <div class="card">
-    <h3>Threads</h3>
-    <p class="metric">{threads}</p>
-    <p class="sub">configured server threads</p>
-  </div>
-  <div class="card">
     <h3>Python</h3>
     <p class="metric">{python_ver}</p>
     <p class="sub">{platform_str}</p>
@@ -2383,11 +2436,6 @@ def render_runtime(
     # Process & memory cards
     memory_cards = f"""
 <section class="cards">
-  <div class="card{process_warn_class}">
-    <h3>Processes</h3>
-    <p class="metric">{process_count_display}</p>
-    <p class="sub">expected {expected_display}</p>
-  </div>
   <div class="card">
     <h3>RSS memory</h3>
     <p class="metric">{rss}</p>
@@ -2399,10 +2447,30 @@ def render_runtime(
     <p class="sub">file descriptors</p>
   </div>
   <div class="card">
-    <h3>Threads (active)</h3>
+    <h3>Active threads</h3>
     <p class="metric">{thread_count}</p>
     <p class="sub">threading.active_count()</p>
   </div>
+  <div class="card">
+    <h3>Load average</h3>
+    <p class="metric">{load_metric}</p>
+    <p class="sub">{load_sub}</p>
+  </div>
+  <div class="card">
+    <h3>Dispatch overhead</h3>
+    <p class="metric">{dispatch_metric}</p>
+    <p class="sub">{dispatch_sub}</p>
+  </div>
+</section>
+"""
+
+    process_warning_section = ""
+    if process_warning:
+        process_warning_section = f"""
+<section class="panel warning">
+  <h3>Process count warning</h3>
+  <p>Observed {process_count_display} EggPool processes;
+     expected {expected_display}.</p>
 </section>
 """
 
@@ -2618,6 +2686,8 @@ def render_runtime(
 {server_cards}
 
 {memory_cards}
+
+{process_warning_section}
 
 <section class="panel">
   <h3>Background tasks</h3>

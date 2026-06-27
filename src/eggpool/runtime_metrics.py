@@ -94,6 +94,7 @@ class RuntimeMetricsService:
         outbound_manager: Any | None = None,  # noqa: ANN401
         dns_backend: Any | None = None,  # noqa: ANN401
         provider_client_pool: Any | None = None,  # noqa: ANN401
+        dispatch_overhead_recorder: Any | None = None,  # noqa: ANN401
     ) -> None:
         self._config = config
         self._db = db
@@ -108,6 +109,7 @@ class RuntimeMetricsService:
         self._outbound_manager = outbound_manager
         self._dns_backend = dns_backend
         self._provider_client_pool = provider_client_pool
+        self._dispatch_overhead_recorder = dispatch_overhead_recorder
 
     async def snapshot(self) -> dict[str, Any]:
         """Return a best-effort runtime snapshot.
@@ -128,8 +130,14 @@ class RuntimeMetricsService:
         # Memory and file descriptors
         result["memory"] = self._snapshot_memory(probe_errors)
 
+        # OS load average (Linux/macOS)
+        result["load"] = self._snapshot_load(probe_errors)
+
         # Process count scan (Linux only)
         result["processes"] = self._snapshot_processes(probe_errors)
+
+        # Dispatch-overhead recorder (in-memory rolling window)
+        result["dispatch_overhead"] = self._snapshot_dispatch_overhead(probe_errors)
 
         # Background tasks
         result["background_tasks"] = self._snapshot_background_tasks(probe_errors)
@@ -573,6 +581,59 @@ class RuntimeMetricsService:
         except Exception as exc:
             probe_errors.append(
                 _truncate_probe_error(f"DNS cache snapshot failed: {exc}")
+            )
+            return {"error": str(exc)}
+
+    def _snapshot_load(self, probe_errors: list[str]) -> dict[str, Any]:
+        """Best-effort snapshot of the OS load average."""
+        cpu_count = os.cpu_count()
+        try:
+            load_1m, load_5m, load_15m = os.getloadavg()
+        except (AttributeError, OSError):
+            return {
+                "available": False,
+                "cpu_count": cpu_count,
+                "load_1m": None,
+                "load_5m": None,
+                "load_15m": None,
+                "normalized_1m": None,
+                "normalized_5m": None,
+                "normalized_15m": None,
+            }
+
+        def norm(value: float) -> float | None:
+            if not cpu_count or cpu_count <= 0:
+                return None
+            return value / cpu_count
+
+        return {
+            "available": True,
+            "cpu_count": cpu_count,
+            "load_1m": load_1m,
+            "load_5m": load_5m,
+            "load_15m": load_15m,
+            "normalized_1m": norm(load_1m),
+            "normalized_5m": norm(load_5m),
+            "normalized_15m": norm(load_15m),
+        }
+
+    def _snapshot_dispatch_overhead(self, probe_errors: list[str]) -> dict[str, Any]:
+        """Best-effort snapshot of the dispatch-overhead recorder state."""
+        if self._dispatch_overhead_recorder is None:
+            return {
+                "window_size": 100,
+                "sample_count": 0,
+                "avg_ms": None,
+                "min_ms": None,
+                "max_ms": None,
+                "p50_ms": None,
+                "p95_ms": None,
+            }
+        try:
+            return self._dispatch_overhead_recorder.snapshot()
+        except Exception as exc:
+            probe_errors.append(
+                _truncate_probe_error(f"Dispatch overhead snapshot failed: {exc}")
             )
             return {"error": str(exc)}
 

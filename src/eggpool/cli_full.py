@@ -3113,6 +3113,52 @@ def _print_runtime_status(data: dict[str, Any]) -> None:
     if warning:
         click.echo("  *** WARNING: Process count exceeds expected ***")
 
+    # Load average
+    load = cast("dict[str, Any]", data.get("load", {}))
+    if load:
+        click.echo()
+        load_available = load.get("available", False)
+        load_1m = load.get("load_1m")
+        load_5m = load.get("load_5m")
+        load_15m = load.get("load_15m")
+        norm_1m = load.get("normalized_1m")
+        cpu_count = load.get("cpu_count")
+        if (
+            load_available
+            and load_1m is not None
+            and load_5m is not None
+            and load_15m is not None
+        ):
+            load_str = f"{float(load_1m):.2f}"
+            if norm_1m is not None and cpu_count:
+                load_str += f" ({float(norm_1m):.2f}/core, {cpu_count} CPUs)"
+            else:
+                load_str += f" (5m {float(load_5m):.2f}, 15m {float(load_15m):.2f})"
+            click.echo(f"  Load (1m):       {load_str}")
+        else:
+            click.echo("  Load (1m):       N/A")
+
+    # Dispatch overhead
+    dispatch = cast("dict[str, Any]", data.get("dispatch_overhead", {}))
+    if dispatch:
+        click.echo()
+        avg_ms = dispatch.get("avg_ms")
+        p95_ms = dispatch.get("p95_ms")
+        p99_ms = dispatch.get("p99_ms")
+        max_ms = dispatch.get("max_ms")
+        sample_count = dispatch.get("sample_count", 0)
+        window_size = dispatch.get("window_size", 100)
+        if avg_ms is None:
+            click.echo(
+                f"  Dispatch Overhead: N/A ({sample_count}/{window_size} attempts)"
+            )
+        else:
+            click.echo(
+                f"  Dispatch Overhead: avg {_format_ms(avg_ms)} ms "
+                f"(p95 {_format_ms(p95_ms)}, p99 {_format_ms(p99_ms)}, "
+                f"max {_format_ms(max_ms)}, n={sample_count})"
+            )
+
     # Background tasks
     click.echo()
     click.echo("  Background Tasks:")
@@ -3225,6 +3271,20 @@ def _format_duration(seconds: object) -> str:
     h = s // 3600
     m = (s % 3600) // 60
     return f"{h}h {m}m"
+
+
+def _format_ms(value: object) -> str:
+    """Format a millisecond value with sub-ms precision for small numbers."""
+    if value is None:
+        return "—"
+    if not isinstance(value, (int, float)):
+        return str(value)
+    number = float(value)
+    if number < 1:
+        return f"{number:.2f}"
+    if number < 10:
+        return f"{number:.1f}"
+    return f"{number:.0f}"
 
 
 def _format_bytes(value: object) -> str:

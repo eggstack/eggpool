@@ -260,7 +260,7 @@ The dashboard includes:
 - Overview with request counts, error rates, costs, token usage, and a System Health row surfacing pending-request and reservation leaks
 - Reliability page (`/reliability`) with attempt success/retry breakdown, `retry_category` distribution, pending health, and operational events
 - Routing page (`/routing`) with per-`(model, provider)` decision aggregates, account selection counts, and exclusion taxonomy (suppressive vs advisory)
-- Runtime page (`/runtime`) with process topology, memory, background task status, database health, and in-flight request counts
+- Runtime page (`/runtime`) with RSS memory, open file descriptors, active thread count, OS load average, dispatch overhead (last 100 upstream attempts), background task status, database health, and in-flight request counts. Process count surfaces only when anomalous
 - Traces page (`/traces`) with auth-gated recent request metadata (no error_detail, no client_ip)
 - Account and model breakdowns with filtering, exactness columns, cache/reasoning ratios, and cost-per-1k-tokens
 - Latency metrics including time-to-first-token (TTFT) and connect/read/coordinator-overhead phase breakdown
@@ -819,14 +819,32 @@ The worker is named `eggpool` in `ps` / `top` (via Granian's
 
 `eggpool runtime-status` calls the local `/api/stats/runtime` endpoint and
 prints a compact terminal summary of process topology, memory usage,
-background task health, database file/WAL sizes, and in-flight request
-counts. Use it to diagnose daemon/systemd/cron deployments without
+background task health, database file/WAL sizes, in-flight request
+counts, OS load average, and the recent upstream dispatch overhead
+distribution. Use it to diagnose daemon/systemd/cron deployments without
 inspecting logs.
 
 The `/api/stats/runtime` endpoint and the `/runtime` dashboard page expose
 the same data. Both are always auth-gated regardless of `dashboard.public`
 because they reveal operational details (PID, memory, DB path, process
 count). The endpoint is best-effort: probes that fail on a given platform
-(e.g., `/proc` on macOS) return `null` for the affected field.
+(e.g., `/proc` on macOS, `os.getloadavg` on Windows) return `null` for
+the affected field.
+
+#### Dispatch overhead
+
+The Runtime page surfaces a `Dispatch overhead` card sourced from an
+in-memory rolling window of the last 100 upstream attempts. It measures
+EggPool-local pre-dispatch work (request validation, routing selection,
+persistence, reservation accounting) and excludes provider connect/TTFT,
+streaming, body read, and finalization. Recording happens immediately
+before `client.send(...)` in both the streaming and non-streaming
+dispatch paths using `time.perf_counter_ns()`, so wall-clock skew never
+contaminates the measurement. The recorder is bounded (`deque(maxlen=100)`)
+and thread-safe; it stores only integer nanoseconds — no request body,
+auth header, account name, or client IP ever lands in the sample buffer.
+The same metric is available via `/api/stats/runtime` under
+`dispatch_overhead` (`window_size`, `sample_count`, `avg_ms`, `min_ms`,
+`max_ms`, `p50_ms`, `p95_ms`).
 
 See [CHANGELOG](CHANGELOG.md) for release history.

@@ -124,6 +124,7 @@ class ProxyRequestContext:
     incoming_headers: dict[str, str]
     started_at: float = field(default_factory=time.time)
     started_monotonic: float = field(default_factory=time.monotonic)
+    started_monotonic_ns: int = field(default_factory=time.perf_counter_ns)
     client_metadata: dict[str, Any] = field(default_factory=dict[str, Any])
     attempted_accounts: set[str] = field(default_factory=set[str])
     provider_id: str | None = None
@@ -208,6 +209,7 @@ class RequestCoordinator:
         account_backoff_repo: AccountBackoffRepository | None = None,
         routing_decision_repo: RoutingDecisionRepository | None = None,
         metrics_coalescer: Any | None = None,  # noqa: ANN401
+        dispatch_overhead_recorder: Any | None = None,  # noqa: ANN401
     ) -> None:
         self._registry = registry
         self._catalog = catalog
@@ -240,6 +242,7 @@ class RequestCoordinator:
             else RoutingDecisionRepository(db)
         )
         self._metrics_coalescer = metrics_coalescer
+        self._dispatch_overhead_recorder = dispatch_overhead_recorder
 
         # Build the attempt finalizer with all dependencies
         self._attempt_finalizer = AttemptFinalizer(
@@ -867,6 +870,10 @@ class RequestCoordinator:
             # are available, so this window includes DNS, TCP, TLS,
             # and the upstream handler accept — everything before the
             # upstream has produced any output.
+            if self._dispatch_overhead_recorder is not None:
+                self._dispatch_overhead_recorder.record_ns(
+                    time.perf_counter_ns() - context.started_monotonic_ns
+                )
             connect_start = time.monotonic()
             response = await client.send(upstream_request, stream=True)
             context.upstream_connect_ms = int((time.monotonic() - connect_start) * 1000)
@@ -1074,6 +1081,10 @@ class RequestCoordinator:
         generator_created = False
         try:
             try:
+                if self._dispatch_overhead_recorder is not None:
+                    self._dispatch_overhead_recorder.record_ns(
+                        time.perf_counter_ns() - context.started_monotonic_ns
+                    )
                 response = await client.send(request, stream=True)
             except httpx.ConnectError as err:
                 raise _RetryableUpstreamError(

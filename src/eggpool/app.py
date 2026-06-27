@@ -68,6 +68,7 @@ from eggpool.providers.dns_cache import DnsNetworkBackend
 from eggpool.providers.outbound import OutboundClientManager, default_network_backend
 from eggpool.request.coordinator import RequestCoordinator
 from eggpool.routing.router import Router
+from eggpool.runtime_dispatch import DispatchOverheadRecorder
 from eggpool.stats import StatsService
 
 if TYPE_CHECKING:
@@ -761,7 +762,11 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     )
     app.state.metrics_coalescer = metrics_coalescer
 
-    # 18c. Request coordinator
+    # 18c. Dispatch-overhead recorder (shared between coordinator and runtime metrics)
+    dispatch_overhead_recorder = DispatchOverheadRecorder(window_size=100)
+    app.state.dispatch_overhead_recorder = dispatch_overhead_recorder
+
+    # 18d. Request coordinator
     coordinator = RequestCoordinator(
         registry=registry,
         catalog=catalog,
@@ -781,6 +786,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         config=config,
         account_backoff_repo=account_backoff_repo,
         metrics_coalescer=metrics_coalescer,
+        dispatch_overhead_recorder=dispatch_overhead_recorder,
     )
     app.state.coordinator = coordinator
 
@@ -819,6 +825,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         outbound_manager=outbound_manager,
         dns_backend=dns_backend,
         provider_client_pool=client_pool,
+        dispatch_overhead_recorder=dispatch_overhead_recorder,
     )
 
     # Register catalog refresh task

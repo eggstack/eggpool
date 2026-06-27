@@ -521,6 +521,8 @@ message.  It does not start the server.
 The output covers:
 
 - **Server** — PID, PPID, uptime, Python version, platform, configured threads.
+- **Load** — OS load average (1m, 5m, 15m) and CPU-normalized 1m when available. Returns `N/A` on platforms without `os.getloadavg`.
+- **Dispatch overhead** — avg / p95 / p99 / max latency (ms) over the last 100 upstream attempts, plus sample count. Empty until the first attempt completes. Measures EggPool-local pre-dispatch work only (validation, routing, persistence, reservations) — upstream connect/TTFT/streaming/finalization are excluded.
 - **Processes** — observed EggPool process count vs expected; a warning
   is printed when the observed count exceeds expected by more than one.
 - **Memory** — RSS, VMS, open FD count, thread count.
