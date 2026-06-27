@@ -23,14 +23,21 @@ src/eggpool/
 ├── routing/           # Quota-aware routing, eligibility, provider parsing
 ├── security/          # Header redaction, security utilities
 ├── stats/             # Statistics queries and service
+├── lifecycle/         # Backup and uninstall orchestration
 ├── deploy/            # Bundled systemd/logrotate/cron snippets for CLI output
 ├── _share/            # Bundled config examples and assets for pipx installs
 ├── auth.py            # Local API key authentication (constant-time)
-├── cli.py             # Click CLI commands
+├── cli.py             # CLI bootstrap entry point (tiny, dispatches fast-path then Click)
+├── cli_full.py        # Click CLI commands (heavy imports)
+├── fastcli.py         # Fast-path CLI (stdlib-only, croncheck/ensure-running)
 ├── errors.py          # Exception hierarchy
 ├── logging.py         # Structured logging setup
+├── runtime.py         # Process management (restart, stop, PID lifecycle)
 ├── runtime_metrics.py # Runtime/ops metrics: process, memory, DB, background tasks, OS load average
 ├── runtime_dispatch.py # Bounded rolling-window recorder for EggPool-local upstream dispatch overhead
+├── runtime_paths.py   # PID file and log path resolution (stdlib-only)
+├── update_checker.py  # PyPI update checker (background + CLI)
+├── cost_recompute.py  # Cost recompute CLI command
 └── constants.py       # Project-wide constants
 ```
 
@@ -130,7 +137,7 @@ SQLite via aiosqlite with WAL mode. Single-connection serialization via a lock +
 
 ### Schema Migrations
 
-Ordered SQL migrations in `db/schema/` (0001 through 0031). Checksums tracked in `checksums.json`.
+Ordered SQL migrations in `db/schema/` (0001 through 0032). Checksums tracked in `checksums.json`.
 
 ### Repositories
 

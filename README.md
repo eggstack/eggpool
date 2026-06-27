@@ -561,11 +561,19 @@ src/eggpool/
 ├── __init__.py          # Package version
 ├── __main__.py          # python -m eggpool
 ├── app.py               # FastAPI application factory
-├── cli.py               # Click CLI commands
+├── cli.py               # CLI bootstrap entry point (tiny, dispatches fast-path then Click)
+├── cli_full.py          # Click CLI commands (heavy imports)
+├── fastcli.py           # Fast-path CLI (stdlib-only, croncheck/ensure-running)
 ├── auth.py              # Local API key authentication
 ├── constants.py         # Project-wide constants
 ├── errors.py            # Exception hierarchy
 ├── logging.py           # Structured logging setup
+├── runtime.py           # Process management (restart, stop, PID lifecycle)
+├── runtime_metrics.py   # Runtime/ops metrics: process, memory, DB, background tasks
+├── runtime_dispatch.py  # Bounded rolling-window dispatch overhead recorder
+├── runtime_paths.py     # PID file and log path resolution (stdlib-only)
+├── update_checker.py    # PyPI update checker (background + CLI)
+├── cost_recompute.py    # Cost recompute CLI command
 ├── onboard.py           # Interactive onboarding setup
 ├── models/
 │   ├── config.py        # Pydantic config models
@@ -602,6 +610,7 @@ src/eggpool/
 │   └── static/          # CSS, JavaScript, and favicon
 ├── integrations/        # External tool config generation (OpenCode, Claude Code)
 ├── security/            # Header redaction and security utilities
+├── lifecycle/           # Backup and uninstall orchestration
 ├── deploy/              # Bundled systemd/logrotate/cron snippets for CLI output
 └── _share/              # Bundled config examples and assets for pipx installs
 
@@ -628,7 +637,8 @@ docs/                    # Documentation
 ├── filesystem-layout.md # Filesystem layout reference
 ├── model-limits.md      # Model context limit configuration
 ├── providers.md         # Provider catalog and configuration guide
-└── proxy.md             # Per-account outbound proxy (pproxy)
+├── proxy.md             # Per-account outbound proxy (pproxy)
+└── network-diagnostics.md  # DNS cache and outbound client diagnostics
 
 config-examples/         # Editor-specific config snippets
 ├── opencode.jsonc       # OpenCode provider config (JSONC)

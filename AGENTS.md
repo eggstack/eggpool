@@ -52,6 +52,8 @@ All four must pass with zero errors.
 
 ## Multi-Provider Architecture
 
+> See `architecture/README.md` and the `architecture` skill for the full design, worked examples, and MiniMax template details.
+
 - Provider-suffixed model IDs: `model-id/provider-id` (e.g., `claude-sonnet-4/opencode-go`)
 - `ProviderClientPool` manages per-provider `httpx.AsyncClient` with independent connection pools for upstream LLM forwarding and catalog model-list fetches
 - `OutboundClientManager` owns a shared `httpx.AsyncClient` for non-provider network paths (update checks, external catalog fetches). Initialized once at startup; `build_count` should stabilize at 1. Accepts `[network]` config for transport tuning and `[network.dns_cache]` for in-memory DNS caching (enabled by default, TTL 300s, max 50 entries). The DNS cache wraps the default httpcore transport so resolved entries are reused across requests. Exposes `snapshot()` with `build_count`, `request_count`, `error_count` for runtime diagnostics. `inject_client()` is the test escape hatch
@@ -87,7 +89,7 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 ## Gotchas
 
 - Configuration changes require a service restart; live reload is intentionally not supported
-- No CI workflows or pre-commit hooks are configured in this repo
+- No pre-commit hooks are configured in this repo; CI runs ruff, pyright, and pytest via GitHub Actions
 - `Database.vacuum()` is the only sanctioned path for `VACUUM` in production code
 - Every DML write must run inside `async with db.transaction():`
 - SQLite transactions are serialized across concurrent tasks via a single connection lock + ContextVar
@@ -108,6 +110,8 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 
 ## Observability
 
+> Full API surface, attempt analytics, routing analytics, and latency phase details are in the `architecture` skill.
+
 - **Attempt analytics**: per-attempt aggregates including latency percentiles, byte totals, retry rate, and the `retry_category` distribution. Every `request_attempts` row carries `provider_id/model_id/protocol/retry_category/release_reason/bytes_received/latency_ms/streamed/is_retry_outcome`
 - **Routing analytics**: per-`(model, provider)` decision aggregates, account-level selection counts, and per-`(account, reason)` exclusion counts. Every routing decision is persisted as a `routing_decisions` row inside the same transaction as the `request_attempts` INSERT
 - **Latency phases**: decomposes each request into `upstream_connect_ms`, `upstream_read_ms`, and `coordinator_overhead_ms`
@@ -121,6 +125,8 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 - Full API surface is documented in the `architecture` skill
 
 ## Dashboard
+
+> Full page list, chart lifecycle, grouped timeseries, tooltip system, and responsive/mobile details are in the `architecture` skill.
 
 - Server-rendered HTML pages in `src/eggpool/dashboard/render.py`
 - Overview page auto-refreshes in place (every `[dashboard].refresh_interval_s`); all other pages are static
