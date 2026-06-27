@@ -606,7 +606,31 @@ class ModelOverrideConfig(ModelLimitOverrideConfig):
     @field_validator("input_price_per_1k", "output_price_per_1k", mode="before")
     @classmethod
     def parse_legacy_price(cls, value: object) -> float | None:
-        return parse_price_per_1k(value)
+        result = parse_price_per_1k(value)
+        # parse_price_per_1k returns None for negative upstream prices.
+        # Operator-provided config values must still reject negatives.
+        if result is not None:
+            return result
+        if value is None:
+            return None
+        # Detect negative values that parse_price_per_1k silently returns
+        # as None for (catalog leniency). Config overrides must reject them.
+        if isinstance(value, bool):
+            raise ValueError("price must be numeric, not boolean")
+        if isinstance(value, (int, float)) and value < 0:
+            raise ValueError("price must be non-negative")
+        if isinstance(value, str):
+            import re as _re
+
+            stripped = value.strip().replace("$", "").replace(",", "").replace("_", "")
+            match = _re.search(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[-+]?\d+)?", stripped)
+            if match is not None:
+                from decimal import Decimal
+
+                num = Decimal(match.group(0))
+                if num < 0:
+                    raise ValueError("price must be non-negative")
+        return result
 
     @field_validator(
         "cache_read_per_million_microdollars",

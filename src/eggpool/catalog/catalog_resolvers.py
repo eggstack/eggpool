@@ -231,9 +231,13 @@ class OpenRouterCatalogResolver:
             if not isinstance(model_id_obj, str) or not model_id_obj:
                 continue
             pricing_obj: object = raw_dict.get("pricing") or {}
-            entry = OpenRouterCatalogResolver._parse_entry(
-                model_id_obj, pricing_obj, raw_dict
-            )
+            try:
+                entry = OpenRouterCatalogResolver._parse_entry(
+                    model_id_obj, pricing_obj, raw_dict
+                )
+            except (ValueError, TypeError) as exc:
+                logger.warning("Skipping catalog entry %r: %s", model_id_obj, exc)
+                continue
             entries[model_id_obj] = entry
         return entries
 

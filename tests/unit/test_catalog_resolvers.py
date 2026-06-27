@@ -131,6 +131,56 @@ class TestOpenRouterParseCatalog:
         assert OpenRouterCatalogResolver._parse_catalog([]) == {}
         assert OpenRouterCatalogResolver._parse_catalog({"no_data": 1}) == {}
 
+    def test_skips_entry_with_negative_price(self) -> None:
+        payload = {
+            "data": [
+                {
+                    "id": "bad-model",
+                    "pricing": {"prompt": "-0.001", "completion": "0.002"},
+                },
+                {
+                    "id": "good-model",
+                    "pricing": {"prompt": "0.001", "completion": "0.002"},
+                },
+            ]
+        }
+        entries = OpenRouterCatalogResolver._parse_catalog(payload)
+        assert "good-model" in entries
+        # Negative price returns None — entry is kept but priced as None
+        assert entries["bad-model"].input_price_per_1k is None
+        assert entries["good-model"].input_price_per_1k is not None
+
+    def test_skips_entry_with_boolean_price(self) -> None:
+        payload = {
+            "data": [
+                {
+                    "id": "bool-model",
+                    "pricing": {"prompt": True, "completion": "0.002"},
+                },
+                {
+                    "id": "good-model",
+                    "pricing": {"prompt": "0.001", "completion": "0.002"},
+                },
+            ]
+        }
+        entries = OpenRouterCatalogResolver._parse_catalog(payload)
+        assert "good-model" in entries
+        assert "bool-model" not in entries
+
+    def test_all_invalid_entries_returns_empty(self) -> None:
+        payload = {
+            "data": [
+                {"id": "a", "pricing": {"prompt": "-1"}},
+                {"id": "b", "pricing": {"prompt": True}},
+            ]
+        }
+        entries = OpenRouterCatalogResolver._parse_catalog(payload)
+        # "a" has negative price → kept with None pricing
+        # "b" has boolean price → skipped entirely
+        assert "a" in entries
+        assert entries["a"].input_price_per_1k is None
+        assert "b" not in entries
+
 
 class TestOpenRouterFetchCatalog:
     @pytest.mark.asyncio

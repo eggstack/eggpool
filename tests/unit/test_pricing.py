@@ -9,6 +9,7 @@ import pytest
 from eggpool.catalog.pricing import (
     CostCalculator,
     PriceSnapshot,
+    _extract_decimal,
     microdollars_per_million_from_price_per_1k,
     parse_microdollars_per_million,
     parse_price_per_1k,
@@ -293,10 +294,14 @@ class TestPriceParsing:
         """Unit forms ($/token, $/1K, $/1M) produce the same microdollars."""
         assert parse_microdollars_per_million(raw) == expected
 
-    @pytest.mark.parametrize("raw", ["-1", "-$3 / 1M", "nan", "inf", "free"])
+    @pytest.mark.parametrize("raw", ["nan", "inf", "free"])
     def test_parse_price_rejects_inappropriate_values(self, raw: str) -> None:
         with pytest.raises(ValueError):
             parse_price_per_1k(raw)
+
+    @pytest.mark.parametrize("raw", ["-1", "-$3 / 1M"])
+    def test_parse_price_returns_none_for_negative_values(self, raw: str) -> None:
+        assert parse_price_per_1k(raw) is None
 
     @pytest.mark.asyncio
     async def test_calculate_cost_cache_read_missing_rate_is_partial(self) -> None:
@@ -378,6 +383,52 @@ class TestPriceParsing:
         assert exactness == "estimated"
         # Fallback estimate: 1K input at $3/M + 1K output at $15/M = 18000
         assert cost == 18000
+
+
+class TestNegativePriceHandling:
+    """Negative prices from upstream catalogs return None instead of crashing."""
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            -1,
+            -0.001,
+            "-5",
+            "-$3 / 1M",
+        ],
+    )
+    def test_extract_decimal_returns_none_for_negative(self, value: object) -> None:
+        assert _extract_decimal(value) is None
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            -1,
+            -0.001,
+            "-5",
+            "-$3 / 1M",
+        ],
+    )
+    def test_parse_price_per_1k_returns_none_for_negative(self, value: object) -> None:
+        assert parse_price_per_1k(value) is None
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            -1,
+            -0.001,
+            "-5",
+            "-$3 / 1M",
+        ],
+    )
+    def test_parse_microdollars_returns_none_for_negative(self, value: object) -> None:
+        assert parse_microdollars_per_million(value) is None
+
+    def test_zero_price_still_valid(self) -> None:
+        assert _extract_decimal(0) is not None
+        assert _extract_decimal("0") is not None
+        assert parse_price_per_1k(0) == 0.0
+        assert parse_price_per_1k("0") == 0.0
 
 
 class TestPartialFallbackPricing:
