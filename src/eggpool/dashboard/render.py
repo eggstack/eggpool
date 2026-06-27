@@ -1580,10 +1580,10 @@ def render_overview(
     }
 </section>
 
-<section class="panel">
-  <h3>Account breakdown</h3>
+<details class="panel panel-collapsible">
+  <summary><h3>Account breakdown</h3></summary>
   {_render_account_table(accounts)}
-</section>
+</details>
 
 {_render_timeseries_chart(period, initial_data=timeseries)}
 

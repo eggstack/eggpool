@@ -352,6 +352,27 @@ h3 {
   overflow-x: auto;
 }
 
+/* Collapsible variant of .panel that uses the native <details>
+   element. The summary line carries the heading and acts as the
+   toggle; collapsed by default (no `open` attribute). The disclosure
+   triangle is suppressed because the heading already reads as a
+   clickable affordance. */
+.panel-collapsible > summary {
+  list-style: none;
+  cursor: pointer;
+  margin: -1rem -1.25rem;
+  padding: 1rem 1.25rem;
+}
+
+.panel-collapsible > summary::-webkit-details-marker {
+  display: none;
+}
+
+.panel-collapsible > summary > h3 {
+  display: inline-block;
+  margin: 0;
+}
+
 .overview-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
