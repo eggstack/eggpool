@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-06-27
+
+### Fixed
+
+- **Exclusion taxonomy empty-state**: the Routing page's doughnut chart now shows `<p class="empty">No exclusion data in this period.</p>` instead of an invisible Chart.js ring when no exclusions have been recorded in the selected period. The previous behaviour rendered a zero-data doughnut whose legend was visible but the chart itself was not, producing a "key but no graph" artefact.
+- **`circuit_breaker` classification**: `SUPPRESSIVE_EXCLUSION_REASONS` now includes `circuit_breaker`, the only exclusion reason the coordinator actually writes to `exclude_reasons_json`. Previously every real-world exclusion landed in the `unknown` bucket because the frozenset only contained the legacy `circuit_open` name.
+
 ### Added
 
 - **Sticky dashboard topbar**: `header.topbar` is `position: sticky; top: 0; z-index: 5` with a subtle backdrop blur, so the page navigation stays visible while scrolling on desktop. Mobile layout is unchanged (the topnav disclosure still wraps cleanly under 480px).
