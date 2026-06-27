@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 from eggpool.catalog.cache import ModelCatalogCache
 from eggpool.catalog.catalog_resolvers import (
     CatalogConfig,
+    CatalogHttpClient,
     CatalogResolverPipeline,
     OpenRouterCatalogResolver,
     PricingCatalogResolver,
@@ -150,7 +151,9 @@ class CatalogService:
         self._ping_repo = ping_repo
         if isinstance(client_pool, ProviderClientPool):
             self._client_pool: ProviderClientPool | None = client_pool
-            self._httpx_client = client_pool.get_default_client()
+            self._httpx_client: httpx.AsyncClient | None = (
+                client_pool.get_default_client()
+            )
         else:
             self._client_pool = None
             self._httpx_client = client_pool
@@ -177,6 +180,10 @@ class CatalogService:
         self._alias_resolver: PricingAliasResolver | None = None
         self._catalog_pipeline: CatalogResolverPipeline | None = None
 
+    def _catalog_http_client(self) -> CatalogHttpClient | None:
+        """Return the long-lived client used for external catalog lookups."""
+        return self._outbound_client or self._httpx_client
+
     def set_price_change_callback(
         self, callback: Callable[[str, str | None], None]
     ) -> None:
@@ -198,11 +205,19 @@ class CatalogService:
 
         catalogs_config = self._config.pricing.catalogs
         resolvers: list[PricingCatalogResolver] = []
+        catalog_client = self._catalog_http_client()
         for name, entry in (
             ("openrouter", catalogs_config.openrouter),
             ("opencode_zen", catalogs_config.opencode_zen),
         ):
             if not entry.enabled:
+                continue
+            if catalog_client is None:
+                logger.warning(
+                    "Skipping external pricing catalog %r: no shared outbound "
+                    "HTTP client is available",
+                    name,
+                )
                 continue
             catalog_config = CatalogConfig(
                 name=name,
@@ -217,7 +232,7 @@ class CatalogService:
                 resolvers.append(
                     OpenRouterCatalogResolver(
                         config=catalog_config,
-                        client=self._outbound_client,
+                        client=catalog_client,
                     )
                 )
         if resolvers:

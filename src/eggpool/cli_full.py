@@ -53,6 +53,7 @@ from eggpool.logging import configure_logging
 from eggpool.models.config import AppConfig
 from eggpool.providers.client_pool import ProviderClientPool
 from eggpool.providers.contract import PROVIDER_STATUS_SYMBOLS, compose_provider_url
+from eggpool.providers.outbound import OutboundClientManager
 from eggpool.toml_edit import (
     render_toml_string,
     section_has_key,
@@ -2605,12 +2606,22 @@ def models_refresh(ctx: click.Context) -> None:
 
         registry = AccountRegistry(config)
         client_pool = ProviderClientPool.from_app_config(config)
+        outbound_manager = OutboundClientManager(config=config.network)
         try:
-            catalog = CatalogService(config, registry, db, client_pool)
+            outbound_client = await outbound_manager.get_client()
+            catalog = CatalogService(
+                config,
+                registry,
+                db,
+                client_pool,
+                outbound_client=outbound_client,
+            )
+            await catalog.attach_pricing_resolvers()
             await catalog.refresh()
             count = catalog.cache.model_count
             click.echo(f"Refreshed catalog: {count} models found")
         finally:
+            await outbound_manager.aclose()
             await client_pool.close()
 
     _run_with_database(config, _run_models_refresh)

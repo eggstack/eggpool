@@ -250,6 +250,11 @@ class TestModelsRefreshFileBacked:
                     ("acct-beta", "gpt-4"),
                 }
                 assert set(pairs) == expected_pairs
+
+                alias_rows = await db.fetch_all(
+                    "SELECT catalog_source FROM model_pricing_aliases"
+                )
+                assert {row["catalog_source"] for row in alias_rows} >= {"openrouter"}
             finally:
                 await db.disconnect()
 

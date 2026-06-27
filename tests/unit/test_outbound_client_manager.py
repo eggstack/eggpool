@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from eggpool.models.config import NetworkConfig
-from eggpool.providers.outbound import OutboundClientManager
+from eggpool.providers.outbound import MeteredAsyncTransport, OutboundClientManager
 
 
 class TestOutboundClientManager:
@@ -121,6 +121,69 @@ class TestOutboundClientManager:
             "api.other.com": 1,
         }
         assert snap["per_host_errors"] == {"api.other.com": 1}
+        await manager.aclose()
+
+    @pytest.mark.anyio
+    async def test_metered_transport_records_successful_response(self) -> None:
+        manager = OutboundClientManager()
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"ok": True}, request=request)
+
+        client = httpx.AsyncClient(
+            transport=MeteredAsyncTransport(httpx.MockTransport(handler), manager)
+        )
+        manager.inject_client(client)
+
+        response = await client.get("https://api.example.com/models")
+
+        assert response.status_code == 200
+        snap = manager.snapshot()
+        assert snap["request_count"] == 1
+        assert snap["error_count"] == 0
+        assert snap["per_host_requests"] == {"api.example.com": 1}
+        await manager.aclose()
+
+    @pytest.mark.anyio
+    async def test_metered_transport_records_http_error_status(self) -> None:
+        manager = OutboundClientManager()
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(503, request=request)
+
+        client = httpx.AsyncClient(
+            transport=MeteredAsyncTransport(httpx.MockTransport(handler), manager)
+        )
+        manager.inject_client(client)
+
+        response = await client.get("https://api.example.com/models")
+
+        assert response.status_code == 503
+        snap = manager.snapshot()
+        assert snap["request_count"] == 1
+        assert snap["error_count"] == 1
+        assert snap["per_host_errors"] == {"api.example.com": 1}
+        await manager.aclose()
+
+    @pytest.mark.anyio
+    async def test_metered_transport_records_transport_exception(self) -> None:
+        manager = OutboundClientManager()
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("boom", request=request)
+
+        client = httpx.AsyncClient(
+            transport=MeteredAsyncTransport(httpx.MockTransport(handler), manager)
+        )
+        manager.inject_client(client)
+
+        with pytest.raises(httpx.ConnectError):
+            await client.get("https://api.example.com/models")
+
+        snap = manager.snapshot()
+        assert snap["request_count"] == 1
+        assert snap["error_count"] == 1
+        assert snap["per_host_errors"] == {"api.example.com": 1}
         await manager.aclose()
 
 

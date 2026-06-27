@@ -133,7 +133,6 @@ class OutboundClientManager:
             write=read_timeout,
             pool=connect_timeout,
         )
-        transport: httpx.AsyncBaseTransport | None = None
         if self._network_backend is not None:
             pool = httpcore.AsyncConnectionPool(
                 max_connections=max_connections,
@@ -141,7 +140,10 @@ class OutboundClientManager:
                 keepalive_expiry=keepalive_expiry,
                 network_backend=self._network_backend,
             )
-            transport = HttpcoreTransport(pool)
+            base_transport: httpx.AsyncBaseTransport = HttpcoreTransport(pool)
+        else:
+            base_transport = httpx.AsyncHTTPTransport(limits=limits)
+        transport = MeteredAsyncTransport(base_transport, self)
         client = httpx.AsyncClient(
             timeout=timeout,
             limits=limits,
@@ -267,6 +269,31 @@ class HttpcoreTransport(httpx.AsyncBaseTransport):
 
     async def aclose(self) -> None:
         await self._pool.aclose()
+
+
+class MeteredAsyncTransport(httpx.AsyncBaseTransport):
+    """Transport wrapper that records shared outbound request diagnostics."""
+
+    def __init__(
+        self,
+        inner: httpx.AsyncBaseTransport,
+        manager: OutboundClientManager,
+    ) -> None:
+        self._inner = inner
+        self._manager = manager
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        host = request.url.host
+        try:
+            response = await self._inner.handle_async_request(request)
+        except Exception:
+            self._manager.record_request(success=False, host=host)
+            raise
+        self._manager.record_request(success=response.status_code < 400, host=host)
+        return response
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
 
 
 class HttpcoreResponseStream(httpx.AsyncByteStream):

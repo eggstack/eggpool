@@ -32,7 +32,6 @@ from eggpool.catalog.pricing_resolver import (
     SOURCE_DETAIL_OPENROUTER,
     ResolvedPricing,
 )
-from eggpool.providers.outbound import warn_adhoc_client_construction
 
 if TYPE_CHECKING:
     from eggpool.catalog.pricing_aliases import PricingAlias, PricingAliasResolver
@@ -105,6 +104,16 @@ class CatalogFetchError(RuntimeError):
     """Raised when a catalog fetch fails (network, parse, auth)."""
 
 
+class CatalogHttpClient(Protocol):
+    """Minimal async HTTP client interface used by catalog resolvers."""
+
+    async def get(
+        self, url: str, *, headers: dict[str, str] | None = None
+    ) -> httpx.Response:
+        """Issue a GET request and return the HTTP response."""
+        ...
+
+
 class TTLCache:
     """Tiny TTL cache for catalog responses.
 
@@ -164,21 +173,16 @@ class OpenRouterCatalogResolver:
         self,
         *,
         config: CatalogConfig,
-        client: httpx.AsyncClient | None = None,
+        client: CatalogHttpClient,
         cache: TTLCache | None = None,
     ) -> None:
         self._config = config
         self._cache = cache or TTLCache(config.ttl_seconds)
-        self._owns_client = client is None
-        self._client = client or self._build_client()
+        self._client = client
 
     @property
     def priority(self) -> int:
         return self._config.priority
-
-    def _build_client(self) -> httpx.AsyncClient:
-        warn_adhoc_client_construction("OpenRouterCatalogResolver._build_client")
-        return httpx.AsyncClient(timeout=15.0, follow_redirects=True)
 
     def _headers(self) -> dict[str, str]:
         headers = {"User-Agent": "eggpool/1.0"}
@@ -189,10 +193,6 @@ class OpenRouterCatalogResolver:
     def _url(self, path: str) -> str:
         base_url = self._config.base_url or "https://openrouter.ai/api/v1"
         return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
-
-    async def aclose(self) -> None:
-        if self._owns_client:
-            await self._client.aclose()
 
     async def fetch_catalog(self) -> dict[str, CatalogEntry]:
         if self._cache.is_fresh:
