@@ -532,11 +532,8 @@ def uninstall(
         ):
             _safe_unlink(paths.env_path)
 
-    if cleanup_data and confirm(
-        f"Delete the eggpool data directory at {paths.data_dir}?"
-    ):
-        _assert_safe_path(paths.data_dir, label="data directory")
-        _safe_rm_tree(paths.data_dir)
+    if cleanup_data:
+        _cleanup_data(paths=paths, confirm=confirm)
 
     if cleanup_path:
         files = list(rc_files) if rc_files is not None else _default_rc_files()
@@ -549,6 +546,22 @@ def uninstall(
             apply_eggpool_path_changes(changeable)
 
     return paths
+
+
+def _cleanup_data(*, paths: UninstallPaths, confirm: Callable[[str], bool]) -> None:
+    """Delete EggPool's SQLite storage without risking broad directory removal."""
+    if _is_safe_path(paths.data_dir):
+        if confirm(f"Delete the eggpool data directory at {paths.data_dir}?"):
+            _safe_rm_tree(paths.data_dir)
+        return
+
+    if not confirm(f"Delete the SQLite database files at {paths.db_path}?"):
+        return
+
+    _assert_safe_database_file_path(paths.db_path)
+    _safe_unlink(paths.db_path)
+    _safe_unlink(paths.db_path.with_name(f"{paths.db_path.name}-wal"))
+    _safe_unlink(paths.db_path.with_name(f"{paths.db_path.name}-shm"))
 
 
 def _render_rc_preview(changeable: Sequence[RcFileChange]) -> None:
@@ -627,7 +640,7 @@ def _resolve_db_path(*, config_path: Path, env: dict[str, str]) -> Path:
     path_value_obj: object = database.get("path")
     if isinstance(path_value_obj, str) and path_value_obj.strip():
         db_path = Path(path_value_obj).expanduser().resolve()
-        _assert_safe_path(db_path, label="database path")
+        _assert_safe_database_file_path(db_path)
         return db_path
     return Path(DEFAULT_DATABASE_PATH).expanduser().resolve()
 
@@ -692,6 +705,26 @@ def _assert_safe_path(target: Path, *, label: str) -> None:
             "This is a top-level directory in your home and is not "
             "an eggpool data path."
         )
+
+
+def _is_safe_path(target: Path) -> bool:
+    try:
+        _assert_safe_path(target, label="path")
+    except RuntimeError:
+        return False
+    return True
+
+
+def _assert_safe_database_file_path(target: Path) -> None:
+    """Raise if a configured database path points at a broad delete target."""
+    try:
+        _assert_safe_path(target, label="database path")
+    except RuntimeError:
+        resolved = target.expanduser().resolve()
+        home = Path.home().resolve()
+        if resolved.parent == home and (resolved.is_file() or resolved.suffix):
+            return
+        raise
 
 
 def _safe_rm_tree(target: Path, *, label: str = "directory") -> None:

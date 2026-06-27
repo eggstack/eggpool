@@ -661,6 +661,37 @@ class TestUninstallSideEffects:
 
         assert not data_dir.exists()
 
+    def test_cleanup_data_removes_home_level_database_files_only(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setattr("pathlib.Path.home", lambda: home)
+        db = home / "usage.sqlite3"
+        db.write_bytes(b"db")
+        (home / "usage.sqlite3-wal").write_bytes(b"wal")
+        (home / "usage.sqlite3-shm").write_bytes(b"shm")
+        unrelated = home / "notes.txt"
+        unrelated.write_text("keep", encoding="utf-8")
+        config = tmp_path / "config.toml"
+        config.write_text("[server]\n")
+        paths = _make_paths(method=InstallMethod.PIPX, config=config, db=db)
+
+        uninstall(
+            paths=paths,
+            confirm=lambda _m: True,
+            cleanup_data=True,
+            cleanup_config=False,
+            cleanup_path=False,
+            pipx_runner=MagicMock(return_value=_fake_result(0)),
+        )
+
+        assert home.exists()
+        assert unrelated.exists()
+        assert not db.exists()
+        assert not (home / "usage.sqlite3-wal").exists()
+        assert not (home / "usage.sqlite3-shm").exists()
+
     def test_keep_data_preserves_data_dir(self, tmp_path: Path) -> None:
         data_dir = tmp_path / "data"
         data_dir.mkdir()
@@ -846,18 +877,19 @@ class TestAssertSafePath:
 
 
 class TestUninstallRejectsDangerousPaths:
-    def test_uninstall_rejects_home_as_data_dir(
+    def test_uninstall_does_not_delete_home_as_data_dir(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """If data_dir resolves to $HOME, uninstall must refuse."""
+        """If data_dir resolves to $HOME, only database files are removed."""
         config = tmp_path / "config.toml"
         config.write_text("[server]\n")
-        # Craft a paths object where data_dir == home.
         home = tmp_path / "home"
         home.mkdir()
         monkeypatch.setattr("pathlib.Path.home", lambda: home)
         db = home / "usage.sqlite3"
-        db.touch()
+        db.write_bytes(b"db")
+        unrelated = home / "unrelated.txt"
+        unrelated.write_text("keep", encoding="utf-8")
         paths = UninstallPaths(
             install_method=InstallMethod.PIPX,
             config_path=config,
@@ -868,15 +900,18 @@ class TestUninstallRejectsDangerousPaths:
             eggpool_dir=None,
         )
 
-        with pytest.raises(RuntimeError, match="home directory"):
-            uninstall(
-                paths=paths,
-                confirm=lambda _m: True,
-                cleanup_data=True,
-                cleanup_config=False,
-                cleanup_path=False,
-                pipx_runner=MagicMock(return_value=_fake_result(0)),
-            )
+        uninstall(
+            paths=paths,
+            confirm=lambda _m: True,
+            cleanup_data=True,
+            cleanup_config=False,
+            cleanup_path=False,
+            pipx_runner=MagicMock(return_value=_fake_result(0)),
+        )
+
+        assert home.exists()
+        assert unrelated.exists()
+        assert not db.exists()
 
     def test_uninstall_rejects_root_as_data_dir(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -894,7 +929,7 @@ class TestUninstallRejectsDangerousPaths:
             eggpool_dir=None,
         )
 
-        with pytest.raises(RuntimeError, match="Refusing to delete '/'"):
+        with pytest.raises(RuntimeError, match="top-level system directory"):
             uninstall(
                 paths=paths,
                 confirm=lambda _m: True,
@@ -944,6 +979,20 @@ class TestUninstallRejectsDangerousPaths:
 
 
 class TestResolveDbPathRejectsDangerous:
+    def test_accepts_home_level_db_file(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Config with [database].path = ~/usage.sqlite3 is valid."""
+        from eggpool.lifecycle.uninstall import _resolve_db_path
+
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setattr("pathlib.Path.home", lambda: home)
+        config = tmp_path / "config.toml"
+        config.write_text(f'[database]\npath = "{home / "usage.sqlite3"}"\n')
+
+        assert _resolve_db_path(config_path=config, env={}) == home / "usage.sqlite3"
+
     def test_rejects_home_as_db_path(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -957,6 +1006,23 @@ class TestResolveDbPathRejectsDangerous:
         config.write_text(f'[database]\npath = "{home}"\n')
 
         with pytest.raises(RuntimeError, match="home directory"):
+            _resolve_db_path(config_path=config, env={})
+
+    def test_rejects_home_level_directory_as_db_path(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Config with [database].path = ~/.config must raise."""
+        from eggpool.lifecycle.uninstall import _resolve_db_path
+
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setattr("pathlib.Path.home", lambda: home)
+        config_dir = home / ".config"
+        config_dir.mkdir()
+        config = tmp_path / "config.toml"
+        config.write_text(f'[database]\npath = "{config_dir}"\n')
+
+        with pytest.raises(RuntimeError, match="top-level directory in your home"):
             _resolve_db_path(config_path=config, env={})
 
     def test_rejects_root_as_db_path(
