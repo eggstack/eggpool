@@ -113,6 +113,34 @@ probe_model = "MiniMax-M2.5"
 probe_protocol = "openai"
 require_models = false
 
+# MiniMax China serves the same model IDs as MiniMax International but
+# via an OpenAI-compatible surface. Pin the protocol here so the global
+# FAMILY_PROTOCOLS["minimax-"] = "anthropic" mapping does not clear the
+# protocol during the provider protocol constraint check (see
+# CatalogService._fetch_and_process_account). Without these seeds
+# MiniMax-M* would be served with protocol = None and rejected at
+# RequestCoordinator._validate_endpoint.
+[[providers.minimax-cn.static_models]]
+id = "MiniMax-M3"
+display_name = "MiniMax-M3"
+protocol = "openai"
+supports_tools = true
+supports_vision = false
+
+[[providers.minimax-cn.static_models]]
+id = "MiniMax-M2.7"
+display_name = "MiniMax-M2.7"
+protocol = "openai"
+supports_tools = true
+supports_vision = false
+
+[[providers.minimax-cn.static_models]]
+id = "MiniMax-M2.5"
+display_name = "MiniMax-M2.5"
+protocol = "openai"
+supports_tools = true
+supports_vision = false
+
 [providers.generalcompute]
 # GeneralCompute — plain OpenAI-compatible PAYG.
 # Treat as standard OpenAI surface (GET /models, POST /chat/completions,

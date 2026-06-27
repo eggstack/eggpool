@@ -170,11 +170,28 @@ Live model discovery fetches the catalog from the MiniMax `/v1/models`
 endpoint using the documented Anthropic-compatible listing. The static
 seeds serve only as a fallback when live discovery is unavailable.
 
-`minimax-cn` (China console) is intentionally still configured as plain
+`minimax-cn` (China console) is intentionally configured as plain
 OpenAI-compatible in the bundled template because the China endpoint
 family and auth shape have not been confirmed against `api.minimaxi.com`.
 Do not assume parity with the international Anthropic-compatible
-template without live testing.
+template without live testing. `minimax-cn` ships with
+`[[providers.minimax-cn.static_models]]` rows pinning `MiniMax-M3`,
+`MiniMax-M2.7`, and `MiniMax-M2.5` to `protocol = "openai"` so the
+global `FAMILY_PROTOCOLS["minimax-"] = "anthropic"` mapping does not
+clear the protocol at the provider constraint check. Route MiniMax
+through `minimax-cn` on `/v1/chat/completions` (OpenAI), not
+`/v1/messages`.
+
+### Endpoint routing by MiniMax provider
+
+| Provider            | Base URL                                | Endpoint                | Auth style   |
+| ------------------- | --------------------------------------- | ----------------------- | ------------ |
+| `minimax`           | `https://api.minimax.io/anthropic`      | `POST /v1/messages`     | `x-api-key`  |
+| `minimax-cn`        | `https://api.minimaxi.com/v1`           | `POST /chat/completions`| `Bearer`     |
+
+Requests that hit the wrong endpoint receive a `400 ProtocolMismatchError`
+("Model 'MiniMax-M3' uses the X protocol. Use /v1/..."). Hit the row
+that matches the provider you configured.
 
 ### GeneralCompute PAYG (Plain OpenAI-Compatible)
 

@@ -305,3 +305,61 @@ class TestEndpointValidationMiniMaxQwen:
             resolver_no_config.validate_endpoint("anthropic", "openai", "qwen3.7-max")
         assert "Anthropic" in str(exc_info.value)
         assert "/v1/messages" in str(exc_info.value)
+
+
+class TestMiniMaxCnFamilyMappings:
+    """MiniMax China is OpenAI-compatible, not Anthropic.
+
+    The bundled ``minimax-cn`` provider template pins MiniMax models to
+    ``protocol = "openai"`` via ``[[providers.minimax-cn.static_models]]``
+    so the global ``FAMILY_PROTOCOLS["minimax-"] = "anthropic"`` mapping
+    does not clear the protocol during the provider protocol constraint
+    check. These tests cover both the catalog resolver and the model
+    override escape hatch.
+    """
+
+    def test_family_mapping_still_resolves_to_anthropic(
+        self, resolver_no_config: ModelProtocolResolver
+    ) -> None:
+        """Without overrides, the global family map says anthropic."""
+        result = resolver_no_config.resolve_from_catalog("MiniMax-M3")
+        assert result.protocol == "anthropic"
+        assert result.source == "family_mapping"
+
+    def test_global_model_override_switches_to_openai(self) -> None:
+        """A top-level ``[model_overrides]`` wins over the family map."""
+        config = AppConfig.from_dict(
+            {
+                "accounts": [],
+                "model_overrides": {"MiniMax-M3": {"protocol": "openai"}},
+            }
+        )
+        resolver = ModelProtocolResolver(config=config)
+        result = resolver.resolve_from_catalog("MiniMax-M3")
+        assert result.protocol == "openai"
+        assert result.source == "config_override"
+
+    def test_validate_endpoint_openai_passes_with_override(self) -> None:
+        """An override-driven openai model accepts ``/v1/chat/completions``."""
+        config = AppConfig.from_dict(
+            {
+                "accounts": [],
+                "model_overrides": {"MiniMax-M3": {"protocol": "openai"}},
+            }
+        )
+        resolver = ModelProtocolResolver(config=config)
+        resolver.validate_endpoint("openai", "openai", "MiniMax-M3")
+
+    def test_validate_endpoint_anthropic_raises_with_override(self) -> None:
+        """An override-driven openai model rejects ``/v1/messages``."""
+        config = AppConfig.from_dict(
+            {
+                "accounts": [],
+                "model_overrides": {"MiniMax-M3": {"protocol": "openai"}},
+            }
+        )
+        resolver = ModelProtocolResolver(config=config)
+        with pytest.raises(ProtocolMismatchError) as exc_info:
+            resolver.validate_endpoint("openai", "anthropic", "MiniMax-M3")
+        assert "OpenAI" in str(exc_info.value)
+        assert "/v1/chat/completions" in str(exc_info.value)

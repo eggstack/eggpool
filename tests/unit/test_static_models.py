@@ -334,6 +334,79 @@ class TestSeedStaticModels:
         assert cache.model_count == 0
         assert cache.get_provider_model_entry("a1", "p1") is None
 
+    def test_minimax_cn_static_seeds_pin_openai_protocol(self) -> None:
+        """MiniMax China seeds pin protocol = openai so the family-mapping
+        anthropic fallback cannot clear the protocol at provider constraint
+        check time.
+        """
+        config = AppConfig.model_validate(
+            {
+                "providers": {
+                    "minimax-cn": {
+                        "id": "minimax-cn",
+                        "base_url": "https://api.minimaxi.com/v1",
+                        "protocols": ["openai"],
+                        "accounts": [{"name": "cn-1", "api_key": "sk-cn"}],
+                        "static_models": [
+                            {"id": "MiniMax-M3", "protocol": "openai"},
+                            {"id": "MiniMax-M2.7", "protocol": "openai"},
+                            {"id": "MiniMax-M2.5", "protocol": "openai"},
+                        ],
+                    }
+                }
+            }
+        )
+        provider_cfg = config.providers["minimax-cn"]
+        cache = ModelCatalogCache()
+        service = _make_service(config)
+        service._cache = cache
+
+        asyncio.run(service._seed_static_models("cn-1", "minimax-cn", provider_cfg))
+
+        for model_id in ("MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5"):
+            entry = cache.get_provider_model_entry(model_id, "minimax-cn")
+            assert entry is not None, f"missing static seed for {model_id}"
+            assert entry["protocol"] == "openai"
+            assert entry["protocol_source"] == "static_config"
+
+    def test_static_seed_protocol_survives_family_mapping_live_merge(self) -> None:
+        """Live fetch from /v1/models resolves MiniMax-M* to anthropic via the
+        family map; the static_config pin must survive via
+        ``_preserve_static_fields``.
+        """
+        cache = ModelCatalogCache()
+        cache.update_from_account(
+            "cn-1",
+            "minimax-cn",
+            [
+                {
+                    "model_id": "MiniMax-M3",
+                    "display_name": "MiniMax-M3",
+                    "protocol": "openai",
+                    "protocol_source": "static_config",
+                    "capabilities": {"supports_tools": True},
+                }
+            ],
+        )
+        cache.update_from_account(
+            "cn-1",
+            "minimax-cn",
+            [
+                {
+                    "model_id": "MiniMax-M3",
+                    "display_name": "MiniMax-M3",
+                    "protocol": "anthropic",
+                    "protocol_source": "family_mapping",
+                    "capabilities": {},
+                }
+            ],
+        )
+
+        entry = cache.get_provider_model_entry("MiniMax-M3", "minimax-cn")
+        assert entry is not None
+        assert entry["protocol"] == "openai"
+        assert entry["protocol_source"] == "static_config"
+
 
 # ---------------------------------------------------------------------------
 # Live merge preserves explicit static fields

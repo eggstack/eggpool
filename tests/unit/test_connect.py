@@ -448,6 +448,36 @@ class TestFormatProviderBlock:
         ]
         assert provider_level_metadata == []
 
+    def test_minimax_cn_template_pins_openai_via_static_seeds(
+        self, tmp_path: Path
+    ) -> None:
+        """MiniMax China uses OpenAI surface; static seeds pin protocol so
+        FAMILY_PROTOCOLS["minimax-"] = "anthropic" does not clear it.
+        """
+        from eggpool.models.config import AppConfig
+
+        data = load_provider_templates()["minimax-cn"]["data"]
+        block = _format_provider_block(
+            "minimax-cn", data, "MINIMAX_CN_KEY", "minimax-cn-0001"
+        )
+
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(block, encoding="utf-8")
+
+        cfg = AppConfig.from_toml(str(config_file))
+        provider = cfg.providers["minimax-cn"]
+        assert provider.protocols == ["openai"]
+        assert provider.base_url == "https://api.minimaxi.com/v1"
+        assert provider.auth.mode == "bearer"
+        assert len(provider.static_models) == 3
+        for static in provider.static_models:
+            assert static.protocol == "openai", (
+                f"static seed {static.id} must be pinned to openai so the "
+                "family mapping does not clear the protocol"
+            )
+        static_ids = {sm.id for sm in provider.static_models}
+        assert static_ids == {"MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5"}
+
 
 class TestMergeProviderIntoConfig:
     """Tests for merging providers into config files."""
