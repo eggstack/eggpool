@@ -439,8 +439,16 @@ td.no { color: var(--color-error); font-weight: 600; }
   color: var(--text-muted);
 }
 
+.timeseries-period-selector label {
+  display: inline-flex;
+  flex-direction: column;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
 .timeseries-controls label > select,
-.timeseries-controls label > input {
+.timeseries-controls label > input,
+.timeseries-period-selector label > select {
   margin-top: 0.25rem;
 }
 
@@ -457,6 +465,10 @@ td.no { color: var(--color-error); font-weight: 600; }
 }
 
 .filter-form select {
+  cursor: pointer;
+}
+
+.period-selector select {
   cursor: pointer;
 }
 

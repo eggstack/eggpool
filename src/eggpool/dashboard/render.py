@@ -658,7 +658,11 @@ def _render_nav(
     return "".join(parts)
 
 
-def _render_period_selector(current: str, current_theme: str = "") -> str:
+def _render_period_selector(
+    current: str,
+    current_theme: str = "",
+    extra_class: str = "",
+) -> str:
     """Render a period selector form."""
     options = [
         ("1h", "Last hour"),
@@ -678,13 +682,17 @@ def _render_period_selector(current: str, current_theme: str = "") -> str:
         if current_theme
         else ""
     )
+    class_attr = "period-selector"
+    if extra_class:
+        class_attr = f"{class_attr} {escape_attr(extra_class)}"
     return (
-        f'<form method="get" class="period-selector" '
+        f'<form method="get" class="{class_attr}" '
         f'data-period-selector aria-label="Period selector">'
-        f'<label for="period">Period: </label>'
+        f'<label for="period">Period: '
         f'<select id="period" name="period">'
         f"{selector}"
         f"</select>"
+        f"</label>"
         f"{theme_hidden}"
         f"</form>"
     )
@@ -2286,6 +2294,7 @@ def _render_timeseries_controls(
     model_filter: str,
     account_options: list[str] | None = None,
     model_options: list[str] | None = None,
+    period: str,
     current_theme: str,
 ) -> str:
     """Render the timeseries filter form with bucket, group, metric, etc.
@@ -2350,6 +2359,7 @@ def _render_timeseries_controls(
   <label>Limit: {_select("limit", selected_limit, limit_options)}</label>
   <label>Account: {_select("account", account_choice, account_select_options)}</label>
   <label>Model: {_select("model", model_choice, model_select_options)}</label>
+  <input type="hidden" name="period" value="{escape_attr(period)}">
   <input type="hidden" name="theme" value="{escape_attr(current_theme)}">
   <button type="submit">Apply</button>
 </form>
@@ -2391,6 +2401,7 @@ def render_timeseries(
         model_filter=model_filter,
         account_options=account_options,
         model_options=model_options,
+        period=period,
         current_theme=current_theme,
     )
     chart_panel = _render_grouped_timeseries_chart(
@@ -2408,7 +2419,7 @@ def render_timeseries(
 
     body = f"""
 <h2>Timeseries ({escape(bucket)} buckets, group by {escape(group_by)})</h2>
-{_render_period_selector(period, current_theme)}
+{_render_period_selector(period, current_theme, "timeseries-period-selector")}
 {controls}
 
 {chart_panel}

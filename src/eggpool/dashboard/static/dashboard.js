@@ -658,6 +658,7 @@
     );
     const period =
       (periodSelect && periodSelect.value) ||
+      get("period") ||
       new URLSearchParams(window.location.search).get("period") ||
       "24h";
     return {
@@ -669,6 +670,18 @@
       account: get("account") || "",
       model: get("model") || "",
     };
+  }
+
+  function syncTimeseriesPeriod(form) {
+    if (!form) return;
+    const periodSelect = document.querySelector(
+      'form[data-period-selector] select[name="period"]'
+    );
+    if (!periodSelect) return;
+    const periodInput = form.querySelector('input[name="period"]');
+    if (periodInput) {
+      periodInput.value = periodSelect.value;
+    }
   }
 
   function setChartData(chartId, payload) {
@@ -697,6 +710,7 @@
   namespace.refreshGroupedTimeseriesChart = function refreshGroupedTimeseriesChart(
     form
   ) {
+    syncTimeseriesPeriod(form);
     const params = readTimeseriesParams(form);
     const canvas = document.querySelector(
       'canvas.grouped-timeseries-chart[data-chart-id="grouped-timeseries-chart"]'
@@ -779,6 +793,7 @@
       if (!select) continue;
       select.addEventListener("change", function () {
         if (timeseriesForm && typeof namespace.refreshGroupedTimeseriesChart === "function") {
+          syncTimeseriesPeriod(timeseriesForm);
           namespace.refreshGroupedTimeseriesChart(timeseriesForm);
         } else {
           periodForm.submit();

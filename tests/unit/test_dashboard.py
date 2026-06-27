@@ -983,12 +983,14 @@ class TestRenderTimeseries:
 
         Re-rendering it inside ``form.timeseries-controls`` would give
         operators two period dropdowns that drift out of sync.
+        The controls form still carries a hidden period for no-JS Apply.
         """
         html = render_timeseries(series=[], bucket="hour", period="24h")
         controls_start = html.index('class="filter-form timeseries-controls"')
         controls_end = html.index("</form>", controls_start)
         controls_section = html[controls_start:controls_end]
-        assert 'name="period"' not in controls_section
+        assert '<select id="period" name="period">' not in controls_section
+        assert '<input type="hidden" name="period" value="24h">' in controls_section
         # Period dropdown still lives outside the controls form.
         assert 'id="period"' in html
 
@@ -1027,6 +1029,11 @@ class TestRenderTimeseries:
         """The canonical period selector opts into the live wire-up."""
         html = render_timeseries(series=[], bucket="hour", period="24h")
         assert "data-period-selector" in html
+
+    def test_timeseries_period_selector_uses_control_class(self) -> None:
+        """Timeseries period styling matches the other controls."""
+        html = render_timeseries(series=[], bucket="hour", period="24h")
+        assert 'class="period-selector timeseries-period-selector"' in html
 
     def test_period_selector_preserves_theme(self) -> None:
         """The period selector's form must carry the active theme as a hidden input.
@@ -1916,6 +1923,12 @@ class TestDashboardStylesheet:
             assert selector in css
         assert "z-index: 1" in css
         assert "position: relative" in css
+
+    def test_timeseries_period_selector_matches_control_style(self) -> None:
+        css = self._load_css()
+        assert ".timeseries-period-selector label" in css
+        assert ".timeseries-period-selector label > select" in css
+        assert ".period-selector select," in css
 
 
 class TestTooltipDateFormat:
