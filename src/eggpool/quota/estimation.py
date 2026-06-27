@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(slots=True)
 class QuotaWindow:
     """A rolling window of quota usage for an account."""
 
@@ -64,7 +64,7 @@ class QuotaWindow:
         return self.used_tokens, self.used_cost_microdollars
 
 
-@dataclass
+@dataclass(slots=True)
 class ManualOffset:
     """Manual adjustment to an account's quota usage.
 
@@ -81,7 +81,7 @@ class ManualOffset:
     applied_at: float = field(default_factory=time.time)
 
 
-@dataclass
+@dataclass(slots=True)
 class EWMAEstimate:
     """EWMA estimate for a specific (account, model) pair or global model."""
 
@@ -103,7 +103,7 @@ class EWMAEstimate:
         self.last_updated = time.time()
 
 
-@dataclass
+@dataclass(slots=True)
 class PersistedWindowSnapshot:
     """Snapshot of persisted window usage for an account."""
 
@@ -114,7 +114,7 @@ class PersistedWindowSnapshot:
     loaded_at: float = field(default_factory=time.time)
 
 
-@dataclass
+@dataclass(slots=True)
 class AccountQuota:
     """Quota state for a single account."""
 
@@ -263,7 +263,7 @@ GLOBAL_FALLBACK = (3.0, 15.0)
 GLOBAL_FALLBACK_FLOOR_MICRODOLLARS_PER_TOKEN = 0.5
 
 
-@dataclass
+@dataclass(slots=True)
 class QuotaEstimator:
     """Estimates quota usage across all accounts.
 

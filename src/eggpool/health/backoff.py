@@ -51,7 +51,7 @@ class BackoffReason(StrEnum):
     CONTEXT_LIMIT_EXCEEDED = "context_limit_exceeded"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class BackoffPolicy:
     """Reason-specific backoff policy for upstream-observed failures.
 

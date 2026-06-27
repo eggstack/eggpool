@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 ATTEMPT_MAX_ERROR_DETAIL_CHARS = MAX_REDACTED_ERROR_DETAIL_CHARS
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class AttemptFinalizationData:
     """Data for finalizing a single failed attempt."""
 
@@ -39,7 +39,7 @@ class AttemptFinalizationData:
     is_retry_outcome: bool = False
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class AttemptFinalizeResult:
     """Result of finalizing a failed attempt."""
 

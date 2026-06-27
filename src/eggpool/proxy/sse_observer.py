@@ -24,7 +24,12 @@ logger = logging.getLogger(__name__)
 MAX_INCOMPLETE_FRAME_BYTES = 64 * 1024  # 64KB
 
 
-@dataclass
+def _utf8_len(value: str) -> int:
+    """Return the UTF-8 byte length without allocating for ASCII strings."""
+    return len(value) if value.isascii() else len(value.encode("utf-8"))
+
+
+@dataclass(slots=True)
 class SSEFrame:
     """A parsed SSE frame."""
 
@@ -127,7 +132,7 @@ class IncrementalSSEObserver:
 
         # Bound by encoded bytes, not Python characters. A non-ASCII character
         # can occupy up to four UTF-8 bytes.
-        if len(self._buffer.encode("utf-8")) > MAX_INCOMPLETE_FRAME_BYTES:
+        if _utf8_len(self._buffer) > MAX_INCOMPLETE_FRAME_BYTES:
             logger.warning(
                 "SSE line exceeded %d bytes, discarding it",
                 MAX_INCOMPLETE_FRAME_BYTES,
@@ -156,9 +161,7 @@ class IncrementalSSEObserver:
             if field_name == "data":
                 separator_bytes = 1 if self._current_data_lines else 0
                 event_bytes = (
-                    self._current_event_bytes
-                    + separator_bytes
-                    + len(value.encode("utf-8"))
+                    self._current_event_bytes + separator_bytes + _utf8_len(value)
                 )
                 if event_bytes > MAX_INCOMPLETE_FRAME_BYTES:
                     logger.warning(

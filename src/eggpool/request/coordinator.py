@@ -113,7 +113,7 @@ def _prepare_error_detail(value: object | None, persist: bool) -> str | None:
     return redact_error_detail(str(value))
 
 
-@dataclass
+@dataclass(slots=True)
 class ProxyRequestContext:
     """Input context for a proxy request."""
 
@@ -139,7 +139,7 @@ class ProxyRequestContext:
         return self.original_body if self.upstream_body is None else self.upstream_body
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SelectedAttempt:
     """Result of atomic pre-dispatch selection.
 
@@ -160,7 +160,7 @@ class SelectedAttempt:
     provider_id: str = DEFAULT_PROVIDER_ID
 
 
-@dataclass
+@dataclass(slots=True)
 class PreparedProxyResponse:
     """Result of executing a proxy request through the coordinator."""
 

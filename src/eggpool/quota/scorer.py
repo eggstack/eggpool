@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from eggpool.quota.estimation import QuotaEstimator
 
 
-@dataclass
+@dataclass(slots=True)
 class RoutingScore:
     """A routing score for an account."""
 
@@ -52,7 +52,7 @@ class RoutingScore:
         return self.quota_score + self.inflight_penalty + self.health_penalty
 
 
-@dataclass
+@dataclass(slots=True)
 class QuotaFairScorer:
     """Scores accounts based on quota fairness and weights.
 

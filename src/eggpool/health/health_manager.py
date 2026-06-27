@@ -96,7 +96,7 @@ def classify_failure_category(
     return FailureCategory.UNKNOWN
 
 
-@dataclass
+@dataclass(slots=True)
 class AccountHealth:
     """Health state for an account."""
 
@@ -145,7 +145,7 @@ class AccountHealth:
         return True
 
 
-@dataclass
+@dataclass(slots=True)
 class HealthManager:
     """Manages health state for all accounts."""
 

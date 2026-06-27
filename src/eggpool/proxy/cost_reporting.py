@@ -66,7 +66,7 @@ _MICROS_PATHS: tuple[tuple[str, ...], ...] = (
 )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ProviderReportedCost:
     """An authoritative cost reported by an upstream provider."""
 

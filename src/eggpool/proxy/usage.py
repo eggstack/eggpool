@@ -19,7 +19,7 @@ def safe_dict(value: Any) -> dict[str, Any] | None:
     return None
 
 
-@dataclass
+@dataclass(slots=True)
 class StreamUsageResult:
     """Usage information extracted from a streaming response."""
 

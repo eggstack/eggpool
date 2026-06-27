@@ -31,7 +31,7 @@ def _failure_backoff(consecutive_failures: int) -> float:
     )
 
 
-@dataclass
+@dataclass(slots=True)
 class AccountRuntimeState:
     """Mutable runtime state for an account."""
 

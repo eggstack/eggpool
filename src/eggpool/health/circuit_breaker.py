@@ -15,7 +15,7 @@ class CircuitState(Enum):
     HALF_OPEN = "half_open"  # Testing if service recovered
 
 
-@dataclass
+@dataclass(slots=True)
 class CircuitBreaker:
     """Circuit breaker for an account/model."""
 

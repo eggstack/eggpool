@@ -46,7 +46,7 @@ class FinalizationOutcome(StrEnum):
     INTERRUPTED = "interrupted"
 
 
-@dataclass
+@dataclass(slots=True)
 class FinalizationData:
     """Input data for finalizing a request."""
 

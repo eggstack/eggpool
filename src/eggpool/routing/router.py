@@ -47,7 +47,7 @@ def _group_by_priority(
     return tiers
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class RoutingCandidates:
     """Eligible account states and their lookup index for one routing decision."""
 
@@ -70,7 +70,7 @@ class RoutingCandidates:
         return [(tier[0].routing_priority, tier) for tier in tiers]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class RoutingExclusion:
     """Record of one account being excluded from a routing decision."""
 
@@ -78,7 +78,7 @@ class RoutingExclusion:
     reason: str  # e.g. "circuit_open", "circuit_half_open_full", "already_attempted"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class RoutingDecisionTrace:
     """Trace of one routing decision for observability.
 

@@ -24,7 +24,7 @@ def _compute_bucket_start(ts: datetime, bucket_size_s: int) -> str:
     return datetime.fromtimestamp(bucket_epoch, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class UsageMetricEvent:
     """Immutable analytics event emitted by the request finalizer."""
 
@@ -49,7 +49,7 @@ class UsageMetricEvent:
     first_byte_ms: int | None
 
 
-@dataclass
+@dataclass(slots=True)
 class _AggregatedDelta:
     """Mutable accumulator for a single rollup key."""
 
@@ -98,7 +98,7 @@ class _AggregatedDelta:
             self.first_byte_ms_count += 1
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class _RollupKey:
     """Hashable key identifying one rollup row."""
 
@@ -112,7 +112,7 @@ class _RollupKey:
     status: str
 
 
-@dataclass
+@dataclass(slots=True)
 class FlushResult:
     """Result of a flush operation."""
 
@@ -121,7 +121,7 @@ class FlushResult:
     error_class: str | None = None
 
 
-@dataclass
+@dataclass(slots=True)
 class MetricsBufferSnapshot:
     """Diagnostic snapshot of the coalescer's in-memory state."""
 
