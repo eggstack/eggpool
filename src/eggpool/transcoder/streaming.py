@@ -17,6 +17,7 @@ from eggpool.proxy.sse_observer import IncrementalSSEObserver
 
 if TYPE_CHECKING:
     from eggpool.proxy.usage import StreamUsageResult
+    from eggpool.transcoder.context import TranscodeContext
 
 logger = logging.getLogger(__name__)
 
@@ -72,10 +73,13 @@ class _BaseStreamingTranscoder:
         self,
         client_protocol: str,
         upstream_protocol: str,
+        *,
+        transcode_context: TranscodeContext | None = None,
     ) -> None:
         self.client_protocol = client_protocol
         self.upstream_protocol = upstream_protocol
         self._observer = IncrementalSSEObserver(upstream_protocol)
+        self._transcode_context = transcode_context
         self._decoder = codecs.getincrementaldecoder("utf-8")(
             errors="replace",
         )
@@ -127,7 +131,7 @@ class _BaseStreamingTranscoder:
 
         self._buffer = "" if self._discarding else incomplete_line
         if _utf8_len(self._buffer) > _MAX_INCOMPLETE_FRAME_BYTES:
-            logger.warning(
+            self._warn(
                 "SSE line exceeded %d bytes, discarding",
                 _MAX_INCOMPLETE_FRAME_BYTES,
             )
@@ -152,7 +156,7 @@ class _BaseStreamingTranscoder:
             sep = 1 if self._current_data_lines else 0
             ev_bytes = self._current_event_bytes + sep + _utf8_len(value)
             if ev_bytes > _MAX_INCOMPLETE_FRAME_BYTES:
-                logger.warning(
+                self._warn(
                     "SSE event exceeded %d bytes, discarding",
                     _MAX_INCOMPLETE_FRAME_BYTES,
                 )
@@ -216,16 +220,23 @@ class _BaseStreamingTranscoder:
         self._discarding = False
         return frames
 
+    def _warn(self, message: str, *args: object) -> None:
+        """Log a warning and accumulate it in the transcode context."""
+        logger.warning(message, *args)
+        if self._transcode_context is not None:
+            self._transcode_context.loss_warnings.append(
+                {"streaming_transcoder": message},
+            )
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _safe_json(data: str) -> dict[str, Any] | None:
+    def _safe_json(self, data: str) -> dict[str, Any] | None:
         try:
             obj = json.loads(data)
         except (json.JSONDecodeError, ValueError):
-            logger.debug("Malformed SSE data, skipping")
+            self._warn("Malformed SSE data, skipping")
             return None
         if not isinstance(obj, dict):
             return None
@@ -254,8 +265,12 @@ class _BaseStreamingTranscoder:
 class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
     """State machine converting OpenAI SSE chunks to Anthropic SSE."""
 
-    def __init__(self) -> None:
-        super().__init__("anthropic", "openai")
+    def __init__(
+        self,
+        *,
+        transcode_context: TranscodeContext | None = None,
+    ) -> None:
+        super().__init__("anthropic", "openai", transcode_context=transcode_context)
         self._started = False
         self._id = ""
         self._model = ""
@@ -467,8 +482,9 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
         self,
         *,
         include_usage: bool = True,
+        transcode_context: TranscodeContext | None = None,
     ) -> None:
-        super().__init__("openai", "anthropic")
+        super().__init__("openai", "anthropic", transcode_context=transcode_context)
         self._include_usage = include_usage
         self._started = False
         self._id = ""
@@ -687,6 +703,7 @@ def select_streaming_transcoder(
     client_protocol: str,
     upstream_protocol: str,
     include_usage: bool = True,
+    transcode_context: TranscodeContext | None = None,
 ) -> StreamingTranscoder | None:
     """Return the streaming transcoder for a protocol pair.
 
@@ -697,7 +714,10 @@ def select_streaming_transcoder(
     if client_protocol == "openai" and upstream_protocol == "anthropic":
         return AnthropicToOpenAIStreaming(
             include_usage=include_usage,
+            transcode_context=transcode_context,
         )
     if client_protocol == "anthropic" and upstream_protocol == "openai":
-        return OpenAIToAnthropicStreaming()
+        return OpenAIToAnthropicStreaming(
+            transcode_context=transcode_context,
+        )
     return None

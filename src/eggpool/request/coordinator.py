@@ -1338,9 +1338,27 @@ class RequestCoordinator:
         async def _stream() -> AsyncIterator[bytes]:
             nonlocal bytes_emitted, first_byte_ms
             try:
+                # Determine include_usage from the request body's
+                # stream_options (already injected by _execute_streaming).
+                include_usage = True
+                if context.upstream_protocol == "openai":
+                    try:
+                        payload_obj = json.loads(context.body_for_upstream)
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+                    else:
+                        if isinstance(payload_obj, dict):
+                            payload = cast("dict[str, Any]", payload_obj)
+                            so_raw: Any = payload.get("stream_options")
+                            if isinstance(so_raw, dict):
+                                so = cast("dict[str, Any]", so_raw)
+                                include_usage = bool(so.get("include_usage", True))
+
                 streaming_transcoder = select_streaming_transcoder(
                     client_protocol=context.protocol,
                     upstream_protocol=context.upstream_protocol,
+                    include_usage=include_usage,
+                    transcode_context=context.transcode_context,
                 )
                 async for chunk in upstream_response.aiter_bytes():
                     if first_byte_ms == 0.0:

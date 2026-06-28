@@ -344,3 +344,34 @@ class TestErrorAfterPartialStream:
 
         event_types = [f["event"] for f in frames]
         assert "message_stop" in event_types
+
+
+class TestLossWarnings:
+    """Verify that malformed frames accumulate in TranscodeContext."""
+
+    @pytest.mark.asyncio
+    async def test_malformed_json_accumulates_warning(self) -> None:
+        from eggpool.transcoder.context import TranscodeContext
+
+        ctx = TranscodeContext(
+            request_id="test-req",
+            client_protocol="openai",
+            upstream_protocol="anthropic",
+        )
+        transcoder = AnthropicToOpenAIStreaming(transcode_context=ctx)
+
+        # Send a frame with valid SSE structure but invalid JSON in data
+        bad_frame = b"event: message_start\ndata: NOT-JSON\n\n"
+        await transcoder.feed(bad_frame)
+
+        assert len(ctx.loss_warnings) >= 1
+        assert any("streaming_transcoder" in w for w in ctx.loss_warnings)
+
+    @pytest.mark.asyncio
+    async def test_no_warning_when_no_context(self) -> None:
+        transcoder = AnthropicToOpenAIStreaming()
+        assert transcoder._transcode_context is None
+
+        # Should not raise even without context
+        bad_frame = b"event: message_start\ndata: NOT-JSON\n\n"
+        await transcoder.feed(bad_frame)
