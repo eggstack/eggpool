@@ -146,13 +146,9 @@ _ERROR_CATEGORY_LABELS: dict[str, str] = {
 
 _CARD_TOOLTIPS: dict[str, str] = {
     "Pending requests": (
-        "Requests still in progress right now. The subtext shows the oldest "
-        "pending age and how many are already stale."
+        "Requests still in progress. Subtext shows the oldest pending age."
     ),
-    "Active reservations": (
-        "Reservations currently holding estimated quota or spend for in-flight "
-        "work. The subtext shows reserved cost and age."
-    ),
+    "Active reservations": ("Active quota or spend reservations for in-flight work."),
     "Finalizer (24h)": (
         "Reliability cleanup activity over the last 24 hours, including stale "
         "request cleanup, timeout cases, and crash recovery runs."
@@ -219,8 +215,7 @@ _CARD_TOOLTIPS: dict[str, str] = {
         "Total bytes emitted by EggPool toward clients in the selected period."
     ),
     "Server PID": (
-        "Process identity for the running EggPool supervisor, including parent "
-        "PID and daemon mode."
+        "Process identity of the running supervisor (PPID and daemon mode)."
     ),
     "Uptime": "Elapsed time since the current EggPool process started.",
     "Python": "Python runtime version and platform for the running process.",
@@ -228,8 +223,7 @@ _CARD_TOOLTIPS: dict[str, str] = {
     "Open FDs": ("Open file descriptors currently held by the process."),
     "Active threads": ("Current number of active Python threads in the process."),
     "Load average": (
-        "Host OS load average. The primary metric is 1-minute load; the "
-        "subtext shows normalized load or longer windows."
+        "Host load average (1m primary, subtext shows normalized load or 5m/15m)."
     ),
     "Dispatch overhead": (
         "EggPool-local time spent before each upstream dispatch attempt begins."
@@ -237,34 +231,24 @@ _CARD_TOOLTIPS: dict[str, str] = {
     "Database": ("Primary SQLite database path and on-disk size."),
     "WAL": ("SQLite write-ahead log size and whether WAL mode is active."),
     "Sync": ("SQLite synchronous mode and whether the primary DB connection is live."),
-    "Stats DB": (
-        "Whether stats use a separate SQLite connection and how many worker "
-        "threads are configured."
-    ),
+    "Stats DB": ("Whether stats use a separate SQLite connection."),
     "In-flight requests": ("Requests currently active against upstream providers."),
     "Active backoffs": (
         "Persisted account backoff rows currently suppressing or delaying "
         "eligible accounts."
     ),
-    "DNS cache": (
-        "Whether outbound DNS caching is enabled and how many cached entries "
-        "are currently stored."
-    ),
+    "DNS cache": ("Outbound DNS cache state and current entry count."),
     "DNS hit rate": (
         "Share of DNS lookups served from the in-memory cache instead of "
         "triggering a fresh resolver call."
     ),
     "DNS misses": "DNS lookups that required a resolver call.",
-    "DNS errors": (
-        "DNS lookup failures and degraded cache behavior such as stale or "
-        "negative-cache hits."
-    ),
+    "DNS errors": ("DNS lookup failures and degraded cache hits (stale or negative)."),
     "Outbound builds": (
         "How many times the shared outbound client manager has built a client."
     ),
     "Outbound requests": (
-        "Requests sent through the shared outbound client manager, with error "
-        "count in the subtext."
+        "Requests via the shared outbound client. Subtext shows errors."
     ),
     "Provider clients": (
         "How many per-provider HTTP clients were built in the provider client pool."
@@ -3127,10 +3111,8 @@ def render_runtime(
     provider_builds = format_int(provider_pool.get("build_count", 0))
 
     network_cards = f"""
-<section class="panel">
-  <h3>Network</h3>
-  <section class="cards">
-    {
+<section class="cards">
+  {
         "".join(
             [
                 _render_metric_card(
@@ -3177,7 +3159,6 @@ def render_runtime(
             ]
         )
     }
-  </section>
 </section>
 """
 

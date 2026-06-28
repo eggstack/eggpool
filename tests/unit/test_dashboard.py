@@ -3672,7 +3672,6 @@ class TestRenderRuntimeNetwork:
             },
         }
         html = render_runtime(snapshot)
-        assert "Network" in html
         assert "enabled" in html
         assert "Outbound builds" in html
         assert "Outbound requests" in html
@@ -3706,7 +3705,6 @@ class TestRenderRuntimeNetwork:
             "routing_runtime": {},
         }
         html = render_runtime(snapshot)
-        assert "Network" in html
         assert "<html" in html
 
     def test_dns_hit_rate_calculation(self) -> None:
@@ -3750,7 +3748,7 @@ class TestRenderRuntimeNetwork:
         assert "—" in html
 
     def test_no_api_keys_in_html(self) -> None:
-        """Network section does not expose API keys."""
+        """Runtime page does not expose API keys via network metrics."""
         snapshot: dict[str, Any] = {
             "server": {"pid": 1, "uptime_seconds": 0, "configured_server_threads": 1},
             "memory": {},
@@ -3868,7 +3866,9 @@ class TestRenderRuntimeDispatchAndLoad:
         snapshot = self._base_snapshot()
         snapshot["dns_cache"] = {"enabled": True, "size": 5, "hits": 2, "misses": 1}
         html = render_runtime(snapshot)
-        assert 'data-tooltip="Whether outbound DNS caching is enabled' in html
+        assert (
+            'data-tooltip="Outbound DNS cache state and current entry count."' in html
+        )
 
     def test_dispatch_overhead_no_samples(self) -> None:
         snapshot = self._base_snapshot()
