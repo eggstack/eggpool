@@ -1665,9 +1665,15 @@ async def fetch_transcoding_stats(
         key = (rd["client_protocol"], rd["upstream_protocol"])
         per_direction[key] = rd["count"]
 
+    # Top loss warnings aggregation. Per-request loss warning counts are
+    # not yet persisted to the ``requests`` table, so this is an empty
+    # list until that schema work lands; the UI handles the empty
+    # state explicitly.
+    top_loss_warnings: list[dict[str, Any]] = []
     return {
         "total": total,
         "native_count": native_count,
         "transcoded_count": transcoded_count,
         "per_direction": per_direction,
+        "top_loss_warnings": top_loss_warnings,
     }

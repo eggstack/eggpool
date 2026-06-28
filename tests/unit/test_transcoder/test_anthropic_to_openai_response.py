@@ -146,6 +146,55 @@ class TestUsageMapping:
 
         assert result["usage"]["input_tokens"] == 20
         assert result["usage"]["output_tokens"] == 8
+        assert result["usage"]["cache_read_input_tokens"] == 5
+
+    def test_usage_cache_creation_fields_preserved(
+        self, transcoder: AnthropicToOpenAI
+    ) -> None:
+        payload = {
+            "id": "cmpl-1",
+            "model": "gpt-4",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Hi"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 20,
+                "completion_tokens": 8,
+                "total_tokens": 28,
+                "prompt_tokens_details": {
+                    "cached_tokens": 5,
+                    "cache_creation_tokens": 9,
+                },
+            },
+        }
+        result, _ = transcoder.decode_response(payload, _make_context())
+
+        assert result["usage"]["cache_read_input_tokens"] == 5
+        assert result["usage"]["cache_creation_input_tokens"] == 9
+
+    def test_usage_no_cache_omits_anthropic_cache(
+        self, transcoder: AnthropicToOpenAI
+    ) -> None:
+        payload = {
+            "id": "cmpl-1",
+            "model": "gpt-4",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Hi"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+        }
+        result, _ = transcoder.decode_response(payload, _make_context())
+
+        assert "cache_read_input_tokens" not in result["usage"]
+        assert "cache_creation_input_tokens" not in result["usage"]
 
     def test_usage_missing_defaults_to_zero(
         self, transcoder: AnthropicToOpenAI

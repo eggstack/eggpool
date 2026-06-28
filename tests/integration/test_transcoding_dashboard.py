@@ -150,6 +150,66 @@ class TestTranscodingCardRendering:
         anthropic_idx = html.index("anthropic → openai")
         assert anthropic_idx < openai_idx
 
+    def test_card_heading_reflects_period(self) -> None:
+        stats = {
+            "total": 10,
+            "native_count": 8,
+            "transcoded_count": 2,
+            "per_direction": {},
+        }
+        html_24h = render_runtime(
+            _minimal_snapshot(), transcoding_stats=stats, period="24h"
+        )
+        html_7d = render_runtime(
+            _minimal_snapshot(), transcoding_stats=stats, period="7d"
+        )
+        html_30d = render_runtime(
+            _minimal_snapshot(), transcoding_stats=stats, period="30d"
+        )
+        assert "Transcoding (24h)" in html_24h
+        assert "Transcoding (7d)" in html_7d
+        assert "Transcoding (30d)" in html_30d
+
+    def test_loss_warnings_panel_with_data(self) -> None:
+        stats = {
+            "total": 100,
+            "native_count": 50,
+            "transcoded_count": 50,
+            "per_direction": {},
+            "top_loss_warnings": [
+                {"direction": ["openai", "anthropic"], "count": 12},
+                {"direction": ["anthropic", "openai"], "count": 4},
+            ],
+        }
+        html = render_runtime(_minimal_snapshot(), transcoding_stats=stats)
+        assert "Top loss warnings" in html
+        assert "openai → anthropic" in html
+        assert "12" in html
+        assert "4" in html
+
+    def test_loss_warnings_panel_empty_state(self) -> None:
+        stats = {
+            "total": 100,
+            "native_count": 100,
+            "transcoded_count": 0,
+            "per_direction": {},
+            "top_loss_warnings": [],
+        }
+        html = render_runtime(_minimal_snapshot(), transcoding_stats=stats)
+        assert "Top loss warnings" not in html
+        assert "No loss warnings recorded" in html
+
+    def test_loss_warnings_panel_missing_key(self) -> None:
+        """Stats without top_loss_warnings render the empty state."""
+        stats = {
+            "total": 10,
+            "native_count": 8,
+            "transcoded_count": 2,
+            "per_direction": {},
+        }
+        html = render_runtime(_minimal_snapshot(), transcoding_stats=stats)
+        assert "No loss warnings recorded" in html
+
 
 class TestTranscodingJsonEndpoint:
     def test_returns_empty_stats_on_empty_db(self, migrated_client: TestClient) -> None:
@@ -160,6 +220,7 @@ class TestTranscodingJsonEndpoint:
         assert data["native_count"] == 0
         assert data["transcoded_count"] == 0
         assert data["per_direction"] == {}
+        assert data["top_loss_warnings"] == []
 
     def test_respects_period_query_param(self, migrated_client: TestClient) -> None:
         response = migrated_client.get("/api/stats/transcoding?period=7d")
@@ -171,3 +232,13 @@ class TestTranscodingJsonEndpoint:
         response = migrated_client.get("/api/stats/transcoding")
         assert response.status_code == 200
         assert response.json()["total"] == 0
+
+    def test_html_runtime_page_respects_period(
+        self, migrated_client: TestClient
+    ) -> None:
+        response = migrated_client.get("/runtime?period=7d")
+        assert response.status_code == 200
+        assert "Transcoding (7d)" in response.text
+        response_24h = migrated_client.get("/runtime?period=24h")
+        assert response_24h.status_code == 200
+        assert "Transcoding (24h)" in response_24h.text

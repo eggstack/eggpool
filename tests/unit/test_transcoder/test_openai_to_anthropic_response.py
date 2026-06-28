@@ -130,6 +130,37 @@ class TestUsageMapping:
         assert result["usage"]["prompt_tokens"] == 20
         assert result["usage"]["completion_tokens"] == 8
         assert result["usage"]["total_tokens"] == 28
+        assert result["usage"]["prompt_tokens_details"]["cached_tokens"] == 3
+        assert result["usage"]["prompt_tokens_details"]["cache_creation_tokens"] == 5
+
+    def test_usage_cache_read_only(self, transcoder: OpenAIToAnthropic) -> None:
+        payload = {
+            "id": "msg-1",
+            "model": "claude-3",
+            "content": [{"type": "text", "text": "Hi"}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 20,
+                "output_tokens": 8,
+                "cache_read_input_tokens": 7,
+            },
+        }
+        result, _ = transcoder.decode_response(payload, _make_context())
+
+        assert result["usage"]["prompt_tokens_details"]["cached_tokens"] == 7
+        assert "cache_creation_tokens" not in result["usage"]["prompt_tokens_details"]
+
+    def test_usage_no_cache_omits_details(self, transcoder: OpenAIToAnthropic) -> None:
+        payload = {
+            "id": "msg-1",
+            "model": "claude-3",
+            "content": [{"type": "text", "text": "Hi"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 20, "output_tokens": 8},
+        }
+        result, _ = transcoder.decode_response(payload, _make_context())
+
+        assert "prompt_tokens_details" not in result["usage"]
 
     def test_usage_missing_defaults_to_zero(
         self, transcoder: OpenAIToAnthropic

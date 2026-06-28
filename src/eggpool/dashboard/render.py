@@ -2758,6 +2758,7 @@ def render_runtime(
     current_theme: str = "",
     update_info: Any | None = None,
     transcoding_stats: dict[str, Any] | None = None,
+    period: str = "24h",
 ) -> str:
     """Render the runtime metrics page."""
     server = _as_dict(snapshot.get("server"))
@@ -3212,9 +3213,52 @@ def render_runtime(
                 + tc_direction_rows
                 + "</tbody></table>"
             )
+        tc_loss_rows = ""
+        tc_loss_warning_items = cast(
+            "list[dict[str, object]]",
+            transcoding_stats.get("top_loss_warnings") or [],
+        )
+        for entry in tc_loss_warning_items:
+            direction_pair: object = entry.get("direction")
+            count_val: object = entry.get("count")
+            if (
+                isinstance(direction_pair, (list, tuple))
+                and len(cast("list[object] | tuple[object, ...]", direction_pair)) == 2
+            ):
+                client_proto = escape(str(cast("list[object]", direction_pair)[0]))
+                upstream_proto = escape(str(cast("list[object]", direction_pair)[1]))
+                direction = f"{client_proto} → {upstream_proto}"
+            else:
+                direction = "—"
+            count_int: int | None
+            if isinstance(count_val, int):
+                count_int = count_val
+            elif isinstance(count_val, float):
+                count_int = int(count_val)
+            else:
+                count_int = 0
+            tc_loss_rows += (
+                f"<tr><td>{direction}</td>"
+                f"<td class='num'>{format_int(count_int)}</td></tr>"
+            )
+        tc_loss_panel = ""
+        if tc_loss_rows:
+            tc_loss_panel = (
+                "<h4>Top loss warnings</h4>"
+                '<table class="data compact"><thead><tr>'
+                + _th("Direction")
+                + _th("Count", priority=2)
+                + "</tr></thead><tbody>"
+                + tc_loss_rows
+                + "</tbody></table>"
+            )
+        else:
+            tc_loss_panel = (
+                "<p class='empty-state'>No loss warnings recorded in this period.</p>"
+            )
         tc_card = f"""
 <section class="panel">
-  <h3>Transcoding (24h)</h3>
+  <h3>Transcoding ({escape(period)})</h3>
   <section class="cards">
     {
             _render_metric_card(
@@ -3239,6 +3283,7 @@ def render_runtime(
         }
   </section>
   {tc_direction_table}
+  {tc_loss_panel}
 </section>
 """
 

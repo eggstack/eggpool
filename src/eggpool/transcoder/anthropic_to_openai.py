@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from eggpool.transcoder.context import TranscodeContext
@@ -173,6 +173,28 @@ class AnthropicToOpenAI:
         usage = payload.get("usage", {})
         prompt_tokens = int(usage.get("prompt_tokens", 0))  # pyright: ignore[reportUnknownMemberType]
         completion_tokens = int(usage.get("completion_tokens", 0))  # pyright: ignore[reportUnknownMemberType]
+        prompt_tokens_details = usage.get("prompt_tokens_details")  # pyright: ignore[reportUnknownMemberType]
+        cache_read_tokens = 0
+        cache_creation_tokens = 0
+        if isinstance(prompt_tokens_details, dict):
+            details: dict[str, object] = cast(
+                "dict[str, object]", prompt_tokens_details
+            )
+            raw_cached: object = details.get("cached_tokens")
+            raw_cache_creation: object = details.get("cache_creation_tokens")
+            if isinstance(raw_cached, (int, float)):
+                cache_read_tokens = int(raw_cached)
+            if isinstance(raw_cache_creation, (int, float)):
+                cache_creation_tokens = int(raw_cache_creation)
+
+        out_usage: dict[str, int] = {
+            "input_tokens": prompt_tokens,
+            "output_tokens": completion_tokens,
+        }
+        if cache_read_tokens > 0:
+            out_usage["cache_read_input_tokens"] = cache_read_tokens
+        if cache_creation_tokens > 0:
+            out_usage["cache_creation_input_tokens"] = cache_creation_tokens
 
         out: dict[str, Any] = {
             "id": payload.get("id", f"msg_{context.request_id}"),
@@ -181,10 +203,7 @@ class AnthropicToOpenAI:
             "content": content_blocks,
             "model": payload.get("model", ""),
             "stop_reason": stop_reason,
-            "usage": {
-                "input_tokens": prompt_tokens,
-                "output_tokens": completion_tokens,
-            },
+            "usage": out_usage,
         }
 
         return out, warnings

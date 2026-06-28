@@ -264,6 +264,13 @@ class TestDroppedFields:
             "response_format",
             "seed",
             "user",
+            "tools",
+            "tool_choice",
+            "functions",
+            "function_call",
+            "parallel_tool_calls",
+            "stream_options",
+            "logit_bias",
         ]
         payload: dict[str, Any] = {
             "model": "gpt-4",
@@ -272,13 +279,16 @@ class TestDroppedFields:
         for field in dropped_fields:
             payload[field] = "value"  # type: ignore[assignment]
 
-        _, warnings = transcoder.encode_request(payload, _make_context())
+        result, warnings = transcoder.encode_request(payload, _make_context())
 
         warned_fields = {
             w.get("field") for w in warnings if w.get("kind") == "dropped_field"
         }
         for field in dropped_fields:
             assert field in warned_fields, f"Expected warning for field '{field}'"
+
+        for field in dropped_fields:
+            assert field not in result, f"Expected field '{field}' to be dropped"
 
     def test_stream_not_in_output(self, transcoder: OpenAIToAnthropic) -> None:
         payload = _load_fixture("openai_text_request.json")

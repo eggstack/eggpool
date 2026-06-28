@@ -43,6 +43,13 @@ DROPPED_FIELDS = (
     "response_format",
     "seed",
     "user",
+    "tools",
+    "tool_choice",
+    "functions",
+    "function_call",
+    "parallel_tool_calls",
+    "stream_options",
+    "logit_bias",
 )
 
 
@@ -196,6 +203,10 @@ class OpenAIToAnthropic:
         usage = payload.get("usage", {})
         prompt_tokens = int(usage.get("input_tokens", 0))  # pyright: ignore[reportUnknownMemberType]
         completion_tokens = int(usage.get("output_tokens", 0))  # pyright: ignore[reportUnknownMemberType]
+        cache_read_tokens = int(usage.get("cache_read_input_tokens", 0))  # pyright: ignore[reportUnknownMemberType]
+        cache_creation_tokens = int(  # pyright: ignore[reportUnknownMemberType]
+            usage.get("cache_creation_input_tokens", 0)  # pyright: ignore[reportUnknownMemberType]
+        )
 
         out: dict[str, Any] = {
             "id": payload.get("id", f"chatcmpl-{context.request_id}"),
@@ -218,6 +229,14 @@ class OpenAIToAnthropic:
                 "total_tokens": prompt_tokens + completion_tokens,
             },
         }
+
+        if cache_read_tokens > 0 or cache_creation_tokens > 0:
+            prompt_tokens_details: dict[str, int] = {}
+            if cache_read_tokens > 0:
+                prompt_tokens_details["cached_tokens"] = cache_read_tokens
+            if cache_creation_tokens > 0:
+                prompt_tokens_details["cache_creation_tokens"] = cache_creation_tokens
+            out["usage"]["prompt_tokens_details"] = prompt_tokens_details
 
         return out, warnings
 

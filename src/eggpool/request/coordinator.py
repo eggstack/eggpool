@@ -64,6 +64,7 @@ from eggpool.request.limits import estimate_reservation_tokens
 from eggpool.retry.classification import RetryCategory, RetryClassifier
 from eggpool.routing.router import RoutingDecisionTrace, RoutingExclusion
 from eggpool.security.redaction import redact_error_detail
+from eggpool.transcoder.context import TranscodeContext
 from eggpool.transcoder.protocol import BodyTranscoder, select_transcoder
 from eggpool.transcoder.streaming import select_streaming_transcoder
 
@@ -78,7 +79,6 @@ if TYPE_CHECKING:
     from eggpool.models.config import AppConfig
     from eggpool.quota.estimation import QuotaEstimator
     from eggpool.routing.router import Router
-    from eggpool.transcoder.context import TranscodeContext
     from eggpool.transcoder.policy import TranscoderPolicy
 
 logger = logging.getLogger(__name__)
@@ -322,7 +322,7 @@ class RequestCoordinator:
             logger.info(
                 "transcoded_request request_id=%s client=%s upstream=%s "
                 "account=%s provider=%s native_match=%s "
-                "loss_warnings=%d bytes_in=%d",
+                "loss_warnings=%d bytes_in=%d bytes_out=%d",
                 context.request_id,
                 context.protocol,
                 context.upstream_protocol,
@@ -331,6 +331,11 @@ class RequestCoordinator:
                 context.protocol == context.upstream_protocol,
                 len(warnings),
                 len(context.original_body),
+                # v1: the coordinator does not track response bytes
+                # consistently across non-streaming, streaming, and
+                # error paths, so this is a constant for now. Future
+                # work: thread bytes_emitted through to here.
+                0,
             )
 
     async def execute(self, context: ProxyRequestContext) -> PreparedProxyResponse:
@@ -2163,6 +2168,38 @@ class RequestCoordinator:
                 ("x-proxy-request-id", context.request_id),
                 ("x-proxy-attempt-count", str(attempt_num)),
             ]
+            # Phase 2: re-render upstream error in client protocol when
+            # transcoding is active. The streaming pre-stream 4xx path
+            # raises ``_NonRetryableUpstreamError`` with the raw upstream
+            # body and never reaches the per-execution reencode branch
+            # in ``_execute_non_streaming`` / ``_execute_streaming``.
+            if context.transcode_required and (
+                context.upstream_protocol != context.protocol
+            ):
+                transcoder = select_transcoder(
+                    client_protocol=context.protocol,
+                    upstream_protocol=context.upstream_protocol,
+                )
+                if transcoder is not None:
+                    try:
+                        err_payload_obj: object = json.loads(body)
+                    except (json.JSONDecodeError, ValueError):
+                        err_payload_obj = None
+                    err_payload: dict[str, Any] | None
+                    if isinstance(err_payload_obj, dict):
+                        err_payload = cast("dict[str, Any]", err_payload_obj)
+                    else:
+                        err_payload = None
+                    transcode_ctx = context.transcode_context or TranscodeContext(
+                        request_id=context.request_id,
+                        client_protocol=context.protocol,
+                        upstream_protocol=context.upstream_protocol,
+                    )
+                    _status, err_body, err_warnings = transcoder.reencode_error(
+                        status, err_payload, transcode_ctx
+                    )
+                    body = encode_json_body(err_body)
+                    transcode_ctx.loss_warnings.extend(err_warnings)
             return PreparedProxyResponse(
                 status_code=status,
                 headers=resp_headers,

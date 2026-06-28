@@ -8,6 +8,7 @@ response is rendered as OpenAI.
 
 from __future__ import annotations
 
+import json
 import os
 from typing import TYPE_CHECKING
 
@@ -182,3 +183,49 @@ async def test_minimax_context_protocol_is_set(
     minimax_coordinator._validate_endpoint_or_transcode(context)
     assert context.upstream_protocol == "anthropic"
     assert context.transcode_required is True
+
+
+@pytest.mark.asyncio
+async def test_minimax_streaming_prestream_400_transcodes_error(
+    minimax_coordinator: RequestCoordinator,
+) -> None:
+    """OpenAI streaming client hits an Anthropic 400 pre-stream.
+
+    The streaming pre-stream 4xx path raises ``_NonRetryableUpstreamError``
+    with the raw upstream body. ``_handle_exhausted`` must re-render the
+    body in the OpenAI error envelope before returning to the client so
+    OpenCode / Aider / etc. receive a shape they can parse.
+    """
+    context = ProxyRequestContext(
+        request_id="minimax-stream-err",
+        protocol="openai",
+        model_id="MiniMax-M2.7",
+        streaming=True,
+        original_body=(
+            b'{"model":"MiniMax-M2.7/minimax","stream":true,'
+            b'"messages":[{"role":"user","content":"Hi"}]}'
+        ),
+        incoming_headers={"content-type": "application/json"},
+        provider_id="minimax",
+    )
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}/anthropic/messages").mock(
+            return_value=httpx.Response(
+                400,
+                json={
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": "messages: too few tokens",
+                    },
+                },
+            )
+        )
+        response = await minimax_coordinator.execute(context)
+
+    assert response.status_code == 400
+    body = json.loads(response.body)
+    assert "error" in body, body
+    assert body["error"]["message"] == "messages: too few tokens"
+    assert body["error"]["type"] == "invalid_request_error"
+    assert body["error"].get("code") == "invalid_request_error", body

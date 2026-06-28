@@ -698,7 +698,11 @@ async def handle_grouped_timeseries_json(
     return JSONResponse(content=payload)
 
 
-async def handle_runtime(request: Request, theme: str | None = None) -> Response:
+async def handle_runtime(
+    request: Request,
+    period: str | None = "24h",
+    theme: str | None = None,
+) -> Response:
     """Render the runtime metrics page."""
     _get_dashboard_config(request)
     runtime_metrics = request.app.state.runtime_metrics
@@ -706,7 +710,7 @@ async def handle_runtime(request: Request, theme: str | None = None) -> Response
     from eggpool.stats import StatsService
 
     stats_service = StatsService(db)
-    transcoding_stats = await stats_service.get_transcoding_stats("24h")
+    transcoding_stats = await stats_service.get_transcoding_stats(period)
     snapshot = await runtime_metrics.snapshot()
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
     return HTMLResponse(
@@ -717,6 +721,7 @@ async def handle_runtime(request: Request, theme: str | None = None) -> Response
             current_theme=current_theme,
             update_info=_get_update_info(request),
             transcoding_stats=transcoding_stats,
+            period=period or "24h",
         )
     )
 
