@@ -65,6 +65,7 @@ from eggpool.retry.classification import RetryCategory, RetryClassifier
 from eggpool.routing.router import RoutingDecisionTrace, RoutingExclusion
 from eggpool.security.redaction import redact_error_detail
 from eggpool.transcoder.protocol import BodyTranscoder, select_transcoder
+from eggpool.transcoder.streaming import select_streaming_transcoder
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -1337,6 +1338,10 @@ class RequestCoordinator:
         async def _stream() -> AsyncIterator[bytes]:
             nonlocal bytes_emitted, first_byte_ms
             try:
+                streaming_transcoder = select_streaming_transcoder(
+                    client_protocol=context.protocol,
+                    upstream_protocol=context.upstream_protocol,
+                )
                 async for chunk in upstream_response.aiter_bytes():
                     if first_byte_ms == 0.0:
                         first_byte_ms = (time.monotonic() - reference) * 1000
@@ -1344,10 +1349,17 @@ class RequestCoordinator:
                     observer.observe(chunk)
                     bytes_emitted = observer.bytes_emitted
 
-                    yield chunk
+                    if streaming_transcoder is not None:
+                        for out_chunk in await streaming_transcoder.feed(chunk):
+                            yield out_chunk
+                    else:
+                        yield chunk
 
-                # Stream completed - flush observer to process any remaining data
+                # Stream completed - flush observer and transcoder
                 observer.flush()
+                if streaming_transcoder is not None:
+                    for out_chunk in await streaming_transcoder.flush():
+                        yield out_chunk
                 usage_result = observer.usage
 
                 upstream_connect_ms_value = context.upstream_connect_ms

@@ -57,7 +57,7 @@ All four must pass with zero errors.
 - **Request lifecycle**: `RequestCoordinator` orchestrates endpoint → routing → persistence → dispatch → finalization. See `architecture/README.md` § Request Lifecycle.
 - **Multi-provider architecture**: provider-suffixed model IDs (`model-id/provider-id`), `ProviderClientPool`, `OutboundClientManager`. See `architecture/README.md` § Multi-Provider Architecture.
 - **Provider contracts**: `compose_provider_url()` is the single source of truth for upstream URLs. See `architecture/README.md` § Provider Contracts and § Provider Contract Rendering.
-- **Protocol transcoding**: transparent request/response format conversion between OpenAI and Anthropic protocols. Phase 2 body translation is implemented in `src/eggpool/transcoder/`. See `architecture/README.md` § Protocol Transcoding.
+- **Protocol transcoding**: transparent request/response format conversion between OpenAI and Anthropic protocols. Phase 2 body translation and Phase 3 streaming SSE translation are implemented in `src/eggpool/transcoder/`. See `architecture/README.md` § Protocol Transcoding.
 - **Database invariants**: SQLite WAL, single-connection serialization, `async with db.transaction():` for all DML. See `architecture/README.md` § Database.
 - **Quota and routing**: tier-based routing via `routing_priority`, `QuotaFairScorer`, upstream-authoritative suppression. See `architecture/README.md` § Quota and Routing.
 - **Error hierarchy**: `AggregatorError` → `UpstreamError` → specific subclasses. See `architecture/README.md` § Error Hierarchy.

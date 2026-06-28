@@ -17,7 +17,7 @@ src/eggpool/
 ├── models/            # Pydantic config, domain, API, and database models
 ├── providers/         # ProviderClientPool, pproxy transport, connect CLI
 ├── proxy/             # Transparent proxy, SSE observer, usage extraction
-├── transcoder/        # Protocol transcoding (OpenAI ↔ Anthropic request/response)
+├── transcoder/        # Protocol transcoding (OpenAI ↔ Anthropic, body + streaming)
 ├── quota/             # Quota estimation, reservations, scoring
 ├── request/           # RequestCoordinator, finalizers, body reader, limit enforcement
 ├── retry/             # Error classification and failover
@@ -152,8 +152,17 @@ body translation is implemented in `src/eggpool/transcoder/`. The
 coordinator pre-translates the request body before dispatch, decodes the
 response body on success, and re-renders non-retryable errors in the client
 protocol. Loss-of-information warnings are accumulated on
-`TranscodeContext.loss_warnings` and logged at request completion. Tool calls,
-vision, thinking, streaming, and routing widening are out of scope (phases 3–6).
+`TranscodeContext.loss_warnings` and logged at request completion.
+
+**Phase 3 — Streaming translation**: SSE stream translation in both
+directions for text-only streams. `StreamingTranscoder` implementations
+(`OpenAIToAnthropicStreaming`, `AnthropicToOpenAIStreaming`) translate
+upstream SSE frames into client-format bytes chunk-by-chunk.
+`select_streaming_transcoder()` in `streaming.py` is the dispatch source
+of truth. The coordinator's `_build_stream_generator` applies the transcoder
+when the client and upstream protocols differ. Same-protocol requests pass
+through unchanged. Tool calls, thinking, and routing widening are out of
+scope (phases 4–6).
 
 Token counts are mapped between protocol-specific fields (e.g.,
 `input_tokens` → `prompt_tokens`, `cache_creation_input_tokens` →
