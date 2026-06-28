@@ -151,6 +151,7 @@ class Router:
         provider_id: str | None = None,
         protocol: str | None = None,
         transcode_eligibility: set[str] | None = None,
+        client_protocol: str | None = None,
     ) -> AccountRuntimeState | None:
         """Select an account for the given model.
 
@@ -171,7 +172,11 @@ class Router:
                 by_name={state.name: state for state in tier_states},
             )
             scores = await self._score_eligible_accounts(
-                tier_candidates, model_id, request_estimates
+                tier_candidates,
+                model_id,
+                request_estimates,
+                client_protocol=client_protocol,
+                transcode_eligibility=transcode_eligibility,
             )
             best = self._scorer.select_account(scores)
             if best is not None:
@@ -206,6 +211,7 @@ class Router:
         provider_id: str | None = None,
         protocol: str | None = None,
         transcode_eligibility: set[str] | None = None,
+        client_protocol: str | None = None,
     ) -> list[tuple[AccountRuntimeState, RoutingScore]]:
         """Select multiple accounts for failover, ranked by score.
 
@@ -234,7 +240,11 @@ class Router:
                 by_name={state.name: state for state in tier_states},
             )
             scores = await self._score_eligible_accounts(
-                tier_candidates, model_id, request_estimates
+                tier_candidates,
+                model_id,
+                request_estimates,
+                client_protocol=client_protocol,
+                transcode_eligibility=transcode_eligibility,
             )
             ranked = self._scorer.rank_accounts(scores)
             for score in ranked:
@@ -282,12 +292,20 @@ class Router:
         candidates: RoutingCandidates,
         model_id: str,
         request_estimates: dict[str, int] | None,
+        *,
+        client_protocol: str | None = None,
+        transcode_eligibility: set[str] | None = None,
     ) -> list[RoutingScore]:
         """Score eligible states with their current active request counts.
 
         Annotates each returned score with the tier (``routing_priority``)
         from the corresponding ``AccountRuntimeState`` so callers can
         short-circuit at tier boundaries during failover.
+
+        When *client_protocol* and *transcode_eligibility* are provided,
+        each score is annotated with ``requires_transcode`` so the
+        ``QuotaFairScorer`` can rank native-protocol accounts above
+        transcodable ones when ``prefer_native`` is enabled.
         """
         active_requests = {
             state.name: state.active_request_count for state in candidates.states
@@ -302,6 +320,13 @@ class Router:
             state = candidates.by_name.get(score.account_name)
             if state is not None:
                 score.tier = state.routing_priority
+                if client_protocol is not None and transcode_eligibility is not None:
+                    score.requires_transcode = not (
+                        self._registry.account_supports_protocol(
+                            score.account_name,
+                            client_protocol,
+                        )
+                    )
         return scores
 
     async def record_usage(

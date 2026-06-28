@@ -98,6 +98,49 @@ def render_proxy_response(result: PreparedProxyResponse) -> Response:
     return response
 
 
+def _infer_upstream_protocol(
+    catalog: Any,  # noqa: ANN401
+    model_id: str,
+    client_protocol: str,
+    provider_id: str | None = None,
+) -> str | None:
+    """Infer the upstream protocol for transcoding, or None on miss.
+
+    Thin wrapper around the catalog cache helpers that does not raise
+    when no transcodable route exists.  Used by the preflight
+    context-limit check to speculatively validate upstream limits.
+    """
+    model_protocols = catalog.cache.get_model_protocols(
+        model_id,
+        provider_id=provider_id,
+    )
+    if client_protocol in model_protocols:
+        return client_protocol
+
+    transcoder_policy = getattr(catalog, "_transcoder_policy", None)
+    # Also check app.state if available
+    if transcoder_policy is None:
+        return None
+    if not transcoder_policy.enabled:
+        return None
+
+    candidates = catalog.cache.get_transcodable_protocols(
+        model_id,
+        client_protocol=client_protocol,
+    )
+    if not candidates:
+        return None
+
+    counts = {
+        p: catalog.cache.count_eligible_accounts_for_protocol(
+            model_id,
+            p,
+        )
+        for p in candidates
+    }
+    return max(sorted(counts), key=lambda p: counts[p]) if counts else None
+
+
 async def handle_proxy_request(
     request: Request,
     endpoint: ProxyEndpointConfig,
@@ -162,6 +205,49 @@ async def handle_proxy_request(
                 message=str(exc),
                 error_type="invalid_request_error",
             )
+
+        # Second pass: when transcoding is active, also validate
+        # the translated payload against upstream limits.
+        transcoder_policy = getattr(request.app.state, "transcoder_policy", None)
+        if transcoder_policy is not None and transcoder_policy.enabled:
+            upstream_protocol = _infer_upstream_protocol(
+                catalog,
+                model_id,
+                endpoint.protocol,
+                provider_id,
+            )
+            if upstream_protocol is not None and upstream_protocol != endpoint.protocol:
+                from eggpool.transcoder.protocol import select_transcoder
+
+                _transcoder = select_transcoder(
+                    client_protocol=endpoint.protocol,
+                    upstream_protocol=upstream_protocol,
+                )
+                if _transcoder is not None:
+                    _ctx = TranscodeContext(
+                        request_id="preflight",
+                        client_protocol=endpoint.protocol,
+                        upstream_protocol=upstream_protocol,
+                    )
+                    translated, _ = _transcoder.encode_request(
+                        payload,
+                        _ctx,
+                    )
+                    try:
+                        _check_context_limits(
+                            model_id=model_id,
+                            provider_id=provider_id,
+                            body=json.dumps(translated).encode(),
+                            payload=translated,
+                            protocol=cast("ProtocolName", upstream_protocol),
+                            catalog_cache=catalog.cache,
+                        )
+                    except ContextLimitExceededError as exc:
+                        return endpoint.error_response(
+                            status_code=400,
+                            message=str(exc),
+                            error_type="invalid_request_error",
+                        )
 
     stream_value = payload.get("stream", False)
     if stream_value is not None and not isinstance(stream_value, bool):

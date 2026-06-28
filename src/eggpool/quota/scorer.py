@@ -43,6 +43,7 @@ class RoutingScore:
     # boundary. Zero means "no tier assigned" (e.g., synthesized
     # elsewhere).
     tier: int = 0
+    requires_transcode: bool = False
 
     @property
     def final_score(self) -> float:
@@ -64,6 +65,7 @@ class QuotaFairScorer:
     mean_weight: float = 0.15
     inflight_penalty_per_request: float = 0.01
     health_penalty_value: float = 10.0
+    prefer_native: bool = True
     quota_estimator: QuotaEstimator | None = None
     health_manager: HealthManager | None = None
 
@@ -185,7 +187,15 @@ class QuotaFairScorer:
             return None
 
         # Sort by final score (lower is better)
-        eligible.sort(key=lambda s: s.final_score)
+        if self.prefer_native:
+            eligible.sort(
+                key=lambda s: (
+                    s.final_score,
+                    0 if not s.requires_transcode else 1,
+                )
+            )
+        else:
+            eligible.sort(key=lambda s: s.final_score)
 
         # Find near-ties (within tiebreaker_range of best score)
         best_score = eligible[0].final_score
@@ -202,7 +212,16 @@ class QuotaFairScorer:
 
     def rank_accounts(self, scores: list[RoutingScore]) -> list[RoutingScore]:
         """Rank accounts by score for fallback selection (lower is better)."""
-        ranked = sorted(scores, key=lambda s: s.final_score)
+        if self.prefer_native:
+            ranked = sorted(
+                scores,
+                key=lambda s: (
+                    s.final_score,
+                    0 if not s.requires_transcode else 1,
+                ),
+            )
+        else:
+            ranked = sorted(scores, key=lambda s: s.final_score)
         if self.tiebreaker_range <= 0 or len(ranked) < 2:
             return ranked
 

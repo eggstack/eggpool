@@ -169,6 +169,7 @@ class SelectedAttempt:
     estimated_microdollars: int
     attempt_number: int
     provider_id: str = DEFAULT_PROVIDER_ID
+    requires_transcode: bool = False
 
 
 @dataclass(slots=True)
@@ -475,7 +476,12 @@ class RequestCoordinator:
                     if context.attempted_accounts
                     else None,
                     provider_id=context.provider_id,
-                    protocol=context.protocol,
+                    protocol=context.upstream_protocol,
+                    transcode_eligibility=(
+                        {context.protocol, context.upstream_protocol}
+                        if context.transcode_required
+                        else None
+                    ),
                 )
                 if not remaining:
                     break
@@ -567,7 +573,12 @@ class RequestCoordinator:
                 if context.attempted_accounts
                 else None,
                 provider_id=context.provider_id,
-                protocol=context.protocol,
+                protocol=context.upstream_protocol,
+                transcode_eligibility=(
+                    {context.protocol, context.upstream_protocol}
+                    if context.transcode_required
+                    else None
+                ),
             )
 
             if not eligible_account_names:
@@ -613,7 +624,13 @@ class RequestCoordinator:
                 request_estimates=request_estimates,
                 exclude_accounts=exclude if exclude else None,
                 provider_id=context.provider_id,
-                protocol=context.protocol,
+                protocol=context.upstream_protocol,
+                transcode_eligibility=(
+                    {context.protocol, context.upstream_protocol}
+                    if context.transcode_required
+                    else None
+                ),
+                client_protocol=context.protocol,
             )
             for candidate_state, score in ranked_candidates:
                 # Acquire the circuit-breaker probe slot. If the
@@ -645,7 +662,13 @@ class RequestCoordinator:
                     request_estimates=request_estimates,
                     exclude_accounts=exclude if exclude else None,
                     provider_id=context.provider_id,
-                    protocol=context.protocol,
+                    protocol=context.upstream_protocol,
+                    transcode_eligibility=(
+                        {context.protocol, context.upstream_protocol}
+                        if context.transcode_required
+                        else None
+                    ),
+                    client_protocol=context.protocol,
                 )
                 if (
                     selected_state is not None
@@ -876,6 +899,7 @@ class RequestCoordinator:
             estimated_microdollars=estimated_microdollars,
             attempt_number=attempt_number,
             provider_id=resolved_provider_id,
+            requires_transcode=context.transcode_required,
         )
 
     async def _execute_upstream(
@@ -2179,11 +2203,53 @@ class RequestCoordinator:
         attempted = context.attempted_accounts
         return all(state.name in attempted for state in enabled)
 
+    def _resolve_upstream_protocol(
+        self,
+        context: ProxyRequestContext,
+    ) -> str | None:
+        """Determine the upstream protocol for transcoding.
+
+        Returns the protocol to use upstream, or None when no
+        transcodable route exists. When the client protocol matches
+        a resolved model protocol, returns that protocol directly
+        (native match, no transcoding needed).
+        """
+        model_protocols = self._catalog.cache.get_model_protocols(
+            context.model_id,
+            provider_id=context.provider_id,
+        )
+        if context.protocol in model_protocols:
+            return context.protocol  # native match
+
+        if self._transcoder_policy is None or not self._transcoder_policy.enabled:
+            return None  # behaviour identical to today
+
+        # Find transcodable protocols among all eligible accounts.
+        candidates = self._catalog.cache.get_transcodable_protocols(
+            context.model_id,
+            client_protocol=context.protocol,
+        )
+        if not candidates:
+            return None
+
+        # Choose the protocol with the largest eligible-account set.
+        counts = {
+            p: self._catalog.cache.count_eligible_accounts_for_protocol(
+                context.model_id,
+                p,
+            )
+            for p in candidates
+        }
+        # Prefer the protocol with the most eligible accounts;
+        # ties broken by alphabetical order.
+        return max(sorted(counts), key=lambda p: counts[p])
+
     def _validate_endpoint(self, context: ProxyRequestContext) -> None:
         """Validate that the endpoint matches the model's protocol.
 
         Raises ProtocolMismatchError (which callers render as 400) when
-        the wrong endpoint is used for a known model.
+        the wrong endpoint is used for a known model and no transcodable
+        route exists.
         """
         if not self._catalog.cache.has_model(context.model_id):
             raise ModelNotFoundError(context.model_id)
@@ -2198,10 +2264,17 @@ class RequestCoordinator:
                 f"Model {context.model_id!r} has unresolved protocol"
             )
 
-        from eggpool.catalog.protocols import ModelProtocolResolver
-
         if context.protocol in model_protocols:
             return
+
+        # Check if transcoding can bridge the protocol gap.
+        upstream_protocol = self._resolve_upstream_protocol(context)
+        if upstream_protocol is not None:
+            context.upstream_protocol = upstream_protocol
+            context.transcode_required = True
+            return
+
+        from eggpool.catalog.protocols import ModelProtocolResolver
 
         resolver = ModelProtocolResolver()
         model_protocol = sorted(model_protocols)[0]

@@ -574,6 +574,25 @@ class ModelCatalogCache:
         protocols.discard(client_protocol)
         return protocols
 
+    def count_eligible_accounts_for_protocol(
+        self,
+        model_id: str,
+        protocol: str,
+    ) -> int:
+        """Count enabled accounts whose provider supports *protocol* and
+        has the model in its catalogue."""
+        supporting = self.get_supporting_accounts(model_id)
+        n = 0
+        for account_name in supporting:
+            provider_id = self._account_providers.get(account_name)
+            if provider_id is None:
+                continue
+            if self._config is not None:
+                provider = self._config.providers.get(provider_id)
+                if provider is not None and protocol in provider.protocols:
+                    n += 1
+        return n
+
     def is_model_available(self, model_id: str, eligible_accounts: set[str]) -> bool:
         """Check if a model is available from any eligible account."""
         if model_id not in self._models:
