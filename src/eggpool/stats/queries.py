@@ -1632,11 +1632,11 @@ async def fetch_transcoding_stats(
     count_sql = """
     SELECT
         COUNT(*) as total,
-        SUM(CASE WHEN protocol = COALESCE(upstream_protocol, protocol)
-            THEN 1 ELSE 0 END) as native_count,
-        SUM(CASE WHEN protocol != COALESCE(upstream_protocol, protocol)
+        COALESCE(SUM(CASE WHEN protocol = COALESCE(upstream_protocol, protocol)
+            THEN 1 ELSE 0 END), 0) as native_count,
+        COALESCE(SUM(CASE WHEN protocol != COALESCE(upstream_protocol, protocol)
             AND upstream_protocol IS NOT NULL
-            THEN 1 ELSE 0 END) as transcoded_count
+            THEN 1 ELSE 0 END), 0) as transcoded_count
     FROM requests
     WHERE started_at >= ? AND started_at < ?
     """
