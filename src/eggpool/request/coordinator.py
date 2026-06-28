@@ -2305,6 +2305,10 @@ class RequestCoordinator:
         if upstream_protocol is not None:
             context.upstream_protocol = upstream_protocol
             context.transcode_required = True
+            # Sync the transcode_context so execute() can detect the
+            # protocol mismatch and select the correct transcoder.
+            if context.transcode_context is not None:
+                context.transcode_context.upstream_protocol = upstream_protocol
             return
 
         from eggpool.catalog.protocols import ModelProtocolResolver
