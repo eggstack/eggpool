@@ -169,7 +169,7 @@ async def test_minimax_openai_to_anthropic_transcode(
 async def test_minimax_context_protocol_is_set(
     minimax_coordinator: RequestCoordinator,
 ) -> None:
-    """After _validate_endpoint, context.upstream_protocol is 'anthropic'."""
+    """After _validate_endpoint_or_transcode, upstream_protocol is 'anthropic'."""
     context = ProxyRequestContext(
         request_id="minimax-proto",
         protocol="openai",
@@ -179,6 +179,6 @@ async def test_minimax_context_protocol_is_set(
         incoming_headers={"content-type": "application/json"},
         provider_id="minimax",
     )
-    minimax_coordinator._validate_endpoint(context)
+    minimax_coordinator._validate_endpoint_or_transcode(context)
     assert context.upstream_protocol == "anthropic"
     assert context.transcode_required is True

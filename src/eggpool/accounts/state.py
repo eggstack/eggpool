@@ -50,6 +50,11 @@ class AccountRuntimeState:
     active_request_count: int = 0
     reserved_microdollars: int = 0
 
+    # Transient: populated by the router when the candidate was included
+    # via the widened selector (provider supports the model's native
+    # protocol but not the client protocol).  Not persisted.
+    requires_transcode: bool = False
+
     # Account-specific model availability: model_id -> available
     model_availability: dict[str, bool] = field(  # pyright: ignore[reportUnknownVariableType]
         default_factory=dict

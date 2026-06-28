@@ -324,7 +324,7 @@ class RequestCoordinator:
         # Section 10.5: Validate endpoint before durable selection.
         # Reject mismatched protocol endpoints before creating any
         # request, reservation, or attempt row.
-        self._validate_endpoint(context)
+        self._validate_endpoint_or_transcode(context)
 
         # Phase 2: select the body transcoder when client and upstream
         # protocols differ and transcoding is enabled.
@@ -2244,8 +2244,14 @@ class RequestCoordinator:
         # ties broken by alphabetical order.
         return max(sorted(counts), key=lambda p: counts[p])
 
-    def _validate_endpoint(self, context: ProxyRequestContext) -> None:
+    def _validate_endpoint_or_transcode(self, context: ProxyRequestContext) -> None:
         """Validate that the endpoint matches the model's protocol.
+
+        When the client protocol does not match the model's native
+        protocol but a transcodable route exists (transcoder enabled and
+        an account supports the native protocol), the mismatch is
+        accepted and ``upstream_protocol`` / ``transcode_required`` are
+        set on the context.
 
         Raises ProtocolMismatchError (which callers render as 400) when
         the wrong endpoint is used for a known model and no transcodable

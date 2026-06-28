@@ -671,6 +671,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     router.quota_estimator.default_unknown_reservation_microdollars = (
         config.routing.unknown_request_reservation_microdollars
     )
+    router._scorer.prefer_native = config.transcoder.prefer_native  # pyright: ignore[reportPrivateUsage]
 
     # 18. Load configured model price overrides into estimator
     for model_id, override in config.model_overrides.items():

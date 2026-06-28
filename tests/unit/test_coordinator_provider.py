@@ -360,7 +360,9 @@ class TestValidateEndpointProviderAware:
         cache.add_account_support("shared-model", "acct1")
         coordinator = self._make_coordinator(cache)
 
-        coordinator._validate_endpoint(_make_context(model_id="shared-model"))
+        coordinator._validate_endpoint_or_transcode(
+            _make_context(model_id="shared-model")
+        )
 
     def test_rejects_when_only_other_protocol_is_available(self) -> None:
         cache = ModelCatalogCache()
@@ -372,7 +374,9 @@ class TestValidateEndpointProviderAware:
         coordinator = self._make_coordinator(cache)
 
         with pytest.raises(ProtocolMismatchError):
-            coordinator._validate_endpoint(_make_context(model_id="shared-model"))
+            coordinator._validate_endpoint_or_transcode(
+                _make_context(model_id="shared-model")
+            )
 
     def test_rejects_unresolved_provider_specific_protocol(self) -> None:
         cache = ModelCatalogCache()
@@ -384,7 +388,9 @@ class TestValidateEndpointProviderAware:
         coordinator = self._make_coordinator(cache)
 
         with pytest.raises(ModelUnavailableError):
-            coordinator._validate_endpoint(_make_context(model_id="shared-model"))
+            coordinator._validate_endpoint_or_transcode(
+                _make_context(model_id="shared-model")
+            )
 
 
 class TestDispatchUrlMatchesComposeProviderUrl:

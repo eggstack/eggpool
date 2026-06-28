@@ -199,10 +199,12 @@ class QuotaFairScorer:
 
         # Find near-ties (within tiebreaker_range of best score)
         best_score = eligible[0].final_score
+        best_requires_transcode = eligible[0].requires_transcode
         near_ties = [
             s
             for s in eligible
             if abs(s.final_score - best_score) < self.tiebreaker_range
+            and s.requires_transcode == best_requires_transcode
         ]
 
         if len(near_ties) > 1:
@@ -229,10 +231,12 @@ class QuotaFairScorer:
         index = 0
         while index < len(ranked):
             base_score = ranked[index].final_score
+            base_requires_transcode = ranked[index].requires_transcode
             group: list[RoutingScore] = []
             while (
                 index < len(ranked)
                 and abs(ranked[index].final_score - base_score) < self.tiebreaker_range
+                and ranked[index].requires_transcode == base_requires_transcode
             ):
                 group.append(ranked[index])
                 index += 1
