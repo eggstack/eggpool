@@ -247,13 +247,23 @@ class TestPositiveLookupCached:
 
 class TestEffectiveTtlCap:
     @pytest.mark.asyncio
-    async def test_stale_if_error_controls_extra_window(self) -> None:
+    async def test_stale_window_refreshes_first_when_resolution_succeeds(
+        self,
+    ) -> None:
         cfg = _make_config(positive_ttl_seconds=10, stale_if_error_seconds=3600)
         cache = DnsCache(cfg)
         fake_time = [1000.0]
+        call_count = 0
 
         def _monotonic() -> float:
             return fake_time[0]
+
+        def _mock_getaddrinfo(host, port, family):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return [(socket.AF_INET, 0, 0, "", ("1.2.3.4", 0))]
+            return [(socket.AF_INET, 0, 0, "", ("5.6.7.8", 0))]
 
         with (
             patch(
@@ -262,14 +272,15 @@ class TestEffectiveTtlCap:
             ),
             patch(
                 "eggpool.providers.dns_cache.socket.getaddrinfo",
-                return_value=[(socket.AF_INET, 0, 0, "", ("1.2.3.4", 0))],
+                side_effect=_mock_getaddrinfo,
             ),
         ):
             await cache.resolve("example.com", socket.AF_INET)
             fake_time[0] += 20
             result = await cache.resolve("example.com", socket.AF_INET)
-        assert result == ["1.2.3.4"]
-        assert cache.stale_hits == 1
+        assert result == ["5.6.7.8"]
+        assert call_count == 2
+        assert cache.stale_hits == 0
 
     @pytest.mark.asyncio
     async def test_zero_stale_if_error_means_no_stale_window(self) -> None:
@@ -439,6 +450,7 @@ class TestStaleIfError:
             result2 = await cache.resolve("example.com", socket.AF_INET)
         assert result1 == ["1.2.3.4"]
         assert result2 == ["1.2.3.4"]
+        assert call_count == 2
         assert cache.stale_hits == 1
 
     @pytest.mark.asyncio
@@ -511,7 +523,8 @@ class TestStaleIfError:
         ):
             await cache.resolve("example.com", socket.AF_INET)
             # expires_at=1010, stale_until=1020
-            # T=1015: expired but within stale window
+            # T=1015: expired but within stale window; refresh fails,
+            # so stale addresses are returned.
             fake_time[0] += 15
             result = await cache.resolve("example.com", socket.AF_INET)
             assert result == ["1.2.3.4"]
@@ -986,7 +999,7 @@ class TestSnapshot:
         snap = cache.snapshot()
         host_stats = snap["by_host"]["host.com/ipv4"]
         assert host_stats["stale_hits"] == 1
-        assert host_stats["misses"] == 2
+        assert host_stats["misses"] == 3
 
     @pytest.mark.asyncio
     async def test_snapshot_hosts_positive_entry(self) -> None:

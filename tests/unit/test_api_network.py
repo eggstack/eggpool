@@ -202,6 +202,44 @@ def test_dns_cache_shape(app_with_key: FastAPI) -> None:
     assert isinstance(dns["by_host"], dict)
 
 
+def test_resolutions_total_counts_cache_misses_not_hits() -> None:
+    class _RuntimeMetrics:
+        async def snapshot(self) -> dict[str, Any]:
+            return {
+                "outbound_client": {},
+                "provider_client_pool": {},
+                "dns_cache": {
+                    "enabled": True,
+                    "size": 1,
+                    "hits": 90,
+                    "misses": 10,
+                    "negative_hits": 2,
+                    "stale_hits": 1,
+                    "evictions": 0,
+                    "resolution_errors": {},
+                    "by_host": {},
+                    "hosts": [],
+                },
+            }
+
+    app = FastAPI()
+    app.state.config = _build_config(api_key="test-key-12345678")
+    app.state.runtime_metrics = _RuntimeMetrics()
+    register_network_routes(app)
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/network/diagnostics",
+        headers={"Authorization": "Bearer test-key-12345678"},
+    )
+
+    assert response.status_code == 200
+    dns = response.json()["dns_cache"]
+    assert dns["hits_total"] == 90
+    assert dns["misses_total"] == 10
+    assert dns["resolutions_total"] == 10
+
+
 def test_hosts_is_list(app_with_key: FastAPI) -> None:
     client = TestClient(app_with_key)
     response = client.get(

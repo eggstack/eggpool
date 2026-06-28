@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import contextlib
 import ipaddress
 import logging
 import socket
@@ -19,6 +20,12 @@ if TYPE_CHECKING:
     from eggpool.models.config import DnsCacheConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _consume_future_exception(future: asyncio.Future[list[str] | None]) -> None:
+    """Mark singleflight exceptions observed when no waiter consumes them."""
+    with contextlib.suppress(asyncio.CancelledError, Exception):
+        future.exception()
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,6 +203,7 @@ class DnsCache:
             return None
 
         key = DnsCacheKey(hostname=normalized, address_family=address_family)
+        stale_fallback: PositiveCacheEntry | None = None
         async with self._lock:
             entry = self._cache.get(key)
             if entry is not None:
@@ -208,16 +216,11 @@ class DnsCache:
                         self._record(key, "hits")
                         return entry.addresses
                     if now < entry.stale_until:
-                        self.stale_hits += 1
-                        self._record(key, "stale_hits")
-                        logger.debug(
-                            "DNS cache stale-if-error hit for %s (%s)",
-                            key.hostname,
-                            "ipv4" if key.address_family == socket.AF_INET else "ipv6",
-                        )
-                        return entry.addresses
-                    del self._cache[key]
-                    self._evictions_by_reason["ttl_expiry"] += 1
+                        stale_fallback = entry
+                        del self._cache[key]
+                    else:
+                        del self._cache[key]
+                        self._evictions_by_reason["ttl_expiry"] += 1
                 else:
                     if now < entry.expires_at:
                         self.negative_hits += 1
@@ -232,6 +235,7 @@ class DnsCache:
             is_owner = key not in self._singleflight
             if is_owner:
                 future = asyncio.get_event_loop().create_future()
+                future.add_done_callback(_consume_future_exception)
                 self._singleflight[key] = future
             else:
                 future = self._singleflight[key]
@@ -256,6 +260,11 @@ class DnsCache:
             )
             async with self._lock:
                 self._singleflight.pop(key, None)
+                fallback_addresses = self._restore_stale_fallback(key, stale_fallback)
+            if fallback_addresses is not None:
+                if not future.cancelled():
+                    future.set_result(fallback_addresses)
+                return fallback_addresses
             exc = httpcore.ConnectTimeout(error_msg)
             if not future.cancelled():
                 future.set_exception(exc)
@@ -263,6 +272,16 @@ class DnsCache:
         except Exception as exc:
             async with self._lock:
                 self._singleflight.pop(key, None)
+                fallback_addresses = self._restore_stale_fallback(key, stale_fallback)
+            if fallback_addresses is not None:
+                logger.debug(
+                    "DNS cache stale-if-error hit for %s (%s)",
+                    key.hostname,
+                    "ipv4" if key.address_family == socket.AF_INET else "ipv6",
+                )
+                if not future.cancelled():
+                    future.set_result(fallback_addresses)
+                return fallback_addresses
             if not future.cancelled():
                 future.set_exception(exc)
             raise
@@ -271,6 +290,20 @@ class DnsCache:
         if not future.cancelled():
             future.set_result(addresses)
         return addresses
+
+    def _restore_stale_fallback(
+        self,
+        key: DnsCacheKey,
+        fallback: PositiveCacheEntry | None,
+    ) -> list[str] | None:
+        if fallback is None:
+            return None
+        self.stale_hits += 1
+        self._record(key, "stale_hits")
+        self._cache.pop(key, None)
+        self._cache[key] = fallback
+        self._cache.move_to_end(key)
+        return fallback.addresses
 
     async def _dns_lookup(
         self,

@@ -87,7 +87,7 @@ The Runtime dashboard page (`/runtime`) shows a Network section with:
     "negative_hits_total": 0,
     "stale_hits_total": 0,
     "evictions_total": 0,
-    "resolutions_total": 1212,
+    "resolutions_total": 8,
     "errors_total": 0
   },
   "hosts": [
@@ -115,6 +115,7 @@ Key fields:
 
 - **`outbound_clients.scopes`**: per-scope build counts. `global` is the shared `OutboundClientManager` client; `provider:*` entries are per-provider clients from `ProviderClientPool`.
 - **`outbound_clients.per_host_requests`**: request counts by target host for the shared outbound client (update checks, catalog fetches).
+- **`dns_cache.resolutions_total`**: cache misses that required a resolver refresh. Cache hits are reported separately and are not counted as DNS resolutions.
 - **`hosts`**: per-cache-entry metadata including `state` (positive/negative), `expires_in_seconds` (TTL remaining), `stale_available` (stale-if-error window), and `last_error_kind` (for negative entries).
 
 This endpoint is always auth-gated regardless of `dashboard.public` setting.
@@ -165,11 +166,11 @@ When running EggPool on a host with Pi-hole or another DNS logger, you can valid
 
 ### Cache expiry
 
-The positive TTL is 300 seconds by default. After expiry, a fresh resolver call is made. You can observe this by watching the Pi-hole query count: it should spike briefly every 5 minutes for each cached host, then return to zero.
+The positive TTL is 300 seconds by default. After expiry, EggPool makes a fresh resolver call. If that refresh fails and the entry is still inside `stale_if_error_seconds`, EggPool temporarily reuses the previous addresses and records a stale hit. You can observe normal refreshes by watching the Pi-hole query count: it should spike briefly every 5 minutes for each cached host, then return to zero.
 
 ## Known caveats
 
-- **CDNs**: some provider endpoints use CDN-backed hostnames that resolve to different IPs based on geographic location or load. The cache stores resolved IPs per hostname, so CDN-driven IP changes may be stale. The stale-if-error mechanism (3600s) provides a fallback.
+- **CDNs**: some provider endpoints use CDN-backed hostnames that resolve to different IPs based on geographic location or load. The cache refreshes after the positive TTL, then uses stale addresses only if the refresh fails and the stale-if-error window is still open.
 - **Split-horizon DNS**: if your DNS resolver returns different IPs based on the source host (common in corporate environments), the cache may store a private-network IP that becomes stale if the host moves between networks (e.g., VPN connect/disconnect). Disable the cache in this scenario.
 - **VPNs**: similar to split-horizon DNS, VPN tunnel establishment changes the routing table but not cached DNS results. Restart EggPool after VPN state changes, or disable the cache.
 - **Custom local DNS**: if you run a custom DNS server that performs filtering or logging, the cache reduces visibility into EggPool's DNS traffic. This is by design (the cache exists to reduce resolver load), but it means Pi-hole logs will show fewer queries than actual DNS lookups performed.

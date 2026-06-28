@@ -51,7 +51,7 @@ async def handle_network_diagnostics(request: Request) -> JSONResponse:
             "stale_hits_total": dns.get("stale_hits", 0),
             "evictions_total": dns.get("evictions", 0),
             "evictions_by_reason": dns.get("evictions_by_reason", {}),
-            "resolutions_total": (dns.get("misses", 0) + dns.get("hits", 0)),
+            "resolutions_total": dns.get("misses", 0),
             "errors_total": sum(dns.get("resolution_errors", {}).values())
             if isinstance(dns.get("resolution_errors"), dict)
             else 0,
