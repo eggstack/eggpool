@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Bidirectional OpenAI ↔ Anthropic protocol transcoding.** When `[transcoder] enabled = true`, requests from clients using one protocol can be forwarded to upstream accounts that speak only the other. Initial scope is text-only requests and responses, plus streaming SSE. Tool calls, vision, and extended thinking land in a follow-up release. See `docs/transcoding.md` for the full translation table.
+- New `eggpool stats transcoding [--period 1d|7d|30d]` subcommand for transcoding observability.
+- New "Transcoding" card on the `/runtime` dashboard page.
+- Structured INFO log per transcoded request with `request_id`, protocol direction, account, and loss-warning count.
+- Boot-time INFO line when `[transcoder] enabled = true` so operators see the configuration at startup.
+
+### Changed
+
+- `RequestCoordinator` now carries `upstream_protocol` alongside `protocol` on `ProxyRequestContext`. Behaviour is identical when `[transcoder] enabled = false`.
+
 ## [0.3.5] - 2026-06-27
 
 ### Changed

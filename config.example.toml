@@ -40,13 +40,21 @@ ping_retain_days = 7
 #                          # emits one provider-suffixed entry per provider.
 
 # ─── Protocol Transcoding ────────────────────────────────────────────
-# When a client sends a request in one protocol (e.g., Anthropic) but the
-# selected provider only supports another (e.g., OpenAI), EggPool can
-# transparently translate the request and response formats.
-# [transcoder]
-# enabled = false           # enable protocol transcoding (default: false)
-# loss_policy = "warn"      # "warn" or "reject" for loss-of-information
-# prefer_native = true      # prefer native-protocol accounts in routing
+# When enabled, requests from clients using one protocol (OpenAI or
+# Anthropic) can be forwarded to upstream accounts whose provider
+# declares only the other protocol. EggPool translates the request body,
+# the streaming SSE events, and the response body bidirectionally.
+#
+# Use this when you want to mix protocol-native and protocol-transcoded
+# accounts (e.g. opencode-go native plus MiniMax International
+# Anthropic-only, both reachable from OpenCode clients).
+#
+# Default: enabled = false. The behaviour before this flag existed is
+# preserved exactly.
+[transcoder]
+enabled = false
+loss_policy = "warn"      # "warn" or "reject" for loss-of-information
+prefer_native = true      # prefer native-protocol accounts in routing
 
 [routing]
 strategy = "quota_fair"

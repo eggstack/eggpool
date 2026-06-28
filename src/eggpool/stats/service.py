@@ -1270,6 +1270,15 @@ class StatsService:
             self._set_dashboard_cache(key, result)
         return result
 
+    async def get_transcoding_stats(self, period: str | None = None) -> dict[str, Any]:
+        """Get protocol transcoding statistics for a time window."""
+        time_range = resolve_time_range(period)
+        return await queries.fetch_transcoding_stats(
+            self._db,
+            time_range.start_str(),
+            time_range.end_str(),
+        )
+
 
 _BUCKET_SIZES: dict[str, int] = {
     "hour": 3600,

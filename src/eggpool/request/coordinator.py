@@ -299,8 +299,12 @@ class RequestCoordinator:
             raise UpstreamError("No HTTP client available for upstream requests")
         return self._client
 
-    def _log_transcode_warnings(self, context: ProxyRequestContext) -> None:
-        """Emit structured logs for any transcode loss-of-information warnings."""
+    def _log_transcode_warnings(
+        self,
+        context: ProxyRequestContext,
+        selected: SelectedAttempt | None = None,
+    ) -> None:
+        """Emit structured logs for transcoded requests and loss warnings."""
         if context.transcode_context is None:
             return
         warnings = context.transcode_context.loss_warnings
@@ -312,6 +316,21 @@ class RequestCoordinator:
                 context.protocol,
                 context.upstream_protocol,
                 warnings,
+            )
+        # Phase 5: per-request structured log for every transcoded request
+        if selected is not None:
+            logger.info(
+                "transcoded_request request_id=%s client=%s upstream=%s "
+                "account=%s provider=%s native_match=%s "
+                "loss_warnings=%d bytes_in=%d",
+                context.request_id,
+                context.protocol,
+                context.upstream_protocol,
+                selected.account_name,
+                selected.provider_id,
+                context.protocol == context.upstream_protocol,
+                len(warnings),
+                len(context.original_body),
             )
 
     async def execute(self, context: ProxyRequestContext) -> PreparedProxyResponse:
@@ -417,7 +436,7 @@ class RequestCoordinator:
                 result = await self._execute_upstream(
                     context, selected, attempt_num, transcoder=transcoder
                 )
-                self._log_transcode_warnings(context)
+                self._log_transcode_warnings(context, selected=selected)
                 return result
             except _RetryableUpstreamError as err:
                 last_error = err
@@ -543,7 +562,7 @@ class RequestCoordinator:
             last_selected,
             health_applied=health_applied,
         )
-        self._log_transcode_warnings(context)
+        self._log_transcode_warnings(context, selected=last_selected)
         return result
 
     async def _select_and_persist_attempt(
@@ -931,6 +950,7 @@ class RequestCoordinator:
                     error_class="CancelledError",
                     upstream_latency_ms=elapsed_ms,
                     bytes_received=len(context.original_body),
+                    upstream_protocol=context.upstream_protocol,
                 ),
             )
             raise
@@ -1110,6 +1130,7 @@ class RequestCoordinator:
                     provider_cost_source=(
                         usage.reported_cost_source if usage else None
                     ),
+                    upstream_protocol=context.upstream_protocol,
                 ),
             )
 
@@ -1444,6 +1465,7 @@ class RequestCoordinator:
                         coordinator_overhead_ms=coordinator_overhead_ms_value,
                         provider_cost_microdollars=usage_result.reported_cost_microdollars,
                         provider_cost_source=usage_result.reported_cost_source,
+                        upstream_protocol=context.upstream_protocol,
                     ),
                 )
 
@@ -1534,6 +1556,7 @@ class RequestCoordinator:
                                         provider_cost_source=(
                                             usage_result.reported_cost_source
                                         ),
+                                        upstream_protocol=context.upstream_protocol,
                                     ),
                                 )
                             ),
@@ -1595,6 +1618,7 @@ class RequestCoordinator:
                             usage_result.reported_cost_microdollars
                         ),
                         provider_cost_source=usage_result.reported_cost_source,
+                        upstream_protocol=context.upstream_protocol,
                     ),
                 )
                 raise
@@ -2021,6 +2045,7 @@ class RequestCoordinator:
                     resp_headers, _UPSTREAM_REQUEST_ID_HEADERS
                 ),
                 bytes_received=len(context.original_body),
+                upstream_protocol=context.upstream_protocol,
             ),
         )
 
@@ -2082,6 +2107,7 @@ class RequestCoordinator:
                     upstream_latency_ms=elapsed_ms,
                     health_already_applied=health_already_applied,
                     bytes_received=len(context.original_body),
+                    upstream_protocol=context.upstream_protocol,
                 ),
             )
         elif context.client_metadata.get("db_request_id") is not None:
@@ -2120,6 +2146,7 @@ class RequestCoordinator:
                     error_detail=error_detail,
                     upstream_latency_ms=elapsed_ms,
                     bytes_received=len(context.original_body),
+                    upstream_protocol=context.upstream_protocol,
                 ),
             )
 

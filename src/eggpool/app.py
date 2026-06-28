@@ -938,7 +938,22 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # 21. Start background tasks
     await supervisor.start_all()
 
-    # 22. Startup complete
+    # 22. Transcoding status
+    if config.transcoder.enabled:
+        logger.info(
+            "Protocol transcoding ENABLED — clients may reach upstream "
+            "accounts whose provider.protocols does not match the client "
+            "protocol. loss_policy=%s prefer_native=%s",
+            config.transcoder.loss_policy,
+            config.transcoder.prefer_native,
+        )
+    else:
+        logger.debug(
+            "Protocol transcoding disabled (default). Set [transcoder] "
+            "enabled = true in config.toml to allow cross-protocol routing."
+        )
+
+    # 23. Startup complete
     logger.info(
         "Application started (%d accounts, %d models). "
         "Restart the process to apply configuration changes.",

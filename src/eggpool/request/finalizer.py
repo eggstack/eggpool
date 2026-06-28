@@ -77,6 +77,7 @@ class FinalizationData:
     # produced the value for audit/observability.
     provider_cost_microdollars: int | None = None
     provider_cost_source: str | None = None
+    upstream_protocol: str | None = None
 
 
 class RequestFinalizer:
@@ -265,6 +266,7 @@ class RequestFinalizer:
                 provider_cost_source=data.provider_cost_source,
                 local_cost_microdollars=local_cost_microdollars,
                 local_cost_exactness=local_cost_exactness,
+                upstream_protocol=data.upstream_protocol,
             )
 
             # 4. Finalize attempt only if request transitioned and attempt

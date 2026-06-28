@@ -2476,6 +2476,83 @@ def stats_recompute_costs(
     sys.exit(asyncio.run(_runner()))
 
 
+@stats.command("transcoding")
+@click.option(
+    "--period",
+    default="24h",
+    help="Time period: 1h, 24h (default), 7d, or 30d.",
+)
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help="Output as JSON.",
+)
+@click.pass_context
+def stats_transcoding(
+    ctx: click.Context,
+    period: str,
+    as_json: bool,
+) -> None:
+    """Show protocol transcoding statistics."""
+    import asyncio
+
+    config_path_raw = ctx.obj.get("config_path") if ctx.obj else None
+    config = AppConfig.from_toml(config_path_raw) if config_path_raw else None
+    if config is None:
+        click.echo(
+            "No config available; pass --config or set EGGPOOL_CONFIG.", err=True
+        )
+        sys.exit(2)
+
+    async def _runner() -> int:
+        from eggpool.db.connection import Database
+        from eggpool.stats import StatsService
+
+        db = Database(
+            path=config.database.path,
+            busy_timeout_ms=config.database.busy_timeout_ms,
+            wal=config.database.wal,
+            synchronous=config.database.synchronous,
+        )
+        await db.connect()
+        try:
+            svc = StatsService(db)
+            stats_data = await svc.get_transcoding_stats(period)
+        finally:
+            await db.disconnect()
+
+        if as_json:
+            import json as json_mod
+
+            click.echo(json_mod.dumps(stats_data, indent=2, default=str))
+            return 0
+
+        total = stats_data.get("total", 0)
+        native_count = stats_data.get("native_count", 0)
+        transcoded_count = stats_data.get("transcoded_count", 0)
+        per_direction = stats_data.get("per_direction", {})
+
+        click.echo(f"Period: {period}")
+        click.echo(f"Total requests: {total:,}")
+        click.echo(f"Native (no transcoding): {native_count:,}")
+        click.echo(f"Transcoded: {transcoded_count:,}")
+
+        if per_direction:
+            click.echo("")
+            click.echo(f"{'Direction':<30} {'Count':>10}")
+            click.echo(f"{'-' * 30} {'-' * 10}")
+            for (client, upstream), count in sorted(
+                per_direction.items(), key=lambda x: x[1], reverse=True
+            ):
+                direction = f"{client}→{upstream}"
+                click.echo(f"{direction:<30} {count:>10,}")
+
+        return 0
+
+    sys.exit(asyncio.run(_runner()))
+
+
 def _format_change_rows(rows: list[dict[str, Any]]) -> str:
     """Format recompute-costs output as a small text table."""
     headers = ("model", "provider", "old_μ$", "new_μ$", "Δ μ$")

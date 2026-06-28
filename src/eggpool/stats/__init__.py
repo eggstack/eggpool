@@ -22,6 +22,7 @@ from eggpool.stats.queries import (
     fetch_routing_selection_breakdown,
     fetch_summary,
     fetch_timeseries,
+    fetch_transcoding_stats,
 )
 from eggpool.stats.service import (
     PERIOD_PRESETS,
@@ -54,6 +55,7 @@ __all__ = [
     "fetch_routing_selection_breakdown",
     "fetch_summary",
     "fetch_timeseries",
+    "fetch_transcoding_stats",
     "resolve_period",
     "resolve_time_range",
 ]

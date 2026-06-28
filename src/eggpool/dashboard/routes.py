@@ -702,6 +702,11 @@ async def handle_runtime(request: Request, theme: str | None = None) -> Response
     """Render the runtime metrics page."""
     _get_dashboard_config(request)
     runtime_metrics = request.app.state.runtime_metrics
+    db = request.app.state.db
+    from eggpool.stats import StatsService
+
+    stats_service = StatsService(db)
+    transcoding_stats = await stats_service.get_transcoding_stats("24h")
     snapshot = await runtime_metrics.snapshot()
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
     return HTMLResponse(
@@ -711,8 +716,23 @@ async def handle_runtime(request: Request, theme: str | None = None) -> Response
             available_themes=available,
             current_theme=current_theme,
             update_info=_get_update_info(request),
+            transcoding_stats=transcoding_stats,
         )
     )
+
+
+async def handle_transcoding_stats_json(request: Request) -> Response:
+    """Return transcoding statistics as JSON."""
+    _get_dashboard_config(request)
+    db = request.app.state.db
+    from starlette.responses import JSONResponse as _JSONResponse
+
+    from eggpool.stats import StatsService
+
+    period = request.query_params.get("period", "24h")
+    stats_service = StatsService(db)
+    data = await stats_service.get_transcoding_stats(period)
+    return _JSONResponse(content=data)
 
 
 def register_dashboard_routes(app: Any, require_auth: bool = False) -> None:
@@ -742,6 +762,7 @@ def register_dashboard_routes(app: Any, require_auth: bool = False) -> None:
         ("/runtime", handle_runtime, HTMLResponse),
         ("/api/timeseries", handle_timeseries_json, JSONResponse),
         ("/api/timeseries/grouped", handle_grouped_timeseries_json, JSONResponse),
+        ("/api/stats/transcoding", handle_transcoding_stats_json, JSONResponse),
     ):
         app.add_api_route(
             path=path,
@@ -766,6 +787,7 @@ __all__ = [
     "handle_runtime",
     "handle_timeseries",
     "handle_timeseries_json",
+    "handle_transcoding_stats_json",
     "handle_traces",
     "register_dashboard_routes",
 ]

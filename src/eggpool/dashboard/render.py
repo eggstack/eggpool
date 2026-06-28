@@ -2757,6 +2757,7 @@ def render_runtime(
     available_themes: list[str] | None = None,
     current_theme: str = "",
     update_info: Any | None = None,
+    transcoding_stats: dict[str, Any] | None = None,
 ) -> str:
     """Render the runtime metrics page."""
     server = _as_dict(snapshot.get("server"))
@@ -2771,6 +2772,18 @@ def render_runtime(
     dns_cache = _as_dict(snapshot.get("dns_cache"))
     load = _as_dict(snapshot.get("load"))
     dispatch = _as_dict(snapshot.get("dispatch_overhead"))
+
+    # Transcoding stats
+    tc_total: int = int(transcoding_stats.get("total", 0)) if transcoding_stats else 0
+    tc_native: int = (
+        int(transcoding_stats.get("native_count", 0)) if transcoding_stats else 0
+    )
+    tc_transcoded: int = (
+        int(transcoding_stats.get("transcoded_count", 0)) if transcoding_stats else 0
+    )
+    tc_per_direction: dict[tuple[str, str], int] = (
+        dict(transcoding_stats.get("per_direction", {})) if transcoding_stats else {}
+    )
 
     # Server section
     pid = server.get("pid", "—")
@@ -3178,6 +3191,57 @@ def render_runtime(
 </section>
 """
 
+    # Transcoding card
+    tc_card = ""
+    if transcoding_stats is not None:
+        tc_direction_rows = ""
+        for (client, upstream), count in sorted(
+            tc_per_direction.items(), key=lambda x: x[1], reverse=True
+        ):
+            direction = f"{escape(client)} → {escape(upstream)}"
+            tc_direction_rows += (
+                f"<tr><td>{direction}</td><td class='num'>{format_int(count)}</td></tr>"
+            )
+        tc_direction_table = ""
+        if tc_direction_rows:
+            tc_direction_table = (
+                '<table class="data compact"><thead><tr>'
+                + _th("Direction")
+                + _th("Count", priority=2)
+                + "</tr></thead><tbody>"
+                + tc_direction_rows
+                + "</tbody></table>"
+            )
+        tc_card = f"""
+<section class="panel">
+  <h3>Transcoding (24h)</h3>
+  <section class="cards">
+    {
+            _render_metric_card(
+                title="Total requests",
+                metric=format_int(tc_total),
+                sub="in period",
+            )
+        }
+    {
+            _render_metric_card(
+                title="Native",
+                metric=format_int(tc_native),
+                sub="no transcoding",
+            )
+        }
+    {
+            _render_metric_card(
+                title="Transcoded",
+                metric=format_int(tc_transcoded),
+                sub="cross-protocol",
+            )
+        }
+  </section>
+  {tc_direction_table}
+</section>
+"""
+
     body = f"""
 <h2>Runtime</h2>
 <p class="sub">Process-level diagnostics for the running EggPool instance.</p>
@@ -3198,6 +3262,8 @@ def render_runtime(
 {routing_cards}
 
 {network_cards}
+
+{tc_card}
 
 <section class="panel">
   <h3>Health states</h3>

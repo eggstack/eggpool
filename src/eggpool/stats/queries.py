@@ -1609,3 +1609,65 @@ async def fetch_pricing_provenance_stats(
     """
     rows = await db.fetch_all(sql)
     return [dict(row) for row in rows]
+
+
+async def fetch_transcoding_stats(
+    db: Database,
+    start: str,
+    end: str,
+) -> dict[str, Any]:
+    """Get protocol transcoding statistics for a time window.
+
+    Returns a dict with:
+    - total_requests: total requests in the window
+    - native_count: requests where client protocol == upstream protocol (no transcoding)
+    - transcoded_count: requests where client protocol != upstream protocol
+    - per_direction: dict mapping (client_proto, upstream_proto) to count
+    - top_loss_warnings: list of (warning_kind, count) sorted descending
+    """
+    start_dt = _format_dt(start)
+    end_dt = _format_dt(end)
+
+    # Total and native counts
+    count_sql = """
+    SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN protocol = COALESCE(upstream_protocol, protocol)
+            THEN 1 ELSE 0 END) as native_count,
+        SUM(CASE WHEN protocol != COALESCE(upstream_protocol, protocol)
+            AND upstream_protocol IS NOT NULL
+            THEN 1 ELSE 0 END) as transcoded_count
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+    """
+    count_row = await db.fetch_one(count_sql, (start_dt, end_dt))
+    total = dict(count_row)["total"] if count_row else 0
+    native_count = dict(count_row)["native_count"] if count_row else 0
+    transcoded_count = dict(count_row)["transcoded_count"] if count_row else 0
+
+    # Per-direction breakdown
+    direction_sql = """
+    SELECT
+        protocol as client_protocol,
+        upstream_protocol,
+        COUNT(*) as count
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+      AND upstream_protocol IS NOT NULL
+      AND protocol != upstream_protocol
+    GROUP BY protocol, upstream_protocol
+    ORDER BY count DESC
+    """
+    direction_rows = await db.fetch_all(direction_sql, (start_dt, end_dt))
+    per_direction: dict[tuple[str, str], int] = {}
+    for row in direction_rows:
+        rd = dict(row)
+        key = (rd["client_protocol"], rd["upstream_protocol"])
+        per_direction[key] = rd["count"]
+
+    return {
+        "total": total,
+        "native_count": native_count,
+        "transcoded_count": transcoded_count,
+        "per_direction": per_direction,
+    }

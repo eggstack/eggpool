@@ -147,6 +147,8 @@ When a provider-suffixed model routes to a provider whose `protocols` list does 
 
 **Phase 4 — Routing eligibility widening**: when `[transcoder] enabled = true`, the routing layer widens the candidate set to include accounts whose `provider.protocols` includes the model's native protocol even if it does not include the client protocol. `_validate_endpoint` checks for transcodable routes before raising `ProtocolMismatchError`. The `_resolve_upstream_protocol` method determines which protocol to use upstream based on the largest eligible-account set. `prefer_native = true` (default) keeps native-protocol accounts ranked above transcodable ones via a secondary sort key in `QuotaFairScorer`. The two-pass context-limit check in `api/proxy_request.py` validates both client-side and upstream limits when transcoding is active.
 
+**Phase 5 — Operator controls and docs**: the default `[transcoder]` config block is documented in `config.example.toml`. `eggpool stats transcoding [--period 1d|7d|30d] [--json]` reports transcoded request counts per direction and loss-warning summaries. The dashboard `/runtime` page includes a "Transcoding" card with total transcoded requests, direction breakdown, and top loss warnings. Boot-time INFO line fires when `[transcoder] enabled = true`. Structured INFO log per transcoded request includes `request_id`, `client_protocol`, `upstream_protocol`, `account`, `provider`, `native_match`, and `loss_warnings` count. See `docs/transcoding.md`.
+
 ### Provider Contract Rendering
 
 `src/eggpool/providers/contract.py` centralizes:

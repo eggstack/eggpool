@@ -46,6 +46,7 @@ See [Deployment](docs/deployment.md) for alternative install methods (pipx, manu
 | `eggpool rehash` | Restart to apply config changes |
 | `eggpool stop` | Stop the running server |
 | `eggpool models refresh` | Refresh the model catalog |
+| `eggpool stats transcoding` | Show protocol transcoding statistics |
 | `eggpool accounts status` | Show configured account status |
 | `eggpool runtime-status` | Print runtime health summary |
 | `eggpool backup` | Create a timestamped backup |
@@ -92,6 +93,31 @@ Use `eggpool connect` for interactive provider setup. See [docs/providers.md](do
 
 Full config reference: [`config.example.toml`](config.example.toml) | [docs/providers.md](docs/providers.md)
 
+## Protocol transcoding
+
+When `[transcoder] enabled = true`, EggPool bridges OpenAI Chat Completions and Anthropic Messages bidirectionally so a single client ecosystem (e.g. OpenCode, which speaks only OpenAI) can reach Anthropic-only upstreams (e.g. MiniMax International at `api.minimax.io/anthropic`) and vice versa.
+
+What gets translated:
+
+- Request bodies (text-only in v1)
+- Streaming SSE events
+- Non-retryable error envelopes
+- Usage and cost fields (preserved exactly as the upstream reported them)
+
+What is dropped with a structured warning log:
+
+- OpenAI fields with no Anthropic equivalent (`logit_bias`, `presence_penalty`, `top_logprobs`, etc.)
+- Anthropic fields with no OpenAI equivalent (`top_k`, `cache_control`)
+
+What is **not** translated in v1 (lands in phase 6):
+
+- Tool calls / function calling
+- Vision / image content
+- Extended thinking / reasoning
+- Structured outputs (`response_format` / `json_schema`)
+
+See [docs/transcoding.md](docs/transcoding.md) for the full translation table and known limitations.
+
 ## API Endpoints
 
 | Method | Path | Description |
@@ -117,6 +143,7 @@ When `[dashboard].enabled = true`, a multi-page dashboard is served at `/` with 
 | Firewall configuration | [docs/firewall.md](docs/firewall.md) |
 | Filesystem layout | [docs/filesystem-layout.md](docs/filesystem-layout.md) |
 | Network & DNS diagnostics | [docs/network-diagnostics.md](docs/network-diagnostics.md) |
+| Protocol transcoding | [docs/transcoding.md](docs/transcoding.md) |
 
 ## Development
 
