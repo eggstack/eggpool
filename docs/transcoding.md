@@ -186,7 +186,7 @@ Before enabling transcoding in production:
 
 1. **Review your client mix.** Are your clients actually mixed-protocol? If every client speaks OpenAI, transcoding does nothing.
 
-2. **Set `loss_policy = "warn"` first.** Run in warn mode for at least a week to see what fields are being dropped. Check logs for `transcode_loss_warnings` entries.
+2. **Set `loss_policy = "warn"` first.** Run in warn mode for at least a week to see what fields are being dropped. Check logs for `transcode.loss_warnings` entries.
 
 3. **Audit loss warnings.** If a dropped field is critical for your use case (e.g., `top_k` for Anthropic-specific tuning), either:
    - Switch to a native-protocol provider for that model, or
@@ -201,7 +201,7 @@ Before enabling transcoding in production:
 
 6. **Verify `prefer_native`.** With `prefer_native = true`, native-protocol accounts always win during routing. This is usually what you want. Set to `false` only if you need routing_priority to override protocol affinity.
 
-7. **Set `loss_policy = "reject"` only if you've confirmed no critical fields are dropped.** In reject mode, any request that would lose information returns a 400 error.
+7. **Set `loss_policy = "reject"` only if you've confirmed no critical request fields are dropped.** In reject mode, lossy request-body translation returns a 400 before dispatch. Loss warnings discovered while decoding upstream responses are still logged and shown in diagnostics.
 
 ## Loss Warning Reference
 
@@ -264,9 +264,9 @@ Lower `max_entries` to trade catalog completeness for steady-state RSS on memory
 
 3. **All-or-nothing per deployment.** When `enabled = true`, transcoding applies to every account. Per-account opt-out is not supported in v1.
 
-4. **No partial translation.** If a request contains both translatable and non-translatable features (e.g., text + tool calls), the entire request is translated. Non-translatable parts are dropped with warnings — the transcoder does not refuse the request unless `loss_policy = "reject"`.
+4. **No partial translation.** If a request contains both translatable and non-translatable features (e.g., text + tool calls), the entire request is translated. Non-translatable request parts are dropped with warnings — the transcoder refuses the request only when `loss_policy = "reject"`.
 
-5. **`loss_policy = "reject"` is opt-in and strict.** Any single loss warning on the request causes a 400 response. This can be surprising — use warn mode first to audit.
+5. **`loss_policy = "reject"` is opt-in and strict for requests.** Any single request translation loss warning causes a 400 response before upstream dispatch. This can be surprising — use warn mode first to audit.
 
 6. **Anthropic error types are best-effort.** The error type mapping covers the common cases but not every edge case. Unrecognised error types map to `api_error` (Anthropic) or `invalid_request_error` (OpenAI).
 

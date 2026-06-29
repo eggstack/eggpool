@@ -23,8 +23,9 @@ class TranscoderPolicy(BaseModel):
         default="warn",
         description=(
             "How to handle loss-of-information during transcoding. 'warn' "
-            "emits a structured log per request. 'reject' returns a 400. "
-            "Only 'warn' is implemented in v1."
+            "emits a structured log per request. 'reject' returns a 400 "
+            "when request-body translation would drop or alter fields before "
+            "upstream dispatch."
         ),
     )
 

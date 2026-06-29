@@ -295,6 +295,7 @@ async def app(config: AppConfig) -> AsyncGenerator[FastAPI]:
 
     catalog = CatalogService(config, registry, db, httpx_client)
     application.state.catalog = catalog
+    application.state.transcoder_policy = config.transcoder
 
     router = Router(registry, catalog)
     application.state.router = router
@@ -442,6 +443,43 @@ async def test_openai_client_anthropic_upstream_roundtrip(
     assert body["usage"]["prompt_tokens"] == 10
     assert body["usage"]["completion_tokens"] == 5
     assert body["usage"]["total_tokens"] == 15
+
+
+@pytest.mark.asyncio
+async def test_loss_policy_reject_blocks_lossy_request_before_dispatch(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+) -> None:
+    """Reject mode returns 400 before upstream dispatch when fields are dropped."""
+    app.state.transcoder_policy = TranscoderPolicy(
+        enabled=True,
+        loss_policy="reject",
+        prefer_native=True,
+    )
+    request_body = {
+        "model": "claude-3",
+        "messages": [{"role": "user", "content": "Hello!"}],
+        "max_tokens": 100,
+        "top_p": 0.9,
+    }
+
+    with respx.mock:
+        upstream = respx.post(f"{UPSTREAM_BASE}{ANTHROPIC_PATH}").mock(
+            return_value=httpx.Response(200, json={})
+        )
+
+        response = await client.post(
+            "/v1/chat/completions",
+            json=request_body,
+            headers=auth_headers,
+        )
+
+    assert response.status_code == 400
+    assert upstream.called is False
+    body = response.json()
+    assert "top_p" in body["error"]["message"]
+    assert "dropped_field" in body["error"]["message"]
 
 
 # ---------------------------------------------------------------------------
