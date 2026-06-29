@@ -169,36 +169,46 @@ class TestWriteHelperContract:
             await db.disconnect()
 
     @pytest.mark.asyncio
-    async def test_child_task_cannot_inherit_transaction(self) -> None:
-        """A child task cannot execute writes that require transaction ownership.
+    async def test_child_task_inherits_transaction_context_for_writes(
+        self,
+    ) -> None:
+        """A child task spawned inside an active transaction inherits the
+        transaction context (via ContextVar snapshot) and can perform
+        writes that piggyback on the parent's transaction.
 
-        Even if the child task inherits the ContextVar depth via asyncio
-        task spawning, the task identity differs and the helper must
-        reject the write.
+        This is the deliberate semantic change behind the SQLite-truth
+        nesting fix: shielded or ``create_task`` children no longer
+        have to open their own ``db.transaction()`` (which would
+        deadlock waiting for the parent's lock) -- they can simply
+        do writes that commit atomically with the parent. The
+        connection lock still serializes all SQL through aiosqlite's
+        worker thread, so concurrent writes remain atomic.
         """
         db = Database(path=":memory:")
         await db.connect()
         await _run_migrations(db)
         try:
-            capture: list[Exception | None] = [None]
 
             async def child_writer() -> None:
-                try:
-                    await db.execute_write(
-                        "INSERT INTO accounts "
-                        "(name, api_key_env, enabled, weight) "
-                        "VALUES (?, ?, 1, 1.0)",
-                        ("child", "X"),
-                    )
-                except Exception as exc:
-                    capture[0] = exc
+                await db.execute_write(
+                    "INSERT INTO accounts "
+                    "(name, api_key_env, enabled, weight) "
+                    "VALUES (?, ?, 1, 1.0)",
+                    ("child", "X"),
+                )
 
             async with db.transaction():
+                await db.execute_write(
+                    "INSERT INTO accounts "
+                    "(name, api_key_env, enabled, weight) "
+                    "VALUES (?, ?, 1, 1.0)",
+                    ("parent", "X"),
+                )
                 child = asyncio.create_task(child_writer())
                 await child
 
-            assert capture[0] is not None
-            assert isinstance(capture[0], DatabaseError)
+            rows = await db.fetch_all("SELECT name FROM accounts ORDER BY id")
+            assert [r["name"] for r in rows] == ["parent", "child"]
         finally:
             await db.disconnect()
 
@@ -269,27 +279,30 @@ class TestRawCursorContract:
             await db.disconnect()
 
     @pytest.mark.asyncio
-    async def test_execute_cursor_in_child_task_without_tx_fails(self) -> None:
-        """A child task without its own transaction cannot use raw cursor."""
+    async def test_execute_cursor_in_child_task_inside_parent_tx_works(
+        self,
+    ) -> None:
+        """A child task spawned inside an active parent transaction can
+        use ``_execute_cursor`` (the raw cursor helper). The child
+        inherits the transaction context via ContextVar snapshot,
+        so it piggybacks on the parent's transaction.
+        """
         db = Database(path=":memory:")
         await db.connect()
         await _run_migrations(db)
         try:
-            capture: list[Exception | None] = [None]
 
             async def child_cursor() -> None:
-                try:
-                    await db._execute_cursor(  # pyright: ignore[reportPrivateUsage]
-                        "SELECT 1"
-                    )
-                except Exception as exc:
-                    capture[0] = exc
+                cursor = await db._execute_cursor(  # pyright: ignore[reportPrivateUsage]
+                    "SELECT 1 AS x"
+                )
+                row = await cursor.fetchone()
+                assert row is not None
+                assert row[0] == 1
 
             async with db.transaction():
                 child = asyncio.create_task(child_cursor())
                 await child
-            assert capture[0] is not None
-            assert isinstance(capture[0], DatabaseError)
         finally:
             await db.disconnect()
 

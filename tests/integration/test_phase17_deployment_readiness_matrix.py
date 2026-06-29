@@ -118,24 +118,24 @@ class TestWriteHelperContract:
         runner = MigrationRunner(db)
         await runner.run()
         try:
-            with pytest.raises(DatabaseError, match="owned transaction"):
+            with pytest.raises(DatabaseError, match="active transaction"):
                 await db.execute_write(
                     "INSERT INTO accounts (name, api_key_env) VALUES (?, ?)",
                     ("no-tx", "ENV"),
                 )
-            with pytest.raises(DatabaseError, match="owned transaction"):
+            with pytest.raises(DatabaseError, match="active transaction"):
                 await db.execute_insert(
                     "INSERT INTO accounts (name, api_key_env) VALUES (?, ?)",
                     ("no-tx", "ENV"),
                 )
-            with pytest.raises(DatabaseError, match="owned transaction"):
+            with pytest.raises(DatabaseError, match="active transaction"):
                 await db.execute_returning("SELECT 1 AS x")
         finally:
             await db.disconnect()
 
     @pytest.mark.asyncio
     async def test_writes_inside_transaction_succeed(self) -> None:
-        """The write helpers succeed inside an owned transaction."""
+        """The write helpers succeed inside an active transaction."""
         db = Database(path=":memory:")
         await db.connect()
         runner = MigrationRunner(db)
@@ -312,7 +312,7 @@ class TestRawCursorRestriction:
         runner = MigrationRunner(db)
         await runner.run()
         try:
-            with pytest.raises(DatabaseError, match="owned transaction"):
+            with pytest.raises(DatabaseError, match="active transaction"):
                 await db._execute_cursor(  # type: ignore[reportPrivateUsage]
                     "SELECT 1"
                 )

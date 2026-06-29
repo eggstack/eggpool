@@ -25,9 +25,11 @@ class Database:
     """Async wrapper around aiosqlite with pragma configuration.
 
     All SQL operations are serialized through a single connection lock.
-    Transaction ownership is tracked per-task to allow nested calls
-    within the same task while preventing child tasks from inheriting
-    transaction ownership.
+    Nesting is detected via SQLite's own connection state
+    (``conn.in_transaction``), not task identity, so calls inside
+    ``asyncio.shield()`` or ``asyncio.create_task()`` correctly
+    piggyback on the outer transaction without issuing a second
+    ``BEGIN`` against the single SQLite connection.
     """
 
     def __init__(
@@ -58,9 +60,33 @@ class Database:
         self._write_ops: int = 0
         self._read_ops: int = 0
         self._total_transactions: int = 0
+        self._total_nested_transactions: int = 0
         self._last_operation_error_class: str | None = None
         self._cumulative_lock_wait_s: float = 0.0
         self._max_lock_wait_s: float = 0.0
+        # Tracks whether the current asyncio.Task is currently
+        # executing inside a ``db.transaction()`` block (outermost
+        # OR nested/piggyback). Used by ``_require_transaction_owner``
+        # and ``vacuum()`` to gate writes and special operations.
+        # ContextVars are inherited at task creation, so shielded
+        # and ``create_task`` children see ``True`` while their
+        # parent is still inside a transaction -- this is what lets
+        # a shielded child do writes that piggyback on the parent's
+        # transaction without re-issuing ``BEGIN``.
+        self._in_transaction_context: ContextVar[bool] = ContextVar(
+            "database_in_transaction_context",
+            default=False,
+        )
+        # Tracks which asyncio.Task issued ``BEGIN IMMEDIATE`` for
+        # the active outermost transaction on this connection.
+        # Used by ``vacuum()`` to refuse to run when the *current*
+        # task is the lock holder (which would deadlock). Nested
+        # detection in ``transaction()`` itself uses SQLite's
+        # ``conn.in_transaction``, NOT this attribute.
+        self._transaction_owner: ContextVar[asyncio.Task[object] | None] = ContextVar(
+            "database_transaction_owner",
+            default=None,
+        )
 
     @property
     def read_only(self) -> bool:
@@ -131,30 +157,42 @@ class Database:
         return self._conn
 
     def _current_task_owns_transaction(self) -> bool:
-        """Check if the current asyncio task owns the active transaction."""
+        """Return True if the *current* task issued the active ``BEGIN``.
+
+        Tracks the task that issued ``BEGIN IMMEDIATE`` for the
+        active outermost transaction. Used by callers that need
+        to distinguish "this task holds the transaction lock"
+        (and therefore cannot acquire ``_connection_lock``
+        without deadlocking) from "some other task holds the
+        transaction lock". Nesting detection inside
+        ``transaction()`` itself uses ``conn.in_transaction``,
+        NOT this helper, because ``_transaction_owner`` is a
+        per-task ContextVar and would misidentify shielded or
+        ``create_task`` children as non-owners.
+        """
         owner = self._transaction_owner.get()
-        return (
-            owner is not None
-            and owner is asyncio.current_task()
-            and self._transaction_depth.get() > 0
-        )
+        return owner is not None and owner is asyncio.current_task()
 
     def _require_transaction_owner(self) -> None:
-        """Raise if the current task is not the owner of an active transaction.
+        """Raise if the current code path is not inside a transaction.
 
         Every write through :meth:`execute_write`, :meth:`execute_insert`,
         :meth:`execute_returning`, or :meth:`_execute_cursor` MUST be
-        performed inside a ``db.transaction()`` boundary owned by the
-        current task.  This prevents implicit transactions and ensures
-        the connection lock is held for the duration of the operation.
+        performed inside a ``db.transaction()`` boundary. The check is
+        per-task-context (``_in_transaction_context`` ContextVar),
+        which is inherited across ``asyncio.shield()`` and
+        ``asyncio.create_task()`` so shielded/child tasks can do
+        writes that piggyback on the parent's transaction without
+        raising. Unrelated tasks that have not entered a transaction
+        block will raise.
         """
         if self._read_only:
             raise DatabaseError(
                 "Database is opened read-only; writes are not permitted"
             )
-        if not self._current_task_owns_transaction():
+        if not self._in_transaction_context.get():
             raise DatabaseError(
-                "Database writes require an owned transaction; "
+                "Database writes require an active transaction; "
                 "use 'async with db.transaction():'"
             )
 
@@ -189,9 +227,12 @@ class Database:
     async def _connection_access(self) -> AsyncGenerator[None]:
         """Acquire the connection lock for a SQL operation.
 
-        If the current task already owns a transaction, the lock is
-        already held and this is a no-op.  Otherwise the lock is
-        acquired for the duration of the ``yield``.
+        If a transaction is already open on this connection, the
+        outermost ``transaction()`` caller holds ``_connection_lock``
+        and SQL is serialized through aiosqlite's worker thread; this
+        is a no-op so piggybacked reads/writes do not deadlock.
+        Otherwise the lock is acquired for the duration of the
+        ``yield``.
 
         Lock wait time is tracked in contention counters for
         runtime diagnostics.
@@ -362,7 +403,7 @@ class Database:
         """
         if self._read_only:
             raise DatabaseError("VACUUM cannot run on a read-only database")
-        if self._current_task_owns_transaction():
+        if self._in_transaction_context.get():
             raise DatabaseError("VACUUM cannot run while a transaction is active")
         self._refresh_idle_connection_lock()
         async with self._connection_lock:
@@ -403,6 +444,7 @@ class Database:
             "write_ops": self._write_ops,
             "read_ops": self._read_ops,
             "total_transactions": self._total_transactions,
+            "total_nested_transactions": self._total_nested_transactions,
             "last_operation_error_class": self._last_operation_error_class,
             "cumulative_lock_wait_s": round(self._cumulative_lock_wait_s, 4),
             "max_lock_wait_s": round(self._max_lock_wait_s, 4),
@@ -440,42 +482,84 @@ class Database:
     async def transaction(self) -> AsyncGenerator[None]:
         """Execute a serialized write transaction.
 
-        Uses BEGIN IMMEDIATE to serialize writers predictably.
+        Uses ``BEGIN IMMEDIATE`` to serialize writers predictably.
         Repository methods must NOT call commit inside this context;
         the caller owns commit boundaries.
 
-        Supports nesting within the same task context: inner transactions
-        inherit the outer commit boundary. Different tasks always get their
-        own outer transaction.
-        """
-        depth = self._transaction_depth.get()
-        owner = asyncio.current_task()
+        Nesting semantics use SQLite's connection state
+        (``conn.in_transaction``), NOT ``asyncio.current_task()``
+        identity. This matters across ``asyncio.shield()`` and
+        ``asyncio.create_task()`` boundaries: a wrapped coroutine
+        entering ``transaction()`` while an outer caller already
+        issued ``BEGIN IMMEDIATE`` will see ``in_transaction=True``
+        and piggyback on the outer transaction's commit boundary,
+        instead of failing with
+        ``OperationalError: cannot start a transaction within
+        a transaction`` or deadlocking on ``_connection_lock``.
 
-        # Nested detection: depth > 0 AND same task owns it
-        if depth > 0 and self._transaction_owner.get() is owner:
-            token = self._transaction_depth.set(depth + 1)
+        The outermost ``transaction()`` caller is the only one
+        that acquires ``_connection_lock`` and issues
+        ``BEGIN IMMEDIATE`` / ``COMMIT`` / ``ROLLBACK``. Nested
+        callers -- including task-spawned piggybackers -- simply
+        yield and inherit the outer's commit boundary.
+        """
+        if self._conn is None:
+            raise DatabaseError("Database not connected")
+
+        # Fast path: piggyback on an existing transaction.
+        # Reading conn.in_transaction does not require the lock --
+        # it reflects SQLite's authoritative per-connection state,
+        # which aiosqlite mutates only inside the worker thread
+        # that serializes our SQL.
+        if self._conn.in_transaction:
+            self._total_nested_transactions += 1
+            ctx_token = self._in_transaction_context.set(True)
             try:
                 yield
+            except BaseException:
+                # Nested callers MUST NOT commit or roll back the
+                # shared transaction. Re-raise so the outermost
+                # caller observes the failure and decides whether
+                # to roll the whole thing back.
+                raise
             finally:
-                self._transaction_depth.reset(token)
+                self._in_transaction_context.reset(ctx_token)
             return
 
-        # Outer transaction: hold the connection lock for the entire
-        # transaction lifetime so no other task can interleave SQL.
+        # Outermost: serialize via the connection lock and own the
+        # BEGIN / COMMIT boundaries.
         self._refresh_idle_connection_lock()
         async with self._connection_lock:
-            depth_token = self._transaction_depth.set(1)
-            owner_token = self._transaction_owner.set(owner)
-            self._total_transactions += 1
-            try:
-                await self.connection.execute("BEGIN IMMEDIATE")
+            # Re-check under the lock. Another task may have raced
+            # between our initial check and acquiring the lock.
+            if self._conn.in_transaction:
+                self._total_nested_transactions += 1
+                ctx_token = self._in_transaction_context.set(True)
                 try:
                     yield
                 except BaseException:
-                    await self.connection.rollback()
                     raise
-                else:
-                    await self.connection.commit()
-            finally:
+                finally:
+                    self._in_transaction_context.reset(ctx_token)
+                return
+
+            self._total_transactions += 1
+            owner = asyncio.current_task()
+            owner_token = self._transaction_owner.set(owner)
+            ctx_token = self._in_transaction_context.set(True)
+            try:
+                await self._conn.execute("BEGIN IMMEDIATE")
+            except Exception as exc:
+                self._in_transaction_context.reset(ctx_token)
                 self._transaction_owner.reset(owner_token)
-                self._transaction_depth.reset(depth_token)
+                raise DatabaseError(f"Begin transaction failed: {exc}") from exc
+            try:
+                yield
+            except BaseException:
+                await self._conn.rollback()
+                raise
+            else:
+                await self._conn.commit()
+            finally:
+                self._in_transaction_context.reset(ctx_token)
+                self._transaction_owner.reset(owner_token)

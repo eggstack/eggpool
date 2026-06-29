@@ -207,6 +207,10 @@ async def test_concurrent_readers_during_write() -> None:
         db1._connection_lock = asyncio.Lock()
         db1._transaction_depth = ContextVar("database_transaction_depth", default=0)
         db1._transaction_owner = ContextVar("database_transaction_owner", default=None)
+        db1._in_transaction_context = ContextVar(
+            "database_in_transaction_context1", default=False
+        )
+        db1._total_nested_transactions = 0  # type: ignore[reportPrivateUsage]
         db1._write_ops = 0  # type: ignore[reportPrivateUsage]
         db1._read_ops = 0  # type: ignore[reportPrivateUsage]
         db1._total_transactions = 0  # type: ignore[reportPrivateUsage]
@@ -220,6 +224,10 @@ async def test_concurrent_readers_during_write() -> None:
         db2._connection_lock = asyncio.Lock()
         db2._transaction_depth = ContextVar("database_transaction_depth2", default=0)
         db2._transaction_owner = ContextVar("database_transaction_owner2", default=None)
+        db2._in_transaction_context = ContextVar(
+            "database_in_transaction_context2", default=False
+        )
+        db2._total_nested_transactions = 0  # type: ignore[reportPrivateUsage]
         db2._write_ops = 0  # type: ignore[reportPrivateUsage]
         db2._read_ops = 0  # type: ignore[reportPrivateUsage]
         db2._total_transactions = 0  # type: ignore[reportPrivateUsage]
@@ -654,3 +662,178 @@ async def test_cascade_delete_account_removes_account_models() -> None:
         assert after["cnt"] == 0
     finally:
         await database.disconnect()
+
+
+class TestTransactionNestingAcrossTaskBoundaries:
+    """Regression tests for `cannot start a transaction within a transaction`.
+
+    Prior to the SQLite-truth nesting fix, ``db.transaction()`` used
+    ``asyncio.current_task()`` identity to detect nesting. That
+    failed across ``asyncio.shield()`` and ``asyncio.create_task()``
+    boundaries: a shielded child entering ``db.transaction()`` while
+    the parent already held ``BEGIN IMMEDIATE`` would fall through
+    to acquire ``_connection_lock`` and issue a second ``BEGIN``,
+    either deadlocking (parent awaits child, child awaits lock) or
+    raising ``OperationalError: cannot start a transaction within
+    a transaction``.
+
+    These tests pin the fixed behavior: nesting is detected via
+    SQLite's per-connection ``in_transaction`` state, so shielded
+    and child tasks piggyback on the outer transaction without
+    re-entering the lock or re-issuing ``BEGIN``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_shielded_task_inside_active_parent_tx_does_not_deadlock(
+        self,
+    ) -> None:
+        """``asyncio.shield()`` while parent holds a transaction must
+        complete without deadlocking on ``_connection_lock`` and without
+        raising ``cannot start a transaction within a transaction``.
+        """
+        db = Database(path=":memory:")
+        await db.connect()
+        await _run_migrations(db)
+        try:
+            async with db.transaction():
+                # Force a write inside the parent so BEGIN IMMEDIATE is
+                # actually open (not an idle transaction).
+                await db.execute_write(
+                    "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+                    "VALUES (?, ?, 1, 1.0)",
+                    ("parent", "PARENT_KEY"),
+                )
+
+                async def shielded_child() -> None:
+                    async with db.transaction():
+                        await db.execute_write(
+                            "INSERT INTO accounts (name, api_key_env, "
+                            "enabled, weight) VALUES (?, ?, 1, 1.0)",
+                            ("shielded-child", "CHILD_KEY"),
+                        )
+
+                # Regression: this used to deadlock. The shield means
+                # cancellation of the outer await cannot kill the child;
+                # the child used to block forever waiting for
+                # ``_connection_lock`` (held by the parent) while the
+                # parent awaited ``wait_for``.
+                await asyncio.wait_for(
+                    asyncio.shield(shielded_child()),
+                    timeout=5.0,
+                )
+
+            rows = await db.fetch_all("SELECT name FROM accounts ORDER BY id")
+            assert [r["name"] for r in rows] == ["parent", "shielded-child"]
+            assert db.contention_snapshot()["total_nested_transactions"] >= 1
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_child_task_via_create_task_can_write_inside_parent_tx(
+        self,
+    ) -> None:
+        """``asyncio.create_task`` spawned inside a parent transaction
+        can open its own ``db.transaction()`` and write without raising.
+        """
+        db = Database(path=":memory:")
+        await db.connect()
+        await _run_migrations(db)
+        try:
+            async with db.transaction():
+                await db.execute_write(
+                    "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+                    "VALUES (?, ?, 1, 1.0)",
+                    ("parent", "PARENT_KEY"),
+                )
+
+                async def child_writer() -> None:
+                    async with db.transaction():
+                        await db.execute_write(
+                            "INSERT INTO accounts (name, api_key_env, "
+                            "enabled, weight) VALUES (?, ?, 1, 1.0)",
+                            ("create-task-child", "CHILD_KEY"),
+                        )
+
+                child = asyncio.create_task(child_writer())
+                await child
+
+            rows = await db.fetch_all("SELECT name FROM accounts ORDER BY id")
+            assert [r["name"] for r in rows] == [
+                "parent",
+                "create-task-child",
+            ]
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_exception_in_shielded_child_rolls_back_outer(self) -> None:
+        """An exception raised inside a shielded child transaction must
+        propagate and roll back the entire outer transaction, including
+        any sibling writes the shielded child performed.
+        """
+        db = Database(path=":memory:")
+        await db.connect()
+        await _run_migrations(db)
+        try:
+
+            class ChildBoomError(Exception):
+                pass
+
+            async def shielded_boomer() -> None:
+                async with db.transaction():
+                    await db.execute_write(
+                        "INSERT INTO accounts (name, api_key_env, "
+                        "enabled, weight) VALUES (?, ?, 1, 1.0)",
+                        ("will-rollback", "ROLLBACK_KEY"),
+                    )
+                    raise ChildBoomError
+
+            outer_caught: list[BaseException] = []
+            with suppress(ChildBoomError):
+                async with db.transaction():
+                    await db.execute_write(
+                        "INSERT INTO accounts (name, api_key_env, "
+                        "enabled, weight) VALUES (?, ?, 1, 1.0)",
+                        ("parent-stays", "PARENT_KEY"),
+                    )
+                    await asyncio.wait_for(
+                        asyncio.shield(shielded_boomer()),
+                        timeout=5.0,
+                    )
+            outer_caught.append(ChildBoomError())
+
+            rows = await db.fetch_all("SELECT name FROM accounts")
+            assert rows == []
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_nested_in_same_task_piggybacks(self) -> None:
+        """In-process nested ``async with db.transaction():`` in the
+        same task must piggyback on the outer transaction's commit
+        boundary; only the outer issues COMMIT.
+        """
+        db = Database(path=":memory:")
+        await db.connect()
+        await _run_migrations(db)
+        try:
+            async with db.transaction():
+                await db.execute_write(
+                    "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+                    "VALUES (?, ?, 1, 1.0)",
+                    ("outer", "OUTER_KEY"),
+                )
+                async with db.transaction():
+                    await db.execute_write(
+                        "INSERT INTO accounts (name, api_key_env, "
+                        "enabled, weight) VALUES (?, ?, 1, 1.0)",
+                        ("inner", "INNER_KEY"),
+                    )
+
+            rows = await db.fetch_all("SELECT name FROM accounts ORDER BY id")
+            assert [r["name"] for r in rows] == ["outer", "inner"]
+            # Migrations run during connect, so we can't assert on absolute
+            # totals — only that the nested call was observed at least once.
+            assert db.contention_snapshot()["total_nested_transactions"] >= 1
+        finally:
+            await db.disconnect()
