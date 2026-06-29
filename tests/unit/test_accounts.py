@@ -84,6 +84,32 @@ def test_account_runtime_state_reset_health() -> None:
     assert state.consecutive_failures == 0
 
 
+def test_account_runtime_state_prune_model_availability() -> None:
+    """prune_model_availability drops stale model_ids."""
+    state = AccountRuntimeState(name="test")
+    state.model_availability = {"model-a": True, "model-b": True, "model-c": True}
+    removed = state.prune_model_availability({"model-a", "model-c"})
+    assert removed == 1
+    assert "model-b" not in state.model_availability
+    assert "model-a" in state.model_availability
+    assert "model-c" in state.model_availability
+
+
+def test_account_runtime_state_prune_model_availability_empty() -> None:
+    """prune_model_availability on empty map returns 0."""
+    state = AccountRuntimeState(name="test")
+    assert state.prune_model_availability({"model-a"}) == 0
+
+
+def test_account_runtime_state_prune_model_availability_all_stale() -> None:
+    """prune_model_availability drops everything when none are advertised."""
+    state = AccountRuntimeState(name="test")
+    state.model_availability = {"model-a": True, "model-b": False}
+    removed = state.prune_model_availability(set())
+    assert removed == 2
+    assert state.model_availability == {}
+
+
 def test_account_registry_loads_accounts() -> None:
     os.environ["TEST_REG_KEY_1"] = "key1"
     os.environ["TEST_REG_KEY_2"] = "key2"

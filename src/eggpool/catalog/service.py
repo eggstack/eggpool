@@ -225,6 +225,7 @@ class CatalogService:
                 enabled=entry.enabled,
                 priority=entry.priority,
                 ttl_seconds=entry.ttl_seconds,
+                max_entries=entry.max_entries,
                 base_url=entry.base_url,
                 api_key=entry.api_key,
                 options=entry.options,

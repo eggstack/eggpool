@@ -169,6 +169,7 @@ class PricingCatalogEntry(BaseModel):
     enabled: bool = True
     priority: int = Field(default=100, ge=0)
     ttl_seconds: int = Field(default=86_400, gt=0)
+    max_entries: int = Field(default=4096, gt=0)
     base_url: str | None = None
     api_key: str | None = None
     options: dict[str, object] = Field(default_factory=dict[str, object])

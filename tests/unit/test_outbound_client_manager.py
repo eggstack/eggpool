@@ -124,6 +124,21 @@ class TestOutboundClientManager:
         await manager.aclose()
 
     @pytest.mark.anyio
+    async def test_record_request_caps_per_host_dict(self) -> None:
+        """Per-host counters are bounded by MAX_TRACKED_HOSTS."""
+        manager = OutboundClientManager()
+        original_cap = manager.MAX_TRACKED_HOSTS
+        manager.MAX_TRACKED_HOSTS = 4
+        try:
+            for i in range(10):
+                manager.record_request(host=f"host-{i}")
+            assert len(manager._per_host_requests) <= 4
+            snap = manager.snapshot()
+            assert snap["evictions_total"] >= 6
+        finally:
+            manager.MAX_TRACKED_HOSTS = original_cap
+
+    @pytest.mark.anyio
     async def test_metered_transport_records_successful_response(self) -> None:
         manager = OutboundClientManager()
 

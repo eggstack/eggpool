@@ -82,6 +82,8 @@ class OutboundClientManager:
     client builds do not grow with request volume.
     """
 
+    MAX_TRACKED_HOSTS = 256
+
     def __init__(
         self,
         config: NetworkConfig | None = None,
@@ -97,9 +99,30 @@ class OutboundClientManager:
         self._build_count: int = 0
         self._request_count: int = 0
         self._error_count: int = 0
+        self.evictions_total: int = 0
         self._lock: asyncio.Lock = asyncio.Lock()
         self._per_host_requests: dict[str, int] = {}
         self._per_host_errors: dict[str, int] = {}
+
+    def _maybe_evict_host(self, host: str) -> None:
+        """Evict the coldest tracked host when the cap is exceeded."""
+        if host in self._per_host_requests or host in self._per_host_errors:
+            return
+        if len(self._per_host_requests) < self.MAX_TRACKED_HOSTS:
+            return
+        smallest_host: str | None = None
+        smallest_total: int | None = None
+        for tracked in self._per_host_requests:
+            total = self._per_host_requests.get(tracked, 0) + self._per_host_errors.get(
+                tracked, 0
+            )
+            if smallest_total is None or total < smallest_total:
+                smallest_total = total
+                smallest_host = tracked
+        if smallest_host is not None:
+            self._per_host_requests.pop(smallest_host, None)
+            self._per_host_errors.pop(smallest_host, None)
+            self.evictions_total += 1
 
     def _build_client(self) -> httpx.AsyncClient:
         """Build the shared outbound HTTP client.
@@ -191,6 +214,7 @@ class OutboundClientManager:
         """
         self._request_count += 1
         if host is not None:
+            self._maybe_evict_host(host)
             self._per_host_requests[host] = self._per_host_requests.get(host, 0) + 1
         if not success:
             self._error_count += 1
@@ -223,6 +247,7 @@ class OutboundClientManager:
             "build_count": self._build_count,
             "request_count": self._request_count,
             "error_count": self._error_count,
+            "evictions_total": self.evictions_total,
             "has_client": self._client is not None,
             "scopes": {"global": self._build_count},
             "per_host_requests": dict(self._per_host_requests),

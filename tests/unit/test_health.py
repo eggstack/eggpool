@@ -286,6 +286,28 @@ class TestHealthManager:
         manager.enable_model("account1", "model1")
         assert manager.is_model_healthy("account1", "model1")
 
+    def test_prune_disabled_models_drops_stale(self) -> None:
+        """prune_disabled_models removes entries for non-advertised models."""
+        manager = HealthManager()
+        manager.disable_model("acct-1", "model-a")
+        manager.disable_model("acct-1", "model-b")
+        removed = manager.prune_disabled_models("acct-1", {"model-a"})
+        assert removed == 1
+        stats = manager.get_health_stats("acct-1")
+        assert "model-a" in stats["disabled_models"]
+        assert "model-b" not in stats["disabled_models"]
+
+    def test_prune_disabled_models_unknown_account(self) -> None:
+        """prune_disabled_models returns 0 for unknown accounts."""
+        manager = HealthManager()
+        assert manager.prune_disabled_models("missing", {"model-a"}) == 0
+
+    def test_prune_disabled_models_empty_disabled(self) -> None:
+        """prune_disabled_models returns 0 when no models are disabled."""
+        manager = HealthManager()
+        manager.get_account_health("acct-1")
+        assert manager.prune_disabled_models("acct-1", {"model-a"}) == 0
+
     def test_get_healthy_accounts(self) -> None:
         """Test getting healthy accounts."""
         manager = HealthManager()

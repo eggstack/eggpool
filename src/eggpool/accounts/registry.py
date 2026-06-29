@@ -193,3 +193,38 @@ class AccountRegistry:
     def get_provider_ids(self) -> list[str]:
         """Get all unique provider IDs."""
         return sorted(set(self._account_providers.values()))
+
+    def prune_account_state(
+        self,
+        account_name: str,
+        advertised_models: set[str],
+        health_manager: Any | None = None,
+    ) -> dict[str, int]:
+        """Prune stale per-account model state.
+
+        Removes ``model_availability`` entries on the matching
+        :class:`AccountRuntimeState` and ``disabled_models`` entries on
+        the matching :class:`AccountHealth` whose ``model_id`` is no
+        longer in the advertised set. Returns a count dict for log
+        diagnostics:
+
+        ``{"model_availability": N, "disabled_models": M}``.
+
+        Unknown accounts yield a zeroed result. ``health_manager`` is
+        optional so callers that do not own one (CLI tools, tests) can
+        still prune the in-memory state without spinning up a manager.
+        """
+        state = self._states.get(account_name)
+        removed_availability = (
+            state.prune_model_availability(advertised_models) if state else 0
+        )
+        removed_disabled = 0
+        if health_manager is not None:
+            removed_disabled = health_manager.prune_disabled_models(
+                account_name,
+                advertised_models,
+            )
+        return {
+            "model_availability": removed_availability,
+            "disabled_models": removed_disabled,
+        }

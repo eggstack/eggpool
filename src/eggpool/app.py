@@ -389,6 +389,76 @@ async def _finalize_stale_requests_once(
     return len(transitioned)
 
 
+async def _prune_health_disabled_models_loop(
+    app_state: Any,
+    cycle_interval_s: float = 60.0,
+) -> None:
+    """Periodic prune: drop stale per-account model state.
+
+    Walks every account in the registry, asks the catalog cache for the
+    current advertised set, and prunes ``model_availability`` rows on
+    :class:`AccountRuntimeState` and ``disabled_models`` rows on the
+    matching :class:`AccountHealth` whose ``model_id`` is no longer
+    advertised. The prune is a no-op for accounts whose sets are
+    already clean; log lines are emitted at INFO only when rows were
+    actually removed.
+    """
+    while True:
+        await asyncio.sleep(cycle_interval_s)
+        try:
+            pruned = await _prune_health_disabled_models_once(app_state)
+            if pruned > 0:
+                logger.info(
+                    "health_disabled_models_prune: removed %d stale rows",
+                    pruned,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("health_disabled_models_prune failed")
+
+
+async def _prune_health_disabled_models_once(app_state: Any) -> int:
+    """Run a single sweep of the disabled-models prune.
+
+    Returns the number of pruned rows. Split out from
+    :func:`_prune_health_disabled_models_loop` so tests and one-off
+    operators can invoke the sweep directly without waiting for the
+    periodic loop. Resolves dependencies lazily so a partially wired
+    app_state does not crash the sweep.
+    """
+    registry: AccountRegistry | None = getattr(app_state, "registry", None)
+    health_manager = getattr(app_state, "health_manager", None)
+    catalog = getattr(app_state, "catalog", None)
+    if registry is None or health_manager is None or catalog is None:
+        return 0
+    cache = getattr(catalog, "cache", None)
+    if cache is None:
+        return 0
+
+    total = 0
+    for state in registry.get_all_states():
+        try:
+            advertised = {
+                mid
+                for mid, accounts in cache._account_support.items()
+                if state.name in accounts
+            }
+            result = registry.prune_account_state(
+                state.name,
+                advertised,
+                health_manager=health_manager,
+            )
+            total += result["model_availability"] + result["disabled_models"]
+        except Exception as exc:  # noqa: BLE001 - per-account isolation
+            logger.warning(
+                "health_disabled_models_prune: error pruning account=%s: %s",
+                state.name,
+                exc,
+            )
+    return total
+
+
 async def _hydrate_health_from_backoffs(
     repo: AccountBackoffRepository,
     health_manager: HealthManager,
@@ -897,6 +967,22 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         )
 
     supervisor.register("stale_request_finalizer", _stale_request_loop)
+
+    # Register periodic prune of stale per-account model state
+    # (model_availability + disabled_models). Runs every 60s so an
+    # upstream model withdrawal is reflected in in-memory state within
+    # one cycle without requiring a process restart. Wiring is wrapped
+    # so a missing dependency (e.g. a future test app) cannot crash
+    # startup.
+    try:
+        supervisor.register(
+            "health_disabled_models_prune",
+            lambda: _prune_health_disabled_models_loop(app.state),
+        )
+    except Exception:  # noqa: BLE001 - best-effort registration
+        logger.exception(
+            "Failed to register health_disabled_models_prune; skipping",
+        )
 
     # Register metrics flush task for buffered modes
     metrics_stop_event = asyncio.Event()

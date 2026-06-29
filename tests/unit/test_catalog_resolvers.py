@@ -85,6 +85,22 @@ class TestTTLCache:
         assert cache.get("x") is None
         assert cache.is_fresh is False
 
+    def test_evicts_oldest_when_max_entries_exceeded(self) -> None:
+        """Oldest entries are evicted when the cache exceeds max_entries."""
+        cache = TTLCache(ttl_seconds=3600, max_entries=3)
+        cache.store(
+            {
+                "a": CatalogEntry(catalog_model_id="a"),
+                "b": CatalogEntry(catalog_model_id="b"),
+                "c": CatalogEntry(catalog_model_id="c"),
+                "d": CatalogEntry(catalog_model_id="d"),
+            }
+        )
+        snap = cache.snapshot()
+        assert len(snap) == 3
+        assert "a" not in snap  # oldest evicted
+        assert "d" in snap
+
 
 class TestOpenRouterParseCatalog:
     def test_parses_minimal_catalog(self) -> None:

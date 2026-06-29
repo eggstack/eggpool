@@ -82,6 +82,7 @@ fallback = "generic_estimate"
 enabled = true
 priority = 100
 ttl_seconds = 86400
+# max_entries = 4096  # bound the in-memory catalog cache; oldest entries evict first (LRU)
 # base_url = "https://openrouter.ai/api/v1"
 # api_key  = "..."   # Optional: only needed for higher rate limits
 # options  = {}      # Resolver-specific options
@@ -92,6 +93,7 @@ ttl_seconds = 86400
 enabled = false
 priority = 200
 ttl_seconds = 86400
+# max_entries = 4096  # bound the in-memory catalog cache; oldest entries evict first (LRU)
 
 [dashboard]
 enabled = true

@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -28,7 +28,19 @@ logger = logging.getLogger(__name__)
 
 @dataclass(slots=True)
 class QuotaWindow:
-    """A rolling window of quota usage for an account."""
+    """Rolling-window quota observations for one cost dimension.
+
+    The ``observations`` deque holds ``(timestamp, tokens, cost_microdollars)``
+    tuples. The deque is bounded by the ``window_seconds`` horizon: entries
+    older than ``current_time - window_seconds`` are pruned on every write.
+
+    Invariant: every persisted snapshot path goes through
+    :meth:`add_observation`, which calls :meth:`_prune_old_observations`.
+    The deque is therefore bounded by the number of observations within
+    the window_seconds horizon. Any future write path that bypasses
+    :meth:`add_observation` MUST call :meth:`_prune_old_observations`
+    explicitly to preserve this invariant.
+    """
 
     window_seconds: float
     used_tokens: int = 0
@@ -262,6 +274,17 @@ MODEL_FAMILY_FALLBACKS: dict[str, tuple[float, float]] = {
 GLOBAL_FALLBACK = (3.0, 15.0)
 GLOBAL_FALLBACK_FLOOR_MICRODOLLARS_PER_TOKEN = 0.5
 
+# Hard caps for the in-memory EWMA tables (Phase 2 of the memory
+# footprint plan). These bound the worst-case memory of the two
+# ``dict`` structures on ``QuotaEstimator`` so a fleet with a long
+# tail of distinct (account, model) keys cannot grow without
+# limit. When a cap is hit, the least-recently-touched entry is
+# evicted; on LRU miss the cost estimator transparently falls
+# through to the next tier (model override, family fallback, or
+# global unknown fallback).
+EWMA_HARD_CAP = 4096
+GLOBAL_EWMA_HARD_CAP = 1024
+
 
 @dataclass(slots=True)
 class QuotaEstimator:
@@ -272,14 +295,23 @@ class QuotaEstimator:
     """
 
     accounts: dict[str, AccountQuota] = field(default_factory=dict[str, AccountQuota])
-    # Tier 1: account/model EWMA
-    account_model_ewma: dict[str, dict[str, EWMAEstimate]] = field(
-        default_factory=dict[str, dict[str, EWMAEstimate]]
+    # Tier 1: account/model EWMA. Backing store is an OrderedDict so we
+    # can evict the least-recently-touched (account, model) entry on
+    # insert overflow (Phase 2 of the memory footprint plan).
+    # OrderedDict is a ``dict`` subclass, so the API surface is
+    # unchanged for callers that treat the field as a plain mapping.
+    account_model_ewma: OrderedDict[str, OrderedDict[str, EWMAEstimate]] = field(
+        default_factory=lambda: OrderedDict[str, OrderedDict[str, EWMAEstimate]]()
     )
-    # Tier 2: global model EWMA
-    global_model_ewma: dict[str, EWMAEstimate] = field(
-        default_factory=dict[str, EWMAEstimate]
+    # Tier 2: global model EWMA. OrderedDict for the same reason above.
+    global_model_ewma: OrderedDict[str, EWMAEstimate] = field(
+        default_factory=lambda: OrderedDict[str, EWMAEstimate]()
     )
+    # Memory caps for the EWMA tables. Tunable for tests; production
+    # code uses the module-level defaults ``EWMA_HARD_CAP`` and
+    # ``GLOBAL_EWMA_HARD_CAP``.
+    ewma_hard_cap: int = EWMA_HARD_CAP
+    global_ewma_hard_cap: int = GLOBAL_EWMA_HARD_CAP
     # Tier 3: configured per-model overrides
     model_overrides: dict[str, tuple[float, float]] = field(
         default_factory=dict[str, tuple[float, float]]
@@ -318,22 +350,52 @@ class QuotaEstimator:
             self.accounts[account_name] = AccountQuota(account_name=account_name)
         self.accounts[account_name].record_usage(tokens, cost_microdollars, timestamp)
 
-        # Update EWMA estimates if model and token data available
+        # Update EWMA estimates if model and token data available. The
+        # LRU helpers cap memory growth at ``ewma_hard_cap`` per-bucket
+        # and at the outer-dict level; cost estimation falls through to
+        # the next tier on cache miss.
         if model_id and tokens > 0 and cost_microdollars > 0:
             cost_per_token = cost_microdollars / tokens
+            self._record_account_model_ewma(account_name, model_id, cost_per_token)
+            self._record_global_model_ewma(model_id, cost_per_token)
 
-            # Tier 1: account/model EWMA
-            if account_name not in self.account_model_ewma:
-                self.account_model_ewma[account_name] = {}
-            am_key = model_id
-            if am_key not in self.account_model_ewma[account_name]:
-                self.account_model_ewma[account_name][am_key] = EWMAEstimate()
-            self.account_model_ewma[account_name][am_key].update(cost_per_token)
+    def _record_account_model_ewma(
+        self, account_name: str, model_id: str, cost_per_token: float
+    ) -> None:
+        """Insert/move-to-end in ``account_model_ewma``, evicting LRU on overflow.
 
-            # Tier 2: Global model EWMA
-            if model_id not in self.global_model_ewma:
-                self.global_model_ewma[model_id] = EWMAEstimate()
-            self.global_model_ewma[model_id].update(cost_per_token)
+        Two cap checks guard memory growth:
+          * the per-account bucket is capped at ``ewma_hard_cap`` model
+            entries, so a misbehaving account cannot grow a single
+            bucket without bound;
+          * the outer dict is capped at ``ewma_hard_cap`` accounts, so
+            a long tail of distinct account names cannot grow the
+            outer dict without bound. A new account pushes out the
+            least-recently-touched account's entire bucket.
+        """
+        bucket = self.account_model_ewma.get(account_name)
+        if bucket is None:
+            bucket = OrderedDict[str, EWMAEstimate]()
+            self.account_model_ewma[account_name] = bucket
+            if len(self.account_model_ewma) > self.ewma_hard_cap:
+                self.account_model_ewma.popitem(last=False)
+        if model_id in bucket:
+            bucket.move_to_end(model_id)
+        else:
+            bucket[model_id] = EWMAEstimate()
+            if len(bucket) > self.ewma_hard_cap:
+                bucket.popitem(last=False)
+        bucket[model_id].update(cost_per_token)
+
+    def _record_global_model_ewma(self, model_id: str, cost_per_token: float) -> None:
+        """Insert/move-to-end in ``global_model_ewma``, evicting LRU on overflow."""
+        if model_id in self.global_model_ewma:
+            self.global_model_ewma.move_to_end(model_id)
+        else:
+            self.global_model_ewma[model_id] = EWMAEstimate()
+            if len(self.global_model_ewma) > self.global_ewma_hard_cap:
+                self.global_model_ewma.popitem(last=False)
+        self.global_model_ewma[model_id].update(cost_per_token)
 
     async def record_usage_and_snapshot(
         self,
@@ -372,8 +434,11 @@ class QuotaEstimator:
 
         Returns estimated cost in microdollars.
         """
-        # Tier 1: Account/model EWMA
-        account_estimates = self.account_model_ewma.get(account_name, {})
+        # Tier 1: Account/model EWMA. On miss, fall through to Tier 2;
+        # the LRU helpers above bound memory for the hit case.
+        account_estimates = self.account_model_ewma.get(
+            account_name, OrderedDict[str, EWMAEstimate]()
+        )
         am_estimate = account_estimates.get(model_id)
         if am_estimate and am_estimate.sample_count >= 5:
             cost = int(

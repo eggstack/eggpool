@@ -242,6 +242,20 @@ Additional context fields that may appear:
 
 The overhead is negligible compared to upstream latency (typically 200ms–30s). You will not measure a difference in p99 latency from transcoding alone.
 
+## Pricing Catalog Cache
+
+The transcoder depends on the upstream pricing catalogs (OpenRouter, OpenCode Zen, ...) that the resolver pipeline caches per catalog. Each `TTLCache` is bounded by a configurable `max_entries` knob (default `4096`, LRU eviction on store). Unparsed `raw` payloads are stripped after the catalog is parsed so the cache footprint stays small even with hundreds of models in the upstream catalog.
+
+```toml
+[pricing.catalogs.openrouter]
+enabled = true
+priority = 100
+ttl_seconds = 86400
+max_entries = 4096  # bound the in-memory catalog cache; oldest entries evict first
+```
+
+Lower `max_entries` to trade catalog completeness for steady-state RSS on memory-constrained hosts (Raspberry Pi, SBC). The OpenRouter catalog ships ~250+ entries today, so the default has plenty of headroom.
+
 ## Known Limitations
 
 1. **Text-only in v1.** Tool calls, function calling, vision/image content, extended thinking, and structured outputs (`response_format` with `json_schema`) are not translated. These features are silently dropped with warnings. Full support is planned for later phases.

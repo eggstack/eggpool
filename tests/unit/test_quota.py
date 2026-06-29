@@ -7,6 +7,8 @@ import time
 import pytest
 
 from eggpool.quota.estimation import (
+    EWMA_HARD_CAP,
+    GLOBAL_EWMA_HARD_CAP,
     MODEL_FAMILY_FALLBACKS,
     AccountQuota,
     ManualOffset,
@@ -516,3 +518,102 @@ class TestEstimateCostTierPriority:
         estimator = QuotaEstimator()
         cost = estimator.estimate_cost("acct", "unknown", 0)
         assert cost >= 1
+
+
+class TestEWMAHardCaps:
+    """EWMA tables are bounded by ``ewma_hard_cap`` / ``global_ewma_hard_cap``.
+
+    Phase 2 of the memory footprint plan: the per-account bucket evicts
+    its least-recently-touched (account, model) entry on insert
+    overflow, and the outer account dict evicts its least-recently-
+    touched bucket on new-account overflow. The global model EWMA
+    behaves the same way for its single-level dict.
+    """
+
+    def test_account_bucket_evicts_lru_on_overflow(self) -> None:
+        """Insert beyond ``ewma_hard_cap`` drops the oldest model keys."""
+        cap = 4
+        estimator = QuotaEstimator(ewma_hard_cap=cap)
+        for i in range(10):
+            estimator.record_usage(
+                account_name="acct-a",
+                tokens=1000,
+                cost_microdollars=2000,
+                model_id=f"model-{i}",
+            )
+        bucket = estimator.account_model_ewma["acct-a"]
+        assert len(bucket) == cap
+        # With LRU eviction on a cap of 4, the last 4 models survive.
+        assert "model-9" in bucket
+        assert "model-8" in bucket
+        assert "model-7" in bucket
+        assert "model-6" in bucket
+        assert "model-0" not in bucket
+
+    def test_account_dict_evicts_lru_account_on_overflow(self) -> None:
+        """Insert beyond ``ewma_hard_cap`` distinct accounts drops the oldest bucket."""
+        cap = 4
+        estimator = QuotaEstimator(ewma_hard_cap=cap)
+        for i in range(10):
+            estimator.record_usage(
+                account_name=f"acct-{i}",
+                tokens=1000,
+                cost_microdollars=2000,
+                model_id="gpt-4",
+            )
+        assert len(estimator.account_model_ewma) == cap
+        assert "acct-9" in estimator.account_model_ewma
+        assert "acct-0" not in estimator.account_model_ewma
+
+    def test_global_model_ewma_evicts_lru_on_overflow(self) -> None:
+        """Insert beyond ``global_ewma_hard_cap`` drops the oldest model keys."""
+        cap = 4
+        estimator = QuotaEstimator(global_ewma_hard_cap=cap)
+        for i in range(10):
+            estimator.record_usage(
+                account_name="acct-a",
+                tokens=1000,
+                cost_microdollars=2000,
+                model_id=f"model-{i}",
+            )
+        assert len(estimator.global_model_ewma) == cap
+        assert "model-9" in estimator.global_model_ewma
+        assert "model-0" not in estimator.global_model_ewma
+
+    def test_existing_keys_are_moved_to_mru_position(self) -> None:
+        """Updating an existing key pops it to the MRU end so it survives eviction."""
+        estimator = QuotaEstimator(global_ewma_hard_cap=4)
+        # Seed with 4 distinct models so the dict is at the cap.
+        for name in ("model-a", "model-b", "model-c", "model-d"):
+            estimator.record_usage(
+                account_name="acct-a",
+                tokens=1000,
+                cost_microdollars=2000,
+                model_id=name,
+            )
+        # Touch the OLDEST key twice: it should be promoted to MRU.
+        for _ in range(2):
+            estimator.record_usage(
+                account_name="acct-a",
+                tokens=1000,
+                cost_microdollars=2000,
+                model_id="model-a",
+            )
+        # Insert a NEW key. The LRU is now model-b (oldest after promotion).
+        estimator.record_usage(
+            account_name="acct-a",
+            tokens=1000,
+            cost_microdollars=2000,
+            model_id="model-e",
+        )
+        assert "model-a" in estimator.global_model_ewma
+        assert "model-b" not in estimator.global_model_ewma
+        assert "model-e" in estimator.global_model_ewma
+
+    def test_default_caps_match_module_constants(self) -> None:
+        """Zero-arg ``QuotaEstimator()`` uses the module-level hard caps."""
+        estimator = QuotaEstimator()
+        assert estimator.ewma_hard_cap == EWMA_HARD_CAP
+        assert estimator.global_ewma_hard_cap == GLOBAL_EWMA_HARD_CAP
+        assert EWMA_HARD_CAP >= 1
+        assert GLOBAL_EWMA_HARD_CAP >= 1

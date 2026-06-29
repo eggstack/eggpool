@@ -13,6 +13,8 @@ from eggpool.constants import DEPRECATED_MODEL_ID
 from eggpool.routing.provider import parse_model_provider
 
 if TYPE_CHECKING:
+    from collections.abc import Set as AbstractSet
+
     from eggpool.db.connection import Database
     from eggpool.models.config import AppConfig
 
@@ -109,8 +111,8 @@ class ModelCatalogCache:
         self._models: dict[str, dict[str, Any]] = {}
         # (model_id, provider_id) -> provider-specific model info
         self._provider_models: dict[tuple[str, str], dict[str, Any]] = {}
-        # model_id -> set of account names that support it
-        self._account_support: dict[str, set[str]] = {}
+        # model_id -> frozenset of account names that support it
+        self._account_support: dict[str, frozenset[str]] = {}
         # account_name -> provider_id
         self._account_providers: dict[str, str] = {}
         self._last_refresh: float = 0.0
@@ -186,21 +188,27 @@ class ModelCatalogCache:
             self._preserve_static_fields(provider_key, model_info)
             self._provider_models[provider_key] = dict(model_info)
 
-            # Global entry: only set on first encounter; never overwrite
-            # metadata from an earlier provider for the same model_id.
-            if model_id not in self._models:
+            # Global entry: only materialize a global row if this
+            # provider brings new information that the existing global
+            # entry does not already have. The first-seen-wins policy
+            # keeps the earliest metadata authoritative; later providers
+            # update only ``last_seen_at`` on the existing global row.
+            global_info = self._models.get(model_id)
+            if global_info is None:
+                self._models[model_id] = model_info
+            elif (
+                global_info is not model_info
+                and not global_info.get("protocol")
+                and model_info.get("protocol")
+            ):
+                # First provider to bring a resolved protocol wins.
+                model_info["first_seen_at"] = global_info.get("first_seen_at", now)
                 self._models[model_id] = model_info
             else:
-                global_info = self._models[model_id]
-                if not global_info.get("protocol") and model_info.get("protocol"):
-                    model_info["first_seen_at"] = global_info.get("first_seen_at", now)
-                    self._models[model_id] = model_info
-                else:
-                    global_info["last_seen_at"] = now
+                global_info["last_seen_at"] = now
 
-            if model_id not in self._account_support:
-                self._account_support[model_id] = set()
-            self._account_support[model_id].add(account_name)
+            existing_support = self._account_support.get(model_id, frozenset())
+            self._account_support[model_id] = existing_support | {account_name}
 
         self._last_refresh = now
         self._account_last_refresh[account_name] = now
@@ -271,7 +279,7 @@ class ModelCatalogCache:
 
     def _visible_provider_ids(
         self,
-        visible_accounts: set[str],
+        visible_accounts: AbstractSet[str],
     ) -> list[str]:
         """Return deterministic provider IDs for the visible accounts."""
         provider_ids = {
@@ -284,8 +292,8 @@ class ModelCatalogCache:
     @staticmethod
     def _is_visible(
         expose_mode: str,
-        visible_accounts: set[str],
-        eligible_accounts: set[str],
+        visible_accounts: AbstractSet[str],
+        eligible_accounts: AbstractSet[str],
     ) -> bool:
         """Return whether account support satisfies the exposure policy."""
         if expose_mode == "intersection":
@@ -297,7 +305,7 @@ class ModelCatalogCache:
         model_info: dict[str, Any],
         *,
         model_id: str,
-        available_accounts: set[str],
+        available_accounts: AbstractSet[str],
         provider_id: str | None = None,
     ) -> dict[str, Any]:
         """Copy a cache entry into the serialized exposure format."""
@@ -377,13 +385,23 @@ class ModelCatalogCache:
 
     def mark_account_models_unavailable(self, account_name: str) -> None:
         """Mark all models as unavailable for an account."""
-        for _model_id, accounts in self._account_support.items():
-            accounts.discard(account_name)
+        for model_id, accounts in list(self._account_support.items()):
+            updated = accounts - {account_name}
+            if updated:
+                self._account_support[model_id] = updated
+            else:
+                self._account_support.pop(model_id, None)
 
     def mark_model_unavailable(self, account_name: str, model_id: str) -> None:
         """Mark a specific model as unavailable for an account."""
-        if model_id in self._account_support:
-            self._account_support[model_id].discard(account_name)
+        accounts = self._account_support.get(model_id)
+        if accounts is None:
+            return
+        updated = accounts - {account_name}
+        if updated:
+            self._account_support[model_id] = updated
+        else:
+            self._account_support.pop(model_id, None)
 
     def get_models_for_exposure(
         self,
@@ -403,7 +421,7 @@ class ModelCatalogCache:
         for model_id, _model_info in self._models.items():
             if model_id == DEPRECATED_MODEL_ID:
                 continue
-            accounts_supporting = self._account_support.get(model_id, set())
+            accounts_supporting = self._account_support.get(model_id, frozenset())
             visible_accounts = accounts_supporting & eligible_account_names
 
             if not self._is_visible(
@@ -459,7 +477,7 @@ class ModelCatalogCache:
         for model_id in self._models:
             if model_id == DEPRECATED_MODEL_ID:
                 continue
-            accounts_supporting = self._account_support.get(model_id, set())
+            accounts_supporting = self._account_support.get(model_id, frozenset())
 
             # Group supporting accounts by provider
             provider_support: dict[str, set[str]] = {}
@@ -541,7 +559,7 @@ class ModelCatalogCache:
                 self._provider_models.get((model_id, provider_id))
             )
 
-        supporting_accounts = self._account_support.get(model_id, set())
+        supporting_accounts = self._account_support.get(model_id, frozenset())
         provider_ids = self._visible_provider_ids(supporting_accounts)
         merged = self._merged_effective_limits_value(model_id, provider_ids)
         if merged is not None:
@@ -618,9 +636,9 @@ class ModelCatalogCache:
                 protocols.add(str(resolved_protocol))
         return protocols
 
-    def get_supporting_accounts(self, model_id: str) -> set[str]:
-        """Get set of account names that support a model."""
-        return self._account_support.get(model_id, set()).copy()
+    def get_supporting_accounts(self, model_id: str) -> frozenset[str]:
+        """Get frozenset of account names that support a model."""
+        return self._account_support.get(model_id, frozenset())
 
     def get_transcodable_protocols(
         self,
@@ -670,7 +688,7 @@ class ModelCatalogCache:
         """Check if a model is available from any eligible account."""
         if model_id not in self._models:
             return False
-        supporting = self._account_support.get(model_id, set())
+        supporting = self._account_support.get(model_id, frozenset())
         visible = supporting & eligible_accounts
         return any(
             self.is_account_model_available(account_name, model_id)
@@ -745,7 +763,7 @@ class ModelCatalogCache:
         self, model_id: str, max_age_s: float
     ) -> set[str]:
         """Get supporting accounts for a model that refreshed within max_age_s."""
-        supporting = self._account_support.get(model_id, set())
+        supporting = self._account_support.get(model_id, frozenset())
         return {
             name for name in supporting if not self.is_account_stale(name, max_age_s)
         }
@@ -805,9 +823,8 @@ class ModelCatalogCache:
 
     def add_account_support(self, model_id: str, account_name: str) -> None:
         """Add account support for a model."""
-        if model_id not in self._account_support:
-            self._account_support[model_id] = set()
-        self._account_support[model_id].add(account_name)
+        existing = self._account_support.get(model_id, frozenset())
+        self._account_support[model_id] = existing | {account_name}
 
     def has_model(self, model_id: str) -> bool:
         """Check if model exists in cache."""
@@ -817,9 +834,9 @@ class ModelCatalogCache:
         """Get all models in cache."""
         return dict(self._models)
 
-    def get_supporting_accounts_for_model(self, model_id: str) -> set[str]:
-        """Get supporting accounts for a model."""
-        return self._account_support.get(model_id, set()).copy()
+    def get_supporting_accounts_for_model(self, model_id: str) -> frozenset[str]:
+        """Get frozenset of supporting accounts for a model."""
+        return self._account_support.get(model_id, frozenset())
 
     def get_provider_model_entries(
         self,

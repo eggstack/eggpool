@@ -638,7 +638,25 @@ section.  On Linux the snapshot reads current RSS from
 `/proc/self/stat`; on macOS it falls back to `ru_maxrss` (a
 high-water mark).
 
-If RSS grows continuously:
+The following in-memory growth axes are bounded by design; see
+`plans/memory.md` for the full design:
+
+- `QuotaEstimator.account_model_ewma` and `global_model_ewma` are
+  LRU-capped at `EWMA_HARD_CAP = 4096` and `GLOBAL_EWMA_HARD_CAP = 1024`
+  entries respectively (hardcoded, not configurable).
+- `ModelCatalogCache` deduplicates `_models` and `_provider_models`,
+  and `_account_support` is a `frozenset[str]` (no per-call `.copy()`).
+- `CatalogResolverPipeline.TTLCache` is bounded per catalog by
+  `max_entries` (default `4096`, configurable per `[pricing.catalogs.<name>]`).
+- `OutboundClientManager._per_host_requests` / `_per_host_errors`
+  are capped at `MAX_TRACKED_HOSTS = 256` (coldest-total eviction;
+  `evictions_total` is exposed in the manager snapshot).
+- `AccountRuntimeState.model_availability` and
+  `HealthManager.AccountHealth.disabled_models` are pruned at every
+  `AccountRegistry.sync_accounts` / `health_disabled_models_prune`
+  sweep against the currently-advertised model set.
+
+If RSS still grows continuously after the above:
 
 1. Check for leaked pending requests (see above).
 2. Verify WAL checkpointing is working: `PRAGMA wal_checkpoint(PASSIVE)`.

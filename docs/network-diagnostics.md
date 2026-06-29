@@ -12,6 +12,8 @@ The cache is bounded (default 50 entries) and TTL-based (default 1800s for posit
 
 Connection pooling alone reduces latency by reusing TLS sessions and TCP connections. The DNS cache complements this by avoiding redundant resolver calls, but the primary win comes from keeping HTTP clients alive across requests. `OutboundClientManager` builds one shared client at startup and reuses it for all non-provider network paths (update checks, external catalog fetches). The `build_count` metric should stabilize at 1; growth with request volume indicates a client lifecycle bug.
 
+The manager also keeps per-host request and error counters for diagnostics. Those counters are bounded by `MAX_TRACKED_HOSTS = 256`; when the cap is exceeded, the host with the smallest combined request+error total is evicted and `evictions_total` is incremented. The counters are best-effort diagnostics — they do not affect routing or accounting.
+
 ## Default configuration
 
 ```toml
@@ -124,7 +126,7 @@ The Runtime dashboard page (`/runtime`) shows a Network section with:
 Key fields:
 
 - **`outbound_clients.scopes`**: per-scope build counts. `global` is the shared `OutboundClientManager` client; `provider:*` entries are per-provider clients from `ProviderClientPool`.
-- **`outbound_clients.per_host_requests`**: request counts by target host for the shared outbound client (update checks, catalog fetches).
+- **`outbound_clients.per_host_requests`**: request counts by target host for the shared outbound client (update checks, catalog fetches). The host set is bounded by `MAX_TRACKED_HOSTS = 256`; when the cap is exceeded, the coldest host (smallest `requests + errors` total) is evicted. `evictions_total` is exposed on `OutboundClientManager.snapshot()` (and surfaced via the runtime metrics `outbound_client` section of `/api/stats/runtime`) for visibility into the eviction cadence.
 - **`dns_cache.resolutions_total`**: legacy counter of cache misses that required a resolver refresh. Prefer `resolver_calls_total` for precise accounting.
 - **`dns_cache.cache_hits_total`**: requests served directly from cache without any singleflight wait or resolver call.
 - **`dns_cache.cache_misses_owner_total`**: cache misses where this instance won the singleflight and performed the resolver call.

@@ -361,6 +361,28 @@ class HealthManager:
         health = self.get_account_health(account_name)
         health.disabled_models.pop(model_id, None)
 
+    def prune_disabled_models(
+        self,
+        account_name: str,
+        advertised_models: set[str],
+    ) -> int:
+        """Drop ``disabled_models`` entries no longer advertised upstream.
+
+        ``disabled_models`` keys are ``model_id`` strings. An entry whose
+        model has been withdrawn upstream is dead weight — the model is
+        no longer reachable through this account, so the disable is
+        moot. Returns the number of entries removed (intended for log
+        diagnostics). Unknown accounts and empty ``disabled_models``
+        are no-ops.
+        """
+        health = self._accounts.get(account_name)
+        if health is None or not health.disabled_models:
+            return 0
+        stale = [mid for mid in health.disabled_models if mid not in advertised_models]
+        for mid in stale:
+            del health.disabled_models[mid]
+        return len(stale)
+
     def _refresh_transient_state(self, health: AccountHealth) -> None:
         """Restore transient health states after cooldown expiration."""
         now = time.time()

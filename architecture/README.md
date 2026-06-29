@@ -587,3 +587,21 @@ Production (`eggpool deploy systemd --install --production`):
 | `metrics_flush` | `write_mode != "immediate"` | Buffered analytics flush to `usage_rollups` |
 | `update_checker` | Always | Periodic PyPI update check (default 24h); see `update_checker.py` |
 | `automatic_backup` | `backup.enabled` | In-process SQLite backup with count-based retention; see `background/backup.py` |
+| `health_disabled_models_prune` | Always | Periodic sweep that drops stale `model_availability` and `disabled_models` entries (every 60s) |
+
+## In-Memory Bounds and Memory Footprint
+
+Long-running deployments — especially Raspberry Pi / SBC nodes — must keep steady-state RSS bounded by workload throughput, not workload cardinality. Every growth axis in the hot path is capped by a hardcoded module constant or a per-catalog config knob; see `plans/memory.md` for the full design and the per-request regression test (`tests/integration/test_memory.py`, marked `pytest.mark.slow`).
+
+| Structure | Location | Cap | Eviction |
+|-----------|----------|-----|----------|
+| `QuotaEstimator.account_model_ewma` | `src/eggpool/quota/estimation.py:285` | `EWMA_HARD_CAP = 4096` (hardcoded) | LRU; on miss recomputes from persisted `QuotaWindow` |
+| `QuotaEstimator.global_model_ewma` | `src/eggpool/quota/estimation.py:286` | `GLOBAL_EWMA_HARD_CAP = 1024` (hardcoded) | LRU |
+| `CatalogResolverPipeline.TTLCache._data` | `src/eggpool/catalog/catalog_resolvers.py:128` | `max_entries = 4096` per `[pricing.catalogs.<name>]` (configurable) | LRU on store; `entry.raw` stripped after parse |
+| `ModelCatalogCache._models` / `_provider_models` | `src/eggpool/catalog/cache.py:109-111` | De-duplicated (per-provider override only when it differs from global) | — |
+| `ModelCatalogCache._account_support` | `src/eggpool/catalog/cache.py:114` | `frozenset[str]` (no per-call `.copy()`); bounded by registered account × model cardinality | — |
+| `OutboundClientManager._per_host_*` | `src/eggpool/providers/outbound.py:85` | `MAX_TRACKED_HOSTS = 256` (hardcoded) | Coldest-total eviction; `evictions_total` surfaced in `snapshot()` and the `outbound_client` runtime metric |
+| `AccountRuntimeState.model_availability` | `src/eggpool/accounts/state.py` | Pruned at every `AccountRegistry.sync_accounts` against advertised model set | — |
+| `HealthManager.AccountHealth.disabled_models` | `src/eggpool/health/health_manager.py:111` | Pruned by `health_disabled_models_prune` supervisor task (60s cycle) | — |
+
+The `frozenset` switch on `_account_support` (`src/eggpool/catalog/cache.py:639`) eliminates one O(n) `set.copy()` per routing decision. Every caller of `get_supporting_accounts(...)` / `get_supporting_accounts_for_model(...)` is read-only (membership, intersection, iteration), so the immutability is a strict superset of caller needs.

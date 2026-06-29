@@ -173,3 +173,20 @@ class AccountRuntimeState:
         # account-level state so reset_health mirrors the same
         # reset semantics as HealthManager.enable_account.
         self.model_availability.clear()
+
+    def prune_model_availability(self, advertised_models: set[str]) -> int:
+        """Drop stale ``model_availability`` entries no longer advertised upstream.
+
+        ``model_availability`` keys are ``model_id`` strings; once an
+        upstream catalog stops advertising a model for this account the
+        entry is dead weight that biases routing decisions and inflates
+        memory. Returns the number of entries removed (intended for log
+        diagnostics). No-op when the map is already empty or every
+        entry is still advertised.
+        """
+        if not self.model_availability:
+            return 0
+        stale = [mid for mid in self.model_availability if mid not in advertised_models]
+        for mid in stale:
+            del self.model_availability[mid]
+        return len(stale)

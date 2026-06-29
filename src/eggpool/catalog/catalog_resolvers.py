@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
@@ -52,6 +53,7 @@ class CatalogConfig:
     enabled: bool = True
     priority: int = 100
     ttl_seconds: int = DEFAULT_CATALOG_TTL_SECONDS
+    max_entries: int = 4096
     base_url: str | None = None
     api_key: str | None = None
     options: dict[str, object] = field(default_factory=dict[str, object])
@@ -123,9 +125,10 @@ class TTLCache:
     in memory across restarts.
     """
 
-    def __init__(self, ttl_seconds: int) -> None:
+    def __init__(self, ttl_seconds: int, max_entries: int = 4096) -> None:
         self._ttl = ttl_seconds
-        self._data: dict[str, CatalogEntry] = {}
+        self._max_entries = max_entries
+        self._data: OrderedDict[str, CatalogEntry] = OrderedDict()
         self._fetched_at: float = 0.0
         self._lock: asyncio.Lock = asyncio.Lock()
 
@@ -140,6 +143,10 @@ class TTLCache:
         return self.age_seconds < self._ttl
 
     @property
+    def max_entries(self) -> int:
+        return self._max_entries
+
+    @property
     def lock(self) -> asyncio.Lock:
         """Public accessor for the fetch lock.
 
@@ -149,12 +156,17 @@ class TTLCache:
         return self._lock
 
     def invalidate(self) -> None:
-        self._data = {}
+        self._data = OrderedDict()
         self._fetched_at = 0.0
 
     def store(self, entries: dict[str, CatalogEntry]) -> None:
-        self._data = dict(entries)
+        self._data = OrderedDict(entries)
         self._fetched_at = time.monotonic()
+        self._evict_to_capacity()
+
+    def _evict_to_capacity(self) -> None:
+        while len(self._data) > self._max_entries:
+            self._data.popitem(last=False)
 
     def get(self, key: str) -> CatalogEntry | None:
         return self._data.get(key)
@@ -177,7 +189,9 @@ class OpenRouterCatalogResolver:
         cache: TTLCache | None = None,
     ) -> None:
         self._config = config
-        self._cache = cache or TTLCache(config.ttl_seconds)
+        self._cache = cache or TTLCache(
+            ttl_seconds=config.ttl_seconds, max_entries=config.max_entries
+        )
         self._client = client
 
     @property
@@ -239,6 +253,10 @@ class OpenRouterCatalogResolver:
                 logger.warning("Skipping catalog entry %r: %s", model_id_obj, exc)
                 continue
             entries[model_id_obj] = entry
+        # Strip raw upstream JSON to bound the cache footprint;
+        # to_resolved_pricing only reads structured fields.
+        for entry in entries.values():
+            entry.raw = {}
         return entries
 
     @staticmethod
