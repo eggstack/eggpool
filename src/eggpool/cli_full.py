@@ -2895,6 +2895,9 @@ def accounts_explain(
         return
 
     async def _run_explain(db: Database) -> None:
+        runner = MigrationRunner(db)
+        await runner.run()
+
         registry = AccountRegistry(config)
         cache = ModelCatalogCache()
         cache.set_config(config)

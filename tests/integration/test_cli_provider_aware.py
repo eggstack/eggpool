@@ -588,3 +588,77 @@ persist_redacted_error_detail = false
 
         assert result.exit_code == 0
         assert "No provider accounts configured" in result.stdout
+
+    def test_accounts_explain_runs_migrations_before_hydration(
+        self,
+        tmp_path,
+        provider_api_keys,
+        monkeypatch,
+    ) -> None:
+        """``accounts explain`` against a fresh (unmigrated) database
+        path must run ``MigrationRunner`` before hydrating the catalog
+        cache; otherwise the subsequent ``SELECT`` against the
+        ``models`` / ``provider_model_metadata`` / ``account_models``
+        tables explodes with ``sqlite3.OperationalError: no such table``,
+        and the command would crash before the operator sees any
+        eligibility verdict. The patch for the final-closure pass adds
+        the explicit migration step inside ``_run_explain``; this test
+        pins that behaviour so a regression cannot silently re-introduce
+        the pre-patch crash.
+        """
+        import asyncio
+
+        db_path = str(tmp_path / "fresh_explain.sqlite3")
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(_build_multi_provider_toml(db_path), encoding="utf-8")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--config",
+                str(config_path),
+                "accounts",
+                "explain",
+                "--model",
+                "gpt-4",
+                "--protocol",
+                "openai",
+            ],
+        )
+
+        assert result.exit_code == 0, (
+            f"CLI failed: exit={result.exit_code} stdout={result.stdout} "
+            f"stderr={getattr(result, 'stderr', '')}"
+        )
+        assert "no such table" not in result.stdout.lower()
+        assert "no such table" not in getattr(result, "stderr", "").lower()
+        assert "Account eligibility for model 'gpt-4'" in result.stdout
+        assert "acct-oc-1" in result.stdout
+
+        async def _check_migrations() -> None:
+            db = Database(path=db_path)
+            await db.connect()
+            try:
+                rows = await db.fetch_all(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name IN ('_migrations', 'models', "
+                    "'provider_model_metadata', 'account_models', 'accounts') "
+                    "ORDER BY name"
+                )
+                table_names = {str(r["name"]) for r in rows}
+                assert "_migrations" in table_names
+                assert "models" in table_names
+                assert "provider_model_metadata" in table_names
+                assert "account_models" in table_names
+                assert "accounts" in table_names
+                migration_rows = await db.fetch_all(
+                    "SELECT version FROM _migrations ORDER BY version"
+                )
+                assert migration_rows, (
+                    "MigrationRunner must have applied at least one migration"
+                )
+            finally:
+                await db.disconnect()
+
+        asyncio.run(_check_migrations())

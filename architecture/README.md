@@ -257,11 +257,27 @@ transaction commits but BEFORE the lock releases, so a concurrent
 selector that enters the lock next observes this attempt's runtime
 state. The publish is fast (in-process counter + cache mutation), so
 the lock-hold stays tight while still closing the burst-skew race
-previously caused by releasing the lock first. The compensation chain
-(`decrement` → finalize-as-cancelled → release health slot → set
-`client_metadata["post_commit_interrupted"]` → re-raise) wraps the
-publish step and catches `BaseException` (including `CancelledError` /
-`SystemExit` / `KeyboardInterrupt`, re-raised without swallowing).
+previously caused by publishing inside the transaction body.
+
+Note: the two contexts are written as explicit nested `async with`
+blocks (outer `_select_lock`, inner `_db.transaction()`) — NOT as a
+compound `async with self._select_lock, self._db.transaction():`. A
+compound form would still exit right-to-left (transaction commits
+before the lock releases), so context-exit order alone is not the
+invariant. The actual bug was that the runtime publication block lived
+INSIDE the transaction body; active-count and reserved-cost state were
+therefore published before the transaction committed. The explicit
+nested form makes it hard to accidentally place publication inside the
+transaction while still keeping publication under `_select_lock`. The
+key invariant is block placement (publication must be outside the DB
+transaction body but still inside `_select_lock`), not context-exit
+order.
+
+The compensation chain (`decrement` → finalize-as-cancelled → release
+health slot → set `client_metadata["post_commit_interrupted"]` →
+re-raise) wraps the publish step and catches `BaseException` (including
+`CancelledError` / `SystemExit` / `KeyboardInterrupt`, re-raised
+without swallowing).
 
 ### Score components and eligibility diagnostics
 
