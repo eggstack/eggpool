@@ -1,10 +1,12 @@
 # Protocol Transcoding
 
-EggPool can transparently translate between OpenAI Chat Completions and Anthropic Messages protocols, letting clients speak one protocol while the upstream provider speaks the other.
+EggPool transparently translates between OpenAI Chat Completions and Anthropic Messages protocols, letting clients speak one protocol while the upstream provider speaks the other.
 
 ## Overview
 
 Protocol transcoding exists because the AI ecosystem has settled on two incompatible wire formats — OpenAI's Chat Completions API and Anthropic's Messages API. Most providers serve only one. Without transcoding, an OpenAI client can only reach OpenAI-compatible providers, and an Anthropic client can only reach Anthropic-compatible providers, even when the underlying model is the same.
+
+**Transcoding is on by default.** Every EggPool data plane normalises the client request to the appropriate upstream wire format automatically: an OpenAI client posting to `/v1/chat/completions` reaches Anthropic upstreams (and vice versa) without any operator configuration. This is the primary behaviour of the router — clients should always see their expected protocol, regardless of the upstream provider's protocol.
 
 The transcoder sits in the request path and:
 
@@ -15,26 +17,34 @@ The transcoder sits in the request path and:
 
 Usage and cost fields are preserved exactly as the upstream reported them — no translation, no rounding, no loss.
 
-## Quick Start
+## Configuration
 
-Add a `[transcoder]` section to your `config.toml`:
+The `[transcoder]` block is optional and rarely needs to be touched:
 
 ```toml
 [transcoder]
-enabled = true
-loss_policy = "warn"      # "warn" (default) or "reject"
-prefer_native = true       # prefer native-protocol accounts (default)
+# Optional loss policy: "warn" (default) or "reject"
+loss_policy = "warn"
+# Optional routing preference: native-protocol accounts outrank transcodable ones
+prefer_native = true
 ```
 
-Restart the service. At boot you'll see:
+At boot you'll see:
 
 ```
-INFO  Protocol transcoding enabled (loss_policy=warn, prefer_native=true)
+INFO  Protocol transcoding ENABLED (default) — clients may reach upstream accounts whose provider.protocols does not match the client protocol. loss_policy=warn prefer_native=true
 ```
 
-That's it. Every request where the client protocol differs from the selected account's protocol will now be transcoded automatically.
+### Deprecated escape hatch: `enabled = false`
 
-To disable, set `enabled = false` (or remove the section) and restart.
+The `enabled` flag is **deprecated** but still honoured as an escape hatch for operators who need to disable translation (for example, while diagnosing routing issues or pinning legacy behaviour):
+
+```toml
+[transcoder]
+enabled = false   # DEPRECATED: forces legacy protocol-exact routing
+```
+
+When set, EggPool boots with a `WARNING` and reverts to the pre-default behaviour: every request must match its upstream protocol exactly. Cross-protocol requests will fail with `HTTP 400 ProtocolMismatchError`. This option will be removed in a future release.
 
 ## Translation Tables
 
@@ -279,10 +289,10 @@ Lower `max_entries` to trade catalog completeness for steady-state RSS on memory
 Check the boot log:
 
 ```
-INFO  Protocol transcoding enabled (loss_policy=warn, prefer_native=true)
+INFO  Protocol transcoding ENABLED (default) — clients may reach upstream accounts whose provider.protocols does not match the client protocol. loss_policy=warn prefer_native=true
 ```
 
-If you see `DEBUG  Protocol transcoding disabled` or no log at all, the `[transcoder]` section is missing or `enabled = false`.
+If you see `WARNING  Protocol transcoding DISABLED`, the `[transcoder] enabled = false` escape hatch is in effect and cross-protocol requests will fail.
 
 ### Read per-request transcoding logs
 
@@ -317,9 +327,9 @@ eggpool stats transcoding --period 7d
 eggpool stats transcoding --period 30d --json
 ```
 
-### Disable transcoding
+### Disable transcoding (deprecated escape hatch)
 
-Set `enabled = false` in `[transcoder]` and restart. All requests will now require protocol match — a client speaking OpenAI to an Anthropic-only account will get a protocol mismatch error.
+Set `enabled = false` in `[transcoder]` and restart. All requests will now require protocol match — a client speaking OpenAI to an Anthropic-only account will get a protocol mismatch error. This option is deprecated; transcoding will become unconditionally on in a future release.
 
 ### Debug a specific request
 

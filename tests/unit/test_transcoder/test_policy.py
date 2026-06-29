@@ -14,7 +14,9 @@ if TYPE_CHECKING:
 
 def test_defaults() -> None:
     policy = TranscoderPolicy()
-    assert policy.enabled is False
+    # Translation is on by default; the `enabled` flag is a deprecated
+    # escape hatch.
+    assert policy.enabled is True
     assert policy.loss_policy == "warn"
     assert policy.prefer_native is True
 
@@ -66,6 +68,14 @@ def test_default_config_has_transcoder() -> None:
     from eggpool.models.config import AppConfig
 
     config = AppConfig()
-    assert config.transcoder.enabled is False
+    # Translation is on by default; the `enabled` flag is a deprecated
+    # escape hatch.
+    assert config.transcoder.enabled is True
     assert config.transcoder.loss_policy == "warn"
     assert config.transcoder.prefer_native is True
+
+
+def test_explicit_disabled_escape_hatch() -> None:
+    """Setting enabled=False reverts to legacy protocol-exact routing."""
+    policy = TranscoderPolicy(enabled=False)
+    assert policy.enabled is False

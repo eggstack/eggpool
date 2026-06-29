@@ -1,4 +1,17 @@
-"""TranscoderPolicy — configuration surface for protocol transcoding."""
+"""TranscoderPolicy — configuration surface for protocol transcoding.
+
+Transcoding is **on by default**. EggPool's data plane normalises every
+client request to the appropriate upstream wire format automatically:
+an OpenAI client posting to ``/v1/chat/completions`` reaches Anthropic
+upstreams (and vice versa) without any operator configuration.
+
+The ``enabled`` flag is preserved as a deprecated escape hatch for
+operators who need to disable translation — e.g. for diagnosis or to
+pin behaviour while debugging routing. Setting ``enabled = false``
+restores the pre-default behaviour where every request must match its
+upstream protocol exactly; this option will be removed in a future
+release.
+"""
 
 from __future__ import annotations
 
@@ -11,11 +24,14 @@ class TranscoderPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "When false (default), every request must match its upstream "
-            "protocol exactly. When true, requests are transcoded when the "
-            "selected account does not natively support the client protocol."
+            "DEPRECATED ESCAPE HATCH. Defaults to true; EggPool automatically "
+            "translates between OpenAI Chat Completions and Anthropic "
+            "Messages when the client protocol does not match the routed "
+            "upstream protocol. Set to false to disable translation and "
+            "require protocol-exact routing (legacy behaviour). This option "
+            "will be removed in a future release."
         ),
     )
 

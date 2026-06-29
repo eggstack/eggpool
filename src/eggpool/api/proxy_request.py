@@ -147,8 +147,16 @@ def _prepare_transcode_preflight(
     payload: dict[str, Any],
     transcoder_policy: Any,  # noqa: ANN401
 ) -> TranscodePreflightResult | None:
-    """Translate once for preflight checks when transcoding is active."""
-    if transcoder_policy is None or not transcoder_policy.enabled:
+    """Translate once for preflight checks when transcoding is active.
+
+    Translation is on by default. The ``enabled`` flag on
+    ``transcoder_policy`` is a deprecated escape hatch — when it is
+    explicitly ``False`` translation is skipped (preserving the legacy
+    protocol-exact behaviour). ``None`` and ``True`` both allow the
+    preflight to run, so a missing policy object never silently disables
+    translation.
+    """
+    if transcoder_policy is not None and transcoder_policy.enabled is False:
         return None
 
     upstream_protocol = _infer_upstream_protocol(

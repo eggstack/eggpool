@@ -520,10 +520,10 @@ class TestMergeProviderIntoConfig:
         assert "routing_priority = 0" in content
         assert AppConfig.from_toml(str(config_file)).transcoder.enabled is True
 
-    def test_dual_protocol_provider_does_not_force_transcoder(
+    def test_dual_protocol_provider_keeps_default_transcoder(
         self, tmp_path: Path
     ) -> None:
-        """Native OpenAI+Anthropic providers keep the default transcoder policy."""
+        """Transcoding is on by default; connect does not touch the policy."""
         from eggpool.models.config import AppConfig
 
         config_file = tmp_path / "config.toml"
@@ -546,12 +546,17 @@ class TestMergeProviderIntoConfig:
         )
 
         assert ok is True
-        assert AppConfig.from_toml(str(config_file)).transcoder.enabled is False
+        # Transcoding is on by default; connect no longer mutates the policy.
+        assert AppConfig.from_toml(str(config_file)).transcoder.enabled is True
 
-    def test_single_protocol_provider_updates_existing_transcoder_block(
+    def test_single_protocol_provider_does_not_mutate_existing_transcoder_block(
         self, tmp_path: Path
     ) -> None:
-        """Connecting MiniMax-style providers enables protocol translation."""
+        """Transcoding is on by default; connect does not rewrite the block.
+
+        Connecting a MiniMax-style provider must respect an operator's
+        explicit ``enabled = false`` opt-out (deprecated escape hatch).
+        """
         from eggpool.models.config import AppConfig
 
         config_file = tmp_path / "config.toml"
@@ -578,8 +583,10 @@ class TestMergeProviderIntoConfig:
 
         content = config_file.read_text(encoding="utf-8")
         assert ok is True
+        # Connect no longer mutates the [transcoder] block; the operator's
+        # explicit disabled setting is preserved.
         assert content.count("[transcoder]") == 1
-        assert AppConfig.from_toml(str(config_file)).transcoder.enabled is True
+        assert AppConfig.from_toml(str(config_file)).transcoder.enabled is False
 
     def test_appending_to_existing_provider_does_not_change_priority(
         self, tmp_path: Path

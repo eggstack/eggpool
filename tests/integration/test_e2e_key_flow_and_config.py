@@ -751,9 +751,6 @@ class TestConfigSetup:
                 [database]
                 path = "{db_path}"
 
-                [transcoder]
-                enabled = false
-
                 [providers.minimax]
                 id = "minimax"
                 base_url = "https://api.minimax.io/anthropic"
@@ -788,8 +785,14 @@ class TestConfigSetup:
         models = snippet["provider"]["eggpool"]["models"]
         assert "MiniMax-M3/minimax" in models
         assert "MiniMax-M3" not in models
-        assert "Start or restart the server to apply generated config." in result.stderr
+        # Transcoding is on by default; configsetup opencode does not need
+        # to mutate the [transcoder] block, so no restart prompt fires.
+        assert (
+            "Start or restart the server to apply generated config."
+            not in result.stderr
+        )
 
+        # The default policy still has transcoding enabled.
         config_after = AppConfig.from_toml(str(config_path))
         assert config_after.transcoder.enabled is True
 

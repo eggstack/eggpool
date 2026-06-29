@@ -2488,6 +2488,12 @@ class RequestCoordinator:
         transcodable route exists. When the client protocol matches
         a resolved model protocol, returns that protocol directly
         (native match, no transcoding needed).
+
+        Translation is on by default. ``_transcoder_policy.enabled`` is
+        a deprecated escape hatch — only an explicit ``False`` disables
+        translation (restoring the legacy protocol-exact routing). ``None``
+        and ``True`` both allow transcoding, so a missing policy object
+        never silently disables it.
         """
         model_protocols = self._catalog.cache.get_model_protocols(
             context.model_id,
@@ -2496,8 +2502,11 @@ class RequestCoordinator:
         if context.protocol in model_protocols:
             return context.protocol  # native match
 
-        if self._transcoder_policy is None or not self._transcoder_policy.enabled:
-            return None  # behaviour identical to today
+        if (
+            self._transcoder_policy is not None
+            and self._transcoder_policy.enabled is False
+        ):
+            return None  # legacy protocol-exact behaviour (escape hatch)
 
         # Find transcodable protocols among all eligible accounts.
         candidates = self._catalog.cache.get_transcodable_protocols(
