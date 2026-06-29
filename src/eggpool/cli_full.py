@@ -1284,7 +1284,9 @@ def configsetup_aider(
 
     config_path: str = ctx.obj["config_path"]
     ctx_data = _build_ctx_with_overrides(config_path, host, base_url)
-    resolved_model = require_model_for_target("aider", model, ctx_data)
+    resolved_model = require_model_for_target(
+        "aider", model, ctx_data, write_mode=do_write
+    )
     snippet = build_aider_env_snippet(ctx_data, resolved_model)
     _output_snippet(
         snippet,
@@ -1322,7 +1324,9 @@ def configsetup_codex(
 
     config_path: str = ctx.obj["config_path"]
     ctx_data = _build_ctx_with_overrides(config_path, host, base_url)
-    resolved_model = require_model_for_target("codex", model, ctx_data)
+    resolved_model = require_model_for_target(
+        "codex", model, ctx_data, write_mode=do_write
+    )
 
     version = detect_codex_version()
     if version:
@@ -1360,7 +1364,9 @@ def configsetup_qwen_code(
 
     config_path: str = ctx.obj["config_path"]
     ctx_data = _build_ctx_with_overrides(config_path, host, base_url)
-    resolved_model = require_model_for_target("qwen-code", model, ctx_data)
+    resolved_model = require_model_for_target(
+        "qwen-code", model, ctx_data, write_mode=do_write
+    )
     snippet = build_qwen_code_provider_snippet(ctx_data, resolved_model)
     _output_snippet(
         snippet,
@@ -1393,7 +1399,9 @@ def configsetup_kilo(
 
     config_path: str = ctx.obj["config_path"]
     ctx_data = _build_ctx_with_overrides(config_path, host, base_url)
-    resolved_model = require_model_for_target("kilo", model, ctx_data)
+    resolved_model = require_model_for_target(
+        "kilo", model, ctx_data, write_mode=do_write
+    )
     snippet = build_kilo_openai_compatible_snippet(ctx_data, resolved_model)
     _output_snippet(
         snippet,
@@ -1426,7 +1434,9 @@ def configsetup_continue(
 
     config_path: str = ctx.obj["config_path"]
     ctx_data = _build_ctx_with_overrides(config_path, host, base_url)
-    resolved_model = require_model_for_target("continue", model, ctx_data)
+    resolved_model = require_model_for_target(
+        "continue", model, ctx_data, write_mode=do_write
+    )
     snippet = build_continue_yaml_snippet(ctx_data, resolved_model)
     _output_snippet(
         snippet,
@@ -1461,7 +1471,9 @@ def configsetup_cline(
 
     config_path: str = ctx.obj["config_path"]
     ctx_data = _build_ctx_with_overrides(config_path, host, base_url)
-    resolved_model = require_model_for_target("cline", model, ctx_data)
+    resolved_model = require_model_for_target(
+        "cline", model, ctx_data, write_mode=do_write
+    )
     snippet = build_cline_profile_snippet(ctx_data, resolved_model)
     _output_snippet(
         snippet,
@@ -1498,7 +1510,9 @@ def configsetup_roo_code(
 
     config_path: str = ctx.obj["config_path"]
     ctx_data = _build_ctx_with_overrides(config_path, host, base_url)
-    resolved_model = require_model_for_target("roo-code", model, ctx_data)
+    resolved_model = require_model_for_target(
+        "roo-code", model, ctx_data, write_mode=do_write
+    )
     snippet = build_roo_code_profile_snippet(ctx_data, resolved_model)
     _output_snippet(
         snippet,
@@ -1536,7 +1550,9 @@ def configsetup_goose(
 
     config_path: str = ctx.obj["config_path"]
     ctx_data = _build_ctx_with_overrides(config_path, host, base_url)
-    resolved_model = require_model_for_target("goose", model, ctx_data)
+    resolved_model = require_model_for_target(
+        "goose", model, ctx_data, write_mode=do_write
+    )
     snippet = build_goose_env_snippet(ctx_data, resolved_model)
     _output_snippet(
         snippet,
@@ -1570,7 +1586,9 @@ def configsetup_openhands(
 
     config_path: str = ctx.obj["config_path"]
     ctx_data = _build_ctx_with_overrides(config_path, host, base_url)
-    resolved_model = require_model_for_target("openhands", model, ctx_data)
+    resolved_model = require_model_for_target(
+        "openhands", model, ctx_data, write_mode=do_write
+    )
     snippet = build_openhands_env_snippet(ctx_data, resolved_model)
     _output_snippet(
         snippet,

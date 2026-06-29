@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from eggpool.catalog.limits import (
     EffectiveModelLimits,
@@ -45,21 +45,30 @@ class ConfigsetupTargetSpec:
 
     name: str
     requires_model: bool
+    mode: Literal["env", "json", "toml", "yaml", "instructions"]
     supports_dynamic_models: bool = False
     supports_direct_write: bool = False
     default_write_path: str | None = None
 
 
 TARGET_SPECS: dict[str, ConfigsetupTargetSpec] = {
-    "aider": ConfigsetupTargetSpec(name="aider", requires_model=False),
-    "codex": ConfigsetupTargetSpec(name="codex", requires_model=False),
-    "qwen-code": ConfigsetupTargetSpec(name="qwen-code", requires_model=False),
-    "kilo": ConfigsetupTargetSpec(name="kilo", requires_model=False),
-    "continue": ConfigsetupTargetSpec(name="continue", requires_model=False),
-    "cline": ConfigsetupTargetSpec(name="cline", requires_model=False),
-    "roo-code": ConfigsetupTargetSpec(name="roo-code", requires_model=False),
-    "goose": ConfigsetupTargetSpec(name="goose", requires_model=False),
-    "openhands": ConfigsetupTargetSpec(name="openhands", requires_model=False),
+    "aider": ConfigsetupTargetSpec(name="aider", requires_model=False, mode="env"),
+    "codex": ConfigsetupTargetSpec(name="codex", requires_model=False, mode="toml"),
+    "qwen-code": ConfigsetupTargetSpec(
+        name="qwen-code", requires_model=False, mode="json"
+    ),
+    "kilo": ConfigsetupTargetSpec(name="kilo", requires_model=False, mode="json"),
+    "continue": ConfigsetupTargetSpec(
+        name="continue", requires_model=True, mode="yaml"
+    ),
+    "cline": ConfigsetupTargetSpec(name="cline", requires_model=False, mode="json"),
+    "roo-code": ConfigsetupTargetSpec(
+        name="roo-code", requires_model=False, mode="json"
+    ),
+    "goose": ConfigsetupTargetSpec(name="goose", requires_model=True, mode="env"),
+    "openhands": ConfigsetupTargetSpec(
+        name="openhands", requires_model=True, mode="env"
+    ),
 }
 
 
@@ -381,13 +390,33 @@ def select_default_model(ctx: IntegrationContext) -> str | None:
 
 
 def require_model_for_target(
-    target: str, model: str | None, ctx: IntegrationContext
+    target: str,
+    model: str | None,
+    ctx: IntegrationContext,
+    *,
+    write_mode: bool = False,
 ) -> str | None:
     """Resolve the model for a target integration.
 
     Returns the explicit *model* if given, the default if exactly one
     model exists, or None to let the CLI layer prompt.
+
+    When *write_mode* is ``True`` and the target spec has
+    ``requires_model=True``, raises ``click.ClickException`` if the
+    model is ambiguous (multiple catalog models and no ``--model``).
     """
     if model is not None:
         return model
-    return select_default_model(ctx)
+    default = select_default_model(ctx)
+    if default is not None:
+        return default
+    spec = TARGET_SPECS.get(target)
+    if write_mode and spec is not None and spec.requires_model and len(ctx.models) != 1:
+        import click
+
+        raise click.ClickException(
+            f"Error: --model is required for {target!r} in write mode "
+            f"because the catalog has {len(ctx.models)} models. "
+            f"Run with --model <name> to select one."
+        )
+    return None

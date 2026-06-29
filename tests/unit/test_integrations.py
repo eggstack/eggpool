@@ -1174,6 +1174,30 @@ class TestConfigSetupCLIExtended:
         assert result.exit_code != 0
         assert "already exists" in (result.output + (result.stderr or ""))
 
+    @pytest.mark.parametrize("subcommand", ["continue", "goose", "openhands"])
+    def test_write_mode_model_required_fails_without_model(
+        self, tmp_path: Path, subcommand: str
+    ) -> None:
+        config_file = _make_config_for_cli(tmp_path)
+        output_file = tmp_path / "output.tmp"
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--config",
+                str(config_file),
+                "configsetup",
+                subcommand,
+                "--write",
+                "--output",
+                str(output_file),
+                "--print-secret",
+            ],
+        )
+        assert result.exit_code != 0
+        output = result.output + (result.stderr or "")
+        assert "--model" in output
+
 
 # ---------------------------------------------------------------------------
 # ConfigsetupTargetSpec tests
@@ -1195,20 +1219,97 @@ class TestConfigsetupTargetSpec:
         }
         assert set(TARGET_SPECS.keys()) == expected
 
-    def test_no_targets_require_model_strictly(self) -> None:
-        # None of the CLI commands fail without --model; they produce
-        # usable (if less specific) snippets. requires_model is False
-        # for all targets to match actual CLI behavior.
+    def test_model_required_targets(self) -> None:
+        required = {name for name, spec in TARGET_SPECS.items() if spec.requires_model}
+        assert required == {"continue", "goose", "openhands"}
+
+    def test_model_optional_targets(self) -> None:
+        optional = {
+            name for name, spec in TARGET_SPECS.items() if not spec.requires_model
+        }
+        assert optional == {"aider", "codex", "qwen-code", "kilo", "cline", "roo-code"}
+
+    def test_all_targets_have_mode(self) -> None:
         for name, spec in TARGET_SPECS.items():
-            assert spec.requires_model is False, f"{name} should not require model"
+            assert spec.mode in ("env", "json", "toml", "yaml", "instructions"), (
+                f"{name} has invalid mode: {spec.mode}"
+            )
+
+    def test_mode_matches_renderer(self) -> None:
+        assert TARGET_SPECS["aider"].mode == "env"
+        assert TARGET_SPECS["codex"].mode == "toml"
+        assert TARGET_SPECS["qwen-code"].mode == "json"
+        assert TARGET_SPECS["kilo"].mode == "json"
+        assert TARGET_SPECS["continue"].mode == "yaml"
+        assert TARGET_SPECS["cline"].mode == "json"
+        assert TARGET_SPECS["roo-code"].mode == "json"
+        assert TARGET_SPECS["goose"].mode == "env"
+        assert TARGET_SPECS["openhands"].mode == "env"
 
     def test_spec_fields(self) -> None:
         spec = ConfigsetupTargetSpec(
             name="test",
             requires_model=True,
+            mode="yaml",
             supports_dynamic_models=False,
             supports_direct_write=False,
             default_write_path=None,
         )
         assert spec.name == "test"
         assert spec.requires_model is True
+        assert spec.mode == "yaml"
+
+
+# ---------------------------------------------------------------------------
+# Model enforcement tests
+# ---------------------------------------------------------------------------
+
+
+class TestModelEnforcement:
+    def test_require_model_write_mode_fails_when_ambiguous_model_required(
+        self, ctx_many_models: IntegrationContext
+    ) -> None:
+        import click
+
+        with pytest.raises(click.ClickException, match="--model is required"):
+            require_model_for_target("continue", None, ctx_many_models, write_mode=True)
+
+    def test_require_model_write_mode_ok_when_explicit_model(
+        self, ctx_many_models: IntegrationContext
+    ) -> None:
+        result = require_model_for_target(
+            "continue", "gpt-4o/openai", ctx_many_models, write_mode=True
+        )
+        assert result == "gpt-4o/openai"
+
+    def test_require_model_write_mode_ok_when_single_model(
+        self, ctx_one_model: IntegrationContext
+    ) -> None:
+        result = require_model_for_target(
+            "continue", None, ctx_one_model, write_mode=True
+        )
+        assert result == "gpt-4o/openai"
+
+    def test_require_model_write_mode_optional_target_returns_none(
+        self, ctx_many_models: IntegrationContext
+    ) -> None:
+        result = require_model_for_target(
+            "aider", None, ctx_many_models, write_mode=True
+        )
+        assert result is None
+
+    def test_require_model_snippet_mode_returns_none_when_ambiguous(
+        self, ctx_many_models: IntegrationContext
+    ) -> None:
+        result = require_model_for_target(
+            "continue", None, ctx_many_models, write_mode=False
+        )
+        assert result is None
+
+    def test_require_model_empty_catalog_fails_write_mode(
+        self, ctx_empty: IntegrationContext
+    ) -> None:
+        import click
+
+        with pytest.raises(click.ClickException, match="--model is required"):
+            require_model_for_target("continue", None, ctx_empty, write_mode=True)
