@@ -224,6 +224,64 @@ class TestFinalizerEmitsUsageEvent:
         assert event.input_tokens == 100
         assert event.output_tokens == 200
         assert event.model_id == "test_model"
+        assert event.protocol == "openai"
+        assert event.streamed is False
+
+    @pytest.mark.asyncio()
+    async def test_request_finalizer_emits_protocol_and_streaming_metadata(
+        self,
+    ) -> None:
+        coalescer = MagicMock(spec=MetricsWriteCoalescer)
+        coalescer.record_usage = MagicMock()
+
+        from eggpool.request.finalizer import (
+            FinalizationData,
+            FinalizationOutcome,
+            RequestFinalizer,
+        )
+
+        db = AsyncMock(spec=Database)
+        request_repo = AsyncMock()
+        attempt_repo = AsyncMock()
+        reservation_repo = AsyncMock()
+
+        request_repo.finalize_if_pending = AsyncMock(return_value=True)
+
+        finalizer = RequestFinalizer(
+            db=db,
+            request_repo=request_repo,
+            attempt_repo=attempt_repo,
+            reservation_repo=reservation_repo,
+            metrics_coalescer=coalescer,
+        )
+
+        selected = MagicMock()
+        selected.db_request_id = 1
+        selected.reservation_id = 10
+        selected.attempt_id = 20
+        selected.account_name = "test_acct"
+        selected.provider_id = "test_provider"
+        selected.model_id = "claude-3"
+        selected.account_id = 1
+        selected.attempt_number = 1
+        selected.estimated_microdollars = 500
+        selected.protocol = "anthropic"
+        selected.streamed = True
+
+        data = FinalizationData(
+            outcome=FinalizationOutcome.COMPLETED,
+            input_tokens=100,
+            output_tokens=200,
+            upstream_latency_ms=150,
+        )
+
+        transitioned = await finalizer.finalize(selected, data)
+
+        assert transitioned is True
+        event = coalescer.record_usage.call_args[0][0]
+        assert isinstance(event, UsageMetricEvent)
+        assert event.protocol == "anthropic"
+        assert event.streamed is True
 
     @pytest.mark.asyncio()
     async def test_request_finalizer_no_double_counting(self) -> None:

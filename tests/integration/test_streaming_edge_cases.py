@@ -318,12 +318,16 @@ async def test_streaming_success_preserves_upstream_status(
 
     assert received_chunks
     request_row = await db.fetch_one(
-        "SELECT status, status_code FROM requests WHERE proxy_request_id = ?",
+        "SELECT status, status_code, upstream_connect_ms, upstream_read_ms, "
+        "coordinator_overhead_ms FROM requests WHERE proxy_request_id = ?",
         ("edge-stream-status-201",),
     )
     assert request_row is not None
     assert request_row["status"] == "completed"
     assert request_row["status_code"] == 201
+    assert request_row["upstream_connect_ms"] is not None
+    assert request_row["upstream_read_ms"] is not None
+    assert request_row["coordinator_overhead_ms"] is not None
 
 
 # ---------------------------------------------------------------------------

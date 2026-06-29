@@ -424,8 +424,8 @@ class RequestFinalizer:
                     provider_id=getattr(selected, "provider_id", "unknown"),
                     model_id=_get_model_id(selected),
                     account_id=getattr(selected, "account_id", None),
-                    protocol="openai",  # protocol is not on SelectedAttempt
-                    streamed=False,
+                    protocol=_get_protocol(selected, data),
+                    streamed=_get_streamed(selected),
                     status=self._outcome_to_status(data.outcome),
                     retry_count=max(0, getattr(selected, "attempt_number", 1) - 1),
                     input_tokens=data.input_tokens,
@@ -468,3 +468,19 @@ def _get_model_id(selected: Any) -> str:
         type(selected).__name__,
     )
     return ""
+
+
+def _get_protocol(selected: Any, data: FinalizationData) -> str:
+    """Extract the client protocol for analytics, falling back safely."""
+    protocol = getattr(selected, "protocol", None)
+    if isinstance(protocol, str) and protocol:
+        return protocol
+    if data.upstream_protocol:
+        return data.upstream_protocol
+    return "openai"
+
+
+def _get_streamed(selected: Any) -> bool:
+    """Extract the streaming flag without trusting loose test doubles."""
+    streamed = getattr(selected, "streamed", None)
+    return streamed if isinstance(streamed, bool) else False

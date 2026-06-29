@@ -109,6 +109,15 @@ _UPSTREAM_REQUEST_ID_HEADERS: list[str] = [
     "x-amzn-requestid",
 ]
 
+_TRANSIENT_BACKOFF_REASONS: tuple[str, ...] = (
+    "quota_exhausted",
+    "rate_limited",
+    "upstream_server_error",
+    "connect_timeout",
+    "connection_failure",
+    "protocol_error",
+)
+
 
 def _prepare_error_detail(value: object | None, persist: bool) -> str | None:
     """Redact error detail only when persistence is enabled."""
@@ -136,6 +145,7 @@ class ProxyRequestContext:
     client_ip: str = ""
     upstream_body: bytes | None = None
     upstream_connect_ms: int | None = None
+    upstream_headers_ms: int | None = None
     upstream_protocol: str = ""
     transcode_required: bool = False
     transcode_context: TranscodeContext | None = None
@@ -170,6 +180,8 @@ class SelectedAttempt:
     attempt_number: int
     provider_id: str = DEFAULT_PROVIDER_ID
     requires_transcode: bool = False
+    protocol: str = "openai"
+    streamed: bool = False
 
 
 @dataclass(slots=True)
@@ -924,6 +936,8 @@ class RequestCoordinator:
             attempt_number=attempt_number,
             provider_id=resolved_provider_id,
             requires_transcode=context.transcode_required,
+            protocol=context.protocol,
+            streamed=context.streaming,
         )
 
     async def _execute_upstream(
@@ -988,13 +1002,9 @@ class RequestCoordinator:
             # are available, so this window includes DNS, TCP, TLS,
             # and the upstream handler accept — everything before the
             # upstream has produced any output.
-            if self._dispatch_overhead_recorder is not None:
-                self._dispatch_overhead_recorder.record_ns(
-                    time.perf_counter_ns() - context.started_monotonic_ns
-                )
-            connect_start = time.monotonic()
-            response = await client.send(upstream_request, stream=True)
-            context.upstream_connect_ms = int((time.monotonic() - connect_start) * 1000)
+            response = await self._send_upstream_request(
+                client, upstream_request, context
+            )
             # Headers available immediately after send(); capture
             # first-byte time before reading the body.
             first_byte_ms = self._elapsed_ms(context)
@@ -1099,16 +1109,13 @@ class RequestCoordinator:
             upstream_req_id = self._get_header_value(
                 resp_headers, _UPSTREAM_REQUEST_ID_HEADERS
             )
-            upstream_connect_ms = cast("int | None", context.upstream_connect_ms)
-            if upstream_connect_ms is None:
-                upstream_read_ms: int | None = None
-                coordinator_overhead_ms: int | None = None
-            else:
-                upstream_read_ms = first_byte_ms
-                coordinator_overhead_ms = max(
-                    0,
-                    int(elapsed_ms) - upstream_connect_ms - first_byte_ms,
-                )
+            upstream_connect_ms = context.upstream_connect_ms
+            upstream_read_ms = self._upstream_read_ms(context, elapsed_ms)
+            coordinator_overhead_ms = self._coordinator_overhead_ms(
+                total_ms=elapsed_ms,
+                connect_ms=upstream_connect_ms,
+                read_ms=upstream_read_ms,
+            )
             # Finalize via RequestFinalizer
             await self._finalizer.finalize(
                 selected,
@@ -1147,14 +1154,7 @@ class RequestCoordinator:
             await self._clear_backoff(
                 selected.account_name,
                 model_id=None,
-                reasons=[
-                    "quota_exhausted",
-                    "rate_limited",
-                    "upstream_server_error",
-                    "connect_timeout",
-                    "connection_failure",
-                    "protocol_error",
-                ],
+                reasons=list(_TRANSIENT_BACKOFF_REASONS),
             )
 
             # Phase 2: decode upstream success response to client protocol
@@ -1240,11 +1240,7 @@ class RequestCoordinator:
         generator_created = False
         try:
             try:
-                if self._dispatch_overhead_recorder is not None:
-                    self._dispatch_overhead_recorder.record_ns(
-                        time.perf_counter_ns() - context.started_monotonic_ns
-                    )
-                response = await client.send(request, stream=True)
+                response = await self._send_upstream_request(client, request, context)
             except httpx.ConnectError as err:
                 raise _RetryableUpstreamError(
                     f"Connection failed: {err}",
@@ -1430,21 +1426,16 @@ class RequestCoordinator:
                         yield out_chunk
                 usage_result = observer.usage
 
-                upstream_connect_ms_value = context.upstream_connect_ms
-                upstream_read_ms_value = (
-                    int(first_byte_ms)
-                    if first_byte_ms > 0 and upstream_connect_ms_value is not None
-                    else None
-                )
                 upstream_latency_total = int((time.monotonic() - reference) * 1000)
-                coordinator_overhead_ms_value: int | None = None
-                if upstream_connect_ms_value is not None:
-                    coordinator_overhead_ms_value = max(
-                        0,
-                        upstream_latency_total
-                        - upstream_connect_ms_value
-                        - (upstream_read_ms_value or 0),
-                    )
+                upstream_connect_ms_value = context.upstream_connect_ms
+                upstream_read_ms_value = self._upstream_read_ms(
+                    context, upstream_latency_total
+                )
+                coordinator_overhead_ms_value = self._coordinator_overhead_ms(
+                    total_ms=upstream_latency_total,
+                    connect_ms=upstream_connect_ms_value,
+                    read_ms=upstream_read_ms_value,
+                )
 
                 # Finalize via RequestFinalizer
                 await finalizer.finalize(
@@ -1483,14 +1474,7 @@ class RequestCoordinator:
                     await clear_backoff(
                         selected.account_name,
                         model_id=None,
-                        reasons=[
-                            "quota_exhausted",
-                            "rate_limited",
-                            "upstream_server_error",
-                            "connect_timeout",
-                            "connection_failure",
-                            "protocol_error",
-                        ],
+                        reasons=list(_TRANSIENT_BACKOFF_REASONS),
                     )
 
             except asyncio.CancelledError:
@@ -1512,21 +1496,16 @@ class RequestCoordinator:
                 observer.flush()
                 usage_result = observer.usage
                 if not context.client_metadata.get("_cancelled_finalized"):
-                    cancel_connect_ms_value = context.upstream_connect_ms
-                    cancel_read_ms_value = (
-                        int(first_byte_ms)
-                        if first_byte_ms > 0 and cancel_connect_ms_value is not None
-                        else None
-                    )
                     cancel_latency_total = int((time.monotonic() - reference) * 1000)
-                    cancel_overhead_ms_value: int | None = None
-                    if cancel_connect_ms_value is not None:
-                        cancel_overhead_ms_value = max(
-                            0,
-                            cancel_latency_total
-                            - cancel_connect_ms_value
-                            - (cancel_read_ms_value or 0),
-                        )
+                    cancel_connect_ms_value = context.upstream_connect_ms
+                    cancel_read_ms_value = self._upstream_read_ms(
+                        context, cancel_latency_total
+                    )
+                    cancel_overhead_ms_value = self._coordinator_overhead_ms(
+                        total_ms=cancel_latency_total,
+                        connect_ms=cancel_connect_ms_value,
+                        read_ms=cancel_read_ms_value,
+                    )
                     try:
                         await asyncio.wait_for(
                             asyncio.shield(
@@ -1585,21 +1564,14 @@ class RequestCoordinator:
                 observer.flush()
                 usage_result = observer.usage
                 error_detail_value = _prepare_error_detail(exc, persist_error_detail)
-                mid_connect_ms_value = context.upstream_connect_ms
-                mid_read_ms_value = (
-                    int(first_byte_ms)
-                    if first_byte_ms > 0 and mid_connect_ms_value is not None
-                    else None
-                )
                 mid_latency_total = int((time.monotonic() - reference) * 1000)
-                mid_overhead_ms_value: int | None = None
-                if mid_connect_ms_value is not None:
-                    mid_overhead_ms_value = max(
-                        0,
-                        mid_latency_total
-                        - mid_connect_ms_value
-                        - (mid_read_ms_value or 0),
-                    )
+                mid_connect_ms_value = context.upstream_connect_ms
+                mid_read_ms_value = self._upstream_read_ms(context, mid_latency_total)
+                mid_overhead_ms_value = self._coordinator_overhead_ms(
+                    total_ms=mid_latency_total,
+                    connect_ms=mid_connect_ms_value,
+                    read_ms=mid_read_ms_value,
+                )
                 await finalizer.finalize(
                     selected,
                     FinalizationData(
@@ -1750,6 +1722,45 @@ class RequestCoordinator:
     def _elapsed_ms(context: ProxyRequestContext) -> int:
         """Return request latency from a clock unaffected by wall-clock jumps."""
         return max(0, int((time.monotonic() - context.started_monotonic) * 1000))
+
+    async def _send_upstream_request(
+        self,
+        client: httpx.AsyncClient,
+        request: httpx.Request,
+        context: ProxyRequestContext,
+    ) -> httpx.Response:
+        """Send an upstream request and capture shared dispatch timing."""
+        if self._dispatch_overhead_recorder is not None:
+            self._dispatch_overhead_recorder.record_ns(
+                time.perf_counter_ns() - context.started_monotonic_ns
+            )
+        connect_start = time.monotonic()
+        response = await client.send(request, stream=True)
+        context.upstream_connect_ms = int((time.monotonic() - connect_start) * 1000)
+        context.upstream_headers_ms = self._elapsed_ms(context)
+        return response
+
+    @staticmethod
+    def _upstream_read_ms(
+        context: ProxyRequestContext,
+        observed_elapsed_ms: int,
+    ) -> int | None:
+        """Return elapsed upstream body/stream read time after response headers."""
+        if context.upstream_headers_ms is None:
+            return None
+        return max(0, observed_elapsed_ms - context.upstream_headers_ms)
+
+    @staticmethod
+    def _coordinator_overhead_ms(
+        *,
+        total_ms: int,
+        connect_ms: int | None,
+        read_ms: int | None,
+    ) -> int | None:
+        """Return elapsed time not attributed to upstream connect or read phases."""
+        if connect_ms is None or read_ms is None:
+            return None
+        return max(0, total_ms - connect_ms - read_ms)
 
     def _classify_upstream_error(
         self,
