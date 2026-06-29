@@ -15,10 +15,7 @@ from eggpool.catalog.limits import (
 )
 from eggpool.config_utils import (
     detect_lan_ip,
-    generate_api_key,
-    read_server_api_key,
     read_server_port,
-    write_server_api_key,
 )
 from eggpool.db.connection import Database
 from eggpool.models.config import AppConfig
@@ -40,6 +37,30 @@ class IntegrationContext:
     collapse_models: bool = False
     config_mutated: bool = False
     transcoder_mutated: bool = False
+
+
+@dataclass(frozen=True)
+class ConfigsetupTargetSpec:
+    """Metadata describing a configsetup target's capabilities."""
+
+    name: str
+    requires_model: bool
+    supports_dynamic_models: bool = False
+    supports_direct_write: bool = False
+    default_write_path: str | None = None
+
+
+TARGET_SPECS: dict[str, ConfigsetupTargetSpec] = {
+    "aider": ConfigsetupTargetSpec(name="aider", requires_model=False),
+    "codex": ConfigsetupTargetSpec(name="codex", requires_model=True),
+    "qwen-code": ConfigsetupTargetSpec(name="qwen-code", requires_model=False),
+    "kilo": ConfigsetupTargetSpec(name="kilo", requires_model=False),
+    "continue": ConfigsetupTargetSpec(name="continue", requires_model=True),
+    "cline": ConfigsetupTargetSpec(name="cline", requires_model=False),
+    "roo-code": ConfigsetupTargetSpec(name="roo-code", requires_model=False),
+    "goose": ConfigsetupTargetSpec(name="goose", requires_model=True),
+    "openhands": ConfigsetupTargetSpec(name="openhands", requires_model=True),
+}
 
 
 def _load_catalog(config: AppConfig, collapse_models: bool) -> list[dict[str, Any]]:
@@ -250,12 +271,45 @@ def _apply_limits(
     return models_data
 
 
-def _enable_transcoder(config: AppConfig) -> bool:
-    """Enable transcoding if it was disabled in config. Returns True if mutated."""
-    if config.transcoder.enabled is False:
-        config.transcoder.enabled = True
-        return True
+def _openai_client_needs_transcoder(config: AppConfig) -> bool:
+    """Check if any enabled provider requires transcoding for OpenAI clients."""
+    for _provider_id, provider_cfg in config.providers.items():
+        if not any(account.enabled for account in provider_cfg.accounts):
+            continue
+        protocols = getattr(provider_cfg, "protocols", [])
+        if "openai" not in protocols and "anthropic" in protocols:
+            return True
     return False
+
+
+def _persist_transcoder_enabled(config_path: str, config: AppConfig) -> bool:
+    """Persist [transcoder].enabled = true to the TOML file if needed.
+
+    Returns True if the file was mutated.
+    """
+    from pathlib import Path
+
+    from eggpool.toml_edit import update_section_value
+
+    if config.transcoder.enabled:
+        return False
+    if not _openai_client_needs_transcoder(config):
+        return False
+
+    path = Path(config_path)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    result = update_section_value(
+        lines,
+        "transcoder",
+        "enabled",
+        "true",
+        insert_missing_key=True,
+        append_missing_section=True,
+    )
+    if not result.section_found and not result.key_found:
+        return False
+    path.write_text("\n".join(result.lines) + "\n", encoding="utf-8")
+    return True
 
 
 def build_integration_context(
@@ -271,16 +325,11 @@ def build_integration_context(
     limits, and transcoder enablement.
     """
     config_mutated = False
-    key = read_server_api_key(config_path)
-    if not key:
-        key = generate_api_key()
-        success, _warning = write_server_api_key(config_path, key)
-        if not success:
-            raise OSError(
-                f"Cannot persist new API key to {config_path}. "
-                "Refusing to proceed without a durable key."
-            )
-        config_mutated = True
+    from eggpool.config_utils import resolve_server_api_key
+
+    key_resolution = resolve_server_api_key(config_path)
+    key = key_resolution.api_key
+    config_mutated = key_resolution.config_mutated
 
     port = read_server_port(config_path)
     lan_ip = detect_lan_ip()
@@ -302,7 +351,7 @@ def build_integration_context(
         models_data = _merge_static_models(models_data, config, collapse_models)
         models_data = _apply_limits(models_data, config, collapse_models)
         if enable_transcoder_for_openai_clients:
-            transcoder_mutated = _enable_transcoder(config)
+            transcoder_mutated = _persist_transcoder_enabled(config_path, config)
 
     return IntegrationContext(
         config_path=config_path,

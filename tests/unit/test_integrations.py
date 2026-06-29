@@ -220,8 +220,15 @@ class TestCodexRenderer:
         self, ctx_one_model: IntegrationContext
     ) -> None:
         snippet = build_codex_toml_snippet(ctx_one_model)
-        assert "[provider.eggpool.models.gpt-4o/openai]" in snippet
+        assert '[provider.eggpool.models."gpt-4o/openai"]' in snippet
         assert "context_window = 128000" in snippet
+
+    def test_toml_snippet_bare_model_id(
+        self, ctx_many_models: IntegrationContext
+    ) -> None:
+        ctx_many_models.models[0]["model_id"] = "gpt-4o"
+        snippet = build_codex_toml_snippet(ctx_many_models)
+        assert "[provider.eggpool.models.gpt-4o]" in snippet
 
 
 class TestQwenCodeRenderer:
@@ -297,13 +304,20 @@ class TestContinueDevRenderer:
         self, ctx_many_models: IntegrationContext
     ) -> None:
         snippet = build_continue_yaml_snippet(ctx_many_models)
-        assert "model:" in snippet
-        # model should be empty when ambiguous
-        for line in snippet.split("\n"):
-            if "model:" in line:
-                assert line.strip().endswith('model: ""') or line.strip().endswith(
-                    "model: "
-                )
+        # model key should be omitted entirely when ambiguous
+        assert "model:" not in snippet
+
+    def test_yaml_snippet_produces_valid_structure(
+        self, ctx_one_model: IntegrationContext
+    ) -> None:
+        snippet = build_continue_yaml_snippet(ctx_one_model)
+        lines = snippet.split("\n")
+        assert lines[0] == "models:"
+        assert lines[1].startswith("  - title:")
+        assert lines[2].startswith("    provider:")
+        assert lines[3].startswith("    model:")
+        assert lines[4].startswith("    apiBase:")
+        assert lines[5].startswith("    apiKey:")
 
 
 class TestClineRenderer:

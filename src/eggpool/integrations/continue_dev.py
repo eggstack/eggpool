@@ -19,11 +19,6 @@ def _render_yaml_value(value: str) -> str:
     return value
 
 
-def _render_yaml_dict(d: dict[str, str]) -> str:
-    """Render a flat dict as YAML key-value pairs."""
-    return "\n".join(f"  {k}: {_render_yaml_value(v)}" for k, v in d.items())
-
-
 def build_continue_yaml_snippet(
     ctx: IntegrationContext, model: str | None = None
 ) -> str:
@@ -33,11 +28,19 @@ def build_continue_yaml_snippet(
     block compatible with Continue's ``config.yaml``.
     """
     default_model = model or (ctx.models[0]["model_id"] if len(ctx.models) == 1 else "")
-    props: dict[str, str] = {
-        "title": "EggPool",
-        "provider": "openai",
-        "model": default_model,
-        "apiBase": ctx.base_url,
-        "apiKey": ctx.api_key,
-    }
-    return f"models:\n- {_render_yaml_dict(props)}"
+    props: list[tuple[str, str]] = [
+        ("title", "EggPool"),
+        ("provider", "openai"),
+    ]
+    if default_model:
+        props.append(("model", default_model))
+    props.append(("apiBase", ctx.base_url))
+    props.append(("apiKey", ctx.api_key))
+
+    lines = ["models:"]
+    for i, (key, value) in enumerate(props):
+        if i == 0:
+            lines.append(f"  - {key}: {_render_yaml_value(value)}")
+        else:
+            lines.append(f"    {key}: {_render_yaml_value(value)}")
+    return "\n".join(lines)

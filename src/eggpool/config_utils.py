@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import secrets
 import socket
-from typing import cast
+from dataclasses import dataclass
+from typing import Literal, cast
 
 from eggpool.toml_edit import (
     render_toml_string,
@@ -73,6 +75,16 @@ def detect_lan_ip() -> str:
         return "127.0.0.1"
 
 
+@dataclass(frozen=True)
+class ServerKeyResolution:
+    """Structured result of server API key resolution."""
+
+    api_key: str
+    source: Literal["inline", "env", "generated"]
+    env_var: str | None = None
+    config_mutated: bool = False
+
+
 def write_server_api_key(config_path: str, new_key: str) -> tuple[bool, str | None]:
     """Write a server API key to the [server] section of the config.
 
@@ -102,3 +114,45 @@ def write_server_api_key(config_path: str, new_key: str) -> tuple[bool, str | No
 
     path.write_text("\n".join(result.lines) + "\n", encoding="utf-8")
     return True, None
+
+
+def resolve_server_api_key(config_path: str) -> ServerKeyResolution:
+    """Resolve the effective server API key with full metadata.
+
+    Resolution order:
+    1. Inline ``[server].api_key`` — reuse as-is.
+    2. ``[server].api_key_env`` with env var present — use env value, no mutation.
+    3. ``[server].api_key_env`` with env var absent — raise an error.
+    4. Neither inline nor env — generate and persist a new key.
+    """
+    raw = load_raw_config(config_path)
+    server = get_section(raw, "server")
+
+    # Case 1: inline key
+    inline_key = server.get("api_key")
+    if isinstance(inline_key, str) and inline_key:
+        return ServerKeyResolution(api_key=inline_key, source="inline")
+
+    # Case 2/3: api_key_env configured
+    env_var = server.get("api_key_env")
+    if isinstance(env_var, str) and env_var:
+        env_value = os.environ.get(env_var)
+        if env_value:
+            return ServerKeyResolution(api_key=env_value, source="env", env_var=env_var)
+        # Env var configured but not present — abort
+        raise SystemExit(
+            f"[server].api_key_env is set to {env_var}, but that environment "
+            f"variable is not available to this process. Export it before "
+            f"running configsetup, or run eggpool newkey to switch to an "
+            f"inline key."
+        )
+
+    # Case 4: generate and persist
+    new_key = generate_api_key()
+    success, _warning = write_server_api_key(config_path, new_key)
+    if not success:
+        raise OSError(
+            f"Cannot persist new API key to {config_path}. "
+            "Refusing to proceed without a durable key."
+        )
+    return ServerKeyResolution(api_key=new_key, source="generated", config_mutated=True)

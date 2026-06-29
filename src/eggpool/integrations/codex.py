@@ -15,6 +15,7 @@ def build_codex_toml_snippet(ctx: IntegrationContext, model: str | None = None) 
 
     Renders a ``[provider.eggpool]`` section with the EggPool endpoint
     and API key, suitable for pasting into a Codex config file.
+    Model IDs containing special characters are quoted in table headers.
     """
     lines = [
         "[provider.eggpool]",
@@ -27,7 +28,9 @@ def build_codex_toml_snippet(ctx: IntegrationContext, model: str | None = None) 
         lines.append("")
         for m in ctx.models:
             mid = m["model_id"]
-            lines.append(f"[provider.eggpool.models.{mid}]")
+            # Quote model IDs that contain characters unsafe for bare TOML keys
+            table_key = f'"{mid}"' if any(c in mid for c in "/.: ") else mid
+            lines.append(f"[provider.eggpool.models.{table_key}]")
             limits = m.get("effective_limits", {})
             ctx_tokens = limits.get("context_tokens")
             if ctx_tokens is not None and ctx_tokens > 0:

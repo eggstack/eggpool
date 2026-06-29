@@ -52,10 +52,6 @@ class Database:
             "database_transaction_depth",
             default=0,
         )
-        self._transaction_owner: ContextVar[asyncio.Task[object] | None] = ContextVar(
-            "database_transaction_owner",
-            default=None,
-        )
         # Contention counters (in-memory only, never persisted)
         self._write_ops: int = 0
         self._read_ops: int = 0

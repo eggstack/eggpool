@@ -161,19 +161,19 @@ uv run pytest
 
 `eggpool configsetup` generates configuration snippets for popular coding agents:
 
-| Target | Command | Output | `--write` default |
-|--------|---------|--------|-------------------|
-| OpenCode | `eggpool configsetup opencode` | JSON provider config | N/A (clipboard) |
-| Claude Code | `eggpool configsetup claude-code` | JSON snippet | N/A (clipboard) |
-| Aider | `eggpool configsetup aider` | Shell env exports | `.env.eggpool` |
-| Codex | `eggpool configsetup codex` | TOML provider block | N/A (printed) |
-| Qwen Code | `eggpool configsetup qwen-code` | JSON provider block | N/A (printed) |
-| Kilo | `eggpool configsetup kilo` | JSON provider block | N/A (printed) |
-| Continue | `eggpool configsetup continue` | YAML model block | `~/.continue/eggpool.yaml` |
-| Cline | `eggpool configsetup cline` | JSON profile | `cline-eggpool.json` |
-| Roo Code | `eggpool configsetup roo-code` | JSON profile | `roo-code-eggpool.json` |
-| Goose | `eggpool configsetup goose` | Shell env exports | N/A (printed) |
-| OpenHands | `eggpool configsetup openhands` | Shell env exports | N/A (printed) |
+| Target | Command | Output | `--write` default | Model | Status |
+|--------|---------|--------|-------------------|-------|--------|
+| OpenCode | `eggpool configsetup opencode` | JSON provider config | N/A (clipboard) | auto | stable |
+| Claude Code | `eggpool configsetup claude-code` | JSON snippet | N/A (clipboard) | N/A | stable |
+| Aider | `eggpool configsetup aider` | Shell env exports | `.env.eggpool` | recommended | stable |
+| Codex | `eggpool configsetup codex` | TOML provider block | N/A (printed) | required | version-sensitive |
+| Qwen Code | `eggpool configsetup qwen-code` | JSON provider block | N/A (printed) | optional | verify schema |
+| Kilo | `eggpool configsetup kilo` | JSON provider block | N/A (printed) | optional | verify schema |
+| Continue | `eggpool configsetup continue` | YAML model block | `~/.continue/eggpool.yaml` | required | stable fragment |
+| Cline | `eggpool configsetup cline` | JSON profile | `cline-eggpool.json` | recommended | paste into UI |
+| Roo Code | `eggpool configsetup roo-code` | JSON profile | `roo-code-eggpool.json` | recommended | paste into UI |
+| Goose | `eggpool configsetup goose` | Shell env exports | N/A (printed) | required | verify env vars |
+| OpenHands | `eggpool configsetup openhands` | Shell env exports | N/A (printed) | required | stable fragment |
 
 Shared options: `--host`, `--base-url`, `--model`, `--write`, `--output`, `--force`, `--no-clipboard`, `--print-secret`.
 

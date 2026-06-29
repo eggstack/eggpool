@@ -76,7 +76,7 @@ CI sets `PYTHONHASHSEED=0` and `TZ=UTC`; reproduce locally for deterministic res
 - **Process model**: supervisor + Granian worker, PID file lifecycle, daemon mode. See `architecture/README.md` § Daemon Mode.
 - **Dashboard**: server-rendered HTML, 12 pages, Chart.js v4, grouped timeseries, CSS tooltips. See `architecture` skill § Dashboard.
 - **Observability**: attempt analytics, routing analytics, latency phases, pending health, runtime metrics. See `architecture` skill § Runtime Observability.
-- **Agent integrations**: `eggpool configsetup` generates configuration snippets for 11 coding agents (OpenCode, Claude Code, Aider, Codex, Qwen Code, Kilo, Continue, Cline, Roo Code, Goose, OpenHands). Target-specific generators live in `src/eggpool/integrations/`; shared utilities in `src/eggpool/config_utils.py`. See `architecture/README.md` § Package Structure.
+- **Agent integrations**: `eggpool configsetup` generates configuration snippets for 11 coding agents (OpenCode, Claude Code, Aider, Codex, Qwen Code, Kilo, Continue, Cline, Roo Code, Goose, OpenHands). Target-specific generators live in `src/eggpool/integrations/`; shared utilities in `src/eggpool/config_utils.py` (`resolve_server_api_key`, `ServerKeyResolution`). Transcoder enablement is persisted to TOML when required. Secret output is controlled explicitly via `contains_secret`. See `architecture/README.md` § Package Structure.
 
 ## Gotchas
 

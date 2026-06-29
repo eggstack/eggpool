@@ -732,6 +732,17 @@ def _restart_after_configsetup_mutation(config_path: str) -> None:
         click.echo("Start or restart the server to apply generated config.", err=True)
 
 
+def _restart_after_integration_context_mutation(
+    config_path: str,
+    ctx_data: Any,
+) -> None:
+    """Restart if key or transcoder was mutated during context build."""
+    if getattr(ctx_data, "config_mutated", False) or getattr(
+        ctx_data, "transcoder_mutated", False
+    ):
+        _restart_after_configsetup_mutation(config_path)
+
+
 @cli.command()
 @click.pass_context
 def getkey(ctx: click.Context) -> None:
@@ -1039,8 +1050,8 @@ def configsetup_opencode(ctx: click.Context) -> None:
             "Run 'eggpool models refresh' to populate model metadata.",
             err=True,
         )
-    if ctx_data.config_mutated:
-        _restart_after_configsetup_mutation(config_path)
+    if ctx_data.config_mutated or ctx_data.transcoder_mutated:
+        _restart_after_integration_context_mutation(config_path, ctx_data)
     click.echo("Paste into ~/.config/opencode/opencode.json.", err=True)
     _print_install_hint()
 
@@ -1137,6 +1148,8 @@ def _build_ctx_with_overrides(
     base_url: str | None,
 ) -> Any:
     """Build IntegrationContext, applying CLI overrides for host/base_url."""
+    from urllib.parse import urlparse
+
     from eggpool.integrations.common import build_integration_context
 
     try:
@@ -1151,11 +1164,24 @@ def _build_ctx_with_overrides(
     if base_url is not None:
         from dataclasses import replace
 
-        root = base_url.rstrip("/")
+        parsed = urlparse(base_url)
+        if not parsed.scheme or not parsed.netloc:
+            click.echo(
+                f"Error: --base-url must be a valid URL with scheme and host, "
+                f"got: {base_url}",
+                err=True,
+            )
+            sys.exit(1)
+        # Normalize trailing slash
+        normalized = base_url.rstrip("/")
+        root = normalized
         if root.endswith("/v1"):
             root = root[:-3]
         ctx_data = replace(
-            ctx_data, base_url=base_url, base_url_root=root, host=host or ctx_data.host
+            ctx_data,
+            base_url=normalized,
+            base_url_root=root,
+            host=host or ctx_data.host,
         )
     elif host is not None:
         from dataclasses import replace
@@ -1179,17 +1205,16 @@ def _output_snippet(
     print_secret: bool,
     default_path: str | None = None,
     paste_hint: str | None = None,
+    contains_secret: bool = True,
 ) -> None:
     """Handle output of a generated snippet: file write, clipboard, stdout."""
     from pathlib import Path
 
-    secret_in_snippet = (
-        "api_key" in snippet.lower()
-        or "apikey" in snippet.lower()
-        or "apiKey" in snippet
-    )
+    secret_in_snippet = contains_secret
 
     if output or do_write:
+        from datetime import UTC, datetime
+
         target = (
             Path(output) if output else (Path(default_path) if default_path else None)
         )
@@ -1204,6 +1229,13 @@ def _output_snippet(
                 err=True,
             )
             sys.exit(1)
+        if target.exists() and force:
+            existing_content = target.read_text(encoding="utf-8")
+            if existing_content != snippet + "\n":
+                ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
+                backup = target.with_suffix(f".eggpool.bak.{ts}{target.suffix}")
+                backup.write_text(existing_content, encoding="utf-8")
+                click.echo(f"Backup created: {backup}", err=True)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(snippet + "\n", encoding="utf-8")
         click.echo(f"Wrote config to {target}", err=True)
@@ -1264,8 +1296,7 @@ def configsetup_aider(
         default_path=".env.eggpool",
         paste_hint="Source the file: source .env.eggpool",
     )
-    if ctx_data.config_mutated:
-        _restart_after_configsetup_mutation(config_path)
+    _restart_after_integration_context_mutation(config_path, ctx_data)
 
 
 @configsetup.command("codex")
@@ -1306,8 +1337,7 @@ def configsetup_codex(
         no_clipboard=no_clipboard,
         print_secret=print_secret,
     )
-    if ctx_data.config_mutated:
-        _restart_after_configsetup_mutation(config_path)
+    _restart_after_integration_context_mutation(config_path, ctx_data)
 
 
 @configsetup.command("qwen-code")
@@ -1340,8 +1370,7 @@ def configsetup_qwen_code(
         no_clipboard=no_clipboard,
         print_secret=print_secret,
     )
-    if ctx_data.config_mutated:
-        _restart_after_configsetup_mutation(config_path)
+    _restart_after_integration_context_mutation(config_path, ctx_data)
 
 
 @configsetup.command("kilo")
@@ -1374,8 +1403,7 @@ def configsetup_kilo(
         no_clipboard=no_clipboard,
         print_secret=print_secret,
     )
-    if ctx_data.config_mutated:
-        _restart_after_configsetup_mutation(config_path)
+    _restart_after_integration_context_mutation(config_path, ctx_data)
 
 
 @configsetup.command("continue")
@@ -1410,8 +1438,7 @@ def configsetup_continue(
         default_path=str(Path.home() / ".continue" / "eggpool.yaml"),
         paste_hint="Paste into ~/.continue/config.yaml under the models: key.",
     )
-    if ctx_data.config_mutated:
-        _restart_after_configsetup_mutation(config_path)
+    _restart_after_integration_context_mutation(config_path, ctx_data)
 
 
 @configsetup.command("cline")
@@ -1448,8 +1475,7 @@ def configsetup_cline(
             "Paste values into Cline extension settings (OpenAI Compatible provider)."
         ),
     )
-    if ctx_data.config_mutated:
-        _restart_after_configsetup_mutation(config_path)
+    _restart_after_integration_context_mutation(config_path, ctx_data)
 
 
 @configsetup.command("roo-code")
@@ -1487,8 +1513,7 @@ def configsetup_roo_code(
             "(OpenAI Compatible provider)."
         ),
     )
-    if ctx_data.config_mutated:
-        _restart_after_configsetup_mutation(config_path)
+    _restart_after_integration_context_mutation(config_path, ctx_data)
 
 
 @configsetup.command("goose")
@@ -1522,8 +1547,7 @@ def configsetup_goose(
         print_secret=print_secret,
         paste_hint="Export these variables before running Goose.",
     )
-    if ctx_data.config_mutated:
-        _restart_after_configsetup_mutation(config_path)
+    _restart_after_integration_context_mutation(config_path, ctx_data)
 
 
 @configsetup.command("openhands")
@@ -1557,8 +1581,7 @@ def configsetup_openhands(
         print_secret=print_secret,
         paste_hint="Pass these environment variables to the OpenHands runtime.",
     )
-    if ctx_data.config_mutated:
-        _restart_after_configsetup_mutation(config_path)
+    _restart_after_integration_context_mutation(config_path, ctx_data)
 
 
 @cli.group()
