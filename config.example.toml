@@ -80,6 +80,29 @@ five_hour_microdollars = 12000000
 weekly_microdollars = 30000000
 monthly_microdollars = 60000000
 
+# --- Pricing resolution ----------------------------------------------
+# External pricing catalogs supplement upstream model metadata when
+# providers do not include pricing in /v1/models responses. The per-catalog
+# max_entries cap bounds steady-state RSS on SBC deployments.
+[pricing]
+fallback = "generic_estimate"
+
+[pricing.catalogs]
+
+[pricing.catalogs.openrouter]
+enabled = true
+priority = 100
+ttl_seconds = 86400
+# max_entries = 4096  # bound the in-memory catalog cache; oldest entries evict first
+# base_url = "https://openrouter.ai/api/v1"
+# api_key = "..."     # optional; only needed for higher rate limits
+
+[pricing.catalogs.opencode_zen]
+enabled = false
+priority = 200
+ttl_seconds = 86400
+# max_entries = 4096  # bound the in-memory catalog cache; oldest entries evict first
+
 # ─── Network ─────────────────────────────────────────────────────────
 # Outbound client transport tuning and DNS caching. The DNS cache wraps
 # the default httpcore transport to cache resolved DNS entries in memory,

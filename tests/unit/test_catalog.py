@@ -146,6 +146,34 @@ def test_cache_update_from_account() -> None:
     assert cache.get_supporting_accounts("gpt-4") == {"account1"}
 
 
+def test_cache_canonical_provider_entry_reuses_global_metadata() -> None:
+    cache = ModelCatalogCache()
+    cache.update_from_account(
+        "account1", "opencode-go", [{"model_id": "gpt-4", "protocol": "openai"}]
+    )
+
+    assert cache.get_provider_model_entry("gpt-4", "opencode-go") is cache.get_model(
+        "gpt-4"
+    )
+
+
+def test_cache_later_provider_keeps_distinct_metadata() -> None:
+    cache = ModelCatalogCache()
+    cache.update_from_account(
+        "account1", "provider-a", [{"model_id": "gpt-4", "protocol": "openai"}]
+    )
+    cache.update_from_account(
+        "account2", "provider-b", [{"model_id": "gpt-4", "protocol": "openai"}]
+    )
+
+    assert cache.get_provider_model_entry("gpt-4", "provider-a") is cache.get_model(
+        "gpt-4"
+    )
+    assert cache.get_provider_model_entry("gpt-4", "provider-b") is not cache.get_model(
+        "gpt-4"
+    )
+
+
 def test_cache_multi_account_support() -> None:
     cache = ModelCatalogCache()
     cache.update_from_account(

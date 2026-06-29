@@ -186,7 +186,6 @@ class ModelCatalogCache:
                 "effective_limits": model.get("effective_limits", {}),
             }
             self._preserve_static_fields(provider_key, model_info)
-            self._provider_models[provider_key] = dict(model_info)
 
             # Global entry: only materialize a global row if this
             # provider brings new information that the existing global
@@ -196,6 +195,9 @@ class ModelCatalogCache:
             global_info = self._models.get(model_id)
             if global_info is None:
                 self._models[model_id] = model_info
+                # This provider supplies the canonical global entry, so
+                # keep one shared dict rather than a duplicate provider copy.
+                self._provider_models[provider_key] = model_info
             elif (
                 global_info is not model_info
                 and not global_info.get("protocol")
@@ -204,7 +206,9 @@ class ModelCatalogCache:
                 # First provider to bring a resolved protocol wins.
                 model_info["first_seen_at"] = global_info.get("first_seen_at", now)
                 self._models[model_id] = model_info
+                self._provider_models[provider_key] = model_info
             else:
+                self._provider_models[provider_key] = dict(model_info)
                 global_info["last_seen_at"] = now
 
             existing_support = self._account_support.get(model_id, frozenset())

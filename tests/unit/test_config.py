@@ -416,6 +416,8 @@ def test_config_example_validates() -> None:
     config = AppConfig.from_toml("config.example.toml")
     assert config.upstream.base_url == "https://opencode.ai/zen/go/v1"
     assert config.limits.five_hour_microdollars == 12_000_000
+    assert config.pricing.catalogs.openrouter.max_entries == 4096
+    assert config.pricing.catalogs.opencode_zen.max_entries == 4096
     # All accounts are commented out — users add them via `connect`
     assert len(config.all_accounts()) == 0
 
