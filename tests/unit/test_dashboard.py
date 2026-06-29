@@ -631,18 +631,17 @@ class TestRenderOverview:
                 "imbalance": {"imbalance_ratio": 0.0},
             },
             accounts=[],
+            enabled_count=12,
+            disabled_count=3,
         )
-        assert "account-breakdown-filter" in html
-        assert 'id="overview_show_disabled"' in html
-        assert 'name="show_disabled"' in html
-        # Default state: "Hide disabled accounts" is selected.
-        assert (
-            '<option value="0" selected="selected">Hide disabled accounts</option>'
-            in html
-        )
+        assert 'class="show-disabled-toggle"' in html
+        assert "Show 3 disabled" in html
+        # Default state: anchor is unpressed and points to the show URL.
+        assert 'aria-pressed="false"' in html
+        assert "show_disabled=1" in html
 
     def test_account_breakdown_filter_reflects_state(self) -> None:
-        """``show_disabled=True`` selects the show option on the overview."""
+        """``show_disabled=True`` flips the toggle to pressed and points to hide."""
         html = render_overview(
             overview={
                 "summary": {"total_requests": 0},
@@ -650,14 +649,14 @@ class TestRenderOverview:
             },
             accounts=[],
             show_disabled=True,
+            disabled_count=3,
         )
-        assert (
-            '<option value="1" selected="selected">Show disabled accounts</option>'
-            in html
-        )
+        assert 'aria-pressed="true"' in html
+        assert "Hide disabled" in html
+        assert "show_disabled=0" in html
 
     def test_account_breakdown_filter_preserves_period_and_theme(self) -> None:
-        """The toggle form preserves period and theme via hidden inputs."""
+        """The toggle href preserves the operator's period and theme."""
         html = render_overview(
             overview={
                 "summary": {"total_requests": 0},
@@ -666,10 +665,99 @@ class TestRenderOverview:
             accounts=[],
             period="7d",
             current_theme="midnight",
+            disabled_count=3,
         )
-        assert 'class="period-selector account-breakdown-filter"' in html
-        assert 'name="period" value="7d"' in html
-        assert 'name="theme" value="midnight"' in html
+        assert 'class="show-disabled-toggle"' in html
+        assert "period=7d" in html
+        assert "theme=midnight" in html
+
+    def test_account_breakdown_chip_with_counts(self) -> None:
+        """Chip combines enabled and disabled counts on the heading."""
+        html = render_overview(
+            overview={
+                "summary": {"total_requests": 0},
+                "imbalance": {"imbalance_ratio": 0.0},
+            },
+            accounts=[],
+            enabled_count=12,
+            disabled_count=3,
+        )
+        assert 'class="panel-header-chip"' in html
+        assert "12 enabled" in html
+        assert "3 disabled" in html
+
+    def test_account_breakdown_chip_no_disabled_zero(self) -> None:
+        """Chip omits the disabled side when no disabled rows exist."""
+        html = render_overview(
+            overview={
+                "summary": {"total_requests": 0},
+                "imbalance": {"imbalance_ratio": 0.0},
+            },
+            accounts=[],
+            enabled_count=12,
+            disabled_count=0,
+        )
+        assert "12 enabled" in html
+        assert "disabled" not in html.split("panel-header-chip")[1].split("</span>")[0]
+
+    def test_account_breakdown_toggle_label_default_with_count(self) -> None:
+        """Default state shows ``Show N disabled`` when N > 0."""
+        html = render_overview(
+            overview={
+                "summary": {"total_requests": 0},
+                "imbalance": {"imbalance_ratio": 0.0},
+            },
+            accounts=[],
+            enabled_count=10,
+            disabled_count=3,
+        )
+        assert "Show 3 disabled" in html
+
+    def test_account_breakdown_toggle_label_default_no_count(self) -> None:
+        """Default state falls back to a static label when N == 0."""
+        html = render_overview(
+            overview={
+                "summary": {"total_requests": 0},
+                "imbalance": {"imbalance_ratio": 0.0},
+            },
+            accounts=[],
+            enabled_count=12,
+            disabled_count=0,
+        )
+        assert "Show disabled" in html
+        assert "Show 0 disabled" not in html
+
+    def test_account_breakdown_toggle_label_active(self) -> None:
+        """Active state shows ``Hide disabled`` and is aria-pressed."""
+        html = render_overview(
+            overview={
+                "summary": {"total_requests": 0},
+                "imbalance": {"imbalance_ratio": 0.0},
+            },
+            accounts=[],
+            enabled_count=12,
+            disabled_count=3,
+            show_disabled=True,
+        )
+        assert "Hide disabled" in html
+        assert 'aria-pressed="true"' in html
+
+    def test_account_breakdown_toggle_xss_safe(self) -> None:
+        """Disabled-count strings are coerced to 0 so no script body renders."""
+        html = render_overview(
+            overview={
+                "summary": {"total_requests": 0},
+                "imbalance": {"imbalance_ratio": 0.0},
+            },
+            accounts=[],
+            enabled_count=12,
+            disabled_count="<script>alert(1)</script>",
+        )
+        assert "<script>alert(1)</script>" not in html
+        # Defensive coercion means non-numeric count falls back to 0:
+        # the toggle label reads the static "Show disabled" string.
+        assert "Show disabled" in html
+        assert "Show <script>" not in html
 
     def test_account_breakdown_empty_state_with_disabled_count(self) -> None:
         """When only disabled rows exist, offer a one-click opt-in link."""

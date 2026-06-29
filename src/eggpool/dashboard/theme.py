@@ -226,6 +226,21 @@ class DashboardTheme(BaseModel):
     button_primary_bg: str = "#1f2328"
     button_primary_text: str = "#ffffff"
 
+    # Filter chip (panel-header chips like "12 enabled · 3 disabled")
+    chip_bg: str = "#eef2f7"
+    chip_border: str = "#d8dee6"
+
+    # Pill-shaped toggle button (the Show/Hide disabled anchor on the overview)
+    button_bg: str = "#ffffff"
+    button_border: str = "#cbd5e1"
+    button_bg_hover: str = "#f1f5f9"
+    button_bg_active: str = "#e0f2fe"
+
+    # Link + accent (used by the toggle button and chip text)
+    link_color: str = "#0969da"
+    link_color_hover: str = "#0550ae"
+    accent_color: str = "#0969da"
+
     # Event tags
     tag_default_bg: str = "#ddf4ff"
     tag_default_text: str = "#0969da"
@@ -272,6 +287,15 @@ class DashboardTheme(BaseModel):
             ("--color-info", self.color_info),
             ("--button-primary-bg", self.button_primary_bg),
             ("--button-primary-text", self.button_primary_text),
+            ("--chip-bg", self.chip_bg),
+            ("--chip-border", self.chip_border),
+            ("--button-bg", self.button_bg),
+            ("--button-border", self.button_border),
+            ("--button-bg-hover", self.button_bg_hover),
+            ("--button-bg-active", self.button_bg_active),
+            ("--link-color", self.link_color),
+            ("--link-color-hover", self.link_color_hover),
+            ("--accent-color", self.accent_color),
             ("--tag-default-bg", self.tag_default_bg),
             ("--tag-default-text", self.tag_default_text),
             ("--tag-success-bg", self.tag_success_bg),
@@ -370,6 +394,29 @@ def translate_theme(halloy: HalloyTheme) -> DashboardTheme:
     )
     button_primary_text = text_primary
 
+    # Filter chip (a soft-tinted pill — subtle enough to read as metadata,
+    # not a button).  Mix a touch of text into the page background so it
+    # works on both light and dark halloy palettes without a hard-coded
+    # lookup table.
+    chip_bg = _mix_with(page_bg, text_primary, 0.06)
+    chip_border = _mix_with(page_bg, text_primary, 0.14)
+
+    # Pill-shaped toggle button (the Show/Hide disabled anchor on the
+    # overview's Account breakdown panel header).  Reads as "another
+    # surface" against the panel card without competing with the
+    # primary CTA — hover lifts, active state uses the info hue.
+    button_bg = card_bg
+    button_border = _mix_with(card_bg, text_primary, 0.18)
+    button_bg_hover = _mix_with(card_bg, text_primary, 0.08)
+    button_bg_active = _mix_with(card_bg, color_info, 0.20)
+
+    # Link + accent: feed the toggle button and any other inline link
+    # styling that needs a primary hue.  Hover is a slightly darker
+    # shade of the same info color so it stays native to the palette.
+    link_color = color_info
+    link_color_hover = _adjust_lightness(color_info, 0.85)
+    accent_color = color_info
+
     # Event tags: derive from theme colors with alpha blending
     tag_default_bg = _mix_with(page_bg, color_info, 0.15)
     tag_default_text = color_info
@@ -414,6 +461,15 @@ def translate_theme(halloy: HalloyTheme) -> DashboardTheme:
         color_info=color_info,
         button_primary_bg=button_primary_bg,
         button_primary_text=button_primary_text,
+        chip_bg=chip_bg,
+        chip_border=chip_border,
+        button_bg=button_bg,
+        button_border=button_border,
+        button_bg_hover=button_bg_hover,
+        button_bg_active=button_bg_active,
+        link_color=link_color,
+        link_color_hover=link_color_hover,
+        accent_color=accent_color,
         tag_default_bg=tag_default_bg,
         tag_default_text=tag_default_text,
         tag_success_bg=tag_success_bg,

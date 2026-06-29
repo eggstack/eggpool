@@ -191,6 +191,7 @@ API keys must be raw tokens; EggPool prepends the configured auth scheme automat
 - Static assets (CSS, JS, favicon) are served via `app.py` handlers with appropriate `Cache-Control` headers
 - Every free-text field on every page goes through `escape()` or `escape_attr()` from `src/eggpool/dashboard/escape.py`; never interpolate raw upstream or model data
 - Format helpers in `escape.py` (`format_duration_ms`, `format_age_seconds`, `format_percent100`, `format_percent01`, `format_int`, `format_count_or_dash`, `short_id`) are shared by every renderer; do not redefine per-page
+- **Account breakdown toggle**: the overview's Account breakdown panel header carries a panel-header chip (`_account_count_chip()`) showing "X enabled · Y disabled" and an anchor-based toggle (`_render_account_breakdown_filter()`) that reads "Show N disabled" / "Hide disabled". The toggle is a plain `<a href>` (no form, no JS), so it works without JavaScript and survives bookmarking. `aria-pressed` reflects the current state for screen readers. Disabled count is defensively coerced via `_coerce_int()` so the page never blows up on bad input. `/accounts` keeps its own dropdown filter (`_render_account_filters()`) — that page pairs a period selector with the show-disabled toggle
 
 ### Chart lifecycle
 

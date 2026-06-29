@@ -790,19 +790,24 @@
       if (periodForm.__eggpoolPeriodWired) continue;
       periodForm.__eggpoolPeriodWired = true;
       const select = periodForm.querySelector('select[name="period"]');
-      if (!select) continue;
-      select.addEventListener("change", function () {
-        if (timeseriesForm && typeof namespace.refreshGroupedTimeseriesChart === "function") {
-          syncTimeseriesPeriod(timeseriesForm);
-          namespace.refreshGroupedTimeseriesChart(timeseriesForm);
-        } else {
-          periodForm.submit();
-        }
-      });
+      if (select) {
+        select.addEventListener("change", function () {
+          if (
+            timeseriesForm
+            && typeof namespace.refreshGroupedTimeseriesChart === "function"
+          ) {
+            syncTimeseriesPeriod(timeseriesForm);
+            namespace.refreshGroupedTimeseriesChart(timeseriesForm);
+          } else {
+            periodForm.submit();
+          }
+        });
+      }
       // Auto-submit any other `data-auto-submit` selects inside the
       // same form (e.g. the "Show disabled accounts" toggle on the
-      // Accounts page).  Lets a single GET-form filter bar submit
-      // immediately when either dropdown changes.
+      // Accounts page).  Wire independently of whether the period
+      // select exists so a filter-only GET form also gets the
+      // auto-submit treatment without depending on the period select.
       const autoSubmits = periodForm.querySelectorAll(
         "select[data-auto-submit]"
       );

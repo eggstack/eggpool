@@ -250,6 +250,7 @@ async def handle_overview(
     theme_css, heatmap_colors, current_theme, available = _get_theme_data(
         request, theme
     )
+    enabled_count = sum(1 for a in accounts if a.get("account_enabled"))
     html = render_overview(
         overview=overview,
         accounts=accounts,
@@ -271,6 +272,7 @@ async def handle_overview(
         update_info=_get_update_info(request),
         show_disabled=show_disabled,
         disabled_count=disabled_count,
+        enabled_count=enabled_count,
     )
     return HTMLResponse(content=html)
 

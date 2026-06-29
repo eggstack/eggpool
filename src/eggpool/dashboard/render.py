@@ -756,13 +756,14 @@ def _render_accounts_empty_state(
     instead of the generic "No accounts configured." message. The link
     is plain anchor navigation, so it works without JS.
     """
-    if show_disabled or disabled_count <= 0:
+    n_disabled = _coerce_int(disabled_count)
+    if show_disabled or n_disabled <= 0:
         return '<p class="empty">No accounts configured.</p>'
-    plural = "s" if disabled_count != 1 else ""
+    plural = "s" if n_disabled != 1 else ""
     return (
         '<p class="empty">'
         "No enabled accounts. "
-        f"{disabled_count} disabled account{plural} hidden — "
+        f"{escape(n_disabled)} disabled account{plural} hidden — "
         '<a href="?show_disabled=1">show them</a>.'
         "</p>"
     )
@@ -1408,6 +1409,7 @@ def render_overview(
     *,
     show_disabled: bool = False,
     disabled_count: int = 0,
+    enabled_count: int = 0,
 ) -> str:
     """Render the overview dashboard page.
 
@@ -1419,7 +1421,14 @@ def render_overview(
     ``disabled_count`` is the total disabled-row count, used only when
     ``accounts`` is empty AND ``show_disabled`` is False: the empty
     state becomes a one-click "N disabled — show them?" hint instead
-    of the generic "No accounts configured." message.
+    of the generic "No accounts configured." message. The same total
+    also drives the panel-header chip and the "Show N disabled"
+    toggle button label.
+
+    ``enabled_count`` is the number of rows in the currently-rendered
+    ``accounts`` list with ``account_enabled == 1``. It drives the
+    panel-header "X enabled · Y disabled" chip and stays accurate
+    whether or not ``show_disabled`` is on.
     """
     summary = overview.get("summary", {})
     imbalance = overview.get("imbalance", {})
@@ -1574,8 +1583,12 @@ def render_overview(
 
 <section class="panel">
   <div class="panel-header">
-    <h3>Account breakdown</h3>
-    {_render_account_breakdown_filter(period, current_theme, show_disabled)}
+    <h3>Account breakdown{_account_count_chip(enabled_count, disabled_count)}</h3>
+    {
+        _render_account_breakdown_filter(
+            period, current_theme, show_disabled, disabled_count
+        )
+    }
   </div>
   {_render_account_breakdown_body(accounts, show_disabled, disabled_count)}
 </section>
@@ -1635,52 +1648,113 @@ def render_overview(
     )
 
 
+def _build_href_with_state(
+    *,
+    period: str | None = None,
+    theme: str | None = None,
+    show_disabled: str | None = None,
+) -> str:
+    """Build a query string that preserves operator URL state.
+
+    The overview's Show/Hide disabled toggle, the panel-header count
+    chip "show them" link, and any future panel that wants the same
+    treatment all need to reload the page with one knob flipped while
+    leaving the rest of the URL alone. Centralizing the construction
+    here keeps the order and escaping consistent across call sites.
+    """
+    parts: list[tuple[str, str]] = []
+    if period:
+        parts.append(("period", period))
+    if theme:
+        parts.append(("theme", theme))
+    if show_disabled:
+        parts.append(("show_disabled", show_disabled))
+    if not parts:
+        return ""
+    return "?" + "&".join(
+        f"{escape(name)}={escape_attr(value)}" for name, value in parts
+    )
+
+
+def _coerce_int(value: Any, default: int = 0) -> int:
+    """Coerce ``value`` to a non-negative ``int``.
+
+    Routes always pass real ints from the DB aggregate, but the
+    renderer is called from tests with raw strings (for XSS safety
+    coverage) and from anywhere else a future caller might plug in.
+    Silently fall back to ``default`` when ``value`` is not a
+    numeric-ish string so the chip/toggle never blows up the page.
+    """
+    if value is None:
+        return default
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return default
+    return n if n > 0 else 0
+
+
+def _account_count_chip(enabled_count: int, disabled_count: int) -> str:
+    """Render the panel-header count chip ("12 enabled · 3 disabled").
+
+    Always renders something for layout stability (avoids the heading
+    line shifting when ``disabled_count`` flips from 0 to N mid-page).
+    Drops the disabled side when the operator has no disabled rows so
+    the chip just reads "12 enabled".
+    """
+    n_disabled = _coerce_int(disabled_count)
+    if n_disabled <= 0:
+        return (
+            f' <span class="panel-header-chip">{escape(enabled_count)} enabled</span>'
+        )
+    return (
+        f' <span class="panel-header-chip">'
+        f"{escape(enabled_count)} enabled &middot; "
+        f"{escape(n_disabled)} disabled"
+        f"</span>"
+    )
+
+
 def _render_account_breakdown_filter(
     period: str,
     current_theme: str,
     show_disabled: bool,
+    disabled_count: int,
 ) -> str:
     """Render the Show/Hide disabled toggle for the overview's Account
     breakdown section.
 
-    The form auto-submits on change via ``data-auto-submit`` and
-    preserves ``period`` and ``theme`` via hidden inputs so the
-    operator's other URL state survives the toggle. Lives in its own
-    ``form[data-period-selector]`` so the existing dashboard.js
-    auto-submit wiring picks it up without extra JS. Disabled rows are
-    hidden by default to match the operator's mental model after
-    ``eggpool logout``; the toggle is opt-in via
-    ``?show_disabled=1`` and survives refresh / bookmarking.
+    Renders a plain anchor (``<a href>``) rather than a form so the
+    toggle works without JavaScript and survives middle-click /
+    bookmarking.  ``aria-pressed`` reflects the current state so screen
+    readers (and dashboard.js) can read it as a toggle.  When
+    ``disabled_count > 0`` the label shows the filtered-out size
+    (``"Show 3 disabled"``) so the operator learns the size of the
+    hidden set without expanding the table; when zero it falls back to
+    the static label and clicking the toggle remains a no-op visually.
     """
-    show_value = "1" if show_disabled else "0"
-    options = [
-        ("0", "Hide disabled accounts"),
-        ("1", "Show disabled accounts"),
-    ]
-    items: list[str] = []
-    for value, label in options:
-        selected = ' selected="selected"' if value == show_value else ""
-        items.append(
-            f'<option value="{escape(value)}"{selected}>{escape(label)}</option>'
-        )
-    show_selector = "".join(items)
-    period_hidden = f'<input type="hidden" name="period" value="{escape_attr(period)}">'
-    theme_hidden = (
-        f'<input type="hidden" name="theme" value="{escape_attr(current_theme)}">'
-        if current_theme
-        else ""
+    n_disabled = _coerce_int(disabled_count)
+    if show_disabled:
+        label = "Hide disabled"
+        next_value = "0"
+    elif n_disabled > 0:
+        label = f"Show {n_disabled} disabled"
+        next_value = "1"
+    else:
+        label = "Show disabled"
+        next_value = "1"
+    href = _build_href_with_state(
+        period=period or None,
+        theme=current_theme or None,
+        show_disabled=next_value,
     )
     return (
-        f'<form method="get" class="period-selector account-breakdown-filter" '
-        f'data-period-selector aria-label="Account breakdown filters">'
-        f'<label for="overview_show_disabled">Disabled: </label>'
-        f'<select id="overview_show_disabled" name="show_disabled" '
-        f'data-auto-submit="1">'
-        f"{show_selector}"
-        f"</select>"
-        f"{period_hidden}"
-        f"{theme_hidden}"
-        f"</form>"
+        f'<a class="show-disabled-toggle" '
+        f'href="{escape_attr(href)}" '
+        f'aria-pressed="{str(show_disabled).lower()}">'
+        f'<span class="disabled-toggle-icon" aria-hidden="true">&#x25BE;</span>'
+        f"{escape(label)}"
+        f"</a>"
     )
 
 
