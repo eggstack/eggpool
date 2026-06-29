@@ -733,6 +733,7 @@ class TestConfigSetup:
         self, tmp_path
     ) -> None:
         import json
+        from unittest.mock import patch
 
         from click.testing import CliRunner
 
@@ -749,6 +750,9 @@ class TestConfigSetup:
 
                 [database]
                 path = "{db_path}"
+
+                [transcoder]
+                enabled = false
 
                 [providers.minimax]
                 id = "minimax"
@@ -773,16 +777,21 @@ class TestConfigSetup:
         )
 
         runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "configsetup", "opencode"],
-        )
+        with patch("eggpool.providers.connect.restart_server", return_value=False):
+            result = runner.invoke(
+                cli,
+                ["--config", str(config_path), "configsetup", "opencode"],
+            )
 
         assert result.exit_code == 0, result.stdout + result.stderr
         snippet = json.loads(result.stdout)
         models = snippet["provider"]["eggpool"]["models"]
         assert "MiniMax-M3/minimax" in models
         assert "MiniMax-M3" not in models
+        assert "Start or restart the server to apply generated config." in result.stderr
+
+        config_after = AppConfig.from_toml(str(config_path))
+        assert config_after.transcoder.enabled is True
 
     def test_configsetup_claude_code_with_existing_key(self, tmp_path):
         """configsetup claude-code uses existing key and LAN IP.

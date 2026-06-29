@@ -795,6 +795,49 @@ def write_server_api_key(config_path: str, new_key: str) -> None:
     path.write_text("\n".join(result.lines) + "\n", encoding="utf-8")
 
 
+def _opencode_requires_transcoder(config: AppConfig) -> bool:
+    """Return whether OpenCode needs transcoding for configured providers."""
+    for provider in config.providers.values():
+        if not any(account.enabled for account in provider.accounts):
+            continue
+        protocols = set(provider.protocols)
+        if "anthropic" in protocols and "openai" not in protocols:
+            return True
+    return False
+
+
+def _ensure_opencode_transcoder_enabled(
+    config_path: str,
+    config: AppConfig,
+) -> bool:
+    """Enable transcoding when OpenCode would otherwise hit Anthropic-only routes."""
+    if config.transcoder.enabled or not _opencode_requires_transcoder(config):
+        return False
+
+    path = Path(config_path)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    result = update_section_value(
+        lines,
+        "transcoder",
+        "enabled",
+        "true",
+        insert_missing_key=True,
+        append_missing_section=True,
+    )
+    path.write_text("\n".join(result.lines) + "\n", encoding="utf-8")
+    return True
+
+
+def _restart_after_configsetup_mutation(config_path: str) -> None:
+    """Restart a running server after configsetup changes live settings."""
+    from eggpool.providers.connect import restart_server
+
+    if restart_server(config_path):
+        click.echo("Server restarted to apply generated config.", err=True)
+    else:
+        click.echo("Start or restart the server to apply generated config.", err=True)
+
+
 @cli.command()
 @click.pass_context
 def getkey(ctx: click.Context) -> None:
@@ -1076,11 +1119,13 @@ def configsetup_opencode(ctx: click.Context) -> None:
     # Auto-generate API key if not present. A read-only filesystem or
     # permission error here would otherwise leave the user with a
     # key in stdout/clipboard that they cannot reuse on the next run.
+    config_mutated = False
     key = _read_server_api_key(config_path)
     if not key:
         try:
             key = generate_api_key()
             write_server_api_key(config_path, key)
+            config_mutated = True
             click.echo("Generated new server API key.", err=True)
         except OSError as exc:
             click.echo(
@@ -1106,6 +1151,17 @@ def configsetup_opencode(ctx: click.Context) -> None:
         config = AppConfig.from_toml(config_path)
         db_path = config.database.path
         collapse_models = config.models.collapse_models
+        try:
+            if _ensure_opencode_transcoder_enabled(config_path, config):
+                config_mutated = True
+        except OSError as exc:
+            click.echo(
+                f"Error: cannot enable [transcoder] in {config_path}: {exc}. "
+                "Refusing to print an OpenCode config that cannot use "
+                "Anthropic-only providers.",
+                err=True,
+            )
+            sys.exit(1)
 
         async def _load_catalog() -> list[dict[str, Any]]:
             db = Database(db_path)
@@ -1327,6 +1383,8 @@ def configsetup_opencode(ctx: click.Context) -> None:
             "Run 'eggpool models refresh' to populate model metadata.",
             err=True,
         )
+    if config_mutated:
+        _restart_after_configsetup_mutation(config_path)
     click.echo("Paste into ~/.config/opencode/opencode.json.", err=True)
     _print_install_hint()
 
