@@ -329,6 +329,20 @@ async def handle_routing_exclusion_breakdown(
     return JSONResponse(content={"period": time_range.label, "exclusions": rows})
 
 
+async def handle_routing_skew_summary(
+    request: Request, period: str | None = "24h"
+) -> Response:
+    """GET /api/stats/routing-skew.
+
+    Routing selection skew summary: max/min selection ratio,
+    most/least selected accounts, total selections.
+    """
+    time_range = resolve_time_range(period)
+    stats = request.app.state.stats
+    summary = await stats.get_routing_skew_summary(time_range)
+    return JSONResponse(content={"period": time_range.label, **summary})
+
+
 async def handle_routing_eligibility_explanation(
     request: Request,
     model_id: str,
@@ -589,6 +603,12 @@ def register_stats_routes(app: Any, require_auth: bool = False) -> None:
         dependencies=dependencies,
     )
     app.add_api_route(
+        path="/api/stats/routing-skew",
+        endpoint=handle_routing_skew_summary,
+        methods=["GET"],
+        dependencies=dependencies,
+    )
+    app.add_api_route(
         path="/api/stats/operational",
         endpoint=handle_operational_health,
         methods=["GET"],
@@ -650,6 +670,7 @@ __all__ = [
     "handle_routing_eligibility_explanation",
     "handle_routing_exclusion_breakdown",
     "handle_routing_selection_breakdown",
+    "handle_routing_skew_summary",
     "handle_summary",
     "handle_timeseries",
     "register_stats_routes",

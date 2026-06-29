@@ -1441,23 +1441,110 @@ async def fetch_routing_selection_breakdown(
     """Account-level selection counts from routing_decisions.
 
     Useful for "how often does each account get selected?" charts.
+    Includes ``last_selected_at`` and ``last_selected_score`` from the
+    most recent routing decision per account so the dashboard can show
+    when each account was last chosen and what score it received.
     Uses ``<=`` for the end filter (see fetch_routing_distribution).
     """
     sql = """
     SELECT
-        COALESCE(selected_account_name, 'unknown') as account_name,
-        provider_id,
+        COALESCE(rd.selected_account_name, 'unknown') as account_name,
+        rd.provider_id,
         COUNT(*) as selection_count,
-        COALESCE(AVG(selected_tier), 0) as avg_selected_tier,
-        COALESCE(AVG(selected_score), 0) as avg_selected_score,
-        COALESCE(AVG(eligible_count), 0) as avg_eligible_count
-    FROM routing_decisions
-    WHERE decision_made_at >= ? AND decision_made_at <= ?
-    GROUP BY selected_account_name, provider_id
+        COALESCE(AVG(rd.selected_tier), 0) as avg_selected_tier,
+        COALESCE(AVG(rd.selected_score), 0) as avg_selected_score,
+        COALESCE(AVG(rd.eligible_count), 0) as avg_eligible_count,
+        (SELECT sub.decision_made_at
+         FROM routing_decisions sub
+         WHERE sub.selected_account_name = rd.selected_account_name
+           AND sub.decision_made_at >= ? AND sub.decision_made_at <= ?
+         ORDER BY sub.decision_made_at DESC
+         LIMIT 1) as last_selected_at,
+        (SELECT sub.selected_score
+         FROM routing_decisions sub
+         WHERE sub.selected_account_name = rd.selected_account_name
+           AND sub.decision_made_at >= ? AND sub.decision_made_at <= ?
+         ORDER BY sub.decision_made_at DESC
+         LIMIT 1) as last_selected_score,
+        (SELECT sub.selected_tier
+         FROM routing_decisions sub
+         WHERE sub.selected_account_name = rd.selected_account_name
+           AND sub.decision_made_at >= ? AND sub.decision_made_at <= ?
+         ORDER BY sub.decision_made_at DESC
+         LIMIT 1) as last_selected_tier
+    FROM routing_decisions rd
+    WHERE rd.decision_made_at >= ? AND rd.decision_made_at <= ?
+    GROUP BY rd.selected_account_name, rd.provider_id
     ORDER BY selection_count DESC
     """
-    rows = await db.fetch_all(sql, (_format_dt(start), _format_dt(end)))
+    fmt_start = _format_dt(start)
+    fmt_end = _format_dt(end)
+    rows = await db.fetch_all(
+        sql,
+        (
+            fmt_start,
+            fmt_end,
+            fmt_start,
+            fmt_end,
+            fmt_start,
+            fmt_end,
+            fmt_start,
+            fmt_end,
+        ),
+    )
     return [dict(row) for row in rows]
+
+
+async def fetch_routing_skew_summary(
+    db: Database,
+    start: str,
+    end: str,
+) -> dict[str, Any]:
+    """Routing selection skew summary across all accounts.
+
+    Returns a single dict with aggregate metrics: total selections,
+    number of distinct accounts selected, max/min selection counts,
+    the ratio between them, and the names of the most/least selected
+    accounts.  Used by the Routing dashboard page to surface skew at
+    a glance.
+    """
+    sql = """
+    WITH account_counts AS (
+        SELECT
+            COALESCE(selected_account_name, 'unknown') as account_name,
+            COUNT(*) as cnt
+        FROM routing_decisions
+        WHERE decision_made_at >= ? AND decision_made_at <= ?
+          AND selected_account_name IS NOT NULL
+        GROUP BY selected_account_name
+    )
+    SELECT
+        COALESCE(SUM(cnt), 0) as total_selections,
+        COUNT(*) as distinct_accounts,
+        COALESCE(MAX(cnt), 0) as max_selections,
+        COALESCE(MIN(cnt), 0) as min_selections,
+        (SELECT account_name FROM account_counts ORDER BY cnt DESC LIMIT 1)
+            as most_selected_account,
+        (SELECT account_name FROM account_counts ORDER BY cnt ASC LIMIT 1)
+            as least_selected_account
+    FROM account_counts
+    """
+    row = await db.fetch_one(sql, (_format_dt(start), _format_dt(end)))
+    if row is None:
+        return {
+            "total_selections": 0,
+            "distinct_accounts": 0,
+            "max_selections": 0,
+            "min_selections": 0,
+            "skew_ratio": 0.0,
+            "most_selected_account": None,
+            "least_selected_account": None,
+        }
+    result = dict(row)
+    max_s = int(result.get("max_selections", 0) or 0)
+    min_s = int(result.get("min_selections", 0) or 0)
+    result["skew_ratio"] = float(max_s) / float(min_s) if min_s > 0 else 0.0
+    return result
 
 
 async def fetch_routing_exclusion_breakdown(

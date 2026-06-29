@@ -3705,6 +3705,7 @@ def render_routing(
     routing_distribution: list[dict[str, Any]],
     routing_selection_breakdown: list[dict[str, Any]],
     routing_exclusion_breakdown: list[dict[str, Any]],
+    routing_skew_summary: dict[str, Any] | None = None,
     theme_css: str = "",
     available_themes: list[str] | None = None,
     current_theme: str = "",
@@ -3736,6 +3737,29 @@ def render_routing(
         for row in routing_distribution or []
     )
 
+    skew = routing_skew_summary or {}
+    skew_ratio = float(skew.get("skew_ratio", 0.0) or 0.0)
+    most_selected = escape(str(skew.get("most_selected_account") or "—"))
+    least_selected = escape(str(skew.get("least_selected_account") or "—"))
+    skew_total = int(skew.get("total_selections", 0) or 0)
+    skew_accounts = int(skew.get("distinct_accounts", 0) or 0)
+    skew_warning = skew_ratio > 3.0 and skew_total > 10
+
+    skew_cards = ""
+    if skew_total > 0:
+        skew_cards = f"""
+{
+            _render_metric_card(
+                title="Selection skew",
+                metric=f"{skew_ratio:.1f}x",
+                sub=f"max/min ratio ({most_selected} / {least_selected})",
+                warning=skew_warning,
+                extra_subs=(
+                    f"{skew_total:,} selections across {skew_accounts} accounts",
+                ),
+            )
+        }"""
+
     summary_cards = f"""
 <section class="cards">
   {
@@ -3759,6 +3783,7 @@ def render_routing(
             ]
         )
     }
+  {skew_cards}
 </section>
 """
 
@@ -3909,7 +3934,7 @@ def _render_routing_distribution_table(
 def _render_selection_breakdown_table(
     selection_breakdown: list[dict[str, Any]],
 ) -> str:
-    """Render the account-level selection counts."""
+    """Render the account-level selection counts with last-selection info."""
     if not selection_breakdown:
         return '<p class="empty">No selection data in this period.</p>'
     rows: list[str] = []
@@ -3920,14 +3945,25 @@ def _render_selection_breakdown_table(
         avg_tier = float(row.get("avg_selected_tier", 0.0) or 0.0)
         avg_score = float(row.get("avg_selected_score", 0.0) or 0.0)
         avg_eligible = float(row.get("avg_eligible_count", 0.0) or 0.0)
+        last_score_raw = row.get("last_selected_score")
+        last_score = (
+            f"{float(last_score_raw):.3f}" if last_score_raw is not None else "—"
+        )
+        last_tier_raw = row.get("last_selected_tier")
+        last_tier = f"{int(last_tier_raw)}" if last_tier_raw is not None else "—"
+        last_at_raw = row.get("last_selected_at")
+        last_at = escape(str(last_at_raw)[:19]) if last_at_raw else "—"
         rows.append(
             f"<tr>"
             f"{_td_priority(account_name, 1)}"
             f"{_td_priority(provider_id, 1)}"
             f"{_td_priority(f'{selection_count:,}', 1)}"
-            f"{_td_priority(f'{avg_tier:.2f}', 2)}"
-            f"{_td_priority(f'{avg_score:.3f}', 2)}"
+            f"{_td_priority(last_score, 2)}"
+            f"{_td_priority(last_tier, 2)}"
+            f"{_td_priority(f'{avg_tier:.2f}', 3)}"
+            f"{_td_priority(f'{avg_score:.3f}', 3)}"
             f"{_td_priority(f'{avg_eligible:.2f}', 3)}"
+            f"{_td_priority(last_at, 3)}"
             f"</tr>"
         )
     return (
@@ -3938,10 +3974,13 @@ def _render_selection_breakdown_table(
         + _th("Provider")
         + _th("Selections")
         # Priority 2 — shown on tablet+
-        + _th("Avg tier", priority=2)
-        + _th("Avg score", priority=2)
+        + _th("Last score", priority=2)
+        + _th("Last tier", priority=2)
         # Priority 3 — desktop only
+        + _th("Avg tier", priority=3)
+        + _th("Avg score", priority=3)
         + _th("Avg eligible", priority=3)
+        + _th("Last selected", priority=3)
         + "</tr></thead><tbody>"
         + f"{''.join(rows)}"
         + "</tbody></table>"

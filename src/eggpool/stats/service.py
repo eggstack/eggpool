@@ -1141,6 +1141,22 @@ class StatsService:
             self._set_dashboard_cache(key, result)
         return result
 
+    async def get_routing_skew_summary(
+        self, time_range: TimeRange, *, use_cache: bool = False
+    ) -> dict[str, Any]:
+        """Routing selection skew summary: max/min ratio and most/least selected."""
+        key = self._dashboard_cache_key("routing_skew", time_range)
+        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
+            return cast("dict[str, Any]", cached)
+        from eggpool.stats.queries import fetch_routing_skew_summary
+
+        result = await fetch_routing_skew_summary(
+            self._db, time_range.start_str(), time_range.end_str()
+        )
+        if use_cache:
+            self._set_dashboard_cache(key, result)
+        return result
+
     async def get_operational_event_summary(
         self, time_range: TimeRange, *, use_cache: bool = False
     ) -> list[dict[str, Any]]:

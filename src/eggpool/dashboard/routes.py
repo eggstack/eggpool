@@ -49,6 +49,7 @@ _RoutingPayload = tuple[
     list[dict[str, Any]],
     list[dict[str, Any]],
     list[dict[str, Any]],
+    dict[str, Any],
 ]
 _BandwidthPayload = tuple[
     dict[str, Any],
@@ -430,12 +431,14 @@ async def handle_routing(
         routing_distribution,
         routing_selection_breakdown,
         routing_exclusion_breakdown,
+        routing_skew_summary,
     ) = cast(
         _RoutingPayload,  # noqa: TC006 — pyright needs the TypeAlias to propagate through gather()
         await asyncio.gather(
             stats.get_routing_distribution(time_range),
             stats.get_routing_selection_breakdown(time_range),
             stats.get_routing_exclusion_breakdown(time_range),
+            stats.get_routing_skew_summary(time_range),
         ),
     )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
@@ -445,6 +448,7 @@ async def handle_routing(
             routing_distribution=routing_distribution or [],
             routing_selection_breakdown=routing_selection_breakdown or [],
             routing_exclusion_breakdown=routing_exclusion_breakdown or [],
+            routing_skew_summary=routing_skew_summary or {},
             theme_css=theme_css,
             available_themes=available,
             current_theme=current_theme,
