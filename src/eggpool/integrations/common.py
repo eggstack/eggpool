@@ -52,14 +52,14 @@ class ConfigsetupTargetSpec:
 
 TARGET_SPECS: dict[str, ConfigsetupTargetSpec] = {
     "aider": ConfigsetupTargetSpec(name="aider", requires_model=False),
-    "codex": ConfigsetupTargetSpec(name="codex", requires_model=True),
+    "codex": ConfigsetupTargetSpec(name="codex", requires_model=False),
     "qwen-code": ConfigsetupTargetSpec(name="qwen-code", requires_model=False),
     "kilo": ConfigsetupTargetSpec(name="kilo", requires_model=False),
-    "continue": ConfigsetupTargetSpec(name="continue", requires_model=True),
+    "continue": ConfigsetupTargetSpec(name="continue", requires_model=False),
     "cline": ConfigsetupTargetSpec(name="cline", requires_model=False),
     "roo-code": ConfigsetupTargetSpec(name="roo-code", requires_model=False),
-    "goose": ConfigsetupTargetSpec(name="goose", requires_model=True),
-    "openhands": ConfigsetupTargetSpec(name="openhands", requires_model=True),
+    "goose": ConfigsetupTargetSpec(name="goose", requires_model=False),
+    "openhands": ConfigsetupTargetSpec(name="openhands", requires_model=False),
 }
 
 
@@ -306,8 +306,6 @@ def _persist_transcoder_enabled(config_path: str, config: AppConfig) -> bool:
         insert_missing_key=True,
         append_missing_section=True,
     )
-    if not result.section_found and not result.key_found:
-        return False
     path.write_text("\n".join(result.lines) + "\n", encoding="utf-8")
     return True
 

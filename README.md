@@ -166,14 +166,14 @@ uv run pytest
 | OpenCode | `eggpool configsetup opencode` | JSON provider config | N/A (clipboard) | auto | stable |
 | Claude Code | `eggpool configsetup claude-code` | JSON snippet | N/A (clipboard) | N/A | stable |
 | Aider | `eggpool configsetup aider` | Shell env exports | `.env.eggpool` | recommended | stable |
-| Codex | `eggpool configsetup codex` | TOML provider block | N/A (printed) | required | version-sensitive |
+| Codex | `eggpool configsetup codex` | TOML provider block | N/A (printed) | recommended | version-sensitive |
 | Qwen Code | `eggpool configsetup qwen-code` | JSON provider block | N/A (printed) | optional | verify schema |
 | Kilo | `eggpool configsetup kilo` | JSON provider block | N/A (printed) | optional | verify schema |
-| Continue | `eggpool configsetup continue` | YAML model block | `~/.continue/eggpool.yaml` | required | stable fragment |
+| Continue | `eggpool configsetup continue` | YAML model block | `~/.continue/eggpool.yaml` | usually yes | stable fragment |
 | Cline | `eggpool configsetup cline` | JSON profile | `cline-eggpool.json` | recommended | paste into UI |
 | Roo Code | `eggpool configsetup roo-code` | JSON profile | `roo-code-eggpool.json` | recommended | paste into UI |
-| Goose | `eggpool configsetup goose` | Shell env exports | N/A (printed) | required | verify env vars |
-| OpenHands | `eggpool configsetup openhands` | Shell env exports | N/A (printed) | required | stable fragment |
+| Goose | `eggpool configsetup goose` | Shell env exports | N/A (printed) | recommended | verify env vars |
+| OpenHands | `eggpool configsetup openhands` | Shell env exports | N/A (printed) | recommended | stable fragment |
 
 Shared options: `--host`, `--base-url`, `--model`, `--write`, `--output`, `--force`, `--no-clipboard`, `--print-secret`.
 

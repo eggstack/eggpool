@@ -3,24 +3,33 @@
 from __future__ import annotations
 
 import json
+import os
+import tomllib
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
 
 from eggpool.cli import cli
 from eggpool.config_utils import (
+    ServerKeyResolution,
     detect_lan_ip,
     generate_api_key,
     read_server_api_key,
     read_server_port,
+    resolve_server_api_key,
     write_server_api_key,
 )
 from eggpool.integrations.aider import build_aider_env_snippet
 from eggpool.integrations.cline import build_cline_profile_snippet
 from eggpool.integrations.codex import build_codex_toml_snippet
 from eggpool.integrations.common import (
+    TARGET_SPECS,
+    ConfigsetupTargetSpec,
     IntegrationContext,
+    _openai_client_needs_transcoder,
+    _persist_transcoder_enabled,
     list_catalog_model_ids,
     require_model_for_target,
     select_default_model,
@@ -31,6 +40,12 @@ from eggpool.integrations.kilo import build_kilo_openai_compatible_snippet
 from eggpool.integrations.openhands import build_openhands_env_snippet
 from eggpool.integrations.qwen_code import build_qwen_code_provider_snippet
 from eggpool.integrations.roo_code import build_roo_code_profile_snippet
+from eggpool.models.config import (
+    AccountConfig,
+    AppConfig,
+    ProviderConfig,
+)
+from eggpool.transcoder.policy import TranscoderPolicy
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -603,3 +618,597 @@ class TestConfigSetupCLI:
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert data["model"] == "gpt-4o"
+
+
+# ---------------------------------------------------------------------------
+# resolve_server_api_key tests
+# ---------------------------------------------------------------------------
+
+INLINE_KEY_CONFIG = """\
+[server]
+api_key = "ep_inline_key_123"
+port = 11300
+"""
+
+ENV_KEY_CONFIG = """\
+[server]
+api_key_env = "TEST_EGGPOOL_KEY"
+port = 11300
+"""
+
+NO_KEY_CONFIG = """\
+[server]
+port = 11300
+"""
+
+
+class TestResolveServerApiKey:
+    def test_inline_key_reused(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(INLINE_KEY_CONFIG, encoding="utf-8")
+        result = resolve_server_api_key(str(config_file))
+        assert result.api_key == "ep_inline_key_123"
+        assert result.source == "inline"
+        assert result.config_mutated is False
+
+    def test_env_key_used_when_present(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(ENV_KEY_CONFIG, encoding="utf-8")
+        with patch.dict(os.environ, {"TEST_EGGPOOL_KEY": "ep_env_key_456"}):
+            result = resolve_server_api_key(str(config_file))
+        assert result.api_key == "ep_env_key_456"
+        assert result.source == "env"
+        assert result.env_var == "TEST_EGGPOOL_KEY"
+        assert result.config_mutated is False
+
+    def test_env_key_absent_exits(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(ENV_KEY_CONFIG, encoding="utf-8")
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            pytest.raises(SystemExit, match="api_key_env is set to"),
+        ):
+            resolve_server_api_key(str(config_file))
+
+    def test_generates_and_persists_when_nothing_configured(
+        self, tmp_path: Path
+    ) -> None:
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(NO_KEY_CONFIG, encoding="utf-8")
+        result = resolve_server_api_key(str(config_file))
+        assert result.api_key.startswith("ep_")
+        assert result.source == "generated"
+        assert result.config_mutated is True
+        # Verify the key was actually persisted
+        assert read_server_api_key(str(config_file)) == result.api_key
+
+    def test_server_key_resolution_frozen(self) -> None:
+        r = ServerKeyResolution(api_key="k", source="inline")
+        with pytest.raises(AttributeError):
+            r.api_key = "new"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Transcoder persistence tests
+# ---------------------------------------------------------------------------
+
+
+def _make_appconfig(
+    *,
+    transcoder_enabled: bool = False,
+    providers: dict[str, ProviderConfig] | None = None,
+) -> AppConfig:
+    """Build a minimal AppConfig for testing."""
+    return AppConfig(
+        transcoder=TranscoderPolicy(enabled=transcoder_enabled),
+        providers=providers or {},
+    )
+
+
+def _make_provider(
+    provider_id: str,
+    protocols: list[str],
+    accounts: list[AccountConfig] | None = None,
+) -> ProviderConfig:
+    return ProviderConfig(
+        id=provider_id,
+        base_url=f"https://{provider_id}.example/v1",
+        protocols=protocols,  # type: ignore[arg-type]
+        accounts=accounts or [AccountConfig(name="acct", api_key_env="K")],
+    )
+
+
+class TestTranscoderPersistence:
+    def test_needs_transcoder_when_anthropic_only(self) -> None:
+        provider = _make_provider("anthropic", ["anthropic"])
+        config = _make_appconfig(providers={"anthropic": provider})
+        assert _openai_client_needs_transcoder(config) is True
+
+    def test_no_transcoder_when_openai_only(self) -> None:
+        provider = _make_provider("openai", ["openai"])
+        config = _make_appconfig(providers={"openai": provider})
+        assert _openai_client_needs_transcoder(config) is False
+
+    def test_no_transcoder_when_dual_protocol(self) -> None:
+        provider = _make_provider("both", ["openai", "anthropic"])
+        config = _make_appconfig(providers={"both": provider})
+        assert _openai_client_needs_transcoder(config) is False
+
+    def test_no_transcoder_when_already_enabled(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("[transcoder]\nenabled = true\n", encoding="utf-8")
+        provider = _make_provider("anthropic", ["anthropic"])
+        config = _make_appconfig(
+            transcoder_enabled=True, providers={"anthropic": provider}
+        )
+        assert _persist_transcoder_enabled(str(config_file), config) is False
+
+    def test_persist_writes_to_toml(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("[server]\nport = 11300\n", encoding="utf-8")
+        provider = _make_provider("anthropic", ["anthropic"])
+        config = _make_appconfig(
+            transcoder_enabled=False, providers={"anthropic": provider}
+        )
+        assert _persist_transcoder_enabled(str(config_file), config) is True
+        content = config_file.read_text(encoding="utf-8")
+        assert "enabled = true" in content
+        # Verify it's valid TOML
+        parsed = tomllib.loads(content)
+        assert parsed["transcoder"]["enabled"] is True
+
+    def test_no_persist_when_no_transcoder_needed(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("[server]\nport = 11300\n", encoding="utf-8")
+        provider = _make_provider("openai", ["openai"])
+        config = _make_appconfig(
+            transcoder_enabled=False, providers={"openai": provider}
+        )
+        assert _persist_transcoder_enabled(str(config_file), config) is False
+
+
+# ---------------------------------------------------------------------------
+# _restart_after_integration_context_mutation tests
+# ---------------------------------------------------------------------------
+
+
+class TestRestartAfterMutation:
+    def test_restarts_when_config_mutated(self) -> None:
+        from eggpool.cli_full import _restart_after_integration_context_mutation
+
+        ctx = IntegrationContext(
+            config_path="/dev/null",
+            api_key="k",
+            base_url="http://h:1/v1",
+            base_url_root="http://h:1",
+            host="h",
+            port=1,
+            config_mutated=True,
+        )
+        with patch("eggpool.cli_full._restart_after_configsetup_mutation") as mock:
+            _restart_after_integration_context_mutation("/dev/null", ctx)
+            mock.assert_called_once_with("/dev/null")
+
+    def test_restarts_when_transcoder_mutated(self) -> None:
+        from eggpool.cli_full import _restart_after_integration_context_mutation
+
+        ctx = IntegrationContext(
+            config_path="/dev/null",
+            api_key="k",
+            base_url="http://h:1/v1",
+            base_url_root="http://h:1",
+            host="h",
+            port=1,
+            transcoder_mutated=True,
+        )
+        with patch("eggpool.cli_full._restart_after_configsetup_mutation") as mock:
+            _restart_after_integration_context_mutation("/dev/null", ctx)
+            mock.assert_called_once_with("/dev/null")
+
+    def test_no_restart_when_neither_mutated(self) -> None:
+        from eggpool.cli_full import _restart_after_integration_context_mutation
+
+        ctx = IntegrationContext(
+            config_path="/dev/null",
+            api_key="k",
+            base_url="http://h:1/v1",
+            base_url_root="http://h:1",
+            host="h",
+            port=1,
+        )
+        with patch("eggpool.cli_full._restart_after_configsetup_mutation") as mock:
+            _restart_after_integration_context_mutation("/dev/null", ctx)
+            mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Base URL validation and backup tests
+# ---------------------------------------------------------------------------
+
+
+class TestBaseUrlValidation:
+    def test_valid_url_accepted(self, tmp_path: Path) -> None:
+        from eggpool.cli_full import _build_ctx_with_overrides
+
+        config_file = _make_config_for_cli(tmp_path)
+        ctx = _build_ctx_with_overrides(str(config_file), None, "http://myhost:9999/v1")
+        assert ctx.base_url == "http://myhost:9999/v1"
+        assert ctx.base_url_root == "http://myhost:9999"
+
+    def test_invalid_url_no_scheme_exits(self, tmp_path: Path) -> None:
+        from eggpool.cli_full import _build_ctx_with_overrides
+
+        config_file = _make_config_for_cli(tmp_path)
+        with pytest.raises(SystemExit):
+            _build_ctx_with_overrides(str(config_file), None, "not-a-url")
+
+    def test_invalid_url_no_netloc_exits(self, tmp_path: Path) -> None:
+        from eggpool.cli_full import _build_ctx_with_overrides
+
+        config_file = _make_config_for_cli(tmp_path)
+        with pytest.raises(SystemExit):
+            _build_ctx_with_overrides(str(config_file), None, "http://")
+
+    def test_trailing_slash_normalized(self, tmp_path: Path) -> None:
+        from eggpool.cli_full import _build_ctx_with_overrides
+
+        config_file = _make_config_for_cli(tmp_path)
+        ctx = _build_ctx_with_overrides(str(config_file), None, "http://host:11300/v1/")
+        assert ctx.base_url == "http://host:11300/v1"
+        assert ctx.base_url_root == "http://host:11300"
+
+    def test_host_override(self, tmp_path: Path) -> None:
+        from eggpool.cli_full import _build_ctx_with_overrides
+
+        config_file = _make_config_for_cli(tmp_path)
+        ctx = _build_ctx_with_overrides(str(config_file), "10.0.0.1", None)
+        assert ctx.host == "10.0.0.1"
+        assert "10.0.0.1" in ctx.base_url
+
+
+class TestOutputSnippetBackup:
+    def test_backup_created_on_force(self, tmp_path: Path) -> None:
+        from eggpool.cli_full import _output_snippet
+
+        target = tmp_path / "config.toml"
+        target.write_text("old content\n", encoding="utf-8")
+        _output_snippet(
+            "new content",
+            do_write=True,
+            output=str(target),
+            force=True,
+            no_clipboard=True,
+            print_secret=True,
+        )
+        assert target.read_text(encoding="utf-8") == "new content\n"
+        backups = list(tmp_path.glob("config.eggpool.bak.*"))
+        assert len(backups) == 1
+        assert backups[0].read_text(encoding="utf-8") == "old content\n"
+
+    def test_no_backup_when_content_identical(self, tmp_path: Path) -> None:
+        from eggpool.cli_full import _output_snippet
+
+        target = tmp_path / "config.toml"
+        target.write_text("same content\n", encoding="utf-8")
+        _output_snippet(
+            "same content",
+            do_write=True,
+            output=str(target),
+            force=True,
+            no_clipboard=True,
+            print_secret=True,
+        )
+        backups = list(tmp_path.glob("config.toml.eggpool.bak.*"))
+        assert len(backups) == 0
+
+    def test_refuses_overwrite_without_force(self, tmp_path: Path) -> None:
+        from eggpool.cli_full import _output_snippet
+
+        target = tmp_path / "config.toml"
+        target.write_text("old\n", encoding="utf-8")
+        with pytest.raises(SystemExit):
+            _output_snippet(
+                "new",
+                do_write=True,
+                output=str(target),
+                force=False,
+                no_clipboard=True,
+                print_secret=True,
+            )
+
+
+# ---------------------------------------------------------------------------
+# Codex TOML parseability tests
+# ---------------------------------------------------------------------------
+
+
+class TestCodexTomlParseability:
+    def _ctx_with_model(self, model_id: str) -> IntegrationContext:
+        return IntegrationContext(
+            config_path="/dev/null",
+            api_key="ep_test_key",
+            base_url="http://host:11300/v1",
+            base_url_root="http://host:11300",
+            host="host",
+            port=11300,
+            models=[
+                {
+                    "model_id": model_id,
+                    "display_name": model_id,
+                    "capabilities": {},
+                    "source_metadata": {},
+                    "effective_limits": {"context_tokens": 128000},
+                }
+            ],
+        )
+
+    def test_parses_with_slash(self) -> None:
+        ctx = self._ctx_with_model("gpt-4o/openai")
+        snippet = build_codex_toml_snippet(ctx)
+        parsed = tomllib.loads(snippet)
+        assert "gpt-4o/openai" in parsed["provider"]["eggpool"]["models"]
+
+    def test_parses_with_dot(self) -> None:
+        ctx = self._ctx_with_model("gpt-4.1-mini")
+        snippet = build_codex_toml_snippet(ctx)
+        parsed = tomllib.loads(snippet)
+        assert "gpt-4.1-mini" in parsed["provider"]["eggpool"]["models"]
+
+    def test_parses_with_colon(self) -> None:
+        ctx = self._ctx_with_model("provider:model")
+        snippet = build_codex_toml_snippet(ctx)
+        parsed = tomllib.loads(snippet)
+        assert "provider:model" in parsed["provider"]["eggpool"]["models"]
+
+    def test_parses_with_space(self) -> None:
+        ctx = self._ctx_with_model("my model name")
+        snippet = build_codex_toml_snippet(ctx)
+        parsed = tomllib.loads(snippet)
+        assert "my model name" in parsed["provider"]["eggpool"]["models"]
+
+    def test_parses_bare_model_id(self) -> None:
+        ctx = self._ctx_with_model("gpt-4o")
+        snippet = build_codex_toml_snippet(ctx)
+        parsed = tomllib.loads(snippet)
+        assert "gpt-4o" in parsed["provider"]["eggpool"]["models"]
+
+
+# ---------------------------------------------------------------------------
+# Extended CLI tests
+# ---------------------------------------------------------------------------
+
+ENV_KEY_CONFIG_MISSING = """\
+[server]
+api_key_env = "MISSING_ENV_VAR_FOR_TEST"
+port = 11300
+"""
+
+
+class TestConfigSetupCLIExtended:
+    def test_refuses_absent_api_key_env(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(ENV_KEY_CONFIG_MISSING, encoding="utf-8")
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--config",
+                str(config_file),
+                "configsetup",
+                "aider",
+                "--no-clipboard",
+                "--print-secret",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "api_key_env" in (result.output + (result.stderr or ""))
+
+    def test_base_url_honored(self, tmp_path: Path) -> None:
+        config_file = _make_config_for_cli(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--config",
+                str(config_file),
+                "configsetup",
+                "aider",
+                "--base-url",
+                "http://custom:9999/v1",
+                "--no-clipboard",
+                "--print-secret",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "http://custom:9999/v1" in result.output
+
+    def test_base_url_invalid_exits(self, tmp_path: Path) -> None:
+        config_file = _make_config_for_cli(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--config",
+                str(config_file),
+                "configsetup",
+                "aider",
+                "--base-url",
+                "not-a-url",
+                "--no-clipboard",
+                "--print-secret",
+            ],
+        )
+        assert result.exit_code != 0
+
+    def test_print_secret_gates_stdout(self, tmp_path: Path) -> None:
+        config_file = _make_config_for_cli(tmp_path)
+        runner = CliRunner()
+        # Without --print-secret, secret should not appear in stdout
+        result = runner.invoke(
+            cli,
+            [
+                "--config",
+                str(config_file),
+                "configsetup",
+                "aider",
+                "--no-clipboard",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "ep_test_key_123" not in result.output
+
+    def test_print_secret_shows_stdout(self, tmp_path: Path) -> None:
+        config_file = _make_config_for_cli(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--config",
+                str(config_file),
+                "configsetup",
+                "aider",
+                "--no-clipboard",
+                "--print-secret",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "ep_test_key_123" in result.output
+
+    @pytest.mark.parametrize(
+        "subcommand",
+        [
+            "aider",
+            "codex",
+            "qwen-code",
+            "kilo",
+            "continue",
+            "cline",
+            "roo-code",
+            "goose",
+            "openhands",
+        ],
+    )
+    def test_no_clipboard_still_produces_output(
+        self, tmp_path: Path, subcommand: str
+    ) -> None:
+        config_file = _make_config_for_cli(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--config",
+                str(config_file),
+                "configsetup",
+                subcommand,
+                "--no-clipboard",
+                "--print-secret",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert len(result.output) > 0
+
+    def test_write_mode_creates_file(self, tmp_path: Path) -> None:
+        config_file = _make_config_for_cli(tmp_path)
+        output_file = tmp_path / "output.env"
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--config",
+                str(config_file),
+                "configsetup",
+                "aider",
+                "--write",
+                "--output",
+                str(output_file),
+                "--print-secret",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert output_file.exists()
+        content = output_file.read_text(encoding="utf-8")
+        assert "ep_test_key_123" in content
+
+    def test_write_mode_force_creates_backup(self, tmp_path: Path) -> None:
+        config_file = _make_config_for_cli(tmp_path)
+        output_file = tmp_path / "output.env"
+        output_file.write_text("old content\n", encoding="utf-8")
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--config",
+                str(config_file),
+                "configsetup",
+                "aider",
+                "--write",
+                "--output",
+                str(output_file),
+                "--force",
+                "--print-secret",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        backups = list(tmp_path.glob("output.eggpool.bak.*"))
+        assert len(backups) == 1
+        assert backups[0].read_text(encoding="utf-8") == "old content\n"
+
+    def test_write_mode_refuses_without_force(self, tmp_path: Path) -> None:
+        config_file = _make_config_for_cli(tmp_path)
+        output_file = tmp_path / "output.env"
+        output_file.write_text("existing\n", encoding="utf-8")
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--config",
+                str(config_file),
+                "configsetup",
+                "aider",
+                "--write",
+                "--output",
+                str(output_file),
+                "--print-secret",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "already exists" in (result.output + (result.stderr or ""))
+
+
+# ---------------------------------------------------------------------------
+# ConfigsetupTargetSpec tests
+# ---------------------------------------------------------------------------
+
+
+class TestConfigsetupTargetSpec:
+    def test_all_targets_have_specs(self) -> None:
+        expected = {
+            "aider",
+            "codex",
+            "qwen-code",
+            "kilo",
+            "continue",
+            "cline",
+            "roo-code",
+            "goose",
+            "openhands",
+        }
+        assert set(TARGET_SPECS.keys()) == expected
+
+    def test_no_targets_require_model_strictly(self) -> None:
+        # None of the CLI commands fail without --model; they produce
+        # usable (if less specific) snippets. requires_model is False
+        # for all targets to match actual CLI behavior.
+        for name, spec in TARGET_SPECS.items():
+            assert spec.requires_model is False, f"{name} should not require model"
+
+    def test_spec_fields(self) -> None:
+        spec = ConfigsetupTargetSpec(
+            name="test",
+            requires_model=True,
+            supports_dynamic_models=False,
+            supports_direct_write=False,
+            default_write_path=None,
+        )
+        assert spec.name == "test"
+        assert spec.requires_model is True
