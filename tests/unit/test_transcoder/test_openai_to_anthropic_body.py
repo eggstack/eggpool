@@ -59,6 +59,21 @@ class TestBasicRequestTranslation:
 
         assert result["system"] == "First system message\n\nSecond system message"
 
+    def test_developer_message_extracted_as_system(
+        self, transcoder: OpenAIToAnthropic
+    ) -> None:
+        payload = {
+            "model": "gpt-4",
+            "messages": [
+                {"role": "developer", "content": "Follow these rules."},
+                {"role": "user", "content": "Hello"},
+            ],
+        }
+        result, _ = transcoder.encode_request(payload, _make_context())
+
+        assert result["system"] == "Follow these rules."
+        assert result["messages"] == [{"role": "user", "content": "Hello"}]
+
     def test_string_content_messages_wrapped(
         self, transcoder: OpenAIToAnthropic
     ) -> None:
@@ -202,6 +217,33 @@ class TestMaxTokens:
         assert result["max_tokens"] == 2048
         missing_warnings = [w for w in warnings if w.get("field") == "max_tokens"]
         assert len(missing_warnings) == 0
+
+    def test_max_completion_tokens_maps_to_max_tokens(
+        self, transcoder: OpenAIToAnthropic
+    ) -> None:
+        payload = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "max_completion_tokens": 512,
+        }
+        result, warnings = transcoder.encode_request(payload, _make_context())
+
+        assert result["max_tokens"] == 512
+        missing_warnings = [w for w in warnings if w.get("field") == "max_tokens"]
+        assert len(missing_warnings) == 0
+
+    def test_max_tokens_takes_precedence_over_max_completion_tokens(
+        self, transcoder: OpenAIToAnthropic
+    ) -> None:
+        payload = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "max_tokens": 2048,
+            "max_completion_tokens": 512,
+        }
+        result, _ = transcoder.encode_request(payload, _make_context())
+
+        assert result["max_tokens"] == 2048
 
     def test_max_tokens_default_4096_when_absent(
         self, transcoder: OpenAIToAnthropic

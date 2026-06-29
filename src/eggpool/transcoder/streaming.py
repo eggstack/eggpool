@@ -510,6 +510,7 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
         self._id = ""
         self._model = ""
         self._emitted_usage = False
+        self._done_emitted = False
 
     async def feed(self, chunk: bytes) -> list[bytes]:
         self._observer.observe(chunk)
@@ -525,7 +526,9 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
         out: list[bytes] = []
         for event_type, data in frames:
             out.extend(self._translate(event_type, data))
-        out.append(self._openai_done())
+        done = self._emit_done()
+        if done is not None:
+            out.append(done)
         return out
 
     def _translate(
@@ -550,7 +553,7 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
             msg = str(err_typed.get("message", str(err_typed)))
         else:
             msg = str(err)
-        return [
+        out = [
             self._openai_frame(
                 {
                     "error": {
@@ -561,8 +564,11 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
                     },
                 },
             ),
-            self._openai_done(),
         ]
+        done = self._emit_done()
+        if done is not None:
+            out.append(done)
+        return out
 
     def _dispatch(
         self,
@@ -714,8 +720,17 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
                     },
                 ),
             )
-        out.append(self._openai_done())
+        done = self._emit_done()
+        if done is not None:
+            out.append(done)
         return out
+
+    def _emit_done(self) -> bytes | None:
+        """Emit the OpenAI terminal marker at most once."""
+        if self._done_emitted:
+            return None
+        self._done_emitted = True
+        return self._openai_done()
 
 
 def select_streaming_transcoder(

@@ -240,6 +240,26 @@ class TestMessageDelta:
         assert finish_data["choices"][0]["finish_reason"] == "stop"
 
     @pytest.mark.asyncio
+    async def test_flush_after_message_delta_does_not_duplicate_done(self) -> None:
+        transcoder = AnthropicToOpenAIStreaming()
+        await transcoder.feed(
+            _anthropic_sse(
+                "message_start",
+                message_id="msg-1",
+                model="claude-3",
+            )
+        )
+
+        raw = await transcoder.feed(
+            _anthropic_sse("message_delta", stop_reason="end_turn")
+        )
+        raw.extend(await transcoder.flush())
+
+        frames = _parse_sse_frames(b"".join(raw))
+        done_frames = [f for f in frames if f["data"] == "[DONE]"]
+        assert len(done_frames) == 1
+
+    @pytest.mark.asyncio
     async def test_message_delta_maps_max_tokens(self) -> None:
         """message_delta with max_tokens emits finish_reason chunk."""
         transcoder = AnthropicToOpenAIStreaming()

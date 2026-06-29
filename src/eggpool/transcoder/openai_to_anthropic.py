@@ -82,7 +82,7 @@ class OpenAIToAnthropic:
             role = str(msg.get("role", ""))  # pyright: ignore[reportUnknownMemberType]
             content = msg.get("content", "")  # pyright: ignore[reportUnknownMemberType]
 
-            if role == "system":
+            if role in ("system", "developer"):
                 if isinstance(content, str):
                     system_parts.append(content)
                 elif isinstance(content, list):
@@ -147,6 +147,8 @@ class OpenAIToAnthropic:
                 out["temperature"] = temperature
 
         max_tokens = payload.get("max_tokens")
+        if max_tokens is None:
+            max_tokens = payload.get("max_completion_tokens")
         if max_tokens is None:
             max_tokens = 4096
             warnings.append(
