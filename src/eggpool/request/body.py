@@ -40,7 +40,7 @@ async def read_body_limited(request: Request, max_bytes: int) -> bytes:
         except ValueError:
             pass  # Invalid content-length, fall through to streaming
 
-    chunks: list[bytes] = []
+    body = bytearray()
     total = 0
     too_large = False
     stream = request.stream()
@@ -50,7 +50,7 @@ async def read_body_limited(request: Request, max_bytes: int) -> bytes:
             if total > max_bytes:
                 too_large = True
                 break
-            chunks.append(chunk)
+            body.extend(chunk)
     finally:
         if too_large:
             # Drain the remaining stream so the upstream connection
@@ -67,4 +67,4 @@ async def read_body_limited(request: Request, max_bytes: int) -> bytes:
                 pass
     if too_large:
         raise RequestTooLargeError(f"Request body exceeds limit of {max_bytes} bytes")
-    return b"".join(chunks)
+    return bytes(body)

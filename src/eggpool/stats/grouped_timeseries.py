@@ -296,40 +296,65 @@ def _finish_series_summary(summary: dict[str, Any]) -> dict[str, Any]:
 def _build_bucket_totals(
     points: Sequence[Mapping[str, Any]], bucket_set: set[str]
 ) -> list[dict[str, Any]]:
-    bucket_totals: list[dict[str, Any]] = []
-    for bucket_label in sorted(bucket_set):
-        bucket_points = [p for p in points if p["bucket"] == bucket_label]
-        request_count = sum(int(p["request_count"]) for p in bucket_points)
-        weighted_latency_num = sum(
-            float(p["avg_latency_ms"]) * int(p["request_count"]) for p in bucket_points
+    buckets = {
+        bucket_label: _new_bucket_total(bucket_label) for bucket_label in bucket_set
+    }
+    for point in points:
+        bucket = buckets[str(point["bucket"])]
+        request_count = int(point["request_count"])
+        bucket["request_count"] += request_count
+        for field in (
+            "error_count",
+            "input_tokens",
+            "output_tokens",
+            "cache_read_tokens",
+            "cache_write_tokens",
+            "reasoning_tokens",
+            "total_tokens",
+            "cost_microdollars",
+            "bytes_received",
+            "bytes_emitted",
+        ):
+            bucket[field] += int(point[field])
+        bucket["_weighted_latency_num"] += (
+            float(point["avg_latency_ms"]) * request_count
         )
-        weighted_ttft_num = sum(
-            float(p["avg_ttft_ms"]) * int(p["request_count"]) for p in bucket_points
-        )
-        bucket_totals.append(
-            {
-                "bucket": bucket_label,
-                "request_count": request_count,
-                "error_count": _sum_points(bucket_points, "error_count"),
-                "input_tokens": _sum_points(bucket_points, "input_tokens"),
-                "output_tokens": _sum_points(bucket_points, "output_tokens"),
-                "cache_read_tokens": _sum_points(bucket_points, "cache_read_tokens"),
-                "cache_write_tokens": _sum_points(bucket_points, "cache_write_tokens"),
-                "reasoning_tokens": _sum_points(bucket_points, "reasoning_tokens"),
-                "total_tokens": _sum_points(bucket_points, "total_tokens"),
-                "cost_microdollars": _sum_points(bucket_points, "cost_microdollars"),
-                "bytes_received": _sum_points(bucket_points, "bytes_received"),
-                "bytes_emitted": _sum_points(bucket_points, "bytes_emitted"),
-                "avg_latency_ms": (
-                    weighted_latency_num / request_count if request_count > 0 else 0.0
-                ),
-                "avg_ttft_ms": (
-                    weighted_ttft_num / request_count if request_count > 0 else 0.0
-                ),
-            }
-        )
-    return bucket_totals
+        bucket["_weighted_ttft_num"] += float(point["avg_ttft_ms"]) * request_count
+
+    return [
+        _finish_bucket_total(buckets[bucket_label]) for bucket_label in sorted(buckets)
+    ]
 
 
-def _sum_points(points: Sequence[Mapping[str, Any]], field: str) -> int:
-    return sum(int(point[field]) for point in points)
+def _new_bucket_total(bucket: str) -> dict[str, Any]:
+    return {
+        "bucket": bucket,
+        "request_count": 0,
+        "error_count": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "reasoning_tokens": 0,
+        "total_tokens": 0,
+        "cost_microdollars": 0,
+        "bytes_received": 0,
+        "bytes_emitted": 0,
+        "_weighted_latency_num": 0.0,
+        "_weighted_ttft_num": 0.0,
+    }
+
+
+def _finish_bucket_total(bucket: dict[str, Any]) -> dict[str, Any]:
+    request_count = int(bucket["request_count"])
+    if request_count > 0:
+        bucket["avg_latency_ms"] = (
+            float(bucket["_weighted_latency_num"]) / request_count
+        )
+        bucket["avg_ttft_ms"] = float(bucket["_weighted_ttft_num"]) / request_count
+    else:
+        bucket["avg_latency_ms"] = 0.0
+        bucket["avg_ttft_ms"] = 0.0
+    del bucket["_weighted_latency_num"]
+    del bucket["_weighted_ttft_num"]
+    return bucket

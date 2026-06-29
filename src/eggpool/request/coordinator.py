@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 
-from eggpool.catalog.pricing import coerce_token_count
 from eggpool.constants import DEFAULT_PROVIDER_ID
 from eggpool.db.repositories import (
     AccountBackoffRepository,
@@ -47,9 +46,12 @@ from eggpool.providers.contract import (
     compose_provider_url,
 )
 from eggpool.proxy.client import filter_response_headers
-from eggpool.proxy.cost_reporting import extract_provider_reported_cost
 from eggpool.proxy.sse_observer import IncrementalSSEObserver
-from eggpool.proxy.usage import StreamUsageResult, safe_dict
+from eggpool.proxy.usage import (
+    StreamUsageResult,
+    extract_anthropic_response_usage,
+    extract_openai_response_usage,
+)
 from eggpool.request.attempt_finalizer import (
     AttemptFinalizationData,
     AttemptFinalizer,
@@ -1643,63 +1645,15 @@ class RequestCoordinator:
         data_dict = cast("dict[str, Any]", data)
 
         if protocol == "anthropic":
-            usage_raw = safe_dict(data_dict.get("usage"))
-            if usage_raw is None:
-                return None
-            reported = extract_provider_reported_cost(
+            return extract_anthropic_response_usage(
                 data_dict,
                 provider_id=provider_id,
-                protocol="anthropic",
             )
-            return StreamUsageResult(
-                input_tokens=coerce_token_count(usage_raw.get("input_tokens", 0)),
-                output_tokens=coerce_token_count(usage_raw.get("output_tokens", 0)),
-                cache_read_tokens=coerce_token_count(
-                    usage_raw.get("cache_read_input_tokens", 0)
-                ),
-                cache_creation_tokens=coerce_token_count(
-                    usage_raw.get("cache_creation_input_tokens", 0)
-                ),
-                is_complete=True,
-                reported_cost_microdollars=(
-                    reported.microdollars if reported is not None else None
-                ),
-                reported_cost_source=(
-                    reported.source if reported is not None else None
-                ),
-            )
-        else:
-            usage_raw = safe_dict(data_dict.get("usage"))
-            if not usage_raw:
-                return None
-            prompt_details = safe_dict(usage_raw.get("prompt_tokens_details"))
-            completion_details = safe_dict(usage_raw.get("completion_tokens_details"))
-            reported = extract_provider_reported_cost(
-                data_dict,
-                provider_id=provider_id,
-                protocol="openai",
-            )
-            return StreamUsageResult(
-                input_tokens=coerce_token_count(usage_raw.get("prompt_tokens", 0)),
-                output_tokens=coerce_token_count(usage_raw.get("completion_tokens", 0)),
-                cache_read_tokens=coerce_token_count(
-                    prompt_details.get("cached_tokens", 0)
-                    if prompt_details is not None
-                    else 0
-                ),
-                reasoning_tokens=coerce_token_count(
-                    completion_details.get("reasoning_tokens", 0)
-                    if completion_details is not None
-                    else 0
-                ),
-                is_complete=True,
-                reported_cost_microdollars=(
-                    reported.microdollars if reported is not None else None
-                ),
-                reported_cost_source=(
-                    reported.source if reported is not None else None
-                ),
-            )
+
+        return extract_openai_response_usage(
+            data_dict,
+            provider_id=provider_id,
+        )
 
     @staticmethod
     def _get_header_value(

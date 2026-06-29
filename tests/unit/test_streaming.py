@@ -6,6 +6,8 @@ from eggpool.proxy.usage import (
     AnthropicStreamUsageExtractor,
     OpenAIStreamUsageExtractor,
     StreamUsageResult,
+    extract_anthropic_response_usage,
+    extract_openai_response_usage,
 )
 
 
@@ -125,3 +127,61 @@ class TestStreamUsageResult:
         assert result1.input_tokens == 100
         assert result1.output_tokens == 50
         assert result1.is_complete is True
+
+
+class TestResponseUsageExtraction:
+    """Tests for protocol response usage extraction shared by stream/non-stream."""
+
+    def test_extract_openai_response_usage(self) -> None:
+        data = {
+            "usage": {
+                "prompt_tokens": "100",
+                "completion_tokens": 50.9,
+                "prompt_tokens_details": {"cached_tokens": 10},
+                "completion_tokens_details": {"reasoning_tokens": "5"},
+            }
+        }
+
+        result = extract_openai_response_usage(data)
+
+        assert result is not None
+        assert result.input_tokens == 100
+        assert result.output_tokens == 50
+        assert result.cache_read_tokens == 10
+        assert result.reasoning_tokens == 5
+        assert result.is_complete is True
+
+    def test_extract_anthropic_response_usage(self) -> None:
+        data = {
+            "usage": {
+                "input_tokens": 200,
+                "output_tokens": 75,
+                "cache_read_input_tokens": "50",
+                "cache_creation_input_tokens": 10,
+            }
+        }
+
+        result = extract_anthropic_response_usage(data)
+
+        assert result is not None
+        assert result.input_tokens == 200
+        assert result.output_tokens == 75
+        assert result.cache_read_tokens == 50
+        assert result.cache_creation_tokens == 10
+        assert result.is_complete is True
+
+    def test_malformed_counts_coerce_to_zero(self) -> None:
+        result = extract_openai_response_usage(
+            {
+                "usage": {
+                    "prompt_tokens": "not-a-number",
+                    "completion_tokens": -1,
+                    "prompt_tokens_details": {"cached_tokens": object()},
+                }
+            }
+        )
+
+        assert result is not None
+        assert result.input_tokens == 0
+        assert result.output_tokens == 0
+        assert result.cache_read_tokens == 0

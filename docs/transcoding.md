@@ -158,6 +158,11 @@ Both protocols are normalised to a common internal representation before reachin
 
 Cache token fields are only populated for Anthropic upstreams.
 
+For request finalization and dashboard accounting, streaming and non-streaming
+responses use the same protocol-specific usage extractors. Malformed, negative,
+or non-finite token counts are treated as zero for internal cost/quota
+calculation; the downstream response body is not rewritten for that reason.
+
 ## Provider Notes
 
 Transcoding is triggered when the client protocol differs from the selected account's upstream protocol. Providers that need transcoding:

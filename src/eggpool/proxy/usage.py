@@ -61,6 +61,68 @@ def _reported_cost(
     )
 
 
+def extract_openai_response_usage(
+    data: dict[str, Any],
+    *,
+    provider_id: str | None = None,
+) -> StreamUsageResult | None:
+    """Extract usage from an OpenAI-compatible response JSON object."""
+    usage_data = safe_dict(data.get("usage"))
+    if not usage_data:
+        return None
+
+    prompt_details = safe_dict(usage_data.get("prompt_tokens_details"))
+    completion_details = safe_dict(usage_data.get("completion_tokens_details"))
+    reported = _reported_cost(data, provider_id=provider_id, protocol="openai")
+
+    return StreamUsageResult(
+        input_tokens=coerce_token_count(usage_data.get("prompt_tokens", 0)),
+        output_tokens=coerce_token_count(usage_data.get("completion_tokens", 0)),
+        cache_read_tokens=coerce_token_count(
+            prompt_details.get("cached_tokens", 0) if prompt_details is not None else 0
+        ),
+        reasoning_tokens=coerce_token_count(
+            completion_details.get("reasoning_tokens", 0)
+            if completion_details is not None
+            else 0
+        ),
+        is_complete=True,
+        reported_cost_microdollars=(
+            reported.microdollars if reported is not None else None
+        ),
+        reported_cost_source=reported.source if reported is not None else None,
+    )
+
+
+def extract_anthropic_response_usage(
+    data: dict[str, Any],
+    *,
+    provider_id: str | None = None,
+) -> StreamUsageResult | None:
+    """Extract usage from an Anthropic-compatible response JSON object."""
+    usage_data = safe_dict(data.get("usage"))
+    if usage_data is None:
+        return None
+
+    reported = _reported_cost(data, provider_id=provider_id, protocol="anthropic")
+
+    return StreamUsageResult(
+        input_tokens=coerce_token_count(usage_data.get("input_tokens", 0)),
+        output_tokens=coerce_token_count(usage_data.get("output_tokens", 0)),
+        cache_read_tokens=coerce_token_count(
+            usage_data.get("cache_read_input_tokens", 0)
+        ),
+        cache_creation_tokens=coerce_token_count(
+            usage_data.get("cache_creation_input_tokens", 0)
+        ),
+        is_complete=True,
+        reported_cost_microdollars=(
+            reported.microdollars if reported is not None else None
+        ),
+        reported_cost_source=reported.source if reported is not None else None,
+    )
+
+
 class OpenAIStreamUsageExtractor:
     """Extracts usage from OpenAI SSE stream events."""
 
@@ -73,38 +135,9 @@ class OpenAIStreamUsageExtractor:
         OpenAI sends usage in the final chunk when
         stream_options.include_usage is set.
         """
-        usage_data = safe_dict(data.get("usage"))
-        if not usage_data:
-            return None
-
-        prompt_details = safe_dict(usage_data.get("prompt_tokens_details"))
-        completion_details = safe_dict(usage_data.get("completion_tokens_details"))
-
-        # Provider-reported cost (when present) is preferred. The finalizer
-        # treats this as authoritative and overrides any locally derived
-        # cost so the dashboard reflects actual spend.
-        reported = _reported_cost(
-            data, provider_id=self._provider_id, protocol="openai"
-        )
-
-        return StreamUsageResult(
-            input_tokens=coerce_token_count(usage_data.get("prompt_tokens", 0)),
-            output_tokens=coerce_token_count(usage_data.get("completion_tokens", 0)),
-            cache_read_tokens=coerce_token_count(
-                prompt_details.get("cached_tokens", 0)
-                if prompt_details is not None
-                else 0
-            ),
-            reasoning_tokens=coerce_token_count(
-                completion_details.get("reasoning_tokens", 0)
-                if completion_details is not None
-                else 0
-            ),
-            is_complete=True,
-            reported_cost_microdollars=(
-                reported.microdollars if reported is not None else None
-            ),
-            reported_cost_source=reported.source if reported is not None else None,
+        return extract_openai_response_usage(
+            data,
+            provider_id=self._provider_id,
         )
 
 
@@ -160,9 +193,7 @@ class AnthropicStreamUsageExtractor:
                 reported_cost_microdollars=(
                     reported.microdollars if reported is not None else None
                 ),
-                reported_cost_source=(
-                    reported.source if reported is not None else None
-                ),
+                reported_cost_source=reported.source if reported is not None else None,
             )
 
         if event_type == "content_block_delta":
