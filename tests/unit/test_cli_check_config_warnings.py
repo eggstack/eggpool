@@ -143,6 +143,35 @@ class TestStaleContractWarnings:
         assert exit_code == 0, output
         assert "openai_path is set but 'openai' is not in protocols" in output
 
+    def test_default_openai_path_does_not_warn_for_anthropic_provider(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        body = (
+            f'[server]\napi_key = "{SERVER_API_KEY}"\n\n'
+            "[providers.minimax]\n"
+            'id = "minimax"\n'
+            'base_url = "https://api.minimax.io/anthropic"\n'
+            'protocols = ["anthropic"]\n'
+            'anthropic_path = "/v1/messages"\n'
+            "\n[providers.minimax.models_endpoint]\n"
+            'method = "GET"\n'
+            'path = "/v1/models"\n'
+            "\n[providers.minimax.auth]\n"
+            'mode = "api_key"\n'
+            'header = "x-api-key"\n'
+            "\n[[providers.minimax.headers]]\n"
+            'name = "anthropic-version"\n'
+            'value = "2023-06-01"\n'
+            "\n[[providers.minimax.accounts]]\n"
+            'name = "default"\n'
+            f'api_key = "{ACCOUNT_API_KEY}"\n'
+        )
+        exit_code, output = _run_check_config(tmp_path, body)
+
+        assert exit_code == 0, output
+        assert "openai_path is set but 'openai' is not in protocols" not in output
+
     def test_authorization_static_header_with_non_default_auth_header(
         self,
         tmp_path: Path,

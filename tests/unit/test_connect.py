@@ -489,6 +489,8 @@ class TestMergeProviderIntoConfig:
 
     def test_adds_new_provider(self, tmp_path: Path) -> None:
         """Adds a new provider block to config."""
+        from eggpool.models.config import AppConfig
+
         config_file = tmp_path / "config.toml"
         config_file.write_text(
             textwrap.dedent("""\
@@ -516,6 +518,68 @@ class TestMergeProviderIntoConfig:
         assert 'api_key = "NEW_API_KEY"' in content
         # New provider blocks emit a routing_priority = 0 default
         assert "routing_priority = 0" in content
+        assert AppConfig.from_toml(str(config_file)).transcoder.enabled is True
+
+    def test_dual_protocol_provider_does_not_force_transcoder(
+        self, tmp_path: Path
+    ) -> None:
+        """Native OpenAI+Anthropic providers keep the default transcoder policy."""
+        from eggpool.models.config import AppConfig
+
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(
+            textwrap.dedent("""\
+                [server]
+                port = 8080
+            """),
+            encoding="utf-8",
+        )
+
+        ok = merge_provider_into_config(
+            str(config_file),
+            {
+                "id": "both-provider",
+                "base_url": "https://both.example.com",
+                "protocols": ["openai", "anthropic"],
+            },
+            "BOTH_API_KEY",
+        )
+
+        assert ok is True
+        assert AppConfig.from_toml(str(config_file)).transcoder.enabled is False
+
+    def test_single_protocol_provider_updates_existing_transcoder_block(
+        self, tmp_path: Path
+    ) -> None:
+        """Connecting MiniMax-style providers enables protocol translation."""
+        from eggpool.models.config import AppConfig
+
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(
+            textwrap.dedent("""\
+                [transcoder]
+                enabled = false
+                loss_policy = "warn"
+                prefer_native = true
+            """),
+            encoding="utf-8",
+        )
+
+        ok = merge_provider_into_config(
+            str(config_file),
+            {
+                "id": "minimax",
+                "base_url": "https://api.minimax.io/anthropic",
+                "protocols": ["anthropic"],
+                "anthropic_path": "/v1/messages",
+            },
+            "MINIMAX_API_KEY",
+        )
+
+        content = config_file.read_text(encoding="utf-8")
+        assert ok is True
+        assert content.count("[transcoder]") == 1
+        assert AppConfig.from_toml(str(config_file)).transcoder.enabled is True
 
     def test_appending_to_existing_provider_does_not_change_priority(
         self, tmp_path: Path

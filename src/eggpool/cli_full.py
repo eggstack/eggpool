@@ -531,6 +531,12 @@ def _check_stale_contracts(config: AppConfig, config_path: str) -> list[str]:
 
     for provider in config.providers.values():
         endpoint = provider.models_endpoint
+        raw_section_obj = raw_providers.get(provider.id)
+        raw_section: dict[str, object] = (
+            cast("dict[str, object]", raw_section_obj)
+            if isinstance(raw_section_obj, dict)
+            else {}
+        )
 
         if (
             endpoint is not None
@@ -553,13 +559,21 @@ def _check_stale_contracts(config: AppConfig, config_path: str) -> list[str]:
                 "verify.require_models is true; the contract is contradictory"
             )
 
-        if provider.anthropic_path and "anthropic" not in provider.protocols:
+        if (
+            "anthropic_path" in raw_section
+            and provider.anthropic_path
+            and "anthropic" not in provider.protocols
+        ):
             warnings.append(
                 f"[{provider.id}] anthropic_path is set but 'anthropic' is "
                 "not in protocols; the field will be ignored"
             )
 
-        if provider.openai_path and "openai" not in provider.protocols:
+        if (
+            "openai_path" in raw_section
+            and provider.openai_path
+            and "openai" not in provider.protocols
+        ):
             warnings.append(
                 f"[{provider.id}] openai_path is set but 'openai' is not "
                 "in protocols; the field will be ignored"
@@ -595,9 +609,7 @@ def _check_stale_contracts(config: AppConfig, config_path: str) -> list[str]:
                 "providers typically use header='x-api-key'"
             )
 
-        raw_section_obj = raw_providers.get(provider.id)
-        if isinstance(raw_section_obj, dict):
-            raw_section = cast("dict[str, object]", raw_section_obj)
+        if raw_section:
             has_legacy_key = (
                 "models_method" in raw_section or "models_path" in raw_section
             )

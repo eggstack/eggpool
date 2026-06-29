@@ -15,7 +15,7 @@ from typing import Any, cast
 from eggpool.constants import DEFAULT_PROVIDER_ID
 from eggpool.providers.contract import PROVIDER_STATUS_SYMBOLS
 from eggpool.runtime import restart_server as _restart_server
-from eggpool.toml_edit import render_toml_value
+from eggpool.toml_edit import render_toml_value, update_section_value
 
 _REGISTRY_METADATA_FIELDS = frozenset(
     {
@@ -454,8 +454,34 @@ def merge_provider_into_config(
         )
         content = _insert_provider_block(content, block)
 
+    if _provider_needs_transcoder(provider_data):
+        content = _ensure_transcoder_enabled(content)
+
     path.write_text(content, encoding="utf-8")
     return True
+
+
+def _provider_needs_transcoder(provider_data: dict[str, Any]) -> bool:
+    """Return whether this provider needs cross-protocol request bridging."""
+    protocols_value = provider_data.get("protocols")
+    if not isinstance(protocols_value, list):
+        return False
+    protocol_items = cast("list[object]", protocols_value)
+    protocols = {str(protocol) for protocol in protocol_items}
+    return bool(protocols) and not {"openai", "anthropic"}.issubset(protocols)
+
+
+def _ensure_transcoder_enabled(content: str) -> str:
+    """Enable the global transcoder block for single-protocol providers."""
+    result = update_section_value(
+        content.split("\n"),
+        "transcoder",
+        "enabled",
+        "true",
+        insert_missing_key=True,
+        append_missing_section=True,
+    )
+    return "\n".join(result.lines)
 
 
 def _get_existing_accounts(content: str, provider_id: str) -> list[str] | None:
