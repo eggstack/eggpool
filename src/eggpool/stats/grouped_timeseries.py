@@ -7,9 +7,18 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
+MIN_GROUPED_LIMIT = 1
+MAX_GROUPED_LIMIT = 25
+
+
+def clamp_grouped_limit(limit: int) -> int:
+    """Clamp grouped-timeseries top-N limits to the public API range."""
+    return max(MIN_GROUPED_LIMIT, min(int(limit), MAX_GROUPED_LIMIT))
+
 
 def empty_grouped_timeseries(bucket: str, group_by: str, limit: int) -> dict[str, Any]:
     """Return the stable zero-valued grouped timeseries contract."""
+    limit = clamp_grouped_limit(limit)
     return {
         "bucket": bucket,
         "group_by": group_by,
@@ -30,6 +39,7 @@ def postprocess_grouped_timeseries(
     limit: int,
 ) -> dict[str, Any]:
     """Fold raw grouped rows into the dashboard/API timeseries payload."""
+    limit = clamp_grouped_limit(limit)
     if not raw_rows:
         return empty_grouped_timeseries(bucket, group_by, limit)
 

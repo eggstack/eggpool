@@ -1976,6 +1976,36 @@ class TestFetchGroupedTimeseries:
             assert ":" in series["key"]
 
     @pytest.mark.asyncio()
+    async def test_limit_is_clamped_in_shared_payload_builder(
+        self, grouped_db: Database
+    ) -> None:
+        """Direct query callers get the same top-N limit contract as the API."""
+        a_id = await _account_id(grouped_db, "acct_a")
+        for index in range(3):
+            await _seed_request(
+                grouped_db,
+                account_id=a_id,
+                model_id="model_x",
+                provider_id=f"prov_{index}",
+            )
+
+        low = await queries.fetch_grouped_timeseries(
+            grouped_db,
+            "2000-01-01 00:00:00",
+            "2099-12-31 23:59:59",
+            limit=0,
+        )
+        high = await queries.fetch_grouped_timeseries(
+            grouped_db,
+            "2000-01-01 00:00:00",
+            "2099-12-31 23:59:59",
+            limit=999,
+        )
+
+        assert low["limit"] == 1
+        assert high["limit"] == 25
+
+    @pytest.mark.asyncio()
     async def test_group_by_provider_only(self, grouped_db: Database) -> None:
         """``provider`` grouping collapses across models on the same provider."""
         a_id = await _account_id(grouped_db, "acct_a")

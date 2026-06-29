@@ -534,7 +534,10 @@ The output covers:
   reserved microdollars, health states, active backoff rows.
 
 All probes are best-effort; failed probes return `null` rather than
-causing the command to fail.
+causing the command to fail. Probe diagnostics are exposed in the JSON
+payload as `probe_errors`, capped at 16 entries with each message
+truncated, so repeated host or permissions failures cannot produce an
+unbounded response.
 
 ### Checking from cron
 

@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from eggpool.stats import queries
 from eggpool.stats.grouped_timeseries import (
+    clamp_grouped_limit,
     empty_grouped_timeseries,
     postprocess_grouped_timeseries,
 )
@@ -564,7 +565,7 @@ class StatsService:
             bucket = "hour"
         if group_by not in ("provider", "model", "provider_model", "account"):
             group_by = "provider_model"
-        bounded_limit = max(1, min(int(limit), 25))
+        bounded_limit = clamp_grouped_limit(limit)
 
         account_id: int | None = None
         if account_name is not None and account_name != "":

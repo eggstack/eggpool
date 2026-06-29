@@ -16,7 +16,9 @@ from eggpool.db.migrations import MigrationRunner
 from eggpool.models.config import AppConfig
 from eggpool.runtime_metrics import (
     _MAX_PROBE_ERROR_LEN,
+    _MAX_PROBE_ERRORS,
     RuntimeMetricsService,
+    _append_probe_error,
     _parse_proc_stat_ids,
     _parse_proc_stat_memory,
     _safe_int,
@@ -111,6 +113,17 @@ def test_truncate_probe_error_long() -> None:
     result = _truncate_probe_error(msg)
     assert len(result) == _MAX_PROBE_ERROR_LEN  # truncated to max + "..."
     assert result.endswith("...")
+
+
+def test_append_probe_error_caps_count_and_message_length() -> None:
+    errors: list[str] = []
+
+    for index in range(_MAX_PROBE_ERRORS + 5):
+        _append_probe_error(errors, f"{index}:" + ("x" * 300))
+
+    assert len(errors) == _MAX_PROBE_ERRORS
+    assert all(len(error) <= _MAX_PROBE_ERROR_LEN for error in errors)
+    assert errors[-1].startswith(f"{_MAX_PROBE_ERRORS - 1}:")
 
 
 def test_parse_proc_stat_memory_uses_rss_pages_not_vsize() -> None:
@@ -302,7 +315,13 @@ async def test_background_tasks_with_supervisor(db: Database) -> None:
     assert isinstance(task["running"], bool)
     assert isinstance(task["done"], bool)
     assert isinstance(task["cancelled"], bool)
+    assert task["iteration_count"] == 0
     assert isinstance(task["restart_count"], int)
+    assert task["last_started_at"] is None
+    assert task["last_completed_at"] is None
+    assert task["last_failure_at"] is None
+    assert task["last_error_at"] is None
+    assert task["last_error_class"] is None
 
 
 @pytest.mark.asyncio

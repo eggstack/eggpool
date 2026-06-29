@@ -112,6 +112,24 @@ class SupervisedTask:
         """Check if the task is currently running."""
         return self._running and self._task is not None and not self._task.done()
 
+    def snapshot(self) -> dict[str, Any]:
+        """Return the stable runtime-metrics payload for this task."""
+        return {
+            "name": self.name,
+            "registered": True,
+            "running": self.is_running,
+            "done": self._task is not None and self._task.done(),
+            "cancelled": self._task is not None and self._task.cancelled(),
+            "iteration_count": self._iteration_count,
+            "restart_count": self._restart_count,
+            "max_restarts": self._max_restarts,
+            "last_started_at": self._last_started_at or None,
+            "last_completed_at": self._last_completed_at or None,
+            "last_failure_at": self._last_failure or None,
+            "last_error_at": self._last_error_at or None,
+            "last_error_class": self._last_error_class,
+        }
+
 
 class TaskSupervisor:
     """Manages multiple supervised background tasks."""
@@ -150,6 +168,14 @@ class TaskSupervisor:
         """Get a task by name."""
         return self._tasks.get(name)
 
+    def snapshot(self) -> list[dict[str, Any]]:
+        """Return runtime snapshots for all registered tasks."""
+        tasks: list[dict[str, Any]] = []
+        for supervised in self._tasks.values():
+            with contextlib.suppress(Exception):
+                tasks.append(supervised.snapshot())
+        return tasks
+
     @property
     def all_healthy(self) -> bool:
         """Check if all tasks are running."""
@@ -177,42 +203,4 @@ class BackgroundTaskMonitor:
         heartbeat timestamps added during ``_run_loop``.  Failed probes
         never raise — malformed tasks are silently skipped.
         """
-        tasks: list[dict[str, Any]] = []
-        for name, supervised in self._supervisor._tasks.items():  # pyright: ignore[reportPrivateUsage]
-            with contextlib.suppress(Exception):
-                tasks.append(
-                    {
-                        "name": name,
-                        "registered": True,
-                        "running": supervised.is_running,
-                        "done": (
-                            supervised._task is not None  # pyright: ignore[reportPrivateUsage]
-                            and supervised._task.done()  # pyright: ignore[reportPrivateUsage]
-                        ),
-                        "cancelled": (
-                            supervised._task is not None  # pyright: ignore[reportPrivateUsage]
-                            and supervised._task.cancelled()  # pyright: ignore[reportPrivateUsage]
-                        ),
-                        "iteration_count": supervised._iteration_count,  # pyright: ignore[reportPrivateUsage]
-                        "restart_count": supervised._restart_count,  # pyright: ignore[reportPrivateUsage]
-                        "max_restarts": supervised._max_restarts,  # pyright: ignore[reportPrivateUsage]
-                        "last_started_at": (
-                            supervised._last_started_at  # pyright: ignore[reportPrivateUsage]
-                            or None
-                        ),
-                        "last_completed_at": (
-                            supervised._last_completed_at  # pyright: ignore[reportPrivateUsage]
-                            or None
-                        ),
-                        "last_failure_at": (
-                            supervised._last_failure  # pyright: ignore[reportPrivateUsage]
-                            or None
-                        ),
-                        "last_error_at": (
-                            supervised._last_error_at  # pyright: ignore[reportPrivateUsage]
-                            or None
-                        ),
-                        "last_error_class": supervised._last_error_class,  # pyright: ignore[reportPrivateUsage]
-                    }
-                )
-        return tasks
+        return self._supervisor.snapshot()

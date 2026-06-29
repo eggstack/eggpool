@@ -51,6 +51,13 @@ def _truncate_probe_error(msg: str) -> str:
     return msg[: _MAX_PROBE_ERROR_LEN - 3] + "..."
 
 
+def _append_probe_error(probe_errors: list[str], msg: str) -> None:
+    """Append a bounded probe error without letting the list grow forever."""
+    if len(probe_errors) >= _MAX_PROBE_ERRORS:
+        return
+    probe_errors.append(_truncate_probe_error(msg))
+
+
 def _parse_proc_stat_memory(stat: str, page_size: int) -> tuple[int | None, int | None]:
     """Parse current VMS/RSS bytes from Linux ``/proc/self/stat`` content."""
     parts = stat.split(")", maxsplit=1)
@@ -235,7 +242,7 @@ class RuntimeMetricsService:
             else:
                 rss_bytes = usage.ru_maxrss
         except Exception:
-            probe_errors.append(_truncate_probe_error("resource.getrusage failed"))
+            _append_probe_error(probe_errors, "resource.getrusage failed")
 
         # Linux: read current RSS/VMS from /proc/self/stat
         if sys.platform == "linux":
@@ -328,7 +335,7 @@ class RuntimeMetricsService:
                 except (OSError, FileNotFoundError):
                     pass
         except Exception as exc:
-            probe_errors.append(_truncate_probe_error(f"Process scan failed: {exc}"))
+            _append_probe_error(probe_errors, f"Process scan failed: {exc}")
 
         expected = _expected_process_count(self._config)
         observed = len(eggpool_pids) + 1  # +1 for self
@@ -349,34 +356,13 @@ class RuntimeMetricsService:
             try:
                 return self._task_monitor.snapshot()
             except Exception as exc:  # noqa: BLE001
-                probe_errors.append(
-                    _truncate_probe_error(f"Task monitor snapshot failed: {exc}")
+                _append_probe_error(
+                    probe_errors, f"Task monitor snapshot failed: {exc}"
                 )
         if self._supervisor is None:
             return []
 
-        tasks: list[dict[str, Any]] = []
-        for name, supervised in self._supervisor._tasks.items():  # pyright: ignore[reportPrivateUsage]
-            tasks.append(
-                {
-                    "name": name,
-                    "registered": True,
-                    "running": supervised.is_running,
-                    "done": (supervised._task is not None and supervised._task.done()),  # pyright: ignore[reportPrivateUsage]
-                    "cancelled": (
-                        supervised._task is not None and supervised._task.cancelled()  # pyright: ignore[reportPrivateUsage]
-                    ),
-                    "restart_count": supervised._restart_count,  # pyright: ignore[reportPrivateUsage]
-                    "last_failure_at": (
-                        supervised._last_failure  # pyright: ignore[reportPrivateUsage]
-                        if supervised._last_failure > 0  # pyright: ignore[reportPrivateUsage]
-                        else None
-                    ),
-                    "max_restarts": supervised._max_restarts,  # pyright: ignore[reportPrivateUsage]
-                }
-            )
-
-        return tasks
+        return self._supervisor.snapshot()
 
     # -- Database health ----------------------------------------------------
 
@@ -465,9 +451,7 @@ class RuntimeMetricsService:
                 active_requests_total = total
                 active_requests_by_account = by_account if by_account else None
             except Exception as exc:
-                probe_errors.append(
-                    _truncate_probe_error(f"Active request count failed: {exc}")
-                )
+                _append_probe_error(probe_errors, f"Active request count failed: {exc}")
 
         if self._health_manager is not None:
             try:
@@ -479,8 +463,8 @@ class RuntimeMetricsService:
                     states[name] = health.health_state
                 health_states = states if states else None
             except Exception as exc:
-                probe_errors.append(
-                    _truncate_probe_error(f"Health state snapshot failed: {exc}")
+                _append_probe_error(
+                    probe_errors, f"Health state snapshot failed: {exc}"
                 )
 
         # Count active backoff rows
@@ -534,9 +518,7 @@ class RuntimeMetricsService:
                 active_reservations_count = int(res_row["active_count"] or 0)
                 reserved_microdollars = int(res_row["total_reserved"] or 0)
         except Exception as exc:
-            probe_errors.append(
-                _truncate_probe_error(f"Pending health snapshot failed: {exc}")
-            )
+            _append_probe_error(probe_errors, f"Pending health snapshot failed: {exc}")
 
         return {
             "active_requests_total": active_requests_total,
@@ -561,9 +543,7 @@ class RuntimeMetricsService:
         try:
             return self._outbound_manager.snapshot()
         except Exception as exc:
-            probe_errors.append(
-                _truncate_probe_error(f"Outbound client snapshot failed: {exc}")
-            )
+            _append_probe_error(probe_errors, f"Outbound client snapshot failed: {exc}")
             return {"error": str(exc)}
 
     def _snapshot_provider_client_pool(self, probe_errors: list[str]) -> dict[str, Any]:
@@ -573,8 +553,8 @@ class RuntimeMetricsService:
         try:
             return self._provider_client_pool.snapshot()
         except Exception as exc:
-            probe_errors.append(
-                _truncate_probe_error(f"Provider client pool snapshot failed: {exc}")
+            _append_probe_error(
+                probe_errors, f"Provider client pool snapshot failed: {exc}"
             )
             return {"error": str(exc)}
 
@@ -585,9 +565,7 @@ class RuntimeMetricsService:
         try:
             return {"enabled": True, **self._dns_backend.cache.snapshot()}
         except Exception as exc:
-            probe_errors.append(
-                _truncate_probe_error(f"DNS cache snapshot failed: {exc}")
-            )
+            _append_probe_error(probe_errors, f"DNS cache snapshot failed: {exc}")
             return {"error": str(exc)}
 
     def _snapshot_load(self, probe_errors: list[str]) -> dict[str, Any]:
@@ -639,8 +617,8 @@ class RuntimeMetricsService:
         try:
             return self._dispatch_overhead_recorder.snapshot()
         except Exception as exc:
-            probe_errors.append(
-                _truncate_probe_error(f"Dispatch overhead snapshot failed: {exc}")
+            _append_probe_error(
+                probe_errors, f"Dispatch overhead snapshot failed: {exc}"
             )
             return {"error": str(exc)}
 
@@ -662,9 +640,7 @@ class RuntimeMetricsService:
         try:
             return self._metrics_coalescer.snapshot()
         except Exception as exc:
-            probe_errors.append(
-                _truncate_probe_error(f"Metrics buffer snapshot failed: {exc}")
-            )
+            _append_probe_error(probe_errors, f"Metrics buffer snapshot failed: {exc}")
             return {"error": str(exc)}
 
 

@@ -31,6 +31,7 @@ from eggpool.dashboard.render import (
 )
 from eggpool.errors import ConfigError
 from eggpool.stats import TimeRange, resolve_time_range
+from eggpool.stats.grouped_timeseries import clamp_grouped_limit
 from eggpool.stats.queries import fetch_disabled_account_count
 
 if TYPE_CHECKING:
@@ -549,7 +550,7 @@ async def handle_timeseries(
     time_range = resolve_time_range(period)
     bucket = _normalize_bucket(bucket)
     group_by = _normalize_group_by(group_by)
-    bounded_limit = _clamp_int(limit, minimum=1, maximum=25)
+    bounded_limit = clamp_grouped_limit(limit)
     stats = request.app.state.stats
     series, grouped = cast(
         "tuple[list[dict[str, Any]] | None, dict[str, Any]]",
@@ -684,7 +685,7 @@ async def handle_grouped_timeseries_json(
     time_range = resolve_time_range(period)
     bucket = _normalize_bucket(bucket)
     group_by = _normalize_group_by(group_by)
-    bounded_limit = _clamp_int(limit, minimum=1, maximum=25)
+    bounded_limit = clamp_grouped_limit(limit)
     stats = request.app.state.stats
     payload = await stats.get_grouped_timeseries(
         time_range,
