@@ -15,8 +15,7 @@ The PID file is owned by the **supervisor** process: the CLI's
 ``Granian(...).serve()`` and removes the file in a ``finally`` block.
 Granian's supervisor + single-worker model means the worker is a
 child of the supervisor; signaling the supervisor PID stops both
-processes cleanly. See ``plans/fix_granian_single_process.md`` for
-the full design.
+processes cleanly.
 
 Putting these helpers in one place ensures consistent behavior
 (timeout handling, error reporting, cleanup of stale PID files,
@@ -31,8 +30,7 @@ closed (``/dev/null``) and stdout/stderr are appended to a log file
 under the operator's state directory, so the spawning shell is not
 tied to the new process and Granian logs survive a closed terminal.
 The child command is **not** passed any ``--daemon`` flag; the
-detachment is purely a parent-side concern. See
-``plans/daemon-and-runtime.md`` for the full design.
+detachment is purely a parent-side concern.
 """
 
 from __future__ import annotations

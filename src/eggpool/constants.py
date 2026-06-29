@@ -33,7 +33,6 @@ MAX_SSE_FRAME_SIZE = 64 * 1024  # 64 KB
 # directory with a UID-scoped ``/tmp`` fallback. The wrapped property
 # below resolves the live path on every read so tests that monkey-patch
 # environment variables see the updated value.
-# See ``plans/daemon-and-runtime.md`` for the design.
 RUNTIME_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp"))
 
 

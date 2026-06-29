@@ -56,8 +56,6 @@ See `architecture/README.md` for the full design overview.
 - `serve --daemon` refuses to run as root unless `--as-root` is passed (prevents accidental root personal deployment)
 - Systemd should **not** use `--daemon`. The systemd unit already owns the process lifecycle; run foreground `serve` and let systemd manage the PID, journal logs, and restart policy
 - `runtime.start_server()` signature: `start_server(config_path, *, cwd=None, daemon=True, log_path=None, quiet=True, verify=False, verify_timeout_s=3.0)`. `runtime.restart_server()` accepts the same `daemon`, `log_path`, and `quiet` options. The CLI flags `eggpool serve --daemon`, `--log-file PATH`, `--quiet`, and `--as-root` map directly to these parameters
-- See `plans/daemon-and-runtime.md` for the full design
-
 ## Installation and Deployment
 
 - `eggpool.deploy_user` — `DeployUser`, `resolve_deploy_user()` (handles normal, `SUDO_USER`, and direct-root cases), `resolve_config_path()` (single source of truth for `--config` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`), `resolve_env_path()`, and XDG default helpers (`default_config_dir()` / `default_data_dir()` / `default_state_dir()` / `default_config_path()` / `default_env_path()`)
@@ -115,7 +113,7 @@ See `architecture/README.md` for the full design overview.
 - `routing_priority` orders tiers; `weight` orders accounts within a tier — the two compose
 - **`prefer_native`**: when transcoding is enabled and `prefer_native = true` (default), native-protocol accounts outrank transcodable ones within the same tier via a secondary sort key (`requires_transcode: False` sorts before `True`). When `prefer_native = false`, transcodable accounts may outrank native ones if their `final_score` is lower.
 - `collapse_models = false` (default) exposes provider-suffixed model IDs; `collapse_models = true` collapses to a single unsuffixed ID routed across all providers
-- **Upstream-authoritative suppression** (default `local_quota_mode = "score_only"`): local cost estimates influence routing rank but never hard-exclude accounts. Only upstream-observed failures, explicit operator disablement, catalog/protocol incompatibility, or an explicit `local_quota_mode = "hard_cap"` may make an account ineligible. See `plans/upstream-authoritative-suppression.md` for context.
+- **Upstream-authoritative suppression** (default `local_quota_mode = "score_only"`): local cost estimates influence routing rank but never hard-exclude accounts. Only upstream-observed failures, explicit operator disablement, catalog/protocol incompatibility, or an explicit `local_quota_mode = "hard_cap"` may make an account ineligible.
 - **`hard_cap` opt-in**: setting `local_quota_mode = "hard_cap"` restores legacy behavior where locally over-quota accounts are excluded. Subscription aggregators should normally leave the default unchanged; a warning is logged at startup when `hard_cap` is enabled.
 - Reservation cleanup is gated on `reservation_released` alone — `health_already_applied` must not be a precondition for in-memory reservation teardown, otherwise single-account 429/402 paths leak in-memory reservation state.
 - **Lock-scope and publish ordering**: in `RequestCoordinator._select_and_persist_attempt()`, the runtime publication step (`Router.increment_active_request_count` + `QuotaEstimator.add_reservation`) runs INSIDE `_select_lock` AFTER the durable transaction commits but BEFORE the lock releases. The two contexts are explicit nested `async with` blocks (outer `_select_lock`, inner `_db.transaction()`). Do NOT collapse them into a compound `async with self._select_lock, self._db.transaction():` because Python exits context managers right-to-left (the transaction would still commit before the lock released — that is not the bug). The actual bug was that the runtime publication block lived INSIDE the transaction body, so active-count and reserved-cost state were published before the transaction committed. The key invariant is block placement (publication must be outside the DB transaction body but still inside `_select_lock`), not context-exit order. The compensation chain (`decrement` → `finalize_failed_attempt(asyncio.shield(...))` → `health_manager.release_request` → set `client_metadata["post_commit_interrupted"]` → `raise`) wraps the publish step; the outer `except BaseException:` catches `CancelledError` / `SystemExit` / `KeyboardInterrupt` and re-raises them after compensation so they cannot be swallowed.
@@ -138,7 +136,7 @@ See `architecture/README.md` for the full design overview.
 - `eggpool connect` writes `routing_priority = 0` on every newly created provider block and leaves existing blocks untouched, so operators can edit one number to rebalance.
 - `eggpool configsetup opencode` honors `collapse_models`: suffixed model IDs when `false`, unsuffixed when `true`.
 - `/v1/models` includes an `eggpool.routing_priority` extension field on each suffixed entry.
-- See `plans/provider_priority.md` for the full design and `docs/providers.md` for the worked example with three providers and three priorities.
+- See `docs/providers.md` for the worked example with three providers and three priorities.
 
 ### Protocol Transcoding
 

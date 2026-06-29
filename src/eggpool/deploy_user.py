@@ -5,8 +5,7 @@ user should the systemd unit / crontab entry run?" in a way that is
 robust to sudo invocation, root invocation, and source-checkout runs.
 
 The :func:`resolve_config_path` and :func:`resolve_env_path` helpers
-implement the CLI-wide config-path precedence mandated by
-``plans/install-deploy-simplification.md``::
+implement the CLI-wide config-path precedence:
 
     --config PATH    (CLI flag, highest)
     $EGGPOOL_CONFIG  (environment variable)

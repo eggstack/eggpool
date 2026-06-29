@@ -156,7 +156,6 @@ the operator's interactive shell environment. `ensure-running`
 atomically checks-and-starts without ever spawning a duplicate
 instance, and uses the stdlib-only fast-path CLI so the cron tick is
 cheap enough to run every five minutes on Raspberry Pi-class hardware.
-See `plans/lightweight-cli-watchdog.md` for the design rationale.
 
 ### 5. Manual run (debug foreground)
 
@@ -701,7 +700,7 @@ A process restart is a definitive boundary: any request that was still
 active reservations are released, regardless of how recently they were
 created.  Check the startup log for `Crash recovery: marked N stale
 requests` to confirm a clean recovery after a crash or forced
-restart.  See `plans/eggpoolfix.md` for the full safety-net design.
+restart.
 
 ---
 

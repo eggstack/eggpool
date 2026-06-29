@@ -89,11 +89,9 @@ def _jitterize(value: float, jitter: float) -> float:
 def get_backoff_policy(reason: str) -> BackoffPolicy | None:
     """Return the policy for a backoff reason, or ``None`` if no policy.
 
-    The mapping follows the plan in
-    ``plans/upstream-authoritative-suppression.md`` Phase 3 (lines
-    184-227). Reasons without a policy (``context_limit_exceeded`` and
-    any unknown value) return ``None``; the caller must not apply any
-    cooldown in that case.
+    The mapping follows the backoff policy design. Reasons without a
+    policy (``context_limit_exceeded`` and any unknown value) return
+    ``None``; the caller must not apply any cooldown in that case.
     """
     try:
         r = BackoffReason(reason)

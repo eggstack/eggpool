@@ -449,8 +449,6 @@ async def test_collapsed_models_endpoint_emits_providers_and_max_priority(
 ) -> None:
     """With ``collapse_models=true`` the endpoint emits ``providers`` and
     ``routing_priority_max`` for each collapsed entry.
-
-    Reproduces the shape from ``plans/provider_priority.md`` lines 300-315.
     """
     config = app.state.config
     new_config = config.model_copy(

@@ -204,7 +204,6 @@ def serve(
     exit. The parent returns promptly with a short success message
     pointing at the log file. The child is **not** passed any
     ``--daemon`` flag; detachment is purely a parent-side concern.
-    See ``plans/daemon-and-runtime.md`` for the full design.
     """
     from eggpool import runtime
 

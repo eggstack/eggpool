@@ -202,7 +202,7 @@ sudo journalctl -u eggpool -n 50 --no-pager | grep -i proxy
 
 # Test with the smoke test
 GOROUTER_BASE_URL=http://127.0.0.1:11300 \
-GOROUTER_API_KEY=$(sudo grep ^GO_AGGREGATOR_API_KEY /etc/eggpool/env | cut -d= -f2-) \
+GOROUTER_API_KEY=$(sudo grep ^EGGPOOL_API_KEY /etc/eggpool/env | cut -d= -f2-) \
 GOROUTER_OPENAI_MODEL=gpt-4 \
 GOROUTER_ANTHROPIC_MODEL=claude-3-5-sonnet \
   uv run python scripts/smoke_test.py

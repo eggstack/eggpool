@@ -241,7 +241,7 @@ corrupted.
 - PID file path is resolved by `eggpool.runtime_paths.default_pid_file()` in this precedence: `$EGGPOOL_PID_FILE` → `$XDG_RUNTIME_DIR/eggpool.pid` → `~/.local/state/eggpool/eggpool.pid` → `/tmp/eggpool-<UID>.pid`. The PID file is owned by the **supervisor**, not the FastAPI lifespan
 - `eggpool serve` refuses to start a second instance: it checks the PID file via `runtime.read_pid()` + `runtime.is_process_running()`, then probes `GET /v1/healthz` over `127.0.0.1` via stdlib `urllib.request`. A live PID or a 200 from the probe exits `1`; stale PID files are cleared before starting
 - `eggpool restart` delegates to `runtime.restart_server`, which calls `runtime.send_sigterm` and `runtime.start_server` (a `subprocess.Popen` of a new supervisor). There is no inline subprocess logic in the CLI command itself
-- Cron-driven watchdog entries should call `eggpool ensure-running` (not `croncheck || eggpool serve &`). `ensure-running` atomically checks-and-starts without ever spawning a duplicate instance and uses the stdlib-only fast-path CLI so the cron tick is cheap. See `plans/lightweight-cli-watchdog.md`
+- Cron-driven watchdog entries should call `eggpool ensure-running` (not `croncheck || eggpool serve &`). `ensure-running` atomically checks-and-starts without ever spawning a duplicate instance and uses the stdlib-only fast-path CLI so the cron tick is cheap.
 
 ### Daemon Mode for Personal Use
 
@@ -257,8 +257,7 @@ daemon's stdout/stderr to `/dev/null` instead).
 `serve --daemon` refuses to run as root unless `--as-root` is
 passed (prevents accidentally starting a personal deployment as
 root). Systemd should **not** use `--daemon` — the unit already
-owns the process lifecycle. See `plans/daemon-and-runtime.md` for
-the full design.
+owns the process lifecycle.
 
 ---
 

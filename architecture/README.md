@@ -185,7 +185,7 @@ SQLite via aiosqlite with WAL mode. Single-connection serialization via a lock +
 
 ### Schema Migrations
 
-Ordered SQL migrations in `db/schema/` (0001 through 0032). Checksums tracked in `checksums.json`.
+Ordered SQL migrations in `db/schema/` (0001 through 0035). Checksums tracked in `checksums.json`.
 
 ### Repositories
 
@@ -231,8 +231,7 @@ Accounts are excluded from routing when:
 In the default `score_only` mode, local cost and quota estimates influence
 routing **priority** only — above-capacity accounts stay eligible. Only
 upstream-observed failures, explicit operator disablement, and catalog/
-protocol incompatibility can suppress routing. See
-`plans/upstream-authoritative-suppression.md` for the full design.
+protocol incompatibility can suppress routing.
 
 Upstream-derived backoffs (429, 402, model-unavailable) persist across
 restarts in the `account_backoffs` table (`src/eggpool/db/schema/0024_account_backoffs.sql`)
