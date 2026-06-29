@@ -987,15 +987,12 @@ def _render_system_health(
     )
 
     stale_finalizer_cleaned = 0
-    finalizer_timeout = 0
     crash_recovery = 0
     for row in summary_rows:
         event_type = str(row.get("event_type", ""))
         event_count = int(row.get("event_count", 0) or 0)
         if event_type == "stale_request_finalizer":
             stale_finalizer_cleaned += event_count
-        elif event_type == "stale_request_cancel_timeout":
-            finalizer_timeout += event_count
         elif event_type == "crash_recovery":
             crash_recovery += event_count
 
@@ -1020,10 +1017,7 @@ def _render_system_health(
             _render_metric_card(
                 title="Finalizer (24h)",
                 metric=format_int(stale_finalizer_cleaned),
-                sub=(
-                    f"cleaned · {finalizer_timeout} timeout · {crash_recovery} recovery"
-                ),
-                warning=finalizer_timeout > 0,
+                sub=f"cleaned · {crash_recovery} recovery",
             ),
             _render_metric_card(
                 title="Retry rate",

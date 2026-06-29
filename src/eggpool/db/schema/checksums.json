@@ -27,7 +27,7 @@
         "0025_stale_request_index.sql": "6f55ea5ea26521a71276a4cc461064bd472c9a0bb9f703873f4c294f9e1914d9",
         "0026_attempt_observability.sql": "283dfa926ee5279187004dbad85db0e2f908319143497c2dc366954c67e8cc93",
         "0027_routing_decisions.sql": "bb115e64f3eff3e119ffc26fad48d1335ce0bafa830c324aa4851cfe447c7067",
-        "0028_operational_events.sql": "e615ddb0c1fe664bb7d8f02ee720f6010b0ab01ff62cd2f30fe41e35adec68ec",
+        "0028_operational_events.sql": "f1e8490088671b566f80816c7a8694dbf22c1e9c70c2412637883a7c4290caca",
         "0029_latency_phases.sql": "500c1a666bf42a26b20fbaaf91b71a54bf7f527dd31c627f7769703da220ba76",
         "0030_model_pricing_aliases.sql": "0280856caa1607dd0afe65509e48c3553c33afa1c90a4ab741ef59ac17440f88",
         "0031_price_snapshot_provenance.sql": "1442daeb0da32048fe27b2aef99c825af6f33d370bea88e40053c479726808ea",

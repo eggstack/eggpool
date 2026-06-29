@@ -98,6 +98,8 @@ def _make_event(
     cache_read_tokens: int = 0,
     cache_write_tokens: int = 0,
     reasoning_tokens: int = 0,
+    streamed: bool = False,
+    first_byte_ms: int | None = None,
 ) -> UsageMetricEvent:
     return UsageMetricEvent(
         timestamp=datetime.now(UTC),
@@ -105,7 +107,7 @@ def _make_event(
         model_id=model_id,
         account_id=account_id,
         protocol="openai",
-        streamed=False,
+        streamed=streamed,
         status="completed",
         retry_count=0,
         input_tokens=input_tokens,
@@ -118,7 +120,7 @@ def _make_event(
         bytes_received=bytes_received,
         bytes_emitted=bytes_emitted,
         latency_ms=latency_ms,
-        first_byte_ms=None,
+        first_byte_ms=first_byte_ms,
     )
 
 
@@ -178,6 +180,60 @@ class TestRollupSummaryParity:
         expected_be = sum(500 * (i + 1) for i in range(5))
         assert rollup_summary["total_bytes_received"] == expected_br
         assert rollup_summary["total_bytes_emitted"] == expected_be
+
+        expected_latency_sum = sum(100 + i * 10 for i in range(5))
+        expected_tps = expected_out * 1000.0 / expected_latency_sum
+        assert rollup_summary["tokens_per_second"] == pytest.approx(expected_tps)
+        assert rollup_summary["avg_ttft_ms"] == 0.0
+
+    @pytest.mark.asyncio()
+    async def test_rollup_summary_ttft_and_throughput_for_streamed(
+        self, seeded_db: Database
+    ) -> None:
+        """Streamed events with first_byte_ms must surface non-zero TTFT and tps."""
+        rollup_repo = UsageRollupRepository(seeded_db)
+        config = MetricsConfig(
+            write_mode="balanced",
+            flush_interval_s=30,
+            max_buffered_events=500,
+            timeseries_bucket_s=3600,
+        )
+        coalescer = MetricsWriteCoalescer(
+            config=config, db=seeded_db, rollup_repo=rollup_repo
+        )
+
+        ttfts = [50, 100, 150, 200, 250]
+        for i in range(5):
+            coalescer.record_usage(
+                _make_event(
+                    input_tokens=100 * (i + 1),
+                    output_tokens=200 * (i + 1),
+                    latency_ms=100 + i * 10,
+                    cost_microdollars=1000 * (i + 1),
+                    streamed=True,
+                    first_byte_ms=ttfts[i],
+                )
+            )
+
+        result = await coalescer.flush(reason="ttft_parity_test")
+        assert result.rows_flushed > 0
+
+        time_range = TimeRange(
+            start=datetime.fromisoformat("2000-01-01"),
+            end=datetime.fromisoformat("2099-12-31"),
+            label="custom",
+        )
+
+        service_with_rollups = StatsService(seeded_db, rollup_repo=rollup_repo)
+        rollup_summary = await service_with_rollups.get_summary(time_range)
+
+        expected_ttft_mean = sum(ttfts) / len(ttfts)
+        expected_out = sum(200 * (i + 1) for i in range(5))
+        expected_latency_sum = sum(100 + i * 10 for i in range(5))
+        expected_tps = expected_out * 1000.0 / expected_latency_sum
+
+        assert rollup_summary["avg_ttft_ms"] == pytest.approx(expected_ttft_mean)
+        assert rollup_summary["tokens_per_second"] == pytest.approx(expected_tps)
 
 
 class TestRollupTimeseriesParity:
@@ -352,3 +408,131 @@ class TestEmptyRollupsFallback:
         expected_out = sum(200 * (i + 1) for i in range(5))
         assert summary["total_input_tokens"] == expected_in
         assert summary["total_output_tokens"] == expected_out
+
+
+@pytest_asyncio.fixture()
+async def exactness_db(db: Database) -> Database:
+    """Seed requests with mixed ``exactness`` values for backfill tests.
+
+    The migration default for ``exactness`` is ``'unknown'``, so we
+    explicitly overwrite it on each row.  Cost values are chosen so
+    the cost aggregates are easy to verify by hand.
+    """
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled) VALUES (?, ?, ?)",
+            ("test_acct", "TEST_ENV", 1),
+        )
+        await db.execute_write(
+            "INSERT INTO models (model_id, protocol) VALUES (?, ?)",
+            ("model_a", "openai"),
+        )
+    rows = [
+        ("exact", 100),
+        ("exact", 200),
+        ("derived", 300),
+        ("estimated", 400),
+        ("provider_reported", 500),
+        ("unknown", 600),
+    ]
+    async with db.transaction():
+        for i, (exactness, cost) in enumerate(rows):
+            await db.execute_write(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, provider_id, started_at, completed_at,
+                    status, input_tokens, output_tokens, cost_microdollars,
+                    upstream_latency_ms, exactness
+                ) VALUES (
+                    (SELECT id FROM accounts WHERE name = ?),
+                    ?, ?, datetime('now', ?), datetime('now', ?),
+                    'completed', ?, ?, ?, ?, ?
+                )
+                """,
+                (
+                    "test_acct",
+                    "model_a",
+                    "provider_a",
+                    f"-{i + 1} hours",
+                    f"-{i + 1} hours",
+                    10,
+                    20,
+                    cost,
+                    100.0,
+                    exactness,
+                ),
+            )
+    return db
+
+
+class TestRollupExactnessBackfill:
+    """``usage_rollups`` does not retain ``exactness``, so the rollup summary
+    must backfill exactness counters from the requests table."""
+
+    @pytest.mark.asyncio()
+    async def test_exactness_counts_backfilled_from_requests(
+        self, exactness_db: Database
+    ) -> None:
+        rollup_repo = UsageRollupRepository(exactness_db)
+        config = MetricsConfig(
+            write_mode="balanced",
+            flush_interval_s=30,
+            max_buffered_events=500,
+            timeseries_bucket_s=3600,
+        )
+        coalescer = MetricsWriteCoalescer(
+            config=config, db=exactness_db, rollup_repo=rollup_repo
+        )
+        # One completed event per seeded row keeps the rollup non-empty so
+        # ``get_summary_from_rollups`` is taken (and not the live fallback).
+        for _ in range(6):
+            coalescer.record_usage(
+                _make_event(
+                    input_tokens=10,
+                    output_tokens=20,
+                    latency_ms=100,
+                    cost_microdollars=100,
+                )
+            )
+        result = await coalescer.flush(reason="exactness_parity_test")
+        assert result.rows_flushed > 0
+
+        time_range = TimeRange(
+            start=datetime.fromisoformat("2000-01-01"),
+            end=datetime.fromisoformat("2099-12-31"),
+            label="custom",
+        )
+
+        service = StatsService(exactness_db, rollup_repo=rollup_repo)
+        summary = await service.get_summary(time_range)
+
+        assert summary["exact_count"] == 2
+        assert summary["derived_count"] == 1
+        assert summary["partial_count"] == 0
+        assert summary["estimated_count"] == 1
+        assert summary["unknown_count"] == 1
+        assert summary["provider_reported_count"] == 1
+        assert summary["provider_reported_cost_microdollars"] == 500
+        assert summary["estimated_cost_sum_microdollars"] == 400
+
+    @pytest.mark.asyncio()
+    async def test_exactness_zero_on_empty_window(self, db: Database) -> None:
+        """No requests and no rollups -> all exactness counters zero."""
+        rollup_repo = UsageRollupRepository(db)
+        time_range = TimeRange(
+            start=datetime.fromisoformat("2000-01-01"),
+            end=datetime.fromisoformat("2099-12-31"),
+            label="custom",
+        )
+
+        service = StatsService(db, rollup_repo=rollup_repo)
+        summary = await service.get_summary(time_range)
+
+        assert summary["exact_count"] == 0
+        assert summary["derived_count"] == 0
+        assert summary["partial_count"] == 0
+        assert summary["estimated_count"] == 0
+        assert summary["unknown_count"] == 0
+        assert summary["provider_reported_count"] == 0
+        assert summary["provider_reported_cost_microdollars"] == 0
+        assert summary["estimated_cost_sum_microdollars"] == 0

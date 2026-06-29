@@ -24,6 +24,7 @@ from eggpool.stats.queries import (
     fetch_attempt_stats,
     fetch_bandwidth_timeseries,
     fetch_error_breakdown,
+    fetch_exactness_breakdown,
     fetch_grouped_timeseries,
     fetch_ip_stats,
     fetch_latency_phase_breakdown,
@@ -641,6 +642,9 @@ class StatsService:
                 "partial_count": 0,
                 "estimated_count": 0,
                 "unknown_count": 0,
+                "provider_reported_count": 0,
+                "provider_reported_cost_microdollars": 0,
+                "estimated_cost_sum_microdollars": 0,
                 "total_bytes_received": 0,
                 "total_bytes_emitted": 0,
                 "total_providers": 0,
@@ -656,6 +660,11 @@ class StatsService:
         )
         error_requests = _int(row.get("error_requests", 0))
         total_output_tokens = _int(row.get("total_output_tokens", 0))
+        exactness = await fetch_exactness_breakdown(
+            self._db,
+            time_range.start_str(),
+            time_range.end_str(),
+        )
         return {
             "total_requests": total_requests,
             "successful_requests": total_requests - error_requests,
@@ -674,16 +683,23 @@ class StatsService:
             "cache_read_ratio": cache_read_ratio,
             "streamed_requests": _int(row.get("streamed_requests", 0)),
             "non_streamed_requests": _int(row.get("non_streamed_requests", 0)),
-            "exact_count": 0,
-            "derived_count": 0,
-            "partial_count": 0,
-            "estimated_count": 0,
-            "unknown_count": 0,
+            "exact_count": exactness["exact_count"],
+            "derived_count": exactness["derived_count"],
+            "partial_count": exactness["partial_count"],
+            "estimated_count": exactness["estimated_count"],
+            "unknown_count": exactness["unknown_count"],
+            "provider_reported_count": exactness["provider_reported_count"],
+            "provider_reported_cost_microdollars": exactness[
+                "provider_reported_cost_microdollars"
+            ],
+            "estimated_cost_sum_microdollars": exactness[
+                "estimated_cost_sum_microdollars"
+            ],
             "total_bytes_received": _int(row.get("total_bytes_received", 0)),
             "total_bytes_emitted": _int(row.get("total_bytes_emitted", 0)),
             "total_providers": 0,
-            "avg_ttft_ms": 0.0,
-            "tokens_per_second": 0.0,
+            "avg_ttft_ms": _float(row.get("avg_ttft_ms", 0.0)),
+            "tokens_per_second": _float(row.get("tokens_per_second", 0.0)),
             "p50_ttft_ms": 0.0,
             "p99_ttft_ms": 0.0,
         }

@@ -735,6 +735,83 @@ async def fetch_grouped_timeseries(
     )
 
 
+async def fetch_exactness_breakdown(
+    db: Database,
+    start: str,
+    end: str,
+    account_id: int | None = None,
+) -> dict[str, Any]:
+    """Fetch exactness counts and cost aggregates from the requests table.
+
+    The ``usage_rollups`` rollup table is bucketed by status and does not
+    retain the ``exactness`` column, so the rollup-based summary path in
+    :meth:`StatsService.get_summary_from_rollups` cannot supply the
+    exactness counters the dashboard renders on its index card. This
+    helper does one cheap ``GROUP BY`` against ``requests`` to backfill
+    them, preserving parity with the live :func:`fetch_summary` path.
+
+    Returns a dict with keys matching the summary contract:
+    ``exact_count``, ``derived_count``, ``partial_count``,
+    ``estimated_count``, ``unknown_count``, ``provider_reported_count``,
+    ``provider_reported_cost_microdollars``,
+    ``estimated_cost_sum_microdollars``. All values default to zero.
+    """
+    account_filter = " AND account_id = ?" if account_id is not None else ""
+    params: list[Any] = [_format_dt(start), _format_dt(end)]
+    if account_id is not None:
+        params.append(account_id)
+    sql = f"""
+    SELECT
+        COALESCE(SUM(CASE WHEN exactness = 'exact' THEN 1 ELSE 0 END), 0)
+            as exact_count,
+        COALESCE(SUM(CASE WHEN exactness = 'derived' THEN 1 ELSE 0 END), 0)
+            as derived_count,
+        COALESCE(SUM(CASE WHEN exactness = 'partial' THEN 1 ELSE 0 END), 0)
+            as partial_count,
+        COALESCE(SUM(CASE WHEN exactness = 'estimated' THEN 1 ELSE 0 END), 0)
+            as estimated_count,
+        COALESCE(SUM(CASE WHEN exactness = 'unknown' THEN 1 ELSE 0 END), 0)
+            as unknown_count,
+        COALESCE(SUM(CASE WHEN exactness = 'provider_reported' THEN 1 ELSE 0 END), 0)
+            as provider_reported_count,
+        COALESCE(SUM(CASE WHEN exactness = 'provider_reported'
+            THEN cost_microdollars ELSE 0 END), 0)
+            as provider_reported_cost_microdollars,
+        COALESCE(SUM(CASE WHEN exactness = 'estimated'
+            THEN cost_microdollars ELSE 0 END), 0)
+            as estimated_cost_sum_microdollars
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?{account_filter}
+    """
+    row = await db.fetch_one(sql, tuple(params))
+    if row is None:
+        return {
+            "exact_count": 0,
+            "derived_count": 0,
+            "partial_count": 0,
+            "estimated_count": 0,
+            "unknown_count": 0,
+            "provider_reported_count": 0,
+            "provider_reported_cost_microdollars": 0,
+            "estimated_cost_sum_microdollars": 0,
+        }
+    data = dict(row)
+    return {
+        "exact_count": int(data.get("exact_count", 0) or 0),
+        "derived_count": int(data.get("derived_count", 0) or 0),
+        "partial_count": int(data.get("partial_count", 0) or 0),
+        "estimated_count": int(data.get("estimated_count", 0) or 0),
+        "unknown_count": int(data.get("unknown_count", 0) or 0),
+        "provider_reported_count": int(data.get("provider_reported_count", 0) or 0),
+        "provider_reported_cost_microdollars": int(
+            data.get("provider_reported_cost_microdollars", 0) or 0
+        ),
+        "estimated_cost_sum_microdollars": int(
+            data.get("estimated_cost_sum_microdollars", 0) or 0
+        ),
+    }
+
+
 def _build_summary(row: dict[str, Any]) -> dict[str, Any]:
     """Build a summary dict from a SQL row."""
     total = int(row.get("total_requests", 0))
