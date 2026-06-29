@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime as _dt
+import json
 import logging
 import time
 from typing import TYPE_CHECKING, Any, cast
@@ -11,6 +13,7 @@ from eggpool.constants import DEPRECATED_MODEL_ID
 from eggpool.routing.provider import parse_model_provider
 
 if TYPE_CHECKING:
+    from eggpool.db.connection import Database
     from eggpool.models.config import AppConfig
 
 logger = logging.getLogger(__name__)
@@ -26,6 +29,76 @@ def parse_model_id(
     provider.
     """
     return parse_model_provider(model_id, known_providers)
+
+
+def _ts_to_unix(value: object) -> float:
+    """Convert a DB TIMESTAMP string (or numeric) to a Unix float.
+
+    Returns 0.0 for ``None`` or unparseable values so cache loads never
+    fail on a malformed timestamp. Naive datetime strings are treated
+    as UTC to match SQLite's ``CURRENT_TIMESTAMP`` convention.
+    """
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    if not text:
+        return 0.0
+    try:
+        dt = _dt.datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_dt.UTC)
+        return dt.timestamp()
+    except ValueError:
+        try:
+            dt = _dt.datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+            dt = dt.replace(tzinfo=_dt.UTC)
+            return dt.timestamp()
+        except ValueError:
+            return 0.0
+
+
+def _parse_metadata_field(
+    value: object,
+    model_id: str,
+    field_name: str,
+) -> dict[str, Any]:
+    """Parse a persisted model-metadata JSON object without aborting hydration.
+
+    Mirrors the private helper in ``CatalogService`` so the read-only
+    ``hydrate_from_db`` path can stay decoupled from the live catalog
+    service. Catalog metadata is advisory; a corrupt value must not
+    prevent unrelated models from loading.
+    """
+    if value is None or value == "":
+        return {}
+    if isinstance(value, dict):
+        return dict(cast("dict[str, Any]", value))
+    if not isinstance(value, (str, bytes, bytearray)):
+        logger.warning(
+            "Ignoring invalid cached %s for model %r",
+            field_name,
+            model_id,
+        )
+        return {}
+    try:
+        parsed: object = json.loads(value)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        logger.warning(
+            "Ignoring malformed cached %s for model %r",
+            field_name,
+            model_id,
+        )
+        return {}
+    if not isinstance(parsed, dict):
+        logger.warning(
+            "Ignoring non-object cached %s for model %r",
+            field_name,
+            model_id,
+        )
+        return {}
+    return cast("dict[str, Any]", parsed)
 
 
 class ModelCatalogCache:
@@ -766,6 +839,110 @@ class ModelCatalogCache:
     ) -> None:
         """Set a per-provider model entry."""
         self._provider_models[(model_id, provider_id)] = model_info
+
+    async def hydrate_from_db(self, db: Database) -> int:
+        """Populate this cache from durable catalog tables.
+
+        Mirrors the read-only half of ``CatalogService._load_cached_models``
+        but stays strictly limited to the data the rest of the cache API
+        needs to answer routing-eligibility questions without booting a
+        full ``CatalogService``:
+
+        - global model rows from ``models`` go into ``_models``;
+        - per-provider rows from ``provider_model_metadata`` go into
+          ``_provider_models``;
+        - account-provider ownership rows from ``accounts`` go into
+          ``_account_providers``;
+        - account-model rows from ``account_models`` (joined with
+          ``accounts`` so disabled entries are filtered) go into
+          ``_account_support``.
+
+        Returns the number of model rows loaded. Used by read-only CLI
+        commands (notably ``eggpool accounts explain``) so the operator
+        sees the durable catalog state instead of an empty in-memory
+        cache.
+
+        Network calls, limit resolution, and pricing-catalog wiring are
+        deliberately skipped — those belong on the live ``CatalogService``
+        boot path.
+        """
+        loaded = 0
+        model_rows = await db.fetch_all(
+            "SELECT model_id, display_name, protocol, capabilities, "
+            "source_metadata, protocol_source, first_seen_at, last_seen_at "
+            "FROM models WHERE model_id <> ?",
+            (DEPRECATED_MODEL_ID,),
+        )
+        for row in model_rows:
+            model_id = str(row["model_id"])
+            caps = _parse_metadata_field(row["capabilities"], model_id, "capabilities")
+            meta = _parse_metadata_field(
+                row["source_metadata"], model_id, "source_metadata"
+            )
+            self.load_model(
+                model_id=model_id,
+                display_name=row["display_name"],
+                protocol=str(row["protocol"] or "openai"),
+                capabilities=caps,
+                source_metadata=meta,
+                protocol_source=row["protocol_source"],
+                first_seen_at=_ts_to_unix(row["first_seen_at"]),
+                last_seen_at=_ts_to_unix(row["last_seen_at"]),
+            )
+            loaded += 1
+
+        provider_rows = await db.fetch_all(
+            "SELECT model_id, provider_id, display_name, protocol, "
+            "capabilities, source_metadata, protocol_source, "
+            "first_seen_at, last_seen_at "
+            "FROM provider_model_metadata WHERE model_id <> ?",
+            (DEPRECATED_MODEL_ID,),
+        )
+        for row in provider_rows:
+            model_id = str(row["model_id"])
+            provider_id = str(row["provider_id"])
+            caps = _parse_metadata_field(row["capabilities"], model_id, "capabilities")
+            meta = _parse_metadata_field(
+                row["source_metadata"], model_id, "source_metadata"
+            )
+            self.set_provider_model_entry(
+                model_id,
+                provider_id,
+                {
+                    "model_id": model_id,
+                    "display_name": row["display_name"],
+                    "protocol": row["protocol"],
+                    "protocol_source": row["protocol_source"],
+                    "capabilities": caps,
+                    "source_metadata": meta,
+                    "first_seen_at": _ts_to_unix(row["first_seen_at"]),
+                    "last_seen_at": _ts_to_unix(row["last_seen_at"]),
+                },
+            )
+
+        acct_rows = await db.fetch_all(
+            "SELECT id, name, provider_id, enabled FROM accounts"
+        )
+        id_to_name: dict[int, str] = {}
+        for row in acct_rows:
+            if not int(row["enabled"]):
+                continue
+            account_id = int(row["id"])
+            id_to_name[account_id] = str(row["name"])
+            self.set_account_provider(str(row["name"]), str(row["provider_id"]))
+
+        support_rows = await db.fetch_all(
+            "SELECT account_id, model_id FROM account_models WHERE enabled = 1"
+        )
+        for row in support_rows:
+            account_name = id_to_name.get(int(row["account_id"]))
+            if account_name is None:
+                continue
+            self.add_account_support(str(row["model_id"]), account_name)
+
+        self.hydrate_account_refresh_ages()
+        self.hydrate_refresh_age()
+        return loaded
 
     def prune_unused(self) -> int:
         """Drop cache entries no longer referenced by any account or provider.

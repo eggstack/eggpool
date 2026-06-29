@@ -47,7 +47,8 @@ See [Deployment](docs/deployment.md) for alternative install methods (pipx, manu
 | `eggpool stop` | Stop the running server |
 | `eggpool models refresh` | Refresh the model catalog |
 | `eggpool stats transcoding` | Show protocol transcoding statistics |
-| `eggpool accounts status` | Show configured account status |
+| `eggpool accounts status` | Show configured account status (provider, priority, weight, enabled) |
+| `eggpool accounts explain` | Show per-account routing eligibility for a model |
 | `eggpool runtime-status` | Print runtime health summary |
 | `eggpool backup` | Create a timestamped backup |
 | `eggpool recover` | Restore from a backup archive |

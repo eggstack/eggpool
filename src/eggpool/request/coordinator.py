@@ -128,6 +128,19 @@ def _prepare_error_detail(value: object | None, persist: bool) -> str | None:
     return redact_error_detail(str(value))
 
 
+def _safe_ratio(numerator: int, denominator: int) -> float | None:
+    """Return ``numerator / denominator`` as a utilization ratio.
+
+    Returns ``None`` when the denominator is zero or negative so the
+    payload distinguishes "no capacity configured" from "0 % used".
+    Used by ``_build_score_components`` to surface per-window
+    utilization alongside the raw cost and capacity values.
+    """
+    if denominator <= 0:
+        return None
+    return float(numerator) / float(denominator)
+
+
 @dataclass(slots=True)
 class ProxyRequestContext:
     """Input context for a proxy request."""
@@ -591,10 +604,27 @@ class RequestCoordinator:
     ) -> SelectedAttempt:
         """Atomically select an account, create request/reservation/attempt.
 
-        All database writes happen inside a single transaction under the
-        select lock. Runtime active-count and quota-reservation updates
-        are applied in a post-commit block so a rolled-back transaction
-        never leaves in-memory state out of sync.
+        Ordering invariants:
+
+        1. ``_select_lock`` is held across the durable selection
+           transaction AND the runtime publication step.
+        2. The inner ``db.transaction()`` context manager EXITS before
+           publication runs so SQLite has committed the request /
+           reservation / attempt / routing_decision rows. Nested
+           ``async with`` blocks guarantee this; the prior
+           ``async with self._select_lock, self._db.transaction()``
+           shape only released the lock AFTER the transaction, which
+           meant the transaction was still open while publication ran.
+        3. ``_execute_upstream`` and all upstream I/O happen OUTSIDE
+           ``_select_lock``.
+
+        Compensation: if publication fails after the durable commit,
+        active count is decremented, the reservation is removed, the
+        attempt is finalized as ``PostCommitInterrupted``, and the
+        health slot is released. The outer ``except BaseException``
+        catches ``CancelledError`` / ``SystemExit`` /
+        ``KeyboardInterrupt`` and re-raises them after compensation so
+        they cannot be swallowed.
         """
         if (
             self._request_repo is None
@@ -603,100 +633,70 @@ class RequestCoordinator:
         ):
             raise DatabaseError("Cannot persist: database repositories unavailable")
 
-        async with self._select_lock, self._db.transaction():
-            # 1. Get eligible account names excluding attempted ones
-            eligible_account_names = self._router.get_eligible_account_names(
-                context.model_id,
-                exclude_accounts=context.attempted_accounts
-                if context.attempted_accounts
-                else None,
-                provider_id=context.provider_id,
-                protocol=context.upstream_protocol,
-                transcode_eligibility=(
-                    {context.protocol, context.upstream_protocol}
-                    if context.transcode_required
-                    else None
-                ),
-            )
-
-            if not eligible_account_names:
-                # Phase 5: distinguish pre-dispatch unavailability
-                # from post-retry exhaustion. ``get_eligible_account_names``
-                # already excludes ``context.attempted_accounts``; an
-                # empty result on the first attempt means no enabled
-                # accounts at all (503). An empty result after at
-                # least one attempt means every eligible candidate has
-                # been tried in this request (502).
-                if context.attempted_accounts:
-                    raise UpstreamExhaustedError(
-                        f"All eligible accounts attempted for model "
-                        f"{context.model_id!r}"
-                    )
-                raise ModelUnavailableError(
-                    f"No accounts available for model {context.model_id!r}"
+        async with self._select_lock:
+            # Inner transaction MUST close before publication runs so
+            # SQLite has committed the durable rows.  See the docstring
+            # above for the ordering invariant.
+            async with self._db.transaction():
+                # 1. Get eligible account names excluding attempted ones
+                eligible_account_names = self._router.get_eligible_account_names(
+                    context.model_id,
+                    exclude_accounts=context.attempted_accounts
+                    if context.attempted_accounts
+                    else None,
+                    provider_id=context.provider_id,
+                    protocol=context.upstream_protocol,
+                    transcode_eligibility=(
+                        {context.protocol, context.upstream_protocol}
+                        if context.transcode_required
+                        else None
+                    ),
                 )
 
-            # 2. Calculate projected request tokens once
-            estimated_tokens = estimate_reservation_tokens(context.original_body)
-
-            # 3. Build per-account estimate map for scoring
-            request_estimates: dict[str, int] = {}
-            if self._quota_estimator is not None:
-                for acct_name in eligible_account_names:
-                    request_estimates[acct_name] = self._quota_estimator.estimate_cost(
-                        acct_name, context.model_id, estimated_tokens
-                    )
-
-            # 4. Rank accounts once using projected estimates, then
-            #    acquire the circuit-breaker probe slot atomically.
-            exclude: set[str] = (
-                set(context.attempted_accounts) if context.attempted_accounts else set()
-            )
-            selected_state = None
-            selected_score: float | None = None
-            selected_tier: int | None = None
-            exclusions: list[RoutingExclusion] = []
-            ranked_candidates = await self._router.select_accounts_for_failover(
-                context.model_id,
-                max_accounts=len(eligible_account_names),
-                request_estimates=request_estimates,
-                exclude_accounts=exclude if exclude else None,
-                provider_id=context.provider_id,
-                protocol=context.upstream_protocol,
-                transcode_eligibility=(
-                    {context.protocol, context.upstream_protocol}
-                    if context.transcode_required
-                    else None
-                ),
-                client_protocol=context.protocol,
-            )
-            for candidate_state, score in ranked_candidates:
-                # Acquire the circuit-breaker probe slot. If the
-                # breaker rejects this account (half-open slot
-                # consumed or still open), try the next ranked
-                # account without rebuilding and rescoring the
-                # whole candidate list.
-                if (
-                    self._health_manager is not None
-                    and not self._health_manager.try_acquire_request(
-                        candidate_state.name, context.model_id
-                    )
-                ):
-                    exclusions.append(
-                        RoutingExclusion(
-                            account_name=candidate_state.name,
-                            reason="circuit_breaker",
+                if not eligible_account_names:
+                    # Phase 5: distinguish pre-dispatch unavailability
+                    # from post-retry exhaustion. ``get_eligible_account_names``
+                    # already excludes ``context.attempted_accounts``; an
+                    # empty result on the first attempt means no enabled
+                    # accounts at all (503). An empty result after at
+                    # least one attempt means every eligible candidate has
+                    # been tried in this request (502).
+                    if context.attempted_accounts:
+                        raise UpstreamExhaustedError(
+                            f"All eligible accounts attempted for model "
+                            f"{context.model_id!r}"
                         )
+                    raise ModelUnavailableError(
+                        f"No accounts available for model {context.model_id!r}"
                     )
-                    continue
-                selected_state = candidate_state
-                selected_score = float(score.final_score)
-                selected_tier = score.tier
-                break
 
-            if selected_state is None and not ranked_candidates:
-                selected_state = await self._router.select_account(
-                    model_id=context.model_id,
+                # 2. Calculate projected request tokens once
+                estimated_tokens = estimate_reservation_tokens(context.original_body)
+
+                # 3. Build per-account estimate map for scoring
+                request_estimates: dict[str, int] = {}
+                if self._quota_estimator is not None:
+                    for acct_name in eligible_account_names:
+                        request_estimates[acct_name] = (
+                            self._quota_estimator.estimate_cost(
+                                acct_name, context.model_id, estimated_tokens
+                            )
+                        )
+
+                # 4. Rank accounts once using projected estimates, then
+                #    acquire the circuit-breaker probe slot atomically.
+                exclude: set[str] = (
+                    set(context.attempted_accounts)
+                    if context.attempted_accounts
+                    else set()
+                )
+                selected_state = None
+                selected_score: float | None = None
+                selected_tier: int | None = None
+                exclusions: list[RoutingExclusion] = []
+                ranked_candidates = await self._router.select_accounts_for_failover(
+                    context.model_id,
+                    max_accounts=len(eligible_account_names),
                     request_estimates=request_estimates,
                     exclude_accounts=exclude if exclude else None,
                     provider_id=context.provider_id,
@@ -708,188 +708,229 @@ class RequestCoordinator:
                     ),
                     client_protocol=context.protocol,
                 )
-                if (
-                    selected_state is not None
-                    and self._health_manager is not None
-                    and not self._health_manager.try_acquire_request(
-                        selected_state.name, context.model_id
-                    )
-                ):
-                    exclusions.append(
-                        RoutingExclusion(
-                            account_name=selected_state.name,
-                            reason="circuit_breaker",
+                for candidate_state, score in ranked_candidates:
+                    # Acquire the circuit-breaker probe slot. If the
+                    # breaker rejects this account (half-open slot
+                    # consumed or still open), try the next ranked
+                    # account without rebuilding and rescoring the
+                    # whole candidate list.
+                    if (
+                        self._health_manager is not None
+                        and not self._health_manager.try_acquire_request(
+                            candidate_state.name, context.model_id
                         )
+                    ):
+                        exclusions.append(
+                            RoutingExclusion(
+                                account_name=candidate_state.name,
+                                reason="circuit_breaker",
+                            )
+                        )
+                        continue
+                    selected_state = candidate_state
+                    selected_score = float(score.final_score)
+                    selected_tier = score.tier
+                    break
+
+                if selected_state is None and not ranked_candidates:
+                    selected_state = await self._router.select_account(
+                        model_id=context.model_id,
+                        request_estimates=request_estimates,
+                        exclude_accounts=exclude if exclude else None,
+                        provider_id=context.provider_id,
+                        protocol=context.upstream_protocol,
+                        transcode_eligibility=(
+                            {context.protocol, context.upstream_protocol}
+                            if context.transcode_required
+                            else None
+                        ),
+                        client_protocol=context.protocol,
                     )
-                    selected_state = None
+                    if (
+                        selected_state is not None
+                        and self._health_manager is not None
+                        and not self._health_manager.try_acquire_request(
+                            selected_state.name, context.model_id
+                        )
+                    ):
+                        exclusions.append(
+                            RoutingExclusion(
+                                account_name=selected_state.name,
+                                reason="circuit_breaker",
+                            )
+                        )
+                        selected_state = None
 
-            if selected_state is None:
-                # Distinguish "all enabled accounts already attempted in
-                # this request" (502 UpstreamExhaustedError) from "no
-                # enabled accounts at all" (503 ModelUnavailableError).
-                # The retry loop only reaches this point after at
-                # least one attempt has been recorded in
-                # ``context.attempted_accounts``; an empty candidate
-                # list while the registry still has enabled states
-                # means the eligible subset was exhausted mid-request.
-                if self._all_accounts_attempted(context):
-                    raise UpstreamExhaustedError(
-                        f"All eligible accounts attempted for model "
-                        f"{context.model_id!r}"
-                    )
-                raise ModelUnavailableError(
-                    f"No accounts available for model {context.model_id!r}"
-                )
-
-            account_name = selected_state.name
-            try:
-                api_key = self._registry.get_api_key(account_name)
-                if api_key is None or not self._registry.has_usable_credentials(
-                    account_name
-                ):
-                    raise AuthenticationError(
-                        f"API key not available for account {account_name!r}"
-                    )
-
-                # 5. Resolve the immutable account ID once per process.
-                account_id = self._account_id_cache.get(account_name)
-                if account_id is None:
-                    account_repo = AccountRepository(self._db)
-                    account_id = await account_repo.get_id_by_name(account_name)
-                    if account_id is not None:
-                        self._account_id_cache[account_name] = account_id
-                if account_id is None:
-                    raise DatabaseError(
-                        f"Account {account_name!r} not found in database"
+                if selected_state is None:
+                    # Distinguish "all enabled accounts already attempted in
+                    # this request" (502 UpstreamExhaustedError) from "no
+                    # enabled accounts at all" (503 ModelUnavailableError).
+                    # The retry loop only reaches this point after at
+                    # least one attempt has been recorded in
+                    # ``context.attempted_accounts``; an empty candidate
+                    # list while the registry still has enabled states
+                    # means the eligible subset was exhausted mid-request.
+                    if self._all_accounts_attempted(context):
+                        raise UpstreamExhaustedError(
+                            f"All eligible accounts attempted for model "
+                            f"{context.model_id!r}"
+                        )
+                    raise ModelUnavailableError(
+                        f"No accounts available for model {context.model_id!r}"
                     )
 
-                # 6. Resolve the selected account's provider
-                resolved_provider_id = (
-                    self._catalog.cache.get_provider_for_account(account_name)
-                    or self._registry.get_provider_for_account(account_name)
-                    or context.provider_id
-                    or DEFAULT_PROVIDER_ID
-                )
+                account_name = selected_state.name
+                try:
+                    api_key = self._registry.get_api_key(account_name)
+                    if api_key is None or not self._registry.has_usable_credentials(
+                        account_name
+                    ):
+                        raise AuthenticationError(
+                            f"API key not available for account {account_name!r}"
+                        )
 
-                # 7. Use the exact estimate for the selected account.
-                estimated_microdollars = request_estimates.get(account_name, 0)
-                if estimated_microdollars == 0 and self._quota_estimator is not None:
-                    estimated_microdollars = self._quota_estimator.estimate_cost(
-                        account_name, context.model_id, estimated_tokens
+                    # 5. Resolve the immutable account ID once per process.
+                    account_id = self._account_id_cache.get(account_name)
+                    if account_id is None:
+                        account_repo = AccountRepository(self._db)
+                        account_id = await account_repo.get_id_by_name(account_name)
+                        if account_id is not None:
+                            self._account_id_cache[account_name] = account_id
+                    if account_id is None:
+                        raise DatabaseError(
+                            f"Account {account_name!r} not found in database"
+                        )
+
+                    # 6. Resolve the selected account's provider
+                    resolved_provider_id = (
+                        self._catalog.cache.get_provider_for_account(account_name)
+                        or self._registry.get_provider_for_account(account_name)
+                        or context.provider_id
+                        or DEFAULT_PROVIDER_ID
                     )
 
-                # 8. Create pending request if first attempt. Store the
-                # reservation estimate in the INSERT so the common path
-                # does not immediately UPDATE the same row.
-                created_request = "db_request_id" not in context.client_metadata
-                if created_request:
-                    db_request_id = await self._request_repo.create_pending(
-                        request_id=context.request_id,
+                    # 7. Use the exact estimate for the selected account.
+                    estimated_microdollars = request_estimates.get(account_name, 0)
+                    if (
+                        estimated_microdollars == 0
+                        and self._quota_estimator is not None
+                    ):
+                        estimated_microdollars = self._quota_estimator.estimate_cost(
+                            account_name, context.model_id, estimated_tokens
+                        )
+
+                    # 8. Create pending request if first attempt. Store the
+                    # reservation estimate in the INSERT so the common path
+                    # does not immediately UPDATE the same row.
+                    created_request = "db_request_id" not in context.client_metadata
+                    if created_request:
+                        db_request_id = await self._request_repo.create_pending(
+                            request_id=context.request_id,
+                            model_id=context.model_id,
+                            protocol=context.protocol,
+                            streamed=context.streaming,
+                            account_id=account_id,
+                            reserved_microdollars=estimated_microdollars,
+                            started_at=context.started_at,
+                            provider_id=resolved_provider_id,
+                            client_ip=context.client_ip,
+                        )
+                        context.client_metadata["db_request_id"] = db_request_id
+                    db_request_id = context.client_metadata["db_request_id"]
+
+                    # 9. Create reservation
+                    reservation_id = await self._reservation_repo.create(
+                        request_id=db_request_id,
+                        account_id=account_id,
+                        model_id=context.model_id,
+                        estimated_tokens=estimated_tokens,
+                        estimated_microdollars=estimated_microdollars,
+                    )
+
+                    # 10. Create attempt row
+                    attempt_id = await self._attempt_repo.create(
+                        request_id=db_request_id,
+                        attempt_number=attempt_number,
+                        account_id=account_id,
+                        provider_id=resolved_provider_id,
                         model_id=context.model_id,
                         protocol=context.protocol,
                         streamed=context.streaming,
-                        account_id=account_id,
-                        reserved_microdollars=estimated_microdollars,
-                        started_at=context.started_at,
+                    )
+
+                    # 10a. Persist the routing-decision trace alongside the
+                    # attempt so the dashboard can answer "why this account?"
+                    # without rescoring from quota tables.
+                    top_score_value: float | None = None
+                    top_score_account_name: str | None = None
+                    if ranked_candidates:
+                        top_state, top_score_obj = ranked_candidates[0]
+                        top_score_value = float(top_score_obj.final_score)
+                        top_score_account_name = top_state.name
+                    score_components = self._build_score_components(
+                        ranked_candidates=ranked_candidates,
+                        selected_account_name=account_name,
+                        selected_state=selected_state,
+                        selected_score=selected_score,
+                        selected_tier=selected_tier,
+                    )
+                    trace = RoutingDecisionTrace(
+                        model_id=context.model_id,
                         provider_id=resolved_provider_id,
-                        client_ip=context.client_ip,
+                        protocol=context.protocol,
+                        selected_account_name=account_name,
+                        selected_account_id=account_id,
+                        selected_tier=selected_tier,
+                        selected_score=selected_score,
+                        eligible_count=len(eligible_account_names),
+                        scored_count=len(ranked_candidates),
+                        attempted_excluded_count=len(exclude),
+                        top_score=top_score_value,
+                        top_score_account_name=top_score_account_name,
+                        exclusions=tuple(exclusions),
+                        score_components=score_components,
                     )
-                    context.client_metadata["db_request_id"] = db_request_id
-                db_request_id = context.client_metadata["db_request_id"]
-
-                # 9. Create reservation
-                reservation_id = await self._reservation_repo.create(
-                    request_id=db_request_id,
-                    account_id=account_id,
-                    model_id=context.model_id,
-                    estimated_tokens=estimated_tokens,
-                    estimated_microdollars=estimated_microdollars,
-                )
-
-                # 10. Create attempt row
-                attempt_id = await self._attempt_repo.create(
-                    request_id=db_request_id,
-                    attempt_number=attempt_number,
-                    account_id=account_id,
-                    provider_id=resolved_provider_id,
-                    model_id=context.model_id,
-                    protocol=context.protocol,
-                    streamed=context.streaming,
-                )
-
-                # 10a. Persist the routing-decision trace alongside the
-                # attempt so the dashboard can answer "why this account?"
-                # without rescoring from quota tables.
-                top_score_value: float | None = None
-                top_score_account_name: str | None = None
-                if ranked_candidates:
-                    top_state, top_score_obj = ranked_candidates[0]
-                    top_score_value = float(top_score_obj.final_score)
-                    top_score_account_name = top_state.name
-                score_components = self._build_score_components(
-                    ranked_candidates=ranked_candidates,
-                    selected_account_name=account_name,
-                    selected_state=selected_state,
-                    selected_score=selected_score,
-                    selected_tier=selected_tier,
-                )
-                trace = RoutingDecisionTrace(
-                    model_id=context.model_id,
-                    provider_id=resolved_provider_id,
-                    protocol=context.protocol,
-                    selected_account_name=account_name,
-                    selected_account_id=account_id,
-                    selected_tier=selected_tier,
-                    selected_score=selected_score,
-                    eligible_count=len(eligible_account_names),
-                    scored_count=len(ranked_candidates),
-                    attempted_excluded_count=len(exclude),
-                    top_score=top_score_value,
-                    top_score_account_name=top_score_account_name,
-                    exclusions=tuple(exclusions),
-                    score_components=score_components,
-                )
-                await self._routing_decision_repo.create(
-                    request_id=int(db_request_id),
-                    attempt_number=attempt_number,
-                    model_id=trace.model_id,
-                    provider_id=trace.provider_id,
-                    protocol=trace.protocol,
-                    selected_account_id=trace.selected_account_id,
-                    selected_account_name=trace.selected_account_name,
-                    selected_tier=trace.selected_tier,
-                    selected_score=trace.selected_score,
-                    eligible_count=trace.eligible_count,
-                    scored_count=trace.scored_count,
-                    attempted_excluded_count=trace.attempted_excluded_count,
-                    top_score=trace.top_score,
-                    top_score_account_name=trace.top_score_account_name,
-                    exclude_reasons_json=trace.to_exclude_reasons_json(),
-                    score_components_json=trace.to_score_components_json(),
-                )
-
-                # Retries select a new account and reservation estimate.
-                if not created_request:
-                    await self._request_repo.update_after_selection(
-                        request_id=db_request_id,
-                        account_id=account_id,
-                        reserved_microdollars=estimated_microdollars,
+                    await self._routing_decision_repo.create(
+                        request_id=int(db_request_id),
+                        attempt_number=attempt_number,
+                        model_id=trace.model_id,
+                        provider_id=trace.provider_id,
+                        protocol=trace.protocol,
+                        selected_account_id=trace.selected_account_id,
+                        selected_account_name=trace.selected_account_name,
+                        selected_tier=trace.selected_tier,
+                        selected_score=trace.selected_score,
+                        eligible_count=trace.eligible_count,
+                        scored_count=trace.scored_count,
+                        attempted_excluded_count=trace.attempted_excluded_count,
+                        top_score=trace.top_score,
+                        top_score_account_name=trace.top_score_account_name,
+                        exclude_reasons_json=trace.to_exclude_reasons_json(),
+                        score_components_json=trace.to_score_components_json(),
                     )
-            except BaseException:
-                if self._health_manager is not None:
-                    self._health_manager.release_request(account_name)
-                raise
 
-            # Record the account under the same select lock so a
-            # concurrent caller observing the same context cannot
-            # race on attempted_accounts before this attempt is
-            # fully persisted and committed.
-            context.attempted_accounts.add(account_name)
-            context.client_metadata["account_name"] = account_name
+                    # Retries select a new account and reservation estimate.
+                    if not created_request:
+                        await self._request_repo.update_after_selection(
+                            request_id=db_request_id,
+                            account_id=account_id,
+                            reserved_microdollars=estimated_microdollars,
+                        )
+                except BaseException:
+                    if self._health_manager is not None:
+                        self._health_manager.release_request(account_name)
+                    raise
 
-            # Transaction committed here. All rows are durable but the
-            # outer ``async with`` block has not yet released
-            # ``_select_lock``; the publish block below runs BEFORE
+                # Record the account under the same select lock so a
+                # concurrent caller observing the same context cannot
+                # race on attempted_accounts before this attempt is
+                # fully persisted and committed.
+                context.attempted_accounts.add(account_name)
+                context.client_metadata["account_name"] = account_name
+
+            # Durable transaction has committed; rows for the request,
+            # reservation, attempt, and routing_decision are visible.
+            # ``_select_lock`` is still held — publication runs BEFORE
             # the lock releases so a concurrent selector entering the
             # lock after this returns observes this attempt's runtime
             # state. The publish is fast (in-process counter + cache
@@ -2257,6 +2298,13 @@ class RequestCoordinator:
         Includes the full breakdown for the selected account plus
         the top near-tie candidates so the dashboard can answer
         "why account A over account B?" without rescoring.
+
+        The payload also carries utilization ratios for each quota
+        window (5h/7d/30d) and a short ``tie_break`` summary
+        identifying the decisive factor between the chosen account
+        and the runner-up (``tier``, ``quota``, ``inflight``,
+        ``transcode``, ``near_tie``) so an operator can correlate
+        visible skew against a concrete cause.
         """
         # Find the score for the selected account from ranked_candidates
         # if present; else synthesize the bare minimum from the trace.
@@ -2265,6 +2313,12 @@ class RequestCoordinator:
             if state.name == selected_account_name:
                 selected_score_obj = score
                 break
+
+        top_candidates_payload = self._build_top_candidates(ranked_candidates)
+        tie_break = self._derive_tie_break_summary(
+            ranked_candidates=ranked_candidates,
+            selected_score_obj=selected_score_obj,
+        )
 
         if selected_score_obj is not None:
             payload: dict[str, Any] = {
@@ -2290,16 +2344,20 @@ class RequestCoordinator:
                 ),
                 "tier": selected_score_obj.tier,
                 "requires_transcode": selected_score_obj.requires_transcode,
-                "top_candidates": [
-                    {
-                        "account_name": state.name,
-                        "final_score": float(score.final_score),
-                        "quota_score": score.quota_score,
-                        "inflight_penalty": score.inflight_penalty,
-                        "health_penalty": score.health_penalty,
-                    }
-                    for state, score in ranked_candidates[:5]
-                ],
+                "util_5h": _safe_ratio(
+                    selected_score_obj.cost_5h_microdollars,
+                    selected_score_obj.capacity_5h_microdollars,
+                ),
+                "util_7d": _safe_ratio(
+                    selected_score_obj.cost_7d_microdollars,
+                    selected_score_obj.capacity_7d_microdollars,
+                ),
+                "util_30d": _safe_ratio(
+                    selected_score_obj.cost_30d_microdollars,
+                    selected_score_obj.capacity_30d_microdollars,
+                ),
+                "tie_break": tie_break,
+                "top_candidates": top_candidates_payload,
             }
         else:
             payload = {
@@ -2321,15 +2379,104 @@ class RequestCoordinator:
                 "capacity_30d_microdollars": 0,
                 "tier": int(selected_tier) if selected_tier is not None else 0,
                 "requires_transcode": False,
-                "top_candidates": [
-                    {
-                        "account_name": state.name,
-                        "final_score": float(score.final_score),
-                    }
-                    for state, score in ranked_candidates[:5]
-                ],
+                "util_5h": None,
+                "util_7d": None,
+                "util_30d": None,
+                "tie_break": tie_break,
+                "top_candidates": top_candidates_payload,
             }
         return payload
+
+    @staticmethod
+    def _build_top_candidates(
+        ranked_candidates: list[tuple[Any, Any]],
+        *,
+        limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Render the top-N ranked candidates for the dashboard table."""
+        out: list[dict[str, Any]] = []
+        for state, score in ranked_candidates[:limit]:
+            entry: dict[str, Any] = {
+                "account_name": state.name,
+                "final_score": float(score.final_score),
+                "quota_score": score.quota_score,
+                "inflight_penalty": score.inflight_penalty,
+                "health_penalty": score.health_penalty,
+                "tier": int(score.tier),
+                "requires_transcode": bool(score.requires_transcode),
+            }
+            out.append(entry)
+        return out
+
+    @staticmethod
+    def _derive_tie_break_summary(
+        *,
+        ranked_candidates: list[tuple[Any, Any]],
+        selected_score_obj: Any | None,
+    ) -> dict[str, Any]:
+        """Summarise why the selected account won over its runner-up.
+
+        Returns a small dict the dashboard can render inline so
+        operators do not have to recompute scores to see whether
+        skew was driven by tier, quota utilization, in-flight
+        pressure, or a near-tie within the scorer's tiebreaker
+        range.
+        """
+        summary: dict[str, Any] = {
+            "factor": "no_runner_up",
+            "margin": None,
+            "runner_up": None,
+        }
+        if selected_score_obj is None or len(ranked_candidates) < 2:
+            return summary
+        # Skip the selected account when searching for the runner-up;
+        # the selected entry may not be ranked first if the caller
+        # passed a list that does not start with the selected account.
+        runner_up: tuple[Any, Any] | None = None
+        for state, score in ranked_candidates:
+            if state.name == selected_score_obj.account_name:
+                continue
+            runner_up = (state, score)
+            break
+        if runner_up is None:
+            return summary
+        ru_state, ru_score = runner_up
+        selected_final = float(selected_score_obj.final_score)
+        runner_final = float(ru_score.final_score)
+        margin = runner_final - selected_final
+        summary["margin"] = margin
+        summary["runner_up"] = {
+            "account_name": ru_state.name,
+            "final_score": runner_final,
+            "tier": int(ru_score.tier),
+            "requires_transcode": bool(ru_score.requires_transcode),
+        }
+        if selected_score_obj.requires_transcode != ru_score.requires_transcode:
+            summary["factor"] = (
+                "transcode"
+                if not selected_score_obj.requires_transcode
+                else "transcode"
+            )
+            return summary
+        if selected_score_obj.tier != ru_score.tier:
+            summary["factor"] = "tier"
+            return summary
+        if margin == 0.0:
+            summary["factor"] = "exact_tie"
+            return summary
+        # Score margins within the scorer's tiebreaker range are not
+        # signal — they are deterministic or random noise.  Anything
+        # outside the band is a real utilization / penalty delta.
+        if abs(margin) <= 0.01:
+            summary["factor"] = "near_tie"
+            return summary
+        if abs(selected_score_obj.inflight_penalty - ru_score.inflight_penalty) > abs(
+            selected_score_obj.quota_score - ru_score.quota_score
+        ):
+            summary["factor"] = "inflight"
+            return summary
+        summary["factor"] = "quota"
+        return summary
 
     def _resolve_upstream_protocol(
         self,

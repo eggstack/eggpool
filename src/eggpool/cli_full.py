@@ -2825,10 +2825,11 @@ def accounts_status(ctx: click.Context) -> None:
 
     for acct in config.all_accounts():
         provider_id = _get_provider_for_account(config, acct.name)
+        priority = _get_priority_for_account(config, acct.name)
         env_set = "yes" if os.environ.get(acct.api_key_env) else "no"
         click.echo(
-            f"  {acct.name}: provider={provider_id}, enabled={acct.enabled}, "
-            f"weight={acct.weight}, "
+            f"  {acct.name}: provider={provider_id}, priority={priority}, "
+            f"enabled={acct.enabled}, weight={acct.weight}, "
             f"api_key_env={acct.api_key_env} (set={env_set})"
         )
 
@@ -2864,10 +2865,14 @@ def accounts_explain(
     provider_id: str | None,
     protocol: str | None,
 ) -> None:
-    """Explain why each account is or is not eligible for ``--model``."""
-    from rich.console import Console
-    from rich.table import Table
+    """Explain why each account is or is not eligible for ``--model``.
 
+    Reads the durable catalog state from SQLite (after running
+    migrations so a fresh install still works) and feeds it into the
+    same ``Router.explain_account_eligibility`` helper the coordinator
+    uses, so the operator sees the real model/account picture instead
+    of an empty in-memory cache.
+    """
     from eggpool.accounts.registry import AccountRegistry
     from eggpool.catalog.cache import ModelCatalogCache
     from eggpool.models.config import AppConfig
@@ -2889,40 +2894,60 @@ def accounts_explain(
         )
         return
 
-    registry = AccountRegistry(config)
-    catalog = ModelCatalogCache()
-    quota_estimator = QuotaEstimator()
-    router = Router(  # pyright: ignore[arg-type]
-        registry,
-        catalog,  # type: ignore[arg-type]
-        quota_estimator=quota_estimator,
-    )
+    async def _run_explain(db: Database) -> None:
+        registry = AccountRegistry(config)
+        cache = ModelCatalogCache()
+        cache.set_config(config)
+        await cache.hydrate_from_db(db)
 
-    import asyncio as _asyncio
+        class _CatalogShim:
+            """Protocol-compatible wrapper exposing the loaded cache.
 
-    rows = _asyncio.run(
-        router.explain_account_eligibility(
+            ``Router`` reads ``catalog.cache`` to answer eligibility
+            questions; constructing a full ``CatalogService`` here
+            would require a provider client pool, outbound manager,
+            and live refresh path. The shim keeps ``accounts explain``
+            to a single SQLite read so the command remains usable on
+            hosts where the outbound network is offline.
+            """
+
+            def __init__(self, inner: ModelCatalogCache) -> None:
+                self.cache = inner
+
+        catalog = _CatalogShim(cache)
+        quota_estimator = QuotaEstimator()
+        router = Router(
+            registry,
+            catalog,  # type: ignore[reportArgumentType]
+            quota_estimator=quota_estimator,
+        )
+        rows = await router.explain_account_eligibility(
             model_id=model_id,
             provider_id=provider_id,
             protocol=protocol,
             transcode_eligibility=None,
         )
-    )
-
-    console = Console()
-    table = Table(title=f"Account eligibility for model {model_id!r}")
-    table.add_column("Account", style="bold")
-    table.add_column("Eligible")
-    table.add_column("Reason")
-    table.add_column("Detail", overflow="fold")
-    for row in rows:
-        table.add_row(
-            row["account_name"],
-            "yes" if row["eligible"] else "no",
-            row["reason_code"],
-            row["reason_detail"],
+        click.echo(f"Account eligibility for model {model_id!r}:")
+        if not rows:
+            click.echo("  (no configured accounts)")
+            return
+        name_w = max(len("Account"), *(len(r["account_name"]) for r in rows))
+        elig_w = max(len("Eligible"), 3)
+        reason_w = max(len("Reason"), *(len(r["reason_code"]) for r in rows))
+        header = (
+            f"  {'Account':<{name_w}}  {'Eligible':<{elig_w}}  "
+            f"{'Reason':<{reason_w}}  Detail"
         )
-    console.print(table)
+        click.echo(header)
+        click.echo(f"  {'-' * name_w}  {'-' * elig_w}  {'-' * reason_w}  ------")
+        for row in rows:
+            click.echo(
+                f"  {row['account_name']:<{name_w}}  "
+                f"{('yes' if row['eligible'] else 'no'):<{elig_w}}  "
+                f"{row['reason_code']:<{reason_w}}  {row['reason_detail']}"
+            )
+
+    _run_with_database(config, _run_explain)
 
 
 def _get_provider_for_account(config: AppConfig, account_name: str) -> str:
@@ -2932,6 +2957,17 @@ def _get_provider_for_account(config: AppConfig, account_name: str) -> str:
             if acct.name == account_name:
                 return provider_id
     return "unknown"
+
+
+def _get_priority_for_account(config: AppConfig, account_name: str) -> int:
+    """Return the routing priority for an account's provider, or 0."""
+    provider_id = _get_provider_for_account(config, account_name)
+    if provider_id == "unknown":
+        return 0
+    provider_cfg = config.providers.get(provider_id)
+    if provider_cfg is None:
+        return 0
+    return int(provider_cfg.routing_priority)
 
 
 @cli.group("db")

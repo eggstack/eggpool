@@ -270,8 +270,13 @@ breakdown captured by `QuotaFairScorer` at the moment the coordinator
 chose the selected account. Migration `0035` adds the
 `score_components_json` column; `RoutingDecisionTrace.to_score_components_json()`
 serializes the diagnostic payload (TEXT JSON, defaults to `'{}'` on rows
-written by code paths that pre-date the migration). The same data flows
-through `eggpool accounts explain --model <id> [--provider P] [--protocol P]`
+written by code paths that pre-date the migration). The payload now also
+includes per-window `util_5h` / `util_7d` / `util_30d` utilization ratios
+(None when the scorer's capacity is unconfigured) and a `tie_break`
+summary naming the decisive factor between the chosen account and its
+runner-up (`tier`, `quota`, `inflight`, `transcode`, `near_tie`,
+`exact_tie`, `no_runner_up`). The same data flows through
+`eggpool accounts explain --model <id> [--provider P] [--protocol P]`
 and `GET /api/stats/routing/eligibility` for live operator diagnostics.
 
 `Router.explain_account_eligibility(model_id, provider_id, protocol)`
@@ -279,9 +284,21 @@ returns one row per registered account with `eligible: bool`, a stable
 `reason_code` (`ok`, `disabled`, `auth_failed`, `quota_exhausted`,
 `cooldown`, `rate_limited`, `circuit_open`, `wrong_provider`,
 `no_protocol`, `protocol_mismatch`, `no_model`, `model_stale`), and a
-short `reason_detail`. The classification mirrors the live filter chain
-in `eggpool.routing.eligibility.get_eligible_accounts` so explanations
+short `reason_detail` that names the account, its provider, its
+configured protocols, the requested model id, and the stale-window
+seconds (so the operator can act directly on the diagnosis). The
+classification mirrors the live filter chain in
+`eggpool.routing.eligibility.get_eligible_accounts` so explanations
 match the routing path exactly.
+
+`eggpool accounts explain` opens the database, runs migrations on a
+fresh install, and calls `ModelCatalogCache.hydrate_from_db(db)` to
+populate the in-memory model / provider / account-support tables from
+the durable `models`, `provider_model_metadata`, and `account_models`
+rows. The cache is wrapped in a tiny `_CatalogShim` so `Router` can
+consume it without booting a full `CatalogService`; output is rendered
+with `click.echo` (the previous `rich` table was removed because the
+dependency was undeclared).
 
 ## Provider Routing Priority and Model Collapse
 

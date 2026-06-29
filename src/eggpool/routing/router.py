@@ -262,33 +262,51 @@ class Router:
         explanation matches the live routing path. ``get_eligible_accounts``
         applies the filters in order; we collapse each short-circuit
         branch into a stable reason_code so the caller can group by
-        cause on the dashboard.
+        cause on the dashboard. ``reason_detail`` carries the specific
+        identifiers an operator needs to act on the diagnosis (provider
+        names, configured protocols, model id, staleness window).
         """
         if not state.enabled:
-            return False, "disabled", "Account is disabled in configuration."
+            return (
+                False,
+                "disabled",
+                f"Account {state.name!r} is disabled in configuration.",
+            )
         if state.health_state == "authentication_failed":
             return (
                 False,
                 "auth_failed",
-                "Account previously failed authentication and is locked.",
+                (
+                    f"Account {state.name!r} previously failed "
+                    f"authentication and is locked."
+                ),
             )
         if state.health_state == "quota_exhausted":
             return (
                 False,
                 "quota_exhausted",
-                "Upstream reported quota exhaustion; cooldown active.",
+                (
+                    f"Account {state.name!r}: upstream reported quota "
+                    f"exhaustion; cooldown active."
+                ),
             )
         if state.health_state == "cooldown":
             return (
                 False,
                 "cooldown",
-                "Account is in cooldown after repeated transient failures.",
+                (
+                    f"Account {state.name!r} is in cooldown after repeated "
+                    f"transient failures."
+                ),
             )
         if state.health_state == "rate_limited":
             return (
                 False,
                 "rate_limited",
-                "Upstream reported rate limiting; retry-after cooldown active.",
+                (
+                    f"Account {state.name!r}: upstream reported rate "
+                    f"limiting; retry-after cooldown active."
+                ),
             )
 
         if provider_id is not None:
@@ -300,8 +318,8 @@ class Router:
                     False,
                     "wrong_provider",
                     (
-                        f"Account belongs to provider {state_provider!r}; "
-                        f"requested provider {provider_id!r}."
+                        f"Account {state.name!r} belongs to provider "
+                        f"{state_provider!r}; requested provider {provider_id!r}."
                     ),
                 )
 
@@ -316,12 +334,26 @@ class Router:
                 )
             )
         ):
+            state_provider = self._registry.get_provider_for_account(state.name)
+            declared_protocols: tuple[str, ...] = (
+                tuple(sorted(self._registry.get_provider_protocols(state_provider)))
+                if state_provider
+                else ()
+            )
+            transcoder_hint = ""
+            if transcode_eligibility:
+                transcoder_hint = (
+                    f"; no transcoder eligible for {sorted(transcode_eligibility)} "
+                    f"covers {protocol!r} either"
+                )
             return (
                 False,
                 "no_protocol",
                 (
-                    f"Account does not declare protocol {protocol!r}; "
-                    "no transcoder covers it either."
+                    f"Account {state.name!r} (provider {state_provider!r}) "
+                    f"declares protocols {list(declared_protocols)}; "
+                    f"requested protocol {protocol!r} is not in that list"
+                    f"{transcoder_hint}."
                 ),
             )
 
@@ -332,7 +364,11 @@ class Router:
             return (
                 False,
                 "circuit_open",
-                "Circuit breaker is open for this model on this account.",
+                (
+                    f"Circuit breaker is open for model {model_id!r} on "
+                    f"account {state.name!r}; recent upstream failures "
+                    f"have temporarily excluded it."
+                ),
             )
 
         if not self._catalog.cache.is_account_model_available(
@@ -343,15 +379,48 @@ class Router:
         ):
             # Distinguish "no entry" vs "stale entry" for the dashboard.
             if state.name not in self._catalog.cache.get_supporting_accounts(model_id):
+                # Surface which providers DO advertise the model so the
+                # operator can pivot to a working account or refresh
+                # the offending provider's catalog.
+                supporting = self._catalog.cache.get_supporting_accounts(model_id)
+                providers_with_model: list[str] = sorted(
+                    {
+                        provider_id
+                        for provider_id in (
+                            self._catalog.cache.get_provider_for_account(name)
+                            for name in supporting
+                        )
+                        if provider_id is not None
+                    }
+                )
+                if providers_with_model:
+                    provider_hint = (
+                        f"; model is advertised by providers "
+                        f"{providers_with_model} on other accounts"
+                    )
+                else:
+                    provider_hint = "; no provider currently advertises this model"
                 return (
                     False,
                     "no_model",
-                    "Catalog has never advertised this model on the account.",
+                    (
+                        f"Account {state.name!r} has no catalog entry for "
+                        f"model {model_id!r}{provider_hint}."
+                    ),
                 )
+            stale_window = (
+                f"{self._stale_after_s:.0f}s"
+                if isinstance(self._stale_after_s, (int, float))
+                else "configured stale window"
+            )
             return (
                 False,
                 "model_stale",
-                "Catalog entry exists but is older than the stale threshold.",
+                (
+                    f"Catalog entry for {model_id!r} on account "
+                    f"{state.name!r} is older than the stale window "
+                    f"({stale_window}); run `eggpool models refresh`."
+                ),
             )
 
         return True, "ok", "Account is eligible to serve this request."

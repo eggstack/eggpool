@@ -603,6 +603,10 @@ class TestRoutingDecisionScoreComponents:
                 "tier",
                 "requires_transcode",
                 "top_candidates",
+                "util_5h",
+                "util_7d",
+                "util_30d",
+                "tie_break",
             }
             missing = expected_keys - set(score_json.keys())
             assert not missing, (
@@ -611,6 +615,31 @@ class TestRoutingDecisionScoreComponents:
             )
             assert isinstance(score_json["top_candidates"], list)
             assert score_json["tier"] == 0  # routing_priority is 0 for this provider
+
+            # Utilization ratios must agree with cost / capacity when
+            # the scorer's capacity fields are non-zero.
+            for window in ("5h", "7d", "30d"):
+                cost = score_json[f"cost_{window}_microdollars"]
+                cap = score_json[f"capacity_{window}_microdollars"]
+                util = score_json[f"util_{window}"]
+                if cap > 0:
+                    assert util is not None
+                    assert abs(util - (cost / cap)) < 1e-9
+                else:
+                    assert util is None
+
+            # tie_break must point at one of the documented factors so
+            # the dashboard renders a stable label.
+            assert score_json["tie_break"]["factor"] in {
+                "no_runner_up",
+                "tier",
+                "quota",
+                "inflight",
+                "transcode",
+                "near_tie",
+                "exact_tie",
+            }
+            assert "margin" in score_json["tie_break"]
         finally:
             await fixture.db.disconnect()
 
@@ -671,6 +700,129 @@ class TestExplainAccountEligibility:
         finally:
             await fixture.db.disconnect()
 
+    @pytest.mark.asyncio()
+    async def test_explain_includes_actionable_details(self) -> None:
+        """``reason_detail`` strings include the identifiers an
+        operator needs to act on the diagnosis (account, provider,
+        configured protocols, requested model id, staleness window).
+        """
+        names = ["alpha", "bravo"]
+        fixture = await _build_coordinator_fixture(names)
+
+        try:
+            router = fixture.router
+            cache = fixture.catalog.cache
+
+            # Pull alpha and bravo onto different providers at the
+            # cache level so the wrong_provider check distinguishes
+            # them; the registry still maps both to test-provider via
+            # the fixture config.
+            cache._account_providers["alpha"] = "opencode-go"  # noqa: SLF001
+            cache._account_providers["bravo"] = "anthropic-proxy"  # noqa: SLF001
+            fixture.registry.get_state("alpha").enabled = False
+            fixture.registry.get_state("bravo").enabled = True
+
+            # alpha disabled, bravo: ask for provider=opencode-go so
+            # bravo triggers wrong_provider.
+            rows = await router.explain_account_eligibility(
+                model_id="gpt-4",
+                provider_id="opencode-go",
+                protocol=None,
+                transcode_eligibility=None,
+            )
+            by_name = {row["account_name"]: row for row in rows}
+
+            alpha = by_name["alpha"]
+            assert alpha["eligible"] is False
+            assert alpha["reason_code"] == "disabled"
+            assert "alpha" in alpha["reason_detail"]
+
+            bravo = by_name["bravo"]
+            assert bravo["eligible"] is False
+            assert bravo["reason_code"] == "wrong_provider"
+            wp_detail = bravo["reason_detail"]
+            assert "bravo" in wp_detail
+            assert "anthropic-proxy" in wp_detail
+            assert "opencode-go" in wp_detail
+
+            # Re-enable alpha and ask provider=anthropic-proxy so
+            # alpha is wrong_provider; bravo is now protocol-compatible
+            # but test-provider's protocols list is just ["openai"], so
+            # bravo (anthropic-proxy) reports no_protocol for "openai"
+            # if we override its protocol list.
+            fixture.registry.get_state("alpha").enabled = True
+            # Override bravo's provider in both cache and registry so
+            # the no_protocol message names the right provider.
+            cache._account_providers["bravo"] = "anthropic-only"  # noqa: SLF001
+            fixture.registry._account_providers["bravo"] = "anthropic-only"  # noqa: SLF001
+            # Patch account_supports_protocol so bravo appears not to
+            # support openai even though anthropic-only has no
+            # protocols list in the fixture config.
+            orig_supports = fixture.registry.account_supports_protocol
+
+            def _supports_no_openai(  # type: ignore[no-untyped-def]
+                account_name: str, protocol: str
+            ) -> bool:
+                if account_name == "bravo" and protocol == "openai":
+                    return False
+                return orig_supports(account_name, protocol)
+
+            fixture.registry.account_supports_protocol = _supports_no_openai  # type: ignore[method-assign]
+            orig_get_protocols = fixture.registry.get_provider_protocols
+
+            def _get_protocols(  # type: ignore[no-untyped-def]
+                provider_id: str,
+            ) -> set[str]:
+                if provider_id == "anthropic-only":
+                    return {"anthropic"}
+                return orig_get_protocols(provider_id)
+
+            fixture.registry.get_provider_protocols = _get_protocols  # type: ignore[method-assign]
+
+            rows = await router.explain_account_eligibility(
+                model_id="gpt-4",
+                provider_id="anthropic-only",
+                protocol="openai",
+                transcode_eligibility=None,
+            )
+            by_name = {row["account_name"]: row for row in rows}
+
+            alpha = by_name["alpha"]
+            assert alpha["eligible"] is False
+            assert alpha["reason_code"] == "wrong_provider"
+            detail = alpha["reason_detail"]
+            assert "opencode-go" in detail
+            assert "anthropic-only" in detail
+            assert "alpha" in detail
+
+            bravo = by_name["bravo"]
+            assert bravo["eligible"] is False
+            assert bravo["reason_code"] == "no_protocol"
+            np_detail = bravo["reason_detail"]
+            assert "bravo" in np_detail
+            assert "anthropic-only" in np_detail
+            assert "openai" in np_detail
+
+            # When the model is unknown to the catalog at all, the
+            # ``no_model`` detail should name the missing model and the
+            # account so the operator can correlate against config.
+            rows = await router.explain_account_eligibility(
+                model_id="totally-unknown",
+                provider_id=None,
+                protocol=None,
+                transcode_eligibility=None,
+            )
+            by_name = {row["account_name"]: row for row in rows}
+            for row in by_name.values():
+                if row["reason_code"] == "no_model":
+                    assert "totally-unknown" in row["reason_detail"]
+                    assert row["account_name"] in row["reason_detail"]
+
+            # Confirm the cache does not leak rows we did not register.
+            assert cache.get_supporting_accounts("totally-unknown") == set()
+        finally:
+            await fixture.db.disconnect()
+
 
 class TestInFlightPenaltyPropagation:
     """Reservations are visible to subsequent scorers via the lock fix."""
@@ -705,6 +857,264 @@ class TestInFlightPenaltyPropagation:
             ), (
                 f"Expected alpha to carry inflight penalty after the "
                 f"reservation was added; scores={scores}"
+            )
+        finally:
+            await fixture.db.disconnect()
+
+
+class TestPublishOrdering:
+    """Lock/transaction nesting guarantees for the cleanup pass.
+
+    These tests assert the invariant introduced by Phase 1 of the
+    cleanup plan: the durable selection transaction commits BEFORE
+    the runtime publication step (``increment_active_request_count`` +
+    ``add_reservation``), AND that publication runs BEFORE
+    ``_select_lock`` releases.  The earlier compound-context shape
+    (``async with self._select_lock, self._db.transaction():``)
+    published while the SQLite transaction was still open; if the
+    transaction defers commit visibility until exit (which it does
+    per ``Database.transaction``), the publication would see no
+    durable rows for the just-selected attempt.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_runtime_publication_happens_after_transaction_commit(
+        self,
+    ) -> None:
+        """``increment_active_request_count`` must observe the durable
+        request/reservation/attempt/routing_decision rows that the
+        coordinator just inserted.
+
+        We monkeypatch the router's publication method to query the
+        same in-memory database connection used by the coordinator.
+        If the inner transaction context manager has not yet exited
+        (the pre-cleanup bug), these rows are NOT visible from a
+        separate fetch because the surrounding transaction is still
+        open and SQLite has not committed.
+        """
+        names = ["alpha", "bravo"]
+        fixture = await _build_coordinator_fixture(names)
+
+        try:
+            coordinator = fixture.coordinator
+            router = fixture.router
+            db = fixture.db
+
+            observed: dict[str, object] = {}
+
+            original_increment = router.increment_active_request_count
+
+            async def _spy_increment(account_name: str) -> None:
+                # Query all four rows for the just-created attempt.
+                # Under the pre-cleanup compound-context shape the
+                # ``async with`` for the transaction has not exited,
+                # so SQLite has not yet COMMITted; these reads would
+                # race or block depending on aiosqlite scheduling.
+                # Under the cleaned-up nested shape the inner
+                # transaction has committed and the rows are visible.
+                attempt_row = await db.fetch_one(
+                    "SELECT id, request_id FROM request_attempts "
+                    "ORDER BY id DESC LIMIT 1"
+                )
+                decision_row = await db.fetch_one(
+                    "SELECT id, selected_account_name FROM routing_decisions "
+                    "ORDER BY id DESC LIMIT 1"
+                )
+                reservation_row = await db.fetch_one(
+                    "SELECT id, account_id, model_id FROM reservations "
+                    "ORDER BY id DESC LIMIT 1"
+                )
+                request_row = await db.fetch_one(
+                    "SELECT id, model_id FROM requests ORDER BY id DESC LIMIT 1"
+                )
+                observed["attempt_row"] = attempt_row
+                observed["decision_row"] = decision_row
+                observed["reservation_row"] = reservation_row
+                observed["request_row"] = request_row
+                observed["selected_account"] = account_name
+                await original_increment(account_name)
+
+            router.increment_active_request_count = (  # type: ignore[method-assign]
+                _spy_increment
+            )
+
+            ctx = _make_context("req-publish-ordering")
+            selected = await coordinator._select_and_persist_attempt(ctx, 1)
+            assert observed, "publication hook never fired"
+
+            # All four durable rows must be visible when the
+            # publication hook runs.
+            assert observed["attempt_row"] is not None, (
+                "request_attempts row missing at publication time — "
+                "transaction had not committed before publication"
+            )
+            assert observed["decision_row"] is not None, (
+                "routing_decisions row missing at publication time"
+            )
+            assert observed["reservation_row"] is not None, (
+                "reservations row missing at publication time"
+            )
+            assert observed["request_row"] is not None, (
+                "requests row missing at publication time"
+            )
+            assert observed["selected_account"] == selected.account_name
+        finally:
+            await fixture.db.disconnect()
+
+    @pytest.mark.asyncio()
+    async def test_select_lock_released_only_after_runtime_publication(
+        self,
+    ) -> None:
+        """A concurrent selector must not be able to enter the
+        critical section until the in-flight selector's publication
+        has completed.
+
+        We hold the publication step on an ``asyncio.Event`` so we
+        can deterministically interleave a second selector against
+        the first. The second selector must block on
+        ``_select_lock`` until the first selector's publication is
+        released; once released, the second selector must observe
+        the first selector's contributions.
+        """
+        names = ["alpha", "bravo"]
+        fixture = await _build_coordinator_fixture(names)
+
+        try:
+            coordinator = fixture.coordinator
+            router = fixture.router
+
+            publish_started = asyncio.Event()
+            release_publish = asyncio.Event()
+            second_started = asyncio.Event()
+
+            original_increment = router.increment_active_request_count
+
+            async def _blocking_increment(account_name: str) -> None:
+                publish_started.set()
+                await release_publish.wait()
+                await original_increment(account_name)
+
+            router.increment_active_request_count = (  # type: ignore[method-assign]
+                _blocking_increment
+            )
+
+            first_selected_holder: list[str] = []
+
+            async def _first() -> str:
+                ctx = _make_context("req-first")
+                selected = await coordinator._select_and_persist_attempt(ctx, 1)
+                first_selected_holder.append(selected.account_name)
+                return selected.account_name
+
+            async def _second() -> tuple[str, int]:
+                # Wait until first selector is mid-publication.
+                await publish_started.wait()
+                second_started.set()
+                ctx = _make_context("req-second")
+                selected = await coordinator._select_and_persist_attempt(ctx, 1)
+                first_active = router._registry.get_state(
+                    first_selected_holder[0]
+                ).active_request_count
+                return (selected.account_name, first_active)
+
+            first_task = asyncio.create_task(_first())
+            await publish_started.wait()
+            second_task = asyncio.create_task(_second())
+            await second_started.wait()
+            # Give the second selector a chance to mis-enter the lock.
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            # The second task should still be blocked waiting on
+            # _select_lock while we hold publication.
+            assert not second_task.done(), (
+                "second selector entered _select_lock before first "
+                "publication completed"
+            )
+            # Release the first selector's publication.
+            release_publish.set()
+            await first_task
+            second_result = await second_task
+            second_selected, first_active = second_result
+            assert first_active >= 1, (
+                f"first selector's active count not published "
+                f"before second selector scored; got {first_active}"
+            )
+        finally:
+            await fixture.db.disconnect()
+
+    @pytest.mark.asyncio()
+    async def test_post_commit_publication_failure_removes_partial_state(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """If publication raises mid-way, the active count increment
+        is compensated and the exception is re-raised with the
+        ``post_commit_interrupted`` flag set on the context.
+
+        ``QuotaEstimator`` is a ``@dataclass(slots=True)`` so its
+        methods cannot be reassigned directly.  Instead we
+        monkeypatch the coordinator's ``_quota_estimator`` reference
+        with a thin wrapper that fails on ``add_reservation`` while
+        delegating the other accessors the coordinator uses
+        (``get_account_reserved_cost``, ``estimate_cost``,
+        ``get_account_quota``) to the underlying estimator.
+        """
+        names = ["alpha", "bravo"]
+        fixture = await _build_coordinator_fixture(names)
+
+        try:
+            coordinator = fixture.coordinator
+            router = fixture.router
+            estimator = router.quota_estimator
+
+            class _FailingEstimator:
+                """Thin wrapper that fails on add_reservation."""
+
+                def __init__(self, inner: Any) -> None:
+                    self._inner = inner
+
+                async def add_reservation(self, account_name: str, cost: int) -> None:
+                    raise RuntimeError("simulated reservation failure")
+
+                def get_account_quota(self, account_name: str) -> Any:
+                    return self._inner.get_account_quota(account_name)
+
+                async def get_account_reserved_cost(self, account_name: str) -> int:
+                    return await self._inner.get_account_reserved_cost(account_name)
+
+                def estimate_cost(
+                    self, account_name: str, model_id: str, tokens: int
+                ) -> int:
+                    return self._inner.estimate_cost(account_name, model_id, tokens)
+
+            failing_estimator = _FailingEstimator(estimator)
+            monkeypatch.setattr(coordinator, "_quota_estimator", failing_estimator)
+
+            ctx = _make_context("req-publication-failure")
+
+            with pytest.raises(RuntimeError, match="simulated"):
+                await coordinator._select_and_persist_attempt(ctx, 1)
+
+            assert ctx.client_metadata.get("post_commit_interrupted") is True, (
+                "post_commit_interrupted flag missing on context"
+            )
+
+            # After monkeypatch is reverted, the next selection
+            # should succeed and produce the expected active count.
+            monkeypatch.setattr(coordinator, "_quota_estimator", estimator)
+            ctx2 = _make_context("req-publication-success")
+            selected_second = await coordinator._select_and_persist_attempt(ctx2, 1)
+            target_state = router._registry.get_state(selected_second.account_name)
+            target_reserved = await estimator.get_account_reserved_cost(
+                selected_second.account_name
+            )
+            assert target_state.active_request_count == 1, (
+                f"active count after successful selection should be 1; "
+                f"got {target_state.active_request_count}"
+            )
+            assert target_reserved > 0, (
+                "reservation after successful selection should be > 0; "
+                f"got {target_reserved}"
             )
         finally:
             await fixture.db.disconnect()
