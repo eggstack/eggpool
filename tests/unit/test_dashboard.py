@@ -3676,7 +3676,7 @@ class TestRenderRuntimeNetwork:
         assert "Outbound builds" in html
         assert "Outbound requests" in html
         assert "DNS cache" in html
-        assert "DNS hit rate" in html
+        assert "DNS suppression" in html
         assert "Provider clients" in html
 
     def test_renders_dns_disabled(self) -> None:
@@ -3722,6 +3722,8 @@ class TestRenderRuntimeNetwork:
                 "size": 3,
                 "hits": 90,
                 "misses": 10,
+                "dns_suppression_rate": 0.9,
+                "resolver_calls_total": 10,
             },
         }
         html = render_runtime(snapshot)

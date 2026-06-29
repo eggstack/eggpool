@@ -472,6 +472,16 @@ def test_print_runtime_status_network_section() -> None:
             "evictions": 0,
             "resolution_errors": {},
             "hosts": [],
+            "cache_hits_total": 100,
+            "cache_misses_owner_total": 10,
+            "singleflight_waits_total": 0,
+            "resolver_calls_total": 10,
+            "resolver_successes_total": 10,
+            "resolver_errors_total": 0,
+            "cache_hit_rate": 0.9091,
+            "dns_suppression_rate": 0.9091,
+            "resolver_calls_per_logical_resolve": 0.1,
+            "worst_missers": [],
         },
         "probe_errors": [],
     }
@@ -485,7 +495,10 @@ def test_print_runtime_status_network_section() -> None:
     assert "Outbound builds:" in output
     assert "Outbound requests:" in output
     assert "DNS cache:" in output
-    assert "DNS hit rate:" in output
+    assert "DNS suppression:" in output
+    assert "Resolver calls:" in output
+    assert "Cache hits:" in output
+    assert "Owner misses:" in output
     assert "Provider clients:" in output
 
 
@@ -499,7 +512,19 @@ def test_print_runtime_status_network_disabled() -> None:
         "db": {},
         "routing_runtime": {},
         "outbound_client": {"build_count": 0, "request_count": 0, "error_count": 0},
-        "dns_cache": {"enabled": False},
+        "dns_cache": {
+            "enabled": False,
+            "cache_hits_total": 0,
+            "cache_misses_owner_total": 0,
+            "singleflight_waits_total": 0,
+            "resolver_calls_total": 0,
+            "resolver_successes_total": 0,
+            "resolver_errors_total": 0,
+            "cache_hit_rate": 0.0,
+            "dns_suppression_rate": 0.0,
+            "resolver_calls_per_logical_resolve": 0.0,
+            "worst_missers": [],
+        },
         "probe_errors": [],
     }
 
@@ -549,6 +574,16 @@ def test_print_runtime_status_dns_hit_rate_calculation() -> None:
             "stale_hits": 0,
             "evictions": 0,
             "resolution_errors": {},
+            "cache_hits_total": 90,
+            "cache_misses_owner_total": 10,
+            "singleflight_waits_total": 0,
+            "resolver_calls_total": 10,
+            "resolver_successes_total": 10,
+            "resolver_errors_total": 0,
+            "cache_hit_rate": 0.9,
+            "dns_suppression_rate": 0.9,
+            "resolver_calls_per_logical_resolve": 0.1,
+            "worst_missers": [],
         },
         "probe_errors": [],
     }
@@ -573,7 +608,22 @@ def test_runtime_status_includes_network_in_json() -> None:
         "routing_runtime": {},
         "outbound_client": {"build_count": 1, "request_count": 5, "error_count": 0},
         "provider_client_pool": {"build_count": 2, "providers": {"a": 1, "b": 1}},
-        "dns_cache": {"enabled": True, "hits": 10, "misses": 2, "hosts": []},
+        "dns_cache": {
+            "enabled": True,
+            "hits": 10,
+            "misses": 2,
+            "hosts": [],
+            "cache_hits_total": 10,
+            "cache_misses_owner_total": 2,
+            "singleflight_waits_total": 0,
+            "resolver_calls_total": 2,
+            "resolver_successes_total": 2,
+            "resolver_errors_total": 0,
+            "cache_hit_rate": 0.8333,
+            "dns_suppression_rate": 0.8333,
+            "resolver_calls_per_logical_resolve": 0.1667,
+            "worst_missers": [],
+        },
         "probe_errors": [],
     }
 

@@ -22,6 +22,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _address_family_label(family: int) -> str:
+    """Return a human-readable label for a socket address family."""
+    if family == socket.AF_INET:
+        return "ipv4"
+    if family == socket.AF_INET6:
+        return "ipv6"
+    return "any" if family == socket.AF_UNSPEC else f"family_{family}"
+
+
 def _consume_future_exception(future: asyncio.Future[list[str] | None]) -> None:
     """Mark singleflight exceptions observed when no waiter consumes them."""
     with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -61,11 +70,19 @@ class DnsCache:
         ] = collections.OrderedDict()
         self._singleflight: dict[DnsCacheKey, asyncio.Future[list[str] | None]] = {}
         self._lock = asyncio.Lock()
+        # Logical counters (backward-compatible)
         self.hits = 0
-        self.misses = 0
+        self.misses = 0  # legacy: now equals cache_misses_owner
         self.negative_hits = 0
         self.stale_hits = 0
         self.evictions = 0
+        # New precise counters
+        self.cache_hits = 0
+        self.cache_misses_owner = 0
+        self.singleflight_waits = 0
+        self.resolver_calls = 0
+        self.resolver_successes = 0
+        self.resolver_errors = 0
         self._evictions_by_reason: dict[str, int] = {"capacity": 0, "ttl_expiry": 0}
         self._per_host: dict[tuple[str, int], dict[str, int]] = {}
         self._resolution_errors: dict[tuple[str, int, str], int] = {}
@@ -117,17 +134,60 @@ class DnsCache:
     def snapshot(self) -> dict[str, object]:
         by_host: dict[str, dict[str, int]] = {}
         for (host, fam), counters in self._per_host.items():
-            fam_label = "ipv4" if fam == socket.AF_INET else "ipv6"
+            fam_label = _address_family_label(fam)
             label = f"{host}/{fam_label}"
             by_host[label] = dict(counters)
         resolution_errors: dict[str, int] = {}
         for (host, fam, kind), count in self._resolution_errors.items():
-            fam_label = "ipv4" if fam == socket.AF_INET else "ipv6"
+            fam_label = _address_family_label(fam)
             label = f"{host}/{fam_label}/{kind}"
             resolution_errors[label] = count
         hosts = self._snapshot_hosts()
+        # Derived metrics
+        logical_calls = (
+            self.cache_hits
+            + self.cache_misses_owner
+            + self.singleflight_waits
+            + self.negative_hits
+            + self.stale_hits
+        )
+        hit_denom = max(1, self.cache_hits + self.cache_misses_owner)
+        cache_hit_rate = self.cache_hits / hit_denom
+        dns_suppression_rate = (
+            self.cache_hits
+            + self.singleflight_waits
+            + self.negative_hits
+            + self.stale_hits
+        ) / max(1, logical_calls)
+        resolver_calls_per_logical = self.resolver_calls / max(1, logical_calls)
+        # Worst missers: top hosts by owner misses or resolver calls
+        worst: list[dict[str, object]] = []
+        now_mono = time.monotonic()
+        for (host, fam), counters in self._per_host.items():
+            owner_misses = counters.get("misses", 0)
+            if owner_misses > 0:
+                hits_count = counters.get("hits", 0)
+                sf_waits = owner_misses  # approximate from per-host misses
+                entry = self._cache.get(DnsCacheKey(hostname=host, address_family=fam))
+                expires_in = -1.0
+                if entry is not None and isinstance(entry, PositiveCacheEntry):
+                    expires_in = max(0.0, entry.expires_at - now_mono)
+                worst.append(
+                    {
+                        "host": host,
+                        "family": _address_family_label(fam),
+                        "owner_misses": owner_misses,
+                        "resolver_calls": owner_misses,
+                        "hits": hits_count,
+                        "singleflight_waits": sf_waits,
+                        "expires_in_seconds": round(expires_in, 1),
+                    }
+                )
+        worst.sort(key=lambda w: w["owner_misses"], reverse=True)  # type: ignore[no-any-return]
+        worst_missers = worst[:20]
         return {
             "max_entries": self._config.max_entries,
+            # Legacy fields (backward-compatible)
             "hits": self.hits,
             "misses": self.misses,
             "negative_hits": self.negative_hits,
@@ -139,6 +199,21 @@ class DnsCache:
             "resolution_errors": resolution_errors,
             "by_host": by_host,
             "hosts": hosts,
+            # New precise counters
+            "cache_hits_total": self.cache_hits,
+            "cache_misses_owner_total": self.cache_misses_owner,
+            "singleflight_waits_total": self.singleflight_waits,
+            "negative_hits_total": self.negative_hits,
+            "stale_hits_total": self.stale_hits,
+            "resolver_calls_total": self.resolver_calls,
+            "resolver_successes_total": self.resolver_successes,
+            "resolver_errors_total": self.resolver_errors,
+            # Derived rates
+            "cache_hit_rate": round(cache_hit_rate, 4),
+            "dns_suppression_rate": round(dns_suppression_rate, 4),
+            "resolver_calls_per_logical_resolve": round(resolver_calls_per_logical, 4),
+            # Diagnostics
+            "worst_missers": worst_missers,
         }
 
     def _snapshot_hosts(self) -> list[dict[str, object]]:
@@ -146,7 +221,7 @@ class DnsCache:
         now = time.monotonic()
         hosts: list[dict[str, object]] = []
         for key, entry in self._cache.items():
-            fam_label = "ipv4" if key.address_family == socket.AF_INET else "ipv6"
+            fam_label = _address_family_label(key.address_family)
             if isinstance(entry, PositiveCacheEntry):
                 expires_in = max(0.0, entry.expires_at - now)
                 stale_available = now < entry.stale_until
@@ -213,6 +288,7 @@ class DnsCache:
                 if isinstance(entry, PositiveCacheEntry):
                     if now < entry.expires_at:
                         self.hits += 1
+                        self.cache_hits += 1
                         self._record(key, "hits")
                         return entry.addresses
                     if now < entry.stale_until:
@@ -229,27 +305,31 @@ class DnsCache:
                     del self._cache[key]
                     self._evictions_by_reason["ttl_expiry"] += 1
 
-            self.misses += 1
-            self._record(key, "misses")
-
+            # Determine singleflight ownership AFTER cache lookup
             is_owner = key not in self._singleflight
             if is_owner:
+                self.cache_misses_owner += 1
+                self.misses += 1  # legacy compatibility
+                self._record(key, "misses")
                 future = asyncio.get_event_loop().create_future()
                 future.add_done_callback(_consume_future_exception)
                 self._singleflight[key] = future
             else:
+                self.singleflight_waits += 1
                 future = self._singleflight[key]
 
         if not is_owner:
             return await future
 
         try:
+            self.resolver_calls += 1
             coro = self._dns_lookup(key.hostname, key.address_family)
             if self._lookup_timeout_s is not None:
                 addresses = await asyncio.wait_for(coro, timeout=self._lookup_timeout_s)
             else:
                 addresses = await coro
         except TimeoutError:
+            self.resolver_errors += 1
             error_msg = f"DNS lookup timed out after {self._lookup_timeout_s}s"
             self._record_error(key.hostname, key.address_family, "timeout")
             self._store_negative(key, httpcore.ConnectTimeout, error_msg)
@@ -270,6 +350,7 @@ class DnsCache:
                 future.set_exception(exc)
             raise exc from None
         except Exception as exc:
+            self.resolver_errors += 1
             async with self._lock:
                 self._singleflight.pop(key, None)
                 fallback_addresses = self._restore_stale_fallback(key, stale_fallback)
@@ -277,7 +358,7 @@ class DnsCache:
                 logger.debug(
                     "DNS cache stale-if-error hit for %s (%s)",
                     key.hostname,
-                    "ipv4" if key.address_family == socket.AF_INET else "ipv6",
+                    _address_family_label(key.address_family),
                 )
                 if not future.cancelled():
                     future.set_result(fallback_addresses)
@@ -285,6 +366,7 @@ class DnsCache:
             if not future.cancelled():
                 future.set_exception(exc)
             raise
+        self.resolver_successes += 1
         async with self._lock:
             self._singleflight.pop(key, None)
         if not future.cancelled():

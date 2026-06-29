@@ -196,10 +196,30 @@ def test_dns_cache_shape(app_with_key: FastAPI) -> None:
     assert "resolutions_total" in dns
     assert "errors_total" in dns
     assert "by_host" in dns
+    assert "cache_hits_total" in dns
+    assert "cache_misses_owner_total" in dns
+    assert "singleflight_waits_total" in dns
+    assert "resolver_calls_total" in dns
+    assert "resolver_successes_total" in dns
+    assert "resolver_errors_total" in dns
+    assert "cache_hit_rate" in dns
+    assert "dns_suppression_rate" in dns
+    assert "resolver_calls_per_logical_resolve" in dns
+    assert "worst_missers" in dns
     assert isinstance(dns["enabled"], bool)
     assert isinstance(dns["entries"], int)
     assert isinstance(dns["evictions_by_reason"], dict)
     assert isinstance(dns["by_host"], dict)
+    assert isinstance(dns["cache_hits_total"], int)
+    assert isinstance(dns["cache_misses_owner_total"], int)
+    assert isinstance(dns["singleflight_waits_total"], int)
+    assert isinstance(dns["resolver_calls_total"], int)
+    assert isinstance(dns["resolver_successes_total"], int)
+    assert isinstance(dns["resolver_errors_total"], int)
+    assert isinstance(dns["cache_hit_rate"], float)
+    assert isinstance(dns["dns_suppression_rate"], float)
+    assert isinstance(dns["resolver_calls_per_logical_resolve"], float)
+    assert isinstance(dns["worst_missers"], list)
 
 
 def test_resolutions_total_counts_cache_misses_not_hits() -> None:
@@ -219,6 +239,16 @@ def test_resolutions_total_counts_cache_misses_not_hits() -> None:
                     "resolution_errors": {},
                     "by_host": {},
                     "hosts": [],
+                    "cache_hits_total": 90,
+                    "cache_misses_owner_total": 10,
+                    "singleflight_waits_total": 0,
+                    "resolver_calls_total": 10,
+                    "resolver_successes_total": 10,
+                    "resolver_errors_total": 0,
+                    "cache_hit_rate": 0.9,
+                    "dns_suppression_rate": 0.9,
+                    "resolver_calls_per_logical_resolve": 0.1,
+                    "worst_missers": [],
                 },
             }
 

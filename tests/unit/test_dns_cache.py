@@ -25,7 +25,7 @@ def _make_config(
     *,
     enabled: bool = True,
     max_entries: int = 50,
-    positive_ttl_seconds: int = 300,
+    positive_ttl_seconds: int = 1800,
     negative_ttl_seconds: int = 30,
     stale_if_error_seconds: int = 3600,
     prefer_ipv6: bool = False,
@@ -79,7 +79,7 @@ class TestDnsCacheConfigParsing:
         cfg = DnsCacheConfig()
         assert cfg.enabled is True
         assert cfg.max_entries == 50
-        assert cfg.positive_ttl_seconds == 300
+        assert cfg.positive_ttl_seconds == 1800
         assert cfg.negative_ttl_seconds == 30
         assert cfg.stale_if_error_seconds == 3600
         assert cfg.prefer_ipv6 is False
@@ -788,9 +788,10 @@ class TestConcurrentResolution:
             await cache.resolve("example.com", socket.AF_INET)
             await cache.resolve("example.com", socket.AF_INET)
         assert call_count == 1
-
-    @pytest.mark.asyncio
-    async def test_concurrent_singleflight_deduplicates(self) -> None:
+        assert cache.cache_hits == 2
+        assert cache.cache_misses_owner == 1
+        assert cache.singleflight_waits == 0
+        assert cache.resolver_calls == 1
         cfg = _make_config(positive_ttl_seconds=300)
         cache = DnsCache(cfg)
         call_count = 0
@@ -819,6 +820,12 @@ class TestConcurrentResolution:
         assert call_count == 1
         for r in results:
             assert r == ["1.2.3.4"]
+        assert cache.cache_misses_owner == 1
+        assert cache.singleflight_waits == 9
+        assert cache.resolver_calls == 1
+        assert cache.resolver_successes == 1
+        assert cache.resolver_errors == 0
+        assert cache.cache_hits == 0
 
     @pytest.mark.asyncio
     async def test_concurrent_singleflight_on_failure(self) -> None:
@@ -864,6 +871,18 @@ class TestSnapshot:
             "resolution_errors": {},
             "by_host": {},
             "hosts": [],
+            "cache_hits_total": 0,
+            "cache_misses_owner_total": 0,
+            "singleflight_waits_total": 0,
+            "negative_hits_total": 0,
+            "stale_hits_total": 0,
+            "resolver_calls_total": 0,
+            "resolver_successes_total": 0,
+            "resolver_errors_total": 0,
+            "cache_hit_rate": 0.0,
+            "dns_suppression_rate": 0.0,
+            "resolver_calls_per_logical_resolve": 0.0,
+            "worst_missers": [],
         }
 
     @pytest.mark.asyncio
@@ -884,6 +903,15 @@ class TestSnapshot:
         assert snap["hits"] == 1
         assert snap["misses"] == 1
         assert snap["size"] == 1
+        assert snap["cache_hits_total"] == 1
+        assert snap["cache_misses_owner_total"] == 1
+        assert snap["singleflight_waits_total"] == 0
+        assert snap["resolver_calls_total"] == 1
+        assert snap["resolver_successes_total"] == 1
+        assert snap["resolver_errors_total"] == 0
+        assert snap["cache_hit_rate"] == 0.5
+        assert snap["dns_suppression_rate"] == 0.5
+        assert snap["resolver_calls_per_logical_resolve"] == 0.5
 
     @pytest.mark.asyncio
     async def test_snapshot_size_after_eviction(self) -> None:
@@ -1000,6 +1028,9 @@ class TestSnapshot:
         host_stats = snap["by_host"]["host.com/ipv4"]
         assert host_stats["stale_hits"] == 1
         assert host_stats["misses"] == 3
+        assert snap["cache_hits_total"] == 0
+        assert snap["cache_misses_owner_total"] == 3
+        assert snap["singleflight_waits_total"] == 0
 
     @pytest.mark.asyncio
     async def test_snapshot_hosts_positive_entry(self) -> None:
@@ -1562,3 +1593,142 @@ class TestCacheKeyInCache:
         key = DnsCacheKey(hostname="fail.com", address_family=socket.AF_INET)
         assert key in cache._cache
         assert isinstance(cache._cache[key], NegativeCacheEntry)
+
+
+class TestAddressFamilyLabel:
+    def test_ipv4(self) -> None:
+        from eggpool.providers.dns_cache import _address_family_label
+
+        assert _address_family_label(socket.AF_INET) == "ipv4"
+
+    def test_ipv6(self) -> None:
+        from eggpool.providers.dns_cache import _address_family_label
+
+        assert _address_family_label(socket.AF_INET6) == "ipv6"
+
+    def test_unspec_is_any(self) -> None:
+        from eggpool.providers.dns_cache import _address_family_label
+
+        assert _address_family_label(socket.AF_UNSPEC) == "any"
+
+    def test_unknown_family(self) -> None:
+        from eggpool.providers.dns_cache import _address_family_label
+
+        assert _address_family_label(99) == "family_99"
+
+
+class TestNewCounters:
+    @pytest.mark.asyncio
+    async def test_singleflight_waits_not_counted_as_misses(self) -> None:
+        cfg = _make_config(positive_ttl_seconds=300)
+        cache = DnsCache(cfg)
+        with patch(
+            "eggpool.providers.dns_cache.socket.getaddrinfo",
+            return_value=[(socket.AF_INET, 0, 0, "", ("1.2.3.4", 0))],
+        ):
+            results = await asyncio.gather(
+                cache.resolve("example.com", socket.AF_INET),
+                cache.resolve("example.com", socket.AF_INET),
+                cache.resolve("example.com", socket.AF_INET),
+            )
+        assert all(r == ["1.2.3.4"] for r in results)
+        assert cache.cache_misses_owner == 1
+        assert cache.singleflight_waits == 2
+        assert cache.resolver_calls == 1
+        assert cache.resolver_successes == 1
+        assert cache.resolver_errors == 0
+        assert cache.misses == cache.cache_misses_owner
+
+    @pytest.mark.asyncio
+    async def test_resolver_error_increments_error_counter(self) -> None:
+        cfg = _make_config(positive_ttl_seconds=300)
+        cache = DnsCache(cfg)
+        with patch(
+            "eggpool.providers.dns_cache.socket.getaddrinfo",
+            side_effect=socket.gaierror("fail"),
+        ):
+            results = await asyncio.gather(
+                cache.resolve("fail.com", socket.AF_INET),
+                cache.resolve("fail.com", socket.AF_INET),
+                return_exceptions=True,
+            )
+        assert cache.resolver_calls == 1
+        assert cache.resolver_errors == 1
+        assert cache.resolver_successes == 0
+        assert all(isinstance(r, httpcore.ConnectError) for r in results)
+
+    @pytest.mark.asyncio
+    async def test_dns_suppression_rate_calculation(self) -> None:
+        cfg = _make_config(positive_ttl_seconds=300)
+        cache = DnsCache(cfg)
+        with patch(
+            "eggpool.providers.dns_cache.socket.getaddrinfo",
+            return_value=[(socket.AF_INET, 0, 0, "", ("1.2.3.4", 0))],
+        ):
+            await cache.resolve("a.com", socket.AF_INET)
+            await cache.resolve("a.com", socket.AF_INET)
+        snap = cache.snapshot()
+        assert snap["dns_suppression_rate"] == 0.5
+        assert snap["cache_hit_rate"] == 0.5
+        assert snap["resolver_calls_per_logical_resolve"] == 0.5
+
+    def test_zero_denominator_rates(self) -> None:
+        cfg = _make_config()
+        cache = DnsCache(cfg)
+        snap = cache.snapshot()
+        assert snap["cache_hit_rate"] == 0.0
+        assert snap["dns_suppression_rate"] == 0.0
+        assert snap["resolver_calls_per_logical_resolve"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_ttl_default_is_1800(self) -> None:
+        from eggpool.models.config import DnsCacheConfig
+
+        cfg = DnsCacheConfig()
+        assert cfg.positive_ttl_seconds == 1800
+
+
+class TestWorstMissers:
+    @pytest.mark.asyncio
+    async def test_worst_missers_empty_when_no_misses(self) -> None:
+        cfg = _make_config()
+        cache = DnsCache(cfg)
+        snap = cache.snapshot()
+        assert snap["worst_missers"] == []
+
+    @pytest.mark.asyncio
+    async def test_worst_missers_sorted_by_misses(self) -> None:
+        cfg = _make_config(positive_ttl_seconds=10, stale_if_error_seconds=0)
+        cache = DnsCache(cfg)
+        fake_time = [1000.0]
+
+        def _monotonic() -> float:
+            return fake_time[0]
+
+        def _mock_getaddrinfo(host, port, family):
+            return [(socket.AF_INET, 0, 0, "", ("1.2.3.4", 0))]
+
+        with (
+            patch(
+                "eggpool.providers.dns_cache.time.monotonic",
+                side_effect=_monotonic,
+            ),
+            patch(
+                "eggpool.providers.dns_cache.socket.getaddrinfo",
+                side_effect=_mock_getaddrinfo,
+            ),
+        ):
+            await cache.resolve("a.com", socket.AF_INET)
+            fake_time[0] += 20
+            await cache.resolve("b.com", socket.AF_INET)
+            fake_time[0] += 20
+            await cache.resolve("b.com", socket.AF_INET)
+            fake_time[0] += 20
+            await cache.resolve("b.com", socket.AF_INET)
+        snap = cache.snapshot()
+        worst = snap["worst_missers"]
+        assert len(worst) == 2
+        assert worst[0]["host"] == "b.com"
+        assert worst[0]["owner_misses"] == 3
+        assert worst[1]["host"] == "a.com"
+        assert worst[1]["owner_misses"] == 1

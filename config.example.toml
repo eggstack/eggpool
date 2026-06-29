@@ -94,7 +94,7 @@ monthly_microdollars = 60000000
 # [network.dns_cache]
 # enabled = true                   # enable in-memory DNS cache (default: true)
 # max_entries = 50                 # max cached host entries (default: 50)
-# positive_ttl_seconds = 300       # upper cap for positive DNS answers (default: 300)
+# positive_ttl_seconds = 1800      # upper cap for positive DNS answers (default: 1800)
 # negative_ttl_seconds = 30        # how long to cache lookup failures (default: 30)
 # stale_if_error_seconds = 3600    # max age for stale records usable on resolver failure (default: 3600)
 # prefer_ipv6 = false              # prefer IPv6 addresses in DNS resolution (default: false)

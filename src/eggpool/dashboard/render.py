@@ -3095,16 +3095,15 @@ def render_runtime(
         dns_entries_label = f"entries {format_int(dns_entries)}"
     dns_hits = dns_cache.get("hits", 0)
     dns_misses = dns_cache.get("misses", 0)
-    dns_total_lookups = dns_hits + dns_misses
-    dns_hit_rate = (
-        f"{dns_hits / dns_total_lookups * 100:.1f}%" if dns_total_lookups > 0 else "—"
-    )
     dns_negative = dns_cache.get("negative_hits", 0)
     dns_stale = dns_cache.get("stale_hits", 0)
-    dns_errors_dict: dict[str, int] = cast(
-        "dict[str, int]", dns_cache.get("resolution_errors") or {}
+    # New precise metrics
+    dns_suppression_rate = dns_cache.get("dns_suppression_rate", 0.0)
+    dns_suppression_pct = (
+        f"{dns_suppression_rate * 100:.1f}%" if dns_suppression_rate else "—"
     )
-    dns_errors = sum(dns_errors_dict.values())
+    dns_resolver_calls = dns_cache.get("resolver_calls_total", 0)
+    dns_resolver_errors = dns_cache.get("resolver_errors_total", 0)
     ob_builds = format_int(outbound.get("build_count", 0))
     ob_requests = format_int(outbound.get("request_count", 0))
     ob_errors = format_int(outbound.get("error_count", 0))
@@ -3121,21 +3120,18 @@ def render_runtime(
                     sub=dns_entries_label,
                 ),
                 _render_metric_card(
-                    title="DNS hit rate",
-                    metric=dns_hit_rate,
-                    sub=(
-                        f"{format_int(dns_hits)} hits / "
-                        f"{format_int(dns_total_lookups)} total"
-                    ),
+                    title="DNS suppression",
+                    metric=dns_suppression_pct,
+                    sub=(f"{format_int(dns_resolver_calls)} resolver calls"),
                 ),
                 _render_metric_card(
-                    title="DNS misses",
-                    metric=format_int(dns_misses),
-                    sub="resolver calls",
+                    title="DNS hits",
+                    metric=format_int(dns_hits),
+                    sub=f"{format_int(dns_misses)} owner misses",
                 ),
                 _render_metric_card(
                     title="DNS errors",
-                    metric=format_int(dns_errors),
+                    metric=format_int(dns_resolver_errors),
                     sub=(
                         f"stale {format_int(dns_stale)} · "
                         f"neg {format_int(dns_negative)}"

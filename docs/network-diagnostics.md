@@ -6,7 +6,7 @@ EggPool keeps outbound HTTP clients alive and reuses connection pools for provid
 
 On Raspberry Pi-class devices, every DNS lookup involves a system call and potentially a network round-trip to a local resolver (or Pi-hole). When EggPool makes repeated requests to the same upstream provider hosts, caching DNS results eliminates redundant lookups and reduces connection latency.
 
-The cache is bounded (default 50 entries) and TTL-based (default 300s for positive results, 30s for negative results). It uses LRU eviction and singleflight deduplication so concurrent lookups for the same hostname share a single resolver call.
+The cache is bounded (default 50 entries) and TTL-based (default 1800s for positive results, 30s for negative results). It uses LRU eviction and singleflight deduplication so concurrent lookups for the same hostname share a single resolver call.
 
 ## Why long-lived outbound clients matter
 
@@ -25,7 +25,7 @@ Connection pooling alone reduces latency by reusing TLS sessions and TCP connect
 [network.dns_cache]
 enabled = true
 # max_entries = 50
-# positive_ttl_seconds = 300
+# positive_ttl_seconds = 1800
 # negative_ttl_seconds = 30
 # stale_if_error_seconds = 3600
 # prefer_ipv6 = false
@@ -88,7 +88,17 @@ The Runtime dashboard page (`/runtime`) shows a Network section with:
     "stale_hits_total": 0,
     "evictions_total": 0,
     "resolutions_total": 8,
-    "errors_total": 0
+    "errors_total": 0,
+    "cache_hits_total": 1204,
+    "cache_misses_owner_total": 8,
+    "singleflight_waits_total": 0,
+    "resolver_calls_total": 8,
+    "resolver_successes_total": 8,
+    "resolver_errors_total": 0,
+    "cache_hit_rate": 0.9934,
+    "dns_suppression_rate": 0.9934,
+    "resolver_calls_per_logical_resolve": 0.0066,
+    "worst_missers": []
   },
   "hosts": [
     {
@@ -115,7 +125,12 @@ Key fields:
 
 - **`outbound_clients.scopes`**: per-scope build counts. `global` is the shared `OutboundClientManager` client; `provider:*` entries are per-provider clients from `ProviderClientPool`.
 - **`outbound_clients.per_host_requests`**: request counts by target host for the shared outbound client (update checks, catalog fetches).
-- **`dns_cache.resolutions_total`**: cache misses that required a resolver refresh. Cache hits are reported separately and are not counted as DNS resolutions.
+- **`dns_cache.resolutions_total`**: legacy counter of cache misses that required a resolver refresh. Prefer `resolver_calls_total` for precise accounting.
+- **`dns_cache.cache_hits_total`**: requests served directly from cache without any singleflight wait or resolver call.
+- **`dns_cache.cache_misses_owner_total`**: cache misses where this instance won the singleflight and performed the resolver call.
+- **`dns_cache.singleflight_waits_total`**: cache misses where this instance waited for another instance's resolver call (not counted as a miss for the caller).
+- **`dns_cache.dns_suppression_rate`**: the primary operator metric — fraction of requests served from cache without a resolver call. High values indicate the cache is effective.
+- **`dns_cache.resolver_calls_total`**: actual resolver calls made. Low values relative to total requests indicate the cache and connection pooling are working. A low `cache_hit_rate` may be acceptable when connection pooling handles most reuse.
 - **`hosts`**: per-cache-entry metadata including `state` (positive/negative), `expires_in_seconds` (TTL remaining), `stale_available` (stale-if-error window), and `last_error_kind` (for negative entries).
 
 This endpoint is always auth-gated regardless of `dashboard.public` setting.
@@ -128,8 +143,10 @@ This endpoint is always auth-gated regardless of `dashboard.public` setting.
 Network:
   DNS cache:         enabled
   DNS entries:       7
-  DNS hit rate:      99.3%
-  DNS misses:        8
+  DNS suppression:   99.3%
+  Resolver calls:    8
+  Cache hits:        1204
+  Owner misses:      8
   DNS errors:        0
   Outbound builds:   1
   Outbound requests: 1204
@@ -166,7 +183,7 @@ When running EggPool on a host with Pi-hole or another DNS logger, you can valid
 
 ### Cache expiry
 
-The positive TTL is 300 seconds by default. After expiry, EggPool makes a fresh resolver call. If that refresh fails and the entry is still inside `stale_if_error_seconds`, EggPool temporarily reuses the previous addresses and records a stale hit. You can observe normal refreshes by watching the Pi-hole query count: it should spike briefly every 5 minutes for each cached host, then return to zero.
+The positive TTL is 1800 seconds by default. After expiry, EggPool makes a fresh resolver call. If that refresh fails and the entry is still inside `stale_if_error_seconds`, EggPool temporarily reuses the previous addresses and records a stale hit. You can observe normal refreshes by watching the Pi-hole query count: it should spike briefly every 30 minutes for each cached host, then return to zero.
 
 ## Known caveats
 

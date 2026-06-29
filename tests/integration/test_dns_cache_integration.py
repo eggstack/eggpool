@@ -53,6 +53,10 @@ class TestRepeatedRequestsShareCache:
         snap = backend.cache.snapshot()
         assert snap["hits"] == 2
         assert snap["misses"] == 1
+        assert snap["cache_hits_total"] == 2
+        assert snap["cache_misses_owner_total"] == 1
+        assert snap["singleflight_waits_total"] == 0
+        assert snap["resolver_calls_total"] == 1
 
 
 class TestCacheExpiryCausesReResolution:
@@ -211,6 +215,7 @@ class TestDisabledBackendBypassesCache:
         snap = backend.cache.snapshot()
         assert snap["size"] == 0
         assert snap["misses"] == 0
+        assert snap["cache_misses_owner_total"] == 0
 
 
 class TestDifferentHostsIndependentCaches:
@@ -260,3 +265,7 @@ class TestConcurrentRequestsShareResolution:
         assert mock_lookup.call_count == 1
         for r in results:
             assert r is mock_stream
+        snap = backend.cache.snapshot()
+        assert snap["cache_misses_owner_total"] == 1
+        assert snap["singleflight_waits_total"] == 2
+        assert snap["resolver_calls_total"] == 1

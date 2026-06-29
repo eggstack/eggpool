@@ -655,7 +655,7 @@ class DnsCacheConfig(BaseModel):
 
     enabled: bool = True
     max_entries: int = Field(default=50, ge=1)
-    positive_ttl_seconds: int = Field(default=300, gt=0)
+    positive_ttl_seconds: int = Field(default=1800, gt=0)
     negative_ttl_seconds: int = Field(default=30, gt=0)
     stale_if_error_seconds: int = Field(default=3600, ge=0)
     prefer_ipv6: bool = False

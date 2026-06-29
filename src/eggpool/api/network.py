@@ -45,6 +45,7 @@ async def handle_network_diagnostics(request: Request) -> JSONResponse:
             "enabled": dns.get("enabled", False),
             "max_entries": dns.get("max_entries"),
             "entries": dns.get("size", 0),
+            # Legacy fields
             "hits_total": dns.get("hits", 0),
             "misses_total": dns.get("misses", 0),
             "negative_hits_total": dns.get("negative_hits", 0),
@@ -56,6 +57,21 @@ async def handle_network_diagnostics(request: Request) -> JSONResponse:
             if isinstance(dns.get("resolution_errors"), dict)
             else 0,
             "by_host": dns.get("by_host", {}),
+            # New precise counters
+            "cache_hits_total": dns.get("cache_hits_total", 0),
+            "cache_misses_owner_total": dns.get("cache_misses_owner_total", 0),
+            "singleflight_waits_total": dns.get("singleflight_waits_total", 0),
+            "resolver_calls_total": dns.get("resolver_calls_total", 0),
+            "resolver_successes_total": dns.get("resolver_successes_total", 0),
+            "resolver_errors_total": dns.get("resolver_errors_total", 0),
+            # Derived rates
+            "cache_hit_rate": dns.get("cache_hit_rate", 0.0),
+            "dns_suppression_rate": dns.get("dns_suppression_rate", 0.0),
+            "resolver_calls_per_logical_resolve": dns.get(
+                "resolver_calls_per_logical_resolve", 0.0
+            ),
+            # Diagnostics
+            "worst_missers": dns.get("worst_missers", []),
         },
         "hosts": dns.get("hosts", []),
     }
