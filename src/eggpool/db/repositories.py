@@ -767,6 +767,7 @@ class RoutingDecisionRepository:
         top_score: float | None,
         top_score_account_name: str | None,
         exclude_reasons_json: str,
+        score_components_json: str | None = None,
     ) -> int:
         """Persist a routing decision row, return its id."""
         return await self._db.execute_insert(
@@ -776,9 +777,9 @@ class RoutingDecisionRepository:
             "selected_tier, selected_score, "
             "eligible_count, scored_count, attempted_excluded_count, "
             "top_score, top_score_account_name, "
-            "exclude_reasons_json"
+            "exclude_reasons_json, score_components_json"
             ") VALUES ("
-            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?"
+            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?"
             ")",
             (
                 request_id,
@@ -796,6 +797,7 @@ class RoutingDecisionRepository:
                 top_score,
                 top_score_account_name,
                 exclude_reasons_json,
+                score_components_json if score_components_json is not None else "{}",
             ),
         )
 

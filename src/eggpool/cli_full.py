@@ -2835,6 +2835,96 @@ def accounts_status(ctx: click.Context) -> None:
     click.echo(f"\nTotal accounts: {len(config.all_accounts())}")
 
 
+@accounts.command("explain")
+@click.option(
+    "--model",
+    "model_id",
+    required=True,
+    help="Model id to evaluate (e.g. gpt-4, claude-3-5-sonnet).",
+)
+@click.option(
+    "--provider",
+    "provider_id",
+    default=None,
+    help="Restrict the explanation to one provider.",
+)
+@click.option(
+    "--protocol",
+    "protocol",
+    default=None,
+    help=(
+        "Restrict the explanation to accounts declaring this protocol "
+        "(default: no protocol filter)."
+    ),
+)
+@click.pass_context
+def accounts_explain(
+    ctx: click.Context,
+    model_id: str,
+    provider_id: str | None,
+    protocol: str | None,
+) -> None:
+    """Explain why each account is or is not eligible for ``--model``."""
+    from rich.console import Console
+    from rich.table import Table
+
+    from eggpool.accounts.registry import AccountRegistry
+    from eggpool.catalog.cache import ModelCatalogCache
+    from eggpool.models.config import AppConfig
+    from eggpool.quota.estimation import QuotaEstimator
+    from eggpool.routing.router import Router
+
+    config_path: str = ctx.obj["config_path"]
+    try:
+        config = AppConfig.from_toml(config_path)
+    except AggregatorError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
+    if not config.all_accounts():
+        click.echo(
+            "No provider accounts configured.\n\n"
+            "  Use `eggpool connect` to add a provider interactively,\n"
+            "  or edit config.toml to add accounts manually."
+        )
+        return
+
+    registry = AccountRegistry(config)
+    catalog = ModelCatalogCache()
+    quota_estimator = QuotaEstimator()
+    router = Router(  # pyright: ignore[arg-type]
+        registry,
+        catalog,  # type: ignore[arg-type]
+        quota_estimator=quota_estimator,
+    )
+
+    import asyncio as _asyncio
+
+    rows = _asyncio.run(
+        router.explain_account_eligibility(
+            model_id=model_id,
+            provider_id=provider_id,
+            protocol=protocol,
+            transcode_eligibility=None,
+        )
+    )
+
+    console = Console()
+    table = Table(title=f"Account eligibility for model {model_id!r}")
+    table.add_column("Account", style="bold")
+    table.add_column("Eligible")
+    table.add_column("Reason")
+    table.add_column("Detail", overflow="fold")
+    for row in rows:
+        table.add_row(
+            row["account_name"],
+            "yes" if row["eligible"] else "no",
+            row["reason_code"],
+            row["reason_detail"],
+        )
+    console.print(table)
+
+
 def _get_provider_for_account(config: AppConfig, account_name: str) -> str:
     """Return the provider ID for an account."""
     for provider_id, provider_cfg in config.providers.items():

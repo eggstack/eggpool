@@ -329,6 +329,41 @@ async def handle_routing_exclusion_breakdown(
     return JSONResponse(content={"period": time_range.label, "exclusions": rows})
 
 
+async def handle_routing_eligibility_explanation(
+    request: Request,
+    model_id: str,
+    provider_id: str | None = None,
+    protocol: str | None = None,
+) -> Response:
+    """GET /api/stats/routing/eligibility.
+
+    Returns one row per registered account explaining why each is or
+    is not eligible to serve ``model_id``. Re-evaluated on every
+    call against the live registry + catalog so operators can diagnose
+    routing skew without restarting the service.
+    """
+    router = getattr(request.app.state, "router", None)
+    if router is None:
+        return JSONResponse(
+            content={"error": "router unavailable"},
+            status_code=503,
+        )
+    rows = await router.explain_account_eligibility(
+        model_id=model_id,
+        provider_id=provider_id,
+        protocol=protocol,
+        transcode_eligibility=None,
+    )
+    return JSONResponse(
+        content={
+            "model_id": model_id,
+            "provider_id": provider_id,
+            "protocol": protocol,
+            "rows": rows,
+        }
+    )
+
+
 async def handle_operational_health(
     request: Request,
     period: str | None = "24h",
@@ -548,6 +583,12 @@ def register_stats_routes(app: Any, require_auth: bool = False) -> None:
         dependencies=dependencies,
     )
     app.add_api_route(
+        path="/api/stats/routing/eligibility",
+        endpoint=handle_routing_eligibility_explanation,
+        methods=["GET"],
+        dependencies=dependencies,
+    )
+    app.add_api_route(
         path="/api/stats/operational",
         endpoint=handle_operational_health,
         methods=["GET"],
@@ -606,6 +647,7 @@ __all__ = [
     "handle_request_trace",
     "handle_retry_distribution",
     "handle_routing_distribution",
+    "handle_routing_eligibility_explanation",
     "handle_routing_exclusion_breakdown",
     "handle_routing_selection_breakdown",
     "handle_summary",

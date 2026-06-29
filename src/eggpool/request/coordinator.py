@@ -826,6 +826,13 @@ class RequestCoordinator:
                     top_state, top_score_obj = ranked_candidates[0]
                     top_score_value = float(top_score_obj.final_score)
                     top_score_account_name = top_state.name
+                score_components = self._build_score_components(
+                    ranked_candidates=ranked_candidates,
+                    selected_account_name=account_name,
+                    selected_state=selected_state,
+                    selected_score=selected_score,
+                    selected_tier=selected_tier,
+                )
                 trace = RoutingDecisionTrace(
                     model_id=context.model_id,
                     provider_id=resolved_provider_id,
@@ -840,6 +847,7 @@ class RequestCoordinator:
                     top_score=top_score_value,
                     top_score_account_name=top_score_account_name,
                     exclusions=tuple(exclusions),
+                    score_components=score_components,
                 )
                 await self._routing_decision_repo.create(
                     request_id=int(db_request_id),
@@ -857,6 +865,7 @@ class RequestCoordinator:
                     top_score=trace.top_score,
                     top_score_account_name=trace.top_score_account_name,
                     exclude_reasons_json=trace.to_exclude_reasons_json(),
+                    score_components_json=trace.to_score_components_json(),
                 )
 
                 # Retries select a new account and reservation estimate.
@@ -878,51 +887,53 @@ class RequestCoordinator:
             context.attempted_accounts.add(account_name)
             context.client_metadata["account_name"] = account_name
 
-            # Transaction committed here. All rows are durable.
+            # Transaction committed here. All rows are durable but the
+            # outer ``async with`` block has not yet released
+            # ``_select_lock``; the publish block below runs BEFORE
+            # the lock releases so a concurrent selector entering the
+            # lock after this returns observes this attempt's runtime
+            # state. The publish is fast (in-process counter + cache
+            # mutation) so the lock-hold stays tight while still
+            # closing the race where the prior revision released the
+            # lock first and a selector could therefore score on stale
+            # zero-penalty counters.
+            active_count_increased = False
+            try:
+                # 11. Increment runtime active count
+                await self._router.increment_active_request_count(account_name)
+                active_count_increased = True
 
-        # Select lock released here. Subsequent runtime updates
-        # (``increment_active_request_count``, ``add_reservation``)
-        # happen outside the lock so a coordinator selecting account
-        # B does not block on a coordinator finishing post-commit
-        # work for account A.
-
-        active_count_increased = False
-        try:
-            # 11. Increment runtime active count
-            await self._router.increment_active_request_count(account_name)
-            active_count_increased = True
-
-            # 12. Add exact reserved amount to in-memory cache
-            if self._quota_estimator is not None:
-                await self._quota_estimator.add_reservation(
-                    account_name, estimated_microdollars
+                # 12. Add exact reserved amount to in-memory cache
+                if self._quota_estimator is not None:
+                    await self._quota_estimator.add_reservation(
+                        account_name, estimated_microdollars
+                    )
+            except BaseException:
+                # Compensate: undo the active count increment so
+                # runtime state stays consistent with the durable row.
+                if active_count_increased:
+                    await self._router.decrement_active_request_count(account_name)
+                # Finalize the just-created attempt as cancelled so
+                # normal finalization has no stale durable IDs.
+                await asyncio.shield(
+                    self._attempt_finalizer.finalize_failed_attempt(
+                        attempt_id=attempt_id,
+                        reservation_id=reservation_id,
+                        data=AttemptFinalizationData(
+                            status_code=None,
+                            error_class="PostCommitInterrupted",
+                            release_reason="post_commit_interrupted",
+                            retry_category=RetryCategory.NEVER.value,
+                            bytes_received=len(context.original_body),
+                            latency_ms=self._elapsed_ms(context),
+                            is_retry_outcome=False,
+                        ),
+                    )
                 )
-        except BaseException:
-            # Compensate: undo the active count increment so
-            # runtime state stays consistent with the durable row.
-            if active_count_increased:
-                await self._router.decrement_active_request_count(account_name)
-            # Finalize the just-created attempt as cancelled so
-            # normal finalization has no stale durable IDs.
-            await asyncio.shield(
-                self._attempt_finalizer.finalize_failed_attempt(
-                    attempt_id=attempt_id,
-                    reservation_id=reservation_id,
-                    data=AttemptFinalizationData(
-                        status_code=None,
-                        error_class="PostCommitInterrupted",
-                        release_reason="post_commit_interrupted",
-                        retry_category=RetryCategory.NEVER.value,
-                        bytes_received=len(context.original_body),
-                        latency_ms=self._elapsed_ms(context),
-                        is_retry_outcome=False,
-                    ),
-                )
-            )
-            if self._health_manager is not None:
-                self._health_manager.release_request(account_name)
-            context.client_metadata["post_commit_interrupted"] = True
-            raise
+                if self._health_manager is not None:
+                    self._health_manager.release_request(account_name)
+                context.client_metadata["post_commit_interrupted"] = True
+                raise
 
         return SelectedAttempt(
             proxy_request_id=context.request_id,
@@ -2231,6 +2242,94 @@ class RequestCoordinator:
             return False
         attempted = context.attempted_accounts
         return all(state.name in attempted for state in enabled)
+
+    def _build_score_components(
+        self,
+        *,
+        ranked_candidates: list[tuple[Any, Any]],
+        selected_account_name: str,
+        selected_state: Any,
+        selected_score: float | None,
+        selected_tier: int | None,
+    ) -> dict[str, Any]:
+        """Build the score_components_json payload for one routing decision.
+
+        Includes the full breakdown for the selected account plus
+        the top near-tie candidates so the dashboard can answer
+        "why account A over account B?" without rescoring.
+        """
+        # Find the score for the selected account from ranked_candidates
+        # if present; else synthesize the bare minimum from the trace.
+        selected_score_obj: Any | None = None
+        for state, score in ranked_candidates:
+            if state.name == selected_account_name:
+                selected_score_obj = score
+                break
+
+        if selected_score_obj is not None:
+            payload: dict[str, Any] = {
+                "account_name": selected_account_name,
+                "quota_score": selected_score_obj.quota_score,
+                "inflight_penalty": selected_score_obj.inflight_penalty,
+                "health_penalty": selected_score_obj.health_penalty,
+                "final_score": selected_score_obj.final_score,
+                "weight": selected_score_obj.weight,
+                "active_request_count": (selected_score_obj.active_request_count),
+                "reserved_microdollars": (selected_score_obj.reserved_microdollars),
+                "cost_5h_microdollars": (selected_score_obj.cost_5h_microdollars),
+                "cost_7d_microdollars": (selected_score_obj.cost_7d_microdollars),
+                "cost_30d_microdollars": (selected_score_obj.cost_30d_microdollars),
+                "capacity_5h_microdollars": (
+                    selected_score_obj.capacity_5h_microdollars
+                ),
+                "capacity_7d_microdollars": (
+                    selected_score_obj.capacity_7d_microdollars
+                ),
+                "capacity_30d_microdollars": (
+                    selected_score_obj.capacity_30d_microdollars
+                ),
+                "tier": selected_score_obj.tier,
+                "requires_transcode": selected_score_obj.requires_transcode,
+                "top_candidates": [
+                    {
+                        "account_name": state.name,
+                        "final_score": float(score.final_score),
+                        "quota_score": score.quota_score,
+                        "inflight_penalty": score.inflight_penalty,
+                        "health_penalty": score.health_penalty,
+                    }
+                    for state, score in ranked_candidates[:5]
+                ],
+            }
+        else:
+            payload = {
+                "account_name": selected_account_name,
+                "quota_score": 0.0,
+                "inflight_penalty": 0.0,
+                "health_penalty": 0.0,
+                "final_score": (
+                    float(selected_score) if selected_score is not None else 0.0
+                ),
+                "weight": 0.0,
+                "active_request_count": 0,
+                "reserved_microdollars": 0,
+                "cost_5h_microdollars": 0,
+                "cost_7d_microdollars": 0,
+                "cost_30d_microdollars": 0,
+                "capacity_5h_microdollars": 0,
+                "capacity_7d_microdollars": 0,
+                "capacity_30d_microdollars": 0,
+                "tier": int(selected_tier) if selected_tier is not None else 0,
+                "requires_transcode": False,
+                "top_candidates": [
+                    {
+                        "account_name": state.name,
+                        "final_score": float(score.final_score),
+                    }
+                    for state, score in ranked_candidates[:5]
+                ],
+            }
+        return payload
 
     def _resolve_upstream_protocol(
         self,

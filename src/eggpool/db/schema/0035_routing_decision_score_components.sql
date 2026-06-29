@@ -1,0 +1,15 @@
+-- Migration 0035: Routing decision score components JSON.
+--
+-- Carries the per-account score breakdown captured by
+-- ``QuotaFairScorer.score_accounts`` at the moment the coordinator
+-- chose the selected account.  Operators inspecting routing skew on
+-- the dashboard no longer need to re-score from quota tables to ask
+-- "why account A over account B?" -- the breakdown (quota_score,
+-- inflight_penalty, health_penalty, random tiebreaker, reserved
+-- cost, active request count, per-window costs and capacities)
+-- travels with the decision row.
+--
+-- The column is JSON (TEXT) rather than a fixed schema so future
+-- scorer fields can be added without another migration.  Stored as
+-- ``'{}'`` on existing rows so dashboards can always JSON-parse.
+ALTER TABLE routing_decisions ADD COLUMN score_components_json TEXT NOT NULL DEFAULT '{}';

@@ -36,6 +36,14 @@ class RoutingScore:
     is_eligible: bool
     inflight_penalty: float = 0.0
     health_penalty: float = 0.0
+    reserved_microdollars: int = 0  # In-flight reservation cost
+    cost_5h_microdollars: int = 0
+    cost_7d_microdollars: int = 0
+    cost_30d_microdollars: int = 0
+    capacity_5h_microdollars: int = 0
+    capacity_7d_microdollars: int = 0
+    capacity_30d_microdollars: int = 0
+    active_request_count: int = 0
     random_tiebreaker: float = field(default_factory=random.random)
     # Tier boundary marker from the provider's routing_priority. Higher
     # tiers are preferred. Callers that want strict tier-bounded failover
@@ -96,6 +104,13 @@ class QuotaFairScorer:
             p5 = 0.0
             pw = 0.0
             pm = 0.0
+            reserved = reserved_by_name.get(name, 0)
+            cost_5h = 0
+            cost_7d = 0
+            cost_30d = 0
+            cap_5h = 0
+            cap_7d = 0
+            cap_30d = 0
 
             if self.quota_estimator:
                 quota = self.quota_estimator.get_account_quota(name)
@@ -111,9 +126,21 @@ class QuotaFairScorer:
                     cost_7d = quota.get_persisted_cost_7d()
                     cost_30d = quota.get_persisted_cost_30d()
 
-                    # Reserved cost was snapshotted above so this loop
-                    # does not serialize on the snapshot lock.
-                    reserved = reserved_by_name.get(name, 0)
+                    cap_5h = (
+                        quota.capacity_5h_microdollars
+                        if quota.capacity_5h_microdollars is not None
+                        else 0
+                    )
+                    cap_7d = (
+                        quota.capacity_7d_microdollars
+                        if quota.capacity_7d_microdollars is not None
+                        else 0
+                    )
+                    cap_30d = (
+                        quota.capacity_30d_microdollars
+                        if quota.capacity_30d_microdollars is not None
+                        else 0
+                    )
 
                     # Get projected request estimate for this account
                     request_estimate = estimates.get(name, 0)
@@ -123,17 +150,17 @@ class QuotaFairScorer:
                     p5 = self._calc_window_utilization(
                         cost_5h + reserved + request_estimate,
                         quota.five_hour_offset,
-                        quota.capacity_5h_microdollars,
+                        cap_5h,
                     )
                     pw = self._calc_window_utilization(
                         cost_7d + reserved + request_estimate,
                         quota.weekly_offset,
-                        quota.capacity_7d_microdollars,
+                        cap_7d,
                     )
                     pm = self._calc_window_utilization(
                         cost_30d + reserved + request_estimate,
                         quota.monthly_offset,
-                        quota.capacity_30d_microdollars,
+                        cap_30d,
                     )
 
             # Base quota score: max of window utilizations
@@ -159,6 +186,14 @@ class QuotaFairScorer:
                     is_eligible=is_eligible,
                     inflight_penalty=inflight,
                     health_penalty=health,
+                    reserved_microdollars=reserved,
+                    cost_5h_microdollars=cost_5h,
+                    cost_7d_microdollars=cost_7d,
+                    cost_30d_microdollars=cost_30d,
+                    capacity_5h_microdollars=cap_5h,
+                    capacity_7d_microdollars=cap_7d,
+                    capacity_30d_microdollars=cap_30d,
+                    active_request_count=int(count),
                 )
             )
 

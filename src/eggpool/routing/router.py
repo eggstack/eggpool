@@ -5,13 +5,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from eggpool.quota.estimation import QuotaEstimator
 from eggpool.quota.scorer import QuotaFairScorer, RoutingScore
 from eggpool.routing.eligibility import get_eligible_accounts
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from eggpool.accounts.registry import AccountRegistry
     from eggpool.accounts.state import AccountRuntimeState
     from eggpool.catalog.service import CatalogService
@@ -101,6 +103,7 @@ class RoutingDecisionTrace:
     top_score: float | None
     top_score_account_name: str | None
     exclusions: tuple[RoutingExclusion, ...] = ()
+    score_components: Mapping[str, Any] | None = None
 
     def to_exclude_reasons_json(self) -> str:
         """Serialize exclusions to a JSON array string for persistence."""
@@ -112,6 +115,19 @@ class RoutingDecisionTrace:
                 for ex in self.exclusions
             ]
         )
+
+    def to_score_components_json(self) -> str:
+        """Serialize per-account score components to a JSON object string.
+
+        ``score_components`` carries the full breakdown computed by
+        ``QuotaFairScorer.score_accounts`` for the selected account
+        plus the top near-tie candidates.  Used by the dashboard to
+        answer "why account A?" without rescoring from quota tables.
+        """
+        import json
+
+        payload: dict[str, Any] = dict(self.score_components or {})
+        return json.dumps(payload)
 
 
 class Router:
@@ -182,6 +198,163 @@ class Router:
             if best is not None:
                 return tier_candidates.by_name.get(best.account_name)
         return None
+
+    async def explain_account_eligibility(
+        self,
+        *,
+        model_id: str,
+        provider_id: str | None = None,
+        protocol: str | None = None,
+        transcode_eligibility: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return one row per registered account explaining eligibility.
+
+        Each row carries the account name, an ``eligible`` boolean,
+        a ``reason_code`` string (``"ok"`` when eligible; one of
+        ``"disabled"``, ``"auth_failed"``, ``"quota_exhausted"``,
+        ``"cooldown"``, ``"rate_limited"``, ``"circuit_open"``,
+        ``"no_provider"``, ``"wrong_provider"``, ``"no_model"``,
+        ``"model_stale"``, ``"no_protocol"``, ``"protocol_mismatch"``
+        otherwise) and a short ``reason_detail`` for dashboard display.
+        Used by ``eggpool accounts explain`` to surface why a model
+        is routing only to a subset of accounts.
+        """
+        all_states: list[AccountRuntimeState] = []
+        seen: set[str] = set()
+        for state in self._registry._states.values():  # pyright: ignore[reportPrivateUsage]
+            if state.name in seen:
+                continue
+            seen.add(state.name)
+            all_states.append(state)
+
+        rows: list[dict[str, Any]] = []
+        for state in all_states:
+            eligible, code, detail = self._classify_eligibility(
+                state=state,
+                model_id=model_id,
+                provider_id=provider_id,
+                protocol=protocol,
+                transcode_eligibility=transcode_eligibility,
+            )
+            rows.append(
+                {
+                    "account_name": state.name,
+                    "eligible": eligible,
+                    "reason_code": code,
+                    "reason_detail": detail,
+                }
+            )
+        return rows
+
+    def _classify_eligibility(
+        self,
+        *,
+        state: AccountRuntimeState,
+        model_id: str,
+        provider_id: str | None,
+        protocol: str | None,
+        transcode_eligibility: set[str] | None,
+    ) -> tuple[bool, str, str]:
+        """Decide whether ``state`` can serve ``model_id`` and why not.
+
+        Mirrors the filter chain in
+        ``eggpool.routing.eligibility.get_eligible_accounts`` so the
+        explanation matches the live routing path. ``get_eligible_accounts``
+        applies the filters in order; we collapse each short-circuit
+        branch into a stable reason_code so the caller can group by
+        cause on the dashboard.
+        """
+        if not state.enabled:
+            return False, "disabled", "Account is disabled in configuration."
+        if state.health_state == "authentication_failed":
+            return (
+                False,
+                "auth_failed",
+                "Account previously failed authentication and is locked.",
+            )
+        if state.health_state == "quota_exhausted":
+            return (
+                False,
+                "quota_exhausted",
+                "Upstream reported quota exhaustion; cooldown active.",
+            )
+        if state.health_state == "cooldown":
+            return (
+                False,
+                "cooldown",
+                "Account is in cooldown after repeated transient failures.",
+            )
+        if state.health_state == "rate_limited":
+            return (
+                False,
+                "rate_limited",
+                "Upstream reported rate limiting; retry-after cooldown active.",
+            )
+
+        if provider_id is not None:
+            state_provider = self._catalog.cache.get_provider_for_account(
+                state.name
+            ) or self._registry.get_provider_for_account(state.name)
+            if state_provider != provider_id:
+                return (
+                    False,
+                    "wrong_provider",
+                    (
+                        f"Account belongs to provider {state_provider!r}; "
+                        f"requested provider {provider_id!r}."
+                    ),
+                )
+
+        if (
+            protocol is not None
+            and not self._registry.account_supports_protocol(state.name, protocol)
+            and not (
+                transcode_eligibility
+                and any(
+                    self._registry.account_supports_protocol(state.name, p)
+                    for p in transcode_eligibility
+                )
+            )
+        ):
+            return (
+                False,
+                "no_protocol",
+                (
+                    f"Account does not declare protocol {protocol!r}; "
+                    "no transcoder covers it either."
+                ),
+            )
+
+        if (
+            self._health_manager is not None
+            and not self._health_manager.is_model_healthy(state.name, model_id)
+        ):
+            return (
+                False,
+                "circuit_open",
+                "Circuit breaker is open for this model on this account.",
+            )
+
+        if not self._catalog.cache.is_account_model_available(
+            state.name,
+            model_id,
+            max_age_s=self._stale_after_s,
+            protocol=protocol,
+        ):
+            # Distinguish "no entry" vs "stale entry" for the dashboard.
+            if state.name not in self._catalog.cache.get_supporting_accounts(model_id):
+                return (
+                    False,
+                    "no_model",
+                    "Catalog has never advertised this model on the account.",
+                )
+            return (
+                False,
+                "model_stale",
+                "Catalog entry exists but is older than the stale threshold.",
+            )
+
+        return True, "ok", "Account is eligible to serve this request."
 
     def get_eligible_account_names(
         self,
