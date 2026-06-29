@@ -19,6 +19,27 @@ import click
 
 from eggpool.accounts.registry import account_config_rows
 from eggpool.auth import require_auth_at_startup
+from eggpool.config_utils import (
+    detect_lan_ip as _detect_lan_ip,
+)
+from eggpool.config_utils import (
+    generate_api_key,
+)
+from eggpool.config_utils import (
+    get_section as _get_section,
+)
+from eggpool.config_utils import (
+    load_raw_config as _load_raw_config,
+)
+from eggpool.config_utils import (
+    read_server_api_key as _read_server_api_key,
+)
+from eggpool.config_utils import (
+    read_server_port as _read_server_port,
+)
+from eggpool.config_utils import (
+    write_server_api_key as _write_server_api_key_raw,
+)
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
 from eggpool.db.repositories import AccountRepository, ProviderRepository
@@ -56,7 +77,6 @@ from eggpool.providers.contract import PROVIDER_STATUS_SYMBOLS, compose_provider
 from eggpool.providers.outbound import OutboundClientManager
 from eggpool.toml_edit import (
     render_toml_string,
-    section_has_key,
     update_section_value,
 )
 from eggpool.update_checker import async_check_for_update
@@ -680,13 +700,6 @@ def edit(ctx: click.Context) -> None:
         sys.exit(1)
 
 
-def generate_api_key() -> str:
-    """Generate a cryptographically secure API key."""
-    import secrets
-
-    return f"ep_{secrets.token_hex(32)}"
-
-
 def _redact_key(key: str) -> str:
     """Return a short, non-secret fingerprint of an API key for display."""
     if not key:
@@ -694,68 +707,6 @@ def _redact_key(key: str) -> str:
     if len(key) <= 8:
         return "***"
     return f"{key[:4]}...{key[-4:]}"
-
-
-def _load_raw_config(config_path: str) -> dict[str, object]:
-    """Load the raw TOML config as a nested dict without Pydantic validation.
-
-    Returns an empty dict if the file is missing or unparseable. Used by
-    CLI commands that only need a few scalar fields (api_key, port,
-    dashboard.public) and want to avoid the cost of full ``AppConfig``
-    validation.
-    """
-    import tomllib
-    from pathlib import Path
-
-    path = Path(config_path)
-    if not path.exists():
-        return {}
-    try:
-        with open(path, "rb") as f:
-            raw = tomllib.load(f)
-    except (OSError, tomllib.TOMLDecodeError):
-        return {}
-    # tomllib.load returns Mapping[str, Any] at the top level; the cast
-    # narrows it for downstream helpers that consume ``dict[str, object]``.
-    return cast("dict[str, object]", raw)
-
-
-def _get_section(raw: dict[str, object], name: str) -> dict[str, object]:
-    """Return a top-level TOML section as a dict, or empty dict."""
-    section = raw.get(name)
-    if isinstance(section, dict):
-        return cast("dict[str, object]", section)
-    return {}
-
-
-def _read_server_api_key(config_path: str) -> str:
-    """Read the current server API key from config without full validation."""
-    raw = _load_raw_config(config_path)
-    server = _get_section(raw, "server")
-    value = server.get("api_key", "")
-    return value if isinstance(value, str) else ""
-
-
-def _read_server_port(config_path: str) -> int:
-    """Read the server port from config without full validation."""
-    from eggpool.constants import DEFAULT_PORT
-
-    raw = _load_raw_config(config_path)
-    server = _get_section(raw, "server")
-    value = server.get("port", DEFAULT_PORT)
-    return value if isinstance(value, int) else DEFAULT_PORT
-
-
-def _detect_lan_ip() -> str:
-    """Detect the LAN IP address of this machine."""
-    import socket
-
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.connect(("10.255.255.255", 1))
-            return s.getsockname()[0]
-    except Exception:
-        return "127.0.0.1"
 
 
 def write_server_api_key(config_path: str, new_key: str) -> None:
@@ -766,33 +717,9 @@ def write_server_api_key(config_path: str, new_key: str) -> None:
     is written. The operator must rotate the env-var to actually pick up
     the new value.
     """
-    from pathlib import Path
-
-    path = Path(config_path)
-    lines = path.read_text(encoding="utf-8").splitlines()
-    has_api_key_env = section_has_key(lines, "server", "api_key_env")
-    result = update_section_value(
-        lines,
-        "server",
-        "api_key",
-        render_toml_string(new_key),
-        insert_missing_key=not has_api_key_env,
-    )
-
-    if not result.section_found:
-        click.echo(
-            "Warning: No [server] section found in config. API key was not written.",
-            err=True,
-        )
-        return
-    if not result.key_found and has_api_key_env:
-        click.echo(
-            "Warning: [server] uses api_key_env; rotate the env-var "
-            "to apply the new key.",
-            err=True,
-        )
-
-    path.write_text("\n".join(result.lines) + "\n", encoding="utf-8")
+    success, warning = _write_server_api_key_raw(config_path, new_key)
+    if not success or warning:
+        click.echo(f"Warning: {warning}", err=True)
 
 
 def _restart_after_configsetup_mutation(config_path: str) -> None:
@@ -1071,257 +998,29 @@ def configsetup_opencode(ctx: click.Context) -> None:
     per-provider limits. When true, the map uses unsuffixed IDs with
     conservative-merged limits across all providers that serve the model.
     """
-    import json as _json
-
-    from eggpool.catalog.limits import (
-        EffectiveModelLimits,
-        ModelLimitResolver,
-        conservative_limits,
-    )
+    from eggpool.integrations.common import build_integration_context
     from eggpool.integrations.opencode import build_opencode_config_json
-    from eggpool.models.config import AppConfig
 
     config_path: str = ctx.obj["config_path"]
 
-    # Auto-generate API key if not present. A read-only filesystem or
-    # permission error here would otherwise leave the user with a
-    # key in stdout/clipboard that they cannot reuse on the next run.
-    config_mutated = False
-    key = _read_server_api_key(config_path)
-    if not key:
-        try:
-            key = generate_api_key()
-            write_server_api_key(config_path, key)
-            config_mutated = True
-            click.echo("Generated new server API key.", err=True)
-        except OSError as exc:
-            click.echo(
-                f"Error: cannot persist new API key to {config_path}: {exc}. "
-                "Refusing to print a key that would not survive a restart.",
-                err=True,
-            )
-            sys.exit(1)
-
-    port = _read_server_port(config_path)
-    lan_ip = _detect_lan_ip()
-    base_url = f"http://{lan_ip}:{port}/v1"
-
-    # Try to load catalog from the database
-    models_data: list[dict[str, Any]] = []
-    config: AppConfig | None = None
-    collapse_models = False
     try:
-        import asyncio
-
-        from eggpool.db.connection import Database
-
-        config = AppConfig.from_toml(config_path)
-        db_path = config.database.path
-        collapse_models = config.models.collapse_models
-        # Transcoding is enabled by default; no config mutation needed.
-
-        async def _load_catalog() -> list[dict[str, Any]]:
-            db = Database(db_path)
-            await db.connect()
-            try:
-                if collapse_models:
-                    rows = await db.fetch_all(
-                        "SELECT model_id, display_name, capabilities, "
-                        "source_metadata FROM models"
-                    )
-                    out: list[dict[str, Any]] = []
-                    for row in rows:
-                        caps_raw = row["capabilities"]
-                        meta_raw = row["source_metadata"]
-                        caps: dict[str, Any] = _json.loads(caps_raw) if caps_raw else {}
-                        meta: dict[str, Any] = _json.loads(meta_raw) if meta_raw else {}
-                        out.append(
-                            {
-                                "model_id": row["model_id"],
-                                "display_name": row["display_name"],
-                                "capabilities": caps,
-                                "source_metadata": meta,
-                                "effective_limits": {},
-                            }
-                        )
-                    return out
-
-                rows = await db.fetch_all(
-                    """
-                    SELECT DISTINCT
-                        am.model_id,
-                        a.provider_id,
-                        COALESCE(pmm.display_name, m.display_name) AS display_name,
-                        COALESCE(pmm.capabilities, m.capabilities) AS capabilities,
-                        COALESCE(pmm.source_metadata, m.source_metadata)
-                            AS source_metadata
-                    FROM account_models am
-                    JOIN accounts a ON a.id = am.account_id
-                    JOIN models m ON m.model_id = am.model_id
-                    LEFT JOIN provider_model_metadata pmm
-                        ON pmm.model_id = am.model_id
-                       AND pmm.provider_id = a.provider_id
-                    WHERE am.enabled = 1
-                      AND a.enabled = 1
-                      AND am.model_id <> '__deprecated__'
-                      AND COALESCE(pmm.protocol, m.protocol) IN ('openai', 'anthropic')
-                    """
-                )
-                if not rows:
-                    rows = await db.fetch_all(
-                        """
-                        SELECT model_id, provider_id, display_name,
-                               capabilities, source_metadata
-                        FROM provider_model_metadata
-                        WHERE model_id <> '__deprecated__'
-                          AND protocol IN ('openai', 'anthropic')
-                        """
-                    )
-                out = []
-                for row in rows:
-                    caps_raw = row["capabilities"]
-                    meta_raw = row["source_metadata"]
-                    caps: dict[str, Any] = _json.loads(caps_raw) if caps_raw else {}
-                    meta: dict[str, Any] = _json.loads(meta_raw) if meta_raw else {}
-                    base_model_id = row["model_id"]
-                    provider_id = row["provider_id"]
-                    out.append(
-                        {
-                            "model_id": (
-                                f"{base_model_id}/{provider_id}"
-                                if provider_id
-                                else base_model_id
-                            ),
-                            "base_model_id": base_model_id,
-                            "provider_id": provider_id,
-                            "display_name": row["display_name"],
-                            "capabilities": caps,
-                            "source_metadata": meta,
-                            "effective_limits": {},
-                        }
-                    )
-                return out
-            finally:
-                await db.disconnect()
-
-        models_data = asyncio.run(_load_catalog())
-    except Exception:
+        ctx_data = build_integration_context(config_path=config_path)
+    except OSError as exc:
         click.echo(
-            "Warning: Could not load catalog. Run 'eggpool models refresh' "
-            "or start the server to populate the catalog before generating "
-            "model-specific limits.",
+            f"Error: {exc}",
             err=True,
         )
+        sys.exit(1)
 
-    if config is not None:
-        seen_model_keys = {str(m.get("model_id")) for m in models_data}
-        for provider_id, provider_cfg in config.providers.items():
-            if not provider_cfg.static_models:
-                continue
-            if not any(account.enabled for account in provider_cfg.accounts):
-                continue
-            for static in provider_cfg.static_models:
-                exposed_id = (
-                    static.id if collapse_models else f"{static.id}/{provider_id}"
-                )
-                if exposed_id in seen_model_keys:
-                    continue
-                capabilities: dict[str, Any] = {}
-                if static.supports_tools is not None:
-                    capabilities["supports_tools"] = static.supports_tools
-                if static.supports_vision is not None:
-                    capabilities["supports_vision"] = static.supports_vision
-                if static.max_context_tokens is not None:
-                    capabilities["max_context_tokens"] = static.max_context_tokens
-                if static.max_input_tokens is not None:
-                    capabilities["max_input_tokens"] = static.max_input_tokens
-                if static.max_output_tokens is not None:
-                    capabilities["max_output_tokens"] = static.max_output_tokens
-                models_data.append(
-                    {
-                        "model_id": exposed_id,
-                        "base_model_id": static.id,
-                        "provider_id": provider_id,
-                        "display_name": static.display_name or static.id,
-                        "capabilities": capabilities,
-                        "source_metadata": {
-                            **static.source_metadata,
-                            "source": "static_config",
-                        },
-                        "effective_limits": {},
-                    }
-                )
-                seen_model_keys.add(exposed_id)
-
-    # Re-apply current config overrides.
-    if models_data and config is not None:
-        resolver = ModelLimitResolver(config)
-        if collapse_models:
-            for m in models_data:
-                eff = resolver.resolve(
-                    provider_id=None,
-                    model_id=m["model_id"],
-                    capabilities=m.get("capabilities", {}),
-                    source_metadata=m.get("source_metadata", {}),
-                )
-                m["effective_limits"] = {
-                    "context_tokens": eff.context_tokens,
-                    "input_tokens": eff.input_tokens,
-                    "output_tokens": eff.output_tokens,
-                    "enforce": eff.enforce,
-                    "context_source": eff.context_source,
-                    "input_source": eff.input_source,
-                    "output_source": eff.output_source,
-                }
-        else:
-            # Group by base model_id and apply conservative merge so OpenCode
-            # compacts before any single provider's limit is exceeded.
-            grouped: dict[str, list[dict[str, Any]]] = {}
-            for m in models_data:
-                base = m.get("base_model_id", m["model_id"])
-                grouped.setdefault(base, []).append(m)
-            for entries in grouped.values():
-                limits_list: list[EffectiveModelLimits] = []
-                for m in entries:
-                    provider_id = m.get("provider_id")
-                    eff = resolver.resolve(
-                        provider_id=provider_id,
-                        model_id=m.get("base_model_id", m["model_id"]),
-                        capabilities=m.get("capabilities", {}),
-                        source_metadata=m.get("source_metadata", {}),
-                    )
-                    limits_list.append(
-                        EffectiveModelLimits(
-                            context_tokens=eff.context_tokens,
-                            input_tokens=eff.input_tokens,
-                            output_tokens=eff.output_tokens,
-                            enforce=eff.enforce,
-                            context_source=eff.context_source,
-                            input_source=eff.input_source,
-                            output_source=eff.output_source,
-                        )
-                    )
-                merged = conservative_limits(limits_list)
-                merged_dict = {
-                    "context_tokens": merged.context_tokens,
-                    "input_tokens": merged.input_tokens,
-                    "output_tokens": merged.output_tokens,
-                    "enforce": merged.enforce,
-                    "context_source": merged.context_source,
-                    "input_source": merged.input_source,
-                    "output_source": merged.output_source,
-                }
-                for m in entries:
-                    m["effective_limits"] = merged_dict
+    if ctx_data.config_mutated:
+        click.echo("Generated new server API key.", err=True)
 
     config_json = build_opencode_config_json(
-        base_url=base_url,
-        api_key=key,
-        models=models_data,
+        base_url=ctx_data.base_url,
+        api_key=ctx_data.api_key,
+        models=ctx_data.models,
     )
 
-    # Print the config to stdout (contains the API key) and also try to
-    # copy it to the clipboard so the user can paste it directly.
     click.echo(config_json)
 
     if _copy_to_clipboard(config_json):
@@ -1332,15 +1031,15 @@ def configsetup_opencode(ctx: click.Context) -> None:
             err=True,
         )
 
-    if models_data:
-        click.echo(f"Generated config with {len(models_data)} models.", err=True)
+    if ctx_data.models:
+        click.echo(f"Generated config with {len(ctx_data.models)} models.", err=True)
     else:
         click.echo(
             "Generated provider connection block (no model limits). "
             "Run 'eggpool models refresh' to populate model metadata.",
             err=True,
         )
-    if config_mutated:
+    if ctx_data.config_mutated:
         _restart_after_configsetup_mutation(config_path)
     click.echo("Paste into ~/.config/opencode/opencode.json.", err=True)
     _print_install_hint()
@@ -1399,6 +1098,467 @@ def configsetup_claude_code(ctx: click.Context) -> None:
         "and --base-url to the Claude Code CLI.",
         err=True,
     )
+
+
+def _common_configsetup_options(f: Any) -> Any:
+    """Add shared options to a configsetup command."""
+    f = click.option(
+        "--host", default=None, help="Override detected LAN host in generated URLs."
+    )(f)
+    f = click.option(
+        "--base-url", default=None, help="Override the full OpenAI-compatible base URL."
+    )(f)
+    f = click.option("--model", default=None, help="Default model to place in config.")(
+        f
+    )
+    f = click.option(
+        "--write", "do_write", is_flag=True, help="Write config file where safe."
+    )(f)
+    f = click.option(
+        "--output", default=None, help="Write generated config to a specific path."
+    )(f)
+    f = click.option("--force", is_flag=True, help="Allow overwriting existing files.")(
+        f
+    )
+    f = click.option(
+        "--no-clipboard", is_flag=True, help="Do not attempt clipboard copy."
+    )(f)
+    f = click.option(
+        "--print-secret",
+        is_flag=True,
+        help="Permit printing the API key to stdout.",
+    )(f)
+    return f
+
+
+def _build_ctx_with_overrides(
+    config_path: str,
+    host: str | None,
+    base_url: str | None,
+) -> Any:
+    """Build IntegrationContext, applying CLI overrides for host/base_url."""
+    from eggpool.integrations.common import build_integration_context
+
+    try:
+        ctx_data = build_integration_context(config_path=config_path)
+    except OSError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
+    if ctx_data.config_mutated:
+        click.echo("Generated new server API key.", err=True)
+
+    if base_url is not None:
+        from dataclasses import replace
+
+        root = base_url.rstrip("/")
+        if root.endswith("/v1"):
+            root = root[:-3]
+        ctx_data = replace(
+            ctx_data, base_url=base_url, base_url_root=root, host=host or ctx_data.host
+        )
+    elif host is not None:
+        from dataclasses import replace
+
+        new_base_url = f"http://{host}:{ctx_data.port}/v1"
+        new_root = f"http://{host}:{ctx_data.port}"
+        ctx_data = replace(
+            ctx_data, base_url=new_base_url, base_url_root=new_root, host=host
+        )
+
+    return ctx_data
+
+
+def _output_snippet(
+    snippet: str,
+    *,
+    do_write: bool,
+    output: str | None,
+    force: bool,
+    no_clipboard: bool,
+    print_secret: bool,
+    default_path: str | None = None,
+    paste_hint: str | None = None,
+) -> None:
+    """Handle output of a generated snippet: file write, clipboard, stdout."""
+    from pathlib import Path
+
+    secret_in_snippet = (
+        "api_key" in snippet.lower()
+        or "apikey" in snippet.lower()
+        or "apiKey" in snippet
+    )
+
+    if output or do_write:
+        target = (
+            Path(output) if output else (Path(default_path) if default_path else None)
+        )
+        if target is None:
+            click.echo(
+                "Error: --write requires --output or a known default path.", err=True
+            )
+            sys.exit(1)
+        if target.exists() and not force:
+            click.echo(
+                f"Error: {target} already exists. Use --force to overwrite.",
+                err=True,
+            )
+            sys.exit(1)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(snippet + "\n", encoding="utf-8")
+        click.echo(f"Wrote config to {target}", err=True)
+        return
+
+    if not no_clipboard and _copy_to_clipboard(snippet):
+        click.echo("Copied config to clipboard.", err=True)
+        if secret_in_snippet and not print_secret:
+            click.echo(
+                "Secret included in clipboard. "
+                "Use --print-secret to also print to stdout.",
+                err=True,
+            )
+            return
+
+    if print_secret or not secret_in_snippet:
+        click.echo(snippet)
+    else:
+        click.echo(
+            "Secret not printed to stdout. Use --print-secret to include it, "
+            "or use `eggpool getkey` to retrieve it.",
+            err=True,
+        )
+
+    if paste_hint:
+        click.echo(paste_hint, err=True)
+
+
+@configsetup.command("aider")
+@click.pass_context
+@_common_configsetup_options
+def configsetup_aider(
+    ctx: click.Context,
+    host: str | None,
+    base_url: str | None,
+    model: str | None,
+    do_write: bool,
+    output: str | None,
+    force: bool,
+    no_clipboard: bool,
+    print_secret: bool,
+) -> None:
+    """Print Aider config snippet for connecting to this router."""
+    from eggpool.integrations.aider import build_aider_env_snippet
+    from eggpool.integrations.common import require_model_for_target
+
+    config_path: str = ctx.obj["config_path"]
+    ctx_data = _build_ctx_with_overrides(config_path, host, base_url)
+    resolved_model = require_model_for_target("aider", model, ctx_data)
+    snippet = build_aider_env_snippet(ctx_data, resolved_model)
+    _output_snippet(
+        snippet,
+        do_write=do_write,
+        output=output,
+        force=force,
+        no_clipboard=no_clipboard,
+        print_secret=print_secret,
+        default_path=".env.eggpool",
+        paste_hint="Source the file: source .env.eggpool",
+    )
+    if ctx_data.config_mutated:
+        _restart_after_configsetup_mutation(config_path)
+
+
+@configsetup.command("codex")
+@click.pass_context
+@_common_configsetup_options
+def configsetup_codex(
+    ctx: click.Context,
+    host: str | None,
+    base_url: str | None,
+    model: str | None,
+    do_write: bool,
+    output: str | None,
+    force: bool,
+    no_clipboard: bool,
+    print_secret: bool,
+) -> None:
+    """Print Codex CLI config snippet for connecting to this router."""
+    from eggpool.integrations.codex import (
+        build_codex_toml_snippet,
+        detect_codex_version,
+    )
+    from eggpool.integrations.common import require_model_for_target
+
+    config_path: str = ctx.obj["config_path"]
+    ctx_data = _build_ctx_with_overrides(config_path, host, base_url)
+    resolved_model = require_model_for_target("codex", model, ctx_data)
+
+    version = detect_codex_version()
+    if version:
+        click.echo(f"Detected Codex version: {version}", err=True)
+
+    snippet = build_codex_toml_snippet(ctx_data, resolved_model)
+    _output_snippet(
+        snippet,
+        do_write=do_write,
+        output=output,
+        force=force,
+        no_clipboard=no_clipboard,
+        print_secret=print_secret,
+    )
+    if ctx_data.config_mutated:
+        _restart_after_configsetup_mutation(config_path)
+
+
+@configsetup.command("qwen-code")
+@click.pass_context
+@_common_configsetup_options
+def configsetup_qwen_code(
+    ctx: click.Context,
+    host: str | None,
+    base_url: str | None,
+    model: str | None,
+    do_write: bool,
+    output: str | None,
+    force: bool,
+    no_clipboard: bool,
+    print_secret: bool,
+) -> None:
+    """Print Qwen Code config snippet for connecting to this router."""
+    from eggpool.integrations.common import require_model_for_target
+    from eggpool.integrations.qwen_code import build_qwen_code_provider_snippet
+
+    config_path: str = ctx.obj["config_path"]
+    ctx_data = _build_ctx_with_overrides(config_path, host, base_url)
+    resolved_model = require_model_for_target("qwen-code", model, ctx_data)
+    snippet = build_qwen_code_provider_snippet(ctx_data, resolved_model)
+    _output_snippet(
+        snippet,
+        do_write=do_write,
+        output=output,
+        force=force,
+        no_clipboard=no_clipboard,
+        print_secret=print_secret,
+    )
+    if ctx_data.config_mutated:
+        _restart_after_configsetup_mutation(config_path)
+
+
+@configsetup.command("kilo")
+@click.pass_context
+@_common_configsetup_options
+def configsetup_kilo(
+    ctx: click.Context,
+    host: str | None,
+    base_url: str | None,
+    model: str | None,
+    do_write: bool,
+    output: str | None,
+    force: bool,
+    no_clipboard: bool,
+    print_secret: bool,
+) -> None:
+    """Print Kilo config snippet for connecting to this router."""
+    from eggpool.integrations.common import require_model_for_target
+    from eggpool.integrations.kilo import build_kilo_openai_compatible_snippet
+
+    config_path: str = ctx.obj["config_path"]
+    ctx_data = _build_ctx_with_overrides(config_path, host, base_url)
+    resolved_model = require_model_for_target("kilo", model, ctx_data)
+    snippet = build_kilo_openai_compatible_snippet(ctx_data, resolved_model)
+    _output_snippet(
+        snippet,
+        do_write=do_write,
+        output=output,
+        force=force,
+        no_clipboard=no_clipboard,
+        print_secret=print_secret,
+    )
+    if ctx_data.config_mutated:
+        _restart_after_configsetup_mutation(config_path)
+
+
+@configsetup.command("continue")
+@click.pass_context
+@_common_configsetup_options
+def configsetup_continue(
+    ctx: click.Context,
+    host: str | None,
+    base_url: str | None,
+    model: str | None,
+    do_write: bool,
+    output: str | None,
+    force: bool,
+    no_clipboard: bool,
+    print_secret: bool,
+) -> None:
+    """Print Continue Dev config snippet for connecting to this router."""
+    from eggpool.integrations.common import require_model_for_target
+    from eggpool.integrations.continue_dev import build_continue_yaml_snippet
+
+    config_path: str = ctx.obj["config_path"]
+    ctx_data = _build_ctx_with_overrides(config_path, host, base_url)
+    resolved_model = require_model_for_target("continue", model, ctx_data)
+    snippet = build_continue_yaml_snippet(ctx_data, resolved_model)
+    _output_snippet(
+        snippet,
+        do_write=do_write,
+        output=output,
+        force=force,
+        no_clipboard=no_clipboard,
+        print_secret=print_secret,
+        default_path=str(Path.home() / ".continue" / "eggpool.yaml"),
+        paste_hint="Paste into ~/.continue/config.yaml under the models: key.",
+    )
+    if ctx_data.config_mutated:
+        _restart_after_configsetup_mutation(config_path)
+
+
+@configsetup.command("cline")
+@click.pass_context
+@_common_configsetup_options
+def configsetup_cline(
+    ctx: click.Context,
+    host: str | None,
+    base_url: str | None,
+    model: str | None,
+    do_write: bool,
+    output: str | None,
+    force: bool,
+    no_clipboard: bool,
+    print_secret: bool,
+) -> None:
+    """Print Cline config snippet for connecting to this router."""
+    from eggpool.integrations.cline import build_cline_profile_snippet
+    from eggpool.integrations.common import require_model_for_target
+
+    config_path: str = ctx.obj["config_path"]
+    ctx_data = _build_ctx_with_overrides(config_path, host, base_url)
+    resolved_model = require_model_for_target("cline", model, ctx_data)
+    snippet = build_cline_profile_snippet(ctx_data, resolved_model)
+    _output_snippet(
+        snippet,
+        do_write=do_write,
+        output=output,
+        force=force,
+        no_clipboard=no_clipboard,
+        print_secret=print_secret,
+        default_path="cline-eggpool.json",
+        paste_hint=(
+            "Paste values into Cline extension settings (OpenAI Compatible provider)."
+        ),
+    )
+    if ctx_data.config_mutated:
+        _restart_after_configsetup_mutation(config_path)
+
+
+@configsetup.command("roo-code")
+@click.pass_context
+@_common_configsetup_options
+def configsetup_roo_code(
+    ctx: click.Context,
+    host: str | None,
+    base_url: str | None,
+    model: str | None,
+    do_write: bool,
+    output: str | None,
+    force: bool,
+    no_clipboard: bool,
+    print_secret: bool,
+) -> None:
+    """Print Roo Code config snippet for connecting to this router."""
+    from eggpool.integrations.common import require_model_for_target
+    from eggpool.integrations.roo_code import build_roo_code_profile_snippet
+
+    config_path: str = ctx.obj["config_path"]
+    ctx_data = _build_ctx_with_overrides(config_path, host, base_url)
+    resolved_model = require_model_for_target("roo-code", model, ctx_data)
+    snippet = build_roo_code_profile_snippet(ctx_data, resolved_model)
+    _output_snippet(
+        snippet,
+        do_write=do_write,
+        output=output,
+        force=force,
+        no_clipboard=no_clipboard,
+        print_secret=print_secret,
+        default_path="roo-code-eggpool.json",
+        paste_hint=(
+            "Paste values into Roo Code extension settings "
+            "(OpenAI Compatible provider)."
+        ),
+    )
+    if ctx_data.config_mutated:
+        _restart_after_configsetup_mutation(config_path)
+
+
+@configsetup.command("goose")
+@click.pass_context
+@_common_configsetup_options
+def configsetup_goose(
+    ctx: click.Context,
+    host: str | None,
+    base_url: str | None,
+    model: str | None,
+    do_write: bool,
+    output: str | None,
+    force: bool,
+    no_clipboard: bool,
+    print_secret: bool,
+) -> None:
+    """Print Goose config snippet for connecting to this router."""
+    from eggpool.integrations.common import require_model_for_target
+    from eggpool.integrations.goose import build_goose_env_snippet
+
+    config_path: str = ctx.obj["config_path"]
+    ctx_data = _build_ctx_with_overrides(config_path, host, base_url)
+    resolved_model = require_model_for_target("goose", model, ctx_data)
+    snippet = build_goose_env_snippet(ctx_data, resolved_model)
+    _output_snippet(
+        snippet,
+        do_write=do_write,
+        output=output,
+        force=force,
+        no_clipboard=no_clipboard,
+        print_secret=print_secret,
+        paste_hint="Export these variables before running Goose.",
+    )
+    if ctx_data.config_mutated:
+        _restart_after_configsetup_mutation(config_path)
+
+
+@configsetup.command("openhands")
+@click.pass_context
+@_common_configsetup_options
+def configsetup_openhands(
+    ctx: click.Context,
+    host: str | None,
+    base_url: str | None,
+    model: str | None,
+    do_write: bool,
+    output: str | None,
+    force: bool,
+    no_clipboard: bool,
+    print_secret: bool,
+) -> None:
+    """Print OpenHands config snippet for connecting to this router."""
+    from eggpool.integrations.common import require_model_for_target
+    from eggpool.integrations.openhands import build_openhands_env_snippet
+
+    config_path: str = ctx.obj["config_path"]
+    ctx_data = _build_ctx_with_overrides(config_path, host, base_url)
+    resolved_model = require_model_for_target("openhands", model, ctx_data)
+    snippet = build_openhands_env_snippet(ctx_data, resolved_model)
+    _output_snippet(
+        snippet,
+        do_write=do_write,
+        output=output,
+        force=force,
+        no_clipboard=no_clipboard,
+        print_secret=print_secret,
+        paste_hint="Pass these environment variables to the OpenHands runtime.",
+    )
+    if ctx_data.config_mutated:
+        _restart_after_configsetup_mutation(config_path)
 
 
 @cli.group()

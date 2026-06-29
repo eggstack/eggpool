@@ -13,7 +13,7 @@ src/eggpool/
 ├── dashboard/         # Self-updating server-rendered HTML dashboard
 ├── db/                # SQLite connection, migrations, repositories, schema
 ├── health/            # Circuit breaker and health tracking
-├── integrations/      # External tool configuration generation (OpenCode, Claude Code)
+├── integrations/      # External tool configuration generation (OpenCode, Claude Code, Aider, Codex, Qwen Code, Kilo, Continue, Cline, Roo Code, Goose, OpenHands)
 ├── models/            # Pydantic config, domain, API, and database models
 ├── providers/         # ProviderClientPool, pproxy transport, connect CLI
 ├── proxy/             # Transparent proxy, SSE observer, usage extraction

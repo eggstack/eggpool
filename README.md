@@ -157,6 +157,33 @@ uv run pyright src/ scripts/
 uv run pytest
 ```
 
+## Agent Configuration
+
+`eggpool configsetup` generates configuration snippets for popular coding agents:
+
+| Target | Command | Output | `--write` default |
+|--------|---------|--------|-------------------|
+| OpenCode | `eggpool configsetup opencode` | JSON provider config | N/A (clipboard) |
+| Claude Code | `eggpool configsetup claude-code` | JSON snippet | N/A (clipboard) |
+| Aider | `eggpool configsetup aider` | Shell env exports | `.env.eggpool` |
+| Codex | `eggpool configsetup codex` | TOML provider block | N/A (printed) |
+| Qwen Code | `eggpool configsetup qwen-code` | JSON provider block | N/A (printed) |
+| Kilo | `eggpool configsetup kilo` | JSON provider block | N/A (printed) |
+| Continue | `eggpool configsetup continue` | YAML model block | `~/.continue/eggpool.yaml` |
+| Cline | `eggpool configsetup cline` | JSON profile | `cline-eggpool.json` |
+| Roo Code | `eggpool configsetup roo-code` | JSON profile | `roo-code-eggpool.json` |
+| Goose | `eggpool configsetup goose` | Shell env exports | N/A (printed) |
+| OpenHands | `eggpool configsetup openhands` | Shell env exports | N/A (printed) |
+
+Shared options: `--host`, `--base-url`, `--model`, `--write`, `--output`, `--force`, `--no-clipboard`, `--print-secret`.
+
+Examples:
+```sh
+eggpool configsetup aider --model openai/gpt-4 --write
+eggpool configsetup continue --model claude-sonnet-4 --output ~/.continue/eggpool.yaml
+eggpool configsetup cline --no-clipboard
+```
+
 ## License
 
 MIT

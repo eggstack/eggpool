@@ -76,6 +76,7 @@ CI sets `PYTHONHASHSEED=0` and `TZ=UTC`; reproduce locally for deterministic res
 - **Process model**: supervisor + Granian worker, PID file lifecycle, daemon mode. See `architecture/README.md` § Daemon Mode.
 - **Dashboard**: server-rendered HTML, 12 pages, Chart.js v4, grouped timeseries, CSS tooltips. See `architecture` skill § Dashboard.
 - **Observability**: attempt analytics, routing analytics, latency phases, pending health, runtime metrics. See `architecture` skill § Runtime Observability.
+- **Agent integrations**: `eggpool configsetup` generates configuration snippets for 11 coding agents (OpenCode, Claude Code, Aider, Codex, Qwen Code, Kilo, Continue, Cline, Roo Code, Goose, OpenHands). Target-specific generators live in `src/eggpool/integrations/`; shared utilities in `src/eggpool/config_utils.py`. See `architecture/README.md` § Package Structure.
 
 ## Gotchas
 
@@ -97,6 +98,7 @@ CI sets `PYTHONHASHSEED=0` and `TZ=UTC`; reproduce locally for deterministic res
 - **DNS cache**: `OutboundClientManager` and `ProviderClientPool` both integrate a `DnsNetworkBackend` that caches resolved DNS entries. Controlled by `[network.dns_cache]` (enabled by default, TTL 1800s, max 50 entries). Exposes precise counters and derived rates for operator diagnostics.
 - **Memory footprint caps**: every growth axis is bounded by hardcoded caps (`EWMA_HARD_CAP = 4096`, `GLOBAL_EWMA_HARD_CAP = 1024`, `MAX_TRACKED_HOSTS = 256`). Regression gate: `tests/integration/test_memory.py` (`pytest.mark.slow`). See `plans/memory.md` for the full design.
 - **Transcoder body translation**: `select_transcoder()` in `src/eggpool/transcoder/protocol.py` is the single source of truth for translator dispatch. Loss-of-information warnings are accumulated on `TranscodeContext.loss_warnings` and logged at request completion.
+- **Agent config generation**: `eggpool configsetup` dispatches to target-specific generators in `src/eggpool/integrations/`. Shared utilities (model ID formatting, base URL defaults, clipboard/write logic) live in `src/eggpool/config_utils.py`. When adding a new target, create a new module in `integrations/` and register it in the Click command; reuse the shared utilities rather than reimplementing them.
 
 ## Error Handling
 
