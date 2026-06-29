@@ -10,6 +10,7 @@ observed failures populate the underlying table.
 from __future__ import annotations
 
 import datetime as _dt
+import math
 import time
 from typing import TYPE_CHECKING, Any, cast
 
@@ -25,6 +26,20 @@ def _iso_or_none(epoch: float | None) -> str | None:
     if epoch is None:
         return None
     return _dt.datetime.fromtimestamp(float(epoch), tz=_dt.UTC).isoformat()
+
+
+def _resolve_now(request: Request) -> float:
+    """Resolve the optional reproducible ``now`` query parameter."""
+    value = request.query_params.get("now")
+    if value is None or value == "":
+        return time.time()
+    try:
+        now = float(value)
+    except ValueError as exc:
+        raise ValueError("now must be a POSIX epoch timestamp") from exc
+    if not math.isfinite(now):
+        raise ValueError("now must be a finite POSIX epoch timestamp")
+    return now
 
 
 async def handle_backoffs(request: Request) -> Response:
@@ -46,7 +61,11 @@ async def handle_backoffs(request: Request) -> Response:
             content={"error": "backoff repository unavailable"},
         )
 
-    now = time.time()
+    try:
+        now = _resolve_now(request)
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+
     try:
         rows = await repo.list_active(now=now)
     except Exception:

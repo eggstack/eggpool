@@ -128,6 +128,7 @@ See [docs/transcoding.md](docs/transcoding.md) for the full translation table an
 | `POST` | `/v1/messages` | Anthropic-compatible messages |
 | `GET` | `/v1/healthz` | Liveness check |
 | `GET` | `/v1/readyz` | Readiness check |
+| `GET` | `/api/backoffs` | Active upstream-derived account backoffs (`?now=<epoch>` for reproducible snapshots) |
 
 When `[dashboard].enabled = true`, a multi-page dashboard is served at `/` with request stats, latency metrics, provider health, and more. Stats API available under `/api/stats/*`.
 

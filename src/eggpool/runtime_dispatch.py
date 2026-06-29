@@ -35,6 +35,8 @@ class DispatchOverheadRecorder:
     """
 
     def __init__(self, window_size: int = 100) -> None:
+        if window_size < 1:
+            raise ValueError("window_size must be at least 1")
         self._samples_ns: deque[int] = deque(maxlen=window_size)
         self._lock = threading.Lock()
         self._window_size = window_size

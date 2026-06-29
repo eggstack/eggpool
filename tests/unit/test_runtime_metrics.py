@@ -737,6 +737,12 @@ class TestDispatchOverheadRecorder:
         assert snap["p95_ms"] is None
         assert snap["p99_ms"] is None
 
+    def test_rejects_non_positive_window_size(self) -> None:
+        from eggpool.runtime_dispatch import DispatchOverheadRecorder
+
+        with pytest.raises(ValueError, match="window_size must be at least 1"):
+            DispatchOverheadRecorder(window_size=0)
+
     def test_bounded_window_drops_oldest(self) -> None:
         from eggpool.runtime_dispatch import DispatchOverheadRecorder
 

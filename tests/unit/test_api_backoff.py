@@ -140,6 +140,60 @@ def test_endpoint_omits_expired_backoffs(
     assert payload["backoffs"] == []
 
 
+def test_endpoint_honors_now_query_parameter(
+    app_with_repo: tuple[FastAPI, AccountBackoffRepository],
+) -> None:
+    app, repo = app_with_repo
+    import asyncio
+
+    cutoff = 1_800_000_000.0
+
+    async def _seed() -> None:
+        await repo.upsert_failure(
+            account_id=1,
+            model_id=None,
+            reason="rate_limited",
+            status_code=429,
+            error_class="RateLimitError",
+            backoff_until=cutoff + 60,
+            consecutive_failures=1,
+        )
+
+    asyncio.run(_seed())
+
+    with TestClient(app) as client:
+        active_response = client.get(f"/api/backoffs?now={cutoff}")
+        expired_response = client.get(f"/api/backoffs?now={cutoff + 120}")
+
+    active_payload = active_response.json()
+    assert active_response.status_code == 200
+    assert active_payload["now"] == "2027-01-15T08:00:00+00:00"
+    assert len(active_payload["backoffs"]) == 1
+
+    assert expired_response.status_code == 200
+    assert expired_response.json()["backoffs"] == []
+
+
+def test_endpoint_rejects_invalid_now_query_parameter(
+    app_with_repo: tuple[FastAPI, AccountBackoffRepository],
+) -> None:
+    app, _repo = app_with_repo
+    with TestClient(app) as client:
+        response = client.get("/api/backoffs?now=not-a-timestamp")
+    assert response.status_code == 400
+    assert response.json() == {"error": "now must be a POSIX epoch timestamp"}
+
+
+def test_endpoint_rejects_non_finite_now_query_parameter(
+    app_with_repo: tuple[FastAPI, AccountBackoffRepository],
+) -> None:
+    app, _repo = app_with_repo
+    with TestClient(app) as client:
+        response = client.get("/api/backoffs?now=inf")
+    assert response.status_code == 400
+    assert response.json() == {"error": "now must be a finite POSIX epoch timestamp"}
+
+
 def test_endpoint_includes_iso_backoff_until(
     app_with_repo: tuple[FastAPI, AccountBackoffRepository],
 ) -> None:

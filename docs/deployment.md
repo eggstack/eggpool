@@ -532,6 +532,14 @@ The output covers:
 - **Routing** — active requests, pending count, active reservations,
   reserved microdollars, health states, active backoff rows.
 
+For a focused view of active upstream-derived suppression, call
+`GET /api/backoffs`. The endpoint returns persisted `account_backoffs`
+rows joined with account names and accepts `?now=<epoch seconds>` for
+reproducible snapshots during tests or incident review. Local quota
+estimates never appear in this response; only upstream-observed
+failures such as 429, 402, auth failures, model unavailability, and
+bounded transient errors create these rows.
+
 All probes are best-effort; failed probes return `null` rather than
 causing the command to fail. Probe diagnostics are exposed in the JSON
 payload as `probe_errors`, capped at 16 entries with each message
