@@ -57,6 +57,10 @@ def _openai_chunk(
     return b"data: " + json.dumps(payload).encode() + b"\n\n"
 
 
+def _openai_done() -> bytes:
+    return b"data: [DONE]\n\n"
+
+
 def _openai_usage_chunk(
     *,
     chunk_id: str = "chatcmpl-1",
@@ -119,7 +123,23 @@ class TestFirstContentChunk:
         chunk = _openai_chunk(role="assistant", content="")
         raw = await transcoder.feed(chunk)
 
-        assert raw == []
+        combined = b"".join(raw)
+        frames = _parse_sse_frames(combined)
+
+        event_types = [f["event"] for f in frames]
+        assert event_types == ["message_start"]
+
+    @pytest.mark.asyncio
+    async def test_role_only_chunk_starts_message_without_content_block(self) -> None:
+        transcoder = OpenAIToAnthropicStreaming()
+        chunk = _openai_chunk(role="assistant")
+        raw = await transcoder.feed(chunk)
+
+        combined = b"".join(raw)
+        frames = _parse_sse_frames(combined)
+
+        event_types = [f["event"] for f in frames]
+        assert event_types == ["message_start"]
 
 
 class TestSubsequentChunks:
@@ -165,6 +185,7 @@ class TestFinishReason:
 
         chunk2 = _openai_chunk(finish_reason="stop")
         raw = await transcoder.feed(chunk2)
+        raw.extend(await transcoder.feed(_openai_done()))
 
         combined = b"".join(raw)
         frames = _parse_sse_frames(combined)
@@ -182,6 +203,7 @@ class TestFinishReason:
 
         chunk2 = _openai_chunk(finish_reason="stop")
         raw = await transcoder.feed(chunk2)
+        raw.extend(await transcoder.feed(_openai_done()))
 
         combined = b"".join(raw)
         frames = _parse_sse_frames(combined)
@@ -200,6 +222,7 @@ class TestFinishReason:
 
         chunk2 = _openai_chunk(finish_reason="length")
         raw = await transcoder.feed(chunk2)
+        raw.extend(await transcoder.feed(_openai_done()))
 
         combined = b"".join(raw)
         frames = _parse_sse_frames(combined)
@@ -233,6 +256,52 @@ class TestUsageChunk:
         assert delta_data["type"] == "message_delta"
         assert "usage" in delta_data
         assert delta_data["usage"]["output_tokens"] == 5
+
+    @pytest.mark.asyncio
+    async def test_usage_chunk_before_done_emits_before_message_stop(self) -> None:
+        transcoder = OpenAIToAnthropicStreaming()
+        await transcoder.feed(_openai_chunk(role="assistant", content="Hi"))
+        finish_raw = await transcoder.feed(_openai_chunk(finish_reason="stop"))
+        usage_raw = await transcoder.feed(
+            _openai_usage_chunk(
+                usage={
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15,
+                }
+            )
+        )
+        done_raw = await transcoder.feed(_openai_done())
+
+        frames = _parse_sse_frames(b"".join(finish_raw + usage_raw + done_raw))
+        event_types = [f["event"] for f in frames]
+
+        assert event_types == [
+            "content_block_stop",
+            "message_delta",
+            "message_stop",
+        ]
+        delta_data = json.loads(frames[1]["data"])
+        assert delta_data["delta"]["stop_reason"] == "end_turn"
+        assert delta_data["usage"]["output_tokens"] == 5
+
+    @pytest.mark.asyncio
+    async def test_empty_completion_finishes_without_content_block_events(
+        self,
+    ) -> None:
+        transcoder = OpenAIToAnthropicStreaming()
+        role_raw = await transcoder.feed(_openai_chunk(role="assistant"))
+        finish_raw = await transcoder.feed(_openai_chunk(finish_reason="stop"))
+        done_raw = await transcoder.feed(_openai_done())
+
+        frames = _parse_sse_frames(b"".join(role_raw + finish_raw + done_raw))
+        event_types = [f["event"] for f in frames]
+
+        assert event_types == [
+            "message_start",
+            "message_delta",
+            "message_stop",
+        ]
 
 
 class TestEmptyStream:

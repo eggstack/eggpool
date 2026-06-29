@@ -272,8 +272,14 @@ class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
     ) -> None:
         super().__init__("anthropic", "openai", transcode_context=transcode_context)
         self._started = False
+        self._content_block_started = False
+        self._finished = False
+        self._stopped = False
         self._id = ""
         self._model = ""
+        self._pending_stop_reason = "end_turn"
+        self._pending_usage: dict[str, Any] | None = None
+        self._usage_emitted = False
 
     async def feed(self, chunk: bytes) -> list[bytes]:
         self._observer.observe(chunk)
@@ -289,6 +295,7 @@ class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
         out: list[bytes] = []
         for event_type, data in frames:
             out.extend(self._translate(event_type, data))
+        out.extend(self._stop_message())
         return out
 
     def _translate(
@@ -299,7 +306,7 @@ class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
         if event_type == "error":
             return self._handle_error(data)
         if data.strip() == "[DONE]":
-            return []
+            return self._stop_message()
         parsed = self._safe_json(data)
         if parsed is None:
             return []
@@ -309,6 +316,7 @@ class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
         parsed = self._safe_json(data)
         if parsed is None:
             return []
+        self._stopped = True
         err = parsed.get("error", {})
         if isinstance(err, dict):
             err_typed = cast("dict[str, Any]", err)
@@ -343,18 +351,23 @@ class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
         delta = choice.get("delta", {})
         finish = choice.get("finish_reason")
         text = delta.get("content")
-        if text and not self._started:
-            self._started = True
-            self._id = str(parsed.get("id", ""))
-            self._model = str(parsed.get("model", ""))
-            return self._start_message(text)
+        if not self._started and (
+            delta.get("role") == "assistant" or text is not None or finish
+        ):
+            out = self._start_message(parsed)
+        else:
+            out = []
         if text:
-            return self._content_delta(text)
+            out.extend(self._content_delta(text))
+            return out
         if finish:
-            return self._finish(parsed, finish)
-        return []
+            out.extend(self._finish(parsed, finish))
+        return out
 
-    def _start_message(self, text: str) -> list[bytes]:
+    def _start_message(self, parsed: dict[str, Any]) -> list[bytes]:
+        self._started = True
+        self._id = str(parsed.get("id", ""))
+        self._model = str(parsed.get("model", ""))
         return [
             self._anthropic_frame(
                 "message_start",
@@ -374,6 +387,13 @@ class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
                     },
                 },
             ),
+        ]
+
+    def _start_content_block(self) -> list[bytes]:
+        if self._content_block_started:
+            return []
+        self._content_block_started = True
+        return [
             self._anthropic_frame(
                 "content_block_start",
                 {
@@ -385,21 +405,11 @@ class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
                     },
                 },
             ),
-            self._anthropic_frame(
-                "content_block_delta",
-                {
-                    "type": "content_block_delta",
-                    "index": 0,
-                    "delta": {
-                        "type": "text_delta",
-                        "text": text,
-                    },
-                },
-            ),
         ]
 
     def _content_delta(self, text: str) -> list[bytes]:
-        return [
+        out = self._start_content_block()
+        out.append(
             self._anthropic_frame(
                 "content_block_delta",
                 {
@@ -410,44 +420,31 @@ class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
                         "text": text,
                     },
                 },
-            ),
-        ]
+            )
+        )
+        return out
 
     def _finish(
         self,
         parsed: dict[str, Any],
         finish_reason: str,
     ) -> list[bytes]:
-        out: list[bytes] = [
-            self._anthropic_frame(
-                "content_block_stop",
-                {"type": "content_block_stop", "index": 0},
-            ),
-        ]
-        stop_reason = _FINISH_TO_STOP.get(
+        self._finished = True
+        self._pending_stop_reason = _FINISH_TO_STOP.get(
             finish_reason,
             "end_turn",
         )
         usage = parsed.get("usage")
-        delta_payload: dict[str, Any] = {
-            "type": "message_delta",
-            "delta": {"stop_reason": stop_reason},
-        }
         if isinstance(usage, dict):
-            usage_typed = cast("dict[str, Any]", usage)
-            delta_payload["usage"] = {
-                "output_tokens": usage_typed.get(
-                    "completion_tokens",
-                    0,
-                ),
-            }
-        out.append(self._anthropic_frame("message_delta", delta_payload))
-        out.append(
-            self._anthropic_frame(
-                "message_stop",
-                {"type": "message_stop"},
-            ),
-        )
+            self._pending_usage = cast("dict[str, Any]", usage)
+        out: list[bytes] = []
+        if self._content_block_started:
+            out.append(
+                self._anthropic_frame(
+                    "content_block_stop",
+                    {"type": "content_block_stop", "index": 0},
+                )
+            )
         return out
 
     def _handle_usage_only(
@@ -457,22 +454,45 @@ class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
         usage = parsed.get("usage")
         if not isinstance(usage, dict):
             return []
-        usage_typed = cast("dict[str, Any]", usage)
+        self._pending_usage = cast("dict[str, Any]", usage)
+        if self._finished:
+            return self._stop_message()
+        if self._started:
+            self._usage_emitted = True
+            return [self._message_delta(stop_reason=None, usage=self._pending_usage)]
+        return []
+
+    def _stop_message(self) -> list[bytes]:
+        if not self._started or not self._finished or self._stopped:
+            return []
+        self._stopped = True
+        usage = None if self._usage_emitted else self._pending_usage
         return [
+            self._message_delta(
+                stop_reason=self._pending_stop_reason,
+                usage=usage,
+            ),
             self._anthropic_frame(
-                "message_delta",
-                {
-                    "type": "message_delta",
-                    "delta": {"stop_reason": None},
-                    "usage": {
-                        "output_tokens": usage_typed.get(
-                            "completion_tokens",
-                            0,
-                        ),
-                    },
-                },
+                "message_stop",
+                {"type": "message_stop"},
             ),
         ]
+
+    def _message_delta(
+        self,
+        *,
+        stop_reason: str | None,
+        usage: dict[str, Any] | None,
+    ) -> bytes:
+        delta_payload: dict[str, Any] = {
+            "type": "message_delta",
+            "delta": {"stop_reason": stop_reason},
+        }
+        if usage is not None:
+            delta_payload["usage"] = {
+                "output_tokens": usage.get("completion_tokens", 0),
+            }
+        return self._anthropic_frame("message_delta", delta_payload)
 
 
 class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):

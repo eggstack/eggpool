@@ -244,7 +244,21 @@ class UsageRollupRepository:
             "  ELSE 0 END AS non_streamed_requests, "
             "CASE WHEN SUM(request_count) > 0 "
             "  THEN CAST(SUM(latency_ms_sum) AS REAL) / SUM(request_count) "
-            "  ELSE 0 END AS avg_latency_ms "
+            "  ELSE 0 END AS avg_latency_ms, "
+            "CASE WHEN SUM(first_byte_ms_count) > 0 "
+            "  THEN CAST(SUM(first_byte_ms_sum) AS REAL) "
+            "       / SUM(first_byte_ms_count) "
+            "  ELSE 0 END AS avg_ttft_ms, "
+            "CASE WHEN COALESCE("
+            "    SUM(CASE WHEN status != 'pending' THEN latency_ms_sum ELSE 0 END), "
+            "    0"
+            "  ) > 0 "
+            "  THEN CAST("
+            "    SUM(CASE WHEN status != 'pending' THEN output_tokens ELSE 0 END) "
+            "    AS REAL"
+            "  ) * 1000.0 "
+            "  / SUM(CASE WHEN status != 'pending' THEN latency_ms_sum ELSE 0 END) "
+            "  ELSE 0 END AS tokens_per_second "
             "FROM usage_rollups "
             "WHERE bucket_start >= ? AND bucket_start < ?"
         )
@@ -264,6 +278,8 @@ class UsageRollupRepository:
                 "streamed_requests": 0,
                 "non_streamed_requests": 0,
                 "avg_latency_ms": 0.0,
+                "avg_ttft_ms": 0.0,
+                "tokens_per_second": 0.0,
             }
         return dict(row)
 
