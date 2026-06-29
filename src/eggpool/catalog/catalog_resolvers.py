@@ -106,6 +106,59 @@ class CatalogFetchError(RuntimeError):
     """Raised when a catalog fetch fails (network, parse, auth)."""
 
 
+def _safe_parse_catalog_price_per_1k(
+    *,
+    catalog_name: str,
+    model_id: str,
+    category: str,
+    value: object,
+    default_unit: str = "1k",
+) -> float | None:
+    """Parse an untrusted external catalog price field.
+
+    External catalogs are advisory. A malformed or negative field should
+    remove that category from the resolved pricing, not fail the whole
+    refresh cycle or discard other valid rates from the same model row.
+    """
+    from eggpool.catalog.pricing import parse_price_per_1k
+
+    try:
+        return parse_price_per_1k(value, default_unit=default_unit)
+    except Exception as exc:
+        logger.warning(
+            "Ignoring invalid %s %s price for %s: %s",
+            catalog_name,
+            category,
+            model_id,
+            exc,
+        )
+        return None
+
+
+def _safe_parse_catalog_microdollars(
+    *,
+    catalog_name: str,
+    model_id: str,
+    category: str,
+    value: object,
+    default_unit: str | None = None,
+) -> int | None:
+    """Parse an untrusted external catalog cache-rate field."""
+    from eggpool.catalog.pricing import parse_microdollars_per_million
+
+    try:
+        return parse_microdollars_per_million(value, default_unit=default_unit)
+    except Exception as exc:
+        logger.warning(
+            "Ignoring invalid %s %s price for %s: %s",
+            catalog_name,
+            category,
+            model_id,
+            exc,
+        )
+        return None
+
+
 class CatalogHttpClient(Protocol):
     """Minimal async HTTP client interface used by catalog resolvers."""
 
@@ -224,8 +277,13 @@ class OpenRouterCatalogResolver:
                 payload_obj: object = response.json()
             except (httpx.HTTPError, ValueError) as exc:
                 raise CatalogFetchError(f"OpenRouter fetch failed: {exc}") from exc
-            entries = self._parse_catalog(payload_obj)
-            self._cache.store(entries)
+            try:
+                entries = self._parse_catalog(payload_obj)
+                self._cache.store(entries)
+            except Exception as exc:
+                raise CatalogFetchError(
+                    f"OpenRouter catalog parse failed: {exc}"
+                ) from exc
             return entries
 
     @staticmethod
@@ -249,8 +307,13 @@ class OpenRouterCatalogResolver:
                 entry = OpenRouterCatalogResolver._parse_entry(
                     model_id_obj, pricing_obj, raw_dict
                 )
-            except (ValueError, TypeError) as exc:
-                logger.warning("Skipping catalog entry %r: %s", model_id_obj, exc)
+            except Exception as exc:
+                logger.warning(
+                    "Skipping catalog entry %r after unexpected parse failure: %s",
+                    model_id_obj,
+                    exc,
+                    exc_info=True,
+                )
                 continue
             entries[model_id_obj] = entry
         # Strip raw upstream JSON to bound the cache footprint;
@@ -264,27 +327,40 @@ class OpenRouterCatalogResolver:
         model_id: str, pricing: object, raw: dict[str, Any]
     ) -> CatalogEntry:
         """Translate an OpenRouter pricing block into a CatalogEntry."""
-        from eggpool.catalog.pricing import (
-            parse_microdollars_per_million,
-            parse_price_per_1k,
-        )
 
         def _opt(key: str) -> object | None:
             if not isinstance(pricing, dict):
                 return None
-            value: object = pricing.get(key)  # type: ignore[reportUnknownMemberType]
-            if isinstance(value, (str, int, float)):
-                return value
-            return None
+            return pricing.get(key)  # type: ignore[reportUnknownMemberType]
 
         # OpenRouter fields are dollars-per-token numeric strings.
-        input_per_1k = parse_price_per_1k(_opt("prompt"), default_unit="token")
-        output_per_1k = parse_price_per_1k(_opt("completion"), default_unit="token")
-        cache_read = parse_microdollars_per_million(
-            _opt("input_cache_read"), default_unit="token"
+        input_per_1k = _safe_parse_catalog_price_per_1k(
+            catalog_name=OpenRouterCatalogResolver.name,
+            model_id=model_id,
+            category="input",
+            value=_opt("prompt"),
+            default_unit="token",
         )
-        cache_write = parse_microdollars_per_million(
-            _opt("input_cache_write"), default_unit="token"
+        output_per_1k = _safe_parse_catalog_price_per_1k(
+            catalog_name=OpenRouterCatalogResolver.name,
+            model_id=model_id,
+            category="output",
+            value=_opt("completion"),
+            default_unit="token",
+        )
+        cache_read = _safe_parse_catalog_microdollars(
+            catalog_name=OpenRouterCatalogResolver.name,
+            model_id=model_id,
+            category="cache_read",
+            value=_opt("input_cache_read"),
+            default_unit="token",
+        )
+        cache_write = _safe_parse_catalog_microdollars(
+            catalog_name=OpenRouterCatalogResolver.name,
+            model_id=model_id,
+            category="cache_write",
+            value=_opt("input_cache_write"),
+            default_unit="token",
         )
         return CatalogEntry(
             catalog_model_id=model_id,
@@ -375,6 +451,15 @@ class CatalogResolverPipeline:
                     exc,
                 )
                 continue
+            except Exception as exc:
+                logger.exception(
+                    "Catalog %s failed unexpectedly for %s/%s: %s",
+                    resolver.name,
+                    provider_id,
+                    model_id,
+                    exc,
+                )
+                continue
             entry = catalog.get(alias.catalog_model_id)
             if entry is None:
                 logger.warning(
@@ -385,10 +470,20 @@ class CatalogResolverPipeline:
                     model_id,
                 )
                 continue
-            return resolver.to_resolved_pricing(
-                entry=entry,
-                provider_id=provider_id,
-                model_id=model_id,
-                alias=alias,
-            )
+            try:
+                return resolver.to_resolved_pricing(
+                    entry=entry,
+                    provider_id=provider_id,
+                    model_id=model_id,
+                    alias=alias,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "Catalog %s failed to convert pricing for %s/%s: %s",
+                    resolver.name,
+                    provider_id,
+                    model_id,
+                    exc,
+                )
+                continue
         return None

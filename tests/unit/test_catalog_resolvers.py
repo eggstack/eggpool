@@ -65,6 +65,48 @@ class _PriorityResolver:
         raise AssertionError("priority-order test should not fetch catalog entries")
 
 
+class _FailingFetchResolver:
+    name = "failing"
+
+    @property
+    def priority(self) -> int:
+        return 10
+
+    async def fetch_catalog(self) -> dict[str, CatalogEntry]:
+        raise RuntimeError("bad catalog payload")
+
+    def to_resolved_pricing(
+        self,
+        *,
+        entry: CatalogEntry,
+        provider_id: str,
+        model_id: str,
+        alias: PricingAlias,
+    ) -> ResolvedPricing:
+        raise AssertionError("fetch failure should skip conversion")
+
+
+class _FailingConvertResolver:
+    name = "failing"
+
+    @property
+    def priority(self) -> int:
+        return 10
+
+    async def fetch_catalog(self) -> dict[str, CatalogEntry]:
+        return {"external": CatalogEntry(catalog_model_id="external")}
+
+    def to_resolved_pricing(
+        self,
+        *,
+        entry: CatalogEntry,
+        provider_id: str,
+        model_id: str,
+        alias: PricingAlias,
+    ) -> ResolvedPricing:
+        raise RuntimeError("bad conversion")
+
+
 class TestTTLCache:
     def test_fresh_after_store(self) -> None:
         cache = TTLCache(ttl_seconds=60)
@@ -166,7 +208,7 @@ class TestOpenRouterParseCatalog:
         assert entries["bad-model"].input_price_per_1k is None
         assert entries["good-model"].input_price_per_1k is not None
 
-    def test_skips_entry_with_boolean_price(self) -> None:
+    def test_ignores_boolean_price_field(self) -> None:
         payload = {
             "data": [
                 {
@@ -181,9 +223,11 @@ class TestOpenRouterParseCatalog:
         }
         entries = OpenRouterCatalogResolver._parse_catalog(payload)
         assert "good-model" in entries
-        assert "bool-model" not in entries
+        assert "bool-model" in entries
+        assert entries["bool-model"].input_price_per_1k is None
+        assert entries["bool-model"].output_price_per_1k == pytest.approx(2.0)
 
-    def test_all_invalid_entries_returns_empty(self) -> None:
+    def test_all_invalid_prices_keep_entries_with_no_prices(self) -> None:
         payload = {
             "data": [
                 {"id": "a", "pricing": {"prompt": "-1"}},
@@ -192,10 +236,53 @@ class TestOpenRouterParseCatalog:
         }
         entries = OpenRouterCatalogResolver._parse_catalog(payload)
         # "a" has negative price → kept with None pricing
-        # "b" has boolean price → skipped entirely
+        # "b" has boolean price → kept with None pricing
         assert "a" in entries
         assert entries["a"].input_price_per_1k is None
-        assert "b" not in entries
+        assert "b" in entries
+        assert entries["b"].input_price_per_1k is None
+
+    def test_invalid_field_does_not_drop_other_valid_fields(self) -> None:
+        payload = {
+            "data": [
+                {
+                    "id": "partial-model",
+                    "pricing": {
+                        "prompt": {"amount": "bad"},
+                        "completion": "0.00000028",
+                        "input_cache_read": ["bad"],
+                        "input_cache_write": "0.000000105",
+                    },
+                }
+            ]
+        }
+
+        entries = OpenRouterCatalogResolver._parse_catalog(payload)
+
+        entry = entries["partial-model"]
+        assert entry.input_price_per_1k is None
+        assert entry.output_price_per_1k == pytest.approx(0.00028)
+        assert entry.cache_read_per_million_microdollars is None
+        assert entry.cache_write_per_million_microdollars == 105_000
+
+    def test_negative_cache_field_does_not_drop_entry(self) -> None:
+        payload = {
+            "data": [
+                {
+                    "id": "negative-cache-model",
+                    "pricing": {
+                        "prompt": "0.0000001",
+                        "input_cache_read": "-0.00000001",
+                    },
+                }
+            ]
+        }
+
+        entries = OpenRouterCatalogResolver._parse_catalog(payload)
+
+        entry = entries["negative-cache-model"]
+        assert entry.input_price_per_1k == pytest.approx(0.0001)
+        assert entry.cache_read_per_million_microdollars is None
 
 
 class TestOpenRouterFetchCatalog:
@@ -245,6 +332,24 @@ class TestOpenRouterFetchCatalog:
         assert client.headers == [
             {"User-Agent": "eggpool/1.0", "Authorization": "Bearer catalog-key"}
         ]
+
+    @pytest.mark.asyncio
+    async def test_wraps_unexpected_parse_failure_as_fetch_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = _StubClient({"data": []})
+        cfg = CatalogConfig(name="openrouter", base_url="https://example.invalid")
+        resolver = OpenRouterCatalogResolver(config=cfg, client=client)  # type: ignore[arg-type]
+
+        def _boom(payload: object) -> dict[str, CatalogEntry]:
+            raise RuntimeError(f"unexpected payload: {payload!r}")
+
+        monkeypatch.setattr(
+            OpenRouterCatalogResolver, "_parse_catalog", staticmethod(_boom)
+        )
+
+        with pytest.raises(CatalogFetchError):
+            await resolver.fetch_catalog()
 
 
 class TestOpenRouterToResolvedPricing:
@@ -399,6 +504,60 @@ class TestCatalogResolverPipeline:
             )
         assert result is None
         assert any("no entry for alias" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_unexpected_fetch_error_logs_and_returns_none(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        alias = PricingAlias(
+            provider_id="opencode-go",
+            upstream_model_id="mimo-v2.5",
+            catalog_source="failing",
+            catalog_model_id="external",
+            confidence="curated_alias",
+        )
+        alias_resolver = _StubAliasResolver(
+            {("opencode-go", "mimo-v2.5", "failing"): alias}
+        )
+        pipeline = CatalogResolverPipeline(
+            resolvers=[_FailingFetchResolver()],
+            alias_resolver=alias_resolver,  # type: ignore[arg-type]
+        )
+
+        with caplog.at_level("ERROR"):
+            result = await pipeline.resolve(
+                provider_id="opencode-go", model_id="mimo-v2.5"
+            )
+
+        assert result is None
+        assert any("failed unexpectedly" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_unexpected_conversion_error_logs_and_returns_none(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        alias = PricingAlias(
+            provider_id="opencode-go",
+            upstream_model_id="mimo-v2.5",
+            catalog_source="failing",
+            catalog_model_id="external",
+            confidence="curated_alias",
+        )
+        alias_resolver = _StubAliasResolver(
+            {("opencode-go", "mimo-v2.5", "failing"): alias}
+        )
+        pipeline = CatalogResolverPipeline(
+            resolvers=[_FailingConvertResolver()],
+            alias_resolver=alias_resolver,  # type: ignore[arg-type]
+        )
+
+        with caplog.at_level("ERROR"):
+            result = await pipeline.resolve(
+                provider_id="opencode-go", model_id="mimo-v2.5"
+            )
+
+        assert result is None
+        assert any("failed to convert pricing" in r.message for r in caplog.records)
 
 
 class TestOpenRouterFetchCatalogIntegration:
