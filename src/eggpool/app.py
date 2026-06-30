@@ -755,6 +755,31 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     app.state.cost_calculator = cost_calculator
 
     # 16. Router (with health manager for circuit breaker integration)
+    def _schedule_missing_account_recovery(account_name: str) -> None:
+        """Fire-and-forget one-shot catalog refresh for an account that
+        is configured+healthy but missing from ``_account_support``.
+
+        A transient per-account refresh failure can age a sibling's
+        ``_account_last_refresh`` past ``stale_after_s`` and silently
+        de-pool the account from routing. The router detects this
+        condition and asks the catalog service to refresh a single
+        account so traffic can re-spread across configured siblings.
+        """
+
+        async def _run() -> None:
+            try:
+                await catalog.refresh_one_account(account_name)
+            except Exception:
+                logger.exception(
+                    "One-shot catalog recovery failed for %r", account_name
+                )
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(_run())
+
     router = Router(
         registry,
         catalog,
@@ -764,6 +789,9 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         fairness_mode=config.routing.fairness_mode,
         fairness_epsilon=config.routing.fairness_epsilon,
         fairness_scope=config.routing.fairness_scope,
+        missing_account_recovery_callback=_schedule_missing_account_recovery,
+        missing_account_recovery_min_interval_s=float(config.models.refresh_interval_s)
+        / 2.0,
     )
     app.state.router = router
 

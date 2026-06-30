@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -14,7 +15,7 @@ from eggpool.routing.eligibility import get_eligible_accounts
 from eggpool.routing.fairness import FairnessDecision, FairnessKey, FairnessRotor
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
 
     from eggpool.accounts.registry import AccountRegistry
     from eggpool.accounts.state import AccountRuntimeState
@@ -189,6 +190,8 @@ class Router:
         fairness_mode: str = "round_robin",
         fairness_epsilon: float | None = None,
         fairness_scope: str = "provider_model_protocol",
+        missing_account_recovery_callback: Callable[[str], None] | None = None,
+        missing_account_recovery_min_interval_s: float = 60.0,
     ) -> None:
         self._registry = registry
         self._catalog = catalog
@@ -207,6 +210,20 @@ class Router:
             quota_estimator=self._quota_estimator,
             health_manager=self._health_manager,
         )
+        # Per-account catalog-recovery trigger. When a configured+healthy
+        # account is excluded from eligibility purely because the
+        # catalog cache has not seen it recently (e.g. an upstream
+        # refresh failed and ``_account_last_refresh`` aged out), the
+        # router fires this callback so the catalog service can run a
+        # one-shot refresh and re-pool the account. Rate-limited per
+        # account via ``missing_account_recovery_min_interval_s`` so a
+        # persistent upstream failure does not become a refresh storm.
+        self._missing_account_recovery_callback = missing_account_recovery_callback
+        self._missing_account_recovery_min_interval_s = (
+            missing_account_recovery_min_interval_s
+        )
+        self._missing_account_recovery_attempt_at: dict[str, float] = {}
+        self._missing_account_recovery_lock = asyncio.Lock()
 
     def _fairness_effective_epsilon(self) -> float:
         """Return fairness epsilon, falling back to scorer tiebreaker_range."""
@@ -878,10 +895,74 @@ class Router:
             eligible = [
                 state for state in eligible if state.name not in exclude_accounts
             ]
+        self._maybe_trigger_missing_account_recovery(
+            model_id=model_id,
+            provider_id=provider_id,
+            eligible=eligible,
+        )
         return RoutingCandidates(
             states=eligible,
             by_name={state.name: state for state in eligible},
         )
+
+    def _maybe_trigger_missing_account_recovery(
+        self,
+        *,
+        model_id: str,
+        provider_id: str | None,
+        eligible: list[AccountRuntimeState],
+    ) -> None:
+        """Schedule a one-shot catalog refresh for accounts that are
+        configured and healthy but missing from the eligible set.
+
+        Without this, a transient per-account refresh failure (network
+        blip, upstream 5xx) can leave a sibling's
+        ``_account_last_refresh`` aged past ``stale_after_s``. The
+        account stays enabled, has valid credentials, and reports
+        healthy in ``HealthManager``, but the catalog cache treats it
+        as unsupported for the model — so the router always picks a
+        different account and traffic skews dramatically. Fire a
+        one-shot refresh to recover.
+        """
+        if self._missing_account_recovery_callback is None:
+            return
+        eligible_names = {state.name for state in eligible}
+        target_provider_ids: set[str | None] = set()
+        for state in eligible:
+            target_provider_ids.add(self._registry.get_provider_for_account(state.name))
+        if provider_id is not None:
+            target_provider_ids.add(provider_id)
+        for pid in target_provider_ids:
+            if pid is None:
+                continue
+            for state in self._registry.get_enabled_states():
+                if state.name in eligible_names:
+                    continue
+                if not state.is_eligible():
+                    continue
+                if not self._registry.has_usable_credentials(state.name):
+                    continue
+                if self._registry.get_provider_for_account(state.name) != pid:
+                    continue
+                self._schedule_missing_account_recovery(state.name)
+
+    def _schedule_missing_account_recovery(self, account_name: str) -> None:
+        """Rate-limited dispatch of the configured recovery callback.
+
+        The dispatch is non-blocking: a single asyncio task is created
+        per call. The internal ``_missing_account_recovery_attempt_at``
+        map enforces a per-account minimum interval so a persistent
+        upstream failure cannot trigger a refresh storm.
+        """
+        now = time.monotonic()
+        last = self._missing_account_recovery_attempt_at.get(account_name, 0.0)
+        if now - last < self._missing_account_recovery_min_interval_s:
+            return
+        self._missing_account_recovery_attempt_at[account_name] = now
+        callback = self._missing_account_recovery_callback
+        if callback is None:
+            return
+        callback(account_name)
 
     async def _score_eligible_accounts(
         self,

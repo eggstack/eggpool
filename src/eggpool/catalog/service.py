@@ -422,6 +422,77 @@ class CatalogService:
                 pruned_count=pruned,
             )
 
+    async def refresh_one_account(
+        self, account_name: str
+    ) -> AccountCatalogOutcome | None:
+        """Refresh a single account and update the in-memory cache.
+
+        Mirrors the per-account slice of :meth:`refresh` so the request
+        path can recover accounts whose catalog support has drifted away
+        from the configured registry (e.g. a transient upstream failure
+        excluded a sibling from ``_account_support``). The full refresh
+        lock is held for the duration so a parallel full cycle cannot
+        race the single-account update. ``None`` is returned when the
+        account is unknown, has no credentials, or the provider client
+        pool cannot supply a client for the account's provider.
+        """
+        async with self._refresh_lock:
+            state = self._registry.get_state(account_name)
+            if state is None or not state.enabled:
+                return None
+            provider_id = self._registry.get_provider_for_account(account_name)
+            if provider_id is None:
+                return None
+            api_key = self._registry.get_api_key(account_name)
+            if api_key is None or not self._registry.has_usable_credentials(
+                account_name
+            ):
+                return None
+
+            client: httpx.AsyncClient | None = None
+            if self._client_pool is not None:
+                try:
+                    client = self._client_pool.get_client(provider_id, account_name)
+                except Exception:
+                    logger.warning(
+                        "No client for provider %r account %r",
+                        provider_id,
+                        account_name,
+                    )
+                    return None
+            elif self._httpx_client is not None:
+                client = self._httpx_client
+            if client is None:
+                return None
+
+            provider_cfg = self._config.providers.get(provider_id)
+            models_method = "GET"
+            models_path = "/models"
+            if provider_cfg is not None:
+                models_method = provider_cfg.models_method
+                models_path = provider_cfg.models_path
+
+            if provider_cfg is not None and provider_cfg.static_models:
+                await self._seed_static_models(account_name, provider_id, provider_cfg)
+
+            outcome, _update = await self._fetch_and_process_account(
+                account_name,
+                api_key,
+                provider_id,
+                client,
+                models_method,
+                models_path,
+                provider_cfg=provider_cfg,
+            )
+            await self._persist_catalog()
+            logger.info(
+                "One-shot catalog refresh for account %r on provider %r: %s",
+                account_name,
+                provider_id,
+                outcome.value,
+            )
+            return outcome
+
     def _log_refresh_summary(
         self,
         outcomes: list[AccountCatalogOutcome],
