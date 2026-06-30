@@ -401,15 +401,25 @@ async def test_default_policy_handles_streaming_minimax(
         'event: message_stop\ndata: {"type":"message_stop"}\n\n',
     ]
     sse_payload = "".join(sse_chunks).encode()
+    upstream_calls: list[dict[str, Any]] = []
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        upstream_calls.append(
+            {
+                "url": str(request.url),
+                "method": request.method,
+                "headers": dict(request.headers),
+                "body": json.loads(request.content) if request.content else {},
+            }
+        )
+        return httpx.Response(
+            200,
+            content=sse_payload,
+            headers={"content-type": "text/event-stream"},
+        )
 
     with respx.mock:
-        respx.post(f"{UPSTREAM_BASE}{ANTHROPIC_PATH}").mock(
-            return_value=httpx.Response(
-                200,
-                content=sse_payload,
-                headers={"content-type": "text/event-stream"},
-            )
-        )
+        respx.post(f"{UPSTREAM_BASE}{ANTHROPIC_PATH}").mock(side_effect=_capture)
         async with client.stream(
             "POST",
             "/v1/chat/completions",
@@ -421,6 +431,14 @@ async def test_default_policy_handles_streaming_minimax(
             async for chunk in response.aiter_text():
                 chunks.append(chunk)
             full = "".join(chunks)
+
+    assert len(upstream_calls) == 1, "expected exactly one upstream dispatch"
+    sent = upstream_calls[0]
+    assert sent["method"] == "POST"
+    assert sent["body"]["model"] == "MiniMax-M3"
+    assert sent["body"]["stream"] is True
+    assert sent["headers"].get("x-api-key") == "test-minimax-token-plan-key"
+    assert sent["headers"].get("anthropic-version") == "2023-06-01"
 
     # OpenAI-style streaming markers present.
     assert "chat.completion.chunk" in full, full

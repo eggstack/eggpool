@@ -349,6 +349,13 @@ class TestDroppedFields:
 
         assert "stream" not in result
 
+    def test_stream_true_is_preserved(self, transcoder: OpenAIToAnthropic) -> None:
+        payload = _load_fixture("openai_text_request.json")
+        payload["stream"] = True
+        result, _ = transcoder.encode_request(payload, _make_context())
+
+        assert result["stream"] is True
+
 
 class TestMalformedUsage:
     def test_decode_response_zeroes_invalid_usage(

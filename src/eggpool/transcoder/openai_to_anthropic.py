@@ -431,6 +431,9 @@ class OpenAIToAnthropic:
         if model is not None:
             out["model"] = model
 
+        if payload.get("stream") is True:
+            out["stream"] = True
+
         temperature = payload.get("temperature")
         if temperature is not None:
             if temperature > 1.0:
