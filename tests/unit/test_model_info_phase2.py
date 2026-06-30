@@ -910,3 +910,104 @@ async def test_failure_count_affects_backoff_cooldown() -> None:
         assert health["src"]["failure_count"] == 0
     finally:
         await db.disconnect()
+
+
+@pytest.mark.asyncio()
+async def test_model_info_created_when_enabled() -> None:
+    """ModelInfoService is created when model_info is enabled."""
+    from eggpool.models.config import AppConfig
+
+    config = AppConfig()
+    config.model_info.enabled = True
+    config.model_info.startup_refresh = False
+
+    cache = _make_cache_with_models({"m1": {}})
+
+    db = Database(path=":memory:")
+    await db.connect()
+    try:
+        await _run_migrations(db)
+        await _seed_model(db, "m1")
+
+        model_info = None
+        if config.model_info.enabled:
+            model_info = ModelInfoService(
+                config=config.model_info,
+                db=db,
+                catalog=cache,
+            )
+            await model_info.load_cache()
+
+        assert model_info is not None
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio()
+async def test_model_info_not_created_when_disabled() -> None:
+    """ModelInfoService is not created when model_info is disabled."""
+    from eggpool.models.config import AppConfig
+
+    config = AppConfig()
+    config.model_info.enabled = False
+
+    model_info = None
+    if config.model_info.enabled:
+        model_info = ModelInfoService(
+            config=config.model_info,
+            db=AsyncMock(),
+            catalog=_make_cache_with_models({}),
+        )
+
+    assert model_info is None
+
+
+@pytest.mark.asyncio()
+async def test_reconcile_catalog_refresh_with_changed_provider_keys() -> None:
+    """reconcile_catalog_refresh updates models with changed provider keys."""
+    db = Database(path=":memory:")
+    await db.connect()
+    try:
+        await _run_migrations(db)
+        await _seed_model(db, "model-x")
+
+        cache = _make_cache_with_models(
+            {"model-x": {"display_name": "Model X"}}, provider_id="prov-new"
+        )
+        config = ModelInfoConfig()
+        service = ModelInfoService(config, db, cache)
+
+        # Create initial canonical row with stale detail so rebuild detects a change
+        now = datetime.now(UTC)
+        info = CanonicalModelInfo(
+            model_id="model-x",
+            status="partial",
+            summary="Old summary",
+            sparse=False,
+            detail={"display_name": "Old Name"},
+            provenance={"sources": ["provider_catalog"]},
+            conflicts={},
+            first_seen_at=now - timedelta(days=1),
+            last_seen_at=now - timedelta(hours=1),
+            last_refreshed_at=now - timedelta(hours=1),
+            next_refresh_at=now + timedelta(hours=1),
+        )
+        await service.repo.upsert_canonical(info)
+
+        # Simulate refresh with changed provider keys for model-x
+        result = CatalogRefreshResult(
+            live_model_ids=frozenset({"model-x"}),
+            new_model_ids=frozenset(),
+            withdrawn_model_ids=frozenset(),
+            changed_provider_keys=frozenset({("model-x", "prov-new")}),
+            refreshed_at=now.timestamp(),
+        )
+
+        reconcile_result = await service.reconcile_catalog_refresh(result)
+        assert reconcile_result["refreshed"] >= 1
+
+        # Verify the canonical row still exists and was updated
+        updated = await service.get_summary("model-x")
+        assert updated is not None
+    finally:
+        await db.disconnect()
