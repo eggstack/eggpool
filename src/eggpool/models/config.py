@@ -154,6 +154,13 @@ class RoutingConfig(BaseModel):
     # "hard_cap" is an opt-in escape hatch that re-enables local quota
     # as a hard eligibility gate (legacy behavior).
     local_quota_mode: Literal["score_only", "hard_cap"] = "score_only"
+    fairness_mode: Literal["off", "round_robin", "random"] = "round_robin"
+    fairness_epsilon: float | None = None
+    fairness_scope: Literal[
+        "provider_model_protocol",
+        "provider_model",
+        "priority_model_protocol",
+    ] = "provider_model_protocol"
 
 
 class PricingCatalogEntry(BaseModel):

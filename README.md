@@ -86,7 +86,7 @@ Use `eggpool connect` for interactive provider setup. See [docs/providers.md](do
 | `[upstream]` | Upstream API base URL, timeouts, connection pool |
 | `[database]` | SQLite path, WAL mode |
 | `[models]` | Catalog refresh, exposure mode, model collapse |
-| `[routing]` | Routing strategy, retry limits, quota mode |
+| `[routing]` | Routing strategy, retry limits, quota mode, same-tier fairness |
 | `[dashboard]` | Dashboard toggle, theme, refresh interval |
 | `[providers.*]` | Provider configs with accounts and routing priority |
 | `[network]` | Outbound transport, DNS cache |

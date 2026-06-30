@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from eggpool.quota.estimation import QuotaEstimator
 from eggpool.quota.scorer import QuotaFairScorer, RoutingScore
 from eggpool.routing.eligibility import get_eligible_accounts
+from eggpool.routing.fairness import FairnessDecision, FairnessKey, FairnessRotor
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -47,6 +49,49 @@ def _group_by_priority(
         current_priority = state.routing_priority
     tiers.append(current_tier)
     return tiers
+
+
+def _fairness_band(
+    ranked: list[tuple[AccountRuntimeState, RoutingScore]],
+    *,
+    epsilon: float,
+    prefer_native: bool,
+) -> tuple[
+    list[tuple[AccountRuntimeState, RoutingScore]],
+    list[tuple[AccountRuntimeState, RoutingScore]],
+    str,
+]:
+    """Extract the top fairness band from a ranked tier.
+
+    Returns ``(band, rest, reason)`` where *band* contains candidates
+    within *epsilon* of the best score in the same priority tier with
+    the same weight and transcode status.  If the band has fewer than
+    two members, returns ``([], ranked, reason)`` so the caller falls
+    back to score-ordered ranking.
+    """
+    if len(ranked) < 2:
+        return [], ranked, "single_candidate"
+
+    best_state, best_score = ranked[0]
+    if not math.isfinite(best_score.final_score):
+        return [], ranked, "non_finite_score"
+
+    band: list[tuple[AccountRuntimeState, RoutingScore]] = []
+    for state, score in ranked:
+        if state.routing_priority != best_state.routing_priority:
+            break
+        if prefer_native and score.requires_transcode != best_score.requires_transcode:
+            break
+        if abs(score.weight - best_score.weight) > 1e-9:
+            break
+        if abs(score.final_score - best_score.final_score) > epsilon:
+            break
+        band.append((state, score))
+
+    if len(band) < 2:
+        return [], ranked, "not_tied"
+
+    return band, ranked[len(band) :], "ok"
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,23 +186,37 @@ class Router:
         health_manager: HealthManager | None = None,
         stale_after_s: float | None = None,
         local_quota_mode: str = "score_only",
+        fairness_mode: str = "round_robin",
+        fairness_epsilon: float | None = None,
+        fairness_scope: str = "provider_model_protocol",
     ) -> None:
         self._registry = registry
         self._catalog = catalog
         self._quota_estimator = quota_estimator or QuotaEstimator()
         self._health_manager = health_manager
         self._stale_after_s = stale_after_s
-        # ``score_only`` keeps above-capacity accounts eligible (rank-only);
-        # ``hard_cap`` restores pre-suppression behavior as an opt-in.
         self._local_quota_mode = local_quota_mode
-        # Counter updates are tiny and infrequent compared with upstream I/O.
-        # One stable lock avoids lock-replacement races when a counter reaches
-        # zero while another coroutine is already waiting to increment it.
+        self._fairness_mode = fairness_mode
+        self._fairness_epsilon = fairness_epsilon
+        self._fairness_scope = fairness_scope
+        self._fairness_rotor = FairnessRotor()
+        self._last_fairness_decision: FairnessDecision | None = None
         self._active_count_lock = asyncio.Lock()
         self._scorer = QuotaFairScorer(
             quota_estimator=self._quota_estimator,
             health_manager=self._health_manager,
         )
+
+    def _fairness_effective_epsilon(self) -> float:
+        """Return fairness epsilon, falling back to scorer tiebreaker_range."""
+        if self._fairness_epsilon is not None:
+            return self._fairness_epsilon
+        return self._scorer.tiebreaker_range
+
+    @property
+    def last_fairness_decision(self) -> FairnessDecision | None:
+        """Return the most recent fairness rotation decision, if any."""
+        return self._last_fairness_decision
 
     async def select_account(
         self,
@@ -194,9 +253,37 @@ class Router:
                 client_protocol=client_protocol,
                 transcode_eligibility=transcode_eligibility,
             )
-            best = self._scorer.select_account(scores)
-            if best is not None:
-                return tier_candidates.by_name.get(best.account_name)
+            ranked_scores = self._scorer.rank_accounts(scores)
+            ranked_pairs: list[tuple[AccountRuntimeState, RoutingScore]] = []
+            for score in ranked_scores:
+                state = tier_candidates.by_name.get(score.account_name)
+                if state is not None:
+                    ranked_pairs.append((state, score))
+
+            if self._fairness_mode != "off" and len(ranked_pairs) >= 2:
+                epsilon = self._fairness_effective_epsilon()
+                band, rest, _band_reason = _fairness_band(
+                    ranked_pairs,
+                    epsilon=epsilon,
+                    prefer_native=self._scorer.prefer_native,
+                )
+                if band and self._fairness_mode == "round_robin":
+                    key = FairnessKey(
+                        provider_id=provider_id,
+                        model_id=model_id,
+                        protocol=None,
+                        priority=_priority,
+                        client_protocol=client_protocol,
+                    )
+                    band, _ = await self._fairness_rotor.rotate(key, band)
+                elif band and self._fairness_mode == "random":
+                    import random as _random
+
+                    _random.shuffle(band)
+                ranked_pairs = band + rest
+
+            if ranked_pairs:
+                return ranked_pairs[0][0]
         return None
 
     async def explain_account_eligibility(
@@ -488,11 +575,70 @@ class Router:
                 client_protocol=client_protocol,
                 transcode_eligibility=transcode_eligibility,
             )
-            ranked = self._scorer.rank_accounts(scores)
-            for score in ranked:
+            ranked_scores = self._scorer.rank_accounts(scores)
+            ranked_pairs: list[tuple[AccountRuntimeState, RoutingScore]] = []
+            for score in ranked_scores:
                 state = tier_candidates.by_name.get(score.account_name)
-                if state is None:
-                    continue
+                if state is not None:
+                    ranked_pairs.append((state, score))
+
+            if self._fairness_mode != "off" and len(ranked_pairs) >= 2:
+                epsilon = self._fairness_effective_epsilon()
+                band, rest, band_reason = _fairness_band(
+                    ranked_pairs,
+                    epsilon=epsilon,
+                    prefer_native=self._scorer.prefer_native,
+                )
+                if band and self._fairness_mode == "round_robin":
+                    key = FairnessKey(
+                        provider_id=(
+                            provider_id
+                            if self._fairness_scope != "priority_model_protocol"
+                            else None
+                        ),
+                        model_id=model_id,
+                        protocol=None,
+                        priority=_priority,
+                        client_protocol=client_protocol,
+                    )
+                    band, fairness_decision = await self._fairness_rotor.rotate(
+                        key, band
+                    )
+                elif band and self._fairness_mode == "random":
+                    import random as _random
+
+                    _random.shuffle(band)
+                    fairness_decision = FairnessDecision(
+                        mode="random",
+                        applied=True,
+                        key="",
+                        candidate_count=len(band),
+                        reason="ok",
+                    )
+                else:
+                    fairness_decision = FairnessDecision(
+                        mode=self._fairness_mode,
+                        applied=False,
+                        key="",
+                        candidate_count=len(ranked_pairs),
+                        reason=band_reason,
+                    )
+                self._last_fairness_decision = fairness_decision
+                ranked_pairs = band + rest
+            else:
+                self._last_fairness_decision = FairnessDecision(
+                    mode=self._fairness_mode,
+                    applied=False,
+                    key="",
+                    candidate_count=len(ranked_pairs),
+                    reason=(
+                        "disabled"
+                        if self._fairness_mode == "off"
+                        else "single_candidate"
+                    ),
+                )
+
+            for state, score in ranked_pairs:
                 result.append((state, score))
                 if len(result) >= max_accounts:
                     return result

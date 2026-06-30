@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Same-tier account fairness rotor**: deterministic round-robin rotation for effectively tied same-tier accounts prevents routing starvation. Configurable via `[routing] fairness_mode`, `fairness_epsilon`, and `fairness_scope`. Defaults to `round_robin` with `provider_model_protocol` scope. Fairness decisions are recorded in `routing_decisions.score_components_json` under the `fairness` key for operator diagnostics.
 - **Bidirectional OpenAI ↔ Anthropic protocol transcoding.** When `[transcoder] enabled = true`, requests from clients using one protocol can be forwarded to upstream accounts that speak only the other. Initial scope is text-only requests and responses, plus streaming SSE. Tool calls, vision, and extended thinking land in a follow-up release. See `docs/transcoding.md` for the full translation table.
 - New `eggpool stats transcoding [--period 1d|7d|30d]` subcommand for transcoding observability.
 - New "Transcoding" card on the `/runtime` dashboard page.

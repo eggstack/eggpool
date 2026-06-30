@@ -246,6 +246,54 @@ the coordinator raises `UpstreamExhaustedError` (502) — synthetic 503 is
 reserved for genuine pre-dispatch unavailability (no enabled accounts,
 missing credentials, all explicitly disabled, model unknown).
 
+### Same-Tier Fairness
+
+When multiple accounts share the same `routing_priority`, weight, transcode
+status, and have scores within `fairness_epsilon` of the best (default:
+`near_tie_epsilon`), they are considered *same-tier peers*. Without fairness
+intervention, stable config order or minor score noise can cause severe
+routing skew (one account receiving nearly all traffic).
+
+EggPool applies a deterministic round-robin rotor
+(``FairnessRotor`` in ``src/eggpool/routing/fairness.py``) to the
+*fairness band* — the set of tied peers within a single priority tier.
+The rotor maintains an in-memory position counter per fairness key
+(provider × model × protocol × priority × client_protocol) and rotates
+the candidate list so the first-selected account advances on each
+routing decision.
+
+Fairness is controlled by three ``[routing]`` config fields:
+
+- ``fairness_mode``: ``"round_robin"`` (default), ``"random"``, or ``"off"``.
+- ``fairness_epsilon``: score proximity threshold; defaults to ``near_tie_epsilon``
+  when omitted.
+- ``fairness_scope``: rotation group granularity — ``"provider_model_protocol"``
+  (default), ``"provider_model"``, or ``"priority_model_protocol"``.
+
+The fairness band is extracted *after* quota scoring and *before* the
+coordinator selects the first circuit-breaker-accepted candidate. Priority
+tier boundaries remain strict: lower-priority accounts never advance ahead
+of higher-priority eligible accounts. Different-weight accounts opt out of
+equal-peer rotation; the band requires identical weights within floating-point
+tolerance.
+
+Fairness decisions are recorded in ``routing_decisions.score_components_json``
+under the ``fairness`` key for operator diagnostics:
+
+```json
+{
+  "fairness": {
+    "mode": "round_robin",
+    "applied": true,
+    "key": "provider=opencode-go|model=gpt-4|protocol=openai|tier=0",
+    "candidate_count": 3,
+    "selected_index": 0,
+    "selected_account_name": "0002",
+    "reason": "ok"
+  }
+}
+```
+
 ### Lock scope and publish ordering
 
 The `RequestCoordinator._select_and_persist_attempt()` method holds

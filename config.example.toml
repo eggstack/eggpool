@@ -79,6 +79,19 @@ quota_exhausted_cooldown_seconds = 300
 # hard eligibility gate (legacy pre-suppression behavior). Subscription
 # aggregators should normally leave this as "score_only".
 local_quota_mode = "score_only"
+# Same-tier fairness for effectively tied accounts. Keeps equal subscription
+# accounts from starving behind stable config order.
+# "round_robin" (default): deterministic rotation across the fairness band.
+# "random": choose randomly within the fairness band.
+# "off": existing behavior; useful for debugging or strict lowest-score routing.
+fairness_mode = "round_robin"
+# Defaults to near_tie_epsilon when omitted.
+# fairness_epsilon = 0.1
+# Fairness scope controls which accounts share a rotation group:
+# "provider_model_protocol" (default): separate rotor per provider, model, protocol, and priority tier.
+# "provider_model": separate rotor per provider, model, and priority tier.
+# "priority_model_protocol": co-balanced across providers sharing a model in the same priority tier.
+fairness_scope = "provider_model_protocol"
 
 [limits]
 five_hour_microdollars = 12000000

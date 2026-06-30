@@ -873,6 +873,7 @@ class RequestCoordinator:
                         selected_state=selected_state,
                         selected_score=selected_score,
                         selected_tier=selected_tier,
+                        fairness_decision=self._router.last_fairness_decision,
                     )
                     trace = RoutingDecisionTrace(
                         model_id=context.model_id,
@@ -2292,6 +2293,7 @@ class RequestCoordinator:
         selected_state: Any,
         selected_score: float | None,
         selected_tier: int | None,
+        fairness_decision: Any | None = None,
     ) -> dict[str, Any]:
         """Build the score_components_json payload for one routing decision.
 
@@ -2358,6 +2360,11 @@ class RequestCoordinator:
                 ),
                 "tie_break": tie_break,
                 "top_candidates": top_candidates_payload,
+                "fairness": (
+                    fairness_decision.to_dict()
+                    if fairness_decision is not None
+                    else None
+                ),
             }
         else:
             payload = {
@@ -2384,6 +2391,11 @@ class RequestCoordinator:
                 "util_30d": None,
                 "tie_break": tie_break,
                 "top_candidates": top_candidates_payload,
+                "fairness": (
+                    fairness_decision.to_dict()
+                    if fairness_decision is not None
+                    else None
+                ),
             }
         return payload
 
