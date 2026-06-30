@@ -418,6 +418,8 @@ async def handle_model_detail(
     if model_info_service is not None:
         try:
             info = await model_info_service.get_summary(decoded_id)
+            if info is None:
+                info = await model_info_service.ensure_canonical(decoded_id)
         except Exception:
             info = None
     theme_css, _, current_theme, available = _get_theme_data(request, theme)

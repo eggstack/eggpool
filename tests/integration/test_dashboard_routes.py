@@ -92,6 +92,16 @@ async def migrated_app(tmp_path):
     application.state.db = db
     application.state.stats_db = db
     application.state.stats = StatsService(db)
+    # The FastAPI lifespan is the path that normally wires
+    # ``app.state.model_info``; integration tests bypass the lifespan
+    # so the detail page's lazy ``ensure_canonical`` path can be
+    # exercised end-to-end here.
+    from eggpool.catalog.cache import ModelCatalogCache
+    from eggpool.model_info.service import ModelInfoService
+
+    application.state.model_info = ModelInfoService(
+        config.model_info, db, ModelCatalogCache()
+    )
     try:
         yield application
     finally:
@@ -710,13 +720,19 @@ async def test_overview_auto_refresh_reinitializes_charts(
 async def test_model_detail_page_returns_200_for_unknown_model(
     migrated_app: FastAPI,
 ) -> None:
-    """The model detail page returns 200 even for unknown models."""
+    """The model detail page returns 200 and lazy-creates a sparse row."""
     from fastapi.testclient import TestClient
 
     client = TestClient(migrated_app)
     response = client.get("/models/nonexistent-model")
     assert response.status_code == 200
-    assert "Model info not available" in response.text
+    body = response.text
+    # The lazy backfill path runs ensure_canonical, which creates a
+    # sparse unmatched row so the page has something to render.
+    assert "nonexistent-model" in body
+    assert "unmatched" in body
+    assert "Summary" in body
+    assert "Model info not available" not in body
 
 
 @pytest.mark.asyncio()
@@ -732,8 +748,15 @@ async def test_model_detail_page_renders_sections(
     body = response.text
     # Should have the model ID in the heading
     assert "test-model" in body
-    # When no model info is available, shows the empty state
-    assert "Model info not available" in body
+    # Lazy backfill produces an unmatched sparse row, so the page
+    # shows the same sections a populated detail page would show
+    # (with sparse markers / em-dashes for the empty fields).
+    assert "unmatched" in body
+    assert "Summary" in body
+    assert "Provider / Callability" in body
+    assert "Metadata" in body
+    assert "Provenance" in body
+    assert "Model info not available" not in body
     # Should not load Chart.js (no charts on this page)
     assert "/static/chart.js" not in body
 

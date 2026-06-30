@@ -600,3 +600,150 @@ async def test_provider_catalog_refresh_and_reconcile_roundtrip() -> None:
         assert "Callable via openai-provider" in (info.summary or "")
     finally:
         await db.disconnect()
+
+
+# --- ensure_canonical (lazy backfill for the dashboard detail page) ---
+
+
+@pytest.mark.asyncio()
+async def test_ensure_canonical_creates_unmatched_for_traffic_only_model() -> None:
+    """A model that was never catalogued still gets a canonical row."""
+    db = Database(path=":memory:")
+    await db.connect()
+    try:
+        await _run_migrations(db)
+
+        from eggpool.catalog.cache import ModelCatalogCache
+
+        cache = ModelCatalogCache()
+        config = ModelInfoConfig()
+        service = ModelInfoService(config, db, cache)
+
+        assert await service.get_summary("traffic-only-model") is None
+
+        info = await service.ensure_canonical("traffic-only-model")
+
+        assert info is not None
+        assert info.model_id == "traffic-only-model"
+        assert info.status == "unmatched"
+        assert info.sparse is True
+        assert info.detail == {}
+        assert info.provenance["sources"] == ["traffic_observation"]
+        assert info.provenance["lazy_created"] is True
+        assert info.last_refreshed_at is None
+        assert info.next_refresh_at is not None
+
+        # The FK on model_info_canonical was satisfied by seeding a
+        # placeholder ``models`` row inside the same transaction.
+        async with db.transaction():
+            row = await db.fetch_one(
+                "SELECT model_id FROM models WHERE model_id = ?",
+                ("traffic-only-model",),
+            )
+        assert row is not None
+        assert row["model_id"] == "traffic-only-model"
+
+        # Subsequent lookup reads the persisted row, not a fresh one
+        again = await service.ensure_canonical("traffic-only-model")
+        assert again.status == "unmatched"
+        assert again.detail == {}
+
+        # And get_summary now returns it without further work
+        fetched = await service.get_summary("traffic-only-model")
+        assert fetched is not None
+        assert fetched.model_id == "traffic-only-model"
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio()
+async def test_ensure_canonical_picks_up_catalog_detail_when_present() -> None:
+    """Models already in the catalog get a catalog-shaped row, not unmatched."""
+    db = Database(path=":memory:")
+    await db.connect()
+    try:
+        await _run_migrations(db)
+        await _seed_model(db, "catalog-model", "Catalog Model")
+
+        from eggpool.catalog.cache import ModelCatalogCache
+
+        cache = ModelCatalogCache()
+        now_ts = datetime.now(UTC).timestamp()
+        cache._models["catalog-model"] = {
+            "model_id": "catalog-model",
+            "display_name": "Catalog Model",
+            "protocol": "openai",
+            "capabilities": {"supports_tools": True},
+            "source_metadata": {},
+            "first_seen_at": now_ts,
+            "last_seen_at": now_ts,
+            "discovered_limits": {},
+            "effective_limits": {
+                "context_tokens": 64000,
+                "input_tokens": 64000,
+                "output_tokens": 8000,
+                "enforce": True,
+            },
+        }
+        cache._provider_models[("catalog-model", "demo-provider")] = dict(
+            cache._models["catalog-model"]
+        )
+
+        config = ModelInfoConfig()
+        service = ModelInfoService(config, db, cache)
+
+        info = await service.ensure_canonical("catalog-model")
+
+        assert info.status == "partial"
+        assert info.sparse is False
+        assert info.provenance["sources"] == ["provider_catalog"]
+        assert info.detail.get("display_name") == "Catalog Model"
+        assert info.detail.get("context_tokens") == 64000
+        assert info.detail.get("supports_tools") is True
+        assert "demo-provider" in info.detail.get("providers", [])
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio()
+async def test_ensure_canonical_returns_existing_row_without_overwrite() -> None:
+    """If a canonical row already exists, ensure_canonical must not touch it."""
+    db = Database(path=":memory:")
+    await db.connect()
+    try:
+        await _run_migrations(db)
+        await _seed_model(db, "existing-model")
+
+        from eggpool.catalog.cache import ModelCatalogCache
+
+        cache = ModelCatalogCache()
+        now = datetime.now(UTC)
+        seeded = CanonicalModelInfo(
+            model_id="existing-model",
+            status="fresh",
+            summary="seeded summary",
+            sparse=False,
+            detail={"display_name": "Existing"},
+            provenance={"sources": ["seed"]},
+            conflicts={},
+            first_seen_at=now - timedelta(days=2),
+            last_seen_at=now - timedelta(hours=1),
+            last_refreshed_at=now - timedelta(hours=2),
+            next_refresh_at=now + timedelta(hours=20),
+        )
+        repo = ModelInfoRepository(db)
+        await repo.upsert_canonical(seeded)
+
+        config = ModelInfoConfig()
+        service = ModelInfoService(config, db, cache)
+
+        info = await service.ensure_canonical("existing-model")
+        assert info.summary == "seeded summary"
+        assert info.status == "fresh"
+        assert info.provenance["sources"] == ["seed"]
+        # The lazy-created marker must NOT appear on a pre-existing row
+        assert "lazy_created" not in info.provenance
+        # first_seen_at is preserved (not bumped to now)
+        assert info.first_seen_at == now - timedelta(days=2)
+    finally:
+        await db.disconnect()

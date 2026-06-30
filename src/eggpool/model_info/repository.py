@@ -110,6 +110,30 @@ class ModelInfoRepository:
         async with self._db.transaction():
             await self._execute_upsert_canonical(info)
 
+    async def upsert_canonical_with_model(self, info: CanonicalModelInfo) -> None:
+        """Seed a placeholder ``models`` row and upsert the canonical row.
+
+        ``model_info_canonical.model_id`` carries a foreign key to
+        ``models.model_id``. Traffic-observed models can show up in
+        the dashboard's detail page before the catalog has written a
+        ``models`` row, so this method seeds one with ``INSERT OR
+        IGNORE`` and then performs the canonical upsert — both inside
+        the same transaction so the FK is satisfied when the canonical
+        row is committed. Existing ``models`` rows are left untouched.
+        """
+        async with self._db.transaction():
+            await self._db.execute_write(
+                "INSERT OR IGNORE INTO models "
+                "(model_id, display_name, first_seen_at, last_seen_at) "
+                "VALUES (?, NULL, ?, ?)",
+                (
+                    info.model_id,
+                    info.first_seen_at.isoformat(),
+                    info.last_seen_at.isoformat(),
+                ),
+            )
+            await self._execute_upsert_canonical(info)
+
     async def upsert_canonical_batch(self, infos: list[CanonicalModelInfo]) -> int:
         """Write multiple canonical rows inside a single transaction.
 

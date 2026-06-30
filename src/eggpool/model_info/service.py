@@ -633,6 +633,77 @@ class ModelInfoService:
         """Return the canonical summary for a model."""
         return await self._repo.get_canonical(model_id)
 
+    async def ensure_canonical(self, model_id: str) -> CanonicalModelInfo:
+        """Return the canonical row, creating a sparse one if missing.
+
+        The dashboard's per-model detail page is the only operator path
+        that links directly to a model_id, so traffic-observed models
+        that never appeared in any provider's ``/v1/models`` listing
+        would otherwise show the empty-state page (``Model info not
+        available``) every time. To make the page useful on every
+        click we backfill a sparse canonical row on demand:
+
+        * If the model is in the live catalog, the row uses the
+          catalog's classification (``_classify_model``) and detail
+          fields (``_build_detail``), with provenance ``provider_catalog``
+          — identical to what ``reconcile_catalog_snapshot`` would
+          have written at startup, just lazily.
+        * If the model is not in the catalog (traffic-only), the row
+          is marked ``status="unmatched"``, ``sparse=True``, with
+          provenance ``traffic_observation`` so it cannot be confused
+          with a catalog-confirmed model.
+
+        The next periodic refresh (``run_periodic_refresh``) will
+        attempt to enrich the row from external sources if any are
+        enabled, and a subsequent catalog refresh will upgrade it.
+        Callers must handle exceptions — a database failure here is
+        not recoverable inside the service, but the dashboard's
+        ``try/except`` swallows it and falls back to the empty-state
+        render.
+        """
+        existing = await self._repo.get_canonical(model_id)
+        if existing is not None:
+            return existing
+
+        in_catalog = model_id in self._catalog._models  # pyright: ignore[reportPrivateUsage]
+        status, sparse = self._classify_model(model_id)
+        detail = self._build_detail(model_id) if in_catalog else {}
+
+        now = datetime.now(UTC)
+        provenance: dict[str, object] = {
+            "sources": ["provider_catalog" if in_catalog else "traffic_observation"],
+            "reconciled_at": now.isoformat(),
+            "lazy_created": True,
+        }
+
+        summary = _generate_summary(
+            model_id=model_id,
+            status=status,
+            sparse=sparse,
+            detail=detail,
+        )
+
+        info = CanonicalModelInfo(
+            model_id=model_id,
+            status=status,
+            summary=summary,
+            sparse=sparse,
+            detail=detail,
+            provenance=provenance,
+            conflicts={},
+            first_seen_at=now,
+            last_seen_at=now,
+            last_refreshed_at=None,
+            next_refresh_at=self._compute_next_refresh(status, now),
+        )
+        # ``model_info_canonical.model_id`` has a FK to ``models``. A
+        # traffic-only model may never have been catalogued, so seed a
+        # placeholder ``models`` row inside the same transaction as the
+        # canonical upsert; an existing row is left untouched via
+        # ``INSERT OR IGNORE``.
+        await self._repo.upsert_canonical_with_model(info)
+        return info
+
     async def get_summary_map(
         self, model_ids: Iterable[str] | None = None
     ) -> dict[str, CanonicalModelInfo]:

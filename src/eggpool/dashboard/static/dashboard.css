@@ -462,6 +462,29 @@ table.data tr:last-child td {
   border-bottom: none;
 }
 
+/* Theme-aware link styling for anchors inside table cells.
+   The Models page renders the model-id column as an anchor; without
+   these rules the link falls back to browser-default blue + underline,
+   which clashes with every bundled theme and ignores the
+   `--link-color` / `--link-color-hover` tokens the theme system
+   already publishes. */
+table.data td a {
+  color: var(--link-color);
+  text-decoration: none;
+}
+
+table.data td a:hover,
+table.data td a:focus-visible {
+  color: var(--link-color-hover);
+  text-decoration: underline;
+}
+
+table.data td a:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
 td.yes { color: var(--color-success); font-weight: 600; }
 td.no { color: var(--color-error); font-weight: 600; }
 
