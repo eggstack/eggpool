@@ -466,3 +466,240 @@ class TestIntegrationEvenDistribution:
         finally:
             for name in names:
                 os.environ.pop(f"K_{name}", None)
+
+
+# ---------------------------------------------------------------------------
+# Test 6: Mixed weights — sub-band of equal-weight peers
+# ---------------------------------------------------------------------------
+
+
+class TestMixedWeightSubBand:
+    """Different-weight accounts do not all end up in one fairness band."""
+
+    def test_fairness_band_forms_sub_band_for_equal_weight_subset(self) -> None:
+        """When weights are 2.0, 1.0, 1.0 the two weight-1.0 accounts
+        form a fairness band if they are at the top of the scored order.
+
+        The plan requires that equal-peer rotor either applies only to
+        the weight-1.0 subset or skips with ``reason = "different_weights"``.
+        """
+        from eggpool.routing.router import _fairness_band
+
+        # Simulate scored order where the two weight-1.0 accounts are
+        # scored highest (e.g. they have lower utilization).  The
+        # weight-2.0 account comes last.
+        states = [
+            AccountRuntimeState(name="light01", routing_priority=0),
+            AccountRuntimeState(name="light02", routing_priority=0),
+            AccountRuntimeState(name="heavy01", routing_priority=0),
+        ]
+        scores = [
+            RoutingScore(
+                account_name="light01", quota_score=0.3, weight=1.0, is_eligible=True
+            ),
+            RoutingScore(
+                account_name="light02", quota_score=0.31, weight=1.0, is_eligible=True
+            ),
+            RoutingScore(
+                account_name="heavy01", quota_score=0.32, weight=2.0, is_eligible=True
+            ),
+        ]
+        ranked = list(zip(states, scores, strict=True))
+
+        band, rest, reason = _fairness_band(ranked, epsilon=0.1, prefer_native=True)
+        # The two weight-1.0 accounts should form a band; the weight-2.0
+        # account should be excluded because its weight differs.
+        assert len(band) == 2
+        assert reason == "ok"
+        assert len(rest) == 1
+        assert rest[0][0].name == "heavy01"
+        assert {s[0].name for s in band} == {"light01", "light02"}
+
+    def test_fairness_band_rejects_when_best_weight_differs(self) -> None:
+        """When the best candidate has a different weight from the runner-up,
+        band < 2 and fairness is not applied.
+
+        This is the ``reason = "not_tied"`` path: the best is weight-2.0,
+        the next is weight-1.0, so they cannot form an equal-peer band.
+        """
+        from eggpool.routing.router import _fairness_band
+
+        states = [
+            AccountRuntimeState(name="heavy01", routing_priority=0),
+            AccountRuntimeState(name="light01", routing_priority=0),
+            AccountRuntimeState(name="light02", routing_priority=0),
+        ]
+        scores = [
+            RoutingScore(
+                account_name="heavy01", quota_score=0.3, weight=2.0, is_eligible=True
+            ),
+            RoutingScore(
+                account_name="light01", quota_score=0.31, weight=1.0, is_eligible=True
+            ),
+            RoutingScore(
+                account_name="light02", quota_score=0.32, weight=1.0, is_eligible=True
+            ),
+        ]
+        ranked = list(zip(states, scores, strict=True))
+
+        band, rest, reason = _fairness_band(ranked, epsilon=0.1, prefer_native=True)
+        # Best is weight-2.0, runner-up is weight-1.0 → different weights
+        # → band can only contain the first candidate → band < 2.
+        assert len(band) == 0
+        assert reason == "not_tied"
+
+
+# ---------------------------------------------------------------------------
+# Test 7: Coordinator hot path — 300 sequential selections distribute evenly
+# ---------------------------------------------------------------------------
+
+
+class TestCoordinatorHotPathFairness:
+    """Phase 8 regression: the coordinator hot path must distribute.
+
+    This test exercises ``_select_and_persist_attempt()`` directly,
+    which is the actual production path used by ``RequestCoordinator``.
+    The test builds a full coordinator with an in-memory database,
+    migrations, and persistence — not just ``Router`` in isolation.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_coordinator_300_sequential_selections_distribute(self) -> None:
+        """300 sequential selections through the coordinator should
+        distribute roughly evenly across 3 equal accounts.
+
+        This is the acceptance-criterion-9 test: it exercises the
+        coordinator hot path (``_select_and_persist_attempt``), not
+        only ``Router.select_accounts_for_failover``.
+        """
+        import httpx
+
+        from eggpool.db.connection import Database
+        from eggpool.db.migrations import MigrationRunner
+        from eggpool.db.repositories import (
+            AttemptRepository,
+            RequestRepository,
+            ReservationRepository,
+            RoutingDecisionRepository,
+        )
+        from eggpool.request.coordinator import ProxyRequestContext, RequestCoordinator
+
+        names = ["0001", "0002", "0003"]
+        for name in names:
+            os.environ[f"K_{name}"] = "k"
+
+        config = AppConfig.model_validate(
+            {
+                "providers": {
+                    "test-provider": {
+                        "id": "test-provider",
+                        "base_url": "https://api.example.com/v1",
+                        "protocols": ["openai"],
+                        "routing_priority": 0,
+                        "accounts": [
+                            {
+                                "name": name,
+                                "api_key_env": f"K_{name}",
+                                "weight": 1.0,
+                            }
+                            for name in names
+                        ],
+                    }
+                }
+            }
+        )
+        registry = AccountRegistry(config)
+
+        cache = ModelCatalogCache()
+        for name in names:
+            cache.update_from_account(
+                name,
+                "test-provider",
+                [{"model_id": "test-model", "protocol": "openai"}],
+            )
+
+        quota_estimator = QuotaEstimator()
+        router = Router(
+            registry,  # type: ignore[arg-type]
+            _MockCatalog(cache),  # type: ignore[arg-type]
+            quota_estimator=quota_estimator,
+            fairness_mode="round_robin",
+        )
+        router._scorer.tiebreaker_range = 0.0  # pyright: ignore[reportPrivateUsage]
+        for name in names:
+            router.quota_estimator.accounts[name] = AccountQuota(
+                account_name=name,
+                weight=1.0,
+                capacity_5h_microdollars=1_000_000_000,
+                capacity_7d_microdollars=7_000_000_000,
+                capacity_30d_microdollars=30_000_000_000,
+            )
+
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            runner = MigrationRunner(db)
+            await runner.run()
+
+            # Seed accounts, models, and account_models rows
+            async with db.transaction():
+                await db.execute_insert(
+                    "INSERT INTO models (model_id, display_name, protocol) "
+                    "VALUES (?, ?, ?)",
+                    ("test-model", "test-model", "openai"),
+                )
+                for name in names:
+                    await db.execute_insert(
+                        "INSERT INTO accounts "
+                        "(name, api_key_env, enabled, weight) "
+                        "VALUES (?, ?, 1, ?)",
+                        (name, f"K_{name}", 1.0),
+                    )
+                    row = await db.fetch_one(
+                        "SELECT id FROM accounts WHERE name = ?", (name,)
+                    )
+                    assert row is not None
+                    await db.execute_insert(
+                        "INSERT INTO account_models "
+                        "(account_id, model_id, enabled) VALUES (?, ?, 1)",
+                        (int(row["id"]), "test-model"),
+                    )
+
+            coordinator = RequestCoordinator(
+                registry=registry,
+                catalog=_MockCatalog(cache),  # type: ignore[arg-type]
+                router=router,
+                db=db,
+                client_pool=httpx.AsyncClient(),
+                request_repo=RequestRepository(db),
+                reservation_repo=ReservationRepository(db),
+                attempt_repo=AttemptRepository(db),
+                routing_decision_repo=RoutingDecisionRepository(db),
+                quota_estimator=quota_estimator,
+                health_manager=None,
+            )
+
+            counts: dict[str, int] = {name: 0 for name in names}
+            attempts = 300
+
+            for i in range(attempts):
+                ctx = ProxyRequestContext(
+                    request_id=f"req-{i}",
+                    protocol="openai",
+                    model_id="test-model",
+                    streaming=False,
+                    original_body=b'{"messages":[{"role":"user","content":"hi"}]}',
+                    incoming_headers={},
+                )
+                selected = await coordinator._select_and_persist_attempt(ctx, 1)
+                counts[selected.account_name] += 1
+
+            # Each account should get roughly 100 of 300 selections
+            for name, count in counts.items():
+                assert count >= 80, f"{name} got {count}, expected >= 80"
+                assert count <= 120, f"{name} got {count}, expected <= 120"
+            assert sum(counts.values()) == attempts
+        finally:
+            await db.disconnect()
+            for name in names:
+                os.environ.pop(f"K_{name}", None)

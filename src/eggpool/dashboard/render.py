@@ -9,7 +9,10 @@ from __future__ import annotations
 import json
 from datetime import UTC, date, datetime, timedelta
 from html import escape as _html_escape
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from eggpool.model_info.types import CanonicalModelInfo
 
 from eggpool.dashboard.escape import (
     escape,
@@ -2247,7 +2250,7 @@ def render_models(
 
 
 def render_model_detail(
-    info: Any | None,
+    info: CanonicalModelInfo | None,
     model_id: str,
     theme_css: str = "",
     available_themes: list[str] | None = None,
@@ -2271,40 +2274,36 @@ def render_model_detail(
         )
 
     # Extract fields from the CanonicalModelInfo object
-    status_raw = getattr(info, "status", "")
-    status_str = str(status_raw) if status_raw is not None else ""
+    status_raw = info.status
+    status_str = str(status_raw)
     status_display = _STATUS_DISPLAY.get(status_str, status_str)
-    sparse = getattr(info, "sparse", False)
-    summary = getattr(info, "summary", "") or ""
-    last_seen = getattr(info, "last_seen_at", None)
-    last_refreshed = getattr(info, "last_refreshed_at", None)
-    next_refresh = getattr(info, "next_refresh_at", None)
-    detail = getattr(info, "detail", {}) or {}
-    provenance = getattr(info, "provenance", {}) or {}
-    conflicts = getattr(info, "conflicts", {}) or {}
+    sparse = info.sparse
+    summary = info.summary or ""
+    last_seen = info.last_seen_at
+    last_refreshed = info.last_refreshed_at
+    next_refresh = info.next_refresh_at
+    detail: dict[str, object] = info.detail or {}
+    provenance: dict[str, object] = info.provenance or {}
+    conflicts: dict[str, object] = info.conflicts or {}
 
     # Status pill
-    pill_info = {
+    pill_info: dict[str, Any] = {
         "status": status_str,
         "sparse": sparse,
         "summary": summary,
-        "sources": (
-            list(provenance.get("sources", [])) if isinstance(provenance, dict) else []
-        ),
+        "sources": list(cast("list[str]", provenance.get("sources", []))),
         "last_refreshed_at": (last_refreshed.isoformat() if last_refreshed else None),
     }
     status_pill = _render_model_info_pill(pill_info)
 
     # Sources list
-    sources = (
-        list(provenance.get("sources", [])) if isinstance(provenance, dict) else []
-    )
+    sources: list[str] = list(cast("list[str]", provenance.get("sources", [])))
     sources_html = (
         ", ".join(f"<code>{escape(s)}</code>" for s in sources) if sources else _EM_DASH
     )
 
     # Provider IDs
-    providers = list(detail.get("providers", [])) if isinstance(detail, dict) else []
+    providers: list[str] = list(cast("list[str]", detail.get("providers", [])))
     providers_html = (
         ", ".join(f"<code>{escape(p)}</code>" for p in providers)
         if providers
@@ -2312,53 +2311,54 @@ def render_model_detail(
     )
 
     # Limits
-    limits = detail.get("limits", {}) if isinstance(detail, dict) else {}
-    ctx = limits.get("effective_context") if isinstance(limits, dict) else None
-    ext_ctx = limits.get("external_context") if isinstance(limits, dict) else None
+    limits: dict[str, object] = cast("dict[str, object]", detail.get("limits", {}))
+    ctx = limits.get("effective_context")
+    ext_ctx = limits.get("external_context")
     limits_parts: list[str] = []
     if ctx is not None:
-        limits_parts.append(f"Effective: {format_tokens(int(ctx))}")
+        limits_parts.append(f"Effective: {format_tokens(int(ctx))}")  # type: ignore[arg-type]
     if ext_ctx is not None:
-        limits_parts.append(f"External: {format_tokens(int(ext_ctx))}")
+        limits_parts.append(f"External: {format_tokens(int(ext_ctx))}")  # type: ignore[arg-type]
     limits_html = " &middot; ".join(limits_parts) if limits_parts else "—"
 
     # Modalities
-    modalities = list(detail.get("modalities", [])) if isinstance(detail, dict) else []
+    modalities: list[str] = list(cast("list[str]", detail.get("modalities", [])))
     modalities_html = ", ".join(escape(m) for m in modalities) if modalities else "—"
 
     # Tool support
-    tools = detail.get("supports_tools") if isinstance(detail, dict) else None
+    tools = detail.get("supports_tools")
     tools_html = "Yes" if tools is True else ("No" if tools is False else "—")
 
     # Family
-    family = detail.get("family") if isinstance(detail, dict) else None
+    family = detail.get("family")
     family_html = escape(str(family)) if family else "—"
 
     # License
-    license_val = detail.get("license") if isinstance(detail, dict) else None
+    license_val = detail.get("license")
     license_html = escape(str(license_val)) if license_val else "—"
 
     # Release date
-    release_date = detail.get("release_date") if isinstance(detail, dict) else None
+    release_date = detail.get("release_date")
     release_html = escape(str(release_date)) if release_date else "—"
 
     # External IDs
-    external_ids = detail.get("external_ids", {}) if isinstance(detail, dict) else {}
+    external_ids: dict[str, object] = cast(
+        "dict[str, object]", detail.get("external_ids", {})
+    )
     ext_id_parts: list[str] = []
-    if isinstance(external_ids, dict):
-        for ext_source, ext_id in external_ids.items():
-            src_esc = escape(str(ext_source))
-            id_esc = escape(str(ext_id))
-            ext_id_parts.append(f"{src_esc}: <code>{id_esc}</code>")
+    for ext_source, ext_id in external_ids.items():
+        src_esc = escape(str(ext_source))
+        id_esc = escape(str(ext_id))
+        ext_id_parts.append(f"{src_esc}: <code>{id_esc}</code>")
     ext_ids_html = "<br>".join(ext_id_parts) if ext_id_parts else _EM_DASH
 
     # Benchmarks
-    benchmarks = detail.get("benchmarks", []) if isinstance(detail, dict) else []
+    benchmarks: list[object] = list(cast("list[object]", detail.get("benchmarks", [])))
     benchmarks_html = _render_benchmarks_table(benchmarks)
 
     # HuggingFace metadata
-    hf_metadata = (
-        detail.get("huggingface_metadata", {}) if isinstance(detail, dict) else {}
+    hf_metadata: dict[str, object] = cast(
+        "dict[str, object]", detail.get("huggingface_metadata", {})
     )
     hf_html = _render_hf_metadata(hf_metadata)
 
@@ -2366,13 +2366,11 @@ def render_model_detail(
     conflicts_html = _render_conflicts_section(conflicts)
 
     # Provenance / reconciled at
-    reconciled_at = (
-        provenance.get("reconciled_at") if isinstance(provenance, dict) else None
-    )
+    reconciled_at = provenance.get("reconciled_at")
     reconciled_html = format_timestamp(reconciled_at) if reconciled_at else _EM_DASH
 
     # Display name
-    display_name = detail.get("display_name") if isinstance(detail, dict) else None
+    display_name = detail.get("display_name")
     title_text = str(display_name) if display_name else model_id
 
     body = f"""
@@ -2480,7 +2478,7 @@ def render_model_detail(
     )
 
 
-def _render_benchmarks_table(benchmarks: list[Any]) -> str:
+def _render_benchmarks_table(benchmarks: list[object]) -> str:
     """Render a benchmarks section if benchmark data is available."""
     if not benchmarks:
         return ""
@@ -2488,13 +2486,14 @@ def _render_benchmarks_table(benchmarks: list[Any]) -> str:
     for bm in benchmarks:
         if not isinstance(bm, dict):
             continue
-        source = escape(str(bm.get("source", "")))
-        name = escape(str(bm.get("benchmark", bm.get("name", ""))))
-        score = bm.get("score")
-        rank = bm.get("rank")
-        percentile = bm.get("percentile")
-        observed = bm.get("observed_at", "")
-        caveat = bm.get("caveat", "")
+        bm_dict: dict[str, Any] = bm  # type: ignore[assignment]
+        source = escape(str(bm_dict.get("source", "")))
+        name = escape(str(bm_dict.get("benchmark", bm_dict.get("name", ""))))
+        score = bm_dict.get("score")
+        rank = bm_dict.get("rank")
+        percentile = bm_dict.get("percentile")
+        observed = bm_dict.get("observed_at", "")
+        caveat = bm_dict.get("caveat", "")
         value_parts: list[str] = []
         if score is not None:
             value_parts.append(f"Score: {escape(str(score))}")
@@ -2520,7 +2519,7 @@ def _render_benchmarks_table(benchmarks: list[Any]) -> str:
     )
 
 
-def _render_hf_metadata(hf_metadata: dict[str, Any]) -> str:
+def _render_hf_metadata(hf_metadata: dict[str, object]) -> str:
     """Render Hugging Face metadata section if available."""
     if not hf_metadata:
         return ""
@@ -2531,7 +2530,8 @@ def _render_hf_metadata(hf_metadata: dict[str, Any]) -> str:
             parts.append(f"<tr><th>{escape(key)}</th><td>{escape(str(val))}</td></tr>")
     tags = hf_metadata.get("tags")
     if isinstance(tags, list) and tags:
-        tags_html = ", ".join(escape(str(t)) for t in tags[:10])
+        tags_list: list[str] = tags  # type: ignore[assignment]
+        tags_html = ", ".join(escape(str(t)) for t in tags_list[:10])
         parts.append(f"<tr><th>Tags</th><td>{tags_html}</td></tr>")
     if not parts:
         return ""
@@ -2542,22 +2542,23 @@ def _render_hf_metadata(hf_metadata: dict[str, Any]) -> str:
     )
 
 
-def _render_conflicts_section(conflicts: dict[str, Any]) -> str:
+def _render_conflicts_section(conflicts: dict[str, object]) -> str:
     """Render a conflicts section if any conflicts exist."""
     if not conflicts:
         return ""
     rows: list[str] = []
     for field, val in conflicts.items():
         if isinstance(val, dict):
-            sources_vals = val.get("sources", {})
-            selected = val.get("selected", "")
-            reason = val.get("reason", "")
+            val_dict: dict[str, Any] = val  # type: ignore[assignment]
+            sources_vals: dict[str, Any] = val_dict.get("sources", {})  # type: ignore[assignment]
+            selected = val_dict.get("selected", "")
+            reason = val_dict.get("reason", "")
             sources_str = (
                 ", ".join(
                     f"{escape(str(k))}: {escape(str(v))}"
                     for k, v in sources_vals.items()
                 )
-                if isinstance(sources_vals, dict)
+                if sources_vals
                 else escape(str(sources_vals))
             )
             rows.append(
