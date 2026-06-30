@@ -32,4 +32,4 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --generate-notes dist/*
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes dist/* || echo "Release already exists, skipping."
