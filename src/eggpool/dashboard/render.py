@@ -586,19 +586,22 @@ def _render_nav(
     # the burger and reveals `.topnav-menu` inline on viewports ≥761px;
     # on narrower viewports the burger is shown and the menu only opens
     # when JS toggles `.topnav-open` on the nav (see
-    # `dashboard.js#initNavToggle`). Theme selector and refresh button
-    # stay outside the menu so they remain reachable on every viewport
-    # size.
+    # `dashboard.js#initNavToggle`). The theme selector lives INSIDE the
+    # menu so it is only reachable on narrow viewports when the menu is
+    # expanded (saves vertical space in the collapsed state) and the
+    # manual refresh button stays outside the menu so it is always
+    # reachable.
     parts.append(
         '<button class="topnav-burger" type="button" '
         'data-tooltip="Open page menu" '
+        'data-tooltip-open-label="Close page menu" '
         'aria-label="Open page menu" '
         'aria-expanded="false" aria-controls="topnav-menu">'
-        '<svg class="topnav-burger-icon" viewBox="0 0 22 16" '
-        'width="22" height="16" aria-hidden="true" focusable="false">'
-        '<rect class="bar bar-1" x="0" y="0" width="22" height="2" rx="1"/>'
-        '<rect class="bar bar-2" x="0" y="7" width="22" height="2" rx="1"/>'
-        '<rect class="bar bar-3" x="0" y="14" width="22" height="2" rx="1"/>'
+        '<svg class="topnav-burger-icon" viewBox="0 0 24 24" '
+        'width="24" height="24" aria-hidden="true" focusable="false">'
+        '<rect class="bar bar-1" x="0" y="0" width="24" height="2" rx="1"/>'
+        '<rect class="bar bar-2" x="0" y="11" width="24" height="2" rx="1"/>'
+        '<rect class="bar bar-3" x="0" y="22" width="24" height="2" rx="1"/>'
         "</svg>"
         "</button>"
     )
@@ -610,9 +613,11 @@ def _render_nav(
             f'&amp;theme={_html_escape(current_theme)}">'
             f"{_html_escape(label)}</a>"
         )
-    parts.append("</div>")
 
-    # Theme selector dropdown
+    # Theme selector lives inside the menu so on narrow viewports it
+    # only shows when the menu is expanded. On wider viewports the
+    # menu is always visible (see `@media (min-width: 761px)` in
+    # `dashboard.css`) so the selector stays reachable.
     themes: list[str] = available_themes or []
     if themes:
         theme_options: list[str] = []
@@ -626,6 +631,7 @@ def _render_nav(
         parts.append(
             '<form method="get" class="theme-selector" '
             'data-tooltip="Switch dashboard theme" '
+            'data-tooltip-pos="bottom" '
             'aria-label="Switch dashboard theme">'
             '<select name="theme" onchange="this.form.submit()">'
             f"{options_html}"
@@ -633,6 +639,7 @@ def _render_nav(
             f'<input type="hidden" name="period" value="{_html_escape(period)}">'
             "</form>"
         )
+    parts.append("</div>")
 
     # Manual refresh button
     parts.append(
@@ -826,6 +833,7 @@ def _render_metric_card(
     card_class = "card warning" if warning else "card"
     parts = [
         f'<div class="{card_class}" data-tooltip="{tooltip_attr}" '
+        f'data-tooltip-pos="bottom" '
         f'aria-label="{tooltip_attr}">',
         f"<h3>{_html_escape(title)}</h3>",
     ]
@@ -871,7 +879,10 @@ def _render_pricing_exactness_badge(
         f"u:{provider_reported},e:{exact},d:{derived},"
         f"p:{partial},~:{estimated},?:{unknown_exc}"
     )
-    return f'<span class="{css_class}" title="{escape(summary)}">{summary}</span>'
+    return (
+        f'<span class="{css_class}" data-tooltip="{escape(summary)}" '
+        f'aria-label="{escape(summary)}">{summary}</span>'
+    )
 
 
 # Status-to-CSS-class mapping for model-info pills
@@ -913,7 +924,8 @@ def _render_model_info_pill(info: dict[str, Any] | None) -> str:
     """
     if not info:
         return (
-            '<span class="pill pill-unknown" title="No model info available">—</span>'
+            '<span class="pill pill-unknown" data-tooltip="No model info available" '
+            'aria-label="No model info available">—</span>'
         )
 
     status = info.get("status", "unknown")
@@ -940,7 +952,8 @@ def _render_model_info_pill(info: dict[str, Any] | None) -> str:
         display += " (sparse)"
 
     return (
-        f'<span class="pill {css_class}" title="{escape(tooltip)}">'
+        f'<span class="pill {css_class}" data-tooltip="{escape(tooltip)}" '
+        f'aria-label="{escape(tooltip)}">'
         f"{escape(display)}</span>"
     )
 

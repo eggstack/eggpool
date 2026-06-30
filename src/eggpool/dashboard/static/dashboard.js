@@ -853,13 +853,35 @@
     if (burger.__eggpoolNavWired) return;
     burger.__eggpoolNavWired = true;
 
+    // Cache the original tooltip + aria-label rendered by
+    // `_render_nav` so we can restore them when the menu closes.
+    // The expanded state should not advertise "Open page menu" —
+    // hovering the X icon after the menu is open otherwise shows
+    // stale copy that no longer matches the button's behaviour.
+    const originalTooltip = burger.getAttribute("data-tooltip") || "";
+    const openTooltip =
+      burger.getAttribute("data-tooltip-open-label") || originalTooltip;
+    const originalAriaLabel = burger.getAttribute("aria-label") || "";
+
     const setOpen = function (open) {
       if (open) {
         nav.classList.add("topnav-open");
         burger.setAttribute("aria-expanded", "true");
+        if (openTooltip) {
+          burger.setAttribute("data-tooltip", openTooltip);
+        } else {
+          burger.removeAttribute("data-tooltip");
+        }
+        burger.setAttribute("aria-label", "Close page menu");
       } else {
         nav.classList.remove("topnav-open");
         burger.setAttribute("aria-expanded", "false");
+        if (originalTooltip) {
+          burger.setAttribute("data-tooltip", originalTooltip);
+        } else {
+          burger.removeAttribute("data-tooltip");
+        }
+        burger.setAttribute("aria-label", originalAriaLabel);
       }
     };
 

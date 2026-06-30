@@ -2557,6 +2557,105 @@ class TestTooltipStylesheet:
         css = self._load_css()
         assert "pointer-events: none" in css
 
+    def test_topnav_burger_suppresses_tooltip_when_expanded(self) -> None:
+        """When the menu is open the burger icon's tooltip must be
+        suppressed so hovering the close button does not show stale
+        "Open page menu" copy that no longer matches the icon."""
+        css = self._load_css()
+        assert '.topnav-burger[aria-expanded="true"]::after' in css
+        assert '.topnav-burger[aria-expanded="true"]::before' in css
+
+    def test_topnav_burger_x_translates_match_square_viewbox(self) -> None:
+        """The burger icon is rendered against a 24x24 square viewBox
+        so the two diagonal strokes meet at the icon's geometric
+        center (12, 12) when the menu is open.  The CSS translate
+        values must move each outer bar from y=1 / y=23 to y=12,
+        i.e. ±11px, otherwise the X drifts off-center."""
+        css = self._load_css()
+        assert "translateY(11px) rotate(45deg)" in css
+        assert "translateY(-11px) rotate(-45deg)" in css
+
+    def test_metric_card_tooltip_anchored_below(self) -> None:
+        """The dashboard's topbar is sticky and sits at z-index 5 above
+        the main content (z-index 1), so a tooltip rendered above a
+        card on the first content row would be clipped by the topbar.
+        Metric cards opt into ``data-tooltip-pos="bottom"`` so their
+        tooltips appear below the card, escaping the topbar clipping
+        entirely.  Verify the card renderer emits the attribute."""
+        from eggpool.dashboard.render import _render_metric_card
+
+        html = _render_metric_card(title="Pending requests", metric="0", sub="—")
+        assert 'data-tooltip-pos="bottom"' in html
+        assert "data-tooltip=" in html
+
+
+class TestTooltipStylizedEverywhere:
+    """Regression tests for the audit that converted the remaining
+    native ``title=`` tooltips on table pills to the stylized
+    ``data-tooltip=`` system.  The dashboard already used the
+    stylized tooltips for cards and event tags; the audit made the
+    exactness badge and model-info pill consistent so every
+    interactive surface renders the themed popup instead of the
+    browser default."""
+
+    @staticmethod
+    def _exactness_badge() -> str:
+        from eggpool.dashboard.render import _render_pricing_exactness_badge
+
+        return _render_pricing_exactness_badge(
+            exact=1,
+            derived=0,
+            partial=0,
+            estimated=0,
+            unknown_exc=0,
+        )
+
+    def test_exactness_badge_uses_stylized_tooltip(self) -> None:
+        html = self._exactness_badge()
+        assert "data-tooltip=" in html
+        assert 'title="u:' not in html
+
+    def test_exactness_badge_preserves_aria_label(self) -> None:
+        html = self._exactness_badge()
+        assert 'aria-label="u:0,e:1' in html
+
+    @staticmethod
+    def _model_info_pill() -> str:
+        from eggpool.dashboard.render import _render_model_info_pill
+
+        return _render_model_info_pill(
+            {
+                "status": "fresh",
+                "sparse": False,
+                "summary": "OpenAI — gpt-4o-mini",
+                "sources": ["openrouter", "upstream"],
+                "last_refreshed_at": "2024-01-01 00:00 UTC",
+            }
+        )
+
+    def test_model_info_pill_uses_stylized_tooltip(self) -> None:
+        html = self._model_info_pill()
+        assert "data-tooltip=" in html
+        assert 'title="OpenAI' not in html
+
+    def test_model_info_pill_includes_sources_in_tooltip(self) -> None:
+        html = self._model_info_pill()
+        # The aria-label mirrors the data-tooltip text; checking it
+        # covers both the visible-on-hover content and the assistive
+        # technology label in a single assertion.
+        assert 'aria-label="OpenAI' in html
+
+    @staticmethod
+    def _empty_model_info_pill() -> str:
+        from eggpool.dashboard.render import _render_model_info_pill
+
+        return _render_model_info_pill(None)
+
+    def test_empty_model_info_pill_uses_stylized_tooltip(self) -> None:
+        html = self._empty_model_info_pill()
+        assert 'data-tooltip="No model info available"' in html
+        assert 'title="No model info available"' not in html
+
 
 class TestRenderReliability:
     """Tests for the Reliability page renderer."""
@@ -3204,9 +3303,10 @@ class TestHamburgerNav:
     On viewports ≥761px the burger is hidden via CSS and the 12 page
     links render inline inside `.topnav-menu`.  On narrower viewports
     the burger is visible and the menu opens when JS toggles
-    `.topnav-open` on the ancestor `nav.topnav`.  Theme selector and
-    refresh button stay outside the menu so they remain reachable on
-    every viewport.
+    `.topnav-open` on the ancestor `nav.topnav`.  The theme selector
+    lives inside the menu so it is only reachable on narrow viewports
+    when the menu is expanded; the manual refresh button stays outside
+    the menu so it remains reachable on every viewport.
     """
 
     def test_burger_button_with_inline_svg_present(self) -> None:
@@ -3224,6 +3324,22 @@ class TestHamburgerNav:
         assert 'aria-expanded="false"' in html[burger_open:]
         assert 'aria-controls="topnav-menu"' in html
 
+    def test_burger_carries_open_and_close_tooltips(self) -> None:
+        """The burger advertises two tooltips so the JS handler can swap
+        between them when the menu opens/closes.  Both labels must be
+        present in the initial markup."""
+        html = _render_nav("overview", "24h")
+        assert 'data-tooltip="Open page menu"' in html
+        assert 'data-tooltip-open-label="Close page menu"' in html
+
+    def test_burger_uses_square_viewbox(self) -> None:
+        """The 24x24 square viewBox keeps the rotated X strokes meeting
+        at the icon's geometric center without sub-pixel clipping
+        against a non-square viewBox."""
+        html = _render_nav("overview", "24h")
+        assert 'viewBox="0 0 24 24"' in html
+        assert 'width="24" height="24"' in html
+
     def test_topnav_menu_lives_after_burger(self) -> None:
         html = _render_nav("overview", "24h")
         burger_pos = html.find('<button class="topnav-burger"')
@@ -3232,19 +3348,26 @@ class TestHamburgerNav:
         assert menu_open_pos > burger_pos
         assert menu_open_pos != -1
 
-    def test_theme_selector_outside_menu(self) -> None:
+    def test_theme_selector_inside_menu(self) -> None:
+        """The theme selector lives inside the dropdown menu on narrow
+        viewports so it only renders when the user expands the burger.
+        On wide viewports the menu is always visible so the selector
+        stays reachable."""
         html = _render_nav("overview", "24h", available_themes=["dark"])
-        menu_close = html.find("</div>", html.find('<div class="topnav-menu"'))
+        menu_start = html.find('<div class="topnav-menu" id="topnav-menu">')
+        menu_end = html.find("</div>", menu_start)
         theme_pos = html.find("theme-selector")
-        assert menu_close != -1
-        assert theme_pos > menu_close
+        assert menu_start != -1
+        assert menu_end != -1
+        assert theme_pos != -1
+        assert menu_start < theme_pos < menu_end
 
     def test_refresh_button_outside_menu(self) -> None:
-        html = _render_nav("overview", "24h")
+        html = _render_nav("overview", "24h", available_themes=["dark"])
         menu_close = html.find("</div>", html.find('<div class="topnav-menu"'))
-        refresh_pos = html.find("topnav-refresh")
+        theme_pos = html.find("topnav-refresh")
         assert menu_close != -1
-        assert refresh_pos > menu_close
+        assert theme_pos > menu_close
 
     def test_all_page_links_inside_menu(self) -> None:
         html = _render_nav("overview", "24h")

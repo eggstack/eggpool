@@ -688,9 +688,15 @@ td.no { color: var(--color-error); font-weight: 600; }
 
 /* Animate the three bars into an X when the burger is expanded.  Pure
    CSS so the toggle does not need to manage additional classes — the
-   JS only flips `aria-expanded` on the button. */
+   JS only flips `aria-expanded` on the button.  The 24x24 viewBox
+   (set in `render.py#_render_nav`) is intentionally square so the
+   two diagonal strokes meet at the icon's geometric center (12,12)
+   without sub-pixel clipping against a non-square viewBox.  Each
+   bar's center sits at y=1, y=12, y=23 in the closed state and the
+   two outer bars translate by ±11px to land at the shared center
+   (y=12) when forming the X. */
 .topnav-burger[aria-expanded="true"] .topnav-burger-icon .bar-1 {
-  transform: translateY(7px) rotate(45deg);
+  transform: translateY(11px) rotate(45deg);
   transform-origin: 50% 50%;
 }
 
@@ -699,7 +705,7 @@ td.no { color: var(--color-error); font-weight: 600; }
 }
 
 .topnav-burger[aria-expanded="true"] .topnav-burger-icon .bar-3 {
-  transform: translateY(-7px) rotate(-45deg);
+  transform: translateY(-11px) rotate(-45deg);
   transform-origin: 50% 50%;
 }
 
@@ -721,7 +727,36 @@ td.no { color: var(--color-error); font-weight: 600; }
     align-items: flex-start;
   }
 
+  /* Center the brand title and stack the nav full-width below it
+     so the brand line does not waste a row alongside the burger
+     button.  The h1 takes the full content width and the text is
+     centered within, while the burger and refresh button keep
+     their own intrinsic width and re-flow via `flex-wrap`. */
+  header.topbar h1 {
+    flex: 1 1 100%;
+    order: 1;
+    text-align: center;
+  }
+
+  /* The burger + refresh row stays above the dropdown menu when the
+     menu is expanded.  The menu carries an explicit `width: 100%`,
+     so by giving it the highest `order` we let flex-wrap push it to
+     its own row beneath the controls.  On a closed menu the menu is
+     `display: none` and the burger + refresh share a single row. */
+  .topnav-burger {
+    order: 0;
+  }
+
+  .topnav-refresh {
+    order: 1;
+  }
+
+  .topnav-menu {
+    order: 3;
+  }
+
   nav.topnav {
+    order: 2;
     width: 100%;
     margin-left: 0;
   }
@@ -762,6 +797,12 @@ td.no { color: var(--color-error); font-weight: 600; }
     display: inline-flex;
   }
 
+  /* The mobile menu drops the theme selector to its visual bottom
+     via `margin-top: auto` so it sits below all the nav links.  The
+     selector is only visible when `.topnav-open` flips the menu on
+     (the .topnav-menu block above already hides the menu by
+     default), so operators on a phone do not pay the cost of an
+     always-visible theme row when the burger is collapsed. */
   .topnav-menu {
     display: none;
     flex-direction: column;
@@ -778,6 +819,20 @@ td.no { color: var(--color-error); font-weight: 600; }
   .topnav-menu a {
     padding: 0.6rem 0.75rem;
     min-height: 44px;
+  }
+
+  /* The theme selector sits inside the .topnav-menu flex column on
+     narrow viewports; pushing it to the bottom keeps the page links
+     grouped together at the top of the dropdown.  On wide viewports
+     the menu is a horizontal row so the `margin-top: auto` becomes
+     a no-op. */
+  .topnav-menu .theme-selector {
+    margin-top: auto;
+    padding-top: 0.5rem;
+  }
+
+  .topnav-menu .theme-selector select {
+    width: 100%;
   }
 }
 
@@ -996,6 +1051,19 @@ nav.topnav [data-tooltip]::before {
   bottom: auto;
   border-top-color: transparent;
   border-bottom-color: var(--card-border);
+}
+
+/* The burger button swaps meaning between "open menu" and "close
+   menu" depending on `aria-expanded`.  Suppress the tooltip when the
+   menu is open so hovering the close button does not show stale
+   "Open page menu" copy that no longer matches the icon.  The
+   companion JS handler also removes the `data-tooltip` attribute
+   while expanded; this rule is the CSS safety net for any browser
+   or extension that does not strip the attribute. */
+.topnav-burger[aria-expanded="true"]::after,
+.topnav-burger[aria-expanded="true"]::before {
+  opacity: 0 !important;
+  pointer-events: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
