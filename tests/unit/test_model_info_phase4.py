@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from eggpool.api.models import MODEL_INFO_STATUS_DISPLAY, serialize_openai_model
+from eggpool.constants import API_V1_PREFIX
 from eggpool.dashboard.render import _render_model_info_pill
 
 # ---------------------------------------------------------------------------
@@ -468,3 +469,233 @@ class TestRenderModelsWithInfo:
         html = render_models(models, model_info_map=mi_map)
         assert "pill-sparse" in html
         assert "pill-conflict" in html
+
+
+# ---------------------------------------------------------------------------
+# /v1/models integration tests (app-level with mocked catalog/service)
+# ---------------------------------------------------------------------------
+
+
+class TestV1ModelsEnrichment:
+    """Integration tests for the /v1/models model-info enrichment path."""
+
+    def test_uses_base_model_id_for_provider_suffixed_entries(self) -> None:
+        """model_info is resolved by base_model_id first for suffixed entries."""
+        from fastapi.testclient import TestClient
+
+        from eggpool.app import create_app
+        from eggpool.models.config import AppConfig
+
+        config = AppConfig.from_dict(
+            {
+                "server": {"api_key_env": "NONEXISTENT_KEY_FOR_TEST"},
+                "database": {"path": ":memory:"},
+                "models": {"startup_refresh": False, "refresh_interval_s": 0},
+                "dashboard": {"enabled": False},
+                "model_info": {
+                    "enabled": True,
+                    "include_in_models_endpoint": True,
+                    "startup_refresh": False,
+                },
+            }
+        )
+        app = create_app(config)
+
+        mock_catalog = MagicMock()
+        mock_catalog.get_models_for_exposure.return_value = [
+            {
+                "model_id": "gpt-4/openai",
+                "base_model_id": "gpt-4",
+                "display_name": "GPT-4",
+            },
+            {
+                "model_id": "minimax-m3/minimax",
+                "display_name": "MiniMax M3",
+            },
+        ]
+        app.state.catalog = mock_catalog
+
+        mi_info_base = MagicMock()
+        mi_info_base.status = "fresh"
+        mi_info_base.sparse = False
+        mi_info_base.summary = "All good."
+        mi_info_base.provenance = {"sources": ["provider_catalog"]}
+        mi_info_base.last_refreshed_at = None
+
+        mi_info_direct = MagicMock()
+        mi_info_direct.status = "partial"
+        mi_info_direct.sparse = True
+        mi_info_direct.summary = "Sparse."
+        mi_info_direct.provenance = {"sources": ["openrouter"]}
+        mi_info_direct.last_refreshed_at = None
+
+        mock_mi_service = AsyncMock()
+        mock_mi_service.get_summary_map.return_value = {
+            "gpt-4": mi_info_base,
+            "minimax-m3": mi_info_direct,
+        }
+        app.state.model_info = mock_mi_service
+
+        client = TestClient(app)
+        response = client.get(f"{API_V1_PREFIX}/models")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["data"]) == 2
+
+        # gpt-4/openai resolved via base_model_id "gpt-4"
+        m1 = data["data"][0]
+        assert m1["id"] == "gpt-4/openai"
+        assert m1["eggpool"]["model_info"]["status"] == "fresh"
+
+        # minimax-m3/minimax resolved via model_id "minimax-m3/minimax"
+        # which does NOT match "minimax-m3" in the map, so no enrichment
+        m2 = data["data"][1]
+        assert m2["id"] == "minimax-m3/minimax"
+        assert "model_info" not in m2.get("eggpool", {})
+
+    def test_omits_enrichment_when_config_disabled(self) -> None:
+        """model_info enrichment is omitted when include_in_models_endpoint is false."""
+        from fastapi.testclient import TestClient
+
+        from eggpool.app import create_app
+        from eggpool.models.config import AppConfig
+
+        config = AppConfig.from_dict(
+            {
+                "server": {"api_key_env": "NONEXISTENT_KEY_FOR_TEST"},
+                "database": {"path": ":memory:"},
+                "models": {"startup_refresh": False, "refresh_interval_s": 0},
+                "dashboard": {"enabled": False},
+                "model_info": {
+                    "enabled": True,
+                    "include_in_models_endpoint": False,
+                    "startup_refresh": False,
+                },
+            }
+        )
+        app = create_app(config)
+
+        mock_catalog = MagicMock()
+        mock_catalog.get_models_for_exposure.return_value = [
+            {"model_id": "gpt-4", "display_name": "GPT-4"},
+        ]
+        app.state.catalog = mock_catalog
+
+        mock_mi_service = AsyncMock()
+        mock_mi_service.get_summary_map.return_value = {
+            "gpt-4": MagicMock(
+                status="fresh",
+                sparse=False,
+                summary="ok",
+                provenance={"sources": ["provider_catalog"]},
+                last_refreshed_at=None,
+            ),
+        }
+        app.state.model_info = mock_mi_service
+
+        client = TestClient(app)
+        response = client.get(f"{API_V1_PREFIX}/models")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["data"]) == 1
+        # eggpool namespace may exist for limits etc., but model_info must be absent
+        eggpool = data["data"][0].get("eggpool", {})
+        assert "model_info" not in eggpool
+        mock_mi_service.get_summary_map.assert_not_called()
+
+    def test_omits_enrichment_on_model_info_error(self) -> None:
+        """model_info errors are silently caught; /v1/models still works."""
+        from fastapi.testclient import TestClient
+
+        from eggpool.app import create_app
+        from eggpool.models.config import AppConfig
+
+        config = AppConfig.from_dict(
+            {
+                "server": {"api_key_env": "NONEXISTENT_KEY_FOR_TEST"},
+                "database": {"path": ":memory:"},
+                "models": {"startup_refresh": False, "refresh_interval_s": 0},
+                "dashboard": {"enabled": False},
+                "model_info": {
+                    "enabled": True,
+                    "include_in_models_endpoint": True,
+                    "startup_refresh": False,
+                },
+            }
+        )
+        app = create_app(config)
+
+        mock_catalog = MagicMock()
+        mock_catalog.get_models_for_exposure.return_value = [
+            {"model_id": "gpt-4", "display_name": "GPT-4"},
+        ]
+        app.state.catalog = mock_catalog
+
+        mock_mi_service = AsyncMock()
+        mock_mi_service.get_summary_map.side_effect = RuntimeError("DB unavailable")
+        app.state.model_info = mock_mi_service
+
+        client = TestClient(app)
+        response = client.get(f"{API_V1_PREFIX}/models")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["data"]) == 1
+        # No model_info in output despite service being configured
+        eggpool = data["data"][0].get("eggpool", {})
+        assert "model_info" not in eggpool
+
+
+# ---------------------------------------------------------------------------
+# Route registration tests
+# ---------------------------------------------------------------------------
+
+
+class TestRouteRegistration:
+    """Verify model-info routes are registered under expected auth policy."""
+
+    def test_model_info_routes_registered_when_enabled(self) -> None:
+        """Model-info endpoints appear in routes when model_info.enabled."""
+        from eggpool.app import create_app
+        from eggpool.models.config import AppConfig
+
+        config = AppConfig.from_dict(
+            {
+                "server": {"api_key_env": "NONEXISTENT_KEY_FOR_TEST"},
+                "database": {"path": ":memory:"},
+                "models": {"startup_refresh": False, "refresh_interval_s": 0},
+                "dashboard": {"enabled": True, "public": True},
+                "model_info": {
+                    "enabled": True,
+                    "startup_refresh": False,
+                },
+            }
+        )
+        app = create_app(config)
+        paths = {route.path for route in app.routes}
+        assert "/api/model-info" in paths
+        assert "/api/model-info/sources" in paths
+        assert "/api/model-info/{model_id:path}" in paths
+        assert "/api/model-info/refresh" in paths
+
+    def test_model_info_routes_absent_when_disabled(self) -> None:
+        """Model-info endpoints are NOT registered when model_info.enabled is false."""
+        from eggpool.app import create_app
+        from eggpool.models.config import AppConfig
+
+        config = AppConfig.from_dict(
+            {
+                "server": {"api_key_env": "NONEXISTENT_KEY_FOR_TEST"},
+                "database": {"path": ":memory:"},
+                "models": {"startup_refresh": False, "refresh_interval_s": 0},
+                "dashboard": {"enabled": True, "public": True},
+                "model_info": {
+                    "enabled": False,
+                    "startup_refresh": False,
+                },
+            }
+        )
+        app = create_app(config)
+        paths = {route.path for route in app.routes}
+        assert "/api/model-info" not in paths
+        assert "/api/model-info/sources" not in paths
+        assert "/api/model-info/refresh" not in paths
