@@ -7,7 +7,7 @@ small. All values rendered into HTML are escaped via the `escape` module.
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from html import escape as _html_escape
 from typing import Any, cast
 
@@ -42,6 +42,8 @@ _DEFAULT_HEATMAP_COLORS = [
     "#30a14e",
     "#216e39",
 ]
+
+_EM_DASH = "\u2014"
 
 
 _UPDATE_INDICATOR_TEMPLATE = (
@@ -884,6 +886,18 @@ _MODEL_INFO_PILL_CLASSES: dict[str, str] = {
     "manual_override": "pill-partial",
     "manual": "pill-partial",
     "withdrawn": "pill-stale",
+}
+
+_STATUS_DISPLAY: dict[str, str] = {
+    "fresh": "fresh",
+    "partial": "partial",
+    "sparse_new": "sparse",
+    "stale": "stale",
+    "conflicting": "conflict",
+    "unmatched": "unmatched",
+    "source_unavailable": "source-unavailable",
+    "manual_override": "manual",
+    "withdrawn": "withdrawn",
 }
 
 
@@ -2168,9 +2182,15 @@ def render_models(
             mi_info = mi_map.get(model_id)
             info_pill = _render_model_info_pill(mi_info)
 
+            model_link = (
+                f'<a href="/models/{escape_attr(model_id)}'
+                f'?theme={escape_attr(current_theme)}">'
+                f"{escape(model_id)}</a>"
+            )
+
             parts.append(
                 f"<tr>"
-                f"{_td_priority(escape(model_id), 1)}"
+                f"{_td_priority(model_link, 1)}"
                 f"{_td_priority(provider, 1)}"
                 f"{_td_priority(info_pill, 1)}"
                 f"{_td_priority(f'{req_count:,}', 1)}"
@@ -2223,6 +2243,342 @@ def render_models(
         available_themes=available_themes,
         current_theme=current_theme,
         update_info=update_info,
+    )
+
+
+def render_model_detail(
+    info: Any | None,
+    model_id: str,
+    theme_css: str = "",
+    available_themes: list[str] | None = None,
+    current_theme: str = "",
+    update_info: Any | None = None,
+) -> str:
+    """Render the model-info detail page for a single model."""
+    if info is None:
+        body = f"""
+<h2>Model: {escape(model_id)}</h2>
+<p class="empty">Model info not available.</p>
+"""
+        return _render_layout(
+            title=f"Model: {model_id}",
+            body=body,
+            active_nav="models",
+            theme_css=theme_css,
+            available_themes=available_themes,
+            current_theme=current_theme,
+            update_info=update_info,
+        )
+
+    # Extract fields from the CanonicalModelInfo object
+    status_raw = getattr(info, "status", "")
+    status_str = str(status_raw) if status_raw is not None else ""
+    status_display = _STATUS_DISPLAY.get(status_str, status_str)
+    sparse = getattr(info, "sparse", False)
+    summary = getattr(info, "summary", "") or ""
+    last_seen = getattr(info, "last_seen_at", None)
+    last_refreshed = getattr(info, "last_refreshed_at", None)
+    next_refresh = getattr(info, "next_refresh_at", None)
+    detail = getattr(info, "detail", {}) or {}
+    provenance = getattr(info, "provenance", {}) or {}
+    conflicts = getattr(info, "conflicts", {}) or {}
+
+    # Status pill
+    pill_info = {
+        "status": status_str,
+        "sparse": sparse,
+        "summary": summary,
+        "sources": (
+            list(provenance.get("sources", [])) if isinstance(provenance, dict) else []
+        ),
+        "last_refreshed_at": (last_refreshed.isoformat() if last_refreshed else None),
+    }
+    status_pill = _render_model_info_pill(pill_info)
+
+    # Sources list
+    sources = (
+        list(provenance.get("sources", [])) if isinstance(provenance, dict) else []
+    )
+    sources_html = (
+        ", ".join(f"<code>{escape(s)}</code>" for s in sources) if sources else _EM_DASH
+    )
+
+    # Provider IDs
+    providers = list(detail.get("providers", [])) if isinstance(detail, dict) else []
+    providers_html = (
+        ", ".join(f"<code>{escape(p)}</code>" for p in providers)
+        if providers
+        else _EM_DASH
+    )
+
+    # Limits
+    limits = detail.get("limits", {}) if isinstance(detail, dict) else {}
+    ctx = limits.get("effective_context") if isinstance(limits, dict) else None
+    ext_ctx = limits.get("external_context") if isinstance(limits, dict) else None
+    limits_parts: list[str] = []
+    if ctx is not None:
+        limits_parts.append(f"Effective: {format_tokens(int(ctx))}")
+    if ext_ctx is not None:
+        limits_parts.append(f"External: {format_tokens(int(ext_ctx))}")
+    limits_html = " &middot; ".join(limits_parts) if limits_parts else "—"
+
+    # Modalities
+    modalities = list(detail.get("modalities", [])) if isinstance(detail, dict) else []
+    modalities_html = ", ".join(escape(m) for m in modalities) if modalities else "—"
+
+    # Tool support
+    tools = detail.get("supports_tools") if isinstance(detail, dict) else None
+    tools_html = "Yes" if tools is True else ("No" if tools is False else "—")
+
+    # Family
+    family = detail.get("family") if isinstance(detail, dict) else None
+    family_html = escape(str(family)) if family else "—"
+
+    # License
+    license_val = detail.get("license") if isinstance(detail, dict) else None
+    license_html = escape(str(license_val)) if license_val else "—"
+
+    # Release date
+    release_date = detail.get("release_date") if isinstance(detail, dict) else None
+    release_html = escape(str(release_date)) if release_date else "—"
+
+    # External IDs
+    external_ids = detail.get("external_ids", {}) if isinstance(detail, dict) else {}
+    ext_id_parts: list[str] = []
+    if isinstance(external_ids, dict):
+        for ext_source, ext_id in external_ids.items():
+            src_esc = escape(str(ext_source))
+            id_esc = escape(str(ext_id))
+            ext_id_parts.append(f"{src_esc}: <code>{id_esc}</code>")
+    ext_ids_html = "<br>".join(ext_id_parts) if ext_id_parts else _EM_DASH
+
+    # Benchmarks
+    benchmarks = detail.get("benchmarks", []) if isinstance(detail, dict) else []
+    benchmarks_html = _render_benchmarks_table(benchmarks)
+
+    # HuggingFace metadata
+    hf_metadata = (
+        detail.get("huggingface_metadata", {}) if isinstance(detail, dict) else {}
+    )
+    hf_html = _render_hf_metadata(hf_metadata)
+
+    # Conflicts
+    conflicts_html = _render_conflicts_section(conflicts)
+
+    # Provenance / reconciled at
+    reconciled_at = (
+        provenance.get("reconciled_at") if isinstance(provenance, dict) else None
+    )
+    reconciled_html = format_timestamp(reconciled_at) if reconciled_at else _EM_DASH
+
+    # Display name
+    display_name = detail.get("display_name") if isinstance(detail, dict) else None
+    title_text = str(display_name) if display_name else model_id
+
+    body = f"""
+<h2>{escape(title_text)} <small>({escape(model_id)})</small></h2>
+<p>{status_pill}</p>
+<section class="cards">
+  {
+        _render_metric_card(
+            title="Status",
+            metric=escape(status_display),
+            sub="Sparse" if sparse else None,
+            tooltip="Current freshness status of model-info metadata",
+        )
+    }
+  {
+        _render_metric_card(
+            title="Last seen",
+            metric=format_age_seconds((datetime.now(UTC) - last_seen).total_seconds())
+            if last_seen
+            else _EM_DASH,
+            sub="Observation time",
+            tooltip="When this model was last observed by any source",
+        )
+    }
+  {
+        _render_metric_card(
+            title="Last refreshed",
+            metric=format_age_seconds(
+                (datetime.now(UTC) - last_refreshed).total_seconds()
+            )
+            if last_refreshed
+            else _EM_DASH,
+            sub="Refresh time",
+            tooltip="When model-info metadata was last refreshed",
+        )
+    }
+  {
+        _render_metric_card(
+            title="Next refresh",
+            metric=format_age_seconds(
+                (next_refresh - datetime.now(UTC)).total_seconds()
+            )
+            if next_refresh
+            else _EM_DASH,
+            sub="Scheduled",
+            tooltip="When the next scheduled refresh will occur",
+        )
+    }
+</section>
+
+<section class="panel">
+  <h3>Summary</h3>
+  <p>{escape(summary) if summary else "<em>No summary available.</em>"}</p>
+</section>
+
+<section class="panel">
+  <h3>Provider / Callability</h3>
+  <table class="data">
+    <tbody>
+      <tr><th>Providers</th><td>{providers_html}</td></tr>
+      <tr><th>Sources</th><td>{sources_html}</td></tr>
+      <tr><th>Limits</th><td>{limits_html}</td></tr>
+      <tr><th>Modalities</th><td>{modalities_html}</td></tr>
+      <tr><th>Tool support</th><td>{tools_html}</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <h3>Metadata</h3>
+  <table class="data">
+    <tbody>
+      <tr><th>Family</th><td>{family_html}</td></tr>
+      <tr><th>License</th><td>{license_html}</td></tr>
+      <tr><th>Release date</th><td>{release_html}</td></tr>
+      <tr><th>External IDs</th><td>{ext_ids_html}</td></tr>
+    </tbody>
+  </table>
+</section>
+
+{benchmarks_html}
+
+{hf_html}
+
+{conflicts_html}
+
+<section class="panel">
+  <h3>Provenance</h3>
+  <table class="data">
+    <tbody>
+      <tr><th>Sources</th><td>{sources_html}</td></tr>
+      <tr><th>Reconciled at</th><td>{reconciled_html}</td></tr>
+    </tbody>
+  </table>
+</section>
+"""
+    return _render_layout(
+        title=f"Model: {title_text}",
+        body=body,
+        active_nav="models",
+        theme_css=theme_css,
+        available_themes=available_themes,
+        current_theme=current_theme,
+        update_info=update_info,
+    )
+
+
+def _render_benchmarks_table(benchmarks: list[Any]) -> str:
+    """Render a benchmarks section if benchmark data is available."""
+    if not benchmarks:
+        return ""
+    rows: list[str] = []
+    for bm in benchmarks:
+        if not isinstance(bm, dict):
+            continue
+        source = escape(str(bm.get("source", "")))
+        name = escape(str(bm.get("benchmark", bm.get("name", ""))))
+        score = bm.get("score")
+        rank = bm.get("rank")
+        percentile = bm.get("percentile")
+        observed = bm.get("observed_at", "")
+        caveat = bm.get("caveat", "")
+        value_parts: list[str] = []
+        if score is not None:
+            value_parts.append(f"Score: {escape(str(score))}")
+        if rank is not None:
+            value_parts.append(f"Rank: {escape(str(rank))}")
+        if percentile is not None:
+            value_parts.append(f"Percentile: {escape(str(percentile))}")
+        value_html = ", ".join(value_parts) if value_parts else "—"
+        caveat_html = f"<br><em>{escape(str(caveat))}</em>" if caveat else ""
+        rows.append(
+            f"<tr><td>{source}</td><td>{name}</td>"
+            f"<td>{value_html}{caveat_html}</td>"
+            f"<td>{escape(str(observed)) if observed else '—'}</td></tr>"
+        )
+    if not rows:
+        return ""
+    return (
+        '<section class="panel">'
+        "<h3>Benchmarks</h3>"
+        '<table class="data"><thead><tr>'
+        "<th>Source</th><th>Benchmark</th><th>Value</th><th>Observed</th>"
+        "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></section>"
+    )
+
+
+def _render_hf_metadata(hf_metadata: dict[str, Any]) -> str:
+    """Render Hugging Face metadata section if available."""
+    if not hf_metadata:
+        return ""
+    parts: list[str] = []
+    for key in ("downloads", "likes", "pipeline_tag", "library_name", "license"):
+        val = hf_metadata.get(key)
+        if val is not None:
+            parts.append(f"<tr><th>{escape(key)}</th><td>{escape(str(val))}</td></tr>")
+    tags = hf_metadata.get("tags")
+    if isinstance(tags, list) and tags:
+        tags_html = ", ".join(escape(str(t)) for t in tags[:10])
+        parts.append(f"<tr><th>Tags</th><td>{tags_html}</td></tr>")
+    if not parts:
+        return ""
+    return (
+        '<section class="panel">'
+        "<h3>Hugging Face</h3>"
+        '<table class="data"><tbody>' + "".join(parts) + "</tbody></table></section>"
+    )
+
+
+def _render_conflicts_section(conflicts: dict[str, Any]) -> str:
+    """Render a conflicts section if any conflicts exist."""
+    if not conflicts:
+        return ""
+    rows: list[str] = []
+    for field, val in conflicts.items():
+        if isinstance(val, dict):
+            sources_vals = val.get("sources", {})
+            selected = val.get("selected", "")
+            reason = val.get("reason", "")
+            sources_str = (
+                ", ".join(
+                    f"{escape(str(k))}: {escape(str(v))}"
+                    for k, v in sources_vals.items()
+                )
+                if isinstance(sources_vals, dict)
+                else escape(str(sources_vals))
+            )
+            rows.append(
+                f"<tr><td>{escape(str(field))}</td>"
+                f"<td>{sources_str}</td>"
+                f"<td>{escape(str(selected))}</td>"
+                f"<td>{escape(str(reason))}</td></tr>"
+            )
+        else:
+            rows.append(
+                f"<tr><td>{escape(str(field))}</td>"
+                f"<td colspan='3'>{escape(str(val))}</td></tr>"
+            )
+    if not rows:
+        return ""
+    return (
+        '<section class="panel">'
+        "<h3>Conflicts</h3>"
+        '<table class="data"><thead><tr>'
+        "<th>Field</th><th>Source values</th><th>Selected</th><th>Reason</th>"
+        "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></section>"
     )
 
 
@@ -4502,6 +4858,7 @@ __all__ = [
     "render_bandwidth",
     "render_events",
     "render_latency",
+    "render_model_detail",
     "render_models",
     "render_overview",
     "render_pings",

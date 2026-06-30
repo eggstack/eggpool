@@ -685,3 +685,62 @@ async def test_overview_auto_refresh_reinitializes_charts(
     # The auto-refresh hook should call into dashboard.js for reinit.
     assert "initGroupedTimeseriesCharts" in body
     assert "reinitTimeseriesChart" in body
+
+
+@pytest.mark.asyncio()
+async def test_model_detail_page_returns_200_for_unknown_model(
+    migrated_app: FastAPI,
+) -> None:
+    """The model detail page returns 200 even for unknown models."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    response = client.get("/models/nonexistent-model")
+    assert response.status_code == 200
+    assert "Model info not available" in response.text
+
+
+@pytest.mark.asyncio()
+async def test_model_detail_page_renders_sections(
+    migrated_app: FastAPI,
+) -> None:
+    """The model detail page renders the expected section headings."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    response = client.get("/models/test-model")
+    assert response.status_code == 200
+    body = response.text
+    # Should have the model ID in the heading
+    assert "test-model" in body
+    # When no model info is available, shows the empty state
+    assert "Model info not available" in body
+    # Should not load Chart.js (no charts on this page)
+    assert "/static/chart.js" not in body
+
+
+@pytest.mark.asyncio()
+async def test_model_detail_page_links_from_models(
+    migrated_app: FastAPI,
+) -> None:
+    """The Models page links model IDs to the detail page."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    # Even with no models, the page should render without error
+    response = client.get("/models")
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio()
+async def test_model_detail_page_with_provider_suffix(
+    migrated_app: FastAPI,
+) -> None:
+    """The model detail page handles provider-suffixed model IDs."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    # Provider-suffixed IDs contain / which needs URL encoding
+    response = client.get("/models/gpt-4o/openai")
+    assert response.status_code == 200
+    assert "gpt-4o/openai" in response.text

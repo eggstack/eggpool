@@ -3995,3 +3995,190 @@ class TestRenderRuntimeDispatchAndLoad:
         }
         html = render_runtime(snapshot)
         assert "Process count warning" not in html
+
+
+class TestRenderModelDetail:
+    """Tests for the model-info detail page renderer."""
+
+    def test_none_info_renders_empty_state(self) -> None:
+        from eggpool.dashboard.render import render_model_detail
+
+        html = render_model_detail(info=None, model_id="test-model")
+        assert "test-model" in html
+        assert "Model info not available" in html
+        assert "Summary" not in html
+
+    def test_basic_info_renders_sections(self) -> None:
+        from datetime import UTC, datetime
+        from types import SimpleNamespace
+
+        from eggpool.dashboard.render import render_model_detail
+
+        now = datetime.now(UTC)
+        info = SimpleNamespace(
+            model_id="gpt-4o",
+            status="fresh",
+            summary="High-capability model",
+            sparse=False,
+            detail={
+                "display_name": "GPT-4o",
+                "family": "gpt",
+                "limits": {"effective_context": 128000},
+                "modalities": ["text", "image"],
+                "supports_tools": True,
+                "external_ids": {"openrouter": "openai/gpt-4o"},
+                "benchmarks": [],
+                "huggingface_metadata": {},
+                "license": "proprietary",
+                "release_date": "2024-05-13",
+            },
+            provenance={"sources": ["provider_catalog", "openrouter"]},
+            conflicts={},
+            first_seen_at=now,
+            last_seen_at=now,
+            last_refreshed_at=now,
+            next_refresh_at=now,
+        )
+        html = render_model_detail(info=info, model_id="gpt-4o")
+        assert "GPT-4o" in html
+        assert "gpt-4o" in html
+        assert "Summary" in html
+        assert "Provider / Callability" in html
+        assert "Metadata" in html
+        assert "Provenance" in html
+        assert "High-capability model" in html
+        assert "provider_catalog" in html
+        assert "openrouter" in html
+        assert "128,000" in html
+        assert "text" in html
+        assert "image" in html
+        assert "Yes" in html  # tool support
+        assert "gpt" in html  # family
+        assert "proprietary" in html  # license
+        assert "2024-05-13" in html  # release date
+        assert "openai/gpt-4o" in html  # external ID
+
+    def test_benchmarks_render_table(self) -> None:
+        from datetime import UTC, datetime
+        from types import SimpleNamespace
+
+        from eggpool.dashboard.render import render_model_detail
+
+        now = datetime.now(UTC)
+        info = SimpleNamespace(
+            model_id="test",
+            status="fresh",
+            summary="",
+            sparse=False,
+            detail={
+                "benchmarks": [
+                    {
+                        "source": "artificial_analysis",
+                        "benchmark": "intelligence",
+                        "score": 85.5,
+                    }
+                ],
+            },
+            provenance={},
+            conflicts={},
+            first_seen_at=now,
+            last_seen_at=now,
+            last_refreshed_at=None,
+            next_refresh_at=None,
+        )
+        html = render_model_detail(info=info, model_id="test")
+        assert "Benchmarks" in html
+        assert "artificial_analysis" in html
+        assert "intelligence" in html
+        assert "85.5" in html
+
+    def test_conflicts_render_table(self) -> None:
+        from datetime import UTC, datetime
+        from types import SimpleNamespace
+
+        from eggpool.dashboard.render import render_model_detail
+
+        now = datetime.now(UTC)
+        info = SimpleNamespace(
+            model_id="test",
+            status="conflicting",
+            summary="",
+            sparse=False,
+            detail={},
+            provenance={},
+            conflicts={
+                "family": {
+                    "sources": {"openrouter": "gpt", "catalog": "unknown"},
+                    "selected": "gpt",
+                    "reason": "majority",
+                }
+            },
+            first_seen_at=now,
+            last_seen_at=now,
+            last_refreshed_at=None,
+            next_refresh_at=None,
+        )
+        html = render_model_detail(info=info, model_id="test")
+        assert "Conflicts" in html
+        assert "family" in html
+        assert "openrouter" in html
+        assert "majority" in html
+
+    def test_hf_metadata_renders_section(self) -> None:
+        from datetime import UTC, datetime
+        from types import SimpleNamespace
+
+        from eggpool.dashboard.render import render_model_detail
+
+        now = datetime.now(UTC)
+        info = SimpleNamespace(
+            model_id="test",
+            status="fresh",
+            summary="",
+            sparse=False,
+            detail={
+                "huggingface_metadata": {
+                    "downloads": 1000,
+                    "likes": 50,
+                    "pipeline_tag": "text-generation",
+                },
+            },
+            provenance={},
+            conflicts={},
+            first_seen_at=now,
+            last_seen_at=now,
+            last_refreshed_at=None,
+            next_refresh_at=None,
+        )
+        html = render_model_detail(info=info, model_id="test")
+        assert "Hugging Face" in html
+        assert "downloads" in html
+        assert "1000" in html
+        assert "text-generation" in html
+
+    def test_models_page_links_to_detail(self) -> None:
+        html = render_models(
+            [
+                {
+                    "model_id": "gpt-4o",
+                    "provider_id": "openai",
+                    "request_count": 10,
+                    "cost_microdollars": 0,
+                    "error_count": 0,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                    "avg_latency_ms": 0,
+                    "avg_ttft_ms": 0,
+                    "tokens_per_second": 0,
+                    "exact_count": 0,
+                    "derived_count": 0,
+                    "partial_count": 0,
+                    "estimated_count": 0,
+                    "unknown_count": 0,
+                    "provider_reported_count": 0,
+                }
+            ],
+        )
+        assert 'href="/models/gpt-4o?theme=' in html
+        assert ">gpt-4o<" in html

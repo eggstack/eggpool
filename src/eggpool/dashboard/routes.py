@@ -20,6 +20,7 @@ from eggpool.dashboard.render import (
     render_bandwidth,
     render_events,
     render_latency,
+    render_model_detail,
     render_models,
     render_overview,
     render_pings,
@@ -392,6 +393,36 @@ async def handle_models(
             current_theme=current_theme,
             update_info=_get_update_info(request),
             model_info_map=model_info_summary_map,
+        )
+    )
+
+
+async def handle_model_detail(
+    request: Request,
+    model_id: str,
+    theme: str | None = None,
+) -> Response:
+    """Render the model-info detail page for a specific model."""
+    _get_dashboard_config(request)
+    model_info_service = getattr(request.app.state, "model_info", None)
+    from urllib.parse import unquote
+
+    decoded_id = unquote(model_id)
+    info = None
+    if model_info_service is not None:
+        try:
+            info = await model_info_service.get_summary(decoded_id)
+        except Exception:
+            info = None
+    theme_css, _, current_theme, available = _get_theme_data(request, theme)
+    return HTMLResponse(
+        content=render_model_detail(
+            info=info,
+            model_id=decoded_id,
+            theme_css=theme_css,
+            available_themes=available,
+            current_theme=current_theme,
+            update_info=_get_update_info(request),
         )
     )
 
@@ -810,6 +841,7 @@ def register_dashboard_routes(app: Any, require_auth: bool = False) -> None:
         ("/", handle_overview, HTMLResponse),
         ("/accounts", handle_accounts, HTMLResponse),
         ("/models", handle_models, HTMLResponse),
+        ("/models/{model_id:path}", handle_model_detail, HTMLResponse),
         ("/latency", handle_latency, HTMLResponse),
         ("/events", handle_events, HTMLResponse),
         ("/timeseries", handle_timeseries, HTMLResponse),
@@ -838,6 +870,7 @@ __all__ = [
     "handle_events",
     "handle_grouped_timeseries_json",
     "handle_latency",
+    "handle_model_detail",
     "handle_models",
     "handle_overview",
     "handle_pings",
