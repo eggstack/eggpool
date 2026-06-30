@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any
 
-from eggpool.constants import DEFAULT_PROVIDER_ID
+from eggpool.constants import DEFAULT_PROVIDER_ID, clamp_sqlite_integer
 
 if TYPE_CHECKING:
     from eggpool.db.connection import Database
@@ -146,7 +146,7 @@ def parse_microdollars_per_million(
     rounded = int(number.to_integral_value())
     if rounded < 0:
         raise ValueError("price must be non-negative")
-    return rounded
+    return clamp_sqlite_integer(rounded)
 
 
 def microdollars_per_million_from_price_per_1k(
@@ -161,7 +161,7 @@ def microdollars_per_million_from_price_per_1k(
     """
     if price_per_1k is None:
         return None
-    return int(round(price_per_1k * 1_000_000_000))
+    return clamp_sqlite_integer(int(round(price_per_1k * 1_000_000_000)))
 
 
 # Cache category fallbacks used by CostCalculator when a per-token rate
@@ -189,11 +189,11 @@ def coerce_token_count(value: object) -> int:
     if isinstance(value, bool):
         return 0
     if isinstance(value, int):
-        return max(0, value)
+        return clamp_sqlite_integer(value)
     if isinstance(value, float):
         if not math.isfinite(value):
             return 0
-        return max(0, int(value))
+        return clamp_sqlite_integer(int(value))
     if isinstance(value, str):
         value = value.strip()
         if not value:
@@ -204,7 +204,7 @@ def coerce_token_count(value: object) -> int:
             return 0
         if not math.isfinite(num):
             return 0
-        return max(0, int(num))
+        return clamp_sqlite_integer(int(num))
     return 0
 
 
@@ -261,6 +261,26 @@ class PriceRepository:
             output_per_million_microdollars = int(
                 round(output_price_per_1k * 1_000_000_000)
             )
+        input_per_million_microdollars = (
+            clamp_sqlite_integer(input_per_million_microdollars)
+            if input_per_million_microdollars is not None
+            else None
+        )
+        output_per_million_microdollars = (
+            clamp_sqlite_integer(output_per_million_microdollars)
+            if output_per_million_microdollars is not None
+            else None
+        )
+        cache_read_per_million_microdollars = (
+            clamp_sqlite_integer(cache_read_per_million_microdollars)
+            if cache_read_per_million_microdollars is not None
+            else None
+        )
+        cache_write_per_million_microdollars = (
+            clamp_sqlite_integer(cache_write_per_million_microdollars)
+            if cache_write_per_million_microdollars is not None
+            else None
+        )
 
         await self._db.execute_write(
             """
@@ -416,10 +436,7 @@ class CostCalculator:
         snapshot = self._latest_cache[cache_key]
 
         if snapshot is None:
-            return (
-                self._estimate_cost(input_tokens, output_tokens),
-                "estimated",
-            )
+            return self._estimate_cost(input_tokens, output_tokens), "estimated"
 
         input_rate = snapshot.input_per_million_microdollars
         output_rate = snapshot.output_per_million_microdollars
@@ -450,10 +467,7 @@ class CostCalculator:
         if any_missing and not any_priced:
             # Every nonzero category is missing a rate — fall back to
             # the generic full-request heuristic and label it estimated.
-            return (
-                self._estimate_cost(input_tokens, output_tokens),
-                "estimated",
-            )
+            return self._estimate_cost(input_tokens, output_tokens), "estimated"
 
         # Compute trusted-category cost using integer microdollar math.
         trusted_numerator = (
@@ -462,7 +476,7 @@ class CostCalculator:
             + (cache_read_tokens * (cache_read_rate or 0))
             + (cache_write_tokens * (cache_write_rate or 0))
         )
-        trusted_cost = trusted_numerator // 1_000_000
+        trusted_cost = clamp_sqlite_integer(trusted_numerator // 1_000_000)
 
         if any_missing:
             # Fill only the missing categories with a per-category
@@ -489,7 +503,7 @@ class CostCalculator:
                 fallback_cost += self._fallback_microdollars_for_category(
                     "cache_write", cache_write_tokens
                 )
-            cost_microdollars = trusted_cost + fallback_cost
+            cost_microdollars = clamp_sqlite_integer(trusted_cost + fallback_cost)
             return cost_microdollars, "partial"
 
         # All categories priced — pure derived cost. If the integer
@@ -497,7 +511,7 @@ class CostCalculator:
         # to zero (e.g. an extremely cheap rate or tiny token count),
         # downgrade exactness so the request finalizer floors the cost
         # at the reservation estimate rather than recording zero.
-        cost_microdollars = round(trusted_numerator / 1_000_000)
+        cost_microdollars = clamp_sqlite_integer(round(trusted_numerator / 1_000_000))
         exactness = "derived"
         if cost_microdollars == 0 and any(
             (
@@ -527,7 +541,7 @@ class CostCalculator:
         output_cost = (output_tokens / 1000.0) * estimated_output_price
         total_cost = input_cost + output_cost
 
-        return int(total_cost * 1_000_000)
+        return clamp_sqlite_integer(int(total_cost * 1_000_000))
 
     @staticmethod
     def _fallback_microdollars_for_category(
@@ -549,4 +563,4 @@ class CostCalculator:
             rate = _CACHE_WRITE_FALLBACK_PER_MILLION_MICRODOLLARS
         else:
             return 0
-        return (tokens * rate) // 1_000_000
+        return clamp_sqlite_integer((tokens * rate) // 1_000_000)

@@ -7,6 +7,7 @@ from decimal import Decimal
 
 import pytest
 
+from eggpool.constants import SQLITE_INTEGER_MAX
 from eggpool.proxy.cost_reporting import (
     ProviderReportedCost,
     extract_provider_reported_cost,
@@ -43,6 +44,19 @@ def test_total_cost_usd_parses() -> None:
     )
     assert result == ProviderReportedCost(
         microdollars=10_000, source="usage.total_cost_usd"
+    )
+
+
+def test_extreme_provider_cost_clamps_to_sqlite_integer() -> None:
+    result = extract_provider_reported_cost(
+        {"usage": {"cost_microdollars": str(SQLITE_INTEGER_MAX + 1)}},
+        provider_id=None,
+        protocol="openai",
+    )
+
+    assert result == ProviderReportedCost(
+        microdollars=SQLITE_INTEGER_MAX,
+        source="usage.cost_microdollars",
     )
 
 

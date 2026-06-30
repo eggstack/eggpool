@@ -25,6 +25,15 @@ DEFAULT_DATABASE_PATH = str(_data_dir / "usage.sqlite3")
 API_V1_PREFIX = "/v1"
 MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024  # 10 MB
 MAX_SSE_FRAME_SIZE = 64 * 1024  # 64 KB
+SQLITE_INTEGER_MAX = 2**63 - 1
+
+
+def clamp_sqlite_integer(value: int | None) -> int:
+    """Clamp a non-negative accounting value to SQLite's INTEGER range."""
+    if value is None or value < 0:
+        return 0
+    return min(value, SQLITE_INTEGER_MAX)
+
 
 # ``PID_FILE`` is kept for backwards compatibility with modules that
 # still import it directly. The authoritative resolver is

@@ -20,6 +20,8 @@ from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from eggpool.constants import clamp_sqlite_integer
+
 if TYPE_CHECKING:
     from eggpool.db.repositories import UsageWindowRepository
 
@@ -446,7 +448,7 @@ class QuotaEstimator:
                 * am_estimate.estimate_cost_per_token
                 * self.default_safety_factor
             )
-            return max(cost, 1)
+            return max(clamp_sqlite_integer(cost), 1)
 
         # Tier 2: Global model EWMA
         global_est = self.global_model_ewma.get(model_id)
@@ -456,7 +458,7 @@ class QuotaEstimator:
                 * global_est.estimate_cost_per_token
                 * self.default_safety_factor
             )
-            return max(cost, 1)
+            return max(clamp_sqlite_integer(cost), 1)
 
         # Tier 3: Configured per-model override
         override = self.account_model_overrides.get(account_name, {}).get(model_id)
@@ -467,7 +469,7 @@ class QuotaEstimator:
             avg_rate = (input_rate + output_rate) / 2.0
             cost_per_token = avg_rate
             cost = int(estimated_tokens * cost_per_token * self.default_safety_factor)
-            return max(cost, 1)
+            return max(clamp_sqlite_integer(cost), 1)
 
         # Tier 4: Model-family moving average
         family_cost = self._get_family_estimate(model_id)
@@ -480,7 +482,7 @@ class QuotaEstimator:
             # microdollars/token.
             cost_per_token = avg_rate
             cost = int(estimated_tokens * cost_per_token * self.default_safety_factor)
-            return max(cost, 1)
+            return max(clamp_sqlite_integer(cost), 1)
 
         # Tier 5: Global unknown-request fallback. Use the conservative
         # lower bound of the unknown-price range, clamped by a small
@@ -491,7 +493,7 @@ class QuotaEstimator:
             GLOBAL_FALLBACK_FLOOR_MICRODOLLARS_PER_TOKEN,
         )
         cost = int(estimated_tokens * cost_per_token * self.default_safety_factor)
-        return max(cost, 1)
+        return max(clamp_sqlite_integer(cost), 1)
 
     def _get_family_estimate(self, model_id: str) -> tuple[float, float] | None:
         """Get model-family fallback estimate."""
@@ -588,7 +590,9 @@ class QuotaEstimator:
         async with self._snapshot_lock:
             if account_name not in self._account_reserved_cost:
                 self._account_reserved_cost[account_name] = 0
-            self._account_reserved_cost[account_name] += cost
+            self._account_reserved_cost[account_name] = clamp_sqlite_integer(
+                self._account_reserved_cost[account_name] + cost
+            )
             # Keep AccountQuota in sync for eligibility checks
             quota = self.get_account_quota(account_name)
             if quota is not None:

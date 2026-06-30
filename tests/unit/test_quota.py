@@ -6,6 +6,7 @@ import time
 
 import pytest
 
+from eggpool.constants import SQLITE_INTEGER_MAX
 from eggpool.quota.estimation import (
     EWMA_HARD_CAP,
     GLOBAL_EWMA_HARD_CAP,
@@ -518,6 +519,19 @@ class TestEstimateCostTierPriority:
         estimator = QuotaEstimator()
         cost = estimator.estimate_cost("acct", "unknown", 0)
         assert cost >= 1
+
+    def test_extreme_override_estimate_clamps_to_sqlite_integer(self) -> None:
+        """Bad price metadata must not produce an unpersistable reservation."""
+        estimator = QuotaEstimator()
+        estimator.set_model_override(
+            "minimax-m3",
+            input_price=1e30,
+            output_price=1e30,
+        )
+
+        cost = estimator.estimate_cost("acct", "minimax-m3", 128_000)
+
+        assert cost == SQLITE_INTEGER_MAX
 
 
 class TestEWMAHardCaps:

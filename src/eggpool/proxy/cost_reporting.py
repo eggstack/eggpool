@@ -36,6 +36,8 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, cast
 
+from eggpool.constants import clamp_sqlite_integer
+
 # Field paths inspected in priority order.  Microdollar fields
 # resolve directly to an integer.  Dollar fields are multiplied
 # by 1_000_000 and rounded.  Anything not listed here is ignored.
@@ -161,7 +163,7 @@ def _try_microdollar(
         if number is None:
             continue
         return ProviderReportedCost(
-            microdollars=int(number.to_integral_value()),
+            microdollars=clamp_sqlite_integer(int(number.to_integral_value())),
             source=_format_source(path),
         )
     return None
@@ -176,7 +178,7 @@ def _try_dollar(
         if number is None:
             continue
         return ProviderReportedCost(
-            microdollars=int(round(number * 1_000_000)),
+            microdollars=clamp_sqlite_integer(int(round(number * 1_000_000))),
             source=_format_source(path),
         )
     return None

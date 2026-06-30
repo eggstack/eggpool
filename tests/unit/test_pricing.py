@@ -10,10 +10,12 @@ from eggpool.catalog.pricing import (
     CostCalculator,
     PriceSnapshot,
     _extract_decimal,
+    coerce_token_count,
     microdollars_per_million_from_price_per_1k,
     parse_microdollars_per_million,
     parse_price_per_1k,
 )
+from eggpool.constants import SQLITE_INTEGER_MAX
 
 
 class TestPriceSnapshot:
@@ -81,6 +83,9 @@ class TestCostCalculator:
         calculator = CostCalculator(price_repo=None)  # type: ignore[arg-type]
         cost = calculator._estimate_cost(input_tokens=-1000, output_tokens=1000)
         assert cost == 15_000
+
+    def test_coerce_token_count_clamps_to_sqlite_integer(self) -> None:
+        assert coerce_token_count(str(SQLITE_INTEGER_MAX + 1)) == SQLITE_INTEGER_MAX
 
     @pytest.mark.asyncio
     async def test_calculate_cost_no_snapshot(self) -> None:
@@ -204,6 +209,29 @@ class TestCostCalculator:
         )
 
         assert cost == 15_000
+        assert exactness == "derived"
+
+    @pytest.mark.asyncio
+    async def test_calculate_cost_clamps_extreme_snapshot_rate(self) -> None:
+        snapshot = PriceSnapshot(
+            model_id="minimax-m3",
+            input_price_per_1k=None,
+            output_price_per_1k=None,
+            captured_at="2026-06-30T00:00:00",
+            input_per_million_microdollars=SQLITE_INTEGER_MAX,
+            output_per_million_microdollars=SQLITE_INTEGER_MAX,
+        )
+        mock_repo = AsyncMock()
+        mock_repo.get_latest_snapshot = AsyncMock(return_value=snapshot)
+        calculator = CostCalculator(price_repo=mock_repo)
+
+        cost, exactness = await calculator.calculate_cost(
+            "minimax-m3",
+            input_tokens=SQLITE_INTEGER_MAX,
+            output_tokens=SQLITE_INTEGER_MAX,
+        )
+
+        assert cost == SQLITE_INTEGER_MAX
         assert exactness == "derived"
 
     @pytest.mark.asyncio
