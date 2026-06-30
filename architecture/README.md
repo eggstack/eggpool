@@ -403,22 +403,27 @@ AggregatorError (base)
 ├── UpstreamExhaustedError
 ├── AccountSuspendedError
 ├── RequestTooLargeError
+├── ModelInfoSourceFetchError
 └── ContextLimitExceededError
 ```
 
 ## Model Information
 
 - **Sidecar subsystem**: `model_info/` package provides persistent model metadata sidecar tables (`model_info_canonical`, `model_info_observations`, `model_info_aliases`, `model_info_source_health`) via migration `0036`
+- **Source adapter pattern**: `ModelInfoSource` protocol in `sources/base.py` defines `name`, `priority`, `fetch_all()`, `fetch_one()`; concrete adapters implement this interface
 - **Provider-native observations**: `ProviderCatalogSource` reads in-memory `ModelCatalogCache` entries and emits `SourceModelRecord`s; no network I/O
+- **OpenRouter metadata source** (phase 3): `OpenRouterModelInfoSource` fetches the OpenRouter `/models` catalog and emits `SourceModelRecord` observations for each entry. TTL-cached per source; uses the shared outbound HTTP client from `OutboundClientManager`. Exact/curated alias matching only (no fuzzy matching). Failures are recorded in source health and never break startup, catalog refresh, or routing
+- **Identity resolution**: `_resolve_openrouter_record()` matches OpenRouter source model IDs to local model IDs via exact `model_info_aliases` rows or exact source_model_id equality. No substring or edit-distance matching
 - **Status classification**: models classified as `sparse_new`, `partial`, `fresh`, etc. based on available metadata (display name, context limit, capabilities)
 - **Deterministic summaries**: generated from fields only (no LLM); sparse models explicitly note metadata sparsity
-- **Lifecycle wiring**: `ModelInfoService` initialized at startup after catalog load; `CatalogService.refresh()` returns `CatalogRefreshResult` with diff information (new/withdrawn models, changed provider keys)
-- **Background refresh**: supervised `model_info_refresh` task processes due models via `ModelInfoRefreshScheduler`; reconciliation also runs after successful catalog refreshes
+- **Lifecycle wiring**: `ModelInfoService` initialized at startup after catalog load; accepts optional `outbound_client` for external sources. `CatalogService.refresh()` returns `CatalogRefreshResult` with diff information (new/withdrawn models, changed provider keys)
+- **Background refresh**: supervised `model_info_refresh` task processes due models via `ModelInfoRefreshScheduler`; reconciliation also runs after successful catalog refreshes. External source catalogs are fetched once per cycle (bulk) and matched to due models via identity resolution
 - **Refresh scheduling**: `ModelInfoRefreshScheduler` computes next refresh time based on status, first-seen age, and config TTLs; sparse-new models receive accelerated refresh within a configurable window
 - **Source health**: per-source health tracking with cooldown backoff; `record_source_success`/`record_source_error` helpers
 - **Write deduplication**: observations deduplicated by `(source, source_model_id, raw_hash)`; canonical rows compared before rewrite
+- **Error hierarchy**: `ModelInfoSourceFetchError` (subclasses `AggregatorError`) raised by source adapters on network/HTTP/parse failures; caught by `ModelInfoService` and recorded as source-health errors
 - **CLI**: `eggpool modelinfo show/list/refresh` commands for inspection and manual refresh
-- **Config**: `[model_info]` section in `config.toml` with TTL controls, refresh intervals, and source enablement
+- **Config**: `[model_info]` section in `config.toml` with TTL controls, refresh intervals, and source enablement (`[model_info.sources.openrouter]` for OpenRouter)
 
 ## Model Context Limits
 

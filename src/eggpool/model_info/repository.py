@@ -186,6 +186,24 @@ class ModelInfoRepository:
             rows = await self._db.fetch_all("SELECT * FROM model_info_canonical")
         return {row["model_id"]: self._row_to_canonical(row) for row in rows}
 
+    async def get_aliases_for_model(
+        self, model_id: str, *, source: str | None = None
+    ) -> list[str]:
+        """Return active alias strings for a model, optionally filtered by source."""
+        if source is not None:
+            rows = await self._db.fetch_all(
+                "SELECT alias FROM model_info_aliases "
+                "WHERE model_id = ? AND source = ? AND active = 1",
+                (model_id, source),
+            )
+        else:
+            rows = await self._db.fetch_all(
+                "SELECT alias FROM model_info_aliases "
+                "WHERE model_id = ? AND active = 1",
+                (model_id,),
+            )
+        return [row["alias"] for row in rows]
+
     async def list_due(
         self, limit: int = 50, now: datetime | None = None
     ) -> list[CanonicalModelInfo]:

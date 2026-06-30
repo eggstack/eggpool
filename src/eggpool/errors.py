@@ -91,6 +91,10 @@ class RequestTooLargeError(AggregatorError):
     """Raised when a request body exceeds the configured limit."""
 
 
+class ModelInfoSourceFetchError(AggregatorError):
+    """Raised when a model-info source fetch fails (network, HTTP, parse)."""
+
+
 class ContextLimitExceededError(AggregatorError):
     """Raised when estimated request context exceeds the configured limit."""
 

@@ -7,11 +7,16 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, cast
 
+from eggpool.errors import ModelInfoSourceFetchError
 from eggpool.model_info.dedup import canonical_needs_update
 from eggpool.model_info.repository import ModelInfoRepository
 from eggpool.model_info.scheduler import ModelInfoRefreshScheduler
 from eggpool.model_info.sources.provider_catalog import ProviderCatalogSource
-from eggpool.model_info.types import CanonicalModelInfo, ModelInfoStatus
+from eggpool.model_info.types import (
+    CanonicalModelInfo,
+    ModelInfoStatus,
+    SourceModelRecord,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -19,6 +24,10 @@ if TYPE_CHECKING:
     from eggpool.catalog.cache import ModelCatalogCache
     from eggpool.catalog.service import CatalogRefreshResult
     from eggpool.db.connection import Database
+    from eggpool.model_info.sources.openrouter import (
+        ModelInfoHttpClient,
+        OpenRouterModelInfoSource,
+    )
     from eggpool.models.config import ModelInfoConfig
 
 logger = logging.getLogger(__name__)
@@ -32,6 +41,8 @@ class ModelInfoService:
         config: ModelInfoConfig,
         db: Database,
         catalog: ModelCatalogCache,
+        *,
+        outbound_client: ModelInfoHttpClient | None = None,
     ) -> None:
         self._config = config
         self._db = db
@@ -39,6 +50,18 @@ class ModelInfoService:
         self._repo = ModelInfoRepository(db)
         self._provider_source = ProviderCatalogSource(catalog)
         self._scheduler = ModelInfoRefreshScheduler(config)
+
+        # External sources (optional)
+        self._openrouter_source: OpenRouterModelInfoSource | None = None
+        if config.sources.openrouter.enabled and outbound_client is not None:
+            from eggpool.model_info.sources.openrouter import (
+                OpenRouterModelInfoSource,
+            )
+
+            self._openrouter_source = OpenRouterModelInfoSource(
+                config=config.sources.openrouter,
+                client=outbound_client,
+            )
 
     @property
     def repo(self) -> ModelInfoRepository:
@@ -275,10 +298,11 @@ class ModelInfoService:
         }
 
     async def refresh_due_models(self) -> dict[str, int]:
-        """Refresh provider-native observations for models due for refresh.
+        """Refresh provider-native and external observations for due models.
 
         Queries the repository for due rows, refreshes provider observations,
-        reconciles canonical summaries, and updates next_refresh_at.
+        attempts OpenRouter enrichment via identity resolution, reconciles
+        canonical summaries, and updates next_refresh_at.
         Batch-writes all changes in a single transaction and skips rows
         where the computed payload is byte-identical to the existing row.
         """
@@ -289,6 +313,19 @@ class ModelInfoService:
 
         if not due_rows:
             return {"refreshed": 0, "total": 0, "skipped": 0}
+
+        # Bulk-fetch OpenRouter catalog once per cycle if the source is active
+        openrouter_indexed: dict[str, SourceModelRecord] = {}
+        if self._openrouter_source is not None:
+            try:
+                or_records = await self._openrouter_source.fetch_all()
+                openrouter_indexed = {r.source_model_id: r for r in or_records}
+            except ModelInfoSourceFetchError as exc:
+                logger.warning("OpenRouter source fetch failed: %s", exc)
+                await self.record_source_error("openrouter", exc)
+            except Exception as exc:
+                logger.exception("OpenRouter source unexpected error")
+                await self.record_source_error("openrouter", exc)
 
         to_write: list[CanonicalModelInfo] = []
         skipped = 0
@@ -307,6 +344,14 @@ class ModelInfoService:
                 now=now,
             )
 
+            # Try OpenRouter identity resolution for this model
+            or_record = await _resolve_openrouter_record(
+                model_id, self._repo, openrouter_indexed
+            )
+            if or_record is not None:
+                await self._persist_source_observation(or_record, model_id=model_id)
+                await self.record_source_success("openrouter")
+
             info = CanonicalModelInfo(
                 model_id=model_id,
                 status=status,
@@ -320,7 +365,9 @@ class ModelInfoService:
                 detail=detail,
                 provenance={
                     **existing.provenance,
-                    "sources": ["provider_catalog"],
+                    "sources": _build_source_list(
+                        existing.provenance, self._openrouter_source is not None
+                    ),
                     "reconciled_at": now.isoformat(),
                 },
                 conflicts=existing.conflicts,
@@ -342,6 +389,32 @@ class ModelInfoService:
             "total": len(due_rows),
             "skipped": skipped,
         }
+
+    async def _persist_source_observation(
+        self,
+        record: SourceModelRecord,
+        *,
+        model_id: str | None = None,
+        provider_id: str | None = None,
+    ) -> None:
+        """Persist a source observation and its aliases."""
+        resolved_model_id = model_id or record.model_id or record.source_model_id
+        resolved_provider_id = provider_id or record.provider_id
+
+        await self._repo.upsert_observation(
+            record,
+            model_id=resolved_model_id,
+            provider_id=resolved_provider_id,
+        )
+        for alias in record.aliases:
+            if alias != resolved_model_id:
+                await self._repo.upsert_alias(
+                    model_id=resolved_model_id,
+                    provider_id=resolved_provider_id,
+                    alias=alias,
+                    source=record.source,
+                    confidence=record.confidence,
+                )
 
     async def run_periodic_refresh(self) -> None:
         """Background loop that refreshes due models periodically."""
@@ -549,6 +622,53 @@ class ModelInfoService:
             detail["providers"] = providers
 
         return detail
+
+
+async def _resolve_openrouter_record(
+    model_id: str,
+    repo: ModelInfoRepository,
+    openrouter_indexed: dict[str, SourceModelRecord],
+) -> SourceModelRecord | None:
+    """Resolve a local model_id to an OpenRouter source record.
+
+    Identity resolution rules (exact / curated only, no fuzzy matching):
+    1. Exact model_info_aliases row with source=openrouter wins.
+    2. Exact source_model_id == model_id match.
+    3. No match → return None.
+    """
+    if not openrouter_indexed:
+        return None
+
+    # Rule 1: Check model_info_aliases for an exact openrouter alias
+    alias_strings = await repo.get_aliases_for_model(model_id, source="openrouter")
+    for alias_str in alias_strings:
+        record = openrouter_indexed.get(alias_str)
+        if record is not None:
+            return record
+
+    # Rule 2: Exact source_model_id == model_id
+    direct = openrouter_indexed.get(model_id)
+    if direct is not None:
+        return direct
+
+    return None
+
+
+def _build_source_list(
+    provenance: dict[str, object], has_openrouter: bool
+) -> list[str]:
+    """Build the sources list for provenance, preserving existing entries."""
+    existing = provenance.get("sources")
+    sources: list[str] = []
+    if isinstance(existing, list):
+        for item in cast("list[object]", existing):
+            if isinstance(item, str):
+                sources.append(item)
+    if has_openrouter and "openrouter" not in sources:
+        sources.append("openrouter")
+    if "provider_catalog" not in sources:
+        sources.append("provider_catalog")
+    return sources
 
 
 def _compute_source_backoff(source_name: str, failure_count: int = 0) -> datetime:

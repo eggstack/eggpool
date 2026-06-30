@@ -720,6 +720,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
                 config=config.model_info,
                 db=db,
                 catalog=catalog.cache,
+                outbound_client=outbound_client,
             )
             app.state.model_info = model_info
             await model_info.load_cache()
