@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -70,6 +71,37 @@ TARGET_SPECS: dict[str, ConfigsetupTargetSpec] = {
         name="openhands", requires_model=True, mode="env"
     ),
 }
+
+_BARE_TOML_KEY_RE = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def render_toml_string(value: str) -> str:
+    """Render *value* as a TOML basic string."""
+    return json.dumps(value, ensure_ascii=False)
+
+
+def render_toml_key(value: str) -> str:
+    """Render *value* as a TOML key segment.
+
+    TOML bare keys cannot contain slashes, dots, spaces, quotes, or most
+    provider/model punctuation. Quoting every unsafe segment avoids accidentally
+    creating nested dotted tables or unparsable snippets.
+    """
+    if _BARE_TOML_KEY_RE.fullmatch(value):
+        return value
+    return render_toml_string(value)
+
+
+def render_yaml_string(value: str) -> str:
+    """Render *value* as a YAML double-quoted scalar."""
+    return json.dumps(value, ensure_ascii=False)
+
+
+def resolve_optional_model(
+    ctx: IntegrationContext, model: str | None = None
+) -> str | None:
+    """Return explicit model or the sole catalog model, if unambiguous."""
+    return model or select_default_model(ctx)
 
 
 def _load_catalog(config: AppConfig, collapse_models: bool) -> list[dict[str, Any]]:

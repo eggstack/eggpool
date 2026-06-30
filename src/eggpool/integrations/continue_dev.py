@@ -4,19 +4,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from eggpool.integrations.common import render_yaml_string, resolve_optional_model
+
 if TYPE_CHECKING:
     from eggpool.integrations.common import IntegrationContext
 
 
 def _render_yaml_value(value: str) -> str:
     """Render a YAML string value with appropriate quoting."""
-    if not value:
-        return '""'
-    needs_quote = any(c in value for c in ":{}[],#&*?|->!%@`")
-    if needs_quote or value.startswith(" ") or value.endswith(" "):
-        escaped = value.replace('"', '\\"')
-        return f'"{escaped}"'
-    return value
+    return render_yaml_string(value)
 
 
 def build_continue_yaml_snippet(
@@ -27,7 +23,7 @@ def build_continue_yaml_snippet(
     Rendered manually (no pyyaml dependency). Produces a ``models``
     block compatible with Continue's ``config.yaml``.
     """
-    default_model = model or (ctx.models[0]["model_id"] if len(ctx.models) == 1 else "")
+    default_model = resolve_optional_model(ctx, model)
     props: list[tuple[str, str]] = [
         ("title", "EggPool"),
         ("provider", "openai"),

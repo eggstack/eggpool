@@ -182,6 +182,8 @@ uv run pytest
 | OpenHands | `eggpool configsetup openhands` | Shell env exports | N/A (printed) | recommended | stable fragment |
 
 Shared options: `--host`, `--base-url`, `--model`, `--write`, `--output`, `--force`, `--no-clipboard`, `--print-secret`.
+Generated JSON, TOML, YAML, and shell snippets escape catalog/config values for
+the target format, including provider-suffixed model IDs.
 
 Examples:
 ```sh

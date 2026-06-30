@@ -43,6 +43,11 @@ src/eggpool/
 └── constants.py       # Project-wide constants
 ```
 
+`integrations/common.py` owns configsetup context construction, catalog-backed
+default model resolution, and format-safe scalar/key rendering helpers. New
+agent targets should reuse those helpers instead of hand-quoting JSON, TOML,
+YAML, shell, or model ID values in target modules.
+
 ## Request Lifecycle
 
 All data-plane requests flow through `RequestCoordinator`:

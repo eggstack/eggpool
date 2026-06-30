@@ -31,13 +31,23 @@ from eggpool.integrations.common import (
     _openai_client_needs_transcoder,
     _persist_transcoder_enabled,
     list_catalog_model_ids,
+    render_toml_key,
+    render_toml_string,
+    render_yaml_string,
     require_model_for_target,
+    resolve_optional_model,
     select_default_model,
 )
 from eggpool.integrations.continue_dev import build_continue_yaml_snippet
-from eggpool.integrations.goose import build_goose_env_snippet
+from eggpool.integrations.goose import (
+    build_goose_config_snippet,
+    build_goose_env_snippet,
+)
 from eggpool.integrations.kilo import build_kilo_openai_compatible_snippet
-from eggpool.integrations.openhands import build_openhands_env_snippet
+from eggpool.integrations.openhands import (
+    build_openhands_config_snippet,
+    build_openhands_env_snippet,
+)
 from eggpool.integrations.qwen_code import build_qwen_code_provider_snippet
 from eggpool.integrations.roo_code import build_roo_code_profile_snippet
 from eggpool.models.config import (
@@ -175,6 +185,30 @@ class TestIntegrationContext:
     ) -> None:
         assert select_default_model(ctx_one_model) == "gpt-4o/openai"
 
+    def test_resolve_optional_model_prefers_explicit(
+        self, ctx_one_model: IntegrationContext
+    ) -> None:
+        assert resolve_optional_model(ctx_one_model, "custom") == "custom"
+
+    def test_resolve_optional_model_uses_single_catalog_model(
+        self, ctx_one_model: IntegrationContext
+    ) -> None:
+        assert resolve_optional_model(ctx_one_model) == "gpt-4o/openai"
+
+    def test_render_toml_string_escapes_special_chars(self) -> None:
+        rendered = render_toml_string('ep_"key\\tail')
+        assert tomllib.loads(f"value = {rendered}\n")["value"] == 'ep_"key\\tail'
+
+    def test_render_toml_key_quotes_unsafe_model_ids(self) -> None:
+        rendered = render_toml_key('provider.model/"variant"')
+        parsed = tomllib.loads(f"[models.{rendered}]\ncontext = 1\n")
+        assert 'provider.model/"variant"' in parsed["models"]
+
+    def test_render_yaml_string_escapes_special_chars(self) -> None:
+        assert render_yaml_string('model: "quote"\\tail') == (
+            '"model: \\"quote\\"\\\\tail"'
+        )
+
     def test_require_model_explicit_passthrough(
         self, ctx_one_model: IntegrationContext
     ) -> None:
@@ -244,6 +278,32 @@ class TestCodexRenderer:
         ctx_many_models.models[0]["model_id"] = "gpt-4o"
         snippet = build_codex_toml_snippet(ctx_many_models)
         assert "[provider.eggpool.models.gpt-4o]" in snippet
+
+    def test_toml_snippet_escapes_scalars_and_model_keys(self) -> None:
+        ctx = IntegrationContext(
+            config_path="/dev/null",
+            api_key='ep_"test\\key',
+            base_url='http://host:11300/"v1',
+            base_url_root="http://host:11300",
+            host="host",
+            port=11300,
+            models=[
+                {
+                    "model_id": 'model.with/"quotes"',
+                    "display_name": 'model.with/"quotes"',
+                    "capabilities": {},
+                    "source_metadata": {},
+                    "effective_limits": {"context_tokens": 128000},
+                }
+            ],
+        )
+        snippet = build_codex_toml_snippet(ctx, model='default/"model"')
+        parsed = tomllib.loads(snippet)
+        provider = parsed["provider"]["eggpool"]
+        assert provider["api_key"] == 'ep_"test\\key'
+        assert provider["base_url"] == 'http://host:11300/"v1'
+        assert provider["default_model"] == 'default/"model"'
+        assert 'model.with/"quotes"' in provider["models"]
 
 
 class TestQwenCodeRenderer:
@@ -334,6 +394,12 @@ class TestContinueDevRenderer:
         assert lines[4].startswith("    apiBase:")
         assert lines[5].startswith("    apiKey:")
 
+    def test_yaml_snippet_escapes_quote_and_backslash(
+        self, ctx_one_model: IntegrationContext
+    ) -> None:
+        snippet = build_continue_yaml_snippet(ctx_one_model, model='model"\\x')
+        assert 'model\\"\\\\x' in snippet
+
 
 class TestClineRenderer:
     def test_produces_valid_json(self, ctx_empty: IntegrationContext) -> None:
@@ -389,6 +455,21 @@ class TestGooseRenderer:
         snippet = build_goose_env_snippet(ctx_one_model, model=None)
         assert "GOOSE_PROVIDER__MODEL" not in snippet
 
+    def test_toml_config_snippet_parseable_with_special_chars(self) -> None:
+        ctx = IntegrationContext(
+            config_path="/dev/null",
+            api_key='ep_"key',
+            base_url='http://host/"v1',
+            base_url_root="http://host",
+            host="host",
+            port=11300,
+        )
+        snippet = build_goose_config_snippet(ctx, model='model"\\x')
+        parsed = tomllib.loads(snippet)
+        provider = parsed["provider"]["eggpool"]
+        assert provider["api_key"] == 'ep_"key'
+        assert provider["default_model"] == 'model"\\x'
+
 
 class TestOpenHandsRenderer:
     def test_env_snippet_contains_expected_vars(
@@ -407,6 +488,21 @@ class TestOpenHandsRenderer:
     ) -> None:
         snippet = build_openhands_env_snippet(ctx_one_model, model=None)
         assert "LLM_MODEL=gpt-4o/openai" in snippet
+
+    def test_toml_config_snippet_parseable_with_special_chars(self) -> None:
+        ctx = IntegrationContext(
+            config_path="/dev/null",
+            api_key='ep_"key',
+            base_url='http://host/"v1',
+            base_url_root="http://host",
+            host="host",
+            port=11300,
+        )
+        snippet = build_openhands_config_snippet(ctx, model='model"\\x')
+        parsed = tomllib.loads(snippet)
+        llm = parsed["llm"]
+        assert llm["api_key"] == 'ep_"key'
+        assert llm["model"] == 'model"\\x'
 
 
 # ---------------------------------------------------------------------------

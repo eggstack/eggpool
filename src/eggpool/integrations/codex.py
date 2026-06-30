@@ -6,6 +6,8 @@ import shutil
 import subprocess
 from typing import TYPE_CHECKING
 
+from eggpool.integrations.common import render_toml_key, render_toml_string
+
 if TYPE_CHECKING:
     from eggpool.integrations.common import IntegrationContext
 
@@ -19,17 +21,16 @@ def build_codex_toml_snippet(ctx: IntegrationContext, model: str | None = None) 
     """
     lines = [
         "[provider.eggpool]",
-        f'base_url = "{ctx.base_url}"',
-        f'api_key = "{ctx.api_key}"',
+        f"base_url = {render_toml_string(ctx.base_url)}",
+        f"api_key = {render_toml_string(ctx.api_key)}",
     ]
     if model:
-        lines.append(f'default_model = "{model}"')
+        lines.append(f"default_model = {render_toml_string(model)}")
     if ctx.models:
         lines.append("")
         for m in ctx.models:
             mid = m["model_id"]
-            # Quote model IDs that contain characters unsafe for bare TOML keys
-            table_key = f'"{mid}"' if any(c in mid for c in "/.: ") else mid
+            table_key = render_toml_key(mid)
             lines.append(f"[provider.eggpool.models.{table_key}]")
             limits = m.get("effective_limits", {})
             ctx_tokens = limits.get("context_tokens")

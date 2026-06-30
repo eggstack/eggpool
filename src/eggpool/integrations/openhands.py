@@ -5,6 +5,11 @@ from __future__ import annotations
 import shlex
 from typing import TYPE_CHECKING
 
+from eggpool.integrations.common import (
+    render_toml_string,
+    resolve_optional_model,
+)
+
 if TYPE_CHECKING:
     from eggpool.integrations.common import IntegrationContext
 
@@ -13,12 +18,12 @@ def build_openhands_config_snippet(
     ctx: IntegrationContext, model: str | None = None
 ) -> str:
     """Build a TOML/env config snippet for OpenHands."""
-    default_model = model or (ctx.models[0]["model_id"] if len(ctx.models) == 1 else "")
+    default_model = resolve_optional_model(ctx, model) or ""
     lines = [
         "[llm]",
-        f'base_url = "{ctx.base_url}"',
-        f'api_key = "{ctx.api_key}"',
-        f'model = "{default_model}"',
+        f"base_url = {render_toml_string(ctx.base_url)}",
+        f"api_key = {render_toml_string(ctx.api_key)}",
+        f"model = {render_toml_string(default_model)}",
     ]
     return "\n".join(lines)
 
@@ -27,7 +32,7 @@ def build_openhands_env_snippet(
     ctx: IntegrationContext, model: str | None = None
 ) -> str:
     """Build shell export statements for OpenHands."""
-    default_model = model or (ctx.models[0]["model_id"] if len(ctx.models) == 1 else "")
+    default_model = resolve_optional_model(ctx, model)
     lines = [
         f"export LLM_BASE_URL={shlex.quote(ctx.base_url)}",
         f"export LLM_API_KEY={shlex.quote(ctx.api_key)}",
