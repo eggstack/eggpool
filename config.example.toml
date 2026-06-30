@@ -38,6 +38,18 @@ ping_retain_days = 7
 #                          # providers is collapsed to a single unsuffixed
 #                          # ID and routed across all of them. Default false
 #                          # emits one provider-suffixed entry per provider.
+# Catalog withdrawal policy controls whether a live refresh can remove
+# an account/model support row that the cache previously knew about.
+# Default "preserve_until_health" never de-pools on catalog uncertainty:
+# only explicit health/config state (auth failure, quota exhaustion,
+# rate-limit, cooldown, circuit open, account disabled) suppresses
+# routing. "confirmed_once" allows a successful authoritative non-empty
+# refresh that omits a model to remove that account/model support.
+# "confirmed_twice" requires two consecutive authoritative omissions.
+# Default is correct for subscription aggregation: a flaky /models
+# response or transient upstream parse error must not silently de-pool
+# a healthy subscription account.
+catalog_withdrawal_policy = "preserve_until_health"
 
 # ─── Protocol Transcoding ────────────────────────────────────────────
 # Transcoding is **on by default**. Requests from clients using one

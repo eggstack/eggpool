@@ -86,13 +86,15 @@ Use `eggpool connect` for interactive provider setup. See [docs/providers.md](do
 | `[server]` | Bind address, port (default 11300), API key, logging, threads |
 | `[upstream]` | Upstream API base URL, timeouts, connection pool |
 | `[database]` | SQLite path, WAL mode |
-| `[models]` | Catalog refresh, exposure mode, model collapse |
+| `[models]` | Catalog refresh, exposure mode, model collapse, withdrawal policy |
 | `[routing]` | Routing strategy, retry limits, quota mode, same-tier fairness |
 | `[dashboard]` | Dashboard toggle, theme, refresh interval |
 | `[providers.*]` | Provider configs with accounts and routing priority |
 | `[network]` | Outbound transport, DNS cache |
 | `[model_info]` | Optional model metadata refresh, aliases, overrides, and external source settings |
 | `[transcoder]` | Protocol transcoding between OpenAI and Anthropic formats |
+
+The catalog refresh is **non-destructive by default**: failed, empty, or partial upstream responses never silently de-pool a healthy account. Set `[models].catalog_withdrawal_policy` (`preserve_until_health` default, `confirmed_once`, `confirmed_twice`) to opt into destructive behavior on authoritative refreshes. See `architecture/README.md` § Catalog Refresh Semantics.
 
 Full config reference: [`config.example.toml`](config.example.toml) | [docs/providers.md](docs/providers.md)
 

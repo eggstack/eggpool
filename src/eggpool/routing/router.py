@@ -369,6 +369,7 @@ class Router:
         provider_id: str | None = None,
         protocol: str | None = None,
         transcode_eligibility: set[str] | None = None,
+        include_gates: bool = False,
     ) -> list[dict[str, Any]]:
         """Return one row per registered account explaining eligibility.
 
@@ -381,6 +382,13 @@ class Router:
         otherwise) and a short ``reason_detail`` for dashboard display.
         Used by ``eggpool accounts explain`` to surface why a model
         is routing only to a subset of accounts.
+
+        When ``include_gates`` is true, the row also carries a
+        ``gates`` dict that exposes every gate's pass/fail status
+        (config, credentials, health, circuit, provider, protocol,
+        model support, freshness, provider-metadata, protocol match,
+        local quota). The dict is informational — the canonical
+        outcome is still ``eligible`` / ``reason_code``.
         """
         all_states: list[AccountRuntimeState] = []
         seen: set[str] = set()
@@ -399,15 +407,115 @@ class Router:
                 protocol=protocol,
                 transcode_eligibility=transcode_eligibility,
             )
-            rows.append(
-                {
-                    "account_name": state.name,
-                    "eligible": eligible,
-                    "reason_code": code,
-                    "reason_detail": detail,
-                }
-            )
+            row: dict[str, Any] = {
+                "account_name": state.name,
+                "eligible": eligible,
+                "reason_code": code,
+                "reason_detail": detail,
+            }
+            if include_gates:
+                gates = self._collect_gate_status(
+                    state=state,
+                    model_id=model_id,
+                    provider_id=provider_id,
+                    protocol=protocol,
+                    transcode_eligibility=transcode_eligibility,
+                )
+                gates["final_eligible"] = eligible
+                row["gates"] = gates
+            rows.append(row)
         return rows
+
+    def _collect_gate_status(
+        self,
+        *,
+        state: AccountRuntimeState,
+        model_id: str,
+        provider_id: str | None,
+        protocol: str | None,
+        transcode_eligibility: set[str] | None,
+    ) -> dict[str, Any]:
+        """Collect pass/fail booleans for every routing gate on one account.
+
+        The dict mirrors the order of checks in
+        ``_classify_eligibility`` so an operator can see exactly which
+        gate is failing. The canonical decision still comes from
+        ``_classify_eligibility`` — this dict is a diagnostic
+        breakdown, not a re-implementation of the gate logic.
+        """
+        cache = self._catalog.cache
+        state_provider = cache.get_provider_for_account(
+            state.name
+        ) or self._registry.get_provider_for_account(state.name)
+        provider_supports_protocol: bool | None = None
+        if protocol is not None and state_provider is not None:
+            provider_supports_protocol = protocol in set(
+                self._registry.get_provider_protocols(state_provider)
+            )
+        elif protocol is None:
+            provider_supports_protocol = None
+        else:
+            provider_supports_protocol = False
+
+        protocol_match: bool | None = None
+        provider_model_protocol: str | None = None
+        provider_model_metadata_exists: bool | None = None
+        if state_provider is not None:
+            entry = cache.get_provider_model_entry(model_id, state_provider)
+            if entry is not None:
+                provider_model_metadata_exists = True
+                provider_model_protocol = (
+                    str(entry.get("protocol"))
+                    if entry.get("protocol") is not None
+                    else None
+                )
+                if protocol is not None and provider_model_protocol is not None:
+                    protocol_match = provider_model_protocol == protocol
+                else:
+                    protocol_match = None
+            else:
+                provider_model_metadata_exists = False
+
+        supporting = cache.get_supporting_accounts(model_id)
+        model_support_row = state.name in supporting
+        fresh_support = model_support_row and not cache.is_account_stale(
+            state.name, self._stale_after_s or 0.0
+        )
+        circuit_closed = (
+            self._health_manager is None
+            or self._health_manager.is_model_healthy(state.name, model_id)
+        )
+        local_quota_gate: bool | None = None
+        if self._local_quota_mode == "hard_cap":
+            # Conservative signal: report ``False`` only when the
+            # account has no remaining capacity at all. This mirrors
+            # the gate in ``eligibility.get_eligible_accounts``; the
+            # router itself never hard-excludes accounts, the gate is
+            # purely advisory and only applies in hard_cap mode.
+            quota = self._quota_estimator.get_account_quota(state.name)
+            local_quota_gate = (
+                quota.get_remaining_capacity() > 0.0 if quota is not None else True
+            )
+        return {
+            "config_enabled": state.enabled,
+            "credentials_usable": self._registry.has_usable_credentials(state.name),
+            "health_state": state.health_state,
+            "circuit_closed": circuit_closed,
+            "provider_id_registry": self._registry.get_provider_for_account(state.name),
+            "provider_id_catalog": cache.get_provider_for_account(state.name),
+            "provider_match": (
+                None if provider_id is None else state_provider == provider_id
+            ),
+            "provider_supports_protocol": provider_supports_protocol,
+            "model_support_row": model_support_row,
+            "model_support_enabled": model_support_row,
+            "fresh_support": fresh_support,
+            "provider_model_metadata_exists": provider_model_metadata_exists,
+            "provider_model_protocol": provider_model_protocol,
+            "protocol_match": protocol_match,
+            "local_quota_gate": local_quota_gate,
+            "final_eligible": None,
+        }
 
     def _classify_eligibility(
         self,

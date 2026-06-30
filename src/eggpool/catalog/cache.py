@@ -6,6 +6,8 @@ import datetime as _dt
 import json
 import logging
 import time
+from dataclasses import dataclass
+from enum import Enum
 from typing import TYPE_CHECKING, Any, cast
 
 from eggpool.catalog.limits import EffectiveModelLimits, conservative_limits
@@ -19,6 +21,41 @@ if TYPE_CHECKING:
     from eggpool.models.config import AppConfig
 
 logger = logging.getLogger(__name__)
+
+
+class AccountCatalogOutcome(Enum):
+    """Result of a per-account catalog fetch.
+
+    The catalog service categorizes each refresh response before touching
+    the in-memory cache so that failed, empty, or partial refreshes do not
+    silently de-pool a healthy account. Only ``SUCCESS_AUTHORITATIVE``
+    responses are allowed to remove support from the cache.
+    """
+
+    SUCCESS_AUTHORITATIVE = "success_authoritative"
+    SUCCESS_EMPTY = "success_empty"
+    SUCCESS_PARTIAL = "success_partial"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+@dataclass(frozen=True, slots=True)
+class AccountCatalogUpdateResult:
+    """Summary of a single ``update_from_account`` call.
+
+    Surfaced to the catalog service so it can record an operational
+    event and so a destructive update can be audited (which models
+    were added, updated, withdrawn, or preserved).
+    """
+
+    account_name: str
+    provider_id: str
+    authoritative: bool
+    allow_withdrawals: bool
+    added_support: int
+    updated_support: int
+    preserved_support: int
+    withdrawn_support: int
 
 
 def parse_model_id(
@@ -137,26 +174,77 @@ class ModelCatalogCache:
         account_name: str,
         provider_id: str,
         models: list[dict[str, Any]],
-    ) -> None:
-        """Update cache with models from a specific account."""
+        *,
+        authoritative: bool = False,
+        allow_withdrawals: bool = False,
+    ) -> AccountCatalogUpdateResult:
+        """Update cache with models from a specific account.
+
+        ``authoritative`` and ``allow_withdrawals`` gate the destructive
+        path so a failed, empty, or partial refresh cannot silently
+        de-pool a healthy account. Live fetch callers should pass
+        ``authoritative=True`` only after a successful non-empty
+        response that has been protocol-resolved, and
+        ``allow_withdrawals=True`` only when the configured
+        ``catalog_withdrawal_policy`` permits it (default: never).
+
+        Semantics:
+
+        - The ``account_name -> provider_id`` mapping is always set.
+        - The supplied ``models`` are always added or updated; the
+          in-memory cache learns about new model/account support
+          regardless of the outcome category.
+        - When ``authoritative and allow_withdrawals`` are both true,
+          any account/model support the new response omits is removed
+          (the legacy "refresh is the source of truth" behavior).
+        - Otherwise prior support is preserved; the destructive
+          ``mark_account_models_unavailable`` step is skipped.
+
+        Returns an :class:`AccountCatalogUpdateResult` summarizing the
+        counts of added, updated, preserved, and withdrawn support
+        rows. The result is informational — the service layer uses it
+        to log/emit operational events.
+        """
         self._account_providers[account_name] = provider_id
         now = time.time()
-        # A refresh response is authoritative for this account. Clear
-        # prior support first so models withdrawn upstream stop being
-        # exposed or routed for this account while other accounts'
-        # support remains intact.
-        self.mark_account_models_unavailable(account_name)
+        added = 0
+        updated = 0
+        preserved = 0
+        withdrawn = 0
+
+        # Destructive withdrawal path is only taken when both flags are
+        # set. Default behavior is non-destructive: catalog uncertainty
+        # must not silently de-pool a healthy account.
+        withdraw_destructive = authoritative and allow_withdrawals
+        if withdraw_destructive:
+            # Count the support rows the destructive step is about to
+            # remove so the result object carries the number of rows
+            # actually withdrawn, not just whether one was requested.
+            for accounts in self._account_support.values():
+                if account_name in accounts:
+                    withdrawn += 1
+            self.mark_account_models_unavailable(account_name)
+        else:
+            # Tally preserved support for the result object before any
+            # additions below so the count reflects the snapshot of
+            # what the cache knew about this account.
+            for accounts in self._account_support.values():
+                if account_name in accounts:
+                    preserved += 1
 
         # Drop any per-provider rows this account used to advertise
         # but the new response no longer includes.  A row survives when
         # at least one other account on the same provider still
         # publishes it; otherwise it is removed so the in-memory cache
-        # converges with the live catalog.
+        # converges with the live catalog.  This step only runs in the
+        # destructive path — in the non-destructive path, missing
+        # (model_id, provider_id) rows survive because the prior
+        # account may simply have failed to refresh this cycle.
         new_keys: set[tuple[str, str]] = set()
         for model in models:
             new_keys.add((model["model_id"], provider_id))
         prior_keys = self._account_provider_keys.get(account_name, set())
-        if prior_keys - new_keys:
+        if withdraw_destructive and prior_keys - new_keys:
             surviving: set[tuple[str, str]] = set()
             for other_acct, other_keys in self._account_provider_keys.items():
                 if other_acct == account_name:
@@ -212,10 +300,24 @@ class ModelCatalogCache:
                 global_info["last_seen_at"] = now
 
             existing_support = self._account_support.get(model_id, frozenset())
+            if account_name in existing_support:
+                updated += 1
+            else:
+                added += 1
             self._account_support[model_id] = existing_support | {account_name}
 
         self._last_refresh = now
         self._account_last_refresh[account_name] = now
+        return AccountCatalogUpdateResult(
+            account_name=account_name,
+            provider_id=provider_id,
+            authoritative=authoritative,
+            allow_withdrawals=allow_withdrawals,
+            added_support=added,
+            updated_support=updated,
+            preserved_support=preserved,
+            withdrawn_support=withdrawn,
+        )
 
     @staticmethod
     def _effective_limits_from_info(

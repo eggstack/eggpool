@@ -244,6 +244,9 @@ def test_cache_mark_unavailable() -> None:
 
 
 def test_cache_refresh_removes_withdrawn_account_support() -> None:
+    """Default update is non-destructive: an empty refresh must not
+    silently de-pool a healthy account. The destructive path requires
+    ``authoritative=True, allow_withdrawals=True``."""
     cache = ModelCatalogCache()
     cache.update_from_account(
         "acct1", "opencode-go", [{"model_id": "gpt-4", "protocol": "openai"}]
@@ -252,9 +255,22 @@ def test_cache_refresh_removes_withdrawn_account_support() -> None:
         "acct2", "opencode-go", [{"model_id": "gpt-4", "protocol": "openai"}]
     )
 
-    cache.update_from_account("acct1", "opencode-go", [])
+    # Default (non-destructive): empty refresh preserves prior support.
+    result = cache.update_from_account("acct1", "opencode-go", [])
+    assert cache.get_supporting_accounts("gpt-4") == {"acct1", "acct2"}
+    assert result.preserved_support == 1
+    assert result.withdrawn_support == 0
 
+    # Explicit destructive path removes support.
+    result = cache.update_from_account(
+        "acct1",
+        "opencode-go",
+        [],
+        authoritative=True,
+        allow_withdrawals=True,
+    )
     assert cache.get_supporting_accounts("gpt-4") == {"acct2"}
+    assert result.withdrawn_support == 1
     assert cache.get_models_for_exposure("union", {"acct1"}) == []
 
 
@@ -883,7 +899,13 @@ def test_suffixed_exposure_does_not_emit_providers_list() -> None:
 
 
 def test_prune_unused_drops_orphan_models() -> None:
-    """A model supported by no account and no provider must be removed."""
+    """A model supported by no account and no provider must be removed.
+
+    With the non-destructive default, an empty refresh preserves prior
+    support, so prune_unused leaves the rows alone. The destructive
+    path (authoritative + allow_withdrawals) is what the prune pass
+    is meant to clean up.
+    """
     cache = ModelCatalogCache()
     cache.update_from_account(
         "acct1",
@@ -893,8 +915,15 @@ def test_prune_unused_drops_orphan_models() -> None:
             {"model_id": "withdrawn", "protocol": "openai"},
         ],
     )
-    # Simulate the model being withdrawn upstream: re-refresh with empty list
-    cache.update_from_account("acct1", "provider-a", [])
+    # Simulate the model being withdrawn upstream with the explicit
+    # destructive flags so the cache can converge with the live catalog.
+    cache.update_from_account(
+        "acct1",
+        "provider-a",
+        [],
+        authoritative=True,
+        allow_withdrawals=True,
+    )
 
     pruned = cache.prune_unused()
 
@@ -908,7 +937,11 @@ def test_prune_unused_drops_orphan_models() -> None:
 
 
 def test_prune_unused_keeps_models_with_remaining_support() -> None:
-    """A model with at least one supporting account is not pruned."""
+    """A model with at least one supporting account is not pruned.
+
+    The destructive path leaves ``shared`` with a remaining account
+    (``acct2`` on provider-b) so the prune pass has nothing to do.
+    """
     cache = ModelCatalogCache()
     cache.update_from_account(
         "acct1",
@@ -920,7 +953,13 @@ def test_prune_unused_keeps_models_with_remaining_support() -> None:
         "provider-b",
         [{"model_id": "shared", "protocol": "openai"}],
     )
-    cache.update_from_account("acct1", "provider-a", [])
+    cache.update_from_account(
+        "acct1",
+        "provider-a",
+        [],
+        authoritative=True,
+        allow_withdrawals=True,
+    )
 
     pruned = cache.prune_unused()
 

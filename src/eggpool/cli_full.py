@@ -3258,6 +3258,17 @@ def accounts_status(ctx: click.Context) -> None:
     help="Show routing scores for eligible accounts "
     "(priority, weight, active count, score).",
 )
+@click.option(
+    "--gates",
+    "show_gates",
+    is_flag=True,
+    default=False,
+    help="Show per-gate diagnostic dict for every account "
+    "(config, credentials, health, circuit, provider, protocol, "
+    "model support, freshness, provider-metadata, protocol match, "
+    "local quota). Each gate is reported as pass/fail so a single "
+    "row makes it obvious which gate is suppressing the account.",
+)
 @click.pass_context
 def accounts_explain(
     ctx: click.Context,
@@ -3265,6 +3276,7 @@ def accounts_explain(
     provider_id: str | None,
     protocol: str | None,
     show_scores: bool,
+    show_gates: bool,
 ) -> None:
     """Explain why each account is or is not eligible for ``--model``.
 
@@ -3276,6 +3288,9 @@ def accounts_explain(
 
     With ``--scores``, eligible accounts are also scored and the output
     includes priority, weight, active request count, and routing score.
+    With ``--gates``, every row carries a ``gates`` dict that exposes
+    the per-gate pass/fail status so the suppressing gate is visible
+    in one read.
     """
     from eggpool.accounts.registry import AccountRegistry
     from eggpool.catalog.cache import ModelCatalogCache
@@ -3333,6 +3348,7 @@ def accounts_explain(
             provider_id=provider_id,
             protocol=protocol,
             transcode_eligibility=None,
+            include_gates=show_gates,
         )
         click.echo(f"Account eligibility for model {model_id!r}:")
         if not rows:
@@ -3360,7 +3376,9 @@ def accounts_explain(
                             "rank": rank + 1,
                         }
 
-        if show_scores and score_map:
+        if show_gates:
+            _render_gates_table(rows)
+        elif show_scores and score_map:
             name_w = max(len("Account"), *(len(r["account_name"]) for r in rows))
             elig_w = max(len("Eligible"), 3)
             reason_w = max(len("Reason"), *(len(r["reason_code"]) for r in rows))
@@ -3421,6 +3439,73 @@ def accounts_explain(
                 )
 
     _run_with_database(config, _run_explain)
+
+
+def _render_gates_table(rows: list[dict[str, Any]]) -> None:
+    """Render the per-account gate diagnostic table.
+
+    Output is one row per account with a fixed set of gate columns.
+    Each cell is rendered as ``yes``/``no`` for booleans, the raw
+    value for strings, and ``-`` for ``None`` (gate not applicable
+    to this filter combination, e.g. protocol match when no
+    protocol was requested).
+    """
+    gate_columns: tuple[tuple[str, str], ...] = (
+        ("config_enabled", "cfg"),
+        ("credentials_usable", "creds"),
+        ("health_state", "health"),
+        ("circuit_closed", "circuit"),
+        ("provider_match", "provider"),
+        ("provider_supports_protocol", "sup_proto"),
+        ("model_support_row", "model"),
+        ("fresh_support", "fresh"),
+        ("provider_model_metadata_exists", "meta"),
+        ("protocol_match", "proto"),
+        ("local_quota_gate", "lq"),
+        ("final_eligible", "eligible"),
+    )
+
+    def _cell(value: object) -> str:
+        if value is None:
+            return "-"
+        if isinstance(value, bool):
+            return "yes" if value else "no"
+        return str(value)
+
+    name_w = max(len("Account"), *(len(r["account_name"]) for r in rows))
+    header = (
+        "  "
+        + f"{'Account':<{name_w}}"
+        + "  "
+        + "  ".join(col_label for _key, col_label in gate_columns)
+    )
+    click.echo(header)
+    click.echo(
+        "  "
+        + f"{'-' * name_w}"
+        + "  "
+        + "  ".join("-" * len(col_label) for _key, col_label in gate_columns)
+    )
+    for row in rows:
+        gates_raw = row.get("gates")
+        gates: dict[str, object] = (
+            cast("dict[str, object]", gates_raw) if isinstance(gates_raw, dict) else {}
+        )
+        cells = "  ".join(_cell(gates.get(key)) for key, _label in gate_columns)
+        click.echo(f"  {row['account_name']:<{name_w}}  {cells}")
+    click.echo("")
+    click.echo(
+        "  cfg=config_enabled  creds=credentials_usable  health=health_state  "
+        "circuit=circuit_closed"
+    )
+    click.echo(
+        "  provider=provider_match  sup_proto=provider_supports_protocol  "
+        "model=model_support_row"
+    )
+    click.echo(
+        "  fresh=fresh_support  meta=provider_model_metadata_exists  "
+        "proto=protocol_match  lq=local_quota_gate"
+    )
 
 
 def _get_provider_for_account(config: AppConfig, account_name: str) -> str:

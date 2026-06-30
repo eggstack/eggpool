@@ -315,7 +315,10 @@ async def test_refresh_prunes_withdrawn_models(
             await service._persist_catalog()  # pyright: ignore[reportPrivateUsage]
             assert service.cache.has_model("withdrawn-model")
 
-            # Second refresh: provider drops the model.
+            # Second refresh: provider drops the model. The
+            # non-destructive default preserves prior support, so the
+            # test must opt into the destructive path explicitly to
+            # simulate a confirmed withdrawal.
             service.cache.update_from_account(
                 "test-acct",
                 "opencode-go",
@@ -328,6 +331,8 @@ async def test_refresh_prunes_withdrawn_models(
                         "source_metadata": {},
                     },
                 ],
+                authoritative=True,
+                allow_withdrawals=True,
             )
             with caplog.at_level(logging.INFO, logger="eggpool.catalog.service"):
                 pruned = service.cache.prune_unused()

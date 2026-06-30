@@ -130,6 +130,11 @@ class ModelsConfig(BaseModel):
     allow_stale_catalog: bool = True
     ping_retain_days: int = Field(default=7, ge=1)
     collapse_models: bool = False
+    catalog_withdrawal_policy: Literal[
+        "preserve_until_health",
+        "confirmed_once",
+        "confirmed_twice",
+    ] = "preserve_until_health"
 
 
 class RoutingConfig(BaseModel):

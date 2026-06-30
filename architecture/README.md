@@ -512,6 +512,77 @@ suffixed (or unsuffixed) model ID.
   provider block and leaves existing blocks untouched, so operators can edit
   one number to rebalance.
 
+## Catalog Refresh Semantics
+
+The catalog refresh path is **non-destructive by default**. Healthy
+account/model support rows survive every refresh cycle so a transient
+network blip, an empty upstream response, or a partially-normalized
+response cannot silently de-pool a healthy account. The only de-pooling
+mechanism in the catalog layer is `HealthManager`; configuration and
+health state jointly own the eligibility decision.
+
+### Per-account outcome classification
+
+`CatalogService._fetch_and_process_account` categorizes every refresh
+attempt and returns an `AccountCatalogOutcome` plus, on success, an
+`AccountCatalogUpdateResult`:
+
+| Outcome | When | Cache touched? |
+| ------- | ---- | -------------- |
+| `SUCCESS_AUTHORITATIVE` | HTTP 2xx, fully protocol-resolved, non-empty | Add/update only unless `catalog_withdrawal_policy` permits withdrawal |
+| `SUCCESS_PARTIAL` | HTTP 2xx, but at least one model lacks a resolved protocol | Add/update only; withdrawal forced off |
+| `SUCCESS_EMPTY` | HTTP 2xx with zero normalizable models | No-op (prior support preserved) |
+| `FAILED` | Network/5xx/auth/quota/JSON-shape failure | **No** (cache untouched) |
+| `SKIPPED` | Fetcher returned without contacting upstream | **No** (cache untouched) |
+
+### Withdrawal policy
+
+`ModelsConfig.catalog_withdrawal_policy` controls when withdrawal is
+permitted:
+
+- `preserve_until_health` (default) — withdrawal is **never**
+  triggered by a refresh. Health state is the sole de-pooling
+  mechanism.
+- `confirmed_once` — a single authoritative refresh may withdraw
+  support for models no longer advertised.
+- `confirmed_twice` — two consecutive authoritative refreshes are
+  required to withdraw support.
+
+`SUCCESS_PARTIAL` overrides the policy for that cycle and forces
+`allow_withdrawals = False` because a partial response is never a
+complete withdrawal confirmation. The destructive
+`mark_account_models_unavailable` step is also gated on
+`authoritative=True, allow_withdrawals=True` so the cache layer
+itself enforces the invariant; the service decides which flags to
+flip based on outcome category and policy.
+
+### Per-cycle operational logging
+
+`CatalogService.refresh()` calls `_log_refresh_summary` after every
+cycle. The INFO log enumerates per-outcome counts on one line so
+operators can spot catalog uncertainty without enabling debug
+logging:
+
+```
+Catalog refresh summary: policy=preserve_until_health total=3 authoritative=1 partial=0 empty=1 failed=1 skipped=0
+```
+
+A run with many `FAILED` or `PARTIAL` rows is signal that an upstream
+or DNS path is unhealthy; a sudden shift in `AUTHORITATIVE` count
+indicates a real catalog change that may need rebalancing.
+
+### Gate diagnostics for `accounts explain`
+
+`Router.explain_account_eligibility(include_gates=True)` returns a
+per-account gate breakdown dict (config, credentials, health,
+circuit, provider, protocol, model support, freshness, provider
+metadata, protocol match, local quota, final eligible) so operators
+can pinpoint exactly which gate is failing without running live
+traffic. The dict is informational; the canonical decision still
+comes from `_classify_eligibility`. The `eggpool accounts explain
+--gates` CLI command renders the same breakdown as a compact
+text table.
+
 ## Error Hierarchy
 
 ```

@@ -10,7 +10,11 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
-from eggpool.catalog.cache import ModelCatalogCache
+from eggpool.catalog.cache import (
+    AccountCatalogOutcome,
+    AccountCatalogUpdateResult,
+    ModelCatalogCache,
+)
 from eggpool.catalog.catalog_resolvers import (
     CatalogConfig,
     CatalogHttpClient,
@@ -290,7 +294,11 @@ class CatalogService:
 
             # Fetch concurrently for each account
             static_tasks: list[asyncio.Task[None]] = []
-            live_tasks: list[asyncio.Task[None]] = []
+            live_tasks: list[
+                asyncio.Task[
+                    tuple[AccountCatalogOutcome, AccountCatalogUpdateResult | None]
+                ]
+            ] = []
             for state in enabled_accounts:
                 api_key = self._registry.get_api_key(state.name)
                 provider_id = self._registry.get_provider_for_account(state.name)
@@ -358,8 +366,25 @@ class CatalogService:
 
             if static_tasks:
                 await asyncio.gather(*static_tasks, return_exceptions=True)
+            outcomes: list[AccountCatalogOutcome] = []
             if live_tasks:
-                await asyncio.gather(*live_tasks, return_exceptions=True)
+                fetch_results = await asyncio.gather(
+                    *live_tasks, return_exceptions=True
+                )
+                for state, fetch_result in zip(
+                    enabled_accounts, fetch_results, strict=False
+                ):
+                    if isinstance(fetch_result, BaseException):
+                        logger.warning(
+                            "Catalog refresh for account %r preserved prior "
+                            "support after exception: %s",
+                            state.name,
+                            fetch_result,
+                        )
+                        outcomes.append(AccountCatalogOutcome.FAILED)
+                        continue
+                    outcome, _update = fetch_result
+                    outcomes.append(outcome)
 
             # Drop models no longer referenced by any account or provider
             # so the in-memory cache converges with the live catalog and
@@ -370,6 +395,8 @@ class CatalogService:
 
             # Persist the updated catalog
             await self._persist_catalog()
+
+            self._log_refresh_summary(outcomes, len(enabled_accounts))
 
             logger.info(
                 "Catalog refresh complete: %d models from %d accounts",
@@ -393,6 +420,49 @@ class CatalogService:
                 changed_provider_keys=changed_provider_keys,
                 refreshed_at=time.time(),
                 pruned_count=pruned,
+            )
+
+    def _log_refresh_summary(
+        self,
+        outcomes: list[AccountCatalogOutcome],
+        total_accounts: int,
+    ) -> None:
+        """Log a per-outcome summary of the just-completed refresh cycle.
+
+        Each non-authoritative outcome is treated as a "catalog
+        uncertainty" event that preserved prior support. The default
+        policy is ``preserve_until_health`` so non-destructive outcomes
+        are expected; a run with many ``FAILED`` rows is still useful
+        signal to operators that an upstream or DNS path is unhealthy.
+        """
+        if total_accounts == 0:
+            return
+        counts: dict[AccountCatalogOutcome, int] = {}
+        for outcome in outcomes:
+            counts[outcome] = counts.get(outcome, 0) + 1
+        policy = self._config.models.catalog_withdrawal_policy
+        logger.info(
+            "Catalog refresh summary: policy=%s total=%d authoritative=%d "
+            "partial=%d empty=%d failed=%d skipped=%d",
+            policy,
+            total_accounts,
+            counts.get(AccountCatalogOutcome.SUCCESS_AUTHORITATIVE, 0),
+            counts.get(AccountCatalogOutcome.SUCCESS_PARTIAL, 0),
+            counts.get(AccountCatalogOutcome.SUCCESS_EMPTY, 0),
+            counts.get(AccountCatalogOutcome.FAILED, 0),
+            counts.get(AccountCatalogOutcome.SKIPPED, 0),
+        )
+        non_authoritative = sum(
+            count
+            for outcome, count in counts.items()
+            if outcome is not AccountCatalogOutcome.SUCCESS_AUTHORITATIVE
+        )
+        if non_authoritative:
+            logger.info(
+                "Catalog refresh: %d non-authoritative outcome(s) preserved "
+                "prior account/model support (policy=%s)",
+                non_authoritative,
+                policy,
             )
 
     def _build_static_models(
@@ -491,8 +561,38 @@ class CatalogService:
         models_path: str = "/models",
         *,
         provider_cfg: ProviderConfig | None = None,
-    ) -> None:
-        """Fetch models for one account and update the cache."""
+    ) -> tuple[AccountCatalogOutcome, AccountCatalogUpdateResult | None]:
+        """Fetch models for one account and update the cache.
+
+        Returns a tuple of ``(outcome, result)`` so the refresh cycle
+        can summarize the per-account state without inspecting the cache
+        directly. ``result`` is ``None`` for ``FAILED`` and ``SKIPPED``
+        outcomes because the cache is not touched in those branches.
+
+        Outcome mapping:
+
+        - ``FAILED`` — network exception, timeout, HTTP 5xx, malformed
+          payload, auth failure (401/403), quota (402/429). The cache
+          is **not** mutated; the ping row records the failure for
+          observability.
+        - ``SUCCESS_EMPTY`` — HTTP 2xx with a model list that did not
+          survive normalization (zero models after filtering). The
+          cache learns the provider returned nothing this cycle but
+          prior support is preserved.
+        - ``SUCCESS_PARTIAL`` — HTTP 2xx with a non-empty list that
+          did not fully resolve (e.g. mixed resolved/unresolved
+          protocols). Prior support is preserved; new models are added
+          but the destructive path is disabled for that cycle.
+        - ``SUCCESS_AUTHORITATIVE`` — HTTP 2xx with a fully
+          protocol-resolved, non-empty list. The cache update honors
+          the configured ``catalog_withdrawal_policy``: under the
+          default ``preserve_until_health`` policy, the call is
+          non-destructive; ``confirmed_once`` / ``confirmed_twice``
+          enable withdrawal.
+        - ``SKIPPED`` — the fetcher returned without contacting
+          upstream (e.g. ``models_endpoint = DISABLED``). The cache is
+          not touched.
+        """
         try:
             result = await fetch_models_for_account(
                 client,
@@ -515,10 +615,54 @@ class CatalogService:
                         model_count=result.model_count,
                     )
 
+            # Failed/empty response: preserve prior support, do not
+            # touch the destructive cache path.
             if not result.response:
-                return
+                # If the fetcher flagged a specific error, this is a
+                # FAILED refresh (network/5xx/auth/quota/malformed
+                # payload). Otherwise (no error, just empty data) it
+                # is SUCCESS_EMPTY.
+                if result.error is not None or result.status_code is None:
+                    logger.warning(
+                        "Catalog refresh for account %r on provider %r "
+                        "preserved prior support after failure: %s "
+                        "(status=%s, models_seen=%d)",
+                        account_name,
+                        provider_id,
+                        result.error or "no response",
+                        result.status_code,
+                        result.model_count,
+                    )
+                    return AccountCatalogOutcome.FAILED, None
+                logger.info(
+                    "Catalog refresh for account %r on provider %r returned "
+                    "an empty model list; prior support preserved",
+                    account_name,
+                    provider_id,
+                )
+                # Still record the empty response in the cache so the
+                # support set reflects what the upstream is currently
+                # advertising. The non-destructive default keeps prior
+                # rows alive.
+                update = self._cache.update_from_account(account_name, provider_id, [])
+                return AccountCatalogOutcome.SUCCESS_EMPTY, update
 
             models = normalize_models(result.response)
+
+            # An HTTP 2xx with a non-empty ``data`` list that survives
+            # normalization as zero models is treated as an empty
+            # refresh (e.g. an Anthropic-shaped response whose items
+            # failed validation). The cache is preserved non-destructively
+            # and the cycle's outcome counter reports ``SUCCESS_EMPTY``.
+            if not models and not result.error:
+                logger.info(
+                    "Catalog refresh for account %r on provider %r returned "
+                    "no normalizable models; prior support preserved",
+                    account_name,
+                    provider_id,
+                )
+                update = self._cache.update_from_account(account_name, provider_id, [])
+                return AccountCatalogOutcome.SUCCESS_EMPTY, update
             provider_cfg = provider_cfg or self._config.providers.get(provider_id)
 
             # Apply per-model protocol resolution (Section 11)
@@ -610,17 +754,79 @@ class CatalogService:
                 }
                 model["effective_limits"] = effective.as_dict()
 
-            self._cache.update_from_account(account_name, provider_id, models)
+            # Decide authoritative / destructive flags from the
+            # configured withdrawal policy. A "partial" outcome is
+            # triggered when at least one model in the response has
+            # an unresolved protocol that the provider-side override
+            # could not pin: those rows are added to the cache but
+            # we do not trust the response to be a complete
+            # withdrawal confirmation, so we mark the outcome
+            # SUCCESS_PARTIAL and never allow withdrawals for it.
+            authoritative, allow_withdrawals, outcome = self._classify_authoritative(
+                models=models,
+                provider_cfg=provider_cfg,
+            )
+            update = self._cache.update_from_account(
+                account_name,
+                provider_id,
+                models,
+                authoritative=authoritative,
+                allow_withdrawals=allow_withdrawals,
+            )
+            if outcome is AccountCatalogOutcome.SUCCESS_PARTIAL:
+                logger.warning(
+                    "Catalog refresh for account %r on provider %r returned a "
+                    "partially-normalized model list; prior support preserved, "
+                    "withdrawals disabled for this cycle",
+                    account_name,
+                    provider_id,
+                )
             logger.debug(
-                "Account %r: found %d models",
+                "Account %r: %s found %d models (added=%d, updated=%d, "
+                "preserved=%d, withdrawn=%d)",
                 account_name,
+                outcome.value,
                 len(models),
+                update.added_support,
+                update.updated_support,
+                update.preserved_support,
+                update.withdrawn_support,
             )
-        except Exception:
-            logger.exception(
-                "Failed to fetch models for account %r",
+            return outcome, update
+        except Exception as exc:
+            logger.warning(
+                "Catalog refresh for account %r on provider %r preserved prior "
+                "support after exception: %s",
                 account_name,
+                provider_id,
+                exc,
             )
+            return AccountCatalogOutcome.FAILED, None
+
+    def _classify_authoritative(
+        self,
+        *,
+        models: list[dict[str, Any]],
+        provider_cfg: ProviderConfig | None,
+    ) -> tuple[bool, bool, AccountCatalogOutcome]:
+        """Decide whether a successful refresh may destructively update.
+
+        The withdrawal policy on ``ModelsConfig.catalog_withdrawal_policy``
+        controls when ``allow_withdrawals`` is set. A response is
+        treated as ``SUCCESS_PARTIAL`` when at least one model in the
+        response is missing a resolved protocol; the cache update is
+        still applied (so newly-discovered models land) but the
+        withdrawal flag is forced off for that cycle because the
+        response is not a complete model list.
+        """
+        policy = self._config.models.catalog_withdrawal_policy
+        allow_withdrawals = policy != "preserve_until_health"
+        has_unresolved = any(not model.get("protocol") for model in models)
+        if has_unresolved and not allow_withdrawals:
+            return True, False, AccountCatalogOutcome.SUCCESS_PARTIAL
+        if has_unresolved:
+            return True, False, AccountCatalogOutcome.SUCCESS_PARTIAL
+        return True, allow_withdrawals, AccountCatalogOutcome.SUCCESS_AUTHORITATIVE
 
     async def _load_cached_models(self) -> None:
         """Load previously cached models from the database."""
