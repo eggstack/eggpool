@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, cast
 
 from eggpool.model_info.repository import ModelInfoRepository
+from eggpool.model_info.scheduler import ModelInfoRefreshScheduler
 from eggpool.model_info.sources.provider_catalog import ProviderCatalogSource
 from eggpool.model_info.types import CanonicalModelInfo, ModelInfoStatus
 
@@ -14,6 +16,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from eggpool.catalog.cache import ModelCatalogCache
+    from eggpool.catalog.service import CatalogRefreshResult
     from eggpool.db.connection import Database
     from eggpool.models.config import ModelInfoConfig
 
@@ -34,6 +37,7 @@ class ModelInfoService:
         self._catalog = catalog
         self._repo = ModelInfoRepository(db)
         self._provider_source = ProviderCatalogSource(catalog)
+        self._scheduler = ModelInfoRefreshScheduler(config)
 
     @property
     def repo(self) -> ModelInfoRepository:
@@ -147,6 +151,194 @@ class ModelInfoService:
                 updated += 1
 
         return {"created": created, "updated": updated, "total": len(model_ids)}
+
+    async def reconcile_catalog_refresh(
+        self, result: CatalogRefreshResult
+    ) -> dict[str, int]:
+        """Reconcile model-info after a catalog refresh.
+
+        For new models: create canonical row if absent, mark sparse_new,
+        set next_refresh_at=now.
+        For changed provider keys: refresh observations for affected models.
+        For withdrawn models: set status 'withdrawn' if not live.
+        """
+        now = datetime.now(UTC)
+        created = 0
+        updated = 0
+        refreshed = 0
+
+        # New models: create sparse canonical rows
+        for model_id in result.new_model_ids:
+            existing = await self._repo.get_canonical(model_id)
+            if existing is None:
+                status, sparse = self._classify_model(model_id)
+                detail = self._build_detail(model_id)
+                provenance: dict[str, object] = {
+                    "sources": ["provider_catalog"],
+                    "reconciled_at": now.isoformat(),
+                }
+                summary = _generate_summary(
+                    model_id=model_id,
+                    status=status,
+                    sparse=sparse,
+                    detail=detail,
+                )
+                info = CanonicalModelInfo(
+                    model_id=model_id,
+                    status=status,
+                    summary=summary,
+                    sparse=sparse,
+                    detail=detail,
+                    provenance=provenance,
+                    conflicts={},
+                    first_seen_at=now,
+                    last_seen_at=now,
+                    last_refreshed_at=None,
+                    next_refresh_at=now,
+                )
+                await self._repo.upsert_canonical(info)
+                created += 1
+
+        # Changed provider keys: refresh observations for affected model IDs
+        changed_model_ids = {
+            model_id for model_id, _provider_id in result.changed_provider_keys
+        }
+        for model_id in changed_model_ids:
+            if model_id in result.new_model_ids:
+                continue  # already handled above
+            existing = await self._repo.get_canonical(model_id)
+            if existing is not None:
+                detail = self._build_detail(model_id)
+                provenance = {
+                    **existing.provenance,
+                    "sources": ["provider_catalog"],
+                    "reconciled_at": now.isoformat(),
+                }
+                info = CanonicalModelInfo(
+                    model_id=model_id,
+                    status=existing.status,
+                    summary=existing.summary,
+                    sparse=existing.sparse,
+                    detail=detail,
+                    provenance=provenance,
+                    conflicts=existing.conflicts,
+                    first_seen_at=existing.first_seen_at,
+                    last_seen_at=now,
+                    last_refreshed_at=existing.last_refreshed_at,
+                    next_refresh_at=existing.next_refresh_at,
+                )
+                await self._repo.upsert_canonical(info)
+                refreshed += 1
+
+        # Withdrawn models: mark withdrawn if not live in catalog
+        for model_id in result.withdrawn_model_ids:
+            existing = await self._repo.get_canonical(model_id)
+            if existing is not None and model_id not in result.live_model_ids:
+                info = CanonicalModelInfo(
+                    model_id=model_id,
+                    status=cast("ModelInfoStatus", "withdrawn"),
+                    summary=existing.summary,
+                    sparse=False,
+                    detail=existing.detail,
+                    provenance=existing.provenance,
+                    conflicts=existing.conflicts,
+                    first_seen_at=existing.first_seen_at,
+                    last_seen_at=existing.last_seen_at,
+                    last_refreshed_at=existing.last_refreshed_at,
+                    next_refresh_at=None,
+                )
+                await self._repo.upsert_canonical(info)
+                updated += 1
+
+        return {
+            "created": created,
+            "updated": updated,
+            "refreshed": refreshed,
+            "total": len(result.live_model_ids),
+        }
+
+    async def refresh_due_models(self) -> dict[str, int]:
+        """Refresh provider-native observations for models due for refresh.
+
+        Queries the repository for due rows, refreshes provider observations,
+        reconciles canonical summaries, and updates next_refresh_at.
+        """
+        now = datetime.now(UTC)
+        due_rows = await self._repo.list_due(
+            limit=self._config.max_models_per_cycle, now=now
+        )
+
+        if not due_rows:
+            return {"refreshed": 0, "total": 0}
+
+        refreshed = 0
+        for canonical in due_rows:
+            model_id = canonical.model_id
+            existing = await self._repo.get_canonical(model_id)
+            if existing is None:
+                continue
+
+            status, sparse = self._classify_model(model_id)
+            detail = self._build_detail(model_id)
+            next_refresh = self._scheduler.next_refresh_for(
+                status=status,
+                first_seen_at=existing.first_seen_at,
+                last_refreshed_at=existing.last_refreshed_at,
+                now=now,
+            )
+
+            info = CanonicalModelInfo(
+                model_id=model_id,
+                status=status,
+                summary=_generate_summary(
+                    model_id=model_id,
+                    status=status,
+                    sparse=sparse,
+                    detail=detail,
+                ),
+                sparse=sparse,
+                detail=detail,
+                provenance={
+                    **existing.provenance,
+                    "sources": ["provider_catalog"],
+                    "reconciled_at": now.isoformat(),
+                },
+                conflicts=existing.conflicts,
+                first_seen_at=existing.first_seen_at,
+                last_seen_at=now,
+                last_refreshed_at=now,
+                next_refresh_at=next_refresh,
+            )
+            await self._repo.upsert_canonical(info)
+            refreshed += 1
+
+        return {"refreshed": refreshed, "total": len(due_rows)}
+
+    async def run_periodic_refresh(self) -> None:
+        """Background loop that refreshes due models periodically."""
+        while True:
+            await asyncio.sleep(self._config.refresh_interval_s)
+            try:
+                result = await self.refresh_due_models()
+                if result["refreshed"] > 0:
+                    logger.info(
+                        "Model info periodic refresh: refreshed %d of %d due models",
+                        result["refreshed"],
+                        result["total"],
+                    )
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logger.exception("Model info periodic refresh failed")
+
+    async def record_source_success(self, source_name: str) -> None:
+        """Record a successful fetch from a model-info source."""
+        await self._repo.record_source_success(source_name)
+
+    async def record_source_error(self, source_name: str, exc: Exception) -> None:
+        """Record an error from a model-info source with backoff."""
+        cooldown = _compute_source_backoff(source_name)
+        await self._repo.record_source_error(source_name, exc, cooldown_until=cooldown)
 
     async def get_summary(self, model_id: str) -> CanonicalModelInfo | None:
         """Return the canonical summary for a model."""
@@ -280,6 +472,14 @@ class ModelInfoService:
             detail["providers"] = providers
 
         return detail
+
+
+def _compute_source_backoff(source_name: str) -> datetime:
+    """Compute exponential backoff for source failures."""
+    # Simple backoff: 15m, 1h, 6h, capped at 24h
+    # For phase 2, use a fixed 15-minute cooldown.
+    # A future phase can track failure_count for true exponential.
+    return datetime.now(UTC) + timedelta(minutes=15)
 
 
 def _generate_summary(

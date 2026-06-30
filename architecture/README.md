@@ -408,12 +408,17 @@ AggregatorError (base)
 
 ## Model Information
 
-- **Phase 1 foundation**: `model_info/` package provides persistent model metadata sidecar tables (`model_info_canonical`, `model_info_observations`, `model_info_aliases`, `model_info_source_health`) via migration `0036`
+- **Sidecar subsystem**: `model_info/` package provides persistent model metadata sidecar tables (`model_info_canonical`, `model_info_observations`, `model_info_aliases`, `model_info_source_health`) via migration `0036`
 - **Provider-native observations**: `ProviderCatalogSource` reads in-memory `ModelCatalogCache` entries and emits `SourceModelRecord`s; no network I/O
 - **Status classification**: models classified as `sparse_new`, `partial`, `fresh`, etc. based on available metadata (display name, context limit, capabilities)
 - **Deterministic summaries**: generated from fields only (no LLM); sparse models explicitly note metadata sparsity
+- **Lifecycle wiring**: `ModelInfoService` initialized at startup after catalog load; `CatalogService.refresh()` returns `CatalogRefreshResult` with diff information (new/withdrawn models, changed provider keys)
+- **Background refresh**: supervised `model_info_refresh` task processes due models via `ModelInfoRefreshScheduler`; reconciliation also runs after successful catalog refreshes
+- **Refresh scheduling**: `ModelInfoRefreshScheduler` computes next refresh time based on status, first-seen age, and config TTLs; sparse-new models receive accelerated refresh within a configurable window
+- **Source health**: per-source health tracking with cooldown backoff; `record_source_success`/`record_source_error` helpers
+- **Write deduplication**: observations deduplicated by `(source, source_model_id, raw_hash)`; canonical rows compared before rewrite
 - **CLI**: `eggpool modelinfo show/list/refresh` commands for inspection and manual refresh
-- **Config**: `[model_info]` section in `config.toml` with TTL controls and source enablement
+- **Config**: `[model_info]` section in `config.toml` with TTL controls, refresh intervals, and source enablement
 
 ## Model Context Limits
 

@@ -6,6 +6,8 @@ import asyncio
 import datetime as _dt
 import json
 import logging
+import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from eggpool.catalog.cache import ModelCatalogCache
@@ -44,6 +46,18 @@ if TYPE_CHECKING:
     from eggpool.models.config import AppConfig, ProviderConfig
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class CatalogRefreshResult:
+    """Result of a catalog refresh with diff information."""
+
+    live_model_ids: frozenset[str]
+    new_model_ids: frozenset[str]
+    withdrawn_model_ids: frozenset[str]
+    changed_provider_keys: frozenset[tuple[str, str]]
+    refreshed_at: float
+    pruned_count: int = 0
 
 
 def _ts_to_unix(value: object) -> float:
@@ -247,10 +261,15 @@ class CatalogService:
     def cache(self) -> ModelCatalogCache:
         return self._cache
 
-    async def refresh(self) -> None:
+    async def refresh(self) -> CatalogRefreshResult:
         """Fetch models from all enabled accounts and update cache."""
         async with self._refresh_lock:
             logger.info("Starting catalog refresh")
+
+            before_model_ids = frozenset(self._cache.get_all_models().keys())
+            before_provider_keys = frozenset(
+                self._cache.get_provider_model_entries().keys()
+            )
 
             # Fresh service instances (for example ``models refresh``) need
             # durable fallback state. Long-running services load once at
@@ -261,7 +280,13 @@ class CatalogService:
             enabled_accounts = self._registry.get_enabled_states()
             if not enabled_accounts:
                 logger.warning("No enabled accounts for catalog refresh")
-                return
+                return CatalogRefreshResult(
+                    live_model_ids=frozenset(),
+                    new_model_ids=frozenset(),
+                    withdrawn_model_ids=frozenset(),
+                    changed_provider_keys=frozenset(),
+                    refreshed_at=time.time(),
+                )
 
             # Fetch concurrently for each account
             static_tasks: list[asyncio.Task[None]] = []
@@ -350,6 +375,24 @@ class CatalogService:
                 "Catalog refresh complete: %d models from %d accounts",
                 self._cache.model_count,
                 len(enabled_accounts),
+            )
+
+            after_model_ids = frozenset(self._cache.get_all_models().keys())
+            after_provider_keys = frozenset(
+                self._cache.get_provider_model_entries().keys()
+            )
+
+            new_model_ids = after_model_ids - before_model_ids
+            withdrawn_model_ids = before_model_ids - after_model_ids
+            changed_provider_keys = before_provider_keys ^ after_provider_keys
+
+            return CatalogRefreshResult(
+                live_model_ids=after_model_ids,
+                new_model_ids=new_model_ids,
+                withdrawn_model_ids=withdrawn_model_ids,
+                changed_provider_keys=changed_provider_keys,
+                refreshed_at=time.time(),
+                pruned_count=pruned,
             )
 
     def _build_static_models(

@@ -710,6 +710,34 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             config.models.stale_after_s,
         )
 
+    # 14b. Model info service
+    model_info = None
+    if config.model_info.enabled:
+        from eggpool.model_info.service import ModelInfoService
+
+        try:
+            model_info = ModelInfoService(
+                config=config.model_info,
+                db=db,
+                catalog=catalog.cache,
+            )
+            app.state.model_info = model_info
+            await model_info.load_cache()
+            if config.model_info.startup_refresh:
+                try:
+                    reconcile_result = await model_info.reconcile_catalog_snapshot(
+                        reason="startup"
+                    )
+                    logger.info(
+                        "Model info startup reconciliation: %s",
+                        reconcile_result,
+                    )
+                except Exception:
+                    logger.exception("Model info startup reconciliation failed")
+        except Exception:
+            logger.exception("Failed to initialize model info service")
+            model_info = None
+
     # 15. Price repository and cost calculator
     price_repo = PriceRepository(db)
     cost_calculator = CostCalculator(price_repo)
@@ -909,7 +937,22 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     if config.models.refresh_interval_s > 0:
         supervisor.register(
             "catalog_refresh",
-            lambda: _catalog_refresh_loop(catalog, config.models.refresh_interval_s),
+            lambda: _catalog_refresh_loop(
+                catalog,
+                config.models.refresh_interval_s,
+                model_info if config.model_info.enabled else None,
+            ),
+        )
+
+    # Register model info periodic refresh task
+    if (
+        config.model_info.enabled
+        and config.model_info.refresh_interval_s > 0
+        and model_info is not None
+    ):
+        supervisor.register(
+            "model_info_refresh",
+            lambda: model_info.run_periodic_refresh(),
         )
 
     # Register retention cleanup task (runs every hour)
@@ -1121,12 +1164,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 async def _catalog_refresh_loop(
     catalog: CatalogService,
     interval_s: int,
+    model_info: Any = None,
 ) -> None:
     """Background task for periodic catalog refresh."""
     while True:
         try:
             await asyncio.sleep(interval_s)
-            await catalog.refresh()
+            result = await catalog.refresh()
+            if model_info is not None:
+                try:
+                    await model_info.reconcile_catalog_refresh(result)
+                except Exception:
+                    logger.exception(
+                        "Model info reconciliation after catalog refresh failed"
+                    )
         except asyncio.CancelledError:
             break
         except Exception:
