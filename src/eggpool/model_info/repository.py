@@ -108,42 +108,58 @@ class ModelInfoRepository:
     async def upsert_canonical(self, info: CanonicalModelInfo) -> None:
         """Write canonical status/detail/provenance/conflicts."""
         async with self._db.transaction():
-            await self._db.execute_write(
-                "INSERT INTO model_info_canonical "
-                "(model_id, status, summary, detail_json, provenance_json, "
-                "conflicts_json, sparse, first_seen_at, last_seen_at, "
-                "last_refreshed_at, next_refresh_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(model_id) DO UPDATE SET "
-                "status = excluded.status, summary = excluded.summary, "
-                "detail_json = excluded.detail_json, "
-                "provenance_json = excluded.provenance_json, "
-                "conflicts_json = excluded.conflicts_json, "
-                "sparse = excluded.sparse, last_seen_at = excluded.last_seen_at, "
-                "last_refreshed_at = excluded.last_refreshed_at, "
-                "next_refresh_at = excluded.next_refresh_at",
+            await self._execute_upsert_canonical(info)
+
+    async def upsert_canonical_batch(self, infos: list[CanonicalModelInfo]) -> int:
+        """Write multiple canonical rows inside a single transaction.
+
+        Returns the number of rows actually written (skipped rows where
+        the payload is byte-identical to the existing row are not counted
+        as writes, though they still acquire the transaction lock).
+        """
+        if not infos:
+            return 0
+        written = 0
+        async with self._db.transaction():
+            for info in infos:
+                await self._execute_upsert_canonical(info)
+                written += 1
+        return written
+
+    async def _execute_upsert_canonical(self, info: CanonicalModelInfo) -> None:
+        """Execute a single canonical upsert (must be inside a transaction)."""
+        await self._db.execute_write(
+            "INSERT INTO model_info_canonical "
+            "(model_id, status, summary, detail_json, provenance_json, "
+            "conflicts_json, sparse, first_seen_at, last_seen_at, "
+            "last_refreshed_at, next_refresh_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(model_id) DO UPDATE SET "
+            "status = excluded.status, summary = excluded.summary, "
+            "detail_json = excluded.detail_json, "
+            "provenance_json = excluded.provenance_json, "
+            "conflicts_json = excluded.conflicts_json, "
+            "sparse = excluded.sparse, last_seen_at = excluded.last_seen_at, "
+            "last_refreshed_at = excluded.last_refreshed_at, "
+            "next_refresh_at = excluded.next_refresh_at",
+            (
+                info.model_id,
+                info.status,
+                info.summary,
+                json.dumps(info.detail, sort_keys=True),
+                json.dumps(info.provenance, sort_keys=True),
+                json.dumps(info.conflicts, sort_keys=True),
+                int(info.sparse),
+                info.first_seen_at.isoformat(),
+                info.last_seen_at.isoformat(),
                 (
-                    info.model_id,
-                    info.status,
-                    info.summary,
-                    json.dumps(info.detail, sort_keys=True),
-                    json.dumps(info.provenance, sort_keys=True),
-                    json.dumps(info.conflicts, sort_keys=True),
-                    int(info.sparse),
-                    info.first_seen_at.isoformat(),
-                    info.last_seen_at.isoformat(),
-                    (
-                        info.last_refreshed_at.isoformat()
-                        if info.last_refreshed_at
-                        else None
-                    ),
-                    (
-                        info.next_refresh_at.isoformat()
-                        if info.next_refresh_at
-                        else None
-                    ),
+                    info.last_refreshed_at.isoformat()
+                    if info.last_refreshed_at
+                    else None
                 ),
-            )
+                (info.next_refresh_at.isoformat() if info.next_refresh_at else None),
+            ),
+        )
 
     async def get_canonical(self, model_id: str) -> CanonicalModelInfo | None:
         """Return one canonical record."""
@@ -202,11 +218,13 @@ class ModelInfoRepository:
         """Record a successful fetch from a source."""
         async with self._db.transaction():
             await self._db.execute_write(
-                "INSERT INTO model_info_source_health (source, last_success_at) "
-                "VALUES (?, CURRENT_TIMESTAMP) "
+                "INSERT INTO model_info_source_health "
+                "(source, last_success_at, failure_count) "
+                "VALUES (?, CURRENT_TIMESTAMP, 0) "
                 "ON CONFLICT(source) DO UPDATE SET "
                 "last_success_at = CURRENT_TIMESTAMP, "
-                "last_error_class = NULL, last_error_message = NULL",
+                "last_error_class = NULL, last_error_message = NULL, "
+                "failure_count = 0",
                 (source,),
             )
 
@@ -217,18 +235,19 @@ class ModelInfoRepository:
         *,
         cooldown_until: datetime | None = None,
     ) -> None:
-        """Record an error from a source."""
+        """Record an error from a source, incrementing failure_count."""
         async with self._db.transaction():
             await self._db.execute_write(
                 "INSERT INTO model_info_source_health "
                 "(source, last_error_at, last_error_class, last_error_message, "
-                "cooldown_until) "
-                "VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?) "
+                "cooldown_until, failure_count) "
+                "VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?, 1) "
                 "ON CONFLICT(source) DO UPDATE SET "
                 "last_error_at = CURRENT_TIMESTAMP, "
                 "last_error_class = excluded.last_error_class, "
                 "last_error_message = excluded.last_error_message, "
-                "cooldown_until = excluded.cooldown_until",
+                "cooldown_until = excluded.cooldown_until, "
+                "failure_count = failure_count + 1",
                 (
                     source,
                     type(exc).__qualname__,
@@ -248,9 +267,20 @@ class ModelInfoRepository:
                 "last_error_class": row["last_error_class"],
                 "last_error_message": row["last_error_message"],
                 "cooldown_until": row["cooldown_until"],
+                "failure_count": int(row["failure_count"]),
             }
             for row in rows
         }
+
+    async def get_source_failure_count(self, source: str) -> int:
+        """Return the current failure_count for a source (0 if unknown)."""
+        row = await self._db.fetch_one(
+            "SELECT failure_count FROM model_info_source_health WHERE source = ?",
+            (source,),
+        )
+        if row is None:
+            return 0
+        return int(row["failure_count"])
 
     @staticmethod
     def _row_to_canonical(row: Any) -> CanonicalModelInfo:

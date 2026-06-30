@@ -7,6 +7,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, cast
 
+from eggpool.model_info.dedup import canonical_needs_update
 from eggpool.model_info.repository import ModelInfoRepository
 from eggpool.model_info.scheduler import ModelInfoRefreshScheduler
 from eggpool.model_info.sources.provider_catalog import ProviderCatalogSource
@@ -161,11 +162,17 @@ class ModelInfoService:
         set next_refresh_at=now.
         For changed provider keys: refresh observations for affected models.
         For withdrawn models: set status 'withdrawn' if not live.
+
+        Skips writes when the computed payload is byte-identical to the
+        existing row (write-amplification avoidance for SBC deployments).
+        Batch-writes all changes in a single transaction.
         """
         now = datetime.now(UTC)
         created = 0
         updated = 0
         refreshed = 0
+        skipped = 0
+        to_write: list[CanonicalModelInfo] = []
 
         # New models: create sparse canonical rows
         for model_id in result.new_model_ids:
@@ -196,7 +203,7 @@ class ModelInfoService:
                     last_refreshed_at=None,
                     next_refresh_at=now,
                 )
-                await self._repo.upsert_canonical(info)
+                to_write.append(info)
                 created += 1
 
         # Changed provider keys: refresh observations for affected model IDs
@@ -227,8 +234,11 @@ class ModelInfoService:
                     last_refreshed_at=existing.last_refreshed_at,
                     next_refresh_at=existing.next_refresh_at,
                 )
-                await self._repo.upsert_canonical(info)
-                refreshed += 1
+                if canonical_needs_update(existing, info):
+                    to_write.append(info)
+                    refreshed += 1
+                else:
+                    skipped += 1
 
         # Withdrawn models: mark withdrawn if not live in catalog
         for model_id in result.withdrawn_model_ids:
@@ -247,13 +257,20 @@ class ModelInfoService:
                     last_refreshed_at=existing.last_refreshed_at,
                     next_refresh_at=None,
                 )
-                await self._repo.upsert_canonical(info)
-                updated += 1
+                if canonical_needs_update(existing, info):
+                    to_write.append(info)
+                    updated += 1
+                else:
+                    skipped += 1
+
+        if to_write:
+            await self._repo.upsert_canonical_batch(to_write)
 
         return {
             "created": created,
             "updated": updated,
             "refreshed": refreshed,
+            "skipped": skipped,
             "total": len(result.live_model_ids),
         }
 
@@ -262,6 +279,8 @@ class ModelInfoService:
 
         Queries the repository for due rows, refreshes provider observations,
         reconciles canonical summaries, and updates next_refresh_at.
+        Batch-writes all changes in a single transaction and skips rows
+        where the computed payload is byte-identical to the existing row.
         """
         now = datetime.now(UTC)
         due_rows = await self._repo.list_due(
@@ -269,9 +288,10 @@ class ModelInfoService:
         )
 
         if not due_rows:
-            return {"refreshed": 0, "total": 0}
+            return {"refreshed": 0, "total": 0, "skipped": 0}
 
-        refreshed = 0
+        to_write: list[CanonicalModelInfo] = []
+        skipped = 0
         for canonical in due_rows:
             model_id = canonical.model_id
             existing = await self._repo.get_canonical(model_id)
@@ -309,10 +329,19 @@ class ModelInfoService:
                 last_refreshed_at=now,
                 next_refresh_at=next_refresh,
             )
-            await self._repo.upsert_canonical(info)
-            refreshed += 1
+            if canonical_needs_update(existing, info):
+                to_write.append(info)
+            else:
+                skipped += 1
 
-        return {"refreshed": refreshed, "total": len(due_rows)}
+        if to_write:
+            await self._repo.upsert_canonical_batch(to_write)
+
+        return {
+            "refreshed": len(to_write),
+            "total": len(due_rows),
+            "skipped": skipped,
+        }
 
     async def run_periodic_refresh(self) -> None:
         """Background loop that refreshes due models periodically."""
@@ -336,8 +365,9 @@ class ModelInfoService:
         await self._repo.record_source_success(source_name)
 
     async def record_source_error(self, source_name: str, exc: Exception) -> None:
-        """Record an error from a model-info source with backoff."""
-        cooldown = _compute_source_backoff(source_name)
+        """Record an error from a model-info source with exponential backoff."""
+        failure_count = await self._repo.get_source_failure_count(source_name)
+        cooldown = _compute_source_backoff(source_name, failure_count)
         await self._repo.record_source_error(source_name, exc, cooldown_until=cooldown)
 
     async def get_summary(self, model_id: str) -> CanonicalModelInfo | None:
@@ -359,6 +389,15 @@ class ModelInfoService:
 
         Returns (status, sparse) where sparse indicates the model has
         minimal provider-native metadata.
+
+        Coverage fields computed (matching the plan):
+        - has_provider_observation: at least one provider entry exists
+        - has_display_name: a non-trivial display name is available
+        - has_effective_context_or_upstream_context: context window known
+        - has_capability_flags: tools or vision capabilities known
+        - has_pricing_state: pricing metadata available (reserved)
+        - has_family_or_release: model family or release date known (reserved)
+        - has_benchmark_state: benchmark scores available (reserved)
         """
         provider_entries = {
             (mid, pid): entry
@@ -366,14 +405,16 @@ class ModelInfoService:
             if mid == model_id
         }
 
-        if not provider_entries:
+        has_provider_observation = bool(provider_entries)
+        if not has_provider_observation:
             return (cast("ModelInfoStatus", "unmatched"), True)
 
         has_display_name = False
         has_context_limit = False
         has_tools_or_vision = False
-        has_benchmarks = False
-        has_family = False
+        has_pricing_state = False
+        has_family_or_release = False
+        has_benchmark_state = False
 
         for _key, entry in provider_entries.items():
             display_name = entry.get("display_name")
@@ -400,15 +441,51 @@ class ModelInfoService:
             ):
                 has_tools_or_vision = True
 
-        indicators = [has_display_name, has_context_limit, has_tools_or_vision]
-        missing = sum(1 for i in indicators if not i)
+            # Pricing: check if the global model entry has any pricing hints
+            global_info = self._catalog._models.get(model_id)  # pyright: ignore[reportPrivateUsage]
+            if global_info is not None:
+                source_meta_raw = global_info.get("source_metadata")
+                source_meta = (
+                    cast("dict[str, object]", source_meta_raw)
+                    if isinstance(source_meta_raw, dict)
+                    else {}
+                )
+                if "pricing" in source_meta or "input_price" in source_meta:
+                    has_pricing_state = True
 
-        sparse = missing >= 2
+            # Family/release: check if model_id contains a family hint
+            # or if there's a source_metadata field indicating this
+            if global_info is not None:
+                source_meta_raw = global_info.get("source_metadata")
+                source_meta = (
+                    cast("dict[str, object]", source_meta_raw)
+                    if isinstance(source_meta_raw, dict)
+                    else {}
+                )
+                if "family" in source_meta or "release_date" in source_meta:
+                    has_family_or_release = True
+
+        indicators = [
+            has_provider_observation,
+            has_display_name,
+            has_context_limit,
+            has_tools_or_vision,
+            has_pricing_state,
+            has_family_or_release,
+            has_benchmark_state,
+        ]
+        filled = sum(indicators)
+        missing = len(indicators) - filled
+
+        sparse = missing >= 4
 
         if sparse:
             return (cast("ModelInfoStatus", "sparse_new"), True)
 
-        if not has_benchmarks and not has_family:
+        if filled <= 3:
+            return (cast("ModelInfoStatus", "partial"), False)
+
+        if not has_benchmark_state and not has_family_or_release:
             return (cast("ModelInfoStatus", "partial"), False)
 
         return (cast("ModelInfoStatus", "fresh"), False)
@@ -474,12 +551,21 @@ class ModelInfoService:
         return detail
 
 
-def _compute_source_backoff(source_name: str) -> datetime:
-    """Compute exponential backoff for source failures."""
-    # Simple backoff: 15m, 1h, 6h, capped at 24h
-    # For phase 2, use a fixed 15-minute cooldown.
-    # A future phase can track failure_count for true exponential.
-    return datetime.now(UTC) + timedelta(minutes=15)
+def _compute_source_backoff(source_name: str, failure_count: int = 0) -> datetime:
+    """Compute exponential backoff for source failures.
+
+    Tiers: 15m → 1h → 6h → 24h cap.
+    The ``source_name`` parameter is reserved for future per-source tuning.
+    """
+    if failure_count <= 0:
+        cooldown_minutes = 15
+    elif failure_count == 1:
+        cooldown_minutes = 60
+    elif failure_count == 2:
+        cooldown_minutes = 360
+    else:
+        cooldown_minutes = 1440  # 24h cap
+    return datetime.now(UTC) + timedelta(minutes=cooldown_minutes)
 
 
 def _generate_summary(
