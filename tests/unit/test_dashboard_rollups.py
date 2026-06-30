@@ -124,6 +124,43 @@ def _make_event(
     )
 
 
+async def _insert_account(db: Database, name: str) -> int:
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled) VALUES (?, ?, ?)",
+            (name, f"{name.upper()}_ENV", 1),
+        )
+    row = await db.fetch_one("SELECT id FROM accounts WHERE name = ?", (name,))
+    assert row is not None
+    return int(row["id"])
+
+
+async def _insert_model(db: Database, model_id: str) -> None:
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+            (model_id, "openai"),
+        )
+
+
+async def _flush_events(
+    db: Database,
+    rollup_repo: UsageRollupRepository,
+    events: list[UsageMetricEvent],
+) -> None:
+    config = MetricsConfig(
+        write_mode="balanced",
+        flush_interval_s=30,
+        max_buffered_events=500,
+        timeseries_bucket_s=3600,
+    )
+    coalescer = MetricsWriteCoalescer(config=config, db=db, rollup_repo=rollup_repo)
+    for event in events:
+        coalescer.record_usage(event)
+    result = await coalescer.flush(reason="rollup_test")
+    assert result.rows_flushed > 0
+
+
 class TestRollupSummaryParity:
     """Verify rollup summary matches request-table summary."""
 
@@ -235,6 +272,55 @@ class TestRollupSummaryParity:
         assert rollup_summary["avg_ttft_ms"] == pytest.approx(expected_ttft_mean)
         assert rollup_summary["tokens_per_second"] == pytest.approx(expected_tps)
 
+    @pytest.mark.asyncio()
+    async def test_rollup_summary_filters_by_account(self, seeded_db: Database) -> None:
+        rollup_repo = UsageRollupRepository(seeded_db)
+        other_id = await _insert_account(seeded_db, "other_acct")
+        await _flush_events(
+            seeded_db,
+            rollup_repo,
+            [
+                _make_event(account_id=1, input_tokens=10, output_tokens=20),
+                _make_event(account_id=other_id, input_tokens=100, output_tokens=200),
+            ],
+        )
+
+        time_range = TimeRange(
+            start=datetime.fromisoformat("2000-01-01"),
+            end=datetime.fromisoformat("2099-12-31"),
+            label="custom",
+        )
+
+        service = StatsService(seeded_db, rollup_repo=rollup_repo)
+        summary = await service.get_summary(time_range, account_name="test_acct")
+
+        assert summary["total_requests"] == 1
+        assert summary["total_input_tokens"] == 10
+        assert summary["total_output_tokens"] == 20
+
+    @pytest.mark.asyncio()
+    async def test_unknown_account_does_not_return_global_rollups(
+        self, seeded_db: Database
+    ) -> None:
+        rollup_repo = UsageRollupRepository(seeded_db)
+        await _flush_events(
+            seeded_db,
+            rollup_repo,
+            [_make_event(account_id=1, input_tokens=10, output_tokens=20)],
+        )
+
+        time_range = TimeRange(
+            start=datetime.fromisoformat("2000-01-01"),
+            end=datetime.fromisoformat("2099-12-31"),
+            label="custom",
+        )
+
+        service = StatsService(seeded_db, rollup_repo=rollup_repo)
+        summary = await service.get_summary(time_range, account_name="missing")
+
+        assert summary["total_requests"] == 0
+        assert summary["total_input_tokens"] == 0
+
 
 class TestRollupTimeseriesParity:
     """Verify rollup timeseries matches request-table timeseries."""
@@ -287,6 +373,45 @@ class TestRollupTimeseriesParity:
         assert total_in == expected_in
         assert total_out == expected_out
 
+    @pytest.mark.asyncio()
+    async def test_rollup_timeseries_filters_by_model(self, db: Database) -> None:
+        rollup_repo = UsageRollupRepository(db)
+        account_id = await _insert_account(db, "test_acct")
+        await _insert_model(db, "model_a")
+        await _insert_model(db, "model_b")
+        await _flush_events(
+            db,
+            rollup_repo,
+            [
+                _make_event(
+                    account_id=account_id,
+                    model_id="model_a",
+                    input_tokens=10,
+                    output_tokens=20,
+                ),
+                _make_event(
+                    account_id=account_id,
+                    model_id="model_b",
+                    input_tokens=100,
+                    output_tokens=200,
+                ),
+            ],
+        )
+
+        time_range = TimeRange(
+            start=datetime.fromisoformat("2000-01-01"),
+            end=datetime.fromisoformat("2099-12-31"),
+            label="custom",
+        )
+
+        service = StatsService(db, rollup_repo=rollup_repo)
+        result = await service.get_timeseries(time_range, model_id="model_a")
+
+        assert result is not None
+        assert sum(int(row["request_count"]) for row in result) == 1
+        assert sum(int(row["input_tokens"]) for row in result) == 10
+        assert sum(int(row["output_tokens"]) for row in result) == 20
+
 
 class TestRollupGroupedTimeseriesParity:
     """Verify grouped rollup timeseries matches request-table data."""
@@ -338,6 +463,54 @@ class TestRollupGroupedTimeseriesParity:
         expected_out = sum(200 * (i + 1) for i in range(5))
         assert total_in == expected_in
         assert total_out == expected_out
+
+    @pytest.mark.asyncio()
+    async def test_rollup_grouped_timeseries_filters_by_model_under_provider_group(
+        self, db: Database
+    ) -> None:
+        rollup_repo = UsageRollupRepository(db)
+        account_id = await _insert_account(db, "test_acct")
+        await _insert_model(db, "model_a")
+        await _insert_model(db, "model_b")
+        await _flush_events(
+            db,
+            rollup_repo,
+            [
+                _make_event(
+                    account_id=account_id,
+                    provider_id="provider_a",
+                    model_id="model_a",
+                    input_tokens=10,
+                    output_tokens=20,
+                ),
+                _make_event(
+                    account_id=account_id,
+                    provider_id="provider_a",
+                    model_id="model_b",
+                    input_tokens=100,
+                    output_tokens=200,
+                ),
+            ],
+        )
+
+        time_range = TimeRange(
+            start=datetime.fromisoformat("2000-01-01"),
+            end=datetime.fromisoformat("2099-12-31"),
+            label="custom",
+        )
+
+        service = StatsService(db, rollup_repo=rollup_repo)
+        grouped = await service.get_grouped_timeseries(
+            time_range,
+            bucket="hour",
+            group_by="provider",
+            model_id="model_a",
+        )
+
+        assert len(grouped["points"]) > 0
+        assert sum(int(point["request_count"]) for point in grouped["points"]) == 1
+        assert sum(int(point["input_tokens"]) for point in grouped["points"]) == 10
+        assert sum(int(point["output_tokens"]) for point in grouped["points"]) == 20
 
 
 class TestRollupBandwidthParity:

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.4.3] - 2026-06-30
+
 ### Added
 
 - **Phase 6.1: Tool-Use Transcoding**. Bidirectional OpenAI ↔ Anthropic tool calling translation for both streaming and non-streaming requests. The transcoder now lifts `tools`, `tool_choice`, assistant `tool_calls` history, `role: "tool"` history, and `tool_use` / `tool_result` content blocks across protocols instead of dropping them with a warning.
@@ -43,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Dashboard rollup filters now match request-table filters.** When buffered analytics are enabled, account-filtered summaries, unknown-account summaries, flat model-filtered timeseries, and grouped model-filtered timeseries now push filters into `usage_rollups` queries instead of accidentally returning global rollup data or falling back because the display series key did not contain the filtered model id.
 - **Cross-account protocol poisoning from a partial sibling refresh.** `_provider_models` is keyed by `(model_id, provider_id)` and shared by every account that lists that provider (e.g. all `opencode-go-0001`/`-0002`/`-0003` accounts share one row per model on the `opencode-go` provider). Prior to this fix a single sibling's partial refresh — transient upstream parse error, unresolved family prefix, or a model whose protocol cannot be re-derived this cycle — produced a model entry with `protocol=None` and clobbered the previously-resolved protocol on the shared row, silently dropping every sibling account from routing even though `_account_support` still listed them. `ModelCatalogCache._preserve_resolved_protocol()` now applies a sibling-wins guard: a non-destructive `update_from_account` will keep the existing resolved protocol when the new entry's `protocol` is `None` and the prior row carried a resolved value. The destructive path (`authoritative=True AND allow_withdrawals=True`) intentionally skips the guard so operator-initiated withdrawals remain effective. `tests/unit/test_catalog_withdrawal_policy.py::test_partial_refresh_does_not_clobber_shared_provider_protocol{,multiple}` and `test_explicit_destructive_update_can_still_clear_protocol` pin the new contract.
 
 ## [0.3.5] - 2026-06-27

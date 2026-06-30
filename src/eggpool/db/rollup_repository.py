@@ -22,6 +22,26 @@ _GROUP_KEY_EXPR: dict[str, str] = {
 }
 
 
+def _append_optional_filters(
+    conditions: list[str],
+    params: list[Any],
+    *,
+    provider_id: str | None = None,
+    model_id: str | None = None,
+    account_id: int | None = None,
+) -> None:
+    """Append common rollup filters to a WHERE clause under construction."""
+    if provider_id is not None:
+        conditions.append("provider_id = ?")
+        params.append(provider_id)
+    if model_id is not None:
+        conditions.append("model_id = ?")
+        params.append(model_id)
+    if account_id is not None:
+        conditions.append("account_id = ?")
+        params.append(account_id)
+
+
 class UsageRollupRepository:
     """Operations for the usage_rollups buffered analytics table.
 
@@ -160,15 +180,13 @@ class UsageRollupRepository:
         conditions = ["bucket_start >= ?", "bucket_start < ?", "bucket_size_s = ?"]
         params: list[Any] = [start, end, bucket_size_s]
 
-        if provider_id is not None:
-            conditions.append("provider_id = ?")
-            params.append(provider_id)
-        if model_id is not None:
-            conditions.append("model_id = ?")
-            params.append(model_id)
-        if account_id is not None:
-            conditions.append("account_id = ?")
-            params.append(account_id)
+        _append_optional_filters(
+            conditions,
+            params,
+            provider_id=provider_id,
+            model_id=model_id,
+            account_id=account_id,
+        )
 
         where = " AND ".join(conditions)
 
@@ -220,8 +238,22 @@ class UsageRollupRepository:
         *,
         start: str,
         end: str,
+        provider_id: str | None = None,
+        model_id: str | None = None,
+        account_id: int | None = None,
     ) -> dict[str, object]:
         """Query aggregate summary from rollups."""
+        conditions = ["bucket_start >= ?", "bucket_start < ?"]
+        params: list[Any] = [start, end]
+        _append_optional_filters(
+            conditions,
+            params,
+            provider_id=provider_id,
+            model_id=model_id,
+            account_id=account_id,
+        )
+        where = " AND ".join(conditions)
+
         sql = (
             "SELECT "
             "COALESCE(SUM(request_count), 0) AS total_requests, "
@@ -260,9 +292,9 @@ class UsageRollupRepository:
             "  / SUM(CASE WHEN status != 'pending' THEN latency_ms_sum ELSE 0 END) "
             "  ELSE 0 END AS tokens_per_second "
             "FROM usage_rollups "
-            "WHERE bucket_start >= ? AND bucket_start < ?"
+            f"WHERE {where}"
         )
-        row = await self._db.fetch_one(sql, (start, end))
+        row = await self._db.fetch_one(sql, tuple(params))
         if row is None:
             return {
                 "total_requests": 0,
@@ -289,11 +321,25 @@ class UsageRollupRepository:
         start: str,
         end: str,
         bucket_size_s: int,
+        provider_id: str | None = None,
+        model_id: str | None = None,
+        account_id: int | None = None,
     ) -> list[dict[str, object]]:
         """Query rollups for flat (non-grouped) timeseries.
 
         Returns one row per bucket with sums across all series.
         """
+        conditions = ["bucket_start >= ?", "bucket_start < ?", "bucket_size_s = ?"]
+        params: list[Any] = [start, end, bucket_size_s]
+        _append_optional_filters(
+            conditions,
+            params,
+            provider_id=provider_id,
+            model_id=model_id,
+            account_id=account_id,
+        )
+        where = " AND ".join(conditions)
+
         sql = (
             "SELECT "
             "bucket_start AS bucket, "
@@ -318,12 +364,11 @@ class UsageRollupRepository:
             "       / SUM(first_byte_ms_count) "
             "  ELSE 0 END AS avg_ttft_ms "
             "FROM usage_rollups "
-            "WHERE bucket_start >= ? AND bucket_start < ? "
-            "  AND bucket_size_s = ? "
+            f"WHERE {where} "
             "GROUP BY bucket_start "
             "ORDER BY bucket_start"
         )
-        rows = await self._db.fetch_all(sql, (start, end, bucket_size_s))
+        rows = await self._db.fetch_all(sql, tuple(params))
         return [dict(row) for row in rows]
 
     async def cleanup_old_rollups(self, retain_days: int, max_rows: int = 5000) -> int:

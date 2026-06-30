@@ -229,15 +229,18 @@ class StatsService:
         time_range: TimeRange,
         account_name: str | None = None,
     ) -> dict[str, Any]:
-        if self._rollup_repo is not None:
-            result = await self.get_summary_from_rollups(time_range)
-            if int(result.get("total_requests", 0)) > 0:
-                return result
         account_id: int | None = None
         if account_name:
             account_id = await fetch_account_id(self._db, account_name)
             if account_id is None:
                 account_id = -1
+        if self._rollup_repo is not None:
+            result = await self.get_summary_from_rollups(
+                time_range,
+                account_id=account_id,
+            )
+            if int(result.get("total_requests", 0)) > 0:
+                return result
         return await fetch_summary(
             self._db,
             time_range.start_str(),
@@ -489,13 +492,18 @@ class StatsService:
             account_id = await fetch_account_id(self._db, account_name)
             if account_id is None:
                 return None
-        if self._rollup_repo is not None and account_id is None:
-            result = await self.get_timeseries_from_rollups(time_range, bucket=bucket)
+        model_filter: str | None = model_id if model_id else None
+        if self._rollup_repo is not None:
+            result = await self.get_timeseries_from_rollups(
+                time_range,
+                bucket=bucket,
+                account_id=account_id,
+                model_id=model_filter,
+            )
             if result:
                 if use_cache:
                     self._set_dashboard_cache(key, result)
                 return result
-        model_filter: str | None = model_id if model_id else None
         result = await fetch_timeseries(
             self._db,
             time_range.start_str(),
@@ -527,8 +535,11 @@ class StatsService:
                 if use_cache:
                     self._set_dashboard_cache(key, result)
                 return result
-        if self._rollup_repo is not None and account_id is None:
-            result = await self.get_bandwidth_timeseries_from_rollups(time_range)
+        if self._rollup_repo is not None:
+            result = await self.get_bandwidth_timeseries_from_rollups(
+                time_range,
+                account_id=account_id,
+            )
             if result:
                 if use_cache:
                     self._set_dashboard_cache(key, result)
@@ -585,12 +596,13 @@ class StatsService:
         )
         if use_cache and (cached := self._get_dashboard_cache(cache_key)) is not None:
             return cast("dict[str, Any]", cached)
-        if self._rollup_repo is not None and account_id is None:
+        if self._rollup_repo is not None:
             result = await self.get_grouped_timeseries_from_rollups(
                 time_range,
                 bucket=bucket,
                 group_by=group_by,
                 limit=bounded_limit,
+                account_id=account_id,
                 model_id=model_id,
             )
             if result["points"]:
@@ -612,12 +624,18 @@ class StatsService:
             self._set_dashboard_cache(cache_key, result)
         return result
 
-    async def get_summary_from_rollups(self, time_range: TimeRange) -> dict[str, Any]:
+    async def get_summary_from_rollups(
+        self,
+        time_range: TimeRange,
+        *,
+        account_id: int | None = None,
+    ) -> dict[str, Any]:
         """Get summary from usage_rollups."""
         assert self._rollup_repo is not None
         row = await self._rollup_repo.query_summary(
             start=time_range.start_str(),
             end=time_range.end_str(),
+            account_id=account_id,
         )
         total_requests = _int(row.get("total_requests", 0))
         if total_requests == 0:
@@ -664,6 +682,7 @@ class StatsService:
             self._db,
             time_range.start_str(),
             time_range.end_str(),
+            account_id=account_id,
         )
         return {
             "total_requests": total_requests,
@@ -709,6 +728,8 @@ class StatsService:
         time_range: TimeRange,
         *,
         bucket: str = "hour",
+        account_id: int | None = None,
+        model_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Get flat timeseries from usage_rollups."""
         assert self._rollup_repo is not None
@@ -717,6 +738,8 @@ class StatsService:
             start=time_range.start_str(),
             end=time_range.end_str(),
             bucket_size_s=bucket_s,
+            account_id=account_id,
+            model_id=model_id,
         )
         result: list[dict[str, Any]] = []
         for row in rows:
@@ -740,7 +763,10 @@ class StatsService:
         return result
 
     async def get_bandwidth_timeseries_from_rollups(
-        self, time_range: TimeRange
+        self,
+        time_range: TimeRange,
+        *,
+        account_id: int | None = None,
     ) -> list[dict[str, Any]]:
         """Get daily-bucketed bandwidth from usage_rollups."""
         assert self._rollup_repo is not None
@@ -748,6 +774,7 @@ class StatsService:
             start=time_range.start_str(),
             end=time_range.end_str(),
             bucket_size_s=3600,
+            account_id=account_id,
         )
         day_buckets: dict[str, dict[str, Any]] = {}
         for row in rows:
@@ -785,6 +812,7 @@ class StatsService:
         bucket: str = "hour",
         group_by: str = "provider_model",
         limit: int = 12,
+        account_id: int | None = None,
         model_id: str | None = None,
     ) -> dict[str, Any]:
         """Get grouped timeseries from usage_rollups."""
@@ -795,15 +823,10 @@ class StatsService:
             end=time_range.end_str(),
             bucket_size_s=bucket_s,
             group_by=group_by,
+            account_id=account_id,
+            model_id=model_id,
             limit=10000,
         )
-        if model_id is not None:
-            rows = [
-                r
-                for r in rows
-                if str(r.get("series_key", "")).endswith(f"/{model_id}")
-                or str(r.get("series_key", "")) == model_id
-            ]
         if not rows:
             return empty_grouped_timeseries(bucket, group_by, limit)
 
