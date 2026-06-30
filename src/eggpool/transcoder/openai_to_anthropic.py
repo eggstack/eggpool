@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-import base64
 import json
 import time
 from typing import TYPE_CHECKING, Any, cast
 
 from eggpool.transcoder.json_helpers import (
     as_object,
+    decode_base64_payload,
     extract_text_blocks,
     has_non_text_blocks,
     iter_objects,
+    split_base64_data_uri,
     token_count_from,
 )
 
@@ -96,29 +97,6 @@ def _parse_tool_arguments(raw: Any, warnings: list[dict[str, Any]]) -> dict[str,
     return {"__raw_arguments__": raw}
 
 
-def _extract_media_type_from_data_uri(data_uri: str) -> str | None:
-    """Extract the media type from a ``data:<media_type>;base64,...`` URI."""
-    if not data_uri.startswith("data:"):
-        return None
-    # data:image/png;base64,iVBOR...
-    rest = data_uri[5:]  # strip "data:"
-    semi = rest.find(";")
-    if semi < 0:
-        return None
-    return rest[:semi]
-
-
-def _decode_base64_data(data_uri: str) -> bytes | None:
-    """Decode the base64 payload from a ``data:...;base64,...`` URI."""
-    if ";base64," not in data_uri:
-        return None
-    _, encoded = data_uri.split(";base64,", 1)
-    try:
-        return base64.b64decode(encoded)
-    except Exception:
-        return None
-
-
 def _translate_openai_content_to_anthropic(
     content: list[dict[str, Any]],
     *,
@@ -145,8 +123,8 @@ def _translate_openai_content_to_anthropic(
             image_url_obj = as_object(part.get("image_url")) or {}
             url = str(image_url_obj.get("url", ""))
             if url.startswith("data:"):
-                media_type = _extract_media_type_from_data_uri(url)
-                if media_type is None:
+                data_uri = split_base64_data_uri(url)
+                if data_uri is None:
                     warnings.append(
                         {
                             "kind": "image_unsupported_format",
@@ -154,7 +132,8 @@ def _translate_openai_content_to_anthropic(
                         }
                     )
                     continue
-                decoded = _decode_base64_data(url)
+                media_type, encoded = data_uri
+                decoded = decode_base64_payload(encoded)
                 if decoded is None:
                     warnings.append(
                         {
@@ -173,13 +152,14 @@ def _translate_openai_content_to_anthropic(
                             "limit_bytes": _ANTHROPIC_IMAGE_SIZE_LIMIT,
                         }
                     )
+                    continue
                 blocks.append(
                     {
                         "type": "image",
                         "source": {
                             "type": "base64",
                             "media_type": media_type,
-                            "data": url,
+                            "data": encoded,
                         },
                     }
                 )

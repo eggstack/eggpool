@@ -71,7 +71,7 @@ class TestOpenAIToAnthropicVision:
         assert img["type"] == "image"
         assert img["source"]["type"] == "base64"
         assert img["source"]["media_type"] == "image/png"
-        assert img["source"]["data"] == _TINY_PNG_DATA_URI
+        assert img["source"]["data"] == _TINY_PNG_B64
 
     def test_url_image_translated(self) -> None:
         url = "https://example.com/photo.jpg"
@@ -141,6 +141,30 @@ class TestOpenAIToAnthropicVision:
             payload, _make_context(), features=_features()
         )
         assert any(w.get("kind") == "image_unsupported_format" for w in warnings)
+
+    def test_base64_image_too_large_dropped(self) -> None:
+        large_b64 = base64.b64encode(b"\x00" * (5 * 1024 * 1024 + 1)).decode()
+        payload = {
+            "model": "claude-3",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Describe this"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{large_b64}"},
+                        },
+                    ],
+                },
+            ],
+        }
+        result, warnings = self.transcoder.encode_request(
+            payload, _make_context(), features=_features()
+        )
+
+        assert result["messages"][0]["content"] == "Describe this"
+        assert any(w.get("kind") == "image_too_large" for w in warnings)
 
     def test_input_audio_dropped(self) -> None:
         payload = {
@@ -411,3 +435,65 @@ class TestAnthropicToOpenVision:
             payload, _make_context("anthropic", "openai"), features=_features()
         )
         assert any(w.get("kind") == "pdf_too_large" for w in warnings)
+
+    def test_pdf_too_large_is_dropped(self) -> None:
+        large_data = b"\x00" * (32 * 1024 * 1024 + 1)
+        large_b64 = base64.b64encode(large_data).decode()
+        payload = {
+            "model": "gpt-4",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Read this"},
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "application/pdf",
+                                "data": large_b64,
+                            },
+                        },
+                    ],
+                },
+            ],
+        }
+
+        result, warnings = self.transcoder.encode_request(
+            payload, _make_context("anthropic", "openai"), features=_features()
+        )
+
+        assert result["messages"][0]["content"] == "Read this"
+        assert any(w.get("kind") == "pdf_too_large" for w in warnings)
+
+    def test_invalid_pdf_base64_is_dropped(self) -> None:
+        payload = {
+            "model": "gpt-4",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Read this"},
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "application/pdf",
+                                "data": "not base64",
+                            },
+                        },
+                    ],
+                },
+            ],
+        }
+
+        result, warnings = self.transcoder.encode_request(
+            payload, _make_context("anthropic", "openai"), features=_features()
+        )
+
+        assert result["messages"][0]["content"] == "Read this"
+        assert any(
+            w.get("kind") == "document_unsupported_media"
+            and w.get("reason") == "invalid_base64"
+            for w in warnings
+        )

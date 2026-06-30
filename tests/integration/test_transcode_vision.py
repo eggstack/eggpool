@@ -59,6 +59,7 @@ class TestVisionOpenAIToAnthropicRoundTrip:
         assert msg["content"][0] == {"type": "text", "text": "Describe this"}
         assert msg["content"][1]["type"] == "image"
         assert msg["content"][1]["source"]["type"] == "base64"
+        assert msg["content"][1]["source"]["data"] == _TINY_PNG_B64
 
         # Decode a text response
         response = {

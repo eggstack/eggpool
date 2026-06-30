@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from typing import Any, cast
 
 from eggpool.catalog.pricing import coerce_token_count
@@ -59,3 +60,24 @@ def token_count_from(mapping: JsonObject | None, field: str) -> int:
     if mapping is None:
         return 0
     return coerce_token_count(mapping.get(field, 0))
+
+
+def decode_base64_payload(encoded: str) -> bytes | None:
+    """Strictly decode a base64 payload, returning ``None`` for invalid data."""
+    try:
+        return base64.b64decode(encoded, validate=True)
+    except (ValueError, TypeError):
+        return None
+
+
+def split_base64_data_uri(data_uri: str) -> tuple[str, str] | None:
+    """Return ``(media_type, encoded_payload)`` for a base64 data URI."""
+    if ";base64," not in data_uri:
+        return None
+    media_prefix, encoded = data_uri.split(";base64,", 1)
+    if not media_prefix.startswith("data:"):
+        return None
+    media_type = media_prefix[5:]
+    if not media_type:
+        return None
+    return media_type, encoded

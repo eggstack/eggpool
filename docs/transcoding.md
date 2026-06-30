@@ -84,7 +84,7 @@ When set, EggPool boots with a `WARNING` and reverts to the pre-default behaviou
 | `seed` | — | Dropped, warning emitted |
 | `user` | — | Dropped, warning emitted |
 | `logit_bias` | — | Dropped, warning emitted |
-| `messages[user].content[image_url]` | `messages[user].content[image]` | Feature-gated: base64 data URI → `{type: "base64", media_type, data}`; URL → `{type: "url", url}`; `detail` dropped |
+| `messages[user].content[image_url]` | `messages[user].content[image]` | Feature-gated: base64 data URI → `{type: "base64", media_type, data}` where `data` is the raw base64 payload; URL → `{type: "url", url}`; `detail` dropped; images over 5 MB are dropped with `image_too_large` |
 | `messages[user].content[input_audio]` | — | Dropped, warning emitted |
 | `messages[user].content[file]` | — | Dropped, warning emitted (file storage not bridged) |
 | `tools` (function-shape) | `tools` (Anthropic-shape) | Translated field-by-field (see Tool-Use Transcoding below) |
@@ -120,7 +120,7 @@ When set, EggPool boots with a `WARNING` and reverts to the pre-default behaviou
 | `tools[].cache_control` | — | Dropped with `cache_control_dropped` warning |
 | `messages[assistant].content[thinking]` | `messages[assistant].reasoning_content` | Feature-gated: thinking text mapped; signature dropped with `thinking_signature_dropped` warning |
 | `messages[assistant].content[image]` | `messages[user].content[image_url]` | Feature-gated: base64 → data URI; URL → `image_url.url` |
-| `messages[user].content[document]` | `messages[user].content[file]` | Feature-gated: PDF base64 → `file` with data URI; URL dropped; non-PDF dropped |
+| `messages[user].content[document]` | `messages[user].content[file]` | Feature-gated: PDF base64 → `file` with data URI; URL dropped; non-PDF, invalid base64, and PDFs over 32 MB are dropped |
 | `messages[assistant].content[].tool_use` | `messages[assistant].tool_calls[]` | Translated; id map mints new client ids |
 | `messages[user].content[].tool_result` | `messages[tool]` | Translated; `tool_use_id` ↔ `tool_call_id` via id map |
 | `messages[].content[non-text]` | — | Non-text blocks dropped, warning emitted |

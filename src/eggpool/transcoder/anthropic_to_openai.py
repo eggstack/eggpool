@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import base64
 import json
 from typing import TYPE_CHECKING, Any, cast
 
 from eggpool.transcoder.json_helpers import (
     as_object,
+    decode_base64_payload,
     extract_text_blocks,
     has_non_text_blocks,
     iter_objects,
@@ -148,10 +148,17 @@ def _translate_anthropic_content_to_openai(
                 )
                 continue
             data = str(source.get("data", ""))
-            try:
-                decoded = base64.b64decode(data)
-            except Exception:
-                decoded = b""
+            decoded = decode_base64_payload(data)
+            if decoded is None:
+                warnings.append(
+                    {
+                        "kind": "document_unsupported_media",
+                        "field": "content[document]",
+                        "media_type": media_type,
+                        "reason": "invalid_base64",
+                    }
+                )
+                continue
             if len(decoded) > _ANTHROPIC_PDF_SIZE_LIMIT:
                 warnings.append(
                     {
@@ -161,6 +168,7 @@ def _translate_anthropic_content_to_openai(
                         "limit_bytes": _ANTHROPIC_PDF_SIZE_LIMIT,
                     }
                 )
+                continue
             url = f"data:application/pdf;base64,{data}"
             parts.append(
                 {
