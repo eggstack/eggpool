@@ -540,6 +540,138 @@ class TestAccountsExplainOutput:
         assert "Reason" in result.stdout
         assert "Account" in result.stdout
 
+    @pytest.mark.parametrize(
+        ("allow_stale", "expected_eligible", "expected_reason"),
+        [
+            (True, "yes", "ok"),
+            (False, "no", "model_stale"),
+        ],
+    )
+    def test_accounts_explain_honors_allow_stale_catalog(
+        self,
+        tmp_path,
+        provider_api_keys,
+        allow_stale: bool,
+        expected_eligible: str,
+        expected_reason: str,
+    ) -> None:
+        """The diagnostic command must match production routing's stale gate.
+
+        With ``allow_stale_catalog=true`` a stale but previously known
+        account/model row remains routable. With it disabled, the same
+        row is reported as stale and ineligible.
+        """
+        db_path = str(tmp_path / "explain_stale.sqlite3")
+        config_path = tmp_path / "config.toml"
+        config_text = _build_multi_provider_toml(db_path).replace(
+            "allow_stale_catalog = true",
+            f"allow_stale_catalog = {str(allow_stale).lower()}",
+        )
+        config_path.write_text(config_text, encoding="utf-8")
+
+        from eggpool.db.connection import Database
+        from eggpool.db.migrations import MigrationRunner
+        from eggpool.db.repositories import (
+            AccountRepository,
+            ProviderRepository,
+        )
+
+        async def _seed() -> None:
+            db = Database(path=db_path)
+            await db.connect()
+            try:
+                runner = MigrationRunner(db)
+                await runner.run()
+                await ProviderRepository(db).sync_from_config(
+                    {
+                        "opencode-go": {
+                            "base_url": UPSTREAM_BASE_OPENCODE,
+                            "protocols": ["openai"],
+                        },
+                        "anthropic-proxy": {
+                            "base_url": UPSTREAM_BASE_ANTHROPIC,
+                            "protocols": ["anthropic"],
+                        },
+                    }
+                )
+                await AccountRepository(db).sync_from_config(
+                    [
+                        {
+                            "name": "acct-oc-1",
+                            "api_key_env": TEST_KEY_ENV_1,
+                            "enabled": True,
+                            "weight": 1.0,
+                            "provider_id": "opencode-go",
+                        },
+                        {
+                            "name": "acct-anth-1",
+                            "api_key_env": TEST_KEY_ENV_2,
+                            "enabled": True,
+                            "weight": 1.0,
+                            "provider_id": "anthropic-proxy",
+                        },
+                    ]
+                )
+                async with db.transaction():
+                    await db.execute_insert(
+                        "INSERT INTO models "
+                        "(model_id, display_name, protocol, last_seen_at) "
+                        "VALUES (?, ?, ?, ?)",
+                        ("gpt-4", "GPT-4", "openai", "2000-01-01 00:00:00"),
+                    )
+                    await db.execute_insert(
+                        "INSERT INTO provider_model_metadata "
+                        "(model_id, provider_id, display_name, protocol, "
+                        "protocol_source, last_seen_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (
+                            "gpt-4",
+                            "opencode-go",
+                            "GPT-4",
+                            "openai",
+                            "config",
+                            "2000-01-01 00:00:00",
+                        ),
+                    )
+                    rows = await db.fetch_all("SELECT id, name FROM accounts")
+                    id_by_name = {str(r["name"]): int(r["id"]) for r in rows}
+                    await db.execute_insert(
+                        "INSERT INTO account_models "
+                        "(account_id, model_id, enabled) VALUES (?, ?, 1)",
+                        (id_by_name["acct-oc-1"], "gpt-4"),
+                    )
+            finally:
+                await db.disconnect()
+
+        import asyncio
+
+        asyncio.run(_seed())
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--config",
+                str(config_path),
+                "accounts",
+                "explain",
+                "--model",
+                "gpt-4",
+                "--protocol",
+                "openai",
+            ],
+        )
+
+        assert result.exit_code == 0, (
+            f"CLI failed: exit={result.exit_code} stdout={result.stdout} "
+            f"stderr={getattr(result, 'stderr', '')}"
+        )
+        account_line = next(
+            line for line in result.stdout.splitlines() if "acct-oc-1" in line
+        )
+        assert expected_eligible in account_line
+        assert expected_reason in account_line
+
     def test_accounts_explain_empty_config(self, tmp_path) -> None:
         """Empty configuration prints the no-accounts hint."""
         config_path = tmp_path / "config.toml"

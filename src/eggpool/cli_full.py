@@ -3296,6 +3296,7 @@ def accounts_explain(
     from eggpool.catalog.cache import ModelCatalogCache
     from eggpool.models.config import AppConfig
     from eggpool.quota.estimation import QuotaEstimator
+    from eggpool.routing.config import routing_stale_after_s
     from eggpool.routing.router import Router
 
     config_path: str = ctx.obj["config_path"]
@@ -3342,6 +3343,11 @@ def accounts_explain(
             registry,
             catalog,  # type: ignore[reportArgumentType]
             quota_estimator=quota_estimator,
+            stale_after_s=routing_stale_after_s(config),
+            local_quota_mode=config.routing.local_quota_mode,
+            fairness_mode=config.routing.fairness_mode,
+            fairness_epsilon=config.routing.fairness_epsilon,
+            fairness_scope=config.routing.fairness_scope,
         )
         rows = await router.explain_account_eligibility(
             model_id=model_id,

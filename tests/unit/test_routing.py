@@ -13,6 +13,7 @@ from eggpool.catalog.cache import ModelCatalogCache
 from eggpool.models.config import AppConfig
 from eggpool.quota.estimation import AccountQuota, QuotaEstimator
 from eggpool.quota.scorer import QuotaFairScorer, RoutingScore
+from eggpool.routing.config import routing_stale_after_s
 from eggpool.routing.eligibility import get_eligible_accounts
 from eggpool.routing.router import Router
 
@@ -55,6 +56,32 @@ def test_eligible_accounts_model_not_supported() -> None:
     states = [AccountRuntimeState(name="acct1", enabled=True)]
     eligible = get_eligible_accounts(states, "claude-3", cache)
     assert len(eligible) == 0
+
+
+def test_routing_stale_gate_disabled_when_stale_catalog_allowed() -> None:
+    config = AppConfig.model_validate(
+        {
+            "models": {
+                "allow_stale_catalog": True,
+                "stale_after_s": 7200,
+            }
+        }
+    )
+
+    assert routing_stale_after_s(config) is None
+
+
+def test_routing_stale_gate_enabled_when_stale_catalog_disallowed() -> None:
+    config = AppConfig.model_validate(
+        {
+            "models": {
+                "allow_stale_catalog": False,
+                "stale_after_s": 7200,
+            }
+        }
+    )
+
+    assert routing_stale_after_s(config) == 7200.0
 
 
 def test_eligible_accounts_require_account_resolved_protocol() -> None:

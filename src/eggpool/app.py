@@ -67,6 +67,7 @@ from eggpool.providers.client_pool import ProviderClientPool
 from eggpool.providers.dns_cache import DnsNetworkBackend
 from eggpool.providers.outbound import OutboundClientManager, default_network_backend
 from eggpool.request.coordinator import RequestCoordinator
+from eggpool.routing.config import routing_stale_after_s
 from eggpool.routing.router import Router
 from eggpool.runtime_dispatch import DispatchOverheadRecorder
 from eggpool.stats import StatsService
@@ -784,7 +785,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         registry,
         catalog,
         health_manager=health_manager,
-        stale_after_s=float(config.models.stale_after_s),
+        stale_after_s=routing_stale_after_s(config),
         local_quota_mode=config.routing.local_quota_mode,
         fairness_mode=config.routing.fairness_mode,
         fairness_epsilon=config.routing.fairness_epsilon,
