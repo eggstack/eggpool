@@ -185,6 +185,18 @@ class ModelInfoRepository:
             ),
         )
 
+    async def list_models_without_canonical(self, limit: int = 50) -> list[str]:
+        """Return model_ids from the models table that lack a canonical row."""
+        rows = await self._db.fetch_all(
+            "SELECT m.model_id FROM models m "
+            "WHERE NOT EXISTS ("
+            "  SELECT 1 FROM model_info_canonical c "
+            "  WHERE c.model_id = m.model_id"
+            ") LIMIT ?",
+            (limit,),
+        )
+        return [row["model_id"] for row in rows]
+
     async def get_canonical(self, model_id: str) -> CanonicalModelInfo | None:
         """Return one canonical record."""
         row = await self._db.fetch_one(

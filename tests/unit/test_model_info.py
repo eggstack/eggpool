@@ -747,3 +747,106 @@ async def test_ensure_canonical_returns_existing_row_without_overwrite() -> None
         assert info.first_seen_at == now - timedelta(days=2)
     finally:
         await db.disconnect()
+
+
+# --- backfill_missing_canonical ---
+
+
+@pytest.mark.asyncio()
+async def test_backfill_missing_canonical_creates_rows_for_orphans() -> None:
+    """Models table rows without canonical rows are backfilled."""
+    db = Database(path=":memory:")
+    await db.connect()
+    try:
+        await _run_migrations(db)
+        await _seed_model(db, "orphan-a")
+        await _seed_model(db, "orphan-b")
+
+        from eggpool.catalog.cache import ModelCatalogCache
+
+        cache = ModelCatalogCache()
+        config = ModelInfoConfig()
+        service = ModelInfoService(config, db, cache)
+
+        result = await service.backfill_missing_canonical()
+        # __deprecated__ + orphan-a + orphan-b = 3
+        assert result["backfilled"] == 3
+
+        info_a = await service.get_summary("orphan-a")
+        assert info_a is not None
+        assert info_a.status == "unmatched"
+        assert info_a.provenance["lazy_created"] is True
+
+        info_b = await service.get_summary("orphan-b")
+        assert info_b is not None
+        assert info_b.status == "unmatched"
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio()
+async def test_backfill_missing_canonical_skips_existing_rows() -> None:
+    """Models that already have a canonical row are not touched."""
+    db = Database(path=":memory:")
+    await db.connect()
+    try:
+        await _run_migrations(db)
+
+        from eggpool.catalog.cache import ModelCatalogCache
+
+        cache = ModelCatalogCache()
+        config = ModelInfoConfig()
+        service = ModelInfoService(config, db, cache)
+
+        # Seed orphan-a and cover it with a canonical row
+        await _seed_model(db, "orphan-a")
+        await service.ensure_canonical("orphan-a")
+        existing = await service.get_summary("orphan-a")
+        assert existing is not None
+        original_first_seen = existing.first_seen_at
+
+        # backfill should only fill __deprecated__ (the other migration
+        # seed), not orphan-a which already has a canonical row
+        result = await service.backfill_missing_canonical()
+        assert result["backfilled"] == 1
+
+        # Original row must not have been modified
+        again = await service.get_summary("orphan-a")
+        assert again is not None
+        assert again.first_seen_at == original_first_seen
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio()
+async def test_backfill_missing_canonical_respects_limit() -> None:
+    """Backfill processes at most N models per call."""
+    db = Database(path=":memory:")
+    await db.connect()
+    try:
+        await _run_migrations(db)
+        for i in range(5):
+            await _seed_model(db, f"model-{i}")
+
+        from eggpool.catalog.cache import ModelCatalogCache
+
+        cache = ModelCatalogCache()
+        config = ModelInfoConfig()
+        service = ModelInfoService(config, db, cache)
+
+        # __deprecated__ + model-0..4 = 6 total without canonical
+        result = await service.backfill_missing_canonical(limit=2)
+        assert result["backfilled"] == 2
+
+        # Remaining 4 should still be unfilled
+        result2 = await service.backfill_missing_canonical(limit=2)
+        assert result2["backfilled"] == 2
+
+        result3 = await service.backfill_missing_canonical(limit=2)
+        assert result3["backfilled"] == 2
+
+        # All done now
+        result4 = await service.backfill_missing_canonical()
+        assert result4["backfilled"] == 0
+    finally:
+        await db.disconnect()

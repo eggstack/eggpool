@@ -562,6 +562,22 @@ class ModelInfoService:
             except Exception:
                 logger.exception("Model info periodic refresh failed")
 
+    async def run_backfill_missing_canonical(self) -> None:
+        """Background loop that fills canonical rows for orphaned models."""
+        while True:
+            await asyncio.sleep(60)
+            try:
+                result = await self.backfill_missing_canonical()
+                if result["backfilled"] > 0:
+                    logger.info(
+                        "Model info backfill: created %d canonical row(s)",
+                        result["backfilled"],
+                    )
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logger.exception("Model info backfill failed")
+
     async def record_source_success(
         self,
         source_name: str,
@@ -703,6 +719,31 @@ class ModelInfoService:
         # ``INSERT OR IGNORE``.
         await self._repo.upsert_canonical_with_model(info)
         return info
+
+    async def backfill_missing_canonical(self, limit: int = 50) -> dict[str, int]:
+        """Create sparse canonical rows for models that lack one.
+
+        Finds ``models`` rows without a matching ``model_info_canonical``
+        row and calls ``ensure_canonical`` for each.  The background
+        refresh will later enrich them from external sources.
+
+        Runs once at startup (after ``reconcile_catalog_snapshot``) and
+        periodically as a supervised background task to cover models
+        that were withdrawn and later reappeared.
+
+        Returns ``{"backfilled": N}`` where N is the number of rows
+        created.  Failures for individual models are logged and skipped
+        so one bad row never blocks the rest of the batch.
+        """
+        model_ids = await self._repo.list_models_without_canonical(limit=limit)
+        backfilled = 0
+        for model_id in model_ids:
+            try:
+                await self.ensure_canonical(model_id)
+                backfilled += 1
+            except Exception:
+                logger.exception("Failed to backfill canonical row for %s", model_id)
+        return {"backfilled": backfilled}
 
     async def get_summary_map(
         self, model_ids: Iterable[str] | None = None

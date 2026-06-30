@@ -735,6 +735,15 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
                     )
                 except Exception:
                     logger.exception("Model info startup reconciliation failed")
+                # Backfill canonical rows for any models table rows
+                # that reconcile_catalog_snapshot missed (e.g. models
+                # withdrawn and later reappeared).
+                try:
+                    backfill = await model_info.backfill_missing_canonical()
+                    if backfill["backfilled"] > 0:
+                        logger.info("Model info startup backfill: %s", backfill)
+                except Exception:
+                    logger.exception("Model info startup backfill failed")
         except Exception:
             logger.exception("Failed to initialize model info service")
             model_info = None
@@ -957,6 +966,15 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         supervisor.register(
             "model_info_refresh",
             lambda: model_info.run_periodic_refresh(),
+        )
+
+    # Register periodic backfill of canonical rows for models that lack
+    # one.  Runs every 60s so withdrawn-and-reappeared models are
+    # covered within one cycle.
+    if config.model_info.enabled and model_info is not None:
+        supervisor.register(
+            "model_info_canonical_backfill",
+            lambda: model_info.run_backfill_missing_canonical(),
         )
 
     # Register retention cleanup task (runs every hour)
