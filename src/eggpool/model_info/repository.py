@@ -232,18 +232,29 @@ class ModelInfoRepository:
         )
         return [self._row_to_canonical(row) for row in rows]
 
-    async def record_source_success(self, source: str) -> None:
+    async def record_source_success(
+        self,
+        source: str,
+        *,
+        status_code: int | None = None,
+        duration_ms: int | None = None,
+        payload_count: int | None = None,
+    ) -> None:
         """Record a successful fetch from a source."""
         async with self._db.transaction():
             await self._db.execute_write(
                 "INSERT INTO model_info_source_health "
-                "(source, last_success_at, failure_count) "
-                "VALUES (?, CURRENT_TIMESTAMP, 0) "
+                "(source, last_success_at, failure_count, last_status_code, "
+                "last_success_duration_ms, last_payload_count) "
+                "VALUES (?, CURRENT_TIMESTAMP, 0, ?, ?, ?) "
                 "ON CONFLICT(source) DO UPDATE SET "
                 "last_success_at = CURRENT_TIMESTAMP, "
                 "last_error_class = NULL, last_error_message = NULL, "
-                "failure_count = 0",
-                (source,),
+                "failure_count = 0, "
+                "last_status_code = excluded.last_status_code, "
+                "last_success_duration_ms = excluded.last_success_duration_ms, "
+                "last_payload_count = excluded.last_payload_count",
+                (source, status_code, duration_ms, payload_count),
             )
 
     async def record_source_error(
@@ -252,33 +263,44 @@ class ModelInfoRepository:
         exc: Exception,
         *,
         cooldown_until: datetime | None = None,
+        status_code: int | None = None,
+        rate_limited_until: datetime | None = None,
     ) -> None:
         """Record an error from a source, incrementing failure_count."""
         async with self._db.transaction():
             await self._db.execute_write(
                 "INSERT INTO model_info_source_health "
                 "(source, last_error_at, last_error_class, last_error_message, "
-                "cooldown_until, failure_count) "
-                "VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?, 1) "
+                "cooldown_until, failure_count, last_status_code, "
+                "rate_limited_until) "
+                "VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?, 1, ?, ?) "
                 "ON CONFLICT(source) DO UPDATE SET "
                 "last_error_at = CURRENT_TIMESTAMP, "
                 "last_error_class = excluded.last_error_class, "
                 "last_error_message = excluded.last_error_message, "
                 "cooldown_until = excluded.cooldown_until, "
-                "failure_count = failure_count + 1",
+                "failure_count = failure_count + 1, "
+                "last_status_code = excluded.last_status_code, "
+                "rate_limited_until = COALESCE("
+                "excluded.rate_limited_until, "
+                "model_info_source_health.rate_limited_until)",
                 (
                     source,
                     type(exc).__qualname__,
                     str(exc)[:500],
                     cooldown_until.isoformat() if cooldown_until else None,
+                    status_code,
+                    rate_limited_until.isoformat() if rate_limited_until else None,
                 ),
             )
 
     async def source_health_snapshot(self) -> dict[str, dict[str, Any]]:
         """Return source health rows as a dict keyed by source name."""
         rows = await self._db.fetch_all("SELECT * FROM model_info_source_health")
-        return {
-            row["source"]: {
+        result: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            keys = row.keys()
+            result[row["source"]] = {
                 "enabled": bool(row["enabled"]),
                 "last_success_at": row["last_success_at"],
                 "last_error_at": row["last_error_at"],
@@ -286,9 +308,20 @@ class ModelInfoRepository:
                 "last_error_message": row["last_error_message"],
                 "cooldown_until": row["cooldown_until"],
                 "failure_count": int(row["failure_count"]),
+                "last_status_code": row["last_status_code"]
+                if "last_status_code" in keys
+                else None,
+                "rate_limited_until": row["rate_limited_until"]
+                if "rate_limited_until" in keys
+                else None,
+                "last_success_duration_ms": row["last_success_duration_ms"]
+                if "last_success_duration_ms" in keys
+                else None,
+                "last_payload_count": row["last_payload_count"]
+                if "last_payload_count" in keys
+                else None,
             }
-            for row in rows
-        }
+        return result
 
     async def get_source_failure_count(self, source: str) -> int:
         """Return the current failure_count for a source (0 if unknown)."""
@@ -299,6 +332,68 @@ class ModelInfoRepository:
         if row is None:
             return 0
         return int(row["failure_count"])
+
+    async def upsert_override(
+        self,
+        model_id: str,
+        *,
+        summary: str | None = None,
+        family: str | None = None,
+        display_name: str | None = None,
+        notes: str | None = None,
+        hide_benchmark_sources: bool = False,
+        status_override: str | None = None,
+    ) -> None:
+        """Insert or update a manual override for a model."""
+        async with self._db.transaction():
+            await self._db.execute_write(
+                "INSERT INTO model_info_overrides "
+                "(model_id, summary, family, display_name, notes, "
+                "hide_benchmark_sources, status_override) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(model_id) DO UPDATE SET "
+                "summary = excluded.summary, family = excluded.family, "
+                "display_name = excluded.display_name, notes = excluded.notes, "
+                "hide_benchmark_sources = excluded.hide_benchmark_sources, "
+                "status_override = excluded.status_override, "
+                "updated_at = CURRENT_TIMESTAMP",
+                (
+                    model_id,
+                    summary,
+                    family,
+                    display_name,
+                    notes,
+                    int(hide_benchmark_sources),
+                    status_override,
+                ),
+            )
+
+    async def get_override(self, model_id: str) -> dict[str, Any] | None:
+        """Return the manual override for a model, or None."""
+        row = await self._db.fetch_one(
+            "SELECT * FROM model_info_overrides WHERE model_id = ?",
+            (model_id,),
+        )
+        if row is None:
+            return None
+        return {
+            "model_id": row["model_id"],
+            "summary": row["summary"],
+            "family": row["family"],
+            "display_name": row["display_name"],
+            "notes": row["notes"],
+            "hide_benchmark_sources": bool(row["hide_benchmark_sources"]),
+            "status_override": row["status_override"],
+        }
+
+    async def delete_override(self, model_id: str) -> bool:
+        """Remove a manual override. Returns True if a row was deleted."""
+        async with self._db.transaction():
+            cursor = await self._db.execute_write(
+                "DELETE FROM model_info_overrides WHERE model_id = ?",
+                (model_id,),
+            )
+            return cursor > 0
 
     @staticmethod
     def _row_to_canonical(row: Any) -> CanonicalModelInfo:

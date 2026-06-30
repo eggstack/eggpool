@@ -92,6 +92,12 @@ def _detail_response(info: Any) -> dict[str, Any]:
     # External IDs
     external_ids = cast("dict[str, Any]", detail.get("external_ids", {}))
 
+    # Benchmarks
+    benchmarks = cast("list[object]", detail.get("benchmarks", []))
+
+    # Hugging Face metadata
+    hf_metadata = cast("dict[str, Any]", detail.get("huggingface_metadata", {}))
+
     # Observations (compact, no raw payloads)
     observations = _build_observations(info)
 
@@ -103,7 +109,10 @@ def _detail_response(info: Any) -> dict[str, Any]:
         "modalities": modalities,
         "supports_tools": detail.get("supports_tools"),
         "external_ids": external_ids,
-        "benchmarks": [],
+        "benchmarks": benchmarks,
+        "huggingface_metadata": hf_metadata if hf_metadata else {},
+        "license": detail.get("license"),
+        "release_date": detail.get("release_date"),
     }
     compact["provenance"] = _compact_provenance(info)
     compact["conflicts"] = getattr(info, "conflicts", {})
@@ -224,9 +233,27 @@ async def handle_model_info_sources(request: Request) -> Response:
                 "last_error_at": health.get("last_error_at"),
                 "last_error_class": health.get("last_error_class"),
                 "cooldown_until": health.get("cooldown_until"),
+                "failure_count": health.get("failure_count", 0),
+                "last_status_code": health.get("last_status_code"),
+                "rate_limited_until": health.get("rate_limited_until"),
+                "last_success_duration_ms": health.get("last_success_duration_ms"),
+                "last_payload_count": health.get("last_payload_count"),
             }
         )
     return JSONResponse(content={"object": "list", "data": data})
+
+
+async def handle_model_info_aliases(request: Request, model_id: str) -> Response:
+    """GET /api/model-info/{model_id}/aliases — aliases for a model."""
+    model_info = getattr(request.app.state, "model_info", None)
+    if model_info is None:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "model_info disabled"},
+        )
+    decoded_id = unquote(model_id)
+    aliases = await model_info.repo.get_aliases_for_model(decoded_id)
+    return JSONResponse(content={"model_id": decoded_id, "aliases": aliases})
 
 
 async def handle_model_info_refresh(request: Request) -> Response:
@@ -308,6 +335,12 @@ def register_model_info_routes(app: Any, require_auth: bool = False) -> None:
         methods=["GET"],
         dependencies=dependencies,
     )
+    app.add_api_route(
+        path="/api/model-info/{model_id:path}/aliases",
+        endpoint=handle_model_info_aliases,
+        methods=["GET"],
+        dependencies=dependencies,
+    )
     # Manual refresh is ALWAYS auth-gated regardless of dashboard.public
     app.add_api_route(
         path="/api/model-info/refresh",
@@ -318,6 +351,7 @@ def register_model_info_routes(app: Any, require_auth: bool = False) -> None:
 
 
 __all__ = [
+    "handle_model_info_aliases",
     "handle_model_info_detail",
     "handle_model_info_refresh",
     "handle_model_info_sources",

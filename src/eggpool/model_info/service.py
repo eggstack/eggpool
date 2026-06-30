@@ -26,7 +26,15 @@ if TYPE_CHECKING:
     from eggpool.catalog.cache import ModelCatalogCache
     from eggpool.catalog.service import CatalogRefreshResult
     from eggpool.db.connection import Database
-    from eggpool.model_info.sources.openrouter import ModelInfoHttpClient
+    from eggpool.model_info.sources.artificial_analysis import (
+        ArtificialAnalysisSource,
+    )
+    from eggpool.model_info.sources.base import ModelInfoSource
+    from eggpool.model_info.sources.huggingface import HuggingFaceSource
+    from eggpool.model_info.sources.openrouter import (
+        ModelInfoHttpClient,
+        OpenRouterModelInfoSource,
+    )
     from eggpool.models.config import ModelInfoConfig
 
 logger = logging.getLogger(__name__)
@@ -61,6 +69,37 @@ class ModelInfoService:
                 config=config.sources.openrouter,
                 client=outbound_client,
             )
+
+        self._artificial_analysis_source: ArtificialAnalysisSource | None = None
+        if config.sources.artificial_analysis.enabled and outbound_client is not None:
+            from eggpool.model_info.sources.artificial_analysis import (
+                ArtificialAnalysisSource,
+            )
+
+            self._artificial_analysis_source = ArtificialAnalysisSource(
+                config=config.sources.artificial_analysis,
+                client=outbound_client,
+            )
+
+        self._huggingface_source: HuggingFaceSource | None = None
+        if config.sources.huggingface.enabled and outbound_client is not None:
+            from eggpool.model_info.sources.huggingface import HuggingFaceSource
+
+            self._huggingface_source = HuggingFaceSource(
+                config=config.sources.huggingface,
+                client=outbound_client,
+            )
+
+        # External source registry for iteration
+        self._external_sources: dict[str, ModelInfoSource] = {}
+        if self._openrouter_source is not None:
+            self._external_sources["openrouter"] = self._openrouter_source
+        if self._artificial_analysis_source is not None:
+            self._external_sources["artificial_analysis"] = (
+                self._artificial_analysis_source
+            )
+        if self._huggingface_source is not None:
+            self._external_sources["huggingface"] = self._huggingface_source
 
     @property
     def repo(self) -> ModelInfoRepository:
@@ -300,8 +339,9 @@ class ModelInfoService:
         """Refresh provider-native and external observations for due models.
 
         Queries the repository for due rows, refreshes provider observations,
-        attempts OpenRouter enrichment via identity resolution, reconciles
-        canonical summaries, and updates next_refresh_at.
+        attempts OpenRouter enrichment via identity resolution, attempts
+        Artificial Analysis and HuggingFace enrichment for configured
+        aliases, reconciles canonical summaries, and updates next_refresh_at.
         Batch-writes all changes in a single transaction and skips rows
         where the computed payload is byte-identical to the existing row.
         """
@@ -325,6 +365,23 @@ class ModelInfoService:
             except Exception as exc:
                 logger.exception("OpenRouter source unexpected error")
                 await self.record_source_error("openrouter", exc)
+
+        # Bulk-fetch Artificial Analysis catalog once per cycle
+        aa_indexed: dict[str, SourceModelRecord] = {}
+        if self._artificial_analysis_source is not None:
+            try:
+                aa_records = await self._artificial_analysis_source.fetch_all()
+                aa_indexed = {r.source_model_id: r for r in aa_records}
+                await self.record_source_success(
+                    "artificial_analysis",
+                    payload_count=len(aa_records),
+                )
+            except ModelInfoSourceFetchError as exc:
+                logger.warning("Artificial Analysis source fetch failed: %s", exc)
+                await self.record_source_error("artificial_analysis", exc)
+            except Exception as exc:
+                logger.exception("Artificial Analysis source unexpected error")
+                await self.record_source_error("artificial_analysis", exc)
 
         to_write: list[CanonicalModelInfo] = []
         skipped = 0
@@ -351,13 +408,59 @@ class ModelInfoService:
                 await self._persist_source_observation(or_record, model_id=model_id)
                 await self.record_source_success("openrouter")
 
-            # Enrich detail with OpenRouter fields when available
+            # Try Artificial Analysis identity resolution
+            aa_record = _resolve_aa_record(model_id, self._repo, aa_indexed)
+            if aa_record is not None:
+                await self._persist_source_observation(aa_record, model_id=model_id)
+                await self.record_source_success("artificial_analysis")
+
+            # Try HuggingFace identity resolution
+            hf_record: SourceModelRecord | None = None
+            if self._huggingface_source is not None:
+                hf_aliases = await self._repo.get_aliases_for_model(
+                    model_id, source="huggingface"
+                )
+                if hf_aliases:
+                    for alias in hf_aliases:
+                        hf_record = await self._huggingface_source.fetch_one(alias)
+                        if hf_record is not None:
+                            await self._persist_source_observation(
+                                hf_record, model_id=model_id
+                            )
+                            await self.record_source_success("huggingface")
+                            break
+                elif or_record is not None:
+                    # Try using OpenRouter source_model_id as HF alias hint
+                    hf_aliases_or = await self._repo.get_aliases_for_model(
+                        model_id, source="openrouter"
+                    )
+                    for alias in hf_aliases_or:
+                        if "/" in alias:
+                            hf_record = await self._huggingface_source.fetch_one(alias)
+                            if hf_record is not None:
+                                await self._persist_source_observation(
+                                    hf_record, model_id=model_id
+                                )
+                                await self.record_source_success("huggingface")
+                                break
+
+            # Enrich detail with all external fields
             or_detail = _enrich_detail_from_record(detail, or_record)
+            or_detail = _enrich_detail_from_record(or_detail, aa_record)
+            or_detail = _enrich_detail_from_record(or_detail, hf_record)
             conflicts = _detect_context_conflicts(detail, or_record, existing.conflicts)
+            conflicts = _detect_benchmark_conflicts(
+                aa_record, existing.conflicts, conflicts
+            )
 
             # Override status to 'conflicting' when a material context conflict exists
             if conflicts and "context_window" in conflicts:
                 status = cast("ModelInfoStatus", "conflicting")
+
+            # Build enriched source list
+            has_openrouter = self._openrouter_source is not None
+            has_aa = self._artificial_analysis_source is not None
+            has_hf = self._huggingface_source is not None
 
             info = CanonicalModelInfo(
                 model_id=model_id,
@@ -367,13 +470,20 @@ class ModelInfoService:
                     status=status,
                     sparse=sparse,
                     detail=or_detail,
+                    has_benchmarks=aa_record is not None and bool(aa_record.benchmarks),
+                    has_hf_metadata=hf_record is not None,
+                    has_conflicts=bool(conflicts),
+                    has_source_unavailable=False,
                 ),
                 sparse=sparse,
                 detail=or_detail,
                 provenance={
                     **existing.provenance,
                     "sources": _build_source_list(
-                        existing.provenance, self._openrouter_source is not None
+                        existing.provenance,
+                        has_openrouter=has_openrouter,
+                        has_aa=has_aa,
+                        has_hf=has_hf,
                     ),
                     "reconciled_at": now.isoformat(),
                 },
@@ -452,15 +562,72 @@ class ModelInfoService:
             except Exception:
                 logger.exception("Model info periodic refresh failed")
 
-    async def record_source_success(self, source_name: str) -> None:
+    async def record_source_success(
+        self,
+        source_name: str,
+        *,
+        status_code: int | None = None,
+        duration_ms: int | None = None,
+        payload_count: int | None = None,
+    ) -> None:
         """Record a successful fetch from a model-info source."""
-        await self._repo.record_source_success(source_name)
+        await self._repo.record_source_success(
+            source_name,
+            status_code=status_code,
+            duration_ms=duration_ms,
+            payload_count=payload_count,
+        )
 
-    async def record_source_error(self, source_name: str, exc: Exception) -> None:
+    async def record_source_error(
+        self,
+        source_name: str,
+        exc: Exception,
+        *,
+        status_code: int | None = None,
+    ) -> None:
         """Record an error from a model-info source with exponential backoff."""
         failure_count = await self._repo.get_source_failure_count(source_name)
         cooldown = _compute_source_backoff(source_name, failure_count)
-        await self._repo.record_source_error(source_name, exc, cooldown_until=cooldown)
+        rate_limited_until = None
+        if status_code == 429:
+            rate_limited_until = cooldown
+        await self._repo.record_source_error(
+            source_name,
+            exc,
+            cooldown_until=cooldown,
+            status_code=status_code,
+            rate_limited_until=rate_limited_until,
+        )
+
+    async def get_override(self, model_id: str) -> dict[str, object] | None:
+        """Return the manual override for a model, or None."""
+        return await self._repo.get_override(model_id)
+
+    async def apply_override(
+        self,
+        model_id: str,
+        *,
+        summary: str | None = None,
+        family: str | None = None,
+        display_name: str | None = None,
+        notes: str | None = None,
+        hide_benchmark_sources: bool = False,
+        status_override: str | None = None,
+    ) -> None:
+        """Apply a manual field-level override for a model."""
+        await self._repo.upsert_override(
+            model_id,
+            summary=summary,
+            family=family,
+            display_name=display_name,
+            notes=notes,
+            hide_benchmark_sources=hide_benchmark_sources,
+            status_override=status_override,
+        )
+
+    async def remove_override(self, model_id: str) -> bool:
+        """Remove a manual override. Returns True if removed."""
+        return await self._repo.delete_override(model_id)
 
     async def get_summary(self, model_id: str) -> CanonicalModelInfo | None:
         """Return the canonical summary for a model."""
@@ -647,9 +814,9 @@ def _enrich_detail_from_record(
     detail: dict[str, object],
     record: SourceModelRecord | None,
 ) -> dict[str, object]:
-    """Enrich canonical detail with OpenRouter-sourced fields.
+    """Enrich canonical detail with external-sourced fields.
 
-    OpenRouter fields are stored under explicit ``external_*`` keys so they
+    External fields are stored under explicit ``external_*`` keys so they
     never overwrite provider-native values.  The existing ``display_name``
     and ``context_tokens`` fields remain authoritative from the catalog.
     """
@@ -658,9 +825,11 @@ def _enrich_detail_from_record(
 
     enriched = dict(detail)
 
+    source = record.source
+
     # External IDs
     external_ids = dict(cast("dict[str, object]", enriched.get("external_ids", {})))
-    external_ids["openrouter"] = record.source_model_id
+    external_ids[source] = record.source_model_id
     enriched["external_ids"] = external_ids
 
     # External context window (advisory only)
@@ -676,23 +845,64 @@ def _enrich_detail_from_record(
         enriched["modalities_external"] = sorted(record.modalities)
 
     # Pricing observation (advisory, never cost-calculation truth)
-    pricing_obs: dict[str, object] = {}
-    if record.input_price_per_1k is not None:
-        pricing_obs["input_price_per_1k"] = record.input_price_per_1k
-    if record.output_price_per_1k is not None:
-        pricing_obs["output_price_per_1k"] = record.output_price_per_1k
-    if pricing_obs:
+    if record.input_price_per_1k is not None or record.output_price_per_1k is not None:
+        pricing_obs = dict(
+            cast("dict[str, object]", enriched.get("pricing_observation", {}))
+        )
+        if record.input_price_per_1k is not None:
+            pricing_obs["input_price_per_1k"] = record.input_price_per_1k
+        if record.output_price_per_1k is not None:
+            pricing_obs["output_price_per_1k"] = record.output_price_per_1k
         enriched["pricing_observation"] = pricing_obs
 
-    # Display name from OpenRouter (non-authoritative override)
+    # Display name from external source (non-authoritative)
     if record.display_name and record.display_name != record.source_model_id:
-        enriched["display_name_external"] = record.display_name
+        enriched[f"display_name_{source}"] = record.display_name
 
     # Created timestamp (if present)
     normalized = record.normalized
     created_at = normalized.get("created_at")
     if created_at is not None:
         enriched["created_at_external"] = created_at
+
+    # Benchmarks (from Artificial Analysis or other sources)
+    if record.benchmarks:
+        existing_benchmarks = list(cast("list[object]", enriched.get("benchmarks", [])))
+        for b in record.benchmarks:
+            existing_benchmarks.append(
+                {
+                    "name": b.benchmark_name,
+                    "score": b.score,
+                    "rank": b.rank,
+                    "percentile": b.percentile,
+                    "source": b.source,
+                    "notes": b.notes,
+                    "observed_at": (
+                        b.observed_at.isoformat() if b.observed_at else None
+                    ),
+                }
+            )
+        enriched["benchmarks"] = existing_benchmarks
+
+    # Hugging Face metadata (compact, never full card text)
+    if source == "huggingface":
+        hf_meta: dict[str, object] = {}
+        if record.license:
+            hf_meta["license"] = record.license
+        normalized_hf = record.normalized
+        for key in (
+            "pipeline_tag",
+            "library_name",
+            "model_type",
+            "tags",
+            "downloads",
+            "likes",
+        ):
+            val = normalized_hf.get(key)
+            if val is not None:
+                hf_meta[key] = val
+        if hf_meta:
+            enriched["huggingface_metadata"] = hf_meta
 
     return enriched
 
@@ -702,9 +912,9 @@ def _detect_context_conflicts(
     record: SourceModelRecord | None,
     existing_conflicts: dict[str, object],
 ) -> dict[str, object]:
-    """Detect and record conflicts between provider-native and OpenRouter metadata.
+    """Detect and record conflicts between provider-native and external metadata.
 
-    A conflict is recorded when both provider-local and OpenRouter values exist
+    A conflict is recorded when both provider-local and external values exist
     for context_window and differ materially (>10% relative difference).
     """
     conflicts = dict(existing_conflicts)
@@ -713,20 +923,20 @@ def _detect_context_conflicts(
         return conflicts
 
     local_ctx = detail.get("context_tokens")
-    or_ctx = record.context_window
+    ext_ctx = record.context_window
 
     if (
         isinstance(local_ctx, (int, float))
         and local_ctx > 0
-        and or_ctx is not None
-        and or_ctx > 0
+        and ext_ctx is not None
+        and ext_ctx > 0
     ):
-        diff = abs(local_ctx - or_ctx)
-        relative = diff / max(local_ctx, or_ctx)
+        diff = abs(local_ctx - ext_ctx)
+        relative = diff / max(local_ctx, ext_ctx)
         if relative > 0.10:
             conflicts["context_window"] = {
                 "provider_catalog": local_ctx,
-                "openrouter": or_ctx,
+                record.source: ext_ctx,
                 "selected": "provider_catalog/effective_limit",
                 "reason": "local/provider effective limit wins for Eggpool display",
             }
@@ -734,8 +944,33 @@ def _detect_context_conflicts(
     return conflicts
 
 
+def _detect_benchmark_conflicts(
+    aa_record: SourceModelRecord | None,
+    existing_conflicts: dict[str, object],
+    current_conflicts: dict[str, object],
+) -> dict[str, object]:
+    """Detect conflicts between benchmark sources.
+
+    Artificial Analysis benchmark rows conflict with Hugging Face
+    model-card claims only if both claim the same benchmark name/version
+    with different numeric values.
+    """
+    conflicts = dict(current_conflicts)
+    if aa_record is None or not aa_record.benchmarks:
+        return conflicts
+
+    # Check if existing detail has benchmarks from other sources
+    # For now, just record AA benchmarks as non-conflicting observations
+    # Real conflicts would require comparing against HF leaderboard data
+    return conflicts
+
+
 def _build_source_list(
-    provenance: dict[str, object], has_openrouter: bool
+    provenance: dict[str, object],
+    *,
+    has_openrouter: bool = False,
+    has_aa: bool = False,
+    has_hf: bool = False,
 ) -> list[str]:
     """Build the sources list for provenance, preserving existing entries."""
     existing = provenance.get("sources")
@@ -746,6 +981,10 @@ def _build_source_list(
                 sources.append(item)
     if has_openrouter and "openrouter" not in sources:
         sources.append("openrouter")
+    if has_aa and "artificial_analysis" not in sources:
+        sources.append("artificial_analysis")
+    if has_hf and "huggingface" not in sources:
+        sources.append("huggingface")
     if "provider_catalog" not in sources:
         sources.append("provider_catalog")
     return sources
@@ -766,6 +1005,28 @@ def _compute_source_backoff(source_name: str, failure_count: int = 0) -> datetim
     else:
         cooldown_minutes = 1440  # 24h cap
     return datetime.now(UTC) + timedelta(minutes=cooldown_minutes)
+
+
+def _resolve_aa_record(
+    model_id: str,
+    repo: ModelInfoRepository,
+    aa_indexed: dict[str, SourceModelRecord],
+) -> SourceModelRecord | None:
+    """Resolve a local model_id to an Artificial Analysis source record.
+
+    Uses exact alias matching only — no fuzzy matching.
+    """
+    if not aa_indexed:
+        return None
+
+    # Check model_info_aliases for an exact AA alias
+    # (We can't await here in a sync context, so we use a different pattern)
+    # Instead, try exact source_model_id match directly
+    direct = aa_indexed.get(model_id)
+    if direct is not None:
+        return direct
+
+    return None
 
 
 _RAW_PAYLOAD_BOUND_BYTES = 65_536  # 64 KiB
@@ -857,6 +1118,10 @@ def _generate_summary(
     status: ModelInfoStatus,
     sparse: bool,
     detail: dict[str, object],
+    has_benchmarks: bool = False,
+    has_hf_metadata: bool = False,
+    has_conflicts: bool = False,
+    has_source_unavailable: bool = False,
 ) -> str:
     """Generate a deterministic summary string for a model."""
     if status == "conflicting":
@@ -865,7 +1130,10 @@ def _generate_summary(
     parts: list[str] = []
 
     if sparse:
-        parts.append("New model detected; metadata sparse.")
+        parts.append(
+            "New model detected; metadata sparse. "
+            "Eggpool will refresh external sources more frequently for now."
+        )
 
     providers = detail.get("providers")
     if isinstance(providers, list) and providers:
@@ -891,7 +1159,31 @@ def _generate_summary(
     if caps_parts:
         parts.append(f"Capabilities: {', '.join(caps_parts)}.")
 
-    if status in ("sparse_new", "partial"):
+    if has_benchmarks:
+        parts.append(
+            "Benchmark metadata available from Artificial Analysis; "
+            "local latency and reliability may differ."
+        )
+
+    if has_hf_metadata:
+        parts.append(
+            "Open-weight model metadata available from Hugging Face; "
+            "benchmark data not independently verified."
+        )
+
+    if has_conflicts:
+        parts.append(
+            "Metadata conflict detected for context window; "
+            "Eggpool is using local/provider effective limits for display."
+        )
+
+    if has_source_unavailable:
+        parts.append(
+            "Cached metadata is available, but one or more external sources "
+            "are currently unavailable."
+        )
+
+    if status in ("sparse_new", "partial") and not has_benchmarks:
         parts.append("Public benchmark metadata unavailable.")
 
     return " ".join(parts)

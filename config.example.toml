@@ -108,6 +108,53 @@ priority = 200
 ttl_seconds = 86400
 # max_entries = 4096  # bound the in-memory catalog cache; oldest entries evict first
 
+# ─── Model Information ────────────────────────────────────────────────
+# The model_info subsystem provides a persistent metadata sidecar for
+# all known models. Source adapters enrich models with display names,
+# context limits, benchmarks, and pipeline tags. Phase 5 adds
+# Artificial Analysis and Hugging Face sources, manual overrides,
+# and alias expansion.
+# [model_info]
+# enabled = true                   # enable model_info sidecar (default: true)
+# include_in_models_endpoint = true  # compact fields in /v1/models (default: true)
+# refresh_interval_s = 3600        # global refresh cadence (seconds)
+# sparse_refresh_interval_s = 300  # accelerated refresh for sparse models (seconds)
+# sparse_refresh_window_s = 86400  # how long sparse models get accelerated refresh (seconds)
+# default_ttl_s = 604800           # default TTL for fresh models (7 days)
+# partial_ttl_s = 259200           # TTL for partially-known models (3 days)
+# sparse_ttl_s = 86400             # TTL for sparse models (1 day)
+#
+# [model_info.sources.openrouter]
+# enabled = true                   # enable OpenRouter metadata source (default: true)
+# priority = 100                   # higher = preferred when multiple sources agree
+# ttl_seconds = 86400              # how long to cache the OpenRouter /models catalog
+# # api_key = "..."                # optional; only needed for higher rate limits
+#
+# [model_info.sources.artificial_analysis]
+# enabled = false                  # Artificial Analysis benchmark source (default: disabled)
+# priority = 200
+# ttl_seconds = 86400
+# api_key = "..."                  # required; get from https://artificialanalysis.ai
+#
+# [model_info.sources.huggingface]
+# enabled = false                  # Hugging Face model card metadata (default: disabled)
+# priority = 300
+# ttl_seconds = 86400
+# # api_key = "..."                # optional; unauthenticated has 60 req/min
+#
+# ─── Manual Overrides ─────────────────────────────────────────────────
+# Override canonical fields for specific models. Overrides take
+# precedence over all source-provided values.
+# [model_info.overrides."model-id"]
+# display_name = "Custom Display Name"
+# summary = "A custom summary for this model"
+#
+# ─── Alias Expansion ──────────────────────────────────────────────────
+# Map canonical model IDs to alternative identifiers used by external
+# sources. Source-specific aliases are matched during identity resolution.
+# [model_info.aliases]
+# "canonical-id" = ["alias-1", "alias-2"]
+
 # ─── Network ─────────────────────────────────────────────────────────
 # Outbound client transport tuning and DNS caching. The DNS cache wraps
 # the default httpcore transport to cache resolved DNS entries in memory,

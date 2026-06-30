@@ -75,7 +75,9 @@ async def test_model_info_migration_is_idempotent() -> None:
             "SELECT name FROM sqlite_master "
             "WHERE type='table' AND name LIKE 'model_info_%'"
         )
-        assert len(rows) == 4
+        assert (
+            len(rows) == 5
+        )  # canonical, observations, aliases, source_health, overrides
     finally:
         await db.disconnect()
 

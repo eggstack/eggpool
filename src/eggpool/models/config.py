@@ -751,6 +751,32 @@ class ModelInfoSourcesConfig(BaseModel):
     )
 
 
+class ModelInfoAliasConfig(BaseModel):
+    """A configured alias mapping a local model to a source-specific ID."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider_id: str
+    model_id: str
+    source: str
+    source_model_id: str
+    confidence: str = "curated"
+    notes: str | None = None
+
+
+class ModelInfoOverrideConfig(BaseModel):
+    """Manual field-level override for a model."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str | None = None
+    family: str | None = None
+    display_name: str | None = None
+    notes: str | None = None
+    hide_benchmark_sources: bool = False
+    status_override: str | None = None
+
+
 class ModelInfoConfig(BaseModel):
     """Configuration for the model-info subsystem."""
 
@@ -769,6 +795,12 @@ class ModelInfoConfig(BaseModel):
     include_in_models_endpoint: bool = True
     store_raw_observations: bool = True
     sources: ModelInfoSourcesConfig = Field(default_factory=ModelInfoSourcesConfig)
+    aliases: list[ModelInfoAliasConfig] = Field(
+        default_factory=list[ModelInfoAliasConfig]
+    )
+    overrides: dict[str, ModelInfoOverrideConfig] = Field(
+        default_factory=dict[str, ModelInfoOverrideConfig]
+    )
 
 
 class AppConfig(BaseModel):
