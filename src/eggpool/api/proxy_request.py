@@ -29,7 +29,12 @@ from eggpool.request.coordinator import (
     ProxyRequestContext,
     RequestCoordinator,
 )
-from eggpool.request.limits import check_context_limits as _check_context_limits
+from eggpool.request.limits import (
+    ESTIMATED_BYTES_PER_TOKEN,
+)
+from eggpool.request.limits import (
+    check_context_limits as _check_context_limits,
+)
 from eggpool.routing.provider import parse_model_provider
 from eggpool.transcoder.context import TranscodeContext
 
@@ -70,6 +75,24 @@ class TranscodePreflightResult:
     upstream_protocol: ProtocolName
     translated_payload: dict[str, Any]
     warnings: list[dict[str, Any]]
+    tool_token_padding: int = 0
+
+
+def _tool_token_padding(payload: dict[str, Any]) -> int:
+    """Estimate extra input tokens from tool schemas in a translated payload.
+
+    Anthropic tool schemas (``input_schema``) are typically 30 % of their
+    JSON size in tokens.  The padding is conservative enough to avoid
+    false rejections without inflating reservations excessively.
+    """
+    tools = payload.get("tools")
+    if not isinstance(tools, list) or not tools:
+        return 0
+    total_bytes = 0
+    tool_list = cast("list[dict[str, Any]]", tools)
+    for tool in tool_list:
+        total_bytes += len(json.dumps(tool))
+    return max(64, total_bytes // 4)
 
 
 def get_client_ip(request: Request) -> str:
@@ -187,6 +210,7 @@ def _prepare_transcode_preflight(
         upstream_protocol=cast("ProtocolName", upstream_protocol),
         translated_payload=translated,
         warnings=warnings,
+        tool_token_padding=_tool_token_padding(translated),
     )
 
 
@@ -295,10 +319,15 @@ async def handle_proxy_request(
                     error_type="invalid_request_error",
                 )
             try:
+                translated_body = json.dumps(preflight.translated_payload).encode()
+                if preflight.tool_token_padding > 0:
+                    translated_body += b"\x00" * (
+                        preflight.tool_token_padding * ESTIMATED_BYTES_PER_TOKEN
+                    )
                 _check_context_limits(
                     model_id=model_id,
                     provider_id=provider_id,
-                    body=json.dumps(preflight.translated_payload).encode(),
+                    body=translated_body,
                     payload=preflight.translated_payload,
                     protocol=preflight.upstream_protocol,
                     catalog_cache=catalog.cache,
