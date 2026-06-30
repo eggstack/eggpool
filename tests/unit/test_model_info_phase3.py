@@ -11,11 +11,13 @@ import pytest
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
 from eggpool.errors import ModelInfoSourceFetchError
+from eggpool.model_info.identity import resolve_openrouter_record
 from eggpool.model_info.repository import ModelInfoRepository
 from eggpool.model_info.service import (
     ModelInfoService,
     _build_source_list,
-    _resolve_openrouter_record,
+    _detect_context_conflicts,
+    _enrich_detail_from_record,
 )
 from eggpool.model_info.sources.openrouter import (
     OpenRouterModelInfoSource,
@@ -382,7 +384,7 @@ class TestIdentityResolution:
             )
             openrouter_indexed = {"openai/gpt-4o": or_record}
 
-            result = await _resolve_openrouter_record(
+            result = await resolve_openrouter_record(
                 "local-model", repo, openrouter_indexed
             )
             assert result is not None
@@ -392,7 +394,7 @@ class TestIdentityResolution:
 
     @pytest.mark.asyncio()
     async def test_exact_model_id_match(self) -> None:
-        """test_identity_refuses_ambiguous_aliases - exact model_id match."""
+        """Exact source_model_id == model_id resolves directly."""
         db = Database(path=":memory:")
         await db.connect()
         try:
@@ -412,7 +414,7 @@ class TestIdentityResolution:
             )
             openrouter_indexed = {"openai/gpt-4o": or_record}
 
-            result = await _resolve_openrouter_record(
+            result = await resolve_openrouter_record(
                 "openai/gpt-4o", repo, openrouter_indexed
             )
             assert result is not None
@@ -422,7 +424,7 @@ class TestIdentityResolution:
 
     @pytest.mark.asyncio()
     async def test_no_match_returns_none(self) -> None:
-        """test_identity_refuses_substring_match - no match returns None."""
+        """Unrelated model_id returns no match (no substring matching)."""
         db = Database(path=":memory:")
         await db.connect()
         try:
@@ -442,7 +444,7 @@ class TestIdentityResolution:
             )
             openrouter_indexed = {"openai/gpt-4o": or_record}
 
-            result = await _resolve_openrouter_record(
+            result = await resolve_openrouter_record(
                 "unrelated-model", repo, openrouter_indexed
             )
             assert result is None
@@ -480,15 +482,370 @@ class TestIdentityResolution:
             )
             openrouter_indexed = {"openai/gpt-4o": or_record}
 
-            result = await _resolve_openrouter_record(
+            result = await resolve_openrouter_record(
                 "local-model", repo, openrouter_indexed
             )
             assert result is None
         finally:
             await db.disconnect()
 
+    @pytest.mark.asyncio()
+    async def test_ambiguous_aliases_returns_none(self) -> None:
+        """Multiple aliases pointing to different entries return no match."""
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await _run_migrations(db)
+            await _seed_model(db, "local-model")
 
-# --- Source list builder ---
+            repo = ModelInfoRepository(db)
+            # Create two different openrouter aliases for the same model
+            await repo.upsert_alias(
+                model_id="local-model",
+                provider_id="test-provider",
+                alias="openai/gpt-4o",
+                source="openrouter",
+                confidence=0.8,
+            )
+            await repo.upsert_alias(
+                model_id="local-model",
+                provider_id="test-provider",
+                alias="openai/gpt-4o-mini",
+                source="openrouter",
+                confidence=0.6,
+            )
+
+            now = datetime.now(UTC)
+            or_record_1 = SourceModelRecord(
+                source="openrouter",
+                source_model_id="openai/gpt-4o",
+                observed_at=now,
+                raw_hash="abc",
+                raw_payload={},
+                normalized={},
+                display_name="GPT-4o",
+            )
+            or_record_2 = SourceModelRecord(
+                source="openrouter",
+                source_model_id="openai/gpt-4o-mini",
+                observed_at=now,
+                raw_hash="def",
+                raw_payload={},
+                normalized={},
+                display_name="GPT-4o Mini",
+            )
+            openrouter_indexed = {
+                "openai/gpt-4o": or_record_1,
+                "openai/gpt-4o-mini": or_record_2,
+            }
+
+            result = await resolve_openrouter_record(
+                "local-model", repo, openrouter_indexed
+            )
+            # Ambiguous — should return None
+            assert result is None
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio()
+    async def test_substring_match_refused(self) -> None:
+        """Substring/contains matches are not resolved."""
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await _run_migrations(db)
+            await _seed_model(db, "gpt-4")
+
+            repo = ModelInfoRepository(db)
+            now = datetime.now(UTC)
+            or_record = SourceModelRecord(
+                source="openrouter",
+                source_model_id="openai/gpt-4o",
+                observed_at=now,
+                raw_hash="abc",
+                raw_payload={},
+                normalized={},
+                display_name="GPT-4o",
+            )
+            openrouter_indexed = {"openai/gpt-4o": or_record}
+
+            # "gpt-4" is a substring of "openai/gpt-4o" but should NOT match
+            result = await resolve_openrouter_record("gpt-4", repo, openrouter_indexed)
+            assert result is None
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio()
+    async def test_pricing_alias_reused_when_source_matches(self) -> None:
+        """Pricing alias is reused when the alias source is openrouter."""
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await _run_migrations(db)
+            await _seed_model(db, "local-model")
+
+            repo = ModelInfoRepository(db)
+            # Create an alias with source="pricing" — this is NOT openrouter source
+            await repo.upsert_alias(
+                model_id="local-model",
+                provider_id="test-provider",
+                alias="openai/gpt-4o",
+                source="pricing",
+                confidence=0.9,
+            )
+
+            now = datetime.now(UTC)
+            or_record = SourceModelRecord(
+                source="openrouter",
+                source_model_id="openai/gpt-4o",
+                observed_at=now,
+                raw_hash="abc",
+                raw_payload={},
+                normalized={},
+                display_name="GPT-4o",
+            )
+            openrouter_indexed = {"openai/gpt-4o": or_record}
+
+            # Pricing alias should be checked (rule 3 in identity.py)
+            result = await resolve_openrouter_record(
+                "local-model", repo, openrouter_indexed
+            )
+            assert result is not None
+            assert result.source_model_id == "openai/gpt-4o"
+        finally:
+            await db.disconnect()
+
+
+# --- Enrichment and conflict detection tests ---
+
+
+class TestEnrichDetailFromRecord:
+    def test_enriches_with_openrouter_fields(self) -> None:
+        """OpenRouter fields are added to detail under external_* keys."""
+        detail: dict[str, object] = {
+            "display_name": "GPT-4o",
+            "context_tokens": 128000,
+        }
+        now = datetime.now(UTC)
+        record = SourceModelRecord(
+            source="openrouter",
+            source_model_id="openai/gpt-4o",
+            observed_at=now,
+            raw_hash="abc",
+            raw_payload={},
+            normalized={"created_at": "2024-01-01T00:00:00+00:00"},
+            display_name="GPT-4o",
+            context_window=128000,
+            max_output_tokens=16384,
+            modalities=frozenset({"text", "image"}),
+            input_price_per_1k=2.5,
+            output_price_per_1k=10.0,
+        )
+
+        enriched = _enrich_detail_from_record(detail, record)
+        assert enriched["external_ids"] == {"openrouter": "openai/gpt-4o"}
+        assert enriched["context_window_external"] == 128000
+        assert enriched["max_output_tokens_external"] == 16384
+        assert enriched["modalities_external"] == ["image", "text"]
+        assert enriched["pricing_observation"] == {
+            "input_price_per_1k": 2.5,
+            "output_price_per_1k": 10.0,
+        }
+        assert enriched["created_at_external"] == "2024-01-01T00:00:00+00:00"
+        # Original fields preserved
+        assert enriched["display_name"] == "GPT-4o"
+        assert enriched["context_tokens"] == 128000
+
+    def test_no_record_returns_original_detail(self) -> None:
+        """When record is None, detail is returned unchanged."""
+        detail: dict[str, object] = {"display_name": "GPT-4o"}
+        enriched = _enrich_detail_from_record(detail, None)
+        assert enriched == detail
+        assert enriched is not detail  # copy, not alias
+
+    def test_external_ids_preserve_existing(self) -> None:
+        """Existing external_ids entries are preserved."""
+        detail: dict[str, object] = {
+            "external_ids": {"other_source": "some-id"},
+        }
+        now = datetime.now(UTC)
+        record = SourceModelRecord(
+            source="openrouter",
+            source_model_id="openai/gpt-4o",
+            observed_at=now,
+            raw_hash="abc",
+            raw_payload={},
+            normalized={},
+            display_name="GPT-4o",
+        )
+
+        enriched = _enrich_detail_from_record(detail, record)
+        assert enriched["external_ids"]["other_source"] == "some-id"
+        assert enriched["external_ids"]["openrouter"] == "openai/gpt-4o"
+
+
+class TestDetectContextConflicts:
+    def test_conflict_when_context_differs_materially(self) -> None:
+        """Conflict recorded when context windows differ by >10%."""
+        detail: dict[str, object] = {"context_tokens": 128000}
+        now = datetime.now(UTC)
+        record = SourceModelRecord(
+            source="openrouter",
+            source_model_id="openai/gpt-4o",
+            observed_at=now,
+            raw_hash="abc",
+            raw_payload={},
+            normalized={},
+            display_name="GPT-4o",
+            context_window=1_000_000,  # >10% different
+        )
+
+        conflicts = _detect_context_conflicts(detail, record, {})
+        assert "context_window" in conflicts
+        assert conflicts["context_window"]["provider_catalog"] == 128000
+        assert conflicts["context_window"]["openrouter"] == 1_000_000
+        assert (
+            conflicts["context_window"]["selected"]
+            == "provider_catalog/effective_limit"
+        )
+
+    def test_no_conflict_when_context_matches(self) -> None:
+        """No conflict when context windows are close (<10% diff)."""
+        detail: dict[str, object] = {"context_tokens": 128000}
+        now = datetime.now(UTC)
+        record = SourceModelRecord(
+            source="openrouter",
+            source_model_id="openai/gpt-4o",
+            observed_at=now,
+            raw_hash="abc",
+            raw_payload={},
+            normalized={},
+            display_name="GPT-4o",
+            context_window=130000,  # ~1.5% different
+        )
+
+        conflicts = _detect_context_conflicts(detail, record, {})
+        assert "context_window" not in conflicts
+
+    def test_no_conflict_when_only_one_source(self) -> None:
+        """No conflict when only one source has context info."""
+        detail: dict[str, object] = {}
+        now = datetime.now(UTC)
+        record = SourceModelRecord(
+            source="openrouter",
+            source_model_id="openai/gpt-4o",
+            observed_at=now,
+            raw_hash="abc",
+            raw_payload={},
+            normalized={},
+            display_name="GPT-4o",
+            context_window=128000,
+        )
+
+        conflicts = _detect_context_conflicts(detail, record, {})
+        assert "context_window" not in conflicts
+
+    def test_preserves_existing_conflicts(self) -> None:
+        """Existing conflicts are preserved when no new conflict detected."""
+        existing = {"some_other_field": {"value": "conflict"}}
+        detail: dict[str, object] = {"context_tokens": 128000}
+        now = datetime.now(UTC)
+        record = SourceModelRecord(
+            source="openrouter",
+            source_model_id="openai/gpt-4o",
+            observed_at=now,
+            raw_hash="abc",
+            raw_payload={},
+            normalized={},
+            display_name="GPT-4o",
+            context_window=130000,  # close enough
+        )
+
+        conflicts = _detect_context_conflicts(detail, record, existing)
+        assert "some_other_field" in conflicts
+        assert "context_window" not in conflicts
+
+
+class TestOpenrouterContextConflictIsRecorded:
+    @pytest.mark.asyncio()
+    async def test_conflict_recorded_in_canonical(self) -> None:
+        """test_openrouter_context_conflict_is_recorded"""
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await _run_migrations(db)
+            await _seed_model(db, "openai/gpt-4o", "GPT-4o")
+
+            # OpenRouter says context is 1M, local catalog says 128k
+            payload = _make_openrouter_payload(
+                _make_or_model(
+                    "openai/gpt-4o",
+                    name="GPT-4o",
+                    context_length=1_000_000,
+                ),
+            )
+            client = _MockHttpClient(payload)
+
+            from eggpool.catalog.cache import ModelCatalogCache
+
+            cache = ModelCatalogCache()
+            now_ts = datetime.now(UTC).timestamp()
+            cache._models["openai/gpt-4o"] = {
+                "model_id": "openai/gpt-4o",
+                "display_name": "GPT-4o",
+                "protocol": "openai",
+                "capabilities": {},
+                "source_metadata": {},
+                "first_seen_at": now_ts,
+                "last_seen_at": now_ts,
+                "discovered_limits": {},
+                "effective_limits": {
+                    "context_tokens": 128000,
+                    "input_tokens": 128000,
+                    "output_tokens": 16384,
+                    "enforce": True,
+                },
+            }
+            cache._provider_models[("openai/gpt-4o", "openai")] = dict(
+                cache._models["openai/gpt-4o"]
+            )
+
+            config = ModelInfoConfig()
+            service = ModelInfoService(config, db, cache, outbound_client=client)
+
+            # Create a due canonical row
+            now = datetime.now(UTC)
+            info = CanonicalModelInfo(
+                model_id="openai/gpt-4o",
+                status="partial",
+                summary="Test",
+                sparse=False,
+                detail={},
+                provenance={"sources": ["provider_catalog"]},
+                conflicts={},
+                first_seen_at=now - timedelta(days=1),
+                last_seen_at=now - timedelta(hours=1),
+                last_refreshed_at=now - timedelta(hours=1),
+                next_refresh_at=now - timedelta(minutes=1),
+            )
+            await service.repo.upsert_canonical(info)
+
+            result = await service.refresh_due_models()
+            assert result["refreshed"] + result["skipped"] == result["total"]
+
+            # Check that conflict was recorded
+            updated = await service.repo.get_canonical("openai/gpt-4o")
+            assert updated is not None
+            assert "context_window" in updated.conflicts
+            assert updated.conflicts["context_window"]["provider_catalog"] == 128000
+            assert updated.conflicts["context_window"]["openrouter"] == 1_000_000
+
+            # Check enrichment
+            assert "external_ids" in updated.detail
+            assert updated.detail["external_ids"]["openrouter"] == "openai/gpt-4o"
+            assert updated.detail["context_window_external"] == 1_000_000
+        finally:
+            await db.disconnect()
 
 
 class TestBuildSourceList:

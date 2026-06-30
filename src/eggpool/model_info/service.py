@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, cast
 
 from eggpool.errors import ModelInfoSourceFetchError
 from eggpool.model_info.dedup import canonical_needs_update
+from eggpool.model_info.identity import resolve_openrouter_record
 from eggpool.model_info.repository import ModelInfoRepository
 from eggpool.model_info.scheduler import ModelInfoRefreshScheduler
 from eggpool.model_info.sources.provider_catalog import ProviderCatalogSource
@@ -24,10 +26,7 @@ if TYPE_CHECKING:
     from eggpool.catalog.cache import ModelCatalogCache
     from eggpool.catalog.service import CatalogRefreshResult
     from eggpool.db.connection import Database
-    from eggpool.model_info.sources.openrouter import (
-        ModelInfoHttpClient,
-        OpenRouterModelInfoSource,
-    )
+    from eggpool.model_info.sources.openrouter import ModelInfoHttpClient
     from eggpool.models.config import ModelInfoConfig
 
 logger = logging.getLogger(__name__)
@@ -345,12 +344,16 @@ class ModelInfoService:
             )
 
             # Try OpenRouter identity resolution for this model
-            or_record = await _resolve_openrouter_record(
+            or_record = await resolve_openrouter_record(
                 model_id, self._repo, openrouter_indexed
             )
             if or_record is not None:
                 await self._persist_source_observation(or_record, model_id=model_id)
                 await self.record_source_success("openrouter")
+
+            # Enrich detail with OpenRouter fields when available
+            or_detail = _enrich_detail_from_record(detail, or_record)
+            conflicts = _detect_context_conflicts(detail, or_record, existing.conflicts)
 
             info = CanonicalModelInfo(
                 model_id=model_id,
@@ -359,10 +362,10 @@ class ModelInfoService:
                     model_id=model_id,
                     status=status,
                     sparse=sparse,
-                    detail=detail,
+                    detail=or_detail,
                 ),
                 sparse=sparse,
-                detail=detail,
+                detail=or_detail,
                 provenance={
                     **existing.provenance,
                     "sources": _build_source_list(
@@ -370,7 +373,7 @@ class ModelInfoService:
                     ),
                     "reconciled_at": now.isoformat(),
                 },
-                conflicts=existing.conflicts,
+                conflicts=conflicts,
                 first_seen_at=existing.first_seen_at,
                 last_seen_at=now,
                 last_refreshed_at=now,
@@ -397,9 +400,21 @@ class ModelInfoService:
         model_id: str | None = None,
         provider_id: str | None = None,
     ) -> None:
-        """Persist a source observation and its aliases."""
+        """Persist a source observation and its aliases.
+
+        Respects ``store_raw_observations`` config:
+        - When ``False``, stores ``{}`` in ``raw_json`` (normalized_json kept).
+        - When ``True``, stores raw payload bounded to 64 KiB; entries
+          exceeding the limit are replaced with a summary plus hash.
+        """
         resolved_model_id = model_id or record.model_id or record.source_model_id
         resolved_provider_id = provider_id or record.provider_id
+
+        # Optionally strip or bound raw payload before persisting
+        if not self._config.store_raw_observations:
+            record = _strip_raw_payload(record)
+        else:
+            record = _bound_raw_payload(record)
 
         await self._repo.upsert_observation(
             record,
@@ -624,34 +639,95 @@ class ModelInfoService:
         return detail
 
 
-async def _resolve_openrouter_record(
-    model_id: str,
-    repo: ModelInfoRepository,
-    openrouter_indexed: dict[str, SourceModelRecord],
-) -> SourceModelRecord | None:
-    """Resolve a local model_id to an OpenRouter source record.
+def _enrich_detail_from_record(
+    detail: dict[str, object],
+    record: SourceModelRecord | None,
+) -> dict[str, object]:
+    """Enrich canonical detail with OpenRouter-sourced fields.
 
-    Identity resolution rules (exact / curated only, no fuzzy matching):
-    1. Exact model_info_aliases row with source=openrouter wins.
-    2. Exact source_model_id == model_id match.
-    3. No match → return None.
+    OpenRouter fields are stored under explicit ``external_*`` keys so they
+    never overwrite provider-native values.  The existing ``display_name``
+    and ``context_tokens`` fields remain authoritative from the catalog.
     """
-    if not openrouter_indexed:
-        return None
+    if record is None:
+        return dict(detail)
 
-    # Rule 1: Check model_info_aliases for an exact openrouter alias
-    alias_strings = await repo.get_aliases_for_model(model_id, source="openrouter")
-    for alias_str in alias_strings:
-        record = openrouter_indexed.get(alias_str)
-        if record is not None:
-            return record
+    enriched = dict(detail)
 
-    # Rule 2: Exact source_model_id == model_id
-    direct = openrouter_indexed.get(model_id)
-    if direct is not None:
-        return direct
+    # External IDs
+    external_ids = dict(cast("dict[str, object]", enriched.get("external_ids", {})))
+    external_ids["openrouter"] = record.source_model_id
+    enriched["external_ids"] = external_ids
 
-    return None
+    # External context window (advisory only)
+    if record.context_window is not None:
+        enriched["context_window_external"] = record.context_window
+
+    # External max output tokens (advisory only)
+    if record.max_output_tokens is not None:
+        enriched["max_output_tokens_external"] = record.max_output_tokens
+
+    # External modalities (advisory only)
+    if record.modalities:
+        enriched["modalities_external"] = sorted(record.modalities)
+
+    # Pricing observation (advisory, never cost-calculation truth)
+    pricing_obs: dict[str, object] = {}
+    if record.input_price_per_1k is not None:
+        pricing_obs["input_price_per_1k"] = record.input_price_per_1k
+    if record.output_price_per_1k is not None:
+        pricing_obs["output_price_per_1k"] = record.output_price_per_1k
+    if pricing_obs:
+        enriched["pricing_observation"] = pricing_obs
+
+    # Display name from OpenRouter (non-authoritative override)
+    if record.display_name and record.display_name != record.source_model_id:
+        enriched["display_name_external"] = record.display_name
+
+    # Created timestamp (if present)
+    normalized = record.normalized
+    created_at = normalized.get("created_at")
+    if created_at is not None:
+        enriched["created_at_external"] = created_at
+
+    return enriched
+
+
+def _detect_context_conflicts(
+    detail: dict[str, object],
+    record: SourceModelRecord | None,
+    existing_conflicts: dict[str, object],
+) -> dict[str, object]:
+    """Detect and record conflicts between provider-native and OpenRouter metadata.
+
+    A conflict is recorded when both provider-local and OpenRouter values exist
+    for context_window and differ materially (>10% relative difference).
+    """
+    conflicts = dict(existing_conflicts)
+
+    if record is None:
+        return conflicts
+
+    local_ctx = detail.get("context_tokens")
+    or_ctx = record.context_window
+
+    if (
+        isinstance(local_ctx, (int, float))
+        and local_ctx > 0
+        and or_ctx is not None
+        and or_ctx > 0
+    ):
+        diff = abs(local_ctx - or_ctx)
+        relative = diff / max(local_ctx, or_ctx)
+        if relative > 0.10:
+            conflicts["context_window"] = {
+                "provider_catalog": local_ctx,
+                "openrouter": or_ctx,
+                "selected": "provider_catalog/effective_limit",
+                "reason": "local/provider effective limit wins for Eggpool display",
+            }
+
+    return conflicts
 
 
 def _build_source_list(
@@ -686,6 +762,89 @@ def _compute_source_backoff(source_name: str, failure_count: int = 0) -> datetim
     else:
         cooldown_minutes = 1440  # 24h cap
     return datetime.now(UTC) + timedelta(minutes=cooldown_minutes)
+
+
+_RAW_PAYLOAD_BOUND_BYTES = 65_536  # 64 KiB
+
+
+def _strip_raw_payload(record: SourceModelRecord) -> SourceModelRecord:
+    """Return a copy of *record* with raw_payload replaced by ``{}``.
+
+    Used when ``store_raw_observations`` is ``False``.
+    """
+    return SourceModelRecord(
+        source=record.source,
+        source_model_id=record.source_model_id,
+        observed_at=record.observed_at,
+        raw_hash=record.raw_hash,
+        raw_payload={},
+        normalized=record.normalized,
+        aliases=record.aliases,
+        provider_id=record.provider_id,
+        model_id=record.model_id,
+        display_name=record.display_name,
+        family=record.family,
+        context_window=record.context_window,
+        max_input_tokens=record.max_input_tokens,
+        max_output_tokens=record.max_output_tokens,
+        modalities=record.modalities,
+        supports_tools=record.supports_tools,
+        supports_reasoning=record.supports_reasoning,
+        input_price_per_1k=record.input_price_per_1k,
+        output_price_per_1k=record.output_price_per_1k,
+        benchmarks=record.benchmarks,
+        release_date=record.release_date,
+        license=record.license,
+        confidence=record.confidence,
+        sparse=record.sparse,
+        notes=record.notes,
+    )
+
+
+def _bound_raw_payload(record: SourceModelRecord) -> SourceModelRecord:
+    """Bound raw_payload size to ``_RAW_PAYLOAD_BOUND_BYTES``.
+
+    If the serialised payload exceeds the limit, replace it with a summary
+    dict containing selected fields and the original hash.
+    """
+    raw_json = json.dumps(record.raw_payload, sort_keys=True, default=str)
+    if len(raw_json.encode()) <= _RAW_PAYLOAD_BOUND_BYTES:
+        return record
+
+    bounded: dict[str, object] = {
+        "_summary": True,
+        "source_model_id": record.source_model_id,
+        "display_name": record.display_name,
+        "raw_hash": record.raw_hash,
+        "original_size_bytes": len(raw_json.encode()),
+    }
+    return SourceModelRecord(
+        source=record.source,
+        source_model_id=record.source_model_id,
+        observed_at=record.observed_at,
+        raw_hash=record.raw_hash,
+        raw_payload=bounded,
+        normalized=record.normalized,
+        aliases=record.aliases,
+        provider_id=record.provider_id,
+        model_id=record.model_id,
+        display_name=record.display_name,
+        family=record.family,
+        context_window=record.context_window,
+        max_input_tokens=record.max_input_tokens,
+        max_output_tokens=record.max_output_tokens,
+        modalities=record.modalities,
+        supports_tools=record.supports_tools,
+        supports_reasoning=record.supports_reasoning,
+        input_price_per_1k=record.input_price_per_1k,
+        output_price_per_1k=record.output_price_per_1k,
+        benchmarks=record.benchmarks,
+        release_date=record.release_date,
+        license=record.license,
+        confidence=record.confidence,
+        sparse=record.sparse,
+        notes=record.notes,
+    )
 
 
 def _generate_summary(
