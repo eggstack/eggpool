@@ -191,16 +191,16 @@ class ModelInfoRepository:
             "SELECT m.model_id FROM models m "
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM model_info_canonical c "
-            "  WHERE c.model_id = m.model_id"
+            "  WHERE c.model_id COLLATE NOCASE = m.model_id"
             ") LIMIT ?",
             (limit,),
         )
         return [row["model_id"] for row in rows]
 
     async def get_canonical(self, model_id: str) -> CanonicalModelInfo | None:
-        """Return one canonical record."""
+        """Return one canonical record (case-insensitive)."""
         row = await self._db.fetch_one(
-            "SELECT * FROM model_info_canonical WHERE model_id = ?",
+            "SELECT * FROM model_info_canonical WHERE model_id COLLATE NOCASE = ?",
             (model_id,),
         )
         if row is None:

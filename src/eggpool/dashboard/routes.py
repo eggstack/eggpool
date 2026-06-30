@@ -413,13 +413,23 @@ async def handle_model_detail(
     model_info_service = getattr(request.app.state, "model_info", None)
     from urllib.parse import unquote
 
+    from eggpool.routing.provider import parse_model_provider
+
     decoded_id = unquote(model_id)
+    # The {model_id:path} route accepts provider-suffixed IDs like
+    # ``gpt-4o/openai``.  Strip the suffix so the lookup matches the
+    # unsuffixed canonical key used by the catalog and stats layer.
+    config = getattr(request.app.state, "config", None)
+    known_providers: set[str] | None = None
+    if config is not None:
+        known_providers = set(config.providers)
+    lookup_id, _provider_suffix = parse_model_provider(decoded_id, known_providers)
     info = None
     if model_info_service is not None:
         try:
-            info = await model_info_service.get_summary(decoded_id)
+            info = await model_info_service.get_summary(lookup_id)
             if info is None:
-                info = await model_info_service.ensure_canonical(decoded_id)
+                info = await model_info_service.ensure_canonical(lookup_id)
         except Exception:
             info = None
     theme_css, _, current_theme, available = _get_theme_data(request, theme)

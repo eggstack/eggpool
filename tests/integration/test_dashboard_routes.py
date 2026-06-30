@@ -785,4 +785,61 @@ async def test_model_detail_page_with_provider_suffix(
     # Provider-suffixed IDs contain / which needs URL encoding
     response = client.get("/models/gpt-4o/openai")
     assert response.status_code == 200
+    # The page heading uses the original decoded ID for display,
+    # but the lookup resolves to the unsuffixed model.
     assert "gpt-4o/openai" in response.text
+
+
+@pytest.mark.asyncio()
+async def test_model_detail_page_provider_suffix_resolves_to_base_model(
+    migrated_app: FastAPI,
+) -> None:
+    """Provider-suffixed IDs should resolve to the unsuffixed model."""
+    from fastapi.testclient import TestClient
+
+    # Seed a model in the models table and give it a canonical row
+    db = migrated_app.state.db
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT OR IGNORE INTO models (model_id, display_name) VALUES (?, ?)",
+            ("base-model", "Base Model"),
+        )
+    mi = migrated_app.state.model_info
+    await mi.ensure_canonical("base-model")
+
+    client = TestClient(migrated_app)
+    # Provider-suffixed: should resolve to "base-model", not create
+    # a separate "base-model/someprovider" row.
+    response = client.get("/models/base-model/someprovider")
+    assert response.status_code == 200
+    body = response.text
+    # The heading displays the original decoded ID
+    assert "base-model/someprovider" in body
+    # But the info should come from the "base-model" canonical row,
+    # not from a new "base-model/someprovider" row.
+    assert "Provider / Callability" in body
+
+
+@pytest.mark.asyncio()
+async def test_model_detail_page_case_insensitive_lookup(
+    migrated_app: FastAPI,
+) -> None:
+    """Case variations in the model ID should resolve to the same row."""
+    from fastapi.testclient import TestClient
+
+    db = migrated_app.state.db
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT OR IGNORE INTO models (model_id, display_name) VALUES (?, ?)",
+            ("my-model", "My Model"),
+        )
+    mi = migrated_app.state.model_info
+    await mi.ensure_canonical("my-model")
+
+    client = TestClient(migrated_app)
+    # Uppercase variant should still find the lowercase row
+    response = client.get("/models/My-Model")
+    assert response.status_code == 200
+    body = response.text
+    # The page should render sections (not "Model info not available")
+    assert "Provider / Callability" in body
