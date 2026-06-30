@@ -16,18 +16,16 @@ Design constraints (from the phase-5 plan):
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import logging
-import time
-from collections import OrderedDict
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, cast
 
 import httpx
 
 from eggpool.errors import ModelInfoSourceFetchError
+from eggpool.model_info.sources.base import SourceTTLCache
 from eggpool.model_info.types import SourceModelRecord
 
 if TYPE_CHECKING:
@@ -37,45 +35,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# TTL cache for the raw Hugging Face catalog
-# ---------------------------------------------------------------------------
-
-
-class _HFTTLCache:
-    """TTL cache indexed by source model ID."""
-
-    def __init__(self, ttl_seconds: int, max_entries: int = 4096) -> None:
-        self._ttl = ttl_seconds
-        self._max_entries = max_entries
-        self._data: OrderedDict[str, dict[str, object]] = OrderedDict()
-        self._fetched_at: float = 0.0
-        self._lock: asyncio.Lock = asyncio.Lock()
-
-    @property
-    def lock(self) -> asyncio.Lock:
-        return self._lock
-
-    @property
-    def is_fresh(self) -> bool:
-        if self._fetched_at == 0.0:
-            return False
-        return (time.monotonic() - self._fetched_at) < self._ttl
-
-    def store(self, entries: dict[str, dict[str, object]]) -> None:
-        self._data = OrderedDict(entries)
-        self._fetched_at = time.monotonic()
-        self._evict_to_capacity()
-
-    def _evict_to_capacity(self) -> None:
-        while len(self._data) > self._max_entries:
-            self._data.popitem(last=False)
-
-    def get(self, key: str) -> dict[str, object] | None:
-        return self._data.get(key)
-
-    def snapshot(self) -> dict[str, dict[str, object]]:
-        return dict(self._data)
+_HFTTLCache = SourceTTLCache
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +111,7 @@ class HuggingFaceSource:
 
         # Store in cache
         async with self._cache.lock:
-            self._cache.store({model_id: payload})
+            self._cache.upsert(model_id, payload)
 
         now = datetime.now(UTC)
         return _parse_hf_entry(model_id, payload, now)

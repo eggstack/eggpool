@@ -114,6 +114,26 @@ class _MockHttpClient:
         )
 
 
+class _SequenceHttpClient:
+    """Mock HTTP client that returns one response per request."""
+
+    def __init__(self, responses: list[dict]) -> None:
+        self._responses = responses
+        self.call_count = 0
+
+    async def get(
+        self, url: str, *, headers: dict[str, str] | None = None
+    ) -> httpx.Response:
+        del headers
+        response = self._responses[self.call_count]
+        self.call_count += 1
+        return httpx.Response(
+            status_code=200,
+            json=response,
+            request=httpx.Request("GET", url),
+        )
+
+
 def _make_aa_payload(*models: dict) -> dict:
     """Build an Artificial Analysis-style /models response."""
     return {"data": list(models)}
@@ -561,6 +581,28 @@ class TestHuggingFaceSource:
         records = await source.fetch_all()
         assert len(records) == 1
         assert records[0].source_model_id == "test/model"
+
+    @pytest.mark.asyncio()
+    async def test_fetch_one_keeps_multiple_cached_models(self) -> None:
+        """Distinct fetch_one calls accumulate cached entries."""
+        client = _SequenceHttpClient(
+            [
+                _make_hf_model("org/model-a", name="Model A"),
+                _make_hf_model("org/model-b", name="Model B"),
+            ]
+        )
+        config = ModelInfoSourceConfig(api_key="hf-key")
+        source = HuggingFaceSource(config=config, client=client)
+
+        await source.fetch_one("org/model-a")
+        await source.fetch_one("org/model-b")
+
+        records = await source.fetch_all()
+        assert {record.source_model_id for record in records} == {
+            "org/model-a",
+            "org/model-b",
+        }
+        assert client.call_count == 2
 
     def test_name_is_huggingface(self) -> None:
         """Source name is 'huggingface'."""

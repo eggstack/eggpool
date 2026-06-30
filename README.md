@@ -15,6 +15,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Per-account outbound proxy support ([pproxy](https://pypi.org/project/pproxy/) — SOCKS5, HTTP, Shadowsocks)
 - Tracks requests, tokens, latency, errors, and estimated costs in SQLite
 - Multi-page dashboard with 50+ themes, reliability, routing, and runtime views
+- Model metadata enrichment from provider catalogs, OpenRouter, Artificial Analysis, and Hugging Face
 - Designed for lightweight deployments (Raspberry Pi, SBCs)
 - Transparent protocol transcoding between OpenAI and Anthropic request formats
 
@@ -90,6 +91,7 @@ Use `eggpool connect` for interactive provider setup. See [docs/providers.md](do
 | `[dashboard]` | Dashboard toggle, theme, refresh interval |
 | `[providers.*]` | Provider configs with accounts and routing priority |
 | `[network]` | Outbound transport, DNS cache |
+| `[model_info]` | Optional model metadata refresh, aliases, overrides, and external source settings |
 | `[transcoder]` | Protocol transcoding between OpenAI and Anthropic formats |
 
 Full config reference: [`config.example.toml`](config.example.toml) | [docs/providers.md](docs/providers.md)
@@ -129,8 +131,12 @@ See [docs/transcoding.md](docs/transcoding.md) for the full translation table an
 | `GET` | `/v1/healthz` | Liveness check |
 | `GET` | `/v1/readyz` | Readiness check |
 | `GET` | `/api/backoffs` | Active upstream-derived account backoffs (`?now=<epoch>` for reproducible snapshots) |
+| `GET` | `/api/model-info` | Enriched model metadata summaries |
+| `GET` | `/api/model-info/{model_id}` | Enriched metadata detail for one model |
+| `GET` | `/api/model-info/sources` | Model-info source health |
+| `POST` | `/api/model-info/refresh` | Trigger model-info refresh (auth-gated) |
 
-When `[dashboard].enabled = true`, a multi-page dashboard is served at `/` with request stats, latency metrics, provider health, and more. Stats API available under `/api/stats/*`.
+When `[dashboard].enabled = true`, a multi-page dashboard is served at `/` with request stats, latency metrics, provider health, model-info detail pages, and more. Stats API available under `/api/stats/*`.
 
 ## Documentation
 
