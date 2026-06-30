@@ -205,7 +205,10 @@ def _prepare_transcode_preflight(
         client_protocol=client_protocol,
         upstream_protocol=upstream_protocol,
     )
-    translated, warnings = transcoder.encode_request(payload, transcode_context)
+    _features = getattr(transcoder_policy, "features", None)
+    translated, warnings = transcoder.encode_request(
+        payload, transcode_context, features=_features
+    )
     return TranscodePreflightResult(
         upstream_protocol=cast("ProtocolName", upstream_protocol),
         translated_payload=translated,

@@ -321,7 +321,6 @@ class TestDroppedFields:
             "frequency_penalty",
             "logprobs",
             "top_logprobs",
-            "response_format",
             "seed",
             "user",
             "logit_bias",

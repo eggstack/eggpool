@@ -27,6 +27,18 @@ The `[transcoder]` block is optional and rarely needs to be touched:
 loss_policy = "warn"
 # Optional routing preference: native-protocol accounts outrank transcodable ones
 prefer_native = true
+
+[transcoder.features]
+# Bidirectional tool calling translation (default: false)
+tools = false
+# Image / document content parts (default: false)
+vision = false
+# Extended thinking blocks ↔ reasoning_content (default: false)
+thinking = false
+# OpenAI response_format / json_schema coercion (default: false)
+structured_outputs = false
+# Anthropic-only primitives explicit handling (default: false)
+anthropic_primitives = false
 ```
 
 At boot you'll see:
@@ -67,10 +79,14 @@ When set, EggPool boots with a `WARNING` and reverts to the pre-default behaviou
 | `n` | — | Dropped when > 1, warning emitted |
 | `logprobs` | — | Dropped, warning emitted |
 | `top_logprobs` | — | Dropped, warning emitted |
-| `response_format` | — | Dropped (json_schema mode), warning emitted |
+| `response_format` | `system` (appended) | Feature-gated: `response_format: json_object` appends JSON instruction to system prompt; `json_schema` appends schema + instruction; `strict: true` adds precision note. Warning `response_format_to_system_prompt` |
+| `reasoning_effort` | `thinking` | Feature-gated: `low` → 1024 tokens, `medium` → 4096, `high` → 16384 budget_tokens |
 | `seed` | — | Dropped, warning emitted |
 | `user` | — | Dropped, warning emitted |
 | `logit_bias` | — | Dropped, warning emitted |
+| `messages[user].content[image_url]` | `messages[user].content[image]` | Feature-gated: base64 data URI → `{type: "base64", media_type, data}`; URL → `{type: "url", url}`; `detail` dropped |
+| `messages[user].content[input_audio]` | — | Dropped, warning emitted |
+| `messages[user].content[file]` | — | Dropped, warning emitted (file storage not bridged) |
 | `tools` (function-shape) | `tools` (Anthropic-shape) | Translated field-by-field (see Tool-Use Transcoding below) |
 | `tool_choice` | `tool_choice` | Translated between string and object shapes |
 | `parallel_tool_calls: true` | omitted | Anthropic defaults to allowing parallel calls |
@@ -93,11 +109,18 @@ When set, EggPool boots with a `WARNING` and reverts to the pre-default behaviou
 | `max_tokens` | `max_tokens` | Passed through |
 | `stop_sequences` | `stop` | Single → string, multi → list |
 | `metadata.user_id` | `user` | Mapped to OpenAI `user` field |
-| `top_k` | — | Dropped, warning emitted |
-| `thinking` | — | Dropped, warning emitted |
+| `top_k` | — | Dropped, warning `top_k_dropped` emitted |
+| `cache_control` | — | Dropped, warning `cache_control_dropped` emitted |
+| `thinking` | — | Dropped, warning emitted (see Extended Thinking below) |
+| `context_management` | — | Dropped, warning emitted (experimental) |
+| `container` | — | Dropped, warning emitted (experimental) |
+| `mcp_servers` | — | Dropped, warning emitted (experimental) |
 | `tools` (Anthropic-shape) | `tools` (function-shape) | Translated field-by-field (see Tool-Use Transcoding below) |
 | `tool_choice` | `tool_choice` | Translated between object and string shapes |
-| `tools[].cache_control` | — | Dropped, warning emitted; OpenAI auto-caches without explicit hints |
+| `tools[].cache_control` | — | Dropped with `cache_control_dropped` warning |
+| `messages[assistant].content[thinking]` | `messages[assistant].reasoning_content` | Feature-gated: thinking text mapped; signature dropped with `thinking_signature_dropped` warning |
+| `messages[assistant].content[image]` | `messages[user].content[image_url]` | Feature-gated: base64 → data URI; URL → `image_url.url` |
+| `messages[user].content[document]` | `messages[user].content[file]` | Feature-gated: PDF base64 → `file` with data URI; URL dropped; non-PDF dropped |
 | `messages[assistant].content[].tool_use` | `messages[assistant].tool_calls[]` | Translated; id map mints new client ids |
 | `messages[user].content[].tool_result` | `messages[tool]` | Translated; `tool_use_id` ↔ `tool_call_id` via id map |
 | `messages[].content[non-text]` | — | Non-text blocks dropped, warning emitted |
@@ -112,6 +135,9 @@ When set, EggPool boots with a `WARNING` and reverts to the pre-default behaviou
 | `model` | `model` | Passed through |
 | `content[].text` | `message.content` | Text blocks concatenated |
 | `content[].tool_use` | `message.tool_calls[]` | Translated; id map mints new client ids |
+| `content[].thinking` | `message.reasoning_content` | Feature-gated: thinking text mapped; signature dropped with `thinking_signature_dropped` warning |
+| `content[].redacted_thinking` | — | Dropped, warning emitted |
+| `content[].image` | `message.content[image_url]` | Feature-gated: base64 → data URI; URL → `image_url.url` |
 | `stop_reason` | `choices[].finish_reason` | Mapped (see table below) |
 | `usage.input_tokens` | `usage.prompt_tokens` | Direct mapping |
 | `usage.output_tokens` | `usage.completion_tokens` | Direct mapping |
@@ -125,6 +151,7 @@ When set, EggPool boots with a `WARNING` and reverts to the pre-default behaviou
 | `model` | `model` | Passed through |
 | `message.content` | `content[].text` | Wrapped in text block |
 | `message.tool_calls[]` | `content[].tool_use` | Translated; id map mints new upstream ids |
+| `message.reasoning_content` | `content[].thinking` | Feature-gated: reasoning text mapped to thinking block |
 | `choices[].finish_reason` | `stop_reason` | Mapped (see table below) |
 | `usage.prompt_tokens` | `usage.input_tokens` | Direct mapping |
 | `usage.completion_tokens` | `usage.output_tokens` | Direct mapping |
@@ -209,7 +236,7 @@ Whenever the map mints a new id, the transcoder appends a `tool_call_id_translat
 | `messages[i].role == "assistant"`, `tool_calls[j].function.name`, `function.arguments` | `tool_use.name`, `tool_use.input` | `arguments` JSON-parsed into an object; on parse failure the raw string is preserved as `{"__raw_arguments__": "<string>"}` and a `malformed_tool_arguments` warning is emitted |
 | `messages[i].role == "assistant"`, mixed text + `tool_calls` | `content: [{type: "text", ...}, {type: "tool_use", ...}, ...]` | Anthropic permits mixed text + tool_use in one assistant turn |
 | `messages[i].role == "tool"`, `content: str`, `tool_call_id` | `messages[i].role == "user"`, `content: [{type: "tool_result", tool_use_id, content: <str>, is_error: <bool>}]` | `tool_use_id` resolved via `id_map.to_upstream(call_id)` |
-| `messages[i].role == "tool"`, `content: list` (mixed text/image) | `tool_result` with joined text; image parts dropped | Warning `tool_result_image_dropped` (image-tool-result translation lands in phase 6.2) |
+| `messages[i].role == "tool"`, `content: list` (mixed text/image) | `tool_result` with joined text; image parts dropped | Warning `tool_result_image_dropped` |
 | `messages[i].role == "tool"`, `is_error: true` | `tool_result.is_error: true` | Forwarded verbatim |
 
 | Anthropic input | OpenAI output | Notes |
@@ -268,7 +295,7 @@ Anthropic's `pause_turn` `stop_reason` signals that the model paused mid-turn (t
 }
 ```
 
-OpenAI clients detect the sentinel by name (`__eggpool_pause_turn__`) and resume the turn with the same `tool_use_id` they received from the original Anthropic `content_block_start`. A phase 6.5 follow-up will refine this into a first-class surface on the streaming transcoder; for now the inline sentinel is emitted on both streaming and non-streaming paths.
+OpenAI clients detect the sentinel by name (`__eggpool_pause_turn__`) and resume the turn with the same `tool_use_id` they received from the original Anthropic `content_block_start`. The sentinel is emitted on both streaming and non-streaming paths, with a `pause_turn` loss warning appended in each case.
 
 A `pause_turn` loss warning is also appended to `TranscodeContext.loss_warnings` whenever the sentinel is synthesized, so operators can audit how often pause-and-resume flows happen against their upstreams.
 
@@ -276,9 +303,21 @@ A `pause_turn` loss warning is also appended to `TranscodeContext.loss_warnings`
 
 OpenAI's `stream_options.include_usage` flag has no Anthropic analogue, so the wrapper object is dropped with a `dropped_field` warning when transcoding to an Anthropic upstream. The single field inside (`include_usage: bool`) is significant for usage accounting, so the transcoder lifts it onto `TranscodeContext.request_include_usage` before the streaming transcoder runs. The streaming transcoder reads `request_include_usage` from the context to decide whether to forward upstream usage chunks to the OpenAI client. The reverse direction (Anthropic → OpenAI) does not need this — OpenAI clients receive usage only when `stream_options.include_usage` was set on the request, which it wasn't.
 
-#### Loss-warning kinds (tool-use)
+#### Thinking streaming (Phase 6.3)
 
-Phase 6.1 introduced the following new `kind` values on `TranscodeContext.loss_warnings`:
+Anthropic `thinking_delta` events translate to OpenAI `delta.reasoning` strings. Order is preserved: thinking comes before tool_use comes before text in Anthropic, and `reasoning_content` comes before `content` in OpenAI.
+
+| Upstream event | Emitted client delta |
+|---|---|
+| `content_block_start` (`type: thinking`) | (nothing — block is started lazily) |
+| `content_block_delta` (`type: thinking_delta`, `thinking: <text>`) | `delta.reasoning: <text>` |
+| `content_block_stop` (thinking index) | (nothing) |
+
+Thinking deltas and text deltas are emitted independently — a stream may contain both `delta.reasoning` and `delta.content` chunks on the same request.
+
+#### Loss-warning kinds
+
+The following `kind` values may appear on `TranscodeContext.loss_warnings`:
 
 | `kind` | Emitted when | Example fields |
 |---|---|---|
@@ -294,7 +333,15 @@ Phase 6.1 introduced the following new `kind` values on `TranscodeContext.loss_w
 | `cache_control_dropped` | Anthropic `tools[].cache_control` was dropped during Anthropic → OpenAI translation | `field` |
 | `pause_turn` | `stop_reason: pause_turn` was mapped to `finish_reason: tool_calls` plus a sentinel tool_call | `field`, `to` |
 | `non_text_content_dropped` | A non-text content part inside a translated message was dropped | `field` |
-| `tool_result_inferred` | A `tool_use_id` was inferred from request context when the client did not supply one | `field`, optional `from` |
+| `image_unsupported_format` | An image URL had an unrecognised scheme (not `data:` or `https:`) | `field` |
+| `image_too_large` | An image exceeded the 5 MB size limit | `field`, `size` |
+| `pdf_too_large` | A PDF document exceeded the 32 MB size limit | `field`, `size` |
+| `document_url_dropped` | An Anthropic document with a URL source was dropped (OpenAI has no PDF URL intake) | `field` |
+| `document_unsupported_media` | An Anthropic document had a non-PDF media type and was dropped | `field`, `media_type` |
+| `thinking_signature_dropped` | An Anthropic thinking block's cryptographic signature was dropped during translation | `field` |
+| `reasoning_content_dropped` | A thinking/reasoning content block was dropped because the feature was disabled | `field` |
+| `response_format_to_system_prompt` | An OpenAI `response_format` was coerced to a system-prompt instruction | `field` |
+| `top_k_dropped` | Anthropic `top_k` was dropped (OpenAI has no top-k sampling knob) | `field` |
 
 The complete catalogue lives in `eggpool.transcoder.LOSS_WARNING_KINDS`.
 
@@ -401,12 +448,20 @@ Every loss warning is a structured dict with at minimum `kind` and `field`. The 
 | `invalid_tool_choice` | A `tool_choice` value could not be mapped to the target shape | `{"kind": "invalid_tool_choice", "field": "tool_choice"}` |
 | `unsupported_tool_type` | A `tools[i].type` other than `"function"` was dropped | `{"kind": "unsupported_tool_type", "field": "tools[].type"}` |
 | `empty_tool_use_block` | Anthropic `stop_reason: tool_use` produced zero tool_use blocks | `{"kind": "empty_tool_use_block", "field": "content[].tool_use"}` |
-| `tool_result_image_dropped` | Image content inside a `tool_result` block was dropped (phase 6.2 will translate) | `{"kind": "tool_result_image_dropped", "field": "messages[tool].content"}` |
+| `tool_result_image_dropped` | Image content inside a `tool_result` block was dropped | `{"kind": "tool_result_image_dropped", "field": "messages[tool].content"}` |
 | `tool_result_error_passthrough` | Anthropic `tool_result.is_error` was forwarded as OpenAI `tool` content + warning | `{"kind": "tool_result_error_passthrough", "field": "tool_result.is_error"}` |
 | `cache_control_dropped` | Anthropic `tools[].cache_control` was dropped during Anthropic → OpenAI translation | `{"kind": "cache_control_dropped", "field": "tools[].cache_control"}` |
 | `pause_turn` | `stop_reason: pause_turn` was mapped to `finish_reason: tool_calls` plus a sentinel tool_call | `{"kind": "pause_turn", "field": "stop_reason", "to": "tool_calls"}` |
 | `non_text_content_dropped` | A non-text content part inside a translated message was dropped | `{"kind": "non_text_content_dropped", "field": "messages[assistant].content"}` |
-| `tool_result_inferred` | A `tool_use_id` was inferred from request context when the client did not supply one | `{"kind": "tool_result_inferred", "field": "tool_use_id"}` |
+| `image_unsupported_format` | An image URL had an unrecognised scheme (not `data:` or `https:`) | `{"kind": "image_unsupported_format", "field": "messages[user].content[image_url]"}` |
+| `image_too_large` | An image exceeded the 5 MB size limit | `{"kind": "image_too_large", "field": "...", "size": 6291456}` |
+| `pdf_too_large` | A PDF document exceeded the 32 MB size limit | `{"kind": "pdf_too_large", "field": "...", "size": 33554432}` |
+| `document_url_dropped` | An Anthropic document with a URL source was dropped (OpenAI has no PDF URL intake) | `{"kind": "document_url_dropped", "field": "messages[user].content[document]"}` |
+| `document_unsupported_media` | An Anthropic document had a non-PDF media type and was dropped | `{"kind": "document_unsupported_media", "field": "...", "media_type": "text/html"}` |
+| `thinking_signature_dropped` | An Anthropic thinking block's cryptographic signature was dropped during translation | `{"kind": "thinking_signature_dropped", "field": "content[].thinking"}` |
+| `reasoning_content_dropped` | A thinking/reasoning content block was dropped because the feature was disabled | `{"kind": "reasoning_content_dropped", "field": "content[].thinking"}` |
+| `response_format_to_system_prompt` | An OpenAI `response_format` was coerced to a system-prompt instruction | `{"kind": "response_format_to_system_prompt", "field": "response_format"}` |
+| `top_k_dropped` | Anthropic `top_k` was dropped (OpenAI has no top-k sampling knob) | `{"kind": "top_k_dropped", "field": "top_k"}` |
 
 Additional context fields that may appear:
 
@@ -433,6 +488,12 @@ The complete catalogue lives in `eggpool.transcoder.LOSS_WARNING_KINDS`.
 | `tools[].cache_control` → OpenAI | `cache_control_dropped` | OpenAI auto-caches without explicit hints |
 | `function_call` / `functions` (deprecated OpenAI API) | `dropped_field` | Deprecated; clients should migrate to `tools` |
 | Tool-call id rewritten (`call_…` ↔ `toolu_…`) | `tool_call_id_translated` | Map is per-request, never collides across requests |
+| `reasoning_effort` → Anthropic `thinking` budget_tokens | `lossy_mapping` | Heuristic mapping (low→1024, medium→4096, high→16384) |
+| Thinking block signature → OpenAI | `thinking_signature_dropped` | Cryptographic receipt cannot be re-fed to OpenAI |
+| `response_format: json_object` → Anthropic system prompt | `response_format_to_system_prompt` | Best-effort coercion; Anthropic does not enforce JSON schema |
+| Image `input_audio` / `file` → Anthropic | `dropped_field` | No Anthropic equivalent for OpenAI audio/file parts |
+| Anthropic `document` (non-PDF) → OpenAI | `document_unsupported_media` | OpenAI file intake limited to PDF |
+| Anthropic `document` (URL) → OpenAI | `document_url_dropped` | OpenAI has no PDF URL intake |
 
 ## Performance Characteristics
 
@@ -459,23 +520,23 @@ Lower `max_entries` to trade catalog completeness for steady-state RSS on memory
 
 ## Known Limitations
 
-1. **Tool calling translated; vision / thinking / structured outputs deferred.** As of phase 6.1, tool use and function calling are translated in both directions for streaming and non-streaming requests (see Tool-Use Transcoding). Vision / image content, extended thinking, structured outputs (`response_format` with `json_schema`), PDF / document input, and audio input are not yet translated; these features are dropped with warnings. They land in subsequent phase 6 sub-phases.
+1. **Headers preserved verbatim.** Upstream response headers are passed through to the client without translation. Some Anthropic-specific headers (e.g., `anthropic-ratelimit-*`) may leak to OpenAI clients. This is cosmetic and harmless.
 
-2. **Headers preserved verbatim.** Upstream response headers are passed through to the client without translation. Some Anthropic-specific headers (e.g., `anthropic-ratelimit-*`) may leak to OpenAI clients. This is cosmetic and harmless.
+2. **All-or-nothing per deployment.** When `enabled = true`, transcoding applies to every account. Per-account opt-out is not supported in v1.
 
-3. **All-or-nothing per deployment.** When `enabled = true`, transcoding applies to every account. Per-account opt-out is not supported in v1.
+3. **No partial translation.** If a request contains both translatable and non-translatable features (e.g., text + vision content), the entire request is translated. Non-translatable request parts are dropped with warnings — the transcoder refuses the request only when `loss_policy = "reject"`.
 
-4. **No partial translation.** If a request contains both translatable and non-translatable features (e.g., text + vision content), the entire request is translated. Non-translatable request parts are dropped with warnings — the transcoder refuses the request only when `loss_policy = "reject"`.
+4. **`loss_policy = "reject"` is opt-in and strict for requests.** Any single request translation loss warning causes a 400 response before upstream dispatch. This can be surprising — use warn mode first to audit.
 
-5. **`loss_policy = "reject"` is opt-in and strict for requests.** Any single request translation loss warning causes a 400 response before upstream dispatch. This can be surprising — use warn mode first to audit.
+5. **Anthropic error types are best-effort.** The error type mapping covers the common cases but not every edge case. Unrecognised error types map to `api_error` (Anthropic) or `invalid_request_error` (OpenAI).
 
-6. **Anthropic error types are best-effort.** The error type mapping covers the common cases but not every edge case. Unrecognised error types map to `api_error` (Anthropic) or `invalid_request_error` (OpenAI).
+6. **Usage values are upstream-authoritative.** If the upstream reports unusual usage (e.g., negative cache tokens), the transcoder passes them through. There is no sanitisation.
 
-7. **Usage values are upstream-authoritative.** If the upstream reports unusual usage (e.g., negative cache tokens), the transcoder passes them through. There is no sanitisation.
+7. **Tool-call id remapping is opaque to clients.** Every cross-protocol tool call has its id rewritten (`call_…` ↔ `toolu_…`) by the `id_map`. Clients that compare ids across turns see the rewritten id, not the original. The mapping is per-request so concurrent requests never collide.
 
-8. **Tool-call id remapping is opaque to clients.** Every cross-protocol tool call has its id rewritten (`call_…` ↔ `toolu_…`) by the `id_map`. Clients that compare ids across turns see the rewritten id, not the original. The mapping is per-request so concurrent requests never collide.
+8. **`pause_turn` is surfaced as a sentinel tool call.** Anthropic's `pause_turn` stop_reason becomes `finish_reason: "tool_calls"` plus a synthetic `__eggpool_pause_turn__` tool_call entry. OpenAI clients detect the pause by name and resume with the same `tool_use_id`.
 
-9. **`pause_turn` is surfaced as a sentinel tool call.** Anthropic's `pause_turn` stop_reason becomes `finish_reason: "tool_calls"` plus a synthetic `__eggpool_pause_turn__` tool_call entry. OpenAI clients detect the pause by name and resume with the same `tool_use_id`. The sentinel is a phase 6.1 placeholder; phase 6.5 will refine the surface.
+9. **Structured outputs are best-effort.** Anthropic does not enforce JSON-schema-constrained generation natively. The transcoder's `response_format` → system-prompt coercion is best-effort. Operators who need strict guarantees should run an Anthropic-native client.
 
 ## Troubleshooting
 

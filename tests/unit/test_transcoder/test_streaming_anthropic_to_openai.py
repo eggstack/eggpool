@@ -23,6 +23,9 @@ def _parse_sse_frames(raw: bytes) -> list[dict[str, Any]]:
                 event = line[7:].decode()
             elif line.startswith(b"data: "):
                 data = line[6:].decode()
+        if data == "[DONE]":
+            frames.append({"event": event, "data": data, "done": True})
+            continue
         frames.append({"event": event, "data": data})
     return frames
 
@@ -807,3 +810,104 @@ class TestToolUseStreaming:
         )
 
         assert context.id_map.to_client("toolu_input_1") is not None
+
+
+class TestPauseTurnSentinel:
+    @pytest.mark.asyncio
+    async def test_pause_turn_emits_sentinel_tool_call(self) -> None:
+        from eggpool.transcoder.context import TranscodeContext
+
+        context = TranscodeContext(
+            request_id="req-test",
+            client_protocol="openai",
+            upstream_protocol="anthropic",
+        )
+        transcoder = AnthropicToOpenAIStreaming(transcode_context=context)
+        await transcoder.feed(
+            _anthropic_sse("message_start", message_id="msg-1", model="claude-3")
+        )
+        raw = await transcoder.feed(
+            _anthropic_sse("message_delta", stop_reason="pause_turn")
+        )
+
+        combined = b"".join(raw)
+        frames = _parse_sse_frames(combined)
+
+        tool_call_frames = []
+        finish_frames = []
+        for f in frames:
+            if f.get("done"):
+                continue
+            data = json.loads(f["data"]) if f["data"] else {}
+            choices = data.get("choices", [])
+            if choices:
+                delta = choices[0].get("delta", {})
+                if "tool_calls" in delta:
+                    tool_call_frames.append(data)
+                if choices[0].get("finish_reason") is not None:
+                    finish_frames.append(data)
+
+        assert len(tool_call_frames) >= 1, (
+            "Expected at least one tool_call delta for pause_turn sentinel"
+        )
+        first_tc = tool_call_frames[0]["choices"][0]["delta"]["tool_calls"][0]
+        assert first_tc["type"] == "function"
+        assert first_tc["function"]["name"] == "__eggpool_pause_turn__"
+        assert first_tc["id"].startswith("call_")
+
+        assert len(finish_frames) == 1
+        assert finish_frames[0]["choices"][0]["finish_reason"] == "tool_calls"
+
+    @pytest.mark.asyncio
+    async def test_pause_turn_appends_loss_warning(self) -> None:
+        from eggpool.transcoder.context import TranscodeContext
+
+        context = TranscodeContext(
+            request_id="req-test",
+            client_protocol="openai",
+            upstream_protocol="anthropic",
+        )
+        transcoder = AnthropicToOpenAIStreaming(transcode_context=context)
+        await transcoder.feed(
+            _anthropic_sse("message_start", message_id="msg-1", model="claude-3")
+        )
+        await transcoder.feed(_anthropic_sse("message_delta", stop_reason="pause_turn"))
+
+        pause_warnings = [
+            w for w in context.loss_warnings if w.get("kind") == "pause_turn"
+        ]
+        assert len(pause_warnings) == 1
+        assert pause_warnings[0]["to"] == "tool_calls"
+
+    @pytest.mark.asyncio
+    async def test_pause_turn_arguments_are_empty_json(self) -> None:
+        from eggpool.transcoder.context import TranscodeContext
+
+        context = TranscodeContext(
+            request_id="req-test",
+            client_protocol="openai",
+            upstream_protocol="anthropic",
+        )
+        transcoder = AnthropicToOpenAIStreaming(transcode_context=context)
+        await transcoder.feed(
+            _anthropic_sse("message_start", message_id="msg-1", model="claude-3")
+        )
+        raw = await transcoder.feed(
+            _anthropic_sse("message_delta", stop_reason="pause_turn")
+        )
+
+        combined = b"".join(raw)
+        frames = _parse_sse_frames(combined)
+
+        for f in frames:
+            if f.get("done"):
+                continue
+            data = json.loads(f["data"]) if f["data"] else {}
+            choices = data.get("choices", [])
+            if choices:
+                delta = choices[0].get("delta", {})
+                tc_list = delta.get("tool_calls", [])
+                for tc in tc_list:
+                    func = tc.get("function", {})
+                    if func.get("arguments"):
+                        assert json.loads(func["arguments"]) == {}

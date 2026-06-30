@@ -22,10 +22,10 @@ Operators can enable any combination.
 | # | Sub-phase | Plan section | Status |
 |---|---|---|---|
 | 6.1 | Tool use / function calling | [§ 1](#1-tool-use--function-calling) | ✅ Implemented 2026-06-30 (`plans/tooltranscoding.md`) |
-| 6.2 | Vision / image input | [§ 2](#2-vision--image-input) | Pending |
-| 6.3 | Extended thinking / reasoning | [§ 3](#3-extended-thinking--reasoning) | Pending |
-| 6.4 | Structured outputs | [§ 4](#4-structured-outputs) | Pending |
-| 6.5 | Anthropic primitives | [§ 5](#5-anthropic-primitives) | Partial — basic `pause_turn` → `__eggpool_pause_turn__` sentinel handling and `cache_control_dropped` warning shipped with 6.1; structured `pause_turn` surface remains pending |
+| 6.2 | Vision / image input | [§ 2](#2-vision--image-input) | ✅ Implemented |
+| 6.3 | Extended thinking / reasoning | [§ 3](#3-extended-thinking--reasoning) | ✅ Implemented |
+| 6.4 | Structured outputs | [§ 4](#4-structured-outputs) | ✅ Implemented |
+| 6.5 | Anthropic primitives | [§ 5](#5-anthropic-primitives) | ✅ Implemented |
 
 Each sub-phase is independently reviewed and merged. They share a
 scaffolding: each adds a feature flag under `[transcoder.features]` and
@@ -118,14 +118,15 @@ LOSS_WARNING_KINDS = frozenset({
     "empty_tool_use_block", "tool_call_id_changed",
     "tool_result_error_passthrough", "cache_control_dropped",
     "pause_turn", "non_text_content_dropped", "tool_result_inferred",
-    # 6.2 (vision) — pending
+    # 6.2 (vision) — implemented
     "image_unsupported_format", "image_url_to_base64_fallback",
-    "image_too_large",
-    # 6.3 (thinking) — pending
+    "image_too_large", "pdf_too_large",
+    "document_url_dropped", "document_unsupported_media",
+    # 6.3 (thinking) — implemented
     "thinking_signature_dropped", "reasoning_content_dropped",
-    # 6.4 (structured outputs) — pending
+    # 6.4 (structured outputs) — implemented
     "response_format_to_system_prompt",
-    # 6.5 (anthropic primitives) — partial
+    # 6.5 (anthropic primitives) — implemented
     "pause_turn_surface", "top_k_dropped",
 })
 ```

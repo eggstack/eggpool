@@ -20,6 +20,59 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class TranscoderFeatures(BaseModel):
+    """Per-feature opt-in flags for Phase 6 sub-phases.
+
+    Each flag is **off** by default.  Operators enable individual
+    features under ``[transcoder.features]``.  When a feature is off
+    the v1 behaviour (drop with warning) prevails for any input that
+    exercises that feature.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    tools: bool = Field(
+        default=False,
+        description=(
+            "Bidirectional tool calling translation. When enabled, OpenAI "
+            "tools/tool_choice are translated to Anthropic format and vice "
+            "versa, including streaming tool-call deltas."
+        ),
+    )
+    vision: bool = Field(
+        default=False,
+        description=(
+            "Image / document content parts. When enabled, OpenAI image_url "
+            "content is translated to Anthropic image/document blocks and "
+            "vice versa."
+        ),
+    )
+    thinking: bool = Field(
+        default=False,
+        description=(
+            "Extended thinking / reasoning blocks. When enabled, Anthropic "
+            "thinking blocks are translated to OpenAI reasoning_content and "
+            "vice versa."
+        ),
+    )
+    structured_outputs: bool = Field(
+        default=False,
+        description=(
+            "OpenAI response_format / json_schema coercion. When enabled, "
+            "json_schema response format is translated to system-prompt "
+            "coercion for Anthropic upstreams."
+        ),
+    )
+    anthropic_primitives: bool = Field(
+        default=False,
+        description=(
+            "Anthropic-only primitives (top_k, cache_control, etc.). When "
+            "enabled, explicit handling replaces drop-with-warning for "
+            "supported primitives."
+        ),
+    )
+
+
 class TranscoderPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -52,5 +105,13 @@ class TranscoderPolicy(BaseModel):
             "transcodable ones inside the selected routing_priority tier. "
             "When false, transcodable accounts can win whenever their quota "
             "score ranks ahead."
+        ),
+    )
+
+    features: TranscoderFeatures = Field(
+        default_factory=TranscoderFeatures,
+        description=(
+            "Per-feature opt-in flags for Phase 6 sub-phases. Each flag "
+            "defaults to false; enable individual features as needed."
         ),
     )

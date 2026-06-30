@@ -181,7 +181,7 @@ class TestParameterTranslation:
 
         tk_warnings = [w for w in warnings if w.get("field") == "top_k"]
         assert len(tk_warnings) == 1
-        assert tk_warnings[0]["reason"] == "openai_unsupported"
+        assert tk_warnings[0]["kind"] == "top_k_dropped"
 
     def test_stop_sequences_single_to_stop_string(
         self, transcoder: AnthropicToOpenAI

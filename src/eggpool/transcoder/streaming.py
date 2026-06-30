@@ -891,6 +891,27 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
         delta_type = delta.get("type", "")
         if delta_type == "input_json_delta":
             return self._on_tool_input_json_delta(parsed)
+        if delta_type == "thinking_delta":
+            thinking_text = delta.get("thinking", "")
+            if not thinking_text:
+                return []
+            return [
+                self._openai_frame(
+                    {
+                        "id": self._id,
+                        "object": "chat.completion.chunk",
+                        "created": 0,
+                        "model": self._model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"reasoning": thinking_text},
+                                "finish_reason": None,
+                            }
+                        ],
+                    },
+                ),
+            ]
         text = delta.get("text", "")
         if not text:
             return []
@@ -956,6 +977,18 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
         delta = parsed.get("delta", {})
         stop = delta.get("stop_reason")
         usage = parsed.get("usage")
+
+        if stop == "pause_turn":
+            out.extend(self._synthesise_pause_turn_sentinel())
+            if self._transcode_context is not None:
+                self._transcode_context.loss_warnings.append(
+                    {
+                        "kind": "pause_turn",
+                        "field": "stop_reason",
+                        "to": "tool_calls",
+                    }
+                )
+
         if stop:
             fr = _STOP_TO_FINISH.get(stop, "stop")
             frame: dict[str, Any] = {
@@ -1026,10 +1059,78 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
                     },
                 ),
             )
-        done = self._emit_done()
-        if done is not None:
-            out.append(done)
+
+        if stop:
+            done = self._emit_done()
+            if done is not None:
+                out.append(done)
         return out
+
+    def _synthesise_pause_turn_sentinel(self) -> list[bytes]:
+        """Emit a synthetic ``__eggpool_pause_turn__`` tool_call for streaming.
+
+        When Anthropic signals ``pause_turn`` as the stop reason, OpenAI
+        clients expect ``finish_reason: "tool_calls"`` with at least one
+        tool_call entry.  This method synthesises the sentinel tool_call
+        deltas that the non-streaming path emits in
+        ``openai_to_anthropic.decode_response``.
+        """
+        id_map = self._id_map()
+        openai_id = (
+            id_map.generate_openai_id() if id_map is not None else "call_pause_turn"
+        )
+        return [
+            self._openai_frame(
+                {
+                    "id": self._id,
+                    "object": "chat.completion.chunk",
+                    "created": 0,
+                    "model": self._model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {
+                                "role": "assistant",
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "id": openai_id,
+                                        "type": "function",
+                                        "function": {
+                                            "name": _PAUSE_TURN_FUNCTION_NAME,
+                                            "arguments": "",
+                                        },
+                                    }
+                                ],
+                            },
+                            "finish_reason": None,
+                        }
+                    ],
+                },
+            ),
+            self._openai_frame(
+                {
+                    "id": self._id,
+                    "object": "chat.completion.chunk",
+                    "created": 0,
+                    "model": self._model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "function": {"arguments": "{}"},
+                                    }
+                                ]
+                            },
+                            "finish_reason": None,
+                        }
+                    ],
+                },
+            ),
+        ]
 
     def _emit_done(self) -> bytes | None:
         """Emit the OpenAI terminal marker at most once."""

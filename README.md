@@ -104,8 +104,8 @@ When `[transcoder] enabled = true`, EggPool bridges OpenAI Chat Completions and 
 
 What gets translated:
 
-- Request bodies (text-only in v1)
-- Streaming SSE events
+- Request bodies (text + tool-use + vision + thinking + structured outputs)
+- Streaming SSE events (including tool-call deltas and thinking deltas)
 - Non-retryable error envelopes
 - Usage and cost fields (preserved exactly as the upstream reported them)
 
@@ -114,12 +114,13 @@ What is dropped with a structured warning log:
 - OpenAI fields with no Anthropic equivalent (`logit_bias`, `presence_penalty`, `top_logprobs`, etc.)
 - Anthropic fields with no OpenAI equivalent (`top_k`, `cache_control`)
 
-What is **not** translated in v1 (lands in phase 6):
+Phase 6 feature flags (`[transcoder.features]`) — all **off** by default:
 
-- Tool calls / function calling
-- Vision / image content
-- Extended thinking / reasoning
-- Structured outputs (`response_format` / `json_schema`)
+- `tools` — bidirectional tool calling translation
+- `vision` — image/document content parts
+- `thinking` — extended thinking ↔ reasoning_content
+- `structured_outputs` — `response_format` / `json_schema` coercion
+- `anthropic_primitives` — `top_k`, `cache_control`, `context_management`, `container`, `mcp_servers`
 
 See [docs/transcoding.md](docs/transcoding.md) for the full translation table and known limitations.
 

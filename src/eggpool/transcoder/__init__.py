@@ -5,7 +5,7 @@ from __future__ import annotations
 from eggpool.transcoder.context import TranscodeContext
 from eggpool.transcoder.errors import UpstreamErrorEnvelope
 from eggpool.transcoder.ids import ToolCallIdMap
-from eggpool.transcoder.policy import TranscoderPolicy
+from eggpool.transcoder.policy import TranscoderFeatures, TranscoderPolicy
 from eggpool.transcoder.protocol import BodyTranscoder, select_transcoder
 from eggpool.transcoder.static_headers import PROTOCOL_REQUIRED_STATIC_HEADERS
 from eggpool.transcoder.streaming import (
@@ -22,7 +22,6 @@ LOSS_WARNING_KINDS: frozenset[str] = frozenset(
         "missing_field",
         "lossy_mapping",
         "inserted_field",
-        "streaming_transcoder",
         # Phase 6.1 (tools)
         "tool_call_id_translated",
         "parallel_tool_calls_collapsed",
@@ -35,9 +34,20 @@ LOSS_WARNING_KINDS: frozenset[str] = frozenset(
         "tool_result_error_passthrough",
         "cache_control_dropped",
         "pause_turn",
-        "refusal",
         "non_text_content_dropped",
-        "tool_result_inferred",
+        # Phase 6.2 (vision)
+        "image_unsupported_format",
+        "image_too_large",
+        "pdf_too_large",
+        "document_url_dropped",
+        "document_unsupported_media",
+        # Phase 6.3 (thinking)
+        "thinking_signature_dropped",
+        "reasoning_content_dropped",
+        # Phase 6.4 (structured outputs)
+        "response_format_to_system_prompt",
+        # Phase 6.5 (anthropic primitives)
+        "top_k_dropped",
     }
 )
 
@@ -47,6 +57,7 @@ __all__ = [
     "PROTOCOL_REQUIRED_STATIC_HEADERS",
     "StreamingTranscoder",
     "TranscodeContext",
+    "TranscoderFeatures",
     "TranscoderPolicy",
     "ToolCallIdMap",
     "UpstreamErrorEnvelope",

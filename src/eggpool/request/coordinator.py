@@ -394,9 +394,15 @@ class RequestCoordinator:
                 except (json.JSONDecodeError, ValueError):
                     payload = None
                 if isinstance(payload, dict):
+                    _features = (
+                        self._transcoder_policy.features
+                        if self._transcoder_policy is not None
+                        else None
+                    )
                     translated, warnings = transcoder.encode_request(
                         cast("dict[str, Any]", payload),
                         context.transcode_context,
+                        features=_features,
                     )
                     context.upstream_body = encode_json_body(translated)
                     context.transcode_context.loss_warnings.extend(warnings)
@@ -1220,9 +1226,15 @@ class RequestCoordinator:
                 except (json.JSONDecodeError, ValueError):
                     upstream_payload = None
                 if isinstance(upstream_payload, dict):
+                    _features = (
+                        self._transcoder_policy.features
+                        if self._transcoder_policy is not None
+                        else None
+                    )
                     translated, decode_warnings = transcoder.decode_response(
                         cast("dict[str, Any]", upstream_payload),
                         context.transcode_context,
+                        features=_features,
                     )
                     body = encode_json_body(translated)
                     context.transcode_context.loss_warnings.extend(decode_warnings)

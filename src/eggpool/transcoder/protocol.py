@@ -8,6 +8,7 @@ from eggpool.errors import ConfigError
 
 if TYPE_CHECKING:
     from eggpool.transcoder.context import TranscodeContext
+    from eggpool.transcoder.policy import TranscoderFeatures
 
 
 class BodyTranscoder(Protocol):
@@ -20,12 +21,16 @@ class BodyTranscoder(Protocol):
         self,
         payload: dict[str, Any],
         context: TranscodeContext,
+        *,
+        features: TranscoderFeatures | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]: ...
 
     def decode_response(
         self,
         payload: dict[str, Any],
         context: TranscodeContext,
+        *,
+        features: TranscoderFeatures | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]: ...
 
     def reencode_error(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import time
 from typing import TYPE_CHECKING, Any, cast
@@ -16,6 +17,10 @@ from eggpool.transcoder.json_helpers import (
 
 if TYPE_CHECKING:
     from eggpool.transcoder.context import TranscodeContext
+    from eggpool.transcoder.policy import TranscoderFeatures
+
+_ANTHROPIC_IMAGE_SIZE_LIMIT = 5 * 1024 * 1024  # 5 MB
+_ANTHROPIC_PDF_SIZE_LIMIT = 32 * 1024 * 1024  # 32 MB
 
 STOP_REASON_MAP: dict[str, str] = {
     "end_turn": "stop",
@@ -49,7 +54,6 @@ DROPPED_FIELDS = (
     "n",
     "logprobs",
     "top_logprobs",
-    "response_format",
     "seed",
     "user",
     "functions",
@@ -92,6 +96,138 @@ def _parse_tool_arguments(raw: Any, warnings: list[dict[str, Any]]) -> dict[str,
     return {"__raw_arguments__": raw}
 
 
+def _extract_media_type_from_data_uri(data_uri: str) -> str | None:
+    """Extract the media type from a ``data:<media_type>;base64,...`` URI."""
+    if not data_uri.startswith("data:"):
+        return None
+    # data:image/png;base64,iVBOR...
+    rest = data_uri[5:]  # strip "data:"
+    semi = rest.find(";")
+    if semi < 0:
+        return None
+    return rest[:semi]
+
+
+def _decode_base64_data(data_uri: str) -> bytes | None:
+    """Decode the base64 payload from a ``data:...;base64,...`` URI."""
+    if ";base64," not in data_uri:
+        return None
+    _, encoded = data_uri.split(";base64,", 1)
+    try:
+        return base64.b64decode(encoded)
+    except Exception:
+        return None
+
+
+def _translate_openai_content_to_anthropic(
+    content: list[dict[str, Any]],
+    *,
+    vision_enabled: bool,
+    warnings: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Translate an OpenAI content-parts list to Anthropic content blocks.
+
+    When ``vision_enabled`` is ``True``, ``image_url`` parts are
+    translated to Anthropic ``image`` blocks.  Otherwise they are
+    dropped with a warning (v1 behaviour).
+    """
+    blocks: list[dict[str, Any]] = []
+    for part in content:
+        part_type = part.get("type")
+        if part_type == "text":
+            text = part.get("text", "")
+            if text:
+                blocks.append({"type": "text", "text": str(text)})
+        elif part_type == "image_url":
+            if not vision_enabled:
+                # Warning emitted by the caller with role context
+                continue
+            image_url_obj = as_object(part.get("image_url")) or {}
+            url = str(image_url_obj.get("url", ""))
+            if url.startswith("data:"):
+                media_type = _extract_media_type_from_data_uri(url)
+                if media_type is None:
+                    warnings.append(
+                        {
+                            "kind": "image_unsupported_format",
+                            "field": "content[image_url]",
+                        }
+                    )
+                    continue
+                decoded = _decode_base64_data(url)
+                if decoded is None:
+                    warnings.append(
+                        {
+                            "kind": "image_unsupported_format",
+                            "field": "content[image_url]",
+                        }
+                    )
+                    continue
+                size = len(decoded)
+                if size > _ANTHROPIC_IMAGE_SIZE_LIMIT:
+                    warnings.append(
+                        {
+                            "kind": "image_too_large",
+                            "field": "content[image_url]",
+                            "size_bytes": size,
+                            "limit_bytes": _ANTHROPIC_IMAGE_SIZE_LIMIT,
+                        }
+                    )
+                blocks.append(
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": url,
+                        },
+                    }
+                )
+            elif url.startswith("http://") or url.startswith("https://"):
+                blocks.append(
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "url",
+                            "url": url,
+                        },
+                    }
+                )
+            else:
+                warnings.append(
+                    {
+                        "kind": "image_unsupported_format",
+                        "field": "content[image_url]",
+                        "reason": "unknown_url_scheme",
+                    }
+                )
+        elif part_type == "input_audio":
+            warnings.append(
+                {
+                    "kind": "dropped_field",
+                    "field": "content[input_audio]",
+                    "reason": "anthropic_unsupported",
+                }
+            )
+        elif part_type == "file":
+            warnings.append(
+                {
+                    "kind": "dropped_field",
+                    "field": "content[file]",
+                    "reason": "anthropic_unsupported",
+                }
+            )
+        else:
+            warnings.append(
+                {
+                    "kind": "dropped_field",
+                    "field": f"content[{part_type}]",
+                    "reason": "anthropic_unsupported",
+                }
+            )
+    return blocks
+
+
 class OpenAIToAnthropic:
     """Translates OpenAI requests/responses to/from Anthropic format."""
 
@@ -102,6 +238,8 @@ class OpenAIToAnthropic:
         self,
         payload: dict[str, Any],
         context: TranscodeContext,
+        *,
+        features: TranscoderFeatures | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         warnings: list[dict[str, Any]] = []
         out: dict[str, Any] = {}
@@ -190,6 +328,24 @@ class OpenAIToAnthropic:
 
                 content_blocks: list[dict[str, Any]] = []
 
+                reasoning_content = msg.get("reasoning_content")
+                if (
+                    reasoning_content
+                    and isinstance(reasoning_content, str)
+                    and features is not None
+                    and features.thinking
+                ):
+                    content_blocks.append(
+                        {"type": "thinking", "thinking": reasoning_content}
+                    )
+                elif reasoning_content:
+                    warnings.append(
+                        {
+                            "kind": "reasoning_content_dropped",
+                            "field": "messages[assistant].reasoning_content",
+                        }
+                    )
+
                 if isinstance(content, str):
                     if content:
                         content_blocks.append({"type": "text", "text": content})
@@ -253,8 +409,11 @@ class OpenAIToAnthropic:
             if isinstance(content, str):
                 messages.append({"role": role, "content": content})
             elif isinstance(content, list):
-                text_parts = extract_text_blocks(content)
-                if has_non_text_blocks(content):
+                vision_enabled = features is not None and features.vision
+                has_image_parts = any(
+                    p.get("type") == "image_url" for p in iter_objects(content)
+                )
+                if has_image_parts and not vision_enabled:
                     warnings.append(
                         {
                             "kind": "dropped_field",
@@ -262,12 +421,26 @@ class OpenAIToAnthropic:
                             "reason": "anthropic_unsupported",
                         }
                     )
-                messages.append({"role": role, "content": "\n".join(text_parts)})
+                inner_warnings: list[dict[str, Any]] = (
+                    [] if not vision_enabled else warnings
+                )
+                anthropic_blocks = _translate_openai_content_to_anthropic(
+                    cast("list[dict[str, Any]]", content),
+                    vision_enabled=vision_enabled,
+                    warnings=inner_warnings,
+                )
+                has_non_text = any(b.get("type") != "text" for b in anthropic_blocks)
+                text_only = [
+                    b["text"] for b in anthropic_blocks if b.get("type") == "text"
+                ]
+                if has_non_text:
+                    messages.append({"role": role, "content": anthropic_blocks or ""})
+                elif text_only:
+                    messages.append({"role": role, "content": "\n".join(text_only)})
+                else:
+                    messages.append({"role": role, "content": ""})
             else:
                 messages.append({"role": role, "content": str(content)})
-
-        if system_parts:
-            out["system"] = "\n\n".join(system_parts)
 
         if not messages:
             messages.append({"role": "user", "content": "(empty)"})
@@ -314,6 +487,64 @@ class OpenAIToAnthropic:
             elif isinstance(stop, list):
                 stop_values = cast("list[object]", stop)
                 out["stop_sequences"] = [str(s) for s in stop_values]
+
+        reasoning_effort = payload.get("reasoning_effort")
+        if reasoning_effort is not None and features is not None and features.thinking:
+            effort = str(reasoning_effort).lower()
+            budget_map = {"low": 1024, "medium": 4096, "high": 16384}
+            budget = budget_map.get(effort, 4096)
+            out["thinking"] = {"type": "enabled", "budget_tokens": budget}
+        elif reasoning_effort is not None:
+            warnings.append(
+                {
+                    "kind": "dropped_field",
+                    "field": "reasoning_effort",
+                    "reason": "thinking_disabled",
+                }
+            )
+
+        response_format = payload.get("response_format")
+        if response_format is not None and isinstance(response_format, dict):
+            rf_obj = cast("dict[str, Any]", response_format)
+            if features is not None and features.structured_outputs:
+                rf_type = str(rf_obj.get("type", ""))
+                schema_text = ""
+                if rf_type == "json_object":
+                    schema_text = (
+                        "\n\nRespond with a valid JSON object. "
+                        "Do not include any text outside the JSON."
+                    )
+                elif rf_type == "json_schema":
+                    json_schema = as_object(rf_obj.get("json_schema")) or {}
+                    schema_obj = as_object(json_schema.get("schema")) or {}
+                    strict = bool(json_schema.get("strict", False))
+                    schema_text = (
+                        "\n\nRespond with a JSON object that matches this schema: "
+                        + json.dumps(schema_obj)
+                        + ". Do not include any text outside the JSON."
+                    )
+                    if strict:
+                        schema_text += " Be precise; do not omit required fields."
+                if schema_text:
+                    system_parts.append(schema_text)
+                    warnings.append(
+                        {
+                            "kind": "response_format_to_system_prompt",
+                            "field": "response_format",
+                            "type": rf_type,
+                        }
+                    )
+            else:
+                warnings.append(
+                    {
+                        "kind": "dropped_field",
+                        "field": "response_format",
+                        "reason": "anthropic_unsupported",
+                    }
+                )
+
+        if system_parts:
+            out["system"] = "\n\n".join(system_parts)
 
         tools_raw = payload.get("tools")
         if isinstance(tools_raw, list):
@@ -383,6 +614,8 @@ class OpenAIToAnthropic:
         self,
         payload: dict[str, Any],
         context: TranscodeContext,
+        *,
+        features: TranscoderFeatures | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         warnings: list[dict[str, Any]] = []
         id_map = context.id_map
@@ -391,6 +624,7 @@ class OpenAIToAnthropic:
         text_parts = extract_text_blocks(content_blocks)
         content_text = "".join(text_parts)
 
+        reasoning_content: str | None = None
         tool_calls: list[dict[str, Any]] = []
         if isinstance(content_blocks, list):
             for block in iter_objects(content_blocks):
@@ -421,11 +655,29 @@ class OpenAIToAnthropic:
                             },
                         }
                     )
-                elif block_type in ("thinking", "redacted_thinking"):
+                elif block_type == "thinking":
+                    thinking_text = str(block.get("thinking", ""))
+                    if features is not None and features.thinking:
+                        reasoning_content = thinking_text
+                        if block.get("signature"):
+                            warnings.append(
+                                {
+                                    "kind": "thinking_signature_dropped",
+                                    "field": "content[].thinking.signature",
+                                }
+                            )
+                    else:
+                        warnings.append(
+                            {
+                                "kind": "reasoning_content_dropped",
+                                "field": "content[].thinking",
+                            }
+                        )
+                elif block_type == "redacted_thinking":
                     warnings.append(
                         {
                             "kind": "dropped_field",
-                            "field": "content[thinking]",
+                            "field": "content[redacted_thinking]",
                             "reason": "anthropic_unsupported",
                         }
                     )
@@ -483,6 +735,8 @@ class OpenAIToAnthropic:
             "role": "assistant",
             "content": content_text,
         }
+        if reasoning_content is not None:
+            message["reasoning_content"] = reasoning_content
         if tool_calls:
             message["tool_calls"] = tool_calls
 
