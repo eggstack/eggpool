@@ -583,6 +583,24 @@ comes from `_classify_eligibility`. The `eggpool accounts explain
 --gates` CLI command renders the same breakdown as a compact
 text table.
 
+### Shared per-provider metadata and sibling-wins protocol guard
+
+`_provider_models` is keyed by `(model_id, provider_id)` and is
+**shared** by every account that lists that provider — e.g. all
+`opencode-go-0001`/`-0002`/`-0003` accounts share one row per
+model on the `opencode-go` provider. The previous
+`update_from_account()` clobbered this shared dict unconditionally
+even on partial responses, which produced the upstream-reported
+"all traffic on `opencode-go-0001`, none on `0002`/`0003`" regression
+when a single account's refresh resolved the protocol as `None`.
+`_preserve_resolved_protocol()` now applies a sibling-wins guard
+in the non-destructive path: when a per-provider row already has a
+resolved protocol and the new entry arrives with `protocol=None`,
+the prior protocol is preserved and the resulting per-provider row
+is shared across all sibling accounts. The destructive path
+(`authoritative=True AND allow_withdrawals=True`) intentionally
+skips the guard so operator-initiated withdrawals remain effective.
+
 ## Error Hierarchy
 
 ```

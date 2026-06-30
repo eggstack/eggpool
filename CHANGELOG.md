@@ -34,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`eggpool accounts status` now prints `routing_priority`.** The per-line output gained a `priority=N` field derived from the account's provider, alongside `provider`, `enabled`, `weight`, and the api-key-env set state.
 - **`eggpool accounts explain` runs migrations on fresh installs.** The inner `_run_explain` coroutine now calls `MigrationRunner(db).run()` before hydrating `ModelCatalogCache.hydrate_from_db(db)`, so a brand-new (unmigrated) database path no longer crashes with `sqlite3.OperationalError: no such table: models` / `provider_model_metadata` / `account_models`. With no catalog rows yet, accounts surface a `no_model` verdict instead of the SQL error. The command still performs no outbound provider refresh.
 
+### Fixed
+
+- **Cross-account protocol poisoning from a partial sibling refresh.** `_provider_models` is keyed by `(model_id, provider_id)` and shared by every account that lists that provider (e.g. all `opencode-go-0001`/`-0002`/`-0003` accounts share one row per model on the `opencode-go` provider). Prior to this fix a single sibling's partial refresh — transient upstream parse error, unresolved family prefix, or a model whose protocol cannot be re-derived this cycle — produced a model entry with `protocol=None` and clobbered the previously-resolved protocol on the shared row, silently dropping every sibling account from routing even though `_account_support` still listed them. `ModelCatalogCache._preserve_resolved_protocol()` now applies a sibling-wins guard: a non-destructive `update_from_account` will keep the existing resolved protocol when the new entry's `protocol` is `None` and the prior row carried a resolved value. The destructive path (`authoritative=True AND allow_withdrawals=True`) intentionally skips the guard so operator-initiated withdrawals remain effective. `tests/unit/test_catalog_withdrawal_policy.py::test_partial_refresh_does_not_clobber_shared_provider_protocol{,multiple}` and `test_explicit_destructive_update_can_still_clear_protocol` pin the new contract.
+
 ## [0.3.5] - 2026-06-27
 
 ### Changed

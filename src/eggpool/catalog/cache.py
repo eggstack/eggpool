@@ -274,6 +274,8 @@ class ModelCatalogCache:
                 "effective_limits": model.get("effective_limits", {}),
             }
             self._preserve_static_fields(provider_key, model_info)
+            if not withdraw_destructive:
+                self._preserve_resolved_protocol(provider_key, model_info)
 
             # Global entry: only materialize a global row if this
             # provider brings new information that the existing global
@@ -349,9 +351,9 @@ class ModelCatalogCache:
 
         When a live row arrives for a model that already has a
         ``static_config``-sourced provider entry, explicit static
-        protocol and capability fields win over a live row that did not
-        bring its own resolution. The merge mutates *model_info* in
-        place so callers can write the merged value into the cache.
+        protocol and capability fields win over a live row that did
+        not bring its own resolution. The merge mutates *model_info*
+        in place so callers can write the merged value into the cache.
         """
         existing = self._provider_models.get(provider_key)
         if existing is None:
@@ -382,6 +384,42 @@ class ModelCatalogCache:
         ):
             new_caps["supports_vision"] = existing_caps["supports_vision"]
         model_info["capabilities"] = new_caps
+
+    def _preserve_resolved_protocol(
+        self,
+        provider_key: tuple[str, str],
+        model_info: dict[str, Any],
+    ) -> None:
+        """Sibling-wins guard: never let a partial live update downgrade a
+        previously-resolved per-provider protocol to ``None``.
+
+        ``_provider_models`` is keyed by ``(model_id, provider_id)`` and
+        is shared by every account that lists that provider — e.g. all
+        three ``opencode-go-000X`` accounts share one row per model on
+        the ``opencode-go`` provider. When one account has a partial
+        refresh (transient upstream parse error, unresolved family
+        prefix, or a model whose protocol cannot be re-derived this
+        cycle), its ``model["protocol"]`` arrives as ``None``. Without
+        this guard, that single partial row would clobber the prior
+        resolved value for every sibling account, silently de-pooling
+        all of them from routing. The destructive ``update_from_account``
+        path (``authoritative=True and allow_withdrawals=True``)
+        intentionally skips this guard so an operator-initiated
+        withdrawal can still take effect.
+        """
+        existing = self._provider_models.get(provider_key)
+        if existing is None:
+            return
+        new_protocol = model_info.get("protocol")
+        new_protocol_source = model_info.get("protocol_source")
+        if new_protocol:
+            return
+        if not existing.get("protocol"):
+            return
+        if new_protocol_source in {"config", "static_config"}:
+            return
+        model_info["protocol"] = existing.get("protocol")
+        model_info["protocol_source"] = existing.get("protocol_source")
 
     def _visible_provider_ids(
         self,

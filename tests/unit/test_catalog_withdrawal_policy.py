@@ -390,3 +390,148 @@ def test_collect_gate_status_returns_expected_keys() -> None:
         "final_eligible",
     }
     assert expected_keys.issubset(gates.keys())
+
+
+# ===================================================================
+# Cross-account protocol-poisoning regression
+# ===================================================================
+
+
+def test_partial_refresh_does_not_clobber_shared_provider_protocol() -> None:
+    """A single account's partial refresh must not poison the shared
+    ``_provider_models[(model_id, provider_id)]`` row for its siblings.
+
+    ``_provider_models`` is keyed by ``(model_id, provider_id)`` and
+    shared by every account that lists that provider. When one
+    ``opencode-go`` account delivers a model with ``protocol=None``
+    (transient upstream parse error, unresolved family prefix, or a
+    normalized list whose protocol could not be re-derived this
+    cycle), the cache must keep the previously-resolved protocol so
+    the other ``opencode-go-XXXX`` siblings remain routable.
+    """
+    cache = ModelCatalogCache()
+
+    for account in ("opencode-go-0001", "opencode-go-0002", "opencode-go-0003"):
+        cache.update_from_account(
+            account,
+            "opencode-go",
+            [
+                {
+                    "model_id": "minimax-2.7",
+                    "protocol": "openai",
+                    "protocol_source": "upstream_metadata",
+                }
+            ],
+        )
+
+    for account in ("opencode-go-0001", "opencode-go-0002", "opencode-go-0003"):
+        assert cache.is_account_model_available(
+            account, "minimax-2.7", protocol="openai"
+        ), f"{account} must be available before any partial refresh"
+
+    cache.update_from_account(
+        "opencode-go-0002",
+        "opencode-go",
+        [
+            {
+                "model_id": "minimax-2.7",
+                "protocol": None,
+                "protocol_source": None,
+            }
+        ],
+        authoritative=True,
+    )
+
+    for account in ("opencode-go-0001", "opencode-go-0002", "opencode-go-0003"):
+        assert cache.is_account_model_available(
+            account, "minimax-2.7", protocol="openai"
+        ), (
+            f"{account} must remain available after a sibling partial "
+            "refresh; the prior resolved protocol must not be clobbered"
+        )
+
+    entry = cache.get_provider_model_entry("minimax-2.7", "opencode-go")
+    assert entry is not None
+    assert entry.get("protocol") == "openai"
+
+
+def test_partial_refresh_does_not_clobber_shared_provider_protocol_multiple() -> None:
+    """Repeated partial refreshes across multiple sibling accounts must
+    not cumulatively downgrade the shared per-provider protocol row.
+    """
+    cache = ModelCatalogCache()
+
+    for account in ("opencode-go-0001", "opencode-go-0002", "opencode-go-0003"):
+        cache.update_from_account(
+            account,
+            "opencode-go",
+            [
+                {
+                    "model_id": "minimax-2.7",
+                    "protocol": "openai",
+                    "protocol_source": "upstream_metadata",
+                }
+            ],
+        )
+
+    for partial_account in ("opencode-go-0002", "opencode-go-0003", "opencode-go-0002"):
+        cache.update_from_account(
+            partial_account,
+            "opencode-go",
+            [
+                {
+                    "model_id": "minimax-2.7",
+                    "protocol": None,
+                    "protocol_source": None,
+                }
+            ],
+            authoritative=True,
+        )
+
+    for account in ("opencode-go-0001", "opencode-go-0002", "opencode-go-0003"):
+        assert cache.is_account_model_available(
+            account, "minimax-2.7", protocol="openai"
+        ), f"{account} must stay routable across repeated partial refreshes"
+
+
+def test_explicit_destructive_update_can_still_clear_protocol() -> None:
+    """The sibling-wins guard must not block operator-initiated
+    destructive withdrawals. With ``authoritative=True and
+    allow_withdrawals=True`` the cache must honor the new state even
+    if it carries ``protocol=None`` so the operator can intentionally
+    clear a previously-resolved protocol.
+    """
+    cache = ModelCatalogCache()
+
+    cache.update_from_account(
+        "opencode-go-0001",
+        "opencode-go",
+        [
+            {
+                "model_id": "minimax-2.7",
+                "protocol": "openai",
+                "protocol_source": "upstream_metadata",
+            }
+        ],
+    )
+
+    cache.update_from_account(
+        "opencode-go-0001",
+        "opencode-go",
+        [
+            {
+                "model_id": "minimax-2.7",
+                "protocol": None,
+                "protocol_source": None,
+            }
+        ],
+        authoritative=True,
+        allow_withdrawals=True,
+    )
+
+    assert not cache.is_account_model_available(
+        "opencode-go-0001", "minimax-2.7", protocol="openai"
+    ), (
+        "Explicit destructive update with both flags must be able to "
+        "clear the resolved protocol and withdraw the account support"
+    )
