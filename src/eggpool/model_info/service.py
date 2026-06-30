@@ -355,6 +355,10 @@ class ModelInfoService:
             or_detail = _enrich_detail_from_record(detail, or_record)
             conflicts = _detect_context_conflicts(detail, or_record, existing.conflicts)
 
+            # Override status to 'conflicting' when a material context conflict exists
+            if conflicts and "context_window" in conflicts:
+                status = cast("ModelInfoStatus", "conflicting")
+
             info = CanonicalModelInfo(
                 model_id=model_id,
                 status=status,

@@ -15,9 +15,11 @@ from eggpool.model_info.identity import resolve_openrouter_record
 from eggpool.model_info.repository import ModelInfoRepository
 from eggpool.model_info.service import (
     ModelInfoService,
+    _bound_raw_payload,
     _build_source_list,
     _detect_context_conflicts,
     _enrich_detail_from_record,
+    _strip_raw_payload,
 )
 from eggpool.model_info.sources.openrouter import (
     OpenRouterModelInfoSource,
@@ -840,6 +842,9 @@ class TestOpenrouterContextConflictIsRecorded:
             assert updated.conflicts["context_window"]["provider_catalog"] == 128000
             assert updated.conflicts["context_window"]["openrouter"] == 1_000_000
 
+            # Status should be 'conflicting' when context conflict is material
+            assert updated.status == "conflicting"
+
             # Check enrichment
             assert "external_ids" in updated.detail
             assert updated.detail["external_ids"]["openrouter"] == "openai/gpt-4o"
@@ -874,6 +879,98 @@ class TestBuildSourceList:
         result = _build_source_list(provenance, has_openrouter=True)
         assert "openrouter" in result
         assert "provider_catalog" in result
+
+
+# --- Raw payload storage tests ---
+
+
+class TestStripRawPayload:
+    def test_replaces_raw_with_empty_dict(self) -> None:
+        """raw_payload is replaced by {} when store_raw_observations is False."""
+        now = datetime.now(UTC)
+        record = SourceModelRecord(
+            source="openrouter",
+            source_model_id="openai/gpt-4o",
+            observed_at=now,
+            raw_hash="abc123",
+            raw_payload={"id": "openai/gpt-4o", "name": "GPT-4o", "data": "large"},
+            normalized={"source_model_id": "openai/gpt-4o"},
+            display_name="GPT-4o",
+        )
+        stripped = _strip_raw_payload(record)
+        assert stripped.raw_payload == {}
+        assert stripped.raw_hash == "abc123"  # hash preserved
+        assert stripped.source_model_id == "openai/gpt-4o"
+        assert stripped.display_name == "GPT-4o"
+
+    def test_preserves_other_fields(self) -> None:
+        """All fields besides raw_payload are preserved."""
+        now = datetime.now(UTC)
+        record = SourceModelRecord(
+            source="openrouter",
+            source_model_id="openai/gpt-4o",
+            observed_at=now,
+            raw_hash="abc",
+            raw_payload={"large": "data"},
+            normalized={"key": "val"},
+            display_name="GPT-4o",
+            context_window=128000,
+            input_price_per_1k=2.5,
+        )
+        stripped = _strip_raw_payload(record)
+        assert stripped.normalized == {"key": "val"}
+        assert stripped.context_window == 128000
+        assert stripped.input_price_per_1k == 2.5
+
+
+class TestBoundRawPayload:
+    def test_small_payload_preserved_as_is(self) -> None:
+        """Payload under 64 KiB is kept unchanged."""
+        now = datetime.now(UTC)
+        small_raw = {"id": "openai/gpt-4o", "name": "GPT-4o"}
+        record = SourceModelRecord(
+            source="openrouter",
+            source_model_id="openai/gpt-4o",
+            observed_at=now,
+            raw_hash="abc",
+            raw_payload=small_raw,
+            normalized={},
+            display_name="GPT-4o",
+        )
+        bounded = _bound_raw_payload(record)
+        assert bounded.raw_payload == small_raw
+
+    def test_large_payload_replaced_with_summary(self) -> None:
+        """Payload over 64 KiB is replaced by a summary dict."""
+        import json as _json
+
+        now = datetime.now(UTC)
+        # Create a payload that exceeds 64 KiB
+        large_raw: dict[str, object] = {"id": "openai/gpt-4o"}
+        # Pad to exceed 64 KiB
+        padding = "x" * 70_000
+        large_raw["padding"] = padding
+        raw_json = _json.dumps(large_raw, sort_keys=True, default=str)
+        assert len(raw_json.encode()) > 65_536  # confirm it's over limit
+
+        record = SourceModelRecord(
+            source="openrouter",
+            source_model_id="openai/gpt-4o",
+            observed_at=now,
+            raw_hash="large_hash",
+            raw_payload=large_raw,
+            normalized={},
+            display_name="GPT-4o",
+        )
+        bounded = _bound_raw_payload(record)
+        assert bounded.raw_payload["_summary"] is True
+        assert bounded.raw_payload["source_model_id"] == "openai/gpt-4o"
+        assert bounded.raw_payload["display_name"] == "GPT-4o"
+        assert bounded.raw_payload["raw_hash"] == "large_hash"
+        assert bounded.raw_payload["original_size_bytes"] == len(raw_json.encode())
+        # All other fields preserved
+        assert bounded.source == "openrouter"
+        assert bounded.raw_hash == "large_hash"
 
 
 # --- Service integration tests ---
@@ -1089,6 +1186,164 @@ class TestServiceIntegration:
                 "WHERE source = 'openrouter' AND model_id = 'openai/gpt-4o'"
             )
             assert len(rows) >= 1
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio()
+    async def test_store_raw_true_preserves_raw_payload(self) -> None:
+        """store_raw_observations=True preserves raw payload in observations."""
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await _run_migrations(db)
+            await _seed_model(db, "openai/gpt-4o", "GPT-4o")
+
+            payload = _make_openrouter_payload(
+                _make_or_model(
+                    "openai/gpt-4o",
+                    name="GPT-4o",
+                    context_length=128000,
+                ),
+            )
+            client = _MockHttpClient(payload)
+
+            from eggpool.catalog.cache import ModelCatalogCache
+
+            cache = ModelCatalogCache()
+            now_ts = datetime.now(UTC).timestamp()
+            cache._models["openai/gpt-4o"] = {
+                "model_id": "openai/gpt-4o",
+                "display_name": "GPT-4o",
+                "protocol": "openai",
+                "capabilities": {},
+                "source_metadata": {},
+                "first_seen_at": now_ts,
+                "last_seen_at": now_ts,
+                "discovered_limits": {},
+                "effective_limits": {
+                    "context_tokens": 128000,
+                    "input_tokens": 128000,
+                    "output_tokens": 16384,
+                    "enforce": True,
+                },
+            }
+            cache._provider_models[("openai/gpt-4o", "openai")] = dict(
+                cache._models["openai/gpt-4o"]
+            )
+
+            config = ModelInfoConfig(store_raw_observations=True)
+            service = ModelInfoService(config, db, cache, outbound_client=client)
+
+            # Create a due canonical row
+            now = datetime.now(UTC)
+            info = CanonicalModelInfo(
+                model_id="openai/gpt-4o",
+                status="partial",
+                summary="Test",
+                sparse=False,
+                detail={},
+                provenance={"sources": ["provider_catalog"]},
+                conflicts={},
+                first_seen_at=now - timedelta(days=1),
+                last_seen_at=now - timedelta(hours=1),
+                last_refreshed_at=now - timedelta(hours=1),
+                next_refresh_at=now - timedelta(minutes=1),
+            )
+            await service.repo.upsert_canonical(info)
+
+            result = await service.refresh_due_models()
+            assert result["refreshed"] + result["skipped"] == result["total"]
+
+            # Check that raw_json is NOT empty
+            rows = await db.fetch_all(
+                "SELECT raw_json FROM model_info_observations "
+                "WHERE source = 'openrouter' AND model_id = 'openai/gpt-4o'"
+            )
+            assert len(rows) >= 1
+            import json as _json
+
+            raw_json = _json.loads(rows[0]["raw_json"])
+            # Should contain the actual OpenRouter entry data, not {}
+            assert raw_json != {}
+            assert "id" in raw_json
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio()
+    async def test_store_raw_false_strips_raw_payload(self) -> None:
+        """store_raw_observations=False strips raw payload from observations."""
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await _run_migrations(db)
+            await _seed_model(db, "openai/gpt-4o", "GPT-4o")
+
+            payload = _make_openrouter_payload(
+                _make_or_model(
+                    "openai/gpt-4o",
+                    name="GPT-4o",
+                    context_length=128000,
+                ),
+            )
+            client = _MockHttpClient(payload)
+
+            from eggpool.catalog.cache import ModelCatalogCache
+
+            cache = ModelCatalogCache()
+            now_ts = datetime.now(UTC).timestamp()
+            cache._models["openai/gpt-4o"] = {
+                "model_id": "openai/gpt-4o",
+                "display_name": "GPT-4o",
+                "protocol": "openai",
+                "capabilities": {},
+                "source_metadata": {},
+                "first_seen_at": now_ts,
+                "last_seen_at": now_ts,
+                "discovered_limits": {},
+                "effective_limits": {
+                    "context_tokens": 128000,
+                    "input_tokens": 128000,
+                    "output_tokens": 16384,
+                    "enforce": True,
+                },
+            }
+            cache._provider_models[("openai/gpt-4o", "openai")] = dict(
+                cache._models["openai/gpt-4o"]
+            )
+
+            config = ModelInfoConfig(store_raw_observations=False)
+            service = ModelInfoService(config, db, cache, outbound_client=client)
+
+            # Create a due canonical row
+            now = datetime.now(UTC)
+            info = CanonicalModelInfo(
+                model_id="openai/gpt-4o",
+                status="partial",
+                summary="Test",
+                sparse=False,
+                detail={},
+                provenance={"sources": ["provider_catalog"]},
+                conflicts={},
+                first_seen_at=now - timedelta(days=1),
+                last_seen_at=now - timedelta(hours=1),
+                last_refreshed_at=now - timedelta(hours=1),
+                next_refresh_at=now - timedelta(minutes=1),
+            )
+            await service.repo.upsert_canonical(info)
+
+            result = await service.refresh_due_models()
+            assert result["refreshed"] + result["skipped"] == result["total"]
+
+            # Check that raw_json is empty
+            rows = await db.fetch_all(
+                "SELECT raw_json FROM model_info_observations "
+                "WHERE source = 'openrouter' AND model_id = 'openai/gpt-4o'"
+            )
+            assert len(rows) >= 1
+            import json as _json
+
+            raw_json = _json.loads(rows[0]["raw_json"])
+            assert raw_json == {}
         finally:
             await db.disconnect()
 
