@@ -10,6 +10,7 @@ src/eggpool/
 ├── api/               # API endpoint handlers (chat completions, messages, stats)
 ├── background/        # TaskSupervisor, retention cleanup, periodic tasks
 ├── catalog/           # Model catalog, pricing, protocols, fetcher, normalizer, limits
+├── model_info/        # Model information sidecar: persistent metadata, observations, summaries, source adapters
 ├── dashboard/         # Self-updating server-rendered HTML dashboard
 ├── db/                # SQLite connection, migrations, repositories, schema
 ├── health/            # Circuit breaker and health tracking
@@ -185,7 +186,7 @@ SQLite via aiosqlite with WAL mode. Single-connection serialization via a lock +
 
 ### Schema Migrations
 
-Ordered SQL migrations in `db/schema/` (0001 through 0035). Checksums tracked in `checksums.json`.
+Ordered SQL migrations in `db/schema/` (0001 through 0036). Checksums tracked in `checksums.json`.
 
 ### Repositories
 
@@ -404,6 +405,15 @@ AggregatorError (base)
 ├── RequestTooLargeError
 └── ContextLimitExceededError
 ```
+
+## Model Information
+
+- **Phase 1 foundation**: `model_info/` package provides persistent model metadata sidecar tables (`model_info_canonical`, `model_info_observations`, `model_info_aliases`, `model_info_source_health`) via migration `0036`
+- **Provider-native observations**: `ProviderCatalogSource` reads in-memory `ModelCatalogCache` entries and emits `SourceModelRecord`s; no network I/O
+- **Status classification**: models classified as `sparse_new`, `partial`, `fresh`, etc. based on available metadata (display name, context limit, capabilities)
+- **Deterministic summaries**: generated from fields only (no LLM); sparse models explicitly note metadata sparsity
+- **CLI**: `eggpool modelinfo show/list/refresh` commands for inspection and manual refresh
+- **Config**: `[model_info]` section in `config.toml` with TTL controls and source enablement
 
 ## Model Context Limits
 

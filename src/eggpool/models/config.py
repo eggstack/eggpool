@@ -709,6 +709,68 @@ class BackupConfig(BaseModel):
     include_env: bool = True
 
 
+class ModelInfoSourceConfig(BaseModel):
+    """Configuration for a single model-info source."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    priority: int = Field(default=100, ge=0)
+    ttl_seconds: int = Field(default=86_400, gt=0)
+    base_url: str | None = None
+    api_key: str | None = None
+    api_key_env: str | None = None
+    max_entries: int = Field(default=4096, gt=0)
+    options: dict[str, object] = Field(default_factory=dict[str, object])
+
+    @property
+    def resolved_api_key(self) -> str | None:
+        if self.api_key:
+            return self.api_key
+        if self.api_key_env:
+            return os.environ.get(self.api_key_env)
+        return None
+
+
+class ModelInfoSourcesConfig(BaseModel):
+    """Configuration for all model-info sources."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider_catalog: ModelInfoSourceConfig = Field(
+        default_factory=lambda: ModelInfoSourceConfig(priority=0, ttl_seconds=300)
+    )
+    openrouter: ModelInfoSourceConfig = Field(default_factory=ModelInfoSourceConfig)
+    artificial_analysis: ModelInfoSourceConfig = Field(
+        default_factory=lambda: ModelInfoSourceConfig(enabled=False, priority=50)
+    )
+    huggingface: ModelInfoSourceConfig = Field(
+        default_factory=lambda: ModelInfoSourceConfig(
+            enabled=False, priority=200, ttl_seconds=604800
+        )
+    )
+
+
+class ModelInfoConfig(BaseModel):
+    """Configuration for the model-info subsystem."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    startup_refresh: bool = True
+    refresh_interval_s: int = Field(default=21_600, ge=0)
+    known_ttl_s: int = Field(default=86_400, gt=0)
+    partial_ttl_s: int = Field(default=43_200, gt=0)
+    sparse_new_initial_ttl_s: int = Field(default=3_600, gt=0)
+    sparse_new_later_ttl_s: int = Field(default=21_600, gt=0)
+    sparse_new_accelerated_days: int = Field(default=7, ge=1)
+    conflict_ttl_s: int = Field(default=7_200, gt=0)
+    max_models_per_cycle: int = Field(default=50, ge=1, le=10_000)
+    include_in_models_endpoint: bool = True
+    store_raw_observations: bool = True
+    sources: ModelInfoSourcesConfig = Field(default_factory=ModelInfoSourcesConfig)
+
+
 class AppConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -730,6 +792,7 @@ class AppConfig(BaseModel):
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
     model_overrides: dict[str, ModelOverrideConfig] = Field(default_factory=dict)
     transcoder: TranscoderPolicy = Field(default_factory=TranscoderPolicy)
+    model_info: ModelInfoConfig = Field(default_factory=ModelInfoConfig)
 
     @model_validator(mode="after")
     def _normalize_providers(self) -> AppConfig:

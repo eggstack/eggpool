@@ -34,6 +34,7 @@
         "0032_usage_rollups.sql": "a06bbafccede276d459fe8f60ac07735fe7d73ad7172742a8c24103dfe75fe41",
         "0033_request_provider_local_cost.sql": "4e044ab78bc27c76bc32c16f8c3b9f5e071762d796760a0b57fd9a1352653fad",
         "0034_transcoding_daily.sql": "b602862c9fe84220a606ae7c5804562487d37d274980b53878b46614dd890516",
-        "0035_routing_decision_score_components.sql": "0919dba8580f7b653abde2a44c401efad540cb78460d7987c737fa9adf413f83"
+        "0035_routing_decision_score_components.sql": "0919dba8580f7b653abde2a44c401efad540cb78460d7987c737fa9adf413f83",
+        "0036_model_info.sql": "3232df4468e01ba2efb08c7e66d448db9cf9e1cb415500e1d7c1110522b1db54"
     }
 }

@@ -2858,6 +2858,171 @@ def set_config(ctx: click.Context, key: str, value: str) -> None:
 
 
 @cli.group()
+@click.pass_context
+def modelinfo(ctx: click.Context) -> None:
+    """Model information subcommands."""
+
+
+@modelinfo.command("show")
+@click.argument("model_id")
+@click.pass_context
+def modelinfo_show(ctx: click.Context, model_id: str) -> None:
+    """Show model info for a specific model."""
+    config_path = ctx.obj["config_path"]
+    config = AppConfig.from_toml(config_path)
+
+    async def _run() -> None:
+        from eggpool.db.connection import Database
+        from eggpool.db.migrations import MigrationRunner
+        from eggpool.model_info.service import ModelInfoService
+
+        db = Database(
+            path=config.database.path,
+            busy_timeout_ms=config.database.busy_timeout_ms,
+            wal=config.database.wal,
+            synchronous=config.database.synchronous,
+        )
+        await db.connect()
+        try:
+            await MigrationRunner(db).run()
+            from eggpool.catalog.cache import ModelCatalogCache
+
+            cache = ModelCatalogCache()
+            cache.set_config(config)
+            service = ModelInfoService(config.model_info, db, cache)
+            info = await service.get_summary(model_id)
+            if info is None:
+                click.echo(f"No model info found for {model_id!r}.", err=True)
+                sys.exit(1)
+            import json as _json
+
+            click.echo(f"Model: {info.model_id}")
+            click.echo(f"Status: {info.status}")
+            click.echo(f"Sparse: {info.sparse}")
+            if info.summary:
+                click.echo(f"Summary: {info.summary}")
+            click.echo(f"Detail: {_json.dumps(info.detail, indent=2)}")
+            click.echo(f"Provenance: {_json.dumps(info.provenance, indent=2)}")
+            if info.conflicts:
+                click.echo(f"Conflicts: {_json.dumps(info.conflicts, indent=2)}")
+            click.echo(f"First seen: {info.first_seen_at}")
+            click.echo(f"Last seen: {info.last_seen_at}")
+            if info.last_refreshed_at:
+                click.echo(f"Last refreshed: {info.last_refreshed_at}")
+            if info.next_refresh_at:
+                click.echo(f"Next refresh: {info.next_refresh_at}")
+        finally:
+            await db.disconnect()
+
+    asyncio.run(_run())
+
+
+@modelinfo.command("list")
+@click.option(
+    "--status",
+    "status_filter",
+    default=None,
+    type=click.Choice(
+        ["fresh", "partial", "sparse_new", "stale", "conflicting", "unmatched"]
+    ),
+    help="Filter by status.",
+)
+@click.pass_context
+def modelinfo_list(ctx: click.Context, status_filter: str | None) -> None:
+    """List model info records."""
+    config_path = ctx.obj["config_path"]
+    config = AppConfig.from_toml(config_path)
+
+    async def _run() -> None:
+        from eggpool.db.connection import Database
+        from eggpool.db.migrations import MigrationRunner
+        from eggpool.model_info.service import ModelInfoService
+
+        db = Database(
+            path=config.database.path,
+            busy_timeout_ms=config.database.busy_timeout_ms,
+            wal=config.database.wal,
+            synchronous=config.database.synchronous,
+        )
+        await db.connect()
+        try:
+            await MigrationRunner(db).run()
+            from eggpool.catalog.cache import ModelCatalogCache
+
+            cache = ModelCatalogCache()
+            cache.set_config(config)
+            service = ModelInfoService(config.model_info, db, cache)
+            summary_map = await service.get_summary_map()
+            items = sorted(summary_map.values(), key=lambda c: (c.status, c.model_id))
+            if status_filter:
+                items = [i for i in items if i.status == status_filter]
+            if not items:
+                click.echo("No model info records found.")
+                return
+            click.echo(f"{'Model ID':<50} {'Status':<16} {'Sparse':<8} Summary")
+            click.echo("-" * 120)
+            for item in items:
+                summary_short = (item.summary or "")[:46]
+                click.echo(
+                    f"{item.model_id:<50} {item.status:<16} "
+                    f"{'yes' if item.sparse else 'no':<8} {summary_short}"
+                )
+            click.echo(f"\nTotal: {len(items)}")
+        finally:
+            await db.disconnect()
+
+    asyncio.run(_run())
+
+
+@modelinfo.command("refresh")
+@click.option(
+    "--provider-catalog-only",
+    is_flag=True,
+    default=True,
+    help="Refresh only from provider catalog (default).",
+)
+@click.pass_context
+def modelinfo_refresh(ctx: click.Context, provider_catalog_only: bool) -> None:
+    """Refresh model info from provider catalogs."""
+    config_path = ctx.obj["config_path"]
+    config = AppConfig.from_toml(config_path)
+
+    async def _run() -> None:
+        from eggpool.db.connection import Database
+        from eggpool.db.migrations import MigrationRunner
+        from eggpool.model_info.service import ModelInfoService
+
+        db = Database(
+            path=config.database.path,
+            busy_timeout_ms=config.database.busy_timeout_ms,
+            wal=config.database.wal,
+            synchronous=config.database.synchronous,
+        )
+        await db.connect()
+        try:
+            await MigrationRunner(db).run()
+            from eggpool.catalog.cache import ModelCatalogCache
+
+            cache = ModelCatalogCache()
+            cache.set_config(config)
+            service = ModelInfoService(config.model_info, db, cache)
+            click.echo("Refreshing provider catalog observations...")
+            obs_result = await service.refresh_provider_catalog_observations()
+            click.echo(f"  Observations upserted: {obs_result['observations']}")
+            click.echo(f"  Aliases created: {obs_result['aliases']}")
+            click.echo("Reconciling catalog snapshot...")
+            rec_result = await service.reconcile_catalog_snapshot(reason="cli_refresh")
+            click.echo(f"  Created: {rec_result['created']}")
+            click.echo(f"  Updated: {rec_result['updated']}")
+            click.echo(f"  Total catalog models: {rec_result['total']}")
+            click.echo("Done.")
+        finally:
+            await db.disconnect()
+
+    asyncio.run(_run())
+
+
+@cli.group()
 def dashboard() -> None:
     """Dashboard configuration commands."""
 
