@@ -24,6 +24,10 @@ class FairnessKey:
     priority: int
     client_protocol: str | None = None
 
+    def to_key_string(self) -> str:
+        """Render to a canonical string for trace storage and rotor lookup."""
+        return _make_key_string(self)
+
 
 @dataclass(frozen=True, slots=True)
 class FairnessDecision:

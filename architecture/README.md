@@ -274,13 +274,26 @@ blunt eviction strategy — there is no LRU or partial eviction.  The cap
 prevents unbounded memory growth when model IDs or fairness keys vary
 heavily.
 
-Fairness is controlled by three ``[routing]`` config fields:
+Fairness is controlled by three ``[routing]`` config fields, all honored
+by the server runtime:
 
 - ``fairness_mode``: ``"round_robin"`` (default), ``"random"``, or ``"off"``.
 - ``fairness_epsilon``: score proximity threshold; defaults to ``near_tie_epsilon``
   when omitted.
 - ``fairness_scope``: rotation group granularity — ``"provider_model_protocol"``
   (default), ``"provider_model"``, or ``"priority_model_protocol"``.
+
+Scope semantics for the fairness key:
+
+- ``provider_model_protocol``: key includes provider, model, routed protocol,
+  priority tier, and client protocol. Separate rotor per provider/model/protocol
+  group. This is the default and recommended scope for subscription aggregation.
+- ``provider_model``: key includes provider, model, priority tier, and client
+  protocol; protocol is intentionally excluded so OpenAI and Anthropic traffic
+  for the same model collapses into one rotation group.
+- ``priority_model_protocol``: key excludes provider but includes model, routed
+  protocol, priority tier, and client protocol. Co-balances accounts from
+  different providers serving the same model in the same priority tier.
 
 The fairness band is extracted *after* quota scoring and *before* the
 coordinator selects the first circuit-breaker-accepted candidate. Priority
@@ -298,7 +311,7 @@ under the ``fairness`` key for operator diagnostics:
     "mode": "round_robin",
     "applied": true,
     "scope": "provider_model_protocol",
-    "key": "provider=opencode-go|model=gpt-4|protocol=openai|tier=0",
+    "key": "provider=opencode-go|model=gpt-4|protocol=openai|tier=0|client_protocol=openai",
     "candidate_count": 3,
     "selected_index": 0,
     "selected_account_name": "0002",

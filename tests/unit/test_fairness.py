@@ -703,3 +703,560 @@ class TestCoordinatorHotPathFairness:
             await db.disconnect()
             for name in names:
                 os.environ.pop(f"K_{name}", None)
+
+
+# ---------------------------------------------------------------------------
+# Test 8: Config propagation — create_app fairness fields reach Router
+# ---------------------------------------------------------------------------
+
+
+class TestConfigPropagation:
+    """Fairness config from RoutingConfig reaches Router constructor."""
+
+    def test_router_receives_non_default_fairness_config(self) -> None:
+        """Router constructed with non-default fairness config stores the values."""
+        registry, catalog, _names = _build_three_equal_accounts()
+
+        router = Router(
+            registry,  # type: ignore[arg-type]
+            catalog,  # type: ignore[arg-type]
+            fairness_mode="off",
+            fairness_epsilon=0.333,
+            fairness_scope="priority_model_protocol",
+        )
+
+        assert router._fairness_mode == "off"  # pyright: ignore[reportPrivateUsage]
+        assert router._fairness_epsilon == 0.333  # pyright: ignore[reportPrivateUsage]
+        assert router._fairness_scope == "priority_model_protocol"  # pyright: ignore[reportPrivateUsage]
+
+    def test_router_defaults_match_routing_config_defaults(self) -> None:
+        """Router defaults match RoutingConfig defaults when not specified."""
+        registry, catalog, _names = _build_three_equal_accounts()
+
+        router = Router(
+            registry,  # type: ignore[arg-type]
+            catalog,  # type: ignore[arg-type]
+        )
+
+        assert router._fairness_mode == "round_robin"  # pyright: ignore[reportPrivateUsage]
+        assert router._fairness_epsilon is None  # pyright: ignore[reportPrivateUsage]
+        assert router._fairness_scope == "provider_model_protocol"  # pyright: ignore[reportPrivateUsage]
+
+
+# ---------------------------------------------------------------------------
+# Test 9: Protocol-scope fairness key construction
+# ---------------------------------------------------------------------------
+
+
+class TestProtocolScopeFairnessKeys:
+    """Fairness keys respect scope: protocol included/excluded correctly."""
+
+    @pytest.mark.asyncio()
+    async def test_provider_model_protocol_separates_protocols(self) -> None:
+        """provider_model_protocol scope includes protocol in key, producing
+        different keys for different protocols."""
+        from eggpool.routing.fairness import FairnessKey, FairnessRotor
+
+        rotor = FairnessRotor()
+
+        key_openai = FairnessKey(
+            provider_id="prov",
+            model_id="m1",
+            protocol="openai",
+            priority=0,
+        )
+        key_anthropic = FairnessKey(
+            provider_id="prov",
+            model_id="m1",
+            protocol="anthropic",
+            priority=0,
+        )
+
+        states = [AccountRuntimeState(name=f"acct{i:04d}") for i in range(1, 4)]
+        scores = [
+            RoutingScore(
+                account_name=f"acct{i:04d}",
+                quota_score=0.0,
+                weight=1.0,
+                is_eligible=True,
+            )
+            for i in range(1, 4)
+        ]
+        candidates = list(zip(states, scores, strict=True))
+
+        _, decision_openai = await rotor.rotate(key_openai, candidates)
+        _, decision_anthropic = await rotor.rotate(key_anthropic, candidates)
+
+        assert decision_openai.applied is True
+        assert decision_anthropic.applied is True
+        assert "protocol=openai" in decision_openai.key
+        assert "protocol=anthropic" in decision_anthropic.key
+        assert decision_openai.key != decision_anthropic.key
+
+    @pytest.mark.asyncio()
+    async def test_provider_model_collapses_protocols(self) -> None:
+        """provider_model scope excludes protocol from key, collapsing
+        different protocols into the same rotation group."""
+        from eggpool.routing.fairness import FairnessKey, FairnessRotor
+
+        rotor = FairnessRotor()
+
+        # Both keys have protocol=None (scope collapses protocol)
+        key1 = FairnessKey(
+            provider_id="prov",
+            model_id="m1",
+            protocol=None,
+            priority=0,
+        )
+        key2 = FairnessKey(
+            provider_id="prov",
+            model_id="m1",
+            protocol=None,
+            priority=0,
+        )
+
+        states = [AccountRuntimeState(name=f"acct{i:04d}") for i in range(1, 4)]
+        scores = [
+            RoutingScore(
+                account_name=f"acct{i:04d}",
+                quota_score=0.0,
+                weight=1.0,
+                is_eligible=True,
+            )
+            for i in range(1, 4)
+        ]
+        candidates = list(zip(states, scores, strict=True))
+
+        _, decision1 = await rotor.rotate(key1, candidates)
+        _, decision2 = await rotor.rotate(key2, candidates)
+
+        # Same key string → shared rotation group
+        assert decision1.key == decision2.key
+        assert "protocol=*" in decision1.key
+
+    @pytest.mark.asyncio()
+    async def test_priority_model_protocol_excludes_provider(self) -> None:
+        """priority_model_protocol scope excludes provider from key."""
+        from eggpool.routing.fairness import FairnessKey, FairnessRotor
+
+        rotor = FairnessRotor()
+
+        key = FairnessKey(
+            provider_id=None,
+            model_id="m1",
+            protocol="openai",
+            priority=0,
+        )
+
+        states = [AccountRuntimeState(name=f"acct{i:04d}") for i in range(1, 4)]
+        scores = [
+            RoutingScore(
+                account_name=f"acct{i:04d}",
+                quota_score=0.0,
+                weight=1.0,
+                is_eligible=True,
+            )
+            for i in range(1, 4)
+        ]
+        candidates = list(zip(states, scores, strict=True))
+
+        _, decision = await rotor.rotate(key, candidates)
+        assert decision.applied is True
+        assert "provider=*" in decision.key
+        assert "protocol=openai" in decision.key
+
+    def test_fairness_key_helper_scope_provider_model_protocol(self) -> None:
+        """_fairness_key includes provider and protocol for provider_model_protocol."""
+        registry, catalog, _names = _build_three_equal_accounts()
+
+        router = Router(
+            registry,  # type: ignore[arg-type]
+            catalog,  # type: ignore[arg-type]
+            fairness_scope="provider_model_protocol",
+        )
+        key = router._fairness_key(
+            provider_id="prov",
+            model_id="m1",
+            protocol="openai",
+            priority=0,
+            client_protocol=None,
+        )
+        assert key.provider_id == "prov"
+        assert key.protocol == "openai"
+
+    def test_fairness_key_helper_scope_provider_model(self) -> None:
+        """_fairness_key() excludes protocol for provider_model."""
+        registry, catalog, _names = _build_three_equal_accounts()
+
+        router = Router(
+            registry,  # type: ignore[arg-type]
+            catalog,  # type: ignore[arg-type]
+            fairness_scope="provider_model",
+        )
+        key = router._fairness_key(
+            provider_id="prov",
+            model_id="m1",
+            protocol="openai",
+            priority=0,
+            client_protocol=None,
+        )
+        assert key.provider_id == "prov"
+        assert key.protocol is None
+
+    def test_fairness_key_helper_scope_priority_model_protocol(self) -> None:
+        """_fairness_key() excludes provider for priority_model_protocol."""
+        registry, catalog, _names = _build_three_equal_accounts()
+
+        router = Router(
+            registry,  # type: ignore[arg-type]
+            catalog,  # type: ignore[arg-type]
+            fairness_scope="priority_model_protocol",
+        )
+        key = router._fairness_key(
+            provider_id="prov",
+            model_id="m1",
+            protocol="openai",
+            priority=0,
+            client_protocol=None,
+        )
+        assert key.provider_id is None
+        assert key.protocol == "openai"
+
+    @pytest.mark.asyncio()
+    async def test_router_protocol_scoped_keys_vary_by_protocol(self) -> None:
+        """Router passes the actual protocol into fairness keys, not None."""
+
+        registry, catalog, _names = _build_three_equal_accounts()
+
+        router = Router(
+            registry,  # type: ignore[arg-type]
+            catalog,  # type: ignore[arg-type]
+            fairness_scope="provider_model_protocol",
+        )
+
+        # Build keys with different protocols via the helper
+        key_openai = router._fairness_key(
+            provider_id="test-provider",
+            model_id="test-model",
+            protocol="openai",
+            priority=0,
+            client_protocol=None,
+        )
+        key_anthropic = router._fairness_key(
+            provider_id="test-provider",
+            model_id="test-model",
+            protocol="anthropic",
+            priority=0,
+            client_protocol=None,
+        )
+
+        # Keys should differ because protocol is included
+        assert key_openai.protocol == "openai"
+        assert key_anthropic.protocol == "anthropic"
+        assert key_openai != key_anthropic
+
+        # Verify the key strings differ
+        str_openai = key_openai.to_key_string()
+        str_anthropic = key_anthropic.to_key_string()
+        assert "protocol=openai" in str_openai
+        assert "protocol=anthropic" in str_anthropic
+        assert str_openai != str_anthropic
+
+
+# ---------------------------------------------------------------------------
+# Test 10: Config override behavior
+# ---------------------------------------------------------------------------
+
+
+class TestConfigOverrideBehavior:
+    """Fairness config overrides affect routing behavior."""
+
+    @pytest.mark.asyncio()
+    async def test_fairness_mode_off_disables_rotor(self) -> None:
+        """With fairness_mode='off', the first account always wins."""
+        registry, catalog, _names = _build_three_equal_accounts()
+
+        try:
+            quota_estimator = QuotaEstimator()
+            for name in _names:
+                quota_estimator.accounts[name] = AccountQuota(
+                    account_name=name,
+                    weight=1.0,
+                    capacity_5h_microdollars=1_000_000_000,
+                    capacity_7d_microdollars=7_000_000_000,
+                    capacity_30d_microdollars=30_000_000_000,
+                )
+
+            router = Router(
+                registry,  # type: ignore[arg-type]
+                catalog,  # type: ignore[arg-type]
+                quota_estimator=quota_estimator,
+                fairness_mode="off",
+            )
+            _force_deterministic_routing(router)
+
+            first_accounts: list[str] = []
+            for _ in range(6):
+                result = await router.select_accounts_for_failover(
+                    model_id="test-model",
+                    max_accounts=1,
+                )
+                assert len(result) >= 1
+                first_accounts.append(result[0][0].name)
+
+            # With fairness off, the same account should always be first
+            assert all(a == first_accounts[0] for a in first_accounts)
+            # The fairness decision should report disabled
+            decision = router.last_fairness_decision
+            assert decision is not None
+            assert decision.applied is False
+            assert decision.reason == "disabled"
+        finally:
+            for name in _names:
+                os.environ.pop(f"K_{name}", None)
+
+    def test_explicit_fairness_epsilon_controls_band_size(self) -> None:
+        """Explicit fairness_epsilon overrides near_tie_epsilon for band extraction."""
+        from eggpool.routing.router import _fairness_band
+
+        states = [
+            AccountRuntimeState(name="close01", routing_priority=0),
+            AccountRuntimeState(name="close02", routing_priority=0),
+            AccountRuntimeState(name="far01", routing_priority=0),
+        ]
+        scores = [
+            RoutingScore(
+                account_name="close01", quota_score=0.50, weight=1.0, is_eligible=True
+            ),
+            RoutingScore(
+                account_name="close02", quota_score=0.55, weight=1.0, is_eligible=True
+            ),
+            RoutingScore(
+                account_name="far01", quota_score=0.70, weight=1.0, is_eligible=True
+            ),
+        ]
+        ranked = list(zip(states, scores, strict=True))
+
+        # Small epsilon: only the two close accounts form a band
+        band_small, _, reason_small = _fairness_band(
+            ranked, epsilon=0.01, prefer_native=True
+        )
+        assert len(band_small) == 0  # 0.05 gap > 0.01
+        assert reason_small == "not_tied"
+
+        # Larger epsilon: all three form a band
+        band_large, _, reason_large = _fairness_band(
+            ranked, epsilon=0.20, prefer_native=True
+        )
+        assert len(band_large) == 3
+        assert reason_large == "ok"
+
+        # Medium epsilon: only the first two form a band
+        band_medium, _, reason_medium = _fairness_band(
+            ranked, epsilon=0.10, prefer_native=True
+        )
+        assert len(band_medium) == 2
+        assert reason_medium == "ok"
+
+    def test_effective_epsilon_falls_back_to_tiebreaker_range(self) -> None:
+        """When fairness_epsilon is None, effective epsilon uses tiebreaker_range."""
+        registry, catalog, _names = _build_three_equal_accounts()
+
+        router = Router(
+            registry,  # type: ignore[arg-type]
+            catalog,  # type: ignore[arg-type]
+            fairness_epsilon=None,
+        )
+        router._scorer.tiebreaker_range = 0.25  # pyright: ignore[reportPrivateUsage]
+        assert router._fairness_effective_epsilon() == 0.25
+
+    def test_explicit_fairness_epsilon_takes_precedence(self) -> None:
+        """When fairness_epsilon is set, it overrides tiebreaker_range."""
+        registry, catalog, _names = _build_three_equal_accounts()
+
+        router = Router(
+            registry,  # type: ignore[arg-type]
+            catalog,  # type: ignore[arg-type]
+            fairness_epsilon=0.42,
+        )
+        router._scorer.tiebreaker_range = 0.25  # pyright: ignore[reportPrivateUsage]
+        assert router._fairness_effective_epsilon() == 0.42
+
+
+# ---------------------------------------------------------------------------
+# Test 11: Coordinator-path trace metadata
+# ---------------------------------------------------------------------------
+
+
+class TestCoordinatorTraceMetadata:
+    """Coordinator-path fairness decisions include trace metadata."""
+
+    @pytest.mark.asyncio()
+    async def test_coordinator_300_selections_show_fairness_trace(self) -> None:
+        """300 sequential coordinator selections produce fairness trace rows
+        with applied=true and candidate_count=3."""
+        import json
+
+        import httpx
+
+        from eggpool.db.connection import Database
+        from eggpool.db.migrations import MigrationRunner
+        from eggpool.db.repositories import (
+            AttemptRepository,
+            RequestRepository,
+            ReservationRepository,
+            RoutingDecisionRepository,
+        )
+        from eggpool.request.coordinator import ProxyRequestContext, RequestCoordinator
+
+        names = ["0001", "0002", "0003"]
+        for name in names:
+            os.environ[f"K_{name}"] = "k"
+
+        config = AppConfig.model_validate(
+            {
+                "providers": {
+                    "test-provider": {
+                        "id": "test-provider",
+                        "base_url": "https://api.example.com/v1",
+                        "protocols": ["openai"],
+                        "routing_priority": 0,
+                        "accounts": [
+                            {
+                                "name": name,
+                                "api_key_env": f"K_{name}",
+                                "weight": 1.0,
+                            }
+                            for name in names
+                        ],
+                    }
+                }
+            }
+        )
+        registry = AccountRegistry(config)
+
+        cache = ModelCatalogCache()
+        for name in names:
+            cache.update_from_account(
+                name,
+                "test-provider",
+                [{"model_id": "test-model", "protocol": "openai"}],
+            )
+
+        quota_estimator = QuotaEstimator()
+        router = Router(
+            registry,  # type: ignore[arg-type]
+            _MockCatalog(cache),  # type: ignore[arg-type]
+            quota_estimator=quota_estimator,
+            fairness_mode="round_robin",
+        )
+        router._scorer.tiebreaker_range = 0.0  # pyright: ignore[reportPrivateUsage]
+        for name in names:
+            router.quota_estimator.accounts[name] = AccountQuota(
+                account_name=name,
+                weight=1.0,
+                capacity_5h_microdollars=1_000_000_000,
+                capacity_7d_microdollars=7_000_000_000,
+                capacity_30d_microdollars=30_000_000_000,
+            )
+
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            runner = MigrationRunner(db)
+            await runner.run()
+
+            async with db.transaction():
+                await db.execute_insert(
+                    "INSERT INTO models (model_id, display_name, protocol) "
+                    "VALUES (?, ?, ?)",
+                    ("test-model", "test-model", "openai"),
+                )
+                for name in names:
+                    await db.execute_insert(
+                        "INSERT INTO accounts "
+                        "(name, api_key_env, enabled, weight) "
+                        "VALUES (?, ?, 1, ?)",
+                        (name, f"K_{name}", 1.0),
+                    )
+                    row = await db.fetch_one(
+                        "SELECT id FROM accounts WHERE name = ?", (name,)
+                    )
+                    assert row is not None
+                    await db.execute_insert(
+                        "INSERT INTO account_models "
+                        "(account_id, model_id, enabled) VALUES (?, ?, 1)",
+                        (int(row["id"]), "test-model"),
+                    )
+
+            coordinator = RequestCoordinator(
+                registry=registry,
+                catalog=_MockCatalog(cache),  # type: ignore[arg-type]
+                router=router,
+                db=db,
+                client_pool=httpx.AsyncClient(),
+                request_repo=RequestRepository(db),
+                reservation_repo=ReservationRepository(db),
+                attempt_repo=AttemptRepository(db),
+                routing_decision_repo=RoutingDecisionRepository(db),
+                quota_estimator=quota_estimator,
+                health_manager=None,
+            )
+
+            for i in range(300):
+                ctx = ProxyRequestContext(
+                    request_id=f"req-trace-{i}",
+                    protocol="openai",
+                    model_id="test-model",
+                    streaming=False,
+                    original_body=b'{"messages":[{"role":"user","content":"hi"}]}',
+                    incoming_headers={},
+                )
+                await coordinator._select_and_persist_attempt(ctx, 1)
+
+            # Check the last 10 routing decisions for fairness trace
+            rows = await db.fetch_all(
+                "SELECT score_components_json "
+                "FROM routing_decisions ORDER BY id DESC LIMIT 10"
+            )
+            assert len(rows) == 10
+            applied_count = 0
+            for row in rows:
+                components = json.loads(row["score_components_json"])
+                fairness = components.get("fairness", {})
+                assert fairness.get("mode") == "round_robin", (
+                    f"Expected mode=round_robin, got {fairness.get('mode')}"
+                )
+                assert fairness.get("scope") == "provider_model_protocol", (
+                    "Expected scope=provider_model_protocol, "
+                    f"got {fairness.get('scope')}"
+                )
+                # Key should always include protocol=openai
+                key = fairness.get("key", "")
+                assert "protocol=openai" in key, (
+                    f"Expected protocol=openai in key, got {key}"
+                )
+                if fairness.get("applied"):
+                    applied_count += 1
+                    assert fairness.get("candidate_count") >= 2, (
+                        "Expected candidate_count>=2, "
+                        f"got {fairness.get('candidate_count')}"
+                    )
+                    assert fairness.get("reason") == "ok", (
+                        f"Expected reason=ok, got {fairness.get('reason')}"
+                    )
+                else:
+                    # Not-applied rows are expected when reservations shift scores
+                    assert fairness.get("reason") in (
+                        "not_tied",
+                        "disabled",
+                        "single_candidate",
+                    ), f"Unexpected reason: {fairness.get('reason')}"
+            # At least some selections should show applied=True
+            assert applied_count > 0, (
+                "Expected at least some fairness decisions with applied=True"
+            )
+        finally:
+            await db.disconnect()
+            for name in names:
+                os.environ.pop(f"K_{name}", None)

@@ -752,6 +752,9 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         health_manager=health_manager,
         stale_after_s=float(config.models.stale_after_s),
         local_quota_mode=config.routing.local_quota_mode,
+        fairness_mode=config.routing.fairness_mode,
+        fairness_epsilon=config.routing.fairness_epsilon,
+        fairness_scope=config.routing.fairness_scope,
     )
     app.state.router = router
 

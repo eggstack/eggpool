@@ -214,6 +214,37 @@ class Router:
             return self._fairness_epsilon
         return self._scorer.tiebreaker_range
 
+    def _fairness_key(
+        self,
+        *,
+        provider_id: str | None,
+        model_id: str,
+        protocol: str | None,
+        priority: int,
+        client_protocol: str | None,
+    ) -> FairnessKey:
+        """Build a FairnessKey respecting the current fairness_scope.
+
+        Scope semantics:
+        - ``provider_model_protocol``: includes provider, model, routed
+          protocol, priority tier, and client protocol.
+        - ``provider_model``: includes provider, model, priority tier,
+          and client protocol; intentionally collapses protocol groups.
+        - ``priority_model_protocol``: excludes provider, includes model,
+          routed protocol, priority tier, and client protocol.
+        """
+        return FairnessKey(
+            provider_id=(
+                None
+                if self._fairness_scope == "priority_model_protocol"
+                else provider_id
+            ),
+            model_id=model_id,
+            protocol=(None if self._fairness_scope == "provider_model" else protocol),
+            priority=priority,
+            client_protocol=client_protocol,
+        )
+
     @property
     def last_fairness_decision(self) -> FairnessDecision | None:
         """Return the most recent fairness rotation decision, if any."""
@@ -274,10 +305,10 @@ class Router:
                     prefer_native=self._scorer.prefer_native,
                 )
                 if band and self._fairness_mode == "round_robin":
-                    key = FairnessKey(
+                    key = self._fairness_key(
                         provider_id=provider_id,
                         model_id=model_id,
-                        protocol=None,
+                        protocol=protocol,
                         priority=_priority,
                         client_protocol=client_protocol,
                     )
@@ -635,14 +666,10 @@ class Router:
                     prefer_native=self._scorer.prefer_native,
                 )
                 if band and self._fairness_mode == "round_robin":
-                    key = FairnessKey(
-                        provider_id=(
-                            provider_id
-                            if self._fairness_scope != "priority_model_protocol"
-                            else None
-                        ),
+                    key = self._fairness_key(
+                        provider_id=provider_id,
                         model_id=model_id,
-                        protocol=None,
+                        protocol=protocol,
                         priority=_priority,
                         client_protocol=client_protocol,
                     )
@@ -653,19 +680,33 @@ class Router:
                     import random as _random
 
                     _random.shuffle(band)
+                    key = self._fairness_key(
+                        provider_id=provider_id,
+                        model_id=model_id,
+                        protocol=protocol,
+                        priority=_priority,
+                        client_protocol=client_protocol,
+                    )
                     fairness_decision = FairnessDecision(
                         mode="random",
                         applied=True,
-                        key="",
+                        key=key.to_key_string(),
                         candidate_count=len(band),
                         scope=self._fairness_scope,
                         reason="ok",
                     )
                 else:
+                    key = self._fairness_key(
+                        provider_id=provider_id,
+                        model_id=model_id,
+                        protocol=protocol,
+                        priority=_priority,
+                        client_protocol=client_protocol,
+                    )
                     fairness_decision = FairnessDecision(
                         mode=self._fairness_mode,
                         applied=False,
-                        key="",
+                        key=key.to_key_string(),
                         candidate_count=len(ranked_pairs),
                         scope=self._fairness_scope,
                         reason=band_reason,
@@ -676,10 +717,17 @@ class Router:
                 )
                 ranked_pairs = band + rest
             else:
+                key = self._fairness_key(
+                    provider_id=provider_id,
+                    model_id=model_id,
+                    protocol=protocol,
+                    priority=_priority,
+                    client_protocol=client_protocol,
+                )
                 self._last_fairness_decision = FairnessDecision(
                     mode=self._fairness_mode,
                     applied=False,
-                    key="",
+                    key=key.to_key_string(),
                     candidate_count=len(ranked_pairs),
                     scope=self._fairness_scope,
                     reason=(
