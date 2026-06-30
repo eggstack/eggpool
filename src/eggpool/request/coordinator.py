@@ -874,6 +874,7 @@ class RequestCoordinator:
                         selected_score=selected_score,
                         selected_tier=selected_tier,
                         fairness_decision=self._router.last_fairness_decision,
+                        fairness_band_names=self._router.last_fairness_band_names,
                     )
                     trace = RoutingDecisionTrace(
                         model_id=context.model_id,
@@ -2294,6 +2295,7 @@ class RequestCoordinator:
         selected_score: float | None,
         selected_tier: int | None,
         fairness_decision: Any | None = None,
+        fairness_band_names: frozenset[str] | None = None,
     ) -> dict[str, Any]:
         """Build the score_components_json payload for one routing decision.
 
@@ -2316,7 +2318,9 @@ class RequestCoordinator:
                 selected_score_obj = score
                 break
 
-        top_candidates_payload = self._build_top_candidates(ranked_candidates)
+        top_candidates_payload = self._build_top_candidates(
+            ranked_candidates, fairness_band_names=fairness_band_names
+        )
         tie_break = self._derive_tie_break_summary(
             ranked_candidates=ranked_candidates,
             selected_score_obj=selected_score_obj,
@@ -2404,10 +2408,40 @@ class RequestCoordinator:
         ranked_candidates: list[tuple[Any, Any]],
         *,
         limit: int = 5,
+        fairness_band_names: frozenset[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Render the top-N ranked candidates for the dashboard table."""
+        """Render the top-N ranked candidates for the dashboard table.
+
+        Each entry includes ``rank_before_fairness`` (the candidate's
+        position in the score-ordered list before the fairness rotor
+        reordered the band), ``rank_after_fairness`` (the candidate's
+        position in the final list), and ``fairness_band_member`` (True
+        when the candidate was part of the fairness band eligible for
+        rotation).
+        """
+        band = fairness_band_names or frozenset()
+
+        # Build the pre-fairness ordering.  Non-band members keep their
+        # post-fairness rank.  Band members are restored to the sorted
+        # (by account name) order the rotor used before rotation.
+        band_entries = [
+            (state, score) for state, score in ranked_candidates if state.name in band
+        ]
+        band_sorted = sorted(band_entries, key=lambda pair: pair[0].name)
+        pre_fairness_rank: dict[str, int] = {}
+        band_idx = 0
+        for rank, (state, _score) in enumerate(ranked_candidates):
+            if state.name in band:
+                # Place this band member at its sorted position
+                if band_idx < len(band_sorted):
+                    pre_name = band_sorted[band_idx][0].name
+                    pre_fairness_rank[pre_name] = rank
+                    band_idx += 1
+            else:
+                pre_fairness_rank[state.name] = rank
+
         out: list[dict[str, Any]] = []
-        for state, score in ranked_candidates[:limit]:
+        for rank_after, (state, score) in enumerate(ranked_candidates[:limit]):
             entry: dict[str, Any] = {
                 "account_name": state.name,
                 "final_score": float(score.final_score),
@@ -2416,6 +2450,9 @@ class RequestCoordinator:
                 "health_penalty": score.health_penalty,
                 "tier": int(score.tier),
                 "requires_transcode": bool(score.requires_transcode),
+                "rank_before_fairness": pre_fairness_rank.get(state.name, rank_after),
+                "rank_after_fairness": rank_after,
+                "fairness_band_member": state.name in band,
             }
             out.append(entry)
         return out

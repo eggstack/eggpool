@@ -248,6 +248,11 @@ missing credentials, all explicitly disabled, model unknown).
 
 ### Same-Tier Fairness
 
+EggPool is not purely lowest-score-wins for same-tier peer accounts. When
+accounts are effectively tied by priority, weight, health, protocol, and
+utilization score, same-tier fairness rotates candidates to avoid stable
+config-order bias and subscription starvation.
+
 When multiple accounts share the same `routing_priority`, weight, transcode
 status, and have scores within `fairness_epsilon` of the best (default:
 `near_tie_epsilon`), they are considered *same-tier peers*. Without fairness
@@ -261,6 +266,13 @@ The rotor maintains an in-memory position counter per fairness key
 (provider × model × protocol × priority × client_protocol) and rotates
 the candidate list so the first-selected account advances on each
 routing decision.
+
+The rotor's position map is capped at 4096 entries
+(``_ROTOR_HARD_CAP``).  When the cap is reached the entire map is
+cleared and rotation restarts from position 0 for all keys.  This is a
+blunt eviction strategy — there is no LRU or partial eviction.  The cap
+prevents unbounded memory growth when model IDs or fairness keys vary
+heavily.
 
 Fairness is controlled by three ``[routing]`` config fields:
 
@@ -285,6 +297,7 @@ under the ``fairness`` key for operator diagnostics:
   "fairness": {
     "mode": "round_robin",
     "applied": true,
+    "scope": "provider_model_protocol",
     "key": "provider=opencode-go|model=gpt-4|protocol=openai|tier=0",
     "candidate_count": 3,
     "selected_index": 0,
@@ -293,6 +306,57 @@ under the ``fairness`` key for operator diagnostics:
   }
 }
 ```
+
+The ``top_candidates`` array in the same payload carries per-candidate
+fairness annotations:
+
+- ``rank_before_fairness``: candidate's position in the score-ordered list
+  before the fairness rotor reordered the band.
+- ``rank_after_fairness``: candidate's position in the final list.
+- ``fairness_band_member``: ``true`` when the candidate was part of the
+  fairness band eligible for rotation.
+
+#### Diagnosing routing skew
+
+When skew persists after deploying the fairness patch, run:
+
+```bash
+eggpool accounts explain --model '<hot-model>' --protocol openai --scores
+```
+
+Then inspect recent routing decisions:
+
+```sql
+SELECT
+  selected_account_name,
+  eligible_count,
+  scored_count,
+  top_score_account_name,
+  selected_score,
+  json_extract(score_components_json, '$.fairness.mode') AS fairness_mode,
+  json_extract(score_components_json, '$.fairness.applied') AS fairness_applied,
+  json_extract(score_components_json, '$.fairness.scope') AS fairness_scope,
+  json_extract(score_components_json, '$.fairness.reason') AS fairness_reason,
+  json_extract(score_components_json, '$.fairness.candidate_count') AS fairness_candidates
+FROM routing_decisions
+ORDER BY id DESC
+LIMIT 50;
+```
+
+Interpretation:
+
+- ``fairness_applied = true`` with ``fairness_candidates = 3``: fairness is
+  working; check that the distribution is approximately balanced.
+- ``fairness_applied = false`` with ``reason = not_tied``: scores diverge
+  beyond ``fairness_epsilon``; the skew is driven by score policy, not
+  config order.
+- ``fairness_applied = false`` with ``reason = different_weights``: accounts
+  have unequal weights; adjust weights to match if equal peer rotation is
+  desired.
+- ``eligible_count = 1`` or ``scored_count = 1``: this is not a fairness
+  problem; accounts are excluded by catalog, health, or quota policy.
+- ``fairness_applied = false`` with ``reason = disabled``: ``fairness_mode``
+  is set to ``"off"``; switch to ``"round_robin"`` to enable rotation.
 
 ### Lock scope and publish ordering
 

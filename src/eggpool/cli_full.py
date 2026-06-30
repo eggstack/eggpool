@@ -3250,12 +3250,21 @@ def accounts_status(ctx: click.Context) -> None:
         "(default: no protocol filter)."
     ),
 )
+@click.option(
+    "--scores",
+    "show_scores",
+    is_flag=True,
+    default=False,
+    help="Show routing scores for eligible accounts "
+    "(priority, weight, active count, score).",
+)
 @click.pass_context
 def accounts_explain(
     ctx: click.Context,
     model_id: str,
     provider_id: str | None,
     protocol: str | None,
+    show_scores: bool,
 ) -> None:
     """Explain why each account is or is not eligible for ``--model``.
 
@@ -3264,6 +3273,9 @@ def accounts_explain(
     same ``Router.explain_account_eligibility`` helper the coordinator
     uses, so the operator sees the real model/account picture instead
     of an empty in-memory cache.
+
+    With ``--scores``, eligible accounts are also scored and the output
+    includes priority, weight, active request count, and routing score.
     """
     from eggpool.accounts.registry import AccountRegistry
     from eggpool.catalog.cache import ModelCatalogCache
@@ -3326,21 +3338,87 @@ def accounts_explain(
         if not rows:
             click.echo("  (no configured accounts)")
             return
-        name_w = max(len("Account"), *(len(r["account_name"]) for r in rows))
-        elig_w = max(len("Eligible"), 3)
-        reason_w = max(len("Reason"), *(len(r["reason_code"]) for r in rows))
-        header = (
-            f"  {'Account':<{name_w}}  {'Eligible':<{elig_w}}  "
-            f"{'Reason':<{reason_w}}  Detail"
-        )
-        click.echo(header)
-        click.echo(f"  {'-' * name_w}  {'-' * elig_w}  {'-' * reason_w}  ------")
-        for row in rows:
-            click.echo(
-                f"  {row['account_name']:<{name_w}}  "
-                f"{('yes' if row['eligible'] else 'no'):<{elig_w}}  "
-                f"{row['reason_code']:<{reason_w}}  {row['reason_detail']}"
+
+        # Score eligible accounts if --scores is requested
+        score_map: dict[str, dict[str, object]] = {}
+        if show_scores:
+            eligible_names = [r["account_name"] for r in rows if r["eligible"]]
+            if eligible_names:
+                ranked = await router.score_accounts_for_model(
+                    model_id,
+                    provider_id=provider_id,
+                    protocol=protocol,
+                )
+                for rank, (st, sc) in enumerate(ranked):
+                    if sc.account_name in eligible_names:
+                        score_map[sc.account_name] = {
+                            "priority": st.routing_priority,
+                            "weight": sc.weight,
+                            "active_count": sc.active_request_count,
+                            "reserved": sc.reserved_microdollars,
+                            "score": sc.final_score,
+                            "rank": rank + 1,
+                        }
+
+        if show_scores and score_map:
+            name_w = max(len("Account"), *(len(r["account_name"]) for r in rows))
+            elig_w = max(len("Eligible"), 3)
+            reason_w = max(len("Reason"), *(len(r["reason_code"]) for r in rows))
+            pri_w = max(len("Priority"), 4)
+            wt_w = max(len("Weight"), 5)
+            act_w = max(len("Active"), 6)
+            res_w = max(len("Reserved"), 8)
+            scr_w = max(len("Score"), 5)
+            header = (
+                f"  {'Account':<{name_w}}  {'Eligible':<{elig_w}}  "
+                f"{'Reason':<{reason_w}}  {'Pri':<{pri_w}}  "
+                f"{'Wt':<{wt_w}}  {'Active':<{act_w}}  "
+                f"{'Reserved':<{res_w}}  {'Score':<{scr_w}}  Detail"
             )
+            click.echo(header)
+            click.echo(
+                f"  {'-' * name_w}  {'-' * elig_w}  {'-' * reason_w}  "
+                f"{'-' * pri_w}  {'-' * wt_w}  {'-' * act_w}  "
+                f"{'-' * res_w}  {'-' * scr_w}  ------"
+            )
+            for row in rows:
+                sc = score_map.get(row["account_name"])
+                if sc is not None:
+                    pri = f"{sc['priority']}"
+                    wt = f"{sc['weight']:.1f}"
+                    act = f"{sc['active_count']}"
+                    res = f"{sc['reserved']}"
+                    score_str = f"{sc['score']:.4f}"
+                else:
+                    pri = "-"
+                    wt = "-"
+                    act = "-"
+                    res = "-"
+                    score_str = "-"
+                click.echo(
+                    f"  {row['account_name']:<{name_w}}  "
+                    f"{('yes' if row['eligible'] else 'no'):<{elig_w}}  "
+                    f"{row['reason_code']:<{reason_w}}  "
+                    f"{pri:<{pri_w}}  {wt:<{wt_w}}  "
+                    f"{act:<{act_w}}  {res:<{res_w}}  "
+                    f"{score_str:<{scr_w}}  {row['reason_detail']}"
+                )
+        else:
+            name_w = max(len("Account"), *(len(r["account_name"]) for r in rows))
+            elig_w = max(len("Eligible"), 3)
+            reason_w = max(len("Reason"), *(len(r["reason_code"]) for r in rows))
+            header = (
+                f"  {'Account':<{name_w}}  {'Eligible':<{elig_w}}  "
+                f"{'Reason':<{reason_w}}  Detail"
+            )
+            click.echo(header)
+            click.echo(f"  {'-' * name_w}  {'-' * elig_w}  {'-' * reason_w}  ------")
+            for row in rows:
+                click.echo(
+                    f"  {row['account_name']:<{name_w}}  "
+                    f"{('yes' if row['eligible'] else 'no'):<{elig_w}}  "
+                    f"{row['reason_code']:<{reason_w}}  {row['reason_detail']}"
+                )
 
     _run_with_database(config, _run_explain)
 

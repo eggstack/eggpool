@@ -33,6 +33,7 @@ class FairnessDecision:
     applied: bool
     key: str
     candidate_count: int
+    scope: str = "provider_model_protocol"
     selected_index: int | None = None
     selected_account_name: str | None = None
     reason: str = ""
@@ -42,6 +43,7 @@ class FairnessDecision:
         return {
             "mode": self.mode,
             "applied": self.applied,
+            "scope": self.scope,
             "key": self.key,
             "candidate_count": self.candidate_count,
             "selected_index": self.selected_index,
@@ -80,6 +82,8 @@ class FairnessRotor:
         self,
         key: FairnessKey,
         candidates: list[tuple[AccountRuntimeState, RoutingScore]],
+        *,
+        scope: str = "provider_model_protocol",
     ) -> tuple[list[tuple[AccountRuntimeState, RoutingScore]], FairnessDecision]:
         """Rotate *candidates* by the current rotor position for *key*.
 
@@ -96,6 +100,7 @@ class FairnessRotor:
                 applied=False,
                 key=key_str,
                 candidate_count=0,
+                scope=scope,
                 reason="no_candidates",
             )
 
@@ -105,6 +110,7 @@ class FairnessRotor:
                 applied=False,
                 key=key_str,
                 candidate_count=1,
+                scope=scope,
                 selected_index=0,
                 selected_account_name=candidates[0][0].name,
                 reason="single_candidate",
@@ -126,6 +132,7 @@ class FairnessRotor:
             applied=True,
             key=key_str,
             candidate_count=n,
+            scope=scope,
             selected_index=0,
             selected_account_name=rotated[0][0].name,
             reason="ok",

@@ -201,6 +201,7 @@ class Router:
         self._fairness_scope = fairness_scope
         self._fairness_rotor = FairnessRotor()
         self._last_fairness_decision: FairnessDecision | None = None
+        self._last_fairness_band_names: frozenset[str] = frozenset()
         self._active_count_lock = asyncio.Lock()
         self._scorer = QuotaFairScorer(
             quota_estimator=self._quota_estimator,
@@ -217,6 +218,11 @@ class Router:
     def last_fairness_decision(self) -> FairnessDecision | None:
         """Return the most recent fairness rotation decision, if any."""
         return self._last_fairness_decision
+
+    @property
+    def last_fairness_band_names(self) -> frozenset[str]:
+        """Return account names in the most recent fairness band."""
+        return self._last_fairness_band_names
 
     async def select_account(
         self,
@@ -285,6 +291,45 @@ class Router:
             if ranked_pairs:
                 return ranked_pairs[0][0]
         return None
+
+    async def score_accounts_for_model(
+        self,
+        model_id: str,
+        *,
+        provider_id: str | None = None,
+        protocol: str | None = None,
+        client_protocol: str | None = None,
+        transcode_eligibility: set[str] | None = None,
+    ) -> list[tuple[AccountRuntimeState, RoutingScore]]:
+        """Score and rank eligible accounts for a model.
+
+        Returns ``(state, score)`` pairs in score order.  Used by
+        ``eggpool accounts explain --scores`` to surface routing
+        diagnostics without exposing private scoring internals.
+        """
+        candidates = self._selection_candidates(
+            model_id, None, provider_id, protocol, transcode_eligibility
+        )
+        tiers = candidates.tiered()
+        result: list[tuple[AccountRuntimeState, RoutingScore]] = []
+        for _priority, tier_states in tiers:
+            tier_candidates = RoutingCandidates(
+                states=tier_states,
+                by_name={s.name: s for s in tier_states},
+            )
+            scores = await self._score_eligible_accounts(
+                tier_candidates,
+                model_id,
+                None,
+                client_protocol=client_protocol,
+                transcode_eligibility=transcode_eligibility,
+            )
+            ranked_scores = self._scorer.rank_accounts(scores)
+            for score in ranked_scores:
+                state = tier_candidates.by_name.get(score.account_name)
+                if state is not None:
+                    result.append((state, score))
+        return result
 
     async def explain_account_eligibility(
         self,
@@ -602,7 +647,7 @@ class Router:
                         client_protocol=client_protocol,
                     )
                     band, fairness_decision = await self._fairness_rotor.rotate(
-                        key, band
+                        key, band, scope=self._fairness_scope
                     )
                 elif band and self._fairness_mode == "random":
                     import random as _random
@@ -613,6 +658,7 @@ class Router:
                         applied=True,
                         key="",
                         candidate_count=len(band),
+                        scope=self._fairness_scope,
                         reason="ok",
                     )
                 else:
@@ -621,9 +667,13 @@ class Router:
                         applied=False,
                         key="",
                         candidate_count=len(ranked_pairs),
+                        scope=self._fairness_scope,
                         reason=band_reason,
                     )
                 self._last_fairness_decision = fairness_decision
+                self._last_fairness_band_names = (
+                    frozenset(s.name for s, _ in band) if band else frozenset()
+                )
                 ranked_pairs = band + rest
             else:
                 self._last_fairness_decision = FairnessDecision(
@@ -631,12 +681,14 @@ class Router:
                     applied=False,
                     key="",
                     candidate_count=len(ranked_pairs),
+                    scope=self._fairness_scope,
                     reason=(
                         "disabled"
                         if self._fairness_mode == "off"
                         else "single_candidate"
                     ),
                 )
+                self._last_fairness_band_names = frozenset()
 
             for state, score in ranked_pairs:
                 result.append((state, score))
