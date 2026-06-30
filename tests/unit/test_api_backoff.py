@@ -213,6 +213,25 @@ def test_endpoint_includes_iso_backoff_until(
     assert model_unavail["backoff_until"] is None
 
 
+def test_endpoint_reports_account_name_lookup_failure(
+    app_with_repo: tuple[FastAPI, AccountBackoffRepository],
+) -> None:
+    """Backoff rows without account-name enrichment should not look healthy."""
+    app, repo = app_with_repo
+    _populate(repo)
+
+    class _FailingDb:
+        async def fetch_all(self, _sql: str, _params: tuple[int, ...]) -> list[Any]:
+            raise RuntimeError("database unavailable")
+
+    app.state.db = _FailingDb()
+    with TestClient(app) as client:
+        response = client.get("/api/backoffs")
+
+    assert response.status_code == 500
+    assert response.json() == {"error": "failed to read backoff account names"}
+
+
 def test_endpoint_returns_503_when_repo_missing() -> None:
     app = FastAPI()
     app.state.db = None

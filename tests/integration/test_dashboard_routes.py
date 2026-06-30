@@ -425,6 +425,25 @@ async def test_overview_html_includes_no_store_for_refresh(
 
 
 @pytest.mark.asyncio()
+async def test_overview_ignores_broken_update_checker(
+    migrated_app: FastAPI,
+) -> None:
+    """A bad update-checker snapshot must not break dashboard rendering."""
+    from fastapi.testclient import TestClient
+
+    class _BrokenUpdateChecker:
+        def snapshot(self) -> object:
+            raise RuntimeError("snapshot unavailable")
+
+    migrated_app.state.update_checker = _BrokenUpdateChecker()
+    client = TestClient(migrated_app)
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert 'id="dashboard-content"' in response.text
+
+
+@pytest.mark.asyncio()
 async def test_theme_is_cached_across_requests(
     migrated_app: FastAPI,
 ) -> None:

@@ -42,6 +42,37 @@ def _resolve_now(request: Request) -> float:
     return now
 
 
+async def _load_account_names(db: Any, account_ids: set[int]) -> dict[int, str]:
+    """Return account names keyed by ID for a non-empty account ID set."""
+    ids = sorted(account_ids)
+    placeholders = ",".join("?" for _ in ids)
+    account_rows = await db.fetch_all(
+        f"SELECT id, name FROM accounts WHERE id IN ({placeholders})",
+        tuple(ids),
+    )
+    return {int(r["id"]): str(r["name"]) for r in cast("list[Any]", account_rows)}
+
+
+def _render_backoff_entry(
+    row: Any,
+    *,
+    account_name: str | None,
+) -> dict[str, Any]:
+    """Render a repository row as the stable public JSON shape."""
+    backoff_until_epoch = row.get("backoff_until_epoch")
+    if backoff_until_epoch is not None:
+        backoff_until_epoch = float(backoff_until_epoch)
+    return {
+        "account_name": account_name,
+        "model_id": row.get("model_id"),
+        "reason": str(row.get("reason") or ""),
+        "backoff_until": _iso_or_none(backoff_until_epoch),
+        "consecutive_failures": int(row.get("consecutive_failures") or 0),
+        "status_code": row.get("status_code"),
+        "error_class": row.get("error_class"),
+    }
+
+
 async def handle_backoffs(request: Request) -> Response:
     """GET /api/backoffs.
 
@@ -76,35 +107,22 @@ async def handle_backoffs(request: Request) -> Response:
 
     name_by_id: dict[int, str] = {}
     if rows:
-        ids = sorted({int(r["account_id"]) for r in rows})
-        placeholders = ",".join("?" for _ in ids)
+        account_ids = {int(r["account_id"]) for r in rows}
         try:
-            account_rows = await db.fetch_all(
-                f"SELECT id, name FROM accounts WHERE id IN ({placeholders})",
-                tuple(ids),
-            )
+            name_by_id = await _load_account_names(db, account_ids)
         except Exception:
-            account_rows = []
-        name_by_id = {
-            int(r["id"]): str(r["name"]) for r in cast("list[Any]", account_rows)
-        }
+            return JSONResponse(
+                status_code=500,
+                content={"error": "failed to read backoff account names"},
+            )
 
-    entries: list[dict[str, Any]] = []
-    for row in rows:
-        backoff_until_epoch = row.get("backoff_until_epoch")
-        if backoff_until_epoch is not None:
-            backoff_until_epoch = float(backoff_until_epoch)
-        entries.append(
-            {
-                "account_name": name_by_id.get(int(row["account_id"])),
-                "model_id": row.get("model_id"),
-                "reason": str(row.get("reason") or ""),
-                "backoff_until": _iso_or_none(backoff_until_epoch),
-                "consecutive_failures": int(row.get("consecutive_failures") or 0),
-                "status_code": row.get("status_code"),
-                "error_class": row.get("error_class"),
-            }
+    entries = [
+        _render_backoff_entry(
+            row,
+            account_name=name_by_id.get(int(row["account_id"])),
         )
+        for row in rows
+    ]
 
     return JSONResponse(
         content={

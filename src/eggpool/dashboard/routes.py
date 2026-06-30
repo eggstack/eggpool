@@ -108,6 +108,13 @@ _VALID_BUCKETS = frozenset({"hour", "day"})
 _VALID_GROUP_BY = frozenset({"provider", "model", "provider_model", "account"})
 
 
+async def _get_disabled_account_count(request: Request, show_disabled: bool) -> int:
+    """Return hidden disabled-account count for pages with that toggle."""
+    if show_disabled:
+        return 0
+    return await fetch_disabled_account_count(request.app.state.stats_db)
+
+
 def _normalize_bucket(bucket: str) -> str:
     """Return a supported dashboard bucket, falling back to hourly."""
     return bucket if bucket in _VALID_BUCKETS else "hour"
@@ -154,7 +161,10 @@ def _get_update_info(request: Request) -> Any | None:
     checker = getattr(request.app.state, "update_checker", None)
     if checker is None:
         return None
-    return checker.snapshot()
+    try:
+        return checker.snapshot()
+    except Exception:
+        return None
 
 
 def _get_theme_data(
@@ -244,9 +254,7 @@ async def handle_overview(
     # Always fetch the disabled count so the Account breakdown empty
     # state can offer a one-click opt-in even when no rows are
     # currently visible. Cheap one-row aggregate; safe on every render.
-    disabled_count = 0
-    if not show_disabled:
-        disabled_count = await fetch_disabled_account_count(request.app.state.stats_db)
+    disabled_count = await _get_disabled_account_count(request, show_disabled)
 
     # Fan out the independent stat reads concurrently.  The single
     # shared connection lock serializes per-query execution, so without
@@ -338,9 +346,7 @@ async def handle_accounts(
 
     # Always fetch the disabled count so the empty state can offer the
     # one-click opt-in even when no rows are currently visible.
-    disabled_count = 0
-    if not show_disabled:
-        disabled_count = await fetch_disabled_account_count(request.app.state.stats_db)
+    disabled_count = await _get_disabled_account_count(request, show_disabled)
 
     accounts = await stats.get_account_stats(
         time_range, include_disabled=show_disabled, use_cache=True
