@@ -298,7 +298,7 @@ mergeable, testable PR.
 | 3 | Streaming translation ✅ | `phase-3-streaming-translation.md` | `StreamingTranscoder` for both directions, fed by the existing observer, with backpressure and frame-level correctness tests. Replaces `yield chunk` in `_build_stream_generator`. |
 | 4 | Routing and eligibility ✅ | `phase-4-routing-eligibility.md` | Widened account selector, native-preference ordering, integration tests proving models reach transcodable accounts. |
 | 5 | Operator controls and docs ✅ | `phase-5-operator-controls-docs.md` | `[transcoder]` config section, `eggpool configsetup opencode` annotations, README updates, default-off rollout, structured logging. |
-| 6 | Deferred features | `phase-6-deferred-features.md` | Tools, vision, thinking, structured outputs. Each is its own sub-phase gated on operator opt-in. |
+| 6 | Deferred features | `phase-6-deferred-features.md` | Tools, vision, thinking, structured outputs. Each is its own sub-phase gated on operator opt-in. **6.1 (Tool use / function calling) shipped 2026-06-30**; see `plans/tooltranscoding.md` for the implementation-grade plan. Sub-phases 6.2 (vision), 6.3 (thinking), 6.4 (structured outputs), and 6.5 (Anthropic primitives) remain pending. |
 
 The roadmap file (this file) is the index. Each phase file is self-contained
 with its own validation steps and acceptance criteria.

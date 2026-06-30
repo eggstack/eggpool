@@ -288,7 +288,15 @@ class TestResponseStructure:
         }
         result, _ = transcoder.decode_response(payload, _make_context())
 
-        assert result["content"] == [{"type": "text", "text": "None"}]
+        assert result["content"] == [
+            {"type": "text", "text": "None"},
+            {
+                "type": "tool_use",
+                "id": result["content"][1]["id"],
+                "name": "get_weather",
+                "input": {},
+            },
+        ]
 
     def test_empty_choices_returns_empty_content(
         self, transcoder: AnthropicToOpenAI
@@ -321,3 +329,299 @@ class TestResponseStructure:
         result, _ = transcoder.decode_response(payload, _make_context())
 
         assert "system_fingerprint" not in result
+
+
+class TestToolResponseTranslation:
+    def test_tool_calls_become_tool_use_blocks(
+        self, transcoder: AnthropicToOpenAI
+    ) -> None:
+        payload = {
+            "id": "cmpl-1",
+            "model": "gpt-4",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_abc",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": '{"city": "SF"}',
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+        result, warnings = transcoder.decode_response(payload, _make_context())
+
+        assert result["content"] == [
+            {"type": "text", "text": "None"},
+            {
+                "type": "tool_use",
+                "id": result["content"][1]["id"],
+                "name": "get_weather",
+                "input": {"city": "SF"},
+            },
+        ]
+        assert result["stop_reason"] == "tool_use"
+        id_warnings = [
+            w
+            for w in warnings
+            if w.get("kind") == "tool_call_id_translated"
+            and w.get("from") == "call_abc"
+        ]
+        assert len(id_warnings) == 1
+        assert result["content"][1]["id"].startswith("toolu_")
+
+    def test_text_and_tool_calls_both_emitted(
+        self, transcoder: AnthropicToOpenAI
+    ) -> None:
+        payload = {
+            "id": "cmpl-1",
+            "model": "gpt-4",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "Checking weather...",
+                        "tool_calls": [
+                            {
+                                "id": "call_abc",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": "{}",
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+        result, _ = transcoder.decode_response(payload, _make_context())
+
+        assert result["content"] == [
+            {"type": "text", "text": "Checking weather..."},
+            {
+                "type": "tool_use",
+                "id": result["content"][1]["id"],
+                "name": "get_weather",
+                "input": {},
+            },
+        ]
+
+    def test_multiple_tool_calls_become_multiple_tool_use_blocks(
+        self, transcoder: AnthropicToOpenAI
+    ) -> None:
+        payload = {
+            "id": "cmpl-1",
+            "model": "gpt-4",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": '{"city": "SF"}',
+                                },
+                            },
+                            {
+                                "id": "call_2",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_time",
+                                    "arguments": '{"timezone": "PST"}',
+                                },
+                            },
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+        result, _ = transcoder.decode_response(payload, _make_context())
+
+        assert len(result["content"]) == 3
+        assert result["content"][0]["type"] == "text"
+        assert result["content"][1]["type"] == "tool_use"
+        assert result["content"][1]["name"] == "get_weather"
+        assert result["content"][2]["type"] == "tool_use"
+        assert result["content"][2]["name"] == "get_time"
+
+    def test_malformed_tool_arguments_passed_as_raw(
+        self, transcoder: AnthropicToOpenAI
+    ) -> None:
+        payload = {
+            "id": "cmpl-1",
+            "model": "gpt-4",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_abc",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": "not-valid-json{",
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        }
+        result, warnings = transcoder.decode_response(payload, _make_context())
+
+        tool_use_block = result["content"][1]
+        assert tool_use_block["input"] == {"__raw_arguments__": "not-valid-json{"}
+        malformed_warnings = [
+            w for w in warnings if w.get("kind") == "malformed_tool_arguments"
+        ]
+        assert len(malformed_warnings) == 1
+
+    def test_tool_call_with_known_id_uses_id_map(
+        self, transcoder: AnthropicToOpenAI
+    ) -> None:
+        context = _make_context()
+        context.id_map.register("call_known", "toolu_known")
+        payload = {
+            "id": "cmpl-1",
+            "model": "gpt-4",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_known",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": "{}",
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        }
+        result, _ = transcoder.decode_response(payload, context)
+
+        assert result["content"][1]["type"] == "tool_use"
+        assert result["content"][1]["id"] != "toolu_known"
+        assert result["content"][1]["id"].startswith("toolu_")
+
+    def test_finish_reason_tool_calls_maps_to_stop_reason_tool_use(
+        self, transcoder: AnthropicToOpenAI
+    ) -> None:
+        payload = {
+            "id": "cmpl-1",
+            "model": "gpt-4",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_abc",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": "{}",
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        }
+        result, _ = transcoder.decode_response(payload, _make_context())
+
+        assert result["stop_reason"] == "tool_use"
+
+    def test_refusal_with_tool_calls_emits_refusal_block(
+        self, transcoder: AnthropicToOpenAI
+    ) -> None:
+        payload = {
+            "id": "cmpl-1",
+            "model": "gpt-4",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "refusal": "I cannot help with that.",
+                        "tool_calls": [
+                            {
+                                "id": "call_abc",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": "{}",
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        }
+        result, _ = transcoder.decode_response(payload, _make_context())
+
+        assert result["content"][0] == {
+            "type": "text",
+            "text": "I cannot help with that.",
+        }
+        assert result["content"][1]["type"] == "tool_use"
+        assert result["stop_reason"] == "refusal"
+
+    def test_tool_call_openai_response_fixture(
+        self, transcoder: AnthropicToOpenAI
+    ) -> None:
+        payload = _load_fixture("tool_call_openai_response.json")
+        result, _ = transcoder.decode_response(payload, _make_context())
+
+        assert result["content"] == [
+            {"type": "text", "text": "None"},
+            {
+                "type": "tool_use",
+                "id": result["content"][1]["id"],
+                "name": "get_weather",
+                "input": {"city": "San Francisco"},
+            },
+        ]
+        assert result["stop_reason"] == "tool_use"

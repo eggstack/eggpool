@@ -33,6 +33,22 @@ def extract_text_blocks(blocks: Any) -> list[str]:
     return result
 
 
+def extract_tool_blocks(blocks: Any) -> list[dict[str, Any]]:
+    """Return ``tool_use`` / ``tool_result`` blocks from a content array.
+
+    Walks the iter_objects helper and returns every dict whose ``type``
+    field is one of the tool-related shapes.  The caller is responsible
+    for any further filtering (e.g. dropping image parts inside a
+    ``tool_result`` is left to phase 6.2).
+    """
+    result: list[dict[str, Any]] = []
+    for block in iter_objects(blocks):
+        block_type = block.get("type")
+        if block_type in ("tool_use", "tool_result"):
+            result.append(block)
+    return result
+
+
 def has_non_text_blocks(blocks: Any) -> bool:
     """True when a block list contains at least one non-text object."""
     return any(block.get("type") != "text" for block in iter_objects(blocks))

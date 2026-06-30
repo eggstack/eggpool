@@ -1,0 +1,21 @@
+{
+    "id": "msg-xyz",
+    "type": "message",
+    "role": "assistant",
+    "content": [
+        {"type": "text", "text": "Let me check."},
+        {
+            "type": "tool_use",
+            "id": "toolu_def456",
+            "name": "get_weather",
+            "input": {"city": "San Francisco"}
+        }
+    ],
+    "model": "claude-3-opus",
+    "stop_reason": "tool_use",
+    "stop_sequence": null,
+    "usage": {
+        "input_tokens": 25,
+        "output_tokens": 10
+    }
+}

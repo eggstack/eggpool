@@ -4,6 +4,14 @@ Provides ``StreamingTranscoder`` implementations that translate upstream SSE
 byte streams into client-format bytes on a chunk-by-chunk basis.  Each
 transcoder owns an ``IncrementalSSEObserver`` for usage extraction and
 maintains its own incremental SSE frame parser for translation.
+
+Phase 6.1 adds tool-call delta support: ``AnthropicToOpenAIStreaming`` emits
+``delta.tool_calls`` entries for every ``content_block_start`` /
+``input_json_delta`` / ``content_block_stop`` triple carrying a
+``tool_use`` block; ``OpenAIToAnthropicStreaming`` buffers incremental
+``tool_calls[*].function.arguments`` strings and emits an Anthropic
+``content_block_start`` + ``content_block_stop`` pair per call when the
+upstream signals ``finish_reason: "tool_calls"``.
 """
 
 from __future__ import annotations
@@ -11,6 +19,7 @@ from __future__ import annotations
 import codecs
 import json
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from eggpool.proxy.sse_observer import IncrementalSSEObserver
@@ -18,6 +27,7 @@ from eggpool.proxy.sse_observer import IncrementalSSEObserver
 if TYPE_CHECKING:
     from eggpool.proxy.usage import StreamUsageResult
     from eggpool.transcoder.context import TranscodeContext
+    from eggpool.transcoder.ids import ToolCallIdMap
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +53,31 @@ _STOP_TO_FINISH: dict[str, str] = {
 }
 
 _MAX_INCOMPLETE_FRAME_BYTES = 64 * 1024
+
+_PAUSE_TURN_FUNCTION_NAME = "__eggpool_pause_turn__"
+
+
+@dataclass(slots=True)
+class _OpenAIToolCall:
+    """Per-slot tool-call state for the Anthropic → OpenAI streaming transcoder."""
+
+    index: int
+    openai_index: int
+    id: str
+    name: str
+    arguments: str = ""
+    finalised: bool = False
+
+
+@dataclass(slots=True)
+class _AnthropicToolUse:
+    """Per-slot tool-use state for the OpenAI → Anthropic streaming transcoder."""
+
+    openai_index: int
+    anthropic_index: int
+    id: str
+    name: str
+    arguments: str = ""
 
 
 def _utf8_len(value: str) -> int:
@@ -220,13 +255,18 @@ class _BaseStreamingTranscoder:
         self._discarding = False
         return frames
 
-    def _warn(self, message: str, *args: object) -> None:
+    def _warn(self, message: str, *args: object, **context: Any) -> None:
         """Log a warning and accumulate it in the transcode context."""
         logger.warning(message, *args)
         if self._transcode_context is not None:
-            self._transcode_context.loss_warnings.append(
-                {"streaming_transcoder": message},
-            )
+            payload: dict[str, Any] = {"streaming_transcoder": message}
+            payload.update(context)
+            self._transcode_context.loss_warnings.append(payload)
+
+    def _id_map(self) -> ToolCallIdMap | None:
+        if self._transcode_context is None:
+            return None
+        return self._transcode_context.id_map
 
     # ------------------------------------------------------------------
     # Helpers
@@ -280,6 +320,8 @@ class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
         self._pending_stop_reason = "end_turn"
         self._pending_usage: dict[str, Any] | None = None
         self._usage_emitted = False
+        self._anthropic_tool_blocks: dict[int, _AnthropicToolUse] = {}
+        self._tool_blocks_emitted = False
 
     async def feed(self, chunk: bytes) -> list[bytes]:
         self._observer.observe(chunk)
@@ -295,6 +337,14 @@ class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
         out: list[bytes] = []
         for event_type, data in frames:
             out.extend(self._translate(event_type, data))
+        if (
+            not self._finished
+            and self._anthropic_tool_blocks
+            and not self._tool_blocks_emitted
+        ):
+            self._finished = True
+            self._pending_stop_reason = "tool_use"
+            out.extend(self._flush_pending_tool_blocks())
         out.extend(self._stop_message())
         return out
 
@@ -351,17 +401,99 @@ class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
         delta = choice.get("delta", {})
         finish = choice.get("finish_reason")
         text = delta.get("content")
+        tool_calls_delta = delta.get("tool_calls")
         if not self._started and (
-            delta.get("role") == "assistant" or text is not None or finish
+            delta.get("role") == "assistant"
+            or text is not None
+            or tool_calls_delta
+            or finish
         ):
             out = self._start_message(parsed)
         else:
             out = []
+        if tool_calls_delta:
+            out.extend(self._ingest_tool_calls(tool_calls_delta))
         if text:
             out.extend(self._content_delta(text))
             return out
         if finish:
             out.extend(self._finish(parsed, finish))
+        return out
+
+    def _ingest_tool_calls(
+        self,
+        tool_calls_delta: list[object],
+    ) -> list[bytes]:
+        """Buffer OpenAI ``tool_calls`` deltas for later Anthropic emission.
+
+        The streaming transcoder cannot emit the Anthropic shape until the
+        upstream signals ``finish_reason: "tool_calls"``; until then we
+        accumulate id / name / arguments on the per-index slot.
+        """
+        out: list[bytes] = []
+        id_map = self._id_map()
+        for entry in tool_calls_delta:
+            if not isinstance(entry, dict):
+                continue
+            entry_dict: dict[str, Any] = cast("dict[str, Any]", entry)
+            raw_index = entry_dict.get("index")
+            index = int(raw_index) if raw_index is not None else 0
+            slot = self._anthropic_tool_blocks.get(index)
+            call_id_raw = entry_dict.get("id")
+            call_id = str(call_id_raw) if call_id_raw is not None else None
+            function_raw = entry_dict.get("function")
+            function = (
+                cast("dict[str, Any]", function_raw)
+                if isinstance(function_raw, dict)
+                else None
+            )
+            if call_id:
+                if slot is not None and slot.id and slot.id != call_id:
+                    self._warn(
+                        "tool_call_id_changed",
+                        index=index,
+                        from_id=slot.id,
+                        to_id=call_id,
+                    )
+                if slot is None:
+                    upstream_id = (
+                        id_map.generate_anthropic_id()
+                        if id_map is not None
+                        else f"toolu_{call_id.removeprefix('call_') or 'x'}"
+                    )
+                    if id_map is not None and call_id:
+                        id_map.register(call_id, upstream_id)
+                    slot = _AnthropicToolUse(
+                        openai_index=index,
+                        anthropic_index=len(self._anthropic_tool_blocks),
+                        id=upstream_id,
+                        name="",
+                        arguments="",
+                    )
+                    self._anthropic_tool_blocks[index] = slot
+                elif id_map is not None and call_id:
+                    id_map.register(call_id, slot.id)
+            if slot is None and function is not None:
+                upstream_id = (
+                    id_map.generate_anthropic_id() if id_map is not None else None
+                )
+                slot = _AnthropicToolUse(
+                    openai_index=index,
+                    anthropic_index=len(self._anthropic_tool_blocks),
+                    id=upstream_id or f"toolu_anon_{index}",
+                    name="",
+                    arguments="",
+                )
+                self._anthropic_tool_blocks[index] = slot
+            if slot is None:
+                continue
+            if function is not None:
+                name_val = function.get("name")
+                if name_val is not None:
+                    slot.name = str(name_val)
+                arguments_val = function.get("arguments")
+                if arguments_val is not None:
+                    slot.arguments = (slot.arguments or "") + str(arguments_val)
         return out
 
     def _start_message(self, parsed: dict[str, Any]) -> list[bytes]:
@@ -445,7 +577,57 @@ class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
                     {"type": "content_block_stop", "index": 0},
                 )
             )
+        out.extend(self._flush_pending_tool_blocks())
         return out
+
+    def _flush_pending_tool_blocks(self) -> list[bytes]:
+        """Emit one ``content_block_start`` + ``content_block_stop`` per slot."""
+        if not self._anthropic_tool_blocks or self._tool_blocks_emitted:
+            return []
+        self._tool_blocks_emitted = True
+        out: list[bytes] = []
+        for anthropic_index, slot in enumerate(self._anthropic_tool_blocks.values()):
+            parsed_input = self._parse_tool_arguments(slot.arguments)
+            slot.anthropic_index = anthropic_index
+            out.append(
+                self._anthropic_frame(
+                    "content_block_start",
+                    {
+                        "type": "content_block_start",
+                        "index": anthropic_index,
+                        "content_block": {
+                            "type": "tool_use",
+                            "id": slot.id,
+                            "name": slot.name,
+                            "input": parsed_input,
+                        },
+                    },
+                )
+            )
+            out.append(
+                self._anthropic_frame(
+                    "content_block_stop",
+                    {"type": "content_block_stop", "index": anthropic_index},
+                )
+            )
+        return out
+
+    def _parse_tool_arguments(self, raw: str) -> dict[str, Any]:
+        """Parse accumulated ``partial_json`` into an input object.
+
+        Invalid JSON is wrapped as ``{"__raw_arguments__": "<raw>"}`` and a
+        ``malformed_tool_arguments`` warning is appended to the transcode
+        context (if available).
+        """
+        try:
+            parsed_obj: object = json.loads(raw) if raw else {}
+        except (json.JSONDecodeError, ValueError):
+            self._warn("malformed_tool_arguments", id=self._id)
+            return {"__raw_arguments__": raw}
+        if isinstance(parsed_obj, dict):
+            return cast("dict[str, Any]", parsed_obj)
+        self._warn("malformed_tool_arguments", id=self._id, reason="not_object")
+        return {"__raw_arguments__": raw}
 
     def _handle_usage_only(
         self,
@@ -511,6 +693,9 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
         self._model = ""
         self._emitted_usage = False
         self._done_emitted = False
+        self._tool_blocks: dict[int, _OpenAIToolCall] = {}
+        self._openai_tool_index: dict[int, int] = {}
+        self._next_openai_tool_index = 0
 
     async def feed(self, chunk: bytes) -> list[bytes]:
         self._observer.observe(chunk)
@@ -579,11 +764,93 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
         if t == "message_start":
             return self._on_message_start(parsed)
         if t == "content_block_start":
-            return []
+            return self._on_content_block_start(parsed)
         if t == "content_block_delta":
             return self._on_content_block_delta(parsed)
+        if t == "content_block_stop":
+            return self._on_content_block_stop(parsed)
         if t == "message_delta":
             return self._on_message_delta(parsed)
+        return []
+
+    def _on_content_block_start(
+        self,
+        parsed: dict[str, Any],
+    ) -> list[bytes]:
+        block_raw = parsed.get("content_block")
+        if not isinstance(block_raw, dict):
+            return []
+        block = cast("dict[str, Any]", block_raw)
+        if block.get("type") != "tool_use":
+            return []
+        raw_index = parsed.get("index", 0)
+        upstream_index = int(raw_index) if raw_index is not None else 0
+        id_raw = block.get("id", "")
+        upstream_id = str(id_raw) if id_raw is not None else ""
+        name_raw = block.get("name", "")
+        name = str(name_raw) if name_raw is not None else ""
+        id_map = self._id_map()
+        openai_id: str | None = (
+            id_map.to_client(upstream_id)
+            if id_map is not None and upstream_id
+            else None
+        )
+        if not openai_id:
+            openai_id = (
+                id_map.generate_openai_id()
+                if id_map is not None
+                else f"call_{upstream_id.removeprefix('toolu_') or 'x'}"
+            )
+        if id_map is not None and upstream_id:
+            id_map.register(openai_id, upstream_id)
+        openai_index = self._next_openai_tool_index
+        self._next_openai_tool_index += 1
+        self._tool_blocks[upstream_index] = _OpenAIToolCall(
+            index=upstream_index,
+            openai_index=openai_index,
+            id=openai_id,
+            name=name,
+        )
+        self._openai_tool_index[upstream_index] = openai_index
+        return [
+            self._openai_frame(
+                {
+                    "id": self._id,
+                    "object": "chat.completion.chunk",
+                    "created": 0,
+                    "model": self._model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {
+                                "role": "assistant",
+                                "tool_calls": [
+                                    {
+                                        "index": openai_index,
+                                        "id": openai_id,
+                                        "type": "function",
+                                        "function": {
+                                            "name": name,
+                                            "arguments": "",
+                                        },
+                                    }
+                                ],
+                            },
+                            "finish_reason": None,
+                        }
+                    ],
+                },
+            ),
+        ]
+
+    def _on_content_block_stop(
+        self,
+        parsed: dict[str, Any],
+    ) -> list[bytes]:
+        upstream_index = int(parsed.get("index", 0))
+        slot = self._tool_blocks.get(upstream_index)
+        if slot is not None:
+            slot.finalised = True
         return []
 
     def _on_message_start(
@@ -621,6 +888,9 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
         parsed: dict[str, Any],
     ) -> list[bytes]:
         delta = parsed.get("delta", {})
+        delta_type = delta.get("type", "")
+        if delta_type == "input_json_delta":
+            return self._on_tool_input_json_delta(parsed)
         text = delta.get("text", "")
         if not text:
             return []
@@ -635,6 +905,42 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
                         {
                             "index": 0,
                             "delta": {"content": text},
+                            "finish_reason": None,
+                        }
+                    ],
+                },
+            ),
+        ]
+
+    def _on_tool_input_json_delta(
+        self,
+        parsed: dict[str, Any],
+    ) -> list[bytes]:
+        upstream_index = int(parsed.get("index", 0))
+        slot = self._tool_blocks.get(upstream_index)
+        if slot is None:
+            return []
+        delta = parsed.get("delta", {})
+        partial = str(delta.get("partial_json", ""))
+        slot.arguments = (slot.arguments or "") + partial
+        return [
+            self._openai_frame(
+                {
+                    "id": self._id,
+                    "object": "chat.completion.chunk",
+                    "created": 0,
+                    "model": self._model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": slot.openai_index,
+                                        "function": {"arguments": partial},
+                                    }
+                                ]
+                            },
                             "finish_reason": None,
                         }
                     ],

@@ -19,13 +19,13 @@ upstreams from OpenCode / Aider / Cursor.
 Five sub-phases, ordered by demand. Each is independently shippable.
 Operators can enable any combination.
 
-| # | Sub-phase | Plan section | Demand driver |
+| # | Sub-phase | Plan section | Status |
 |---|---|---|---|
-| 6.1 | Tool use / function calling | [§ 1](#1-tool-use--function-calling) | Largest gap; agent workflows |
-| 6.2 | Vision / image input | [§ 2](#2-vision--image-input) | Multimodal models |
-| 6.3 | Extended thinking / reasoning | [§ 3](#3-extended-thinking--reasoning) | OpenAI o-series, Anthropic Sonnet 4+ |
-| 6.4 | Structured outputs | [§ 4](#4-structured-outputs) | `response_format`, `json_schema` |
-| 6.5 | Anthropic primitives | [§ 5](#5-anthropic-primitives) | `pause_turn`, `cache_control`, `context_management` |
+| 6.1 | Tool use / function calling | [§ 1](#1-tool-use--function-calling) | ✅ Implemented 2026-06-30 (`plans/tooltranscoding.md`) |
+| 6.2 | Vision / image input | [§ 2](#2-vision--image-input) | Pending |
+| 6.3 | Extended thinking / reasoning | [§ 3](#3-extended-thinking--reasoning) | Pending |
+| 6.4 | Structured outputs | [§ 4](#4-structured-outputs) | Pending |
+| 6.5 | Anthropic primitives | [§ 5](#5-anthropic-primitives) | Partial — basic `pause_turn` → `__eggpool_pause_turn__` sentinel handling and `cache_control_dropped` warning shipped with 6.1; structured `pause_turn` surface remains pending |
 
 Each sub-phase is independently reviewed and merged. They share a
 scaffolding: each adds a feature flag under `[transcoder.features]` and
@@ -111,18 +111,22 @@ tests can reference it without string typos:
 LOSS_WARNING_KINDS = frozenset({
     # Phase 2 (text-only)
     "dropped_field", "value_clamped",
-    # 6.1 (tools)
+    # 6.1 (tools) — implemented 2026-06-30
     "tool_call_id_translated", "parallel_tool_calls_collapsed",
-    "tool_result_image_dropped",
-    # 6.2 (vision)
+    "tool_result_image_dropped", "malformed_tool_arguments",
+    "invalid_tool_choice", "unsupported_tool_type",
+    "empty_tool_use_block", "tool_call_id_changed",
+    "tool_result_error_passthrough", "cache_control_dropped",
+    "pause_turn", "non_text_content_dropped", "tool_result_inferred",
+    # 6.2 (vision) — pending
     "image_unsupported_format", "image_url_to_base64_fallback",
     "image_too_large",
-    # 6.3 (thinking)
+    # 6.3 (thinking) — pending
     "thinking_signature_dropped", "reasoning_content_dropped",
-    # 6.4 (structured outputs)
+    # 6.4 (structured outputs) — pending
     "response_format_to_system_prompt",
-    # 6.5 (anthropic primitives)
-    "cache_control_dropped", "pause_turn_surface", "top_k_dropped",
+    # 6.5 (anthropic primitives) — partial
+    "pause_turn_surface", "top_k_dropped",
 })
 ```
 
@@ -512,3 +516,47 @@ The `"reject"` policy implementation is a small follow-up after 6.5
 because it requires the coordinator to read `loss_warnings` after
 `encode_request` and short-circuit. The implementation is documented in
 `plans/phase-6-reject-policy.md` (to be written when 6.5 lands).
+
+## Completed Phases
+
+### 6.1 — Tool use / function calling (shipped 2026-06-30)
+
+Sub-phase 6.1 is complete. The implementation-grade plan lives in
+`plans/tooltranscoding.md`; the operator-facing documentation lives in
+`docs/transcoding.md` § Tool-Use Transcoding.
+
+What shipped:
+
+- Body translation in both directions for `tools`, `tool_choice`,
+  `parallel_tool_calls`, assistant `tool_calls` history, `role: "tool"`
+  history, and `tool_use` / `tool_result` content blocks.
+- Streaming tool-call delta translation via the existing
+  `StreamingTranscoder` interface (`AnthropicToOpenAIStreaming` and
+  `OpenAIToAnthropicStreaming`). `AnthropicToOpenAIStreaming` emits
+  OpenAI `tool_calls` deltas in insertion order; `OpenAIToAnthropicStreaming`
+  buffers `tool_calls[*].function.arguments` chunks and flushes
+  Anthropic `tool_use` blocks on `finish_reason: "tool_calls"`.
+- A per-request `ToolCallIdMap` (`TranscodeContext.id_map`) minting
+  `call_<24 hex>` and `toolu_<24 hex>` ids so the two namespaces never
+  collide. `generate_openai_id()` / `generate_anthropic_id()` produce
+  24 hex characters after the prefix.
+- `pause_turn` sentinel handling: Anthropic's `pause_turn` `stop_reason`
+  maps to `finish_reason: "tool_calls"` plus a synthetic
+  `__eggpool_pause_turn__` tool_call entry. OpenAI clients detect the
+  pause by name. A `pause_turn` loss warning is appended whenever the
+  sentinel is synthesized.
+- `stream_options.include_usage` lifting onto
+  `TranscodeContext.request_include_usage` so the streaming transcoder
+  can decide whether to forward upstream usage chunks.
+- New loss-warning kinds registered in `LOSS_WARNING_KINDS`:
+  `tool_call_id_translated`, `tool_call_id_changed`,
+  `parallel_tool_calls_collapsed`, `malformed_tool_arguments`,
+  `invalid_tool_choice`, `unsupported_tool_type`, `empty_tool_use_block`,
+  `tool_result_image_dropped`, `tool_result_error_passthrough`,
+  `cache_control_dropped`, `pause_turn`, `non_text_content_dropped`,
+  `tool_result_inferred`.
+
+Sub-phase 6.1 ships with tools-on-only; the `[transcoder.features] tools = false`
+opt-out is a phase 6.5 follow-up. The structured `pause_turn` surface
+(first-class rather than the inline sentinel) and the structured
+`is_error` response shape are also 6.5 follow-ups.

@@ -34,6 +34,7 @@ def _openai_chunk(
     content: str | None = None,
     role: str | None = None,
     finish_reason: str | None = None,
+    tool_calls: list[dict[str, Any]] | None = None,
 ) -> bytes:
     """Build an OpenAI SSE data frame."""
     delta: dict[str, Any] = {}
@@ -41,6 +42,8 @@ def _openai_chunk(
         delta["role"] = role
     if content is not None:
         delta["content"] = content
+    if tool_calls is not None:
+        delta["tool_calls"] = tool_calls
 
     choice: dict[str, Any] = {
         "index": 0,
@@ -405,3 +408,265 @@ class TestArbitraryChunkBoundaries:
         assert len(content_frames) >= 1
         d = json.loads(content_frames[0]["data"])
         assert "Hello" in d["delta"]["text"]
+
+
+class TestToolCallStreaming:
+    @pytest.mark.asyncio
+    async def test_tool_call_id_and_name_announced_buffers_until_finish(
+        self,
+    ) -> None:
+        transcoder = OpenAIToAnthropicStreaming()
+        announce_chunk = _openai_chunk(
+            role="assistant",
+            tool_calls=[
+                {
+                    "index": 0,
+                    "id": "call_abc",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": ""},
+                }
+            ],
+        )
+
+        raw = await transcoder.feed(announce_chunk)
+
+        combined = b"".join(raw)
+        frames = _parse_sse_frames(combined)
+
+        event_types = [f["event"] for f in frames]
+        assert "content_block_start" not in event_types
+        assert "message_start" in event_types
+
+    @pytest.mark.asyncio
+    async def test_tool_call_deltas_buffered_across_chunks(self) -> None:
+        transcoder = OpenAIToAnthropicStreaming()
+        await transcoder.feed(
+            _openai_chunk(
+                role="assistant",
+                tool_calls=[
+                    {
+                        "index": 0,
+                        "id": "call_abc",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": ""},
+                    }
+                ],
+            )
+        )
+
+        for piece in ['{"city"', ": ", '"SF"}']:
+            raw = await transcoder.feed(
+                _openai_chunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "function": {"arguments": piece},
+                        }
+                    ],
+                )
+            )
+            combined = b"".join(raw)
+            frames = _parse_sse_frames(combined)
+            event_types = [f["event"] for f in frames]
+            assert "content_block_start" not in event_types
+            assert "content_block_stop" not in event_types
+
+    @pytest.mark.asyncio
+    async def test_finish_reason_tool_calls_emits_anthropic_blocks(self) -> None:
+        from eggpool.transcoder.context import TranscodeContext
+
+        context = TranscodeContext(
+            request_id="req-test",
+            client_protocol="anthropic",
+            upstream_protocol="openai",
+        )
+        transcoder = OpenAIToAnthropicStreaming(transcode_context=context)
+
+        await transcoder.feed(
+            _openai_chunk(
+                role="assistant",
+                tool_calls=[
+                    {
+                        "index": 0,
+                        "id": "call_abc",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": ""},
+                    }
+                ],
+            )
+        )
+        await transcoder.feed(
+            _openai_chunk(
+                tool_calls=[
+                    {"index": 0, "function": {"arguments": '{"city": "SF"}'}},
+                ],
+            )
+        )
+        finish_raw = await transcoder.feed(_openai_chunk(finish_reason="tool_calls"))
+        stop_raw = await transcoder.feed(_openai_done())
+        flush_raw = await transcoder.flush()
+
+        all_raw = finish_raw + stop_raw + flush_raw
+        combined = b"".join(all_raw)
+        frames = _parse_sse_frames(combined)
+
+        event_types = [f["event"] for f in frames]
+        assert "content_block_start" in event_types
+        assert "content_block_stop" in event_types
+        assert "message_delta" in event_types
+        assert "message_stop" in event_types
+
+        block_start = next(f for f in frames if f["event"] == "content_block_start")
+        block_data = json.loads(block_start["data"])
+        assert block_data["content_block"]["type"] == "tool_use"
+        assert block_data["content_block"]["id"].startswith("toolu_")
+        assert block_data["content_block"]["name"] == "get_weather"
+        assert block_data["content_block"]["input"] == {"city": "SF"}
+
+        msg_delta = next(f for f in frames if f["event"] == "message_delta")
+        delta_data = json.loads(msg_delta["data"])
+        assert delta_data["delta"]["stop_reason"] == "tool_use"
+
+    @pytest.mark.asyncio
+    async def test_multiple_tool_calls_parallel_indices(self) -> None:
+        transcoder = OpenAIToAnthropicStreaming()
+        await transcoder.feed(
+            _openai_chunk(
+                role="assistant",
+                tool_calls=[
+                    {
+                        "index": 0,
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": ""},
+                    },
+                    {
+                        "index": 1,
+                        "id": "call_2",
+                        "type": "function",
+                        "function": {"name": "get_time", "arguments": ""},
+                    },
+                ],
+            )
+        )
+        await transcoder.feed(
+            _openai_chunk(
+                tool_calls=[
+                    {"index": 0, "function": {"arguments": '{"city": "SF"}'}},
+                    {"index": 1, "function": {"arguments": '{"tz": "PST"}'}},
+                ],
+            )
+        )
+        finish_raw = await transcoder.feed(_openai_chunk(finish_reason="tool_calls"))
+        stop_raw = await transcoder.feed(_openai_done())
+        flush_raw = await transcoder.flush()
+
+        all_raw = finish_raw + stop_raw + flush_raw
+        combined = b"".join(all_raw)
+        frames = _parse_sse_frames(combined)
+
+        block_starts = [f for f in frames if f["event"] == "content_block_start"]
+        assert len(block_starts) == 2
+        block_data_0 = json.loads(block_starts[0]["data"])
+        block_data_1 = json.loads(block_starts[1]["data"])
+        assert block_data_0["index"] == 0
+        assert block_data_1["index"] == 1
+        assert block_data_0["content_block"]["name"] == "get_weather"
+        assert block_data_1["content_block"]["name"] == "get_time"
+
+        block_stops = [f for f in frames if f["event"] == "content_block_stop"]
+        assert len(block_stops) == 2
+
+    @pytest.mark.asyncio
+    async def test_malformed_tool_arguments_passes_through_as_raw(self) -> None:
+        from eggpool.transcoder.context import TranscodeContext
+
+        context = TranscodeContext(
+            request_id="req-test",
+            client_protocol="anthropic",
+            upstream_protocol="openai",
+        )
+        transcoder = OpenAIToAnthropicStreaming(transcode_context=context)
+
+        await transcoder.feed(
+            _openai_chunk(
+                role="assistant",
+                tool_calls=[
+                    {
+                        "index": 0,
+                        "id": "call_abc",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": ""},
+                    }
+                ],
+            )
+        )
+        await transcoder.feed(
+            _openai_chunk(
+                tool_calls=[
+                    {
+                        "index": 0,
+                        "function": {"arguments": "not-valid-json{"},
+                    }
+                ],
+            )
+        )
+        finish_raw = await transcoder.feed(_openai_chunk(finish_reason="tool_calls"))
+        stop_raw = await transcoder.feed(_openai_done())
+        flush_raw = await transcoder.flush()
+
+        all_raw = finish_raw + stop_raw + flush_raw
+        combined = b"".join(all_raw)
+        frames = _parse_sse_frames(combined)
+
+        block_start = next(f for f in frames if f["event"] == "content_block_start")
+        block_data = json.loads(block_start["data"])
+        assert block_data["content_block"]["input"] == {
+            "__raw_arguments__": "not-valid-json{"
+        }
+
+        malformed_warnings = [
+            w
+            for w in context.loss_warnings
+            if w.get("streaming_transcoder") == "malformed_tool_arguments"
+        ]
+        assert len(malformed_warnings) == 1
+
+    @pytest.mark.asyncio
+    async def test_tool_call_id_registered_in_id_map(self) -> None:
+        from eggpool.transcoder.context import TranscodeContext
+
+        context = TranscodeContext(
+            request_id="req-test",
+            client_protocol="anthropic",
+            upstream_protocol="openai",
+        )
+        transcoder = OpenAIToAnthropicStreaming(transcode_context=context)
+
+        await transcoder.feed(
+            _openai_chunk(
+                role="assistant",
+                tool_calls=[
+                    {
+                        "index": 0,
+                        "id": "call_abc",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": ""},
+                    }
+                ],
+            )
+        )
+        await transcoder.feed(
+            _openai_chunk(
+                tool_calls=[
+                    {"index": 0, "function": {"arguments": "{}"}},
+                ],
+            )
+        )
+        await transcoder.feed(_openai_chunk(finish_reason="tool_calls"))
+        await transcoder.feed(_openai_done())
+        await transcoder.flush()
+
+        upstream_id = context.id_map.to_upstream("call_abc")
+        assert upstream_id is not None
+        assert upstream_id.startswith("toolu_")

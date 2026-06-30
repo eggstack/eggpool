@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any, cast
 
 from eggpool.transcoder.json_helpers import (
@@ -31,7 +32,46 @@ ERROR_TYPE_MAP: dict[str, str] = {
     "timeout": "timeout_error",
 }
 
-DROPPED_FIELDS = ("top_k", "thinking", "tools", "tool_choice")
+DROPPED_FIELDS = (
+    "top_k",
+    "thinking",
+    "cache_control",
+    "context_management",
+    "container",
+    "mcp_servers",
+)
+
+
+def _parse_tool_input(raw: Any, warnings: list[dict[str, Any]]) -> dict[str, Any]:
+    """Parse ``tool_calls[].function.arguments`` into a JSON object.
+
+    Invalid JSON is wrapped as ``{"__raw_arguments__": "<raw>"}`` and a
+    ``malformed_tool_arguments`` warning is appended.
+    """
+    if not isinstance(raw, str):
+        return {"__raw_arguments__": str(raw)}
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        warnings.append(
+            {
+                "kind": "malformed_tool_arguments",
+                "field": "tool_calls[].function.arguments",
+                "raw": raw,
+            }
+        )
+        return {"__raw_arguments__": raw}
+    if isinstance(parsed, dict):
+        return cast("dict[str, Any]", parsed)
+    warnings.append(
+        {
+            "kind": "malformed_tool_arguments",
+            "field": "tool_calls[].function.arguments",
+            "raw": raw,
+            "reason": "not_object",
+        }
+    )
+    return {"__raw_arguments__": raw}
 
 
 class AnthropicToOpenAI:
@@ -47,6 +87,7 @@ class AnthropicToOpenAI:
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         warnings: list[dict[str, Any]] = []
         out: dict[str, Any] = {}
+        id_map = context.id_map
 
         messages: list[dict[str, Any]] = []
 
@@ -70,19 +111,131 @@ class AnthropicToOpenAI:
 
             if isinstance(content, str):
                 messages.append({"role": role, "content": content})
-            elif isinstance(content, list):
-                text_parts = extract_text_blocks(content)
-                if has_non_text_blocks(content):
-                    warnings.append(
+                continue
+
+            if isinstance(content, list):
+                tool_call_accumulator: list[dict[str, Any]] = []
+                tool_result_messages: list[dict[str, Any]] = []
+                text_parts: list[str] = []
+
+                for part in iter_objects(content):
+                    part_type = part.get("type")
+                    if part_type == "tool_use":
+                        upstream_id = str(part.get("id", ""))
+                        name = str(part.get("name", ""))
+                        input_obj = as_object(part.get("input")) or {}
+                        openai_id = id_map.generate_openai_id()
+                        if upstream_id:
+                            id_map.register(openai_id, upstream_id)
+                            if upstream_id != openai_id:
+                                warnings.append(
+                                    {
+                                        "kind": "tool_call_id_translated",
+                                        "field": "messages[].content[].tool_use.id",
+                                        "from": upstream_id,
+                                        "to": openai_id,
+                                    }
+                                )
+                        tool_call_accumulator.append(
+                            {
+                                "id": openai_id,
+                                "type": "function",
+                                "function": {
+                                    "name": name,
+                                    "arguments": json.dumps(input_obj),
+                                },
+                            }
+                        )
+                    elif part_type == "tool_result":
+                        tool_use_id = str(part.get("tool_use_id", ""))
+                        client_id = id_map.to_client(tool_use_id)
+                        if client_id is None:
+                            client_id = id_map.generate_openai_id()
+                            if tool_use_id:
+                                id_map.register(client_id, tool_use_id)
+                                warnings.append(
+                                    {
+                                        "kind": "tool_call_id_translated",
+                                        "field": (
+                                            "messages[].content[]"
+                                            ".tool_result.tool_use_id"
+                                        ),
+                                        "from": tool_use_id,
+                                        "to": client_id,
+                                    }
+                                )
+                        result_content = part.get("content", "")
+                        if isinstance(result_content, list):
+                            joined_text = "\n".join(extract_text_blocks(result_content))
+                            if has_non_text_blocks(result_content):
+                                warnings.append(
+                                    {
+                                        "kind": "dropped_field",
+                                        "field": (
+                                            "messages[].content[]"
+                                            ".tool_result.content[non-text]"
+                                        ),
+                                        "reason": "openai_unsupported",
+                                    }
+                                )
+                            result_text = joined_text
+                        else:
+                            result_text = str(result_content)
+                        if part.get("is_error") is True:
+                            warnings.append(
+                                {
+                                    "kind": "tool_result_error_passthrough",
+                                    "field": (
+                                        "messages[].content[].tool_result.is_error"
+                                    ),
+                                }
+                            )
+                        tool_result_messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": client_id,
+                                "content": result_text,
+                            }
+                        )
+                    elif part_type == "text":
+                        text_parts.append(str(part.get("text", "")))
+                    else:
+                        if part_type in ("image", "document", "audio"):
+                            warnings.append(
+                                {
+                                    "kind": "non_text_content_dropped",
+                                    "field": f"messages[{role}].content[non-text]",
+                                    "type": part_type,
+                                }
+                            )
+                        else:
+                            warnings.append(
+                                {
+                                    "kind": "dropped_field",
+                                    "field": f"messages[{role}].content[non-text]",
+                                    "reason": "openai_unsupported",
+                                }
+                            )
+
+                if tool_call_accumulator:
+                    assistant_msg: dict[str, Any] = {
+                        "role": "assistant",
+                        "content": "\n".join(text_parts) if text_parts else "",
+                        "tool_calls": tool_call_accumulator,
+                    }
+                    messages.append(assistant_msg)
+                elif text_parts:
+                    messages.append(
                         {
-                            "kind": "dropped_field",
-                            "field": f"messages[{role}].content[non-text]",
-                            "reason": "openai_unsupported",
+                            "role": role,
+                            "content": "\n".join(text_parts),
                         }
                     )
-                messages.append({"role": role, "content": "\n".join(text_parts)})
-            else:
-                messages.append({"role": role, "content": str(content)})
+
+                messages.extend(tool_result_messages)
+                continue
+
+            messages.append({"role": role, "content": str(content)})
 
         if not messages:
             warnings.append(
@@ -122,6 +275,41 @@ class AnthropicToOpenAI:
         if max_tokens is not None:
             out["max_tokens"] = max_tokens
 
+        tools_raw = payload.get("tools")
+        if isinstance(tools_raw, list):
+            translated_tools: list[dict[str, Any]] = []
+            for tool in iter_objects(tools_raw):
+                if "cache_control" in tool:
+                    warnings.append(
+                        {
+                            "kind": "cache_control_dropped",
+                            "field": "tools[].cache_control",
+                        }
+                    )
+                function: dict[str, Any] = {}
+                if tool.get("name") is not None:
+                    function["name"] = tool["name"]
+                if tool.get("description") is not None:
+                    function["description"] = tool["description"]
+                if tool.get("input_schema") is not None:
+                    function["parameters"] = tool["input_schema"]
+                translated_tools.append(
+                    {
+                        "type": "function",
+                        "function": function,
+                    }
+                )
+            if translated_tools:
+                out["tools"] = translated_tools
+
+        tool_choice_raw = payload.get("tool_choice")
+        if tool_choice_raw is not None:
+            translated_choice = _translate_anthropic_tool_choice(
+                tool_choice_raw, warnings
+            )
+            if translated_choice is not None:
+                out["tool_choice"] = translated_choice
+
         for field in DROPPED_FIELDS:
             if field in payload:
                 warnings.append(
@@ -140,6 +328,7 @@ class AnthropicToOpenAI:
         context: TranscodeContext,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         warnings: list[dict[str, Any]] = []
+        id_map = context.id_map
 
         choices = list(iter_objects(payload.get("choices", [])))
         if not choices:
@@ -163,6 +352,35 @@ class AnthropicToOpenAI:
         content_blocks: list[dict[str, Any]] = []
         if content_text:
             content_blocks.append({"type": "text", "text": content_text})
+
+        tool_calls_raw = message.get("tool_calls")
+        if isinstance(tool_calls_raw, list):
+            for call in iter_objects(tool_calls_raw):
+                call_id = str(call.get("id", ""))
+                function = as_object(call.get("function")) or {}
+                name = str(function.get("name", ""))
+                arguments_raw = function.get("arguments", "")
+                parsed_input = _parse_tool_input(arguments_raw, warnings)
+                upstream_id = id_map.generate_anthropic_id()
+                if call_id:
+                    id_map.register(call_id, upstream_id)
+                    if call_id != upstream_id:
+                        warnings.append(
+                            {
+                                "kind": "tool_call_id_translated",
+                                "field": "choices[].message.tool_calls[].id",
+                                "from": call_id,
+                                "to": upstream_id,
+                            }
+                        )
+                content_blocks.append(
+                    {
+                        "type": "tool_use",
+                        "id": upstream_id,
+                        "name": name,
+                        "input": parsed_input,
+                    }
+                )
 
         usage = as_object(payload.get("usage"))
         prompt_tokens = token_count_from(usage, "prompt_tokens")
@@ -247,3 +465,46 @@ def _empty_anthropic_response(
         "stop_reason": "end_turn",
         "usage": {"input_tokens": 0, "output_tokens": 0},
     }
+
+
+def _translate_anthropic_tool_choice(
+    tool_choice: Any,
+    warnings: list[dict[str, Any]],
+) -> Any:
+    """Translate an Anthropic ``tool_choice`` value into OpenAI shape."""
+    if not isinstance(tool_choice, dict):
+        warnings.append(
+            {
+                "kind": "invalid_tool_choice",
+                "field": "tool_choice",
+            }
+        )
+        return None
+
+    choice_obj = cast("dict[str, Any]", tool_choice)
+    choice_type = choice_obj.get("type")
+    if choice_type == "auto":
+        return "auto"
+    if choice_type == "any":
+        return "required"
+    if choice_type == "tool":
+        name = choice_obj.get("name", "")
+        if not name:
+            warnings.append(
+                {
+                    "kind": "invalid_tool_choice",
+                    "field": "tool_choice.name",
+                }
+            )
+            return None
+        return {"type": "function", "function": {"name": str(name)}}
+    if choice_type == "none":
+        return "none"
+    warnings.append(
+        {
+            "kind": "invalid_tool_choice",
+            "field": "tool_choice",
+            "from": choice_type,
+        }
+    )
+    return None

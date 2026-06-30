@@ -71,7 +71,14 @@ When set, EggPool boots with a `WARNING` and reverts to the pre-default behaviou
 | `seed` | — | Dropped, warning emitted |
 | `user` | — | Dropped, warning emitted |
 | `logit_bias` | — | Dropped, warning emitted |
-| `messages[tool]` | — | Dropped, warning emitted |
+| `tools` (function-shape) | `tools` (Anthropic-shape) | Translated field-by-field (see Tool-Use Transcoding below) |
+| `tool_choice` | `tool_choice` | Translated between string and object shapes |
+| `parallel_tool_calls: true` | omitted | Anthropic defaults to allowing parallel calls |
+| `parallel_tool_calls: false` | dropped | Warning emitted; Anthropic has no parallel-disable knob |
+| `tools[].function.strict` | — | Dropped, warning emitted (no Anthropic equivalent) |
+| `stream_options` | — | Wrapper dropped with warning; `include_usage` lifted onto `TranscodeContext.request_include_usage` |
+| `messages[assistant].tool_calls[]` | `messages[assistant].content[].tool_use` | Translated; id map mints new upstream ids |
+| `messages[tool]` | `messages[user].content[].tool_result` | Translated; `tool_call_id` ↔ `tool_use_id` via id map |
 | `messages[].content[non-text]` | — | Non-text blocks dropped, warning emitted |
 
 #### Anthropic → OpenAI
@@ -88,8 +95,11 @@ When set, EggPool boots with a `WARNING` and reverts to the pre-default behaviou
 | `metadata.user_id` | `user` | Mapped to OpenAI `user` field |
 | `top_k` | — | Dropped, warning emitted |
 | `thinking` | — | Dropped, warning emitted |
-| `tools` | — | Dropped, warning emitted |
-| `tool_choice` | — | Dropped, warning emitted |
+| `tools` (Anthropic-shape) | `tools` (function-shape) | Translated field-by-field (see Tool-Use Transcoding below) |
+| `tool_choice` | `tool_choice` | Translated between object and string shapes |
+| `tools[].cache_control` | — | Dropped, warning emitted; OpenAI auto-caches without explicit hints |
+| `messages[assistant].content[].tool_use` | `messages[assistant].tool_calls[]` | Translated; id map mints new client ids |
+| `messages[user].content[].tool_result` | `messages[tool]` | Translated; `tool_use_id` ↔ `tool_call_id` via id map |
 | `messages[].content[non-text]` | — | Non-text blocks dropped, warning emitted |
 
 ### Response Bodies
@@ -101,6 +111,7 @@ When set, EggPool boots with a `WARNING` and reverts to the pre-default behaviou
 | `id` | `id` | Prefixed `chatcmpl-` if needed |
 | `model` | `model` | Passed through |
 | `content[].text` | `message.content` | Text blocks concatenated |
+| `content[].tool_use` | `message.tool_calls[]` | Translated; id map mints new client ids |
 | `stop_reason` | `choices[].finish_reason` | Mapped (see table below) |
 | `usage.input_tokens` | `usage.prompt_tokens` | Direct mapping |
 | `usage.output_tokens` | `usage.completion_tokens` | Direct mapping |
@@ -113,6 +124,7 @@ When set, EggPool boots with a `WARNING` and reverts to the pre-default behaviou
 | `id` | `id` | Prefixed `msg_` if needed |
 | `model` | `model` | Passed through |
 | `message.content` | `content[].text` | Wrapped in text block |
+| `message.tool_calls[]` | `content[].tool_use` | Translated; id map mints new upstream ids |
 | `choices[].finish_reason` | `stop_reason` | Mapped (see table below) |
 | `usage.prompt_tokens` | `usage.input_tokens` | Direct mapping |
 | `usage.completion_tokens` | `usage.output_tokens` | Direct mapping |
@@ -127,8 +139,164 @@ When set, EggPool boots with a `WARNING` and reverts to the pre-default behaviou
 | `max_tokens` | `length` | Lossless |
 | `tool_use` | `tool_calls` | Lossless |
 | `refusal` | `content_filter` | Lossless |
-| `pause_turn` | `tool_calls` | Lossy (semantics differ) |
+| `pause_turn` | `tool_calls` + sentinel | Lossy; see Tool-Use Transcoding |
 | `model_context_window_exceeded` | `length` | Lossy (cause obscured) |
+
+### Tool-Use Transcoding
+
+Tool calling is translated between OpenAI Chat Completions and Anthropic Messages in both directions, for streaming and non-streaming requests. The OpenAI client's `tools` and `tool_choice` reach Anthropic-only upstreams (e.g. MiniMax International) intact, and tool calls emitted by an Anthropic upstream are reconstructed as OpenAI `tool_calls` on the response. Anthropic clients driving OpenAI-only upstreams see the same round trip in reverse.
+
+#### Field translation
+
+**OpenAI `tools` → Anthropic `tools`**:
+
+| OpenAI input | Anthropic output | Notes |
+|---|---|---|
+| `tools[i].type == "function"` | `tools[i]` (Anthropic-shape) | Lifted; `function.name` → `name`, `function.description` → `description`, `function.parameters` → `input_schema` |
+| `tools[i].type` other than `"function"` | dropped | Warning `unsupported_tool_type` |
+| `tools[i].function.strict` | — | Dropped; no Anthropic equivalent |
+
+**Anthropic `tools` → OpenAI `tools`**:
+
+| Anthropic input | OpenAI output | Notes |
+|---|---|---|
+| `tools[i].name`, `description`, `input_schema` | `tools[i].type == "function"` with `function.{name, description, parameters}` | `parameters` is the lifted `input_schema` |
+| `tools[i].cache_control` | — | Dropped with warning; OpenAI auto-caches without explicit hints |
+
+**`tool_choice` translation**:
+
+| OpenAI input | Anthropic output | Notes |
+|---|---|---|
+| `"none"` | `{"type": "none"}` | |
+| `"auto"` | omitted | Anthropic default |
+| `"required"` | `{"type": "any"}` | |
+| `{"type": "function", "function": {"name": "X"}}` | `{"type": "tool", "name": "X"}` | |
+| anything else | omitted | Warning `invalid_tool_choice` |
+
+| Anthropic input | OpenAI output | Notes |
+|---|---|---|
+| `{"type": "auto"}` | `"auto"` | |
+| `{"type": "any"}` | `"required"` | |
+| `{"type": "tool", "name": "X"}` | `{"type": "function", "function": {"name": "X"}}` | |
+| `{"type": "none"}` | `"none"` | |
+| anything else | `"auto"` | Warning `invalid_tool_choice` |
+
+**`parallel_tool_calls`**:
+
+- `parallel_tool_calls: true` is omitted on the Anthropic side (Anthropic defaults to allowing parallel calls).
+- `parallel_tool_calls: false` is dropped with a warning — Anthropic has no parallel-disable knob. Each model invocation always permits multiple tool calls.
+
+#### Tool-call id translation
+
+Tool-call ids are protocol-shaped and never reused across the wire. OpenAI clients expect `call_<…>` ids; Anthropic upstreams expect `toolu_<…>` ids. The transcoder maintains a per-request `ToolCallIdMap` keyed on the originating `TranscodeContext.id_map` so the two namespaces stay independent.
+
+| Direction | Source id | Generated id |
+|---|---|---|
+| OpenAI → Anthropic (assistant `tool_calls`) | `call_…` (client) | `toolu_<24 hex>` (via `generate_anthropic_id`) |
+| Anthropic → OpenAI (assistant `content[].tool_use`) | `toolu_…` (upstream) | `call_<24 hex>` (via `generate_openai_id`) |
+| OpenAI → Anthropic (`role: "tool"` history) | `call_…` (client `tool_call_id`) | `toolu_…` carried over as the `tool_use_id` on the Anthropic `tool_result` block |
+| Anthropic → OpenAI (`tool_result` history) | `toolu_…` (upstream `tool_use_id`) | `call_…` carried over as the `tool_call_id` on the OpenAI `tool` message |
+
+Both `generate_openai_id` and `generate_anthropic_id` produce 24 hex characters after the prefix (`call_` / `toolu_`), matching what real OpenAI and Anthropic responses emit. The `id_map` is per-`TranscodeContext` (i.e. per-request), so concurrent requests cannot collide.
+
+Whenever the map mints a new id, the transcoder appends a `tool_call_id_translated` loss warning so operators can audit id translation traffic.
+
+#### Message history translation
+
+| OpenAI input | Anthropic output | Notes |
+|---|---|---|
+| `messages[i].role == "assistant"`, `tool_calls[j].id` (`call_…`) | `messages[i].content[k].type == "tool_use"`, `id` (`toolu_…`) | id via `id_map.register(call_…, toolu_…)` |
+| `messages[i].role == "assistant"`, `tool_calls[j].function.name`, `function.arguments` | `tool_use.name`, `tool_use.input` | `arguments` JSON-parsed into an object; on parse failure the raw string is preserved as `{"__raw_arguments__": "<string>"}` and a `malformed_tool_arguments` warning is emitted |
+| `messages[i].role == "assistant"`, mixed text + `tool_calls` | `content: [{type: "text", ...}, {type: "tool_use", ...}, ...]` | Anthropic permits mixed text + tool_use in one assistant turn |
+| `messages[i].role == "tool"`, `content: str`, `tool_call_id` | `messages[i].role == "user"`, `content: [{type: "tool_result", tool_use_id, content: <str>, is_error: <bool>}]` | `tool_use_id` resolved via `id_map.to_upstream(call_id)` |
+| `messages[i].role == "tool"`, `content: list` (mixed text/image) | `tool_result` with joined text; image parts dropped | Warning `tool_result_image_dropped` (image-tool-result translation lands in phase 6.2) |
+| `messages[i].role == "tool"`, `is_error: true` | `tool_result.is_error: true` | Forwarded verbatim |
+
+| Anthropic input | OpenAI output | Notes |
+|---|---|---|
+| `messages[i].content[k].type == "tool_use"`, `id` (`toolu_…`), `name`, `input` | `messages[i].role == "assistant"`, `tool_calls[k']` with `id` (`call_…`), `type: "function"`, `function.name`, `function.arguments` | `input` JSON-stringified into `arguments`; on encode failure the raw value is preserved as `{"__raw_arguments__": "<string>"}` with `malformed_tool_arguments` warning |
+| `messages[i].content[k].type == "tool_result"`, `tool_use_id`, `content: str` | `messages[i].role == "tool"`, `tool_call_id` (`call_…`), `content: <str>` | |
+| `messages[i].content[k].type == "tool_result"`, `content: list` | `messages[i].role == "tool"`, `content: <joined text>` | Text parts joined with `\n`; non-text dropped with `non_text_content_dropped` |
+| `messages[i].content[k].type == "tool_result"`, `is_error: true` | `messages[i].role == "tool"`, `content: <error text>` | Warning `tool_result_error_passthrough` — OpenAI has no `is_error` field |
+
+#### Streaming translation
+
+**Anthropic → OpenAI (upstream SSE → client SSE)**:
+
+Each Anthropic `content_block_start` with `content_block.type == "tool_use"` opens an indexed slot in the streaming transcoder's per-request state, keyed by the Anthropic `index`. The transcoder mints a fresh `call_<…>` id via `id_map.generate_openai_id()` and emits a `tool_calls` delta carrying `{index, id, type: "function", function: {name, arguments: ""}}`. Each subsequent `content_block_delta` with `delta.type == "input_json_delta"` appends `partial_json` to the slot's argument buffer and emits a `tool_calls` delta with `{index, function: {arguments: <chunk>}}`. The `content_block_stop` finalises the slot but emits nothing extra — the terminal `finish_reason: "tool_calls"` chunk plus `[DONE]` arrive on `message_delta`.
+
+| Upstream event | Emitted client delta |
+|---|---|
+| `content_block_start` (`type: tool_use`, `id: toolu_X`, `name: fn`, `input: {}`) | `delta.tool_calls[i] = {index, id: call_Y, type: "function", function: {name: fn, arguments: ""}}` |
+| `content_block_delta` (`type: input_json_delta`, `partial_json: <chunk>`) | `delta.tool_calls[i] = {index, function: {arguments: <chunk>}}` |
+| `content_block_stop` (`index: i`) | (nothing) |
+| `message_delta` (`stop_reason: tool_use`) | `delta: {}, finish_reason: "tool_calls"`, then `[DONE]` |
+
+If `flush()` is called before a slot received its `content_block_stop`, the streaming transcoder still emits a final `tool_calls` delta with the accumulated `arguments`. If the accumulated JSON fails to parse, a `malformed_tool_arguments` warning is appended and the raw string is delivered anyway so the client can attempt to use the partial value.
+
+**OpenAI → Anthropic (upstream SSE → client SSE)**:
+
+OpenAI `tool_calls[*]` deltas may arrive split across many chunks (often with the id and name on the first chunk and incremental `arguments` on subsequent chunks). The transcoder buffers each call keyed on the OpenAI `tool_calls[*].index` until `finish_reason: "tool_calls"` arrives on the terminal delta, then assembles the Anthropic `tool_use` blocks in insertion order:
+
+```
+event: content_block_start
+data: {"index": K, "content_block": {"type": "tool_use", "id": "toolu_<…>", "name": <name>, "input": <parsed JSON>}}
+event: content_block_stop
+data: {"index": K}
+```
+
+The `message_delta` then carries `stop_reason: "tool_use"` and `message_stop` closes the stream. Each block is emitted at a fresh `index` (the position in the assembled list), so multi-tool-call OpenAI traffic round-trips to multiple Anthropic `tool_use` blocks at distinct indices.
+
+Edge cases:
+
+- If an OpenAI delta arrives with a new `index`, a new slot is allocated.
+- If an existing slot receives a non-empty `id` mid-stream, a `tool_call_id_changed` warning is appended and the new id is re-registered; callers should not update the id mid-stream.
+- `tool_calls[*].function.arguments` is accumulated verbatim and parsed at `finish_reason: "tool_calls"`. On parse failure, the raw string is wrapped in `{"__raw_arguments__": "<string>"}` and a `malformed_tool_arguments` warning is emitted.
+
+#### `pause_turn` handling
+
+Anthropic's `pause_turn` `stop_reason` signals that the model paused mid-turn (typically to wait for a long-running tool). Phase 6.1 surfaces this to OpenAI clients by mapping `stop_reason: pause_turn` to `finish_reason: "tool_calls"` and appending a synthetic sentinel entry to `message.tool_calls`:
+
+```json
+{
+  "id": "call_pause_turn_<request_id>",
+  "type": "function",
+  "function": {
+    "name": "__eggpool_pause_turn__",
+    "arguments": "{}"
+  }
+}
+```
+
+OpenAI clients detect the sentinel by name (`__eggpool_pause_turn__`) and resume the turn with the same `tool_use_id` they received from the original Anthropic `content_block_start`. A phase 6.5 follow-up will refine this into a first-class surface on the streaming transcoder; for now the inline sentinel is emitted on both streaming and non-streaming paths.
+
+A `pause_turn` loss warning is also appended to `TranscodeContext.loss_warnings` whenever the sentinel is synthesized, so operators can audit how often pause-and-resume flows happen against their upstreams.
+
+#### `stream_options.include_usage` lifting
+
+OpenAI's `stream_options.include_usage` flag has no Anthropic analogue, so the wrapper object is dropped with a `dropped_field` warning when transcoding to an Anthropic upstream. The single field inside (`include_usage: bool`) is significant for usage accounting, so the transcoder lifts it onto `TranscodeContext.request_include_usage` before the streaming transcoder runs. The streaming transcoder reads `request_include_usage` from the context to decide whether to forward upstream usage chunks to the OpenAI client. The reverse direction (Anthropic → OpenAI) does not need this — OpenAI clients receive usage only when `stream_options.include_usage` was set on the request, which it wasn't.
+
+#### Loss-warning kinds (tool-use)
+
+Phase 6.1 introduced the following new `kind` values on `TranscodeContext.loss_warnings`:
+
+| `kind` | Emitted when | Example fields |
+|---|---|---|
+| `tool_call_id_translated` | The id map mints a fresh id on either side of the translation | `field`, `from`, `to` |
+| `tool_call_id_changed` | A streaming delta re-supplies a non-empty `id` for an existing tool_call slot | `field`, `from`, `to` |
+| `parallel_tool_calls_collapsed` | `parallel_tool_calls: false` is dropped (no Anthropic equivalent) | `field` |
+| `malformed_tool_arguments` | `tool_calls[*].function.arguments` or `content[].tool_use.input` fails to JSON-parse | `id`, optional `reason` |
+| `invalid_tool_choice` | A `tool_choice` value cannot be mapped to the target shape | `field`, optional `from` |
+| `unsupported_tool_type` | A `tools[i].type` other than `"function"` is dropped | `field`, `from` |
+| `empty_tool_use_block` | Anthropic `stop_reason: tool_use` produced zero tool_use blocks | `field` |
+| `tool_result_image_dropped` | Image content inside a `tool_result` block was dropped | `field` |
+| `tool_result_error_passthrough` | Anthropic `tool_result.is_error` was forwarded as OpenAI `tool` content + warning (no `is_error` field in OpenAI shape) | `field` |
+| `cache_control_dropped` | Anthropic `tools[].cache_control` was dropped during Anthropic → OpenAI translation | `field` |
+| `pause_turn` | `stop_reason: pause_turn` was mapped to `finish_reason: tool_calls` plus a sentinel tool_call | `field`, `to` |
+| `non_text_content_dropped` | A non-text content part inside a translated message was dropped | `field` |
+| `tool_result_inferred` | A `tool_use_id` was inferred from request context when the client did not supply one | `field`, optional `from` |
+
+The complete catalogue lives in `eggpool.transcoder.LOSS_WARNING_KINDS`.
 
 ### Error Envelopes
 
@@ -207,6 +375,7 @@ For production deployments using transcoding:
    - Text content arrives correctly.
    - `finish_reason` / `stop_reason` is correct.
    - Usage values appear in the final chunk.
+   - Tool-call deltas arrive in insertion order and terminate with `finish_reason: "tool_calls"` plus `[DONE]`. For tool-using requests against Anthropic-only upstreams, ensure the synthetic `__eggpool_pause_turn__` sentinel (if any) is detected and surfaced to the application logic.
 
 5. **Check your dashboard.** The Runtime page shows a Transcoding card with total transcoded requests, direction breakdown, and top loss warnings. Monitor this after adding cross-protocol providers or clients.
 
@@ -225,14 +394,30 @@ Every loss warning is a structured dict with at minimum `kind` and `field`. The 
 | `value_clamped` | A value was adjusted to fit the target protocol's range | `{"kind": "value_clamped", "field": "temperature", "from": 2.0, "to": 1.0}` |
 | `lossy_mapping` | A value was mapped but semantics changed | `{"kind": "lossy_mapping", "field": "stop_reason", "from": "stop_sequence", "to": "stop"}` |
 | `inserted_field` | An empty or missing structure was synthesised | `{"kind": "inserted_field", "field": "messages", "reason": "empty_messages"}` |
+| `tool_call_id_translated` | The id map minted a new id on either side of the translation | `{"kind": "tool_call_id_translated", "field": "messages[assistant].tool_calls[].id", "from": "call_…", "to": "toolu_…"}` |
+| `tool_call_id_changed` | A streaming delta re-supplied a non-empty `id` for an existing tool_call slot | `{"kind": "tool_call_id_changed", "field": "tool_calls[]", "from": "call_X", "to": "call_Y"}` |
+| `parallel_tool_calls_collapsed` | `parallel_tool_calls: false` was dropped (no Anthropic equivalent) | `{"kind": "parallel_tool_calls_collapsed", "field": "parallel_tool_calls"}` |
+| `malformed_tool_arguments` | Tool argument JSON failed to parse; raw string delivered as `__raw_arguments__` | `{"kind": "malformed_tool_arguments", "id": "call_…"}` |
+| `invalid_tool_choice` | A `tool_choice` value could not be mapped to the target shape | `{"kind": "invalid_tool_choice", "field": "tool_choice"}` |
+| `unsupported_tool_type` | A `tools[i].type` other than `"function"` was dropped | `{"kind": "unsupported_tool_type", "field": "tools[].type"}` |
+| `empty_tool_use_block` | Anthropic `stop_reason: tool_use` produced zero tool_use blocks | `{"kind": "empty_tool_use_block", "field": "content[].tool_use"}` |
+| `tool_result_image_dropped` | Image content inside a `tool_result` block was dropped (phase 6.2 will translate) | `{"kind": "tool_result_image_dropped", "field": "messages[tool].content"}` |
+| `tool_result_error_passthrough` | Anthropic `tool_result.is_error` was forwarded as OpenAI `tool` content + warning | `{"kind": "tool_result_error_passthrough", "field": "tool_result.is_error"}` |
+| `cache_control_dropped` | Anthropic `tools[].cache_control` was dropped during Anthropic → OpenAI translation | `{"kind": "cache_control_dropped", "field": "tools[].cache_control"}` |
+| `pause_turn` | `stop_reason: pause_turn` was mapped to `finish_reason: tool_calls` plus a sentinel tool_call | `{"kind": "pause_turn", "field": "stop_reason", "to": "tool_calls"}` |
+| `non_text_content_dropped` | A non-text content part inside a translated message was dropped | `{"kind": "non_text_content_dropped", "field": "messages[assistant].content"}` |
+| `tool_result_inferred` | A `tool_use_id` was inferred from request context when the client did not supply one | `{"kind": "tool_result_inferred", "field": "tool_use_id"}` |
 
 Additional context fields that may appear:
 
 | Field | Present when |
 |---|---|
 | `reason` | Explains why (e.g., `anthropic_unsupported`, `openai_unsupported`, `empty_messages`) |
-| `from` / `to` | Shows original and mapped value for `value_clamped` and `lossy_mapping` |
+| `from` / `to` | Shows original and mapped value for `value_clamped`, `lossy_mapping`, `tool_call_id_translated`, `tool_call_id_changed`, `pause_turn` |
 | `default` | Shows the synthetic default for `missing_field` |
+| `id` | Tool-call id associated with the warning (e.g., `malformed_tool_arguments`) |
+
+The complete catalogue lives in `eggpool.transcoder.LOSS_WARNING_KINDS`.
 
 ### Known Lossy Mappings
 
@@ -241,8 +426,13 @@ Additional context fields that may appear:
 | `temperature > 1.0` → Anthropic | `value_clamped` | Clamped to 1.0 |
 | `max_tokens` missing from OpenAI request → Anthropic | `missing_field` | Defaulted to 4096 |
 | `stop_sequence` → OpenAI `stop` | `lossy_mapping` | Sequence identity lost |
-| `pause_turn` → OpenAI `tool_calls` | `lossy_mapping` | Semantic change |
+| `pause_turn` → OpenAI `tool_calls` + `__eggpool_pause_turn__` sentinel | `lossy_mapping` + `pause_turn` | Semantic change; see Tool-Use Transcoding |
 | `model_context_window_exceeded` → OpenAI `length` | `lossy_mapping` | Cause obscured |
+| `parallel_tool_calls: false` → Anthropic | `parallel_tool_calls_collapsed` | Anthropic has no parallel-disable knob |
+| `tools[].function.strict` → Anthropic | `dropped_field` | No Anthropic equivalent |
+| `tools[].cache_control` → OpenAI | `cache_control_dropped` | OpenAI auto-caches without explicit hints |
+| `function_call` / `functions` (deprecated OpenAI API) | `dropped_field` | Deprecated; clients should migrate to `tools` |
+| Tool-call id rewritten (`call_…` ↔ `toolu_…`) | `tool_call_id_translated` | Map is per-request, never collides across requests |
 
 ## Performance Characteristics
 
@@ -269,19 +459,23 @@ Lower `max_entries` to trade catalog completeness for steady-state RSS on memory
 
 ## Known Limitations
 
-1. **Text-only in v1.** Tool calls, function calling, vision/image content, extended thinking, and structured outputs (`response_format` with `json_schema`) are not translated. These features are silently dropped with warnings. Full support is planned for later phases.
+1. **Tool calling translated; vision / thinking / structured outputs deferred.** As of phase 6.1, tool use and function calling are translated in both directions for streaming and non-streaming requests (see Tool-Use Transcoding). Vision / image content, extended thinking, structured outputs (`response_format` with `json_schema`), PDF / document input, and audio input are not yet translated; these features are dropped with warnings. They land in subsequent phase 6 sub-phases.
 
 2. **Headers preserved verbatim.** Upstream response headers are passed through to the client without translation. Some Anthropic-specific headers (e.g., `anthropic-ratelimit-*`) may leak to OpenAI clients. This is cosmetic and harmless.
 
 3. **All-or-nothing per deployment.** When `enabled = true`, transcoding applies to every account. Per-account opt-out is not supported in v1.
 
-4. **No partial translation.** If a request contains both translatable and non-translatable features (e.g., text + tool calls), the entire request is translated. Non-translatable request parts are dropped with warnings — the transcoder refuses the request only when `loss_policy = "reject"`.
+4. **No partial translation.** If a request contains both translatable and non-translatable features (e.g., text + vision content), the entire request is translated. Non-translatable request parts are dropped with warnings — the transcoder refuses the request only when `loss_policy = "reject"`.
 
 5. **`loss_policy = "reject"` is opt-in and strict for requests.** Any single request translation loss warning causes a 400 response before upstream dispatch. This can be surprising — use warn mode first to audit.
 
 6. **Anthropic error types are best-effort.** The error type mapping covers the common cases but not every edge case. Unrecognised error types map to `api_error` (Anthropic) or `invalid_request_error` (OpenAI).
 
 7. **Usage values are upstream-authoritative.** If the upstream reports unusual usage (e.g., negative cache tokens), the transcoder passes them through. There is no sanitisation.
+
+8. **Tool-call id remapping is opaque to clients.** Every cross-protocol tool call has its id rewritten (`call_…` ↔ `toolu_…`) by the `id_map`. Clients that compare ids across turns see the rewritten id, not the original. The mapping is per-request so concurrent requests never collide.
+
+9. **`pause_turn` is surfaced as a sentinel tool call.** Anthropic's `pause_turn` stop_reason becomes `finish_reason: "tool_calls"` plus a synthetic `__eggpool_pause_turn__` tool_call entry. OpenAI clients detect the pause by name and resume with the same `tool_use_id`. The sentinel is a phase 6.1 placeholder; phase 6.5 will refine the surface.
 
 ## Troubleshooting
 

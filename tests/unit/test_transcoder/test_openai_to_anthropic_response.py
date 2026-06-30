@@ -288,3 +288,205 @@ class TestLossWarnings:
 
         loss_warnings = [w for w in warnings if w.get("kind") == "lossy_mapping"]
         assert len(loss_warnings) == 0
+
+
+class TestToolResponseTranslation:
+    def test_tool_use_block_becomes_tool_call(
+        self, transcoder: OpenAIToAnthropic
+    ) -> None:
+        payload = {
+            "id": "msg-1",
+            "model": "claude-3",
+            "content": [
+                {"type": "text", "text": "Let me check."},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_input_1",
+                    "name": "weather",
+                    "input": {"city": "SF"},
+                },
+            ],
+            "stop_reason": "tool_use",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }
+        result, warnings = transcoder.decode_response(payload, _make_context())
+
+        message = result["choices"][0]["message"]
+        assert message["content"] == "Let me check."
+        assert message["tool_calls"] == [
+            {
+                "id": message["tool_calls"][0]["id"],
+                "type": "function",
+                "function": {
+                    "name": "weather",
+                    "arguments": '{"city": "SF"}',
+                },
+            }
+        ]
+        assert result["choices"][0]["finish_reason"] == "tool_calls"
+        id_warnings = [
+            w
+            for w in warnings
+            if w.get("kind") == "tool_call_id_translated"
+            and w.get("from") == "toolu_input_1"
+        ]
+        assert len(id_warnings) == 1
+        assert message["tool_calls"][0]["id"].startswith("call_")
+
+    def test_tool_use_block_with_known_id_uses_id_map(
+        self, transcoder: OpenAIToAnthropic
+    ) -> None:
+        context = _make_context()
+        context.id_map.register("call_known", "toolu_input_1")
+        payload = {
+            "id": "msg-1",
+            "model": "claude-3",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_input_1",
+                    "name": "weather",
+                    "input": {},
+                }
+            ],
+            "stop_reason": "tool_use",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }
+        result, _ = transcoder.decode_response(payload, context)
+
+        tool_call = result["choices"][0]["message"]["tool_calls"][0]
+        assert tool_call["id"].startswith("call_")
+        assert tool_call["id"] != "call_known"
+        assert tool_call["function"]["name"] == "weather"
+        assert tool_call["function"]["arguments"] == "{}"
+
+    def test_multiple_tool_use_blocks(self, transcoder: OpenAIToAnthropic) -> None:
+        payload = {
+            "id": "msg-1",
+            "model": "claude-3",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_a",
+                    "name": "get_weather",
+                    "input": {"city": "SF"},
+                },
+                {
+                    "type": "tool_use",
+                    "id": "toolu_b",
+                    "name": "get_time",
+                    "input": {"timezone": "PST"},
+                },
+            ],
+            "stop_reason": "tool_use",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }
+        result, _ = transcoder.decode_response(payload, _make_context())
+
+        message = result["choices"][0]["message"]
+        assert len(message["tool_calls"]) == 2
+        assert message["tool_calls"][0]["function"]["name"] == "get_weather"
+        assert message["tool_calls"][1]["function"]["name"] == "get_time"
+
+    def test_pause_turn_emits_synthetic_tool_call(
+        self, transcoder: OpenAIToAnthropic
+    ) -> None:
+        payload = {
+            "id": "msg-1",
+            "model": "claude-3",
+            "content": [{"type": "text", "text": "Pausing."}],
+            "stop_reason": "pause_turn",
+            "usage": {"input_tokens": 5, "output_tokens": 3},
+        }
+        result, _ = transcoder.decode_response(payload, _make_context())
+
+        assert result["choices"][0]["finish_reason"] == "tool_calls"
+        tool_calls = result["choices"][0]["message"]["tool_calls"]
+        assert len(tool_calls) == 1
+        assert tool_calls[0]["function"]["name"] == "__eggpool_pause_turn__"
+        assert tool_calls[0]["function"]["arguments"] == "{}"
+        assert tool_calls[0]["id"] == "call_pause_turn_req-test"
+
+    def test_text_and_tool_use_both_emitted(
+        self, transcoder: OpenAIToAnthropic
+    ) -> None:
+        payload = {
+            "id": "msg-1",
+            "model": "claude-3",
+            "content": [
+                {"type": "text", "text": "Let me check."},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_input_1",
+                    "name": "weather",
+                    "input": {"city": "SF"},
+                },
+            ],
+            "stop_reason": "tool_use",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }
+        result, _ = transcoder.decode_response(payload, _make_context())
+
+        message = result["choices"][0]["message"]
+        assert message["content"] == "Let me check."
+        assert len(message["tool_calls"]) == 1
+        assert message["tool_calls"][0]["function"]["name"] == "weather"
+
+    def test_tool_use_block_with_empty_input(
+        self, transcoder: OpenAIToAnthropic
+    ) -> None:
+        payload = {
+            "id": "msg-1",
+            "model": "claude-3",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_input_1",
+                    "name": "weather",
+                    "input": {},
+                }
+            ],
+            "stop_reason": "tool_use",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }
+        result, _ = transcoder.decode_response(payload, _make_context())
+
+        tool_call = result["choices"][0]["message"]["tool_calls"][0]
+        assert tool_call["function"]["arguments"] == "{}"
+
+    def test_tool_use_with_finish_reason_tool_use_empty_blocks_warning(
+        self, transcoder: OpenAIToAnthropic
+    ) -> None:
+        payload = {
+            "id": "msg-1",
+            "model": "claude-3",
+            "content": [{"type": "text", "text": "Just text."}],
+            "stop_reason": "tool_use",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }
+        _, warnings = transcoder.decode_response(payload, _make_context())
+
+        empty_warnings = [
+            w for w in warnings if w.get("kind") == "empty_tool_use_block"
+        ]
+        assert len(empty_warnings) == 1
+
+    def test_tool_call_anthropic_response_fixture(
+        self, transcoder: OpenAIToAnthropic
+    ) -> None:
+        payload = _load_fixture("tool_call_anthropic_response.json")
+        result, _ = transcoder.decode_response(payload, _make_context())
+
+        message = result["choices"][0]["message"]
+        assert message["content"] == "Let me check."
+        assert message["tool_calls"] == [
+            {
+                "id": message["tool_calls"][0]["id"],
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "arguments": '{"city": "San Francisco"}',
+                },
+            }
+        ]
+        assert result["choices"][0]["finish_reason"] == "tool_calls"

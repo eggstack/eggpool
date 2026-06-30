@@ -37,6 +37,10 @@ def _anthropic_sse(
     stop_reason: str | None = None,
     usage: dict[str, Any] | None = None,
     index: int = 0,
+    tool_id: str | None = None,
+    tool_name: str | None = None,
+    partial_json: str | None = None,
+    block_type: str = "text",
 ) -> bytes:
     """Build an Anthropic SSE frame."""
     if event_type is None:
@@ -56,19 +60,32 @@ def _anthropic_sse(
             },
         }
     elif event == "content_block_start":
+        if block_type == "tool_use":
+            content_block: dict[str, Any] = {
+                "type": "tool_use",
+                "id": tool_id or "toolu_default",
+                "name": tool_name or "default_tool",
+                "input": {},
+            }
+        else:
+            content_block = {"type": "text", "text": ""}
         payload = {
             "type": event_type,
             "index": index,
-            "content_block": {"type": "text", "text": ""},
+            "content_block": content_block,
         }
     elif event == "content_block_delta":
+        if partial_json is not None:
+            delta_obj: dict[str, Any] = {
+                "type": "input_json_delta",
+                "partial_json": partial_json,
+            }
+        else:
+            delta_obj = {"type": "text_delta", "text": content or ""}
         payload = {
             "type": event_type,
             "index": index,
-            "delta": {
-                "type": "text_delta",
-                "text": content or "",
-            },
+            "delta": delta_obj,
         }
     elif event == "content_block_stop":
         payload = {"type": event_type, "index": index}
@@ -445,3 +462,348 @@ class TestArbitraryChunkBoundaries:
             json.loads(f["data"])["choices"][0]["delta"]["content"] for f in text_frames
         )
         assert "Hello" in all_text
+
+
+class TestToolUseStreaming:
+    @pytest.mark.asyncio
+    async def test_content_block_start_tool_use_emits_tool_call_delta(self) -> None:
+        transcoder = AnthropicToOpenAIStreaming()
+        await transcoder.feed(
+            _anthropic_sse(
+                "message_start",
+                message_id="msg-1",
+                model="claude-3",
+            )
+        )
+
+        raw = await transcoder.feed(
+            _anthropic_sse(
+                "content_block_start",
+                index=0,
+                block_type="tool_use",
+                tool_id="toolu_xyz",
+                tool_name="get_weather",
+            )
+        )
+
+        combined = b"".join(raw)
+        frames = _parse_sse_frames(combined)
+
+        assert len(frames) == 1
+        data = json.loads(frames[0]["data"])
+        delta = data["choices"][0]["delta"]
+        assert delta["role"] == "assistant"
+        tool_call = delta["tool_calls"][0]
+        assert tool_call["index"] == 0
+        assert tool_call["id"].startswith("call_")
+        assert tool_call["id"] != "toolu_xyz"
+        assert tool_call["type"] == "function"
+        assert tool_call["function"]["name"] == "get_weather"
+        assert tool_call["function"]["arguments"] == ""
+
+    @pytest.mark.asyncio
+    async def test_content_block_delta_input_json_emits_arguments(
+        self,
+    ) -> None:
+        transcoder = AnthropicToOpenAIStreaming()
+        await transcoder.feed(
+            _anthropic_sse(
+                "message_start",
+                message_id="msg-1",
+                model="claude-3",
+            )
+        )
+        await transcoder.feed(
+            _anthropic_sse(
+                "content_block_start",
+                index=0,
+                block_type="tool_use",
+                tool_id="toolu_xyz",
+                tool_name="get_weather",
+            )
+        )
+
+        raw = await transcoder.feed(
+            _anthropic_sse(
+                "content_block_delta",
+                index=0,
+                partial_json='{"city": "SF"}',
+            )
+        )
+
+        combined = b"".join(raw)
+        frames = _parse_sse_frames(combined)
+
+        assert len(frames) == 1
+        data = json.loads(frames[0]["data"])
+        delta = data["choices"][0]["delta"]
+        assert delta["tool_calls"][0]["index"] == 0
+        assert delta["tool_calls"][0]["function"]["arguments"] == '{"city": "SF"}'
+
+    @pytest.mark.asyncio
+    async def test_full_tool_use_stream_emits_tool_calls_and_finish(
+        self,
+    ) -> None:
+        transcoder = AnthropicToOpenAIStreaming()
+        await transcoder.feed(
+            _anthropic_sse(
+                "message_start",
+                message_id="msg-1",
+                model="claude-3",
+            )
+        )
+        tool_start_raw = await transcoder.feed(
+            _anthropic_sse(
+                "content_block_start",
+                index=0,
+                block_type="tool_use",
+                tool_id="toolu_xyz",
+                tool_name="get_weather",
+            )
+        )
+        delta_raw_1 = await transcoder.feed(
+            _anthropic_sse(
+                "content_block_delta",
+                index=0,
+                partial_json='{"city":',
+            )
+        )
+        delta_raw_2 = await transcoder.feed(
+            _anthropic_sse(
+                "content_block_delta",
+                index=0,
+                partial_json='"SF"}',
+            )
+        )
+        await transcoder.feed(_anthropic_sse("content_block_stop", index=0))
+
+        finish_raw = await transcoder.feed(
+            _anthropic_sse(
+                "message_delta",
+                stop_reason="tool_use",
+            )
+        )
+        flush_raw = await transcoder.flush()
+
+        all_raw = tool_start_raw + delta_raw_1 + delta_raw_2 + finish_raw + flush_raw
+        combined = b"".join(all_raw)
+        frames = _parse_sse_frames(combined)
+
+        has_done = any(f["data"] == "[DONE]" for f in frames)
+        assert has_done
+
+        tool_call_id: str | None = None
+        tool_call_name: str | None = None
+        tool_args_pieces: list[str] = []
+        for f in frames:
+            if f["data"] == "[DONE]" or not f["data"]:
+                continue
+            data = json.loads(f["data"])
+            choice = data["choices"][0]
+            delta = choice["delta"]
+            if "tool_calls" in delta:
+                tc = delta["tool_calls"][0]
+                if "id" in tc:
+                    tool_call_id = tc["id"]
+                if tc.get("function", {}).get("name"):
+                    tool_call_name = tc["function"]["name"]
+                if tc.get("function", {}).get("arguments"):
+                    tool_args_pieces.append(tc["function"]["arguments"])
+        assert tool_call_id is not None
+        assert tool_call_id.startswith("call_")
+        assert tool_call_name == "get_weather"
+        assert "".join(tool_args_pieces) == '{"city":"SF"}'
+
+    @pytest.mark.asyncio
+    async def test_full_stream_with_text_and_tool_use(self) -> None:
+        transcoder = AnthropicToOpenAIStreaming()
+        await transcoder.feed(
+            _anthropic_sse("message_start", message_id="msg-1", model="claude-3")
+        )
+        text_start_raw = await transcoder.feed(
+            _anthropic_sse("content_block_start", index=0)
+        )
+        text_delta_raw = await transcoder.feed(
+            _anthropic_sse("content_block_delta", content="Looking up...", index=0)
+        )
+        await transcoder.feed(_anthropic_sse("content_block_stop", index=0))
+
+        tool_start_raw = await transcoder.feed(
+            _anthropic_sse(
+                "content_block_start",
+                index=1,
+                block_type="tool_use",
+                tool_id="toolu_xyz",
+                tool_name="get_weather",
+            )
+        )
+        tool_delta_raw = await transcoder.feed(
+            _anthropic_sse(
+                "content_block_delta",
+                index=1,
+                partial_json='{"city": "SF"}',
+            )
+        )
+        await transcoder.feed(_anthropic_sse("content_block_stop", index=1))
+        finish_raw = await transcoder.feed(
+            _anthropic_sse("message_delta", stop_reason="tool_use")
+        )
+        flush_raw = await transcoder.flush()
+
+        all_raw = (
+            text_start_raw
+            + text_delta_raw
+            + tool_start_raw
+            + tool_delta_raw
+            + finish_raw
+            + flush_raw
+        )
+        combined = b"".join(all_raw)
+        frames = _parse_sse_frames(combined)
+
+        text_chunks: list[str] = []
+        tool_call_id: str | None = None
+        tool_call_name: str | None = None
+        tool_args: list[str] = []
+        finish_reason: str | None = None
+        for f in frames:
+            if f["data"] == "[DONE]" or not f["data"]:
+                continue
+            data = json.loads(f["data"])
+            choice = data["choices"][0]
+            delta = choice["delta"]
+            if delta.get("content"):
+                text_chunks.append(delta["content"])
+            if "tool_calls" in delta:
+                tc = delta["tool_calls"][0]
+                if "id" in tc:
+                    tool_call_id = tc["id"]
+                if tc.get("function", {}).get("name"):
+                    tool_call_name = tc["function"]["name"]
+                if tc.get("function", {}).get("arguments"):
+                    tool_args.append(tc["function"]["arguments"])
+            if choice.get("finish_reason"):
+                finish_reason = choice["finish_reason"]
+
+        assert "".join(text_chunks) == "Looking up..."
+        assert tool_call_id is not None
+        assert tool_call_id.startswith("call_")
+        assert tool_call_name == "get_weather"
+        assert "".join(tool_args) == '{"city": "SF"}'
+        assert finish_reason == "tool_calls"
+
+    @pytest.mark.asyncio
+    async def test_multiple_tool_use_blocks_parallel_indices(self) -> None:
+        transcoder = AnthropicToOpenAIStreaming()
+        await transcoder.feed(
+            _anthropic_sse("message_start", message_id="msg-1", model="claude-3")
+        )
+        tool_a_raw = await transcoder.feed(
+            _anthropic_sse(
+                "content_block_start",
+                index=0,
+                block_type="tool_use",
+                tool_id="toolu_a",
+                tool_name="get_weather",
+            )
+        )
+        tool_b_raw = await transcoder.feed(
+            _anthropic_sse(
+                "content_block_start",
+                index=1,
+                block_type="tool_use",
+                tool_id="toolu_b",
+                tool_name="get_time",
+            )
+        )
+        await transcoder.feed(_anthropic_sse("content_block_stop", index=0))
+        await transcoder.feed(_anthropic_sse("content_block_stop", index=1))
+        await transcoder.feed(_anthropic_sse("message_delta", stop_reason="tool_use"))
+        await transcoder.flush()
+
+        all_raw = tool_a_raw + tool_b_raw
+        ids: list[str] = []
+        names: list[str] = []
+        for chunk in all_raw:
+            for f in _parse_sse_frames(chunk):
+                if f["data"] == "[DONE]" or not f["data"]:
+                    continue
+                data = json.loads(f["data"])
+                delta = data["choices"][0]["delta"]
+                if "tool_calls" in delta:
+                    tc = delta["tool_calls"][0]
+                    if "id" in tc:
+                        ids.append(tc["id"])
+                    if tc.get("function", {}).get("name"):
+                        names.append(tc["function"]["name"])
+        assert len(ids) == 2
+        assert ids[0] != ids[1]
+        assert names == ["get_weather", "get_time"]
+
+    @pytest.mark.asyncio
+    async def test_tool_arguments_split_across_chunks(self) -> None:
+        transcoder = AnthropicToOpenAIStreaming()
+        await transcoder.feed(
+            _anthropic_sse("message_start", message_id="msg-1", model="claude-3")
+        )
+        await transcoder.feed(
+            _anthropic_sse(
+                "content_block_start",
+                index=0,
+                block_type="tool_use",
+                tool_id="toolu_xyz",
+                tool_name="get_weather",
+            )
+        )
+
+        raw_pieces: list[bytes] = []
+        for piece in ['{"city"', ": ", '"SF"}']:
+            raw = await transcoder.feed(
+                _anthropic_sse(
+                    "content_block_delta",
+                    index=0,
+                    partial_json=piece,
+                )
+            )
+            raw_pieces.extend(raw)
+
+        chunks_args: list[str] = []
+        for raw in raw_pieces:
+            for f in _parse_sse_frames(raw):
+                if f["data"] == "[DONE]" or not f["data"]:
+                    continue
+                data = json.loads(f["data"])
+                args = (
+                    data["choices"][0]["delta"]
+                    .get("tool_calls", [{}])[0]
+                    .get("function", {})
+                    .get("arguments")
+                )
+                if args:
+                    chunks_args.append(args)
+        assert "".join(chunks_args) == '{"city": "SF"}'
+
+    @pytest.mark.asyncio
+    async def test_tool_use_block_id_registered_in_id_map(self) -> None:
+        from eggpool.transcoder.context import TranscodeContext
+
+        context = TranscodeContext(
+            request_id="req-test",
+            client_protocol="openai",
+            upstream_protocol="anthropic",
+        )
+        transcoder = AnthropicToOpenAIStreaming(transcode_context=context)
+        await transcoder.feed(
+            _anthropic_sse("message_start", message_id="msg-1", model="claude-3")
+        )
+        await transcoder.feed(
+            _anthropic_sse(
+                "content_block_start",
+                index=0,
+                block_type="tool_use",
+                tool_id="toolu_input_1",
+                tool_name="get_weather",
+            )
+        )
+
+        assert context.id_map.to_client("toolu_input_1") is not None

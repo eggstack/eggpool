@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from typing import TYPE_CHECKING, Any, cast
 
@@ -51,14 +52,44 @@ DROPPED_FIELDS = (
     "response_format",
     "seed",
     "user",
-    "tools",
-    "tool_choice",
     "functions",
     "function_call",
-    "parallel_tool_calls",
-    "stream_options",
     "logit_bias",
 )
+
+_PAUSE_TURN_FUNCTION_NAME = "__eggpool_pause_turn__"
+
+
+def _parse_tool_arguments(raw: Any, warnings: list[dict[str, Any]]) -> dict[str, Any]:
+    """Parse a JSON string into a dict, wrapping invalid JSON with a marker.
+
+    On failure, appends a ``malformed_tool_arguments`` warning and
+    returns ``{"__raw_arguments__": "<raw string>"}``.
+    """
+    if not isinstance(raw, str):
+        return {"__raw_arguments__": str(raw)}
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        warnings.append(
+            {
+                "kind": "malformed_tool_arguments",
+                "field": "function.arguments",
+                "raw": raw,
+            }
+        )
+        return {"__raw_arguments__": raw}
+    if isinstance(parsed, dict):
+        return cast("dict[str, Any]", parsed)
+    warnings.append(
+        {
+            "kind": "malformed_tool_arguments",
+            "field": "function.arguments",
+            "raw": raw,
+            "reason": "not_object",
+        }
+    )
+    return {"__raw_arguments__": raw}
 
 
 class OpenAIToAnthropic:
@@ -77,6 +108,20 @@ class OpenAIToAnthropic:
 
         system_parts: list[str] = []
         messages: list[dict[str, Any]] = []
+        id_map = context.id_map
+
+        stream_options_raw = payload.get("stream_options")
+        if isinstance(stream_options_raw, dict):
+            stream_options = cast("dict[str, Any]", stream_options_raw)
+            include_usage = bool(stream_options.get("include_usage", False))
+            context.request_include_usage = include_usage
+            warnings.append(
+                {
+                    "kind": "dropped_field",
+                    "field": "stream_options",
+                    "reason": "anthropic_unsupported",
+                }
+            )
 
         for msg in iter_objects(payload.get("messages", [])):
             role = str(msg.get("role", ""))
@@ -90,13 +135,119 @@ class OpenAIToAnthropic:
                 continue
 
             if role == "tool":
-                warnings.append(
+                tool_call_id = str(msg.get("tool_call_id", ""))
+                tool_use_id = id_map.to_upstream(tool_call_id)
+                if tool_use_id is None:
+                    tool_use_id = id_map.generate_anthropic_id()
+                    id_map.register(tool_call_id, tool_use_id)
+                    if tool_call_id:
+                        warnings.append(
+                            {
+                                "kind": "tool_call_id_translated",
+                                "field": "messages[tool].tool_call_id",
+                                "from": tool_call_id,
+                                "to": tool_use_id,
+                            }
+                        )
+
+                if isinstance(content, str):
+                    tool_result_content: Any = content
+                elif isinstance(content, list):
+                    text_parts = extract_text_blocks(content)
+                    if has_non_text_blocks(content):
+                        warnings.append(
+                            {
+                                "kind": "tool_result_image_dropped",
+                                "field": "messages[tool].content",
+                            }
+                        )
+                    tool_result_content = "\n".join(text_parts)
+                else:
+                    tool_result_content = str(content)
+
+                tool_result_block: dict[str, Any] = {
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": tool_result_content,
+                }
+                if msg.get("is_error") is True:
+                    tool_result_block["is_error"] = True
+
+                messages.append(
                     {
-                        "kind": "dropped_field",
-                        "field": "messages[tool]",
-                        "reason": "anthropic_unsupported",
+                        "role": "user",
+                        "content": [tool_result_block],
                     }
                 )
+                continue
+
+            if role == "assistant":
+                tool_calls_raw = msg.get("tool_calls")
+                tool_calls: list[dict[str, Any]] = []
+                if isinstance(tool_calls_raw, list):
+                    for call in iter_objects(tool_calls_raw):
+                        tool_calls.append(call)
+
+                content_blocks: list[dict[str, Any]] = []
+
+                if isinstance(content, str):
+                    if content:
+                        content_blocks.append({"type": "text", "text": content})
+                elif isinstance(content, list):
+                    text_parts = extract_text_blocks(content)
+                    for part in text_parts:
+                        content_blocks.append({"type": "text", "text": part})
+                    if has_non_text_blocks(content):
+                        warnings.append(
+                            {
+                                "kind": "dropped_field",
+                                "field": "messages[assistant].content[non-text]",
+                                "reason": "anthropic_unsupported",
+                            }
+                        )
+                else:
+                    if content:
+                        content_blocks.append({"type": "text", "text": str(content)})
+
+                for call in tool_calls:
+                    call_id = str(call.get("id", ""))
+                    function = as_object(call.get("function")) or {}
+                    name = str(function.get("name", ""))
+                    arguments_raw = function.get("arguments", "")
+                    parsed_input = _parse_tool_arguments(arguments_raw, warnings)
+                    upstream_id = id_map.generate_anthropic_id()
+                    if call_id:
+                        id_map.register(call_id, upstream_id)
+                        if call_id != upstream_id:
+                            warnings.append(
+                                {
+                                    "kind": "tool_call_id_translated",
+                                    "field": "messages[assistant].tool_calls[].id",
+                                    "from": call_id,
+                                    "to": upstream_id,
+                                }
+                            )
+                    content_blocks.append(
+                        {
+                            "type": "tool_use",
+                            "id": upstream_id,
+                            "name": name,
+                            "input": parsed_input,
+                        }
+                    )
+
+                if content_blocks:
+                    if len(content_blocks) == 1 and content_blocks[0]["type"] == "text":
+                        messages.append(
+                            {
+                                "role": role,
+                                "content": str(content_blocks[0]["text"]),
+                            }
+                        )
+                    else:
+                        messages.append({"role": role, "content": content_blocks})
+                else:
+                    messages.append({"role": role, "content": ""})
                 continue
 
             if isinstance(content, str):
@@ -164,6 +315,58 @@ class OpenAIToAnthropic:
                 stop_values = cast("list[object]", stop)
                 out["stop_sequences"] = [str(s) for s in stop_values]
 
+        tools_raw = payload.get("tools")
+        if isinstance(tools_raw, list):
+            translated_tools: list[dict[str, Any]] = []
+            for tool in iter_objects(tools_raw):
+                tool_type = tool.get("type", "function")
+                if tool_type == "function":
+                    function = as_object(tool.get("function")) or {}
+                    name = str(function.get("name", ""))
+                    description = function.get("description")
+                    parameters = function.get("parameters", {})
+                    translated_tool: dict[str, Any] = {
+                        "name": name,
+                        "input_schema": parameters,
+                    }
+                    if description is not None:
+                        translated_tool["description"] = description
+                    if function.get("strict") is not None:
+                        warnings.append(
+                            {
+                                "kind": "dropped_field",
+                                "field": "tools[].function.strict",
+                                "reason": "anthropic_unsupported",
+                            }
+                        )
+                    translated_tools.append(translated_tool)
+                else:
+                    warnings.append(
+                        {
+                            "kind": "unsupported_tool_type",
+                            "field": "tools[]",
+                            "type": tool_type,
+                        }
+                    )
+            if translated_tools:
+                out["tools"] = translated_tools
+
+        tool_choice_raw = payload.get("tool_choice")
+        if tool_choice_raw is not None:
+            translated_choice = _translate_openai_tool_choice(tool_choice_raw, warnings)
+            if translated_choice is not None:
+                out["tool_choice"] = translated_choice
+
+        parallel_raw = payload.get("parallel_tool_calls")
+        if parallel_raw is False:
+            warnings.append(
+                {
+                    "kind": "parallel_tool_calls_collapsed",
+                    "field": "parallel_tool_calls",
+                    "reason": "anthropic_unsupported",
+                }
+            )
+
         for field in DROPPED_FIELDS:
             if field in payload:
                 warnings.append(
@@ -182,10 +385,50 @@ class OpenAIToAnthropic:
         context: TranscodeContext,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         warnings: list[dict[str, Any]] = []
+        id_map = context.id_map
 
         content_blocks = payload.get("content", [])
         text_parts = extract_text_blocks(content_blocks)
         content_text = "".join(text_parts)
+
+        tool_calls: list[dict[str, Any]] = []
+        if isinstance(content_blocks, list):
+            for block in iter_objects(content_blocks):
+                block_type = block.get("type")
+                if block_type == "tool_use":
+                    upstream_id = str(block.get("id", ""))
+                    name = str(block.get("name", ""))
+                    input_obj = as_object(block.get("input")) or {}
+                    openai_id = id_map.generate_openai_id()
+                    if upstream_id:
+                        id_map.register(openai_id, upstream_id)
+                        if upstream_id != openai_id:
+                            warnings.append(
+                                {
+                                    "kind": "tool_call_id_translated",
+                                    "field": "content[].tool_use.id",
+                                    "from": upstream_id,
+                                    "to": openai_id,
+                                }
+                            )
+                    tool_calls.append(
+                        {
+                            "id": openai_id,
+                            "type": "function",
+                            "function": {
+                                "name": name,
+                                "arguments": json.dumps(input_obj),
+                            },
+                        }
+                    )
+                elif block_type in ("thinking", "redacted_thinking"):
+                    warnings.append(
+                        {
+                            "kind": "dropped_field",
+                            "field": "content[thinking]",
+                            "reason": "anthropic_unsupported",
+                        }
+                    )
 
         stop_reason = str(payload.get("stop_reason", "end_turn"))
         finish_reason = STOP_REASON_MAP.get(stop_reason, "stop")
@@ -199,6 +442,34 @@ class OpenAIToAnthropic:
                 }
             )
 
+        if stop_reason == "tool_use" and not tool_calls:
+            warnings.append(
+                {
+                    "kind": "empty_tool_use_block",
+                    "field": "content[].tool_use",
+                }
+            )
+
+        if stop_reason == "pause_turn":
+            sentinel_id = f"call_pause_turn_{context.request_id}"
+            tool_calls.append(
+                {
+                    "id": sentinel_id,
+                    "type": "function",
+                    "function": {
+                        "name": _PAUSE_TURN_FUNCTION_NAME,
+                        "arguments": "{}",
+                    },
+                }
+            )
+            warnings.append(
+                {
+                    "kind": "pause_turn",
+                    "field": "stop_reason",
+                    "to": "tool_calls",
+                }
+            )
+
         usage = as_object(payload.get("usage"))
         prompt_tokens = token_count_from(usage, "input_tokens")
         completion_tokens = token_count_from(usage, "output_tokens")
@@ -208,6 +479,13 @@ class OpenAIToAnthropic:
             "cache_creation_input_tokens",
         )
 
+        message: dict[str, Any] = {
+            "role": "assistant",
+            "content": content_text,
+        }
+        if tool_calls:
+            message["tool_calls"] = tool_calls
+
         out: dict[str, Any] = {
             "id": payload.get("id", f"chatcmpl-{context.request_id}"),
             "object": "chat.completion",
@@ -216,10 +494,7 @@ class OpenAIToAnthropic:
             "choices": [
                 {
                     "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": content_text,
-                    },
+                    "message": message,
                     "finish_reason": finish_reason,
                 }
             ],
@@ -283,3 +558,63 @@ class OpenAIToAnthropic:
         }
 
         return upstream_status, out, warnings
+
+
+def _translate_openai_tool_choice(
+    tool_choice: Any,
+    warnings: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Translate an OpenAI ``tool_choice`` value into Anthropic shape."""
+    if isinstance(tool_choice, str):
+        if tool_choice == "none":
+            return {"type": "none"}
+        if tool_choice == "auto":
+            return None
+        if tool_choice == "required":
+            return {"type": "any"}
+        warnings.append(
+            {
+                "kind": "invalid_tool_choice",
+                "field": "tool_choice",
+                "from": tool_choice,
+            }
+        )
+        return None
+
+    if not isinstance(tool_choice, dict):
+        warnings.append(
+            {
+                "kind": "invalid_tool_choice",
+                "field": "tool_choice",
+            }
+        )
+        return None
+
+    choice_obj = cast("dict[str, Any]", tool_choice)
+    choice_type = choice_obj.get("type")
+    if choice_type == "function":
+        function = as_object(choice_obj.get("function")) or {}
+        name = str(function.get("name", "")).strip()
+        if not name:
+            warnings.append(
+                {
+                    "kind": "invalid_tool_choice",
+                    "field": "tool_choice.function.name",
+                }
+            )
+            return None
+        return {"type": "tool", "name": name}
+    if choice_type == "auto":
+        return None
+    if choice_type == "none":
+        return {"type": "none"}
+    if choice_type == "required":
+        return {"type": "any"}
+    warnings.append(
+        {
+            "kind": "invalid_tool_choice",
+            "field": "tool_choice",
+            "from": choice_type,
+        }
+    )
+    return None
