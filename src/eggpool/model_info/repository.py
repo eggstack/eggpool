@@ -42,6 +42,16 @@ class ModelInfoRepository:
         raw_json = json.dumps(record.raw_payload, sort_keys=True)
 
         async with self._db.transaction():
+            await self._db.execute_write(
+                "INSERT OR IGNORE INTO models "
+                "(model_id, display_name, first_seen_at, last_seen_at) "
+                "VALUES (?, NULL, ?, ?)",
+                (
+                    resolved_model_id,
+                    record.observed_at.isoformat(),
+                    record.observed_at.isoformat(),
+                ),
+            )
             row = await self._db.fetch_one(
                 "SELECT id FROM model_info_observations "
                 "WHERE source = ? AND source_model_id = ? AND raw_hash = ?",

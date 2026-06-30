@@ -180,6 +180,108 @@ async def test_model_info_repository_deduplicates_observations_by_hash() -> None
 
 
 @pytest.mark.asyncio()
+async def test_upsert_observation_seeds_models_row() -> None:
+    """upsert_observation seeds a placeholder ``models`` row when missing.
+
+    ``model_info_observations.model_id`` has a FK to ``models.model_id``,
+    so a fresh observation insert must satisfy the FK. Catalog entries
+    for unresolved static models can reach the observation path before
+    ``_persist_catalog`` writes them to the ``models`` table, so the
+    repository seeds a placeholder row in the same transaction (mirrors
+    ``upsert_canonical_with_model``). Without this, an older
+    installation upgrading into migration 0036 sees ``FOREIGN KEY
+    constraint failed`` at startup.
+    """
+    db = Database(path=":memory:")
+    await db.connect()
+    try:
+        await _run_migrations(db)
+
+        repo = ModelInfoRepository(db)
+        now = datetime.now(UTC)
+        record = SourceModelRecord(
+            source="provider_catalog",
+            source_model_id="unresolved-model",
+            observed_at=now,
+            raw_hash="hash-unresolved",
+            raw_payload={"display_name": "Unresolved"},
+            normalized={},
+            model_id="unresolved-model",
+            provider_id="test_provider",
+        )
+
+        row_id = await repo.upsert_observation(record)
+        assert row_id > 0
+
+        model_row = await db.fetch_one(
+            "SELECT model_id, display_name FROM models WHERE model_id = ?",
+            ("unresolved-model",),
+        )
+        assert model_row is not None
+        assert model_row["display_name"] is None
+
+        obs_row = await db.fetch_one(
+            "SELECT model_id, provider_id, source FROM model_info_observations "
+            "WHERE id = ?",
+            (row_id,),
+        )
+        assert obs_row is not None
+        assert obs_row["model_id"] == "unresolved-model"
+        assert obs_row["provider_id"] == "test_provider"
+        assert obs_row["source"] == "provider_catalog"
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio()
+async def test_upsert_observation_preserves_existing_models_row() -> None:
+    """A pre-existing ``models`` row keeps its catalog-authored fields.
+
+    The placeholder seed uses ``INSERT OR IGNORE``, so a catalog row
+    written by ``_persist_catalog`` (with resolved protocol,
+    display_name, capabilities) is preserved when the same model_id is
+    later observed. Observation rows must still be inserted normally.
+    """
+    db = Database(path=":memory:")
+    await db.connect()
+    try:
+        await _run_migrations(db)
+        await _seed_model(db, "test-model", display_name="GPT-4o (catalog)")
+
+        repo = ModelInfoRepository(db)
+        now = datetime.now(UTC)
+        record = SourceModelRecord(
+            source="provider_catalog",
+            source_model_id="test-model",
+            observed_at=now,
+            raw_hash="hash-1",
+            raw_payload={"display_name": "GPT-4o (provider)"},
+            normalized={},
+            model_id="test-model",
+            provider_id="openai",
+        )
+
+        await repo.upsert_observation(record)
+
+        model_row = await db.fetch_one(
+            "SELECT display_name FROM models WHERE model_id = ?",
+            ("test-model",),
+        )
+        assert model_row is not None
+        assert model_row["display_name"] == "GPT-4o (catalog)"
+
+        obs_count = await db.fetch_one(
+            "SELECT COUNT(*) AS n FROM model_info_observations "
+            "WHERE source_model_id = ?",
+            ("test-model",),
+        )
+        assert obs_count is not None
+        assert int(obs_count["n"]) == 1
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio()
 async def test_model_info_repository_lists_due_rows() -> None:
     """list_due returns rows where next_refresh_at is past."""
     db = Database(path=":memory:")
