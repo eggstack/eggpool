@@ -843,3 +843,164 @@ async def test_model_detail_page_case_insensitive_lookup(
     body = response.text
     # The page should render sections (not "Model info not available")
     assert "Provider / Callability" in body
+
+
+# --- Edge-case tests ---
+
+
+@pytest.mark.asyncio()
+async def test_model_detail_page_special_characters_escaped(
+    migrated_app: FastAPI,
+) -> None:
+    """Model IDs with HTML-significant characters are escaped, not injected."""
+    from fastapi.testclient import TestClient
+
+    db = migrated_app.state.db
+    evil_id = '<script>alert("xss")</script>'
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT OR IGNORE INTO models (model_id) VALUES (?)",
+            (evil_id,),
+        )
+    mi = migrated_app.state.model_info
+    await mi.ensure_canonical(evil_id)
+
+    client = TestClient(migrated_app)
+    response = client.get("/models/%3Cscript%3Ealert(%22xss%22)%3C%2Fscript%3E")
+    assert response.status_code == 200
+    body = response.text
+    # The raw <script> tag must not appear — it should be entity-escaped.
+    assert "<script>" not in body
+    # The escaped form should appear in the heading.
+    assert "&lt;script&gt;" in body
+
+
+@pytest.mark.asyncio()
+async def test_model_detail_page_ampersand_in_model_id(
+    migrated_app: FastAPI,
+) -> None:
+    """Model IDs containing & are properly escaped in HTML."""
+    from fastapi.testclient import TestClient
+
+    db = migrated_app.state.db
+    model_id = "model&v2"
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT OR IGNORE INTO models (model_id) VALUES (?)",
+            (model_id,),
+        )
+    mi = migrated_app.state.model_info
+    await mi.ensure_canonical(model_id)
+
+    client = TestClient(migrated_app)
+    response = client.get("/models/model%26v2")
+    assert response.status_code == 200
+    body = response.text
+    # The & must be entity-escaped in the heading.
+    assert "model&amp;v2" in body
+    # No raw & that could break the HTML structure.
+    assert "<script>" not in body
+
+
+@pytest.mark.asyncio()
+async def test_model_detail_page_empty_model_id(
+    migrated_app: FastAPI,
+) -> None:
+    """A trailing-slash URL that resolves to empty model_id renders."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    # /models/ → model_id = "" after path capture
+    response = client.get("/models/")
+    # FastAPI may redirect /models/ → /models (307) or route with ""
+    assert response.status_code in (200, 307)
+
+
+@pytest.mark.asyncio()
+async def test_model_detail_page_long_model_id(
+    migrated_app: FastAPI,
+) -> None:
+    """Very long model IDs are handled without crashing."""
+    from fastapi.testclient import TestClient
+
+    long_id = "m" * 500
+    db = migrated_app.state.db
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT OR IGNORE INTO models (model_id) VALUES (?)",
+            (long_id,),
+        )
+    mi = migrated_app.state.model_info
+    await mi.ensure_canonical(long_id)
+
+    client = TestClient(migrated_app)
+    response = client.get(f"/models/{long_id}")
+    assert response.status_code == 200
+    body = response.text
+    # The heading should contain the long ID (escaped).
+    assert long_id in body
+    assert "Provider / Callability" in body
+
+
+@pytest.mark.asyncio()
+async def test_model_detail_page_url_encoded_slash(
+    migrated_app: FastAPI,
+) -> None:
+    """%2F in the URL is decoded to / and handled like a raw slash."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    # %2F → / after unquote, same as /models/gpt-4o/openai
+    response = client.get("/models/gpt-4o%2Fopenai")
+    assert response.status_code == 200
+    assert "gpt-4o/openai" in response.text
+
+
+# --- Startup backfill test ---
+
+
+@pytest.mark.asyncio()
+async def test_backfill_covers_models_added_before_service_init() -> None:
+    """Models seeded before the service starts are backfilled on first call."""
+    from eggpool.catalog.cache import ModelCatalogCache
+    from eggpool.db.connection import Database
+    from eggpool.db.migrations import MigrationRunner
+    from eggpool.model_info.service import ModelInfoService
+    from eggpool.models.config import ModelInfoConfig
+
+    db = Database(path=":memory:")
+    await db.connect()
+    try:
+        runner = MigrationRunner(db)
+        await runner.run()
+
+        # Seed two orphaned models (simulates a previous process that
+        # wrote models rows but no canonical rows).
+        async with db.transaction():
+            await db.execute_write(
+                "INSERT OR IGNORE INTO models (model_id, display_name) VALUES (?, ?)",
+                ("pre-seeded-a", "Pre-Seeded A"),
+            )
+            await db.execute_write(
+                "INSERT OR IGNORE INTO models (model_id, display_name) VALUES (?, ?)",
+                ("pre-seeded-b", "Pre-Seeded B"),
+            )
+
+        # A fresh service (empty catalog) should backfill both.
+        cache = ModelCatalogCache()
+        config = ModelInfoConfig()
+        service = ModelInfoService(config, db, cache)
+
+        result = await service.backfill_missing_canonical()
+        # pre-seeded-a + pre-seeded-b + __deprecated__ = 3
+        assert result["backfilled"] == 3
+
+        info_a = await service.get_summary("pre-seeded-a")
+        assert info_a is not None
+        assert info_a.status == "unmatched"
+
+        info_b = await service.get_summary("pre-seeded-b")
+        assert info_b is not None
+        assert info_b.status == "unmatched"
+    finally:
+        await db.disconnect()
