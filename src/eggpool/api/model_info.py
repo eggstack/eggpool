@@ -69,24 +69,47 @@ def _compact_summary(info: Any) -> dict[str, Any]:
 
 
 def _detail_response(info: Any) -> dict[str, Any]:
-    """Build a full detail dict from a CanonicalModelInfo."""
+    """Build a full detail dict from a CanonicalModelInfo.
+
+    Reads from the normalized ``limits`` block when present, falling
+    back to the legacy flat keys (``context_tokens`` and
+    ``context_window_external``) for canonical rows written before
+    Phase B shipped.
+    """
     detail = cast("dict[str, Any]", getattr(info, "detail", {}))
 
-    # Limits
+    # Limits — prefer the nested limits block, fall back to legacy
+    # flat keys for pre-Phase-B canonical rows.
+    raw_limits = cast("dict[str, Any]", detail.get("limits", {}))
     limits: dict[str, Any] = {}
-    ctx = detail.get("context_tokens")
-    ext_ctx = detail.get("context_window_external")
+    ctx = raw_limits.get("effective_context")
+    if ctx is None:
+        ctx = detail.get("context_tokens")
     if ctx is not None:
         limits["effective_context"] = ctx
+    ext_ctx = raw_limits.get("external_context")
+    if ext_ctx is None:
+        ext_ctx = detail.get("context_window_external")
     if ext_ctx is not None:
         limits["external_context"] = ext_ctx
+    eff_out = raw_limits.get("effective_output")
+    if eff_out is None:
+        eff_out = detail.get("output_tokens_external") or detail.get(
+            "max_output_tokens"
+        )
+    if eff_out is not None:
+        limits["effective_output"] = eff_out
+    ext_out = raw_limits.get("external_output")
+    if ext_out is None:
+        ext_out = detail.get("max_output_tokens")
+    if ext_out is not None:
+        limits["external_output"] = ext_out
 
     # Modalities
     modalities: list[str] = []
-    for key in ("modalities", "modalities_external"):
-        raw = cast("list[object]", detail.get(key, []))
-        for m in raw:
-            modalities.append(str(m))
+    raw_modalities = cast("list[object]", detail.get("modalities", []))
+    for m in raw_modalities:
+        modalities.append(str(m))
     modalities = sorted(set(modalities))
 
     # External IDs
@@ -244,7 +267,13 @@ async def handle_model_info_sources(request: Request) -> Response:
 
 
 async def handle_model_info_aliases(request: Request, model_id: str) -> Response:
-    """GET /api/model-info/{model_id}/aliases — aliases for a model."""
+    """GET /api/model-info/{model_id}/aliases — aliases for a model.
+
+    Returns both the flat alias list (legacy shape) and a
+    source-keyed list so callers can tell which source each alias
+    is configured for.  Source-keyed entries include ``source``,
+    ``alias``, ``provider_id``, ``confidence``, and ``active``.
+    """
     model_info = getattr(request.app.state, "model_info", None)
     if model_info is None:
         return JSONResponse(
@@ -252,17 +281,25 @@ async def handle_model_info_aliases(request: Request, model_id: str) -> Response
             content={"error": "model_info disabled"},
         )
     decoded_id = unquote(model_id)
-    aliases = await model_info.repo.get_aliases_for_model(decoded_id)
-    return JSONResponse(content={"model_id": decoded_id, "aliases": aliases})
+    flat_aliases = await model_info.repo.get_aliases_for_model(decoded_id)
+    source_rows = await model_info.repo.list_alias_rows_for_model(decoded_id)
+    return JSONResponse(
+        content={
+            "model_id": decoded_id,
+            "aliases": flat_aliases,
+            "aliases_by_source": source_rows,
+        }
+    )
 
 
 async def handle_model_info_refresh(request: Request) -> Response:
     """POST /api/model-info/refresh — manual refresh.
 
     Always auth-gated. Accepts optional query params:
-      ?model_id=<id>  — refresh a single model
-      ?source=provider_catalog|openrouter|all  — source filter (reserved)
-      ?force=1        — force refresh
+      ?model_id=<id>  — refresh a single model (provider suffix accepted)
+      ?source=provider_catalog|openrouter|artificial_analysis|huggingface
+                     — restrict single-model refresh to one source
+      ?force=1        — force refresh even if not due
     """
     model_info = getattr(request.app.state, "model_info", None)
     if model_info is None:
@@ -272,20 +309,25 @@ async def handle_model_info_refresh(request: Request) -> Response:
         )
 
     model_id_filter = request.query_params.get("model_id")
-    # source and force params reserved for future use
+    source_filter = request.query_params.get("source")
+    force = request.query_params.get("force") in {"1", "true", "yes"}
 
     if model_id_filter:
-        # Single-model refresh: reconcile just this model
-        result = await model_info.reconcile_catalog_snapshot(reason="manual")
+        result = await model_info.refresh_model_info(
+            model_id_filter, source=source_filter, force=force
+        )
         return JSONResponse(
             content={
                 "status": "ok",
-                "requested": 1,
-                "refreshed": result.get("created", 0) + result.get("updated", 0),
-                "skipped": result.get("total", 0)
-                - result.get("created", 0)
-                - result.get("updated", 0),
-                "errors": 0,
+                "scope": "model",
+                "model_id": model_id_filter,
+                "requested": result.get("requested", 0),
+                "refreshed": result.get("refreshed", 0),
+                "skipped": result.get("skipped", 0),
+                "errors": result.get("errors", 0),
+                "sources_attempted": result.get("sources_attempted", []),
+                "sources_matched": result.get("sources_matched", []),
+                "observations": result.get("observations", 0),
             }
         )
 
@@ -297,6 +339,7 @@ async def handle_model_info_refresh(request: Request) -> Response:
     return JSONResponse(
         content={
             "status": "ok",
+            "scope": "cycle",
             "requested": total,
             "refreshed": refreshed,
             "skipped": skipped,

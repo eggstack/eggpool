@@ -136,8 +136,9 @@ See [docs/transcoding.md](docs/transcoding.md) for the full translation table an
 | `GET` | `/api/backoffs` | Active upstream-derived account backoffs (`?now=<epoch>` for reproducible snapshots) |
 | `GET` | `/api/model-info` | Enriched model metadata summaries |
 | `GET` | `/api/model-info/{model_id}` | Enriched metadata detail for one model |
+| `GET` | `/api/model-info/{model_id}/aliases` | Source-keyed alias rows for one model |
 | `GET` | `/api/model-info/sources` | Model-info source health |
-| `POST` | `/api/model-info/refresh` | Trigger model-info refresh (auth-gated) |
+| `POST` | `/api/model-info/refresh` | Trigger model-info refresh — `?model_id=<id>&source=<provider_catalog\|openrouter\|artificial_analysis\|huggingface>&force=1` for a single-model force refresh (auth-gated) |
 
 When `[dashboard].enabled = true`, a multi-page dashboard is served at `/` with request stats, latency metrics, provider health, model-info detail pages, and more. Stats API available under `/api/stats/*`.
 

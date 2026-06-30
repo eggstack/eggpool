@@ -106,10 +106,95 @@ class ModelInfoService:
         return self._repo
 
     async def load_cache(self) -> None:
-        """Load provider-native observations into the DB from the catalog cache."""
+        """Load provider-native observations into the DB from the catalog cache.
+
+        Seed configured aliases (Phase A) before any external source
+        fetch so source adapters that rely on exact alias matching
+        (Hugging Face in particular) can resolve the very first cycle.
+        """
         if not self._config.enabled:
             return
+        try:
+            await self.seed_configured_aliases()
+        except Exception:
+            logger.exception("Configured alias seeding failed")
         await self.refresh_provider_catalog_observations()
+
+    async def seed_configured_aliases(self) -> dict[str, int]:
+        """Seed ``config.model_info.aliases`` into ``model_info_aliases``.
+
+        Returns a summary dict with ``seeded`` and ``skipped`` counts.
+        Configured aliases are idempotent — re-running this method
+        just refreshes ``last_seen_at`` and updates confidence. They
+        are preferred over auto-discovered aliases (which are
+        inserted by ``refresh_provider_catalog_observations``) and are
+        what enables Hugging Face exact-alias fetches to actually
+        run.
+
+        Invalid entries (empty ``source_model_id``, unknown source)
+        are skipped with a warning rather than raised; one bad
+        configured alias should never block startup.
+        """
+        seeded = 0
+        skipped = 0
+        seen: set[tuple[str, str, str]] = set()
+        for alias in self._config.aliases:
+            source = alias.source.strip() if alias.source else ""
+            source_model_id = (
+                alias.source_model_id.strip() if alias.source_model_id else ""
+            )
+            if not source_model_id:
+                logger.warning(
+                    "Skipping configured alias for %s/%s: empty source_model_id",
+                    alias.provider_id,
+                    alias.model_id,
+                )
+                skipped += 1
+                continue
+            if not source:
+                logger.warning(
+                    "Skipping configured alias for %s/%s: empty source",
+                    alias.provider_id,
+                    alias.model_id,
+                )
+                skipped += 1
+                continue
+            if not _is_known_source(source):
+                logger.warning(
+                    "Configured alias %s/%s -> %s uses unknown source %r; "
+                    "expected one of %s",
+                    alias.provider_id,
+                    alias.model_id,
+                    source_model_id,
+                    source,
+                    sorted(_ALIAS_VALID_SOURCES),
+                )
+                skipped += 1
+                continue
+
+            key = (alias.provider_id, source_model_id, source)
+            if key in seen:
+                logger.debug(
+                    "Duplicate configured alias skipped: %s/%s -> %s (%s)",
+                    alias.provider_id,
+                    alias.model_id,
+                    source_model_id,
+                    source,
+                )
+                skipped += 1
+                continue
+            seen.add(key)
+
+            confidence = _alias_confidence_to_float(alias.confidence)
+            await self._repo.upsert_alias(
+                model_id=alias.model_id,
+                provider_id=alias.provider_id,
+                alias=source_model_id,
+                source=source,
+                confidence=confidence,
+            )
+            seeded += 1
+        return {"seeded": seeded, "skipped": skipped}
 
     async def refresh_provider_catalog_observations(self) -> dict[str, int]:
         """Fetch all provider-catalog observations and upsert them.
@@ -149,8 +234,17 @@ class ModelInfoService:
     ) -> dict[str, int]:
         """Reconcile catalog models with model-info canonical rows.
 
-        For every model in the catalog, ensure a canonical row exists with
-        the correct status and a deterministic summary.
+        For every model in the catalog, ensure a canonical row exists
+        with the correct status and a deterministic summary.
+
+        The merged detail is observation-driven (Phase B): for every
+        model, the latest persisted per-source observations are read
+        and merged into the provider-native detail via
+        :func:`build_canonical_detail`. This makes startup
+        reconciliation non-destructive — previously persisted
+        Hugging Face / OpenRouter / Artificial Analysis data is
+        preserved across restarts even when no external source
+        is currently active or matched.
         """
         model_ids = set(self._catalog._models.keys())  # pyright: ignore[reportPrivateUsage]
 
@@ -165,48 +259,83 @@ class ModelInfoService:
 
             next_refresh = self._compute_next_refresh(status, now)
 
-            detail = self._build_detail(model_id)
-            provenance: dict[str, object] = {
-                "sources": ["provider_catalog"],
-                "reconciled_at": now.isoformat(),
-            }
-            conflicts: dict[str, object] = {}
+            provider_detail = self._build_detail(model_id)
+            observation_payloads = await self._repo.get_latest_observation_payloads(
+                model_id
+            )
+            merged_detail, merged_provenance, merged_conflicts = build_canonical_detail(
+                model_id=model_id,
+                provider_detail=provider_detail,
+                observation_payloads=observation_payloads,
+                existing_detail=existing.detail if existing is not None else None,
+            )
+            conflicts = dict(merged_conflicts)
+            if existing is not None:
+                # Preserve pre-existing conflict rows build_canonical_detail
+                # does not manage (e.g. benchmark conflicts).
+                for key, val in existing.conflicts.items():
+                    conflicts.setdefault(key, val)
+
+            if existing is None:
+                first_seen = now
+                last_refreshed = now
+            else:
+                first_seen = existing.first_seen_at
+                # Reconcile is not a refresh: keep last_refreshed_at stable
+                # unless the row never recorded one. This is what
+                # prevents the "wiped on restart" effect.
+                last_refreshed = existing.last_refreshed_at or now
 
             summary = _generate_summary(
                 model_id=model_id,
                 status=status,
                 sparse=sparse,
-                detail=detail,
+                detail=merged_detail,
+                has_benchmarks=bool(merged_detail.get("benchmarks")),
+                has_hf_metadata=bool(merged_detail.get("huggingface_metadata")),
+                has_conflicts=bool(conflicts),
+                has_source_unavailable=False,
             )
 
             if existing is None:
+                provenance: dict[str, object] = {
+                    **merged_provenance,
+                    "reconciled_at": now.isoformat(),
+                    "reason": reason,
+                }
                 info = CanonicalModelInfo(
                     model_id=model_id,
                     status=status,
                     summary=summary,
                     sparse=sparse,
-                    detail=detail,
+                    detail=merged_detail,
                     provenance=provenance,
                     conflicts=conflicts,
-                    first_seen_at=now,
+                    first_seen_at=first_seen,
                     last_seen_at=now,
-                    last_refreshed_at=now,
+                    last_refreshed_at=last_refreshed,
                     next_refresh_at=next_refresh,
                 )
                 await self._repo.upsert_canonical(info)
                 created += 1
             else:
+                provenance = {
+                    **existing.provenance,
+                    "sources": merged_provenance["sources"],
+                    "reconciled_at": now.isoformat(),
+                    "reason": reason,
+                }
                 info = CanonicalModelInfo(
                     model_id=model_id,
                     status=status,
                     summary=summary,
                     sparse=sparse,
-                    detail=detail,
-                    provenance={**existing.provenance, **provenance},
+                    detail=merged_detail,
+                    provenance=provenance,
                     conflicts=conflicts,
-                    first_seen_at=existing.first_seen_at,
+                    first_seen_at=first_seen,
                     last_seen_at=now,
-                    last_refreshed_at=now,
+                    last_refreshed_at=last_refreshed,
                     next_refresh_at=next_refresh,
                 )
                 await self._repo.upsert_canonical(info)
@@ -240,25 +369,38 @@ class ModelInfoService:
             existing = await self._repo.get_canonical(model_id)
             if existing is None:
                 status, sparse = self._classify_model(model_id)
-                detail = self._build_detail(model_id)
+                provider_detail = self._build_detail(model_id)
+                observation_payloads = await self._repo.get_latest_observation_payloads(
+                    model_id
+                )
+                merged_detail, merged_provenance, merged_conflicts = (
+                    build_canonical_detail(
+                        model_id=model_id,
+                        provider_detail=provider_detail,
+                        observation_payloads=observation_payloads,
+                    )
+                )
                 provenance: dict[str, object] = {
-                    "sources": ["provider_catalog"],
+                    **merged_provenance,
                     "reconciled_at": now.isoformat(),
                 }
                 summary = _generate_summary(
                     model_id=model_id,
                     status=status,
                     sparse=sparse,
-                    detail=detail,
+                    detail=merged_detail,
+                    has_benchmarks=bool(merged_detail.get("benchmarks")),
+                    has_hf_metadata=bool(merged_detail.get("huggingface_metadata")),
+                    has_conflicts=bool(merged_conflicts),
                 )
                 info = CanonicalModelInfo(
                     model_id=model_id,
                     status=status,
                     summary=summary,
                     sparse=sparse,
-                    detail=detail,
+                    detail=merged_detail,
                     provenance=provenance,
-                    conflicts={},
+                    conflicts=merged_conflicts,
                     first_seen_at=now,
                     last_seen_at=now,
                     last_refreshed_at=None,
@@ -276,10 +418,25 @@ class ModelInfoService:
                 continue  # already handled above
             existing = await self._repo.get_canonical(model_id)
             if existing is not None:
-                detail = self._build_detail(model_id)
+                provider_detail = self._build_detail(model_id)
+                observation_payloads = await self._repo.get_latest_observation_payloads(
+                    model_id
+                )
+                merged_detail, merged_provenance, merged_conflicts = (
+                    build_canonical_detail(
+                        model_id=model_id,
+                        provider_detail=provider_detail,
+                        observation_payloads=observation_payloads,
+                        existing_detail=existing.detail,
+                    )
+                )
+                # Preserve any pre-existing conflict rows.
+                conflicts = dict(merged_conflicts)
+                for key, val in existing.conflicts.items():
+                    conflicts.setdefault(key, val)
                 provenance = {
                     **existing.provenance,
-                    "sources": ["provider_catalog"],
+                    "sources": merged_provenance["sources"],
                     "reconciled_at": now.isoformat(),
                 }
                 info = CanonicalModelInfo(
@@ -287,9 +444,9 @@ class ModelInfoService:
                     status=existing.status,
                     summary=existing.summary,
                     sparse=existing.sparse,
-                    detail=detail,
+                    detail=merged_detail,
                     provenance=provenance,
-                    conflicts=existing.conflicts,
+                    conflicts=conflicts,
                     first_seen_at=existing.first_seen_at,
                     last_seen_at=now,
                     last_refreshed_at=existing.last_refreshed_at,
@@ -409,7 +566,7 @@ class ModelInfoService:
                 await self.record_source_success("openrouter")
 
             # Try Artificial Analysis identity resolution
-            aa_record = _resolve_aa_record(model_id, self._repo, aa_indexed)
+            aa_record = await _resolve_aa_record(model_id, self._repo, aa_indexed)
             if aa_record is not None:
                 await self._persist_source_observation(aa_record, model_id=model_id)
                 await self.record_source_success("artificial_analysis")
@@ -444,23 +601,103 @@ class ModelInfoService:
                                 await self.record_source_success("huggingface")
                                 break
 
-            # Enrich detail with all external fields
-            or_detail = _enrich_detail_from_record(detail, or_record)
-            or_detail = _enrich_detail_from_record(or_detail, aa_record)
-            or_detail = _enrich_detail_from_record(or_detail, hf_record)
-            conflicts = _detect_context_conflicts(detail, or_record, existing.conflicts)
-            conflicts = _detect_benchmark_conflicts(
-                aa_record, existing.conflicts, conflicts
+            # Build observation payloads (in-memory) for the canonical
+            # detail builder. Only sources that actually matched this
+            # cycle contribute a payload — empty/sparse sources never
+            # claim provenance credit.
+            observation_payloads: list[dict[str, object]] = []
+            if or_record is not None:
+                observation_payloads.append(
+                    {
+                        "source": "openrouter",
+                        "source_model_id": or_record.source_model_id,
+                        "observed_at": or_record.observed_at,
+                        "confidence": or_record.confidence,
+                        "normalized": {
+                            "context_window": or_record.context_window,
+                            "max_output_tokens": or_record.max_output_tokens,
+                            "modalities": list(or_record.modalities),
+                            "display_name": or_record.display_name,
+                            "input_price_per_1k": or_record.input_price_per_1k,
+                            "output_price_per_1k": or_record.output_price_per_1k,
+                            **{k: v for k, v in or_record.normalized.items()},
+                        },
+                    }
+                )
+            if aa_record is not None:
+                observation_payloads.append(
+                    {
+                        "source": "artificial_analysis",
+                        "source_model_id": aa_record.source_model_id,
+                        "observed_at": aa_record.observed_at,
+                        "confidence": aa_record.confidence,
+                        "normalized": {
+                            "display_name": aa_record.display_name,
+                            "benchmarks": [
+                                {
+                                    "name": b.benchmark_name,
+                                    "score": b.score,
+                                    "rank": b.rank,
+                                    "percentile": b.percentile,
+                                    "source": b.source,
+                                    "observed_at": (
+                                        b.observed_at.isoformat()
+                                        if b.observed_at
+                                        else None
+                                    ),
+                                    "notes": b.notes,
+                                }
+                                for b in aa_record.benchmarks
+                            ],
+                        },
+                    }
+                )
+            if hf_record is not None:
+                hf_normalized = dict(hf_record.normalized)
+                if hf_record.license and "license" not in hf_normalized:
+                    hf_normalized["license"] = hf_record.license
+                observation_payloads.append(
+                    {
+                        "source": "huggingface",
+                        "source_model_id": hf_record.source_model_id,
+                        "observed_at": hf_record.observed_at,
+                        "confidence": hf_record.confidence,
+                        "normalized": hf_normalized,
+                    }
+                )
+
+            merged_detail, merged_provenance, merged_conflicts = build_canonical_detail(
+                model_id=model_id,
+                provider_detail=detail,
+                observation_payloads=observation_payloads,
+                existing_detail=existing.detail,
             )
+            conflicts = merged_conflicts
+            # Preserve any pre-existing conflict rows (e.g. benchmark
+            # conflicts) that build_canonical_detail doesn't manage.
+            for key, val in existing.conflicts.items():
+                conflicts.setdefault(key, val)
 
             # Override status to 'conflicting' when a material context conflict exists
             if conflicts and "context_window" in conflicts:
                 status = cast("ModelInfoStatus", "conflicting")
 
-            # Build enriched source list
-            has_openrouter = self._openrouter_source is not None
-            has_aa = self._artificial_analysis_source is not None
-            has_hf = self._huggingface_source is not None
+            # Provenance: keep prior reconciled_at and other meta, but
+            # let build_canonical_detail decide which sources actually
+            # contributed. Existing provenance keys (e.g. lazy_created)
+            # are preserved.
+            provenance: dict[str, object] = {
+                **existing.provenance,
+                "sources": merged_provenance["sources"],
+                "reconciled_at": now.isoformat(),
+            }
+
+            has_benchmarks = any(
+                p.get("source") == "artificial_analysis" for p in observation_payloads
+            ) and bool(aa_record and aa_record.benchmarks)
+            has_hf_metadata = any(
+                p.get("source") == "huggingface" for p in observation_payloads
+            )
 
             info = CanonicalModelInfo(
                 model_id=model_id,
@@ -469,24 +706,15 @@ class ModelInfoService:
                     model_id=model_id,
                     status=status,
                     sparse=sparse,
-                    detail=or_detail,
-                    has_benchmarks=aa_record is not None and bool(aa_record.benchmarks),
-                    has_hf_metadata=hf_record is not None,
+                    detail=merged_detail,
+                    has_benchmarks=has_benchmarks,
+                    has_hf_metadata=has_hf_metadata,
                     has_conflicts=bool(conflicts),
                     has_source_unavailable=False,
                 ),
                 sparse=sparse,
-                detail=or_detail,
-                provenance={
-                    **existing.provenance,
-                    "sources": _build_source_list(
-                        existing.provenance,
-                        has_openrouter=has_openrouter,
-                        has_aa=has_aa,
-                        has_hf=has_hf,
-                    ),
-                    "reconciled_at": now.isoformat(),
-                },
+                detail=merged_detail,
+                provenance=provenance,
                 conflicts=conflicts,
                 first_seen_at=existing.first_seen_at,
                 last_seen_at=now,
@@ -505,6 +733,294 @@ class ModelInfoService:
             "refreshed": len(to_write),
             "total": len(due_rows),
             "skipped": skipped,
+        }
+
+    async def refresh_model_info(
+        self,
+        model_id: str,
+        *,
+        provider_id: str | None = None,
+        source: str | None = None,
+        force: bool = False,
+    ) -> dict[str, object]:
+        """Force-refresh a single model immediately.
+
+        Unlike :meth:`refresh_due_models`, this method:
+
+        * Honors a ``model_id`` argument — only that model is touched.
+        * Honors ``force=True`` to bypass any ``next_refresh_at``
+          gating; the row is always updated.
+        * Honors ``source`` to restrict the refresh to a specific
+          source (``openrouter`` / ``artificial_analysis`` /
+          ``huggingface`` / ``provider_catalog``). The provider
+          catalog is always refreshed so callability facts stay
+          current; only the external fetches are filtered.
+        * Returns a counts dict with ``requested``,
+          ``refreshed``, ``skipped``, ``errors``,
+          ``sources_attempted``, ``sources_matched``, and
+          ``observations`` for the API endpoint.
+        """
+        sources_attempted: list[str] = []
+        sources_matched: list[str] = []
+        observations_persisted = 0
+
+        if not model_id or not model_id.strip():
+            return {
+                "requested": 0,
+                "refreshed": 0,
+                "skipped": 0,
+                "errors": 0,
+                "sources_attempted": [],
+                "sources_matched": [],
+                "observations": 0,
+            }
+
+        model_id = model_id.strip()
+
+        # 1. Ensure a canonical row exists. The caller is responsible
+        # for passing the canonical (base) model_id; we do not
+        # silently strip provider suffixes here because that would
+        # silently change which row we update.
+        lookup_id = model_id
+
+        existing = await self._repo.get_canonical(lookup_id)
+        if existing is None:
+            await self.ensure_canonical(lookup_id)
+            existing = await self._repo.get_canonical(lookup_id)
+        if existing is None:
+            # Defensive: ensure_canonical should never return None here.
+            return {
+                "requested": 1,
+                "refreshed": 0,
+                "skipped": 0,
+                "errors": 1,
+                "sources_attempted": [],
+                "sources_matched": [],
+                "observations": 0,
+            }
+
+        # When not forced, honor the existing next_refresh_at: a row
+        # that's not yet due returns a no-op counts dict.
+        now = datetime.now(UTC)
+        if (
+            not force
+            and existing.next_refresh_at is not None
+            and existing.next_refresh_at > now
+        ):
+            return {
+                "requested": 1,
+                "refreshed": 0,
+                "skipped": 1,
+                "errors": 0,
+                "sources_attempted": [],
+                "sources_matched": [],
+                "observations": 0,
+            }
+
+        # 2. Always refresh the provider-catalog observation for
+        #    callability facts.
+        try:
+            records = await self._provider_source.fetch_all()
+            provider_record = None
+            for record in records:
+                rec_model_id = record.model_id or record.source_model_id
+                if rec_model_id != lookup_id:
+                    continue
+                if provider_id is not None and record.provider_id != provider_id:
+                    continue
+                provider_record = record
+                break
+            if provider_record is not None:
+                await self._persist_source_observation(
+                    provider_record, model_id=lookup_id
+                )
+                observations_persisted += 1
+                sources_matched.append("provider_catalog")
+        except Exception as exc:
+            logger.exception(
+                "Provider-catalog refresh failed for %s: %s", lookup_id, exc
+            )
+        sources_attempted.append("provider_catalog")
+
+        # 3. Fetch external sources (filtered by ``source`` arg).
+        async def _fetch_openrouter() -> SourceModelRecord | None:
+            if self._openrouter_source is None:
+                return None
+            try:
+                records = await self._openrouter_source.fetch_all()
+                or_indexed = {r.source_model_id: r for r in records}
+                return await resolve_openrouter_record(
+                    lookup_id, self._repo, or_indexed
+                )
+            except ModelInfoSourceFetchError as exc:
+                logger.warning("OpenRouter fetch failed for %s: %s", lookup_id, exc)
+                await self.record_source_error("openrouter", exc)
+                return None
+            except Exception as exc:
+                logger.exception(
+                    "OpenRouter unexpected error for %s: %s", lookup_id, exc
+                )
+                await self.record_source_error("openrouter", exc)
+                return None
+
+        async def _fetch_aa() -> SourceModelRecord | None:
+            if self._artificial_analysis_source is None:
+                return None
+            try:
+                aa_records = await self._artificial_analysis_source.fetch_all()
+                await self.record_source_success(
+                    "artificial_analysis",
+                    payload_count=len(aa_records),
+                )
+            except ModelInfoSourceFetchError as exc:
+                logger.warning(
+                    "Artificial Analysis fetch failed for %s: %s",
+                    lookup_id,
+                    exc,
+                )
+                await self.record_source_error("artificial_analysis", exc)
+                return None
+            except Exception as exc:
+                logger.exception(
+                    "Artificial Analysis unexpected error for %s: %s",
+                    lookup_id,
+                    exc,
+                )
+                await self.record_source_error("artificial_analysis", exc)
+                return None
+            aa_indexed = {r.source_model_id: r for r in aa_records}
+            return await _resolve_aa_record(lookup_id, self._repo, aa_indexed)
+
+        async def _fetch_hf() -> SourceModelRecord | None:
+            if self._huggingface_source is None:
+                return None
+            hf_aliases = await self._repo.get_aliases_for_model(
+                lookup_id, source="huggingface"
+            )
+            for alias in hf_aliases:
+                try:
+                    record = await self._huggingface_source.fetch_one(alias)
+                except Exception as exc:
+                    logger.warning("Hugging Face fetch failed for %s: %s", alias, exc)
+                    await self.record_source_error("huggingface", exc)
+                    continue
+                if record is not None:
+                    return record
+            return None
+
+        or_record: SourceModelRecord | None = None
+        aa_record: SourceModelRecord | None = None
+        hf_record: SourceModelRecord | None = None
+
+        if source in (None, "openrouter"):
+            or_record = await _fetch_openrouter()
+            if or_record is not None:
+                await self._persist_source_observation(or_record, model_id=lookup_id)
+                await self.record_source_success("openrouter")
+                observations_persisted += 1
+                sources_matched.append("openrouter")
+            if self._openrouter_source is not None:
+                sources_attempted.append("openrouter")
+
+        if source in (None, "artificial_analysis"):
+            aa_record = await _fetch_aa()
+            if aa_record is not None:
+                await self._persist_source_observation(aa_record, model_id=lookup_id)
+                await self.record_source_success("artificial_analysis")
+                observations_persisted += 1
+                sources_matched.append("artificial_analysis")
+            if self._artificial_analysis_source is not None:
+                sources_attempted.append("artificial_analysis")
+
+        if source in (None, "huggingface"):
+            hf_record = await _fetch_hf()
+            if hf_record is not None:
+                await self._persist_source_observation(hf_record, model_id=lookup_id)
+                await self.record_source_success("huggingface")
+                observations_persisted += 1
+                sources_matched.append("huggingface")
+            if self._huggingface_source is not None:
+                sources_attempted.append("huggingface")
+
+        # 4. Rebuild canonical detail from provider + latest observations.
+        provider_detail = self._build_detail(lookup_id)
+        observation_payloads = await self._repo.get_latest_observation_payloads(
+            lookup_id
+        )
+        merged_detail, merged_provenance, merged_conflicts = build_canonical_detail(
+            model_id=lookup_id,
+            provider_detail=provider_detail,
+            observation_payloads=observation_payloads,
+            existing_detail=existing.detail,
+        )
+        conflicts: dict[str, object] = dict(merged_conflicts)
+        for key, val in existing.conflicts.items():
+            conflicts.setdefault(key, val)
+
+        status, sparse = self._classify_model(lookup_id)
+        if conflicts and "context_window" in conflicts:
+            status = cast("ModelInfoStatus", "conflicting")
+
+        provenance: dict[str, object] = {
+            **existing.provenance,
+            "sources": merged_provenance["sources"],
+            "reconciled_at": now.isoformat(),
+            "force_refreshed": force,
+            "requested_source": source,
+        }
+
+        has_benchmarks = any(
+            p.get("source") == "artificial_analysis" for p in observation_payloads
+        ) and bool(aa_record and aa_record.benchmarks)
+        has_hf_metadata = any(
+            p.get("source") == "huggingface" for p in observation_payloads
+        )
+
+        next_refresh = self._scheduler.next_refresh_for(
+            status=status,
+            first_seen_at=existing.first_seen_at,
+            last_refreshed_at=now,
+            now=now,
+        )
+
+        info = CanonicalModelInfo(
+            model_id=lookup_id,
+            status=status,
+            summary=_generate_summary(
+                model_id=lookup_id,
+                status=status,
+                sparse=sparse,
+                detail=merged_detail,
+                has_benchmarks=has_benchmarks,
+                has_hf_metadata=has_hf_metadata,
+                has_conflicts=bool(conflicts),
+                has_source_unavailable=False,
+            ),
+            sparse=sparse,
+            detail=merged_detail,
+            provenance=provenance,
+            conflicts=conflicts,
+            first_seen_at=existing.first_seen_at,
+            last_seen_at=now,
+            last_refreshed_at=now,
+            next_refresh_at=next_refresh,
+        )
+        if canonical_needs_update(existing, info):
+            await self._repo.upsert_canonical(info)
+            refreshed = 1
+            skipped = 0
+        else:
+            refreshed = 0
+            skipped = 1
+
+        return {
+            "requested": 1,
+            "refreshed": refreshed,
+            "skipped": skipped,
+            "errors": 0,
+            "sources_attempted": sources_attempted,
+            "sources_matched": sources_matched,
+            "observations": observations_persisted,
         }
 
     async def _persist_source_observation(
@@ -745,6 +1261,116 @@ class ModelInfoService:
                 logger.exception("Failed to backfill canonical row for %s", model_id)
         return {"backfilled": backfilled}
 
+    async def backfill_legacy_detail_blocks(self, limit: int = 200) -> dict[str, int]:
+        """Re-populate the normalized ``limits`` block on pre-Phase-B
+        canonical rows.
+
+        Phase B introduced the nested ``detail["limits"]`` block
+        (``effective_context``, ``external_context``, ``effective_output``,
+        ``external_output``) and made the canonical detail
+        observation-driven and non-destructive.  Canonical rows written
+        before Phase B only carry the legacy flat keys
+        (``context_tokens`` / ``context_window_external`` /
+        ``max_output_tokens``).
+
+        This backfill finds rows whose ``detail`` lacks a populated
+        ``limits`` block, rebuilds the canonical detail via
+        :func:`build_canonical_detail` using the existing flat keys as
+        the provider detail and any persisted observation payloads as
+        the external evidence, and writes the result back.  The
+        operation is idempotent: rows that already have a populated
+        ``limits`` block are skipped.
+
+        Returns ``{"scanned": N, "upgraded": M, "skipped": K, "errors": E}``
+        where the counts describe the batch as a whole.  Individual
+        failures are logged and counted but never block the rest.
+        """
+        try:
+            rows: list[CanonicalModelInfo] = await self._repo.list_all_canonical(
+                limit=limit
+            )
+        except AttributeError:
+            rows = []
+        upgraded = 0
+        skipped = 0
+        errors = 0
+        for canonical in rows:
+            detail = canonical.detail or {}
+            raw_limits = cast("dict[str, object]", detail.get("limits", {}))
+            if raw_limits and (
+                raw_limits.get("effective_context") is not None
+                or raw_limits.get("external_context") is not None
+            ):
+                skipped += 1
+                continue
+            try:
+                provider_detail = self._build_detail(canonical.model_id)
+                observation_payloads = await self._repo.get_latest_observation_payloads(
+                    canonical.model_id
+                )
+                # Pre-seed the provider detail with the legacy flat
+                # keys so ``build_canonical_detail`` can lift them
+                # into the new nested ``limits`` block. Without this,
+                # legacy rows that pre-date Phase B would lose their
+                # context_window_external / max_output_tokens values
+                # because the merge only consults ``existing_detail``
+                # via the ``external_*`` prefix.
+                legacy_limits = _legacy_flat_keys_to_limits(detail)
+                if legacy_limits:
+                    merged_provider = dict(provider_detail)
+                    existing_provider_limits = cast(
+                        "dict[str, object]",
+                        merged_provider.get("limits", {}),
+                    )
+                    for key, val in legacy_limits.items():
+                        if key not in existing_provider_limits:
+                            existing_provider_limits[key] = val
+                    merged_provider["limits"] = existing_provider_limits
+                    provider_detail = merged_provider
+                merged_detail, merged_provenance, merged_conflicts = (
+                    build_canonical_detail(
+                        model_id=canonical.model_id,
+                        provider_detail=provider_detail,
+                        observation_payloads=observation_payloads,
+                        existing_detail=detail,
+                    )
+                )
+                conflicts: dict[str, object] = dict(merged_conflicts)
+                for key, val in canonical.conflicts.items():
+                    conflicts.setdefault(key, val)
+                provenance = dict(canonical.provenance)
+                provenance["sources"] = merged_provenance["sources"]
+                provenance["backfilled_limits"] = True
+                updated = CanonicalModelInfo(
+                    model_id=canonical.model_id,
+                    status=canonical.status,
+                    summary=canonical.summary,
+                    sparse=canonical.sparse,
+                    detail=merged_detail,
+                    provenance=provenance,
+                    conflicts=conflicts,
+                    first_seen_at=canonical.first_seen_at,
+                    last_seen_at=canonical.last_seen_at,
+                    last_refreshed_at=canonical.last_refreshed_at,
+                    next_refresh_at=canonical.next_refresh_at,
+                )
+                if canonical_needs_update(canonical, updated):
+                    await self._repo.upsert_canonical(updated)
+                    upgraded += 1
+                else:
+                    skipped += 1
+            except Exception:
+                logger.exception(
+                    "Failed to backfill detail block for %s", canonical.model_id
+                )
+                errors += 1
+        return {
+            "scanned": len(rows),
+            "upgraded": upgraded,
+            "skipped": skipped,
+            "errors": errors,
+        }
+
     async def get_summary_map(
         self, model_ids: Iterable[str] | None = None
     ) -> dict[str, CanonicalModelInfo]:
@@ -902,12 +1528,21 @@ class ModelInfoService:
 
         limits = self._catalog._effective_limits_from_info(global_info)  # pyright: ignore[reportPrivateUsage]
         if limits:
+            limits_block: dict[str, object] = dict(
+                cast("dict[str, object]", detail.get("limits", {}))
+            )
             if limits.context_tokens is not None:
+                limits_block["effective_context"] = limits.context_tokens
+                # Legacy flat key kept for migration; renderer prefers limits.*.
                 detail["context_tokens"] = limits.context_tokens
             if limits.input_tokens is not None:
+                limits_block["effective_input"] = limits.input_tokens
                 detail["input_tokens"] = limits.input_tokens
             if limits.output_tokens is not None:
+                limits_block["effective_output"] = limits.output_tokens
                 detail["output_tokens"] = limits.output_tokens
+            if limits_block:
+                detail["limits"] = limits_block
 
         providers = sorted(
             {
@@ -922,7 +1557,7 @@ class ModelInfoService:
         return detail
 
 
-def _enrich_detail_from_record(
+def _enrich_detail_from_record(  # pyright: ignore[reportUnusedFunction]
     detail: dict[str, object],
     record: SourceModelRecord | None,
 ) -> dict[str, object]:
@@ -944,12 +1579,19 @@ def _enrich_detail_from_record(
     external_ids[source] = record.source_model_id
     enriched["external_ids"] = external_ids
 
-    # External context window (advisory only)
+    # External context/output (advisory only). Stored under
+    # detail["limits"]["external_*"] in the normalized schema, with
+    # legacy flat keys kept for back-compat.
     if record.context_window is not None:
+        limits_block = dict(cast("dict[str, object]", enriched.get("limits", {})))
+        limits_block["external_context"] = record.context_window
+        enriched["limits"] = limits_block
         enriched["context_window_external"] = record.context_window
 
-    # External max output tokens (advisory only)
     if record.max_output_tokens is not None:
+        limits_block = dict(cast("dict[str, object]", enriched.get("limits", {})))
+        limits_block["external_output"] = record.max_output_tokens
+        enriched["limits"] = limits_block
         enriched["max_output_tokens_external"] = record.max_output_tokens
 
     # External modalities (advisory only)
@@ -1019,7 +1661,7 @@ def _enrich_detail_from_record(
     return enriched
 
 
-def _detect_context_conflicts(
+def _detect_context_conflicts(  # pyright: ignore[reportUnusedFunction]
     detail: dict[str, object],
     record: SourceModelRecord | None,
     existing_conflicts: dict[str, object],
@@ -1028,13 +1670,22 @@ def _detect_context_conflicts(
 
     A conflict is recorded when both provider-local and external values exist
     for context_window and differ materially (>10% relative difference).
+
+    Reads the provider-native effective context from the normalized
+    ``detail["limits"]["effective_context"]`` block, with a
+    back-compat fallback to the legacy flat ``detail["context_tokens"]``
+    key. New canonical rows always populate the nested limits block,
+    but rows from older installs may still carry only the flat key.
     """
     conflicts = dict(existing_conflicts)
 
     if record is None:
         return conflicts
 
-    local_ctx = detail.get("context_tokens")
+    limits_block = cast("dict[str, object]", detail.get("limits", {}))
+    local_ctx = limits_block.get("effective_context")
+    if local_ctx is None:
+        local_ctx = detail.get("context_tokens")
     ext_ctx = record.context_window
 
     if (
@@ -1056,7 +1707,7 @@ def _detect_context_conflicts(
     return conflicts
 
 
-def _detect_benchmark_conflicts(
+def _detect_benchmark_conflicts(  # pyright: ignore[reportUnusedFunction]
     aa_record: SourceModelRecord | None,
     existing_conflicts: dict[str, object],
     current_conflicts: dict[str, object],
@@ -1077,7 +1728,332 @@ def _detect_benchmark_conflicts(
     return conflicts
 
 
-def _build_source_list(
+def _normalize_observation_payload(
+    source: str,
+    payload: dict[str, object],
+) -> dict[str, object]:
+    """Convert a persisted ``normalized_json`` payload to a partial detail.
+
+    Used by :func:`build_canonical_detail` so that an external
+    observation row (which has no typed ``SourceModelRecord`` fields
+    to bind to) still contributes a useful fragment to the merged
+    canonical detail.
+    """
+    out: dict[str, object] = {}
+    if source == "huggingface":
+        hf_meta: dict[str, object] = {}
+        for key in (
+            "pipeline_tag",
+            "library_name",
+            "model_type",
+            "tags",
+            "downloads",
+            "likes",
+            "card_data",
+            "card_metadata",
+        ):
+            val = payload.get(key)
+            if val is not None:
+                hf_meta[key] = val
+        license_val = payload.get("license")
+        if license_val is not None:
+            hf_meta["license"] = license_val
+        if hf_meta:
+            out["huggingface_metadata"] = hf_meta
+        modalities: list[str] = []
+        for m in cast("list[object]", payload.get("modalities", []) or []):
+            modalities.append(str(m))
+        if modalities:
+            out["modalities_external"] = sorted(modalities)
+    elif source == "openrouter":
+        ctx = payload.get("context_window") or payload.get("context_length")
+        if isinstance(ctx, (int, float)) and ctx > 0:
+            limits = cast("dict[str, object]", out.get("limits", {}))
+            limits["external_context"] = int(ctx)
+            out["limits"] = limits
+        max_out = payload.get("max_output_tokens")
+        if isinstance(max_out, (int, float)) and max_out > 0:
+            limits = cast("dict[str, object]", out.get("limits", {}))
+            limits["external_output"] = int(max_out)
+            out["limits"] = limits
+        modalities: list[str] = []
+        for m in cast("list[object]", payload.get("modalities", []) or []):
+            modalities.append(str(m))
+        if modalities:
+            out["modalities_external"] = sorted(modalities)
+        if payload.get("display_name"):
+            out["display_name_openrouter"] = payload["display_name"]
+    elif source == "artificial_analysis":
+        benchmarks = payload.get("benchmarks")
+        if isinstance(benchmarks, list) and benchmarks:
+            out["benchmarks"] = list(cast("list[object]", benchmarks))
+        if payload.get("display_name"):
+            out["display_name_artificial_analysis"] = payload["display_name"]
+    return out
+
+
+def _legacy_flat_keys_to_limits(
+    detail: dict[str, object],
+) -> dict[str, object]:
+    """Lift pre-Phase-B flat keys into the nested ``limits`` block.
+
+    Returns a dict suitable for merging into ``provider_detail["limits"]``
+    so that legacy rows contribute their previously known external
+    values to the rebuilt canonical detail.  Recognized flat keys:
+
+    * ``context_tokens`` → ``effective_context``
+    * ``context_window_external`` → ``external_context``
+    * ``max_output_tokens`` → ``effective_output``
+    * ``max_output_tokens_external`` → ``external_output``
+    """
+    limits: dict[str, object] = {}
+    ctx = detail.get("context_tokens")
+    if isinstance(ctx, (int, float)) and ctx > 0:
+        limits["effective_context"] = int(ctx)
+    ext_ctx = detail.get("context_window_external")
+    if isinstance(ext_ctx, (int, float)) and ext_ctx > 0:
+        limits["external_context"] = int(ext_ctx)
+    eff_out = detail.get("max_output_tokens")
+    if isinstance(eff_out, (int, float)) and eff_out > 0:
+        limits["effective_output"] = int(eff_out)
+    ext_out = detail.get("max_output_tokens_external")
+    if isinstance(ext_out, (int, float)) and ext_out > 0:
+        limits["external_output"] = int(ext_out)
+    return limits
+
+
+def build_canonical_detail(
+    *,
+    model_id: str,
+    provider_detail: dict[str, object],
+    observation_payloads: list[dict[str, object]],
+    existing_detail: dict[str, object] | None = None,
+) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+    """Build a merged canonical detail, provenance, and conflict map.
+
+    Returns ``(detail, provenance, conflicts)``. The merge rules:
+
+    * ``provider_detail`` is the seed (it is the only authoritative
+      source for ``effective_context``, ``effective_input``,
+      ``effective_output``, ``protocol``, ``supports_tools``,
+      ``supports_vision``, ``display_name``). Those fields are
+      authoritative and never overwritten by external observations.
+    * External observation payloads add *advisory* fields under
+      ``limits.external_*``, ``modalities_external``, ``benchmarks``,
+      ``huggingface_metadata``, ``display_name_<source>``, and
+      ``external_ids``. They never overwrite provider-native values
+      but enrich the detail where the provider does not speak.
+    * ``existing_detail`` (if present) contributes fields that are
+      *missing* from both the provider and the latest observations
+      — this is the back-compat path so that a one-cycle external
+      fetch failure does not erase previously persisted external
+      enrichment.
+    * ``provenance.sources`` lists only sources whose data actually
+      contributed a field to the merged detail.
+    * ``conflicts`` is built field-by-field; currently only context
+      window is compared, with provider-native value selected.
+    """
+    detail: dict[str, object] = dict(provider_detail)
+
+    # Start with provider limits block (or empty) so subsequent merges
+    # write into the same shape regardless of which path populated it.
+    limits_block: dict[str, object] = dict(
+        cast("dict[str, object]", detail.get("limits", {}))
+    )
+
+    used_sources: set[str] = set()
+    external_ids: dict[str, object] = dict(
+        cast("dict[str, object]", detail.get("external_ids", {}))
+    )
+    benchmarks: list[object] = list(cast("list[object]", detail.get("benchmarks", [])))
+    hf_meta: dict[str, object] = dict(
+        cast("dict[str, object]", detail.get("huggingface_metadata", {}))
+    )
+    modalities_external: set[str] = set(
+        cast("list[str]", detail.get("modalities_external", []))
+    )
+    conflicts: dict[str, object] = {}
+
+    for obs in observation_payloads:
+        source = str(obs.get("source", ""))
+        if not source or source == "provider_catalog":
+            continue
+        payload = cast("dict[str, object]", obs.get("normalized", {}))
+        if not payload:
+            continue
+        source_model_id = obs.get("source_model_id")
+        if source_model_id and not external_ids.get(source):
+            external_ids[source] = source_model_id
+        fragment = _normalize_observation_payload(source, payload)
+
+        contributed = False
+        if "limits" in fragment:
+            new_limits = cast("dict[str, object]", fragment["limits"])
+            for key, val in new_limits.items():
+                # External-* keys from observations are authoritative
+                # — overwrite stale legacy seeds so the rebuild path
+                # can pick up fresher OpenRouter/AA values that
+                # arrived after the legacy flat key was written.
+                if (
+                    key.startswith("external_")
+                    or key not in limits_block
+                    or limits_block[key] is None
+                ):
+                    limits_block[key] = val
+                    contributed = True
+        if "modalities_external" in fragment:
+            new_modalities = cast("list[str]", fragment["modalities_external"])
+            before = len(modalities_external)
+            modalities_external.update(new_modalities)
+            if len(modalities_external) > before:
+                contributed = True
+        if "benchmarks" in fragment:
+            new_benchmarks = cast("list[object]", fragment["benchmarks"])
+            if new_benchmarks:
+                benchmarks.extend(new_benchmarks)
+                contributed = True
+        if "huggingface_metadata" in fragment:
+            new_hf = cast("dict[str, object]", fragment["huggingface_metadata"])
+            for key, val in new_hf.items():
+                if key not in hf_meta or hf_meta[key] is None:
+                    hf_meta[key] = val
+                    contributed = True
+        for key, val in fragment.items():
+            if key in {
+                "limits",
+                "modalities_external",
+                "benchmarks",
+                "huggingface_metadata",
+            }:
+                continue
+            if key not in detail or detail[key] in (None, ""):
+                detail[key] = val
+                contributed = True
+        if contributed:
+            used_sources.add(source)
+
+    # Context-window conflict detection (advisory: provider wins)
+    eff_ctx = limits_block.get("effective_context")
+    ext_ctx = limits_block.get("external_context")
+    # Identify the source that contributed the external context, so
+    # the conflict record names it explicitly.
+    ext_source = ""
+    for obs in observation_payloads:
+        source = str(obs.get("source", ""))
+        if source and source != "provider_catalog":
+            payload = cast("dict[str, object]", obs.get("normalized", {}))
+            ctx = payload.get("context_window") or payload.get("context_length")
+            if (
+                isinstance(ctx, (int, float))
+                and ext_ctx is not None
+                and isinstance(ext_ctx, (int, float))
+                and int(ctx) == int(ext_ctx)
+            ):
+                ext_source = source
+                break
+    if (
+        isinstance(eff_ctx, (int, float))
+        and eff_ctx > 0
+        and isinstance(ext_ctx, (int, float))
+        and ext_ctx > 0
+    ):
+        diff = abs(eff_ctx - ext_ctx)
+        relative = diff / max(eff_ctx, ext_ctx)
+        if relative > 0.10:
+            conflict_entry: dict[str, object] = {
+                "provider_catalog": eff_ctx,
+                "selected": "provider_catalog/effective_limit",
+                "reason": ("local/provider effective limit wins for Eggpool display"),
+            }
+            if ext_source:
+                conflict_entry[ext_source] = ext_ctx
+            else:
+                conflict_entry["external"] = ext_ctx
+            conflicts["context_window"] = conflict_entry
+
+    # Fallback: if external data was unavailable this cycle, preserve
+    # previously known external fields rather than wiping them. Only
+    # adopt a value from existing_detail when neither the provider
+    # nor the latest observations contributed one.
+    if existing_detail:
+        for key, val in existing_detail.items():
+            if key in {"limits", "huggingface_metadata", "benchmarks"}:
+                continue
+            if (
+                (key not in detail or detail[key] in (None, ""))
+                and val is not None
+                and val != ""
+            ):
+                detail[key] = val
+        existing_limits = cast("dict[str, object]", existing_detail.get("limits", {}))
+        for key, val in existing_limits.items():
+            if key.startswith("external_") and (
+                key not in limits_block or limits_block[key] is None
+            ):
+                limits_block[key] = val
+        existing_hf = cast(
+            "dict[str, object]",
+            existing_detail.get("huggingface_metadata", {}),
+        )
+        for key, val in existing_hf.items():
+            if key not in hf_meta or hf_meta[key] is None:
+                hf_meta[key] = val
+        existing_benchmarks = cast(
+            "list[object]", existing_detail.get("benchmarks", [])
+        )
+        for b in existing_benchmarks:
+            if b not in benchmarks:
+                benchmarks.append(b)
+        existing_modalities = cast(
+            "list[str]", existing_detail.get("modalities_external", [])
+        )
+        modalities_external.update(existing_modalities)
+        existing_ext_ids = cast(
+            "dict[str, object]", existing_detail.get("external_ids", {})
+        )
+        for k, v in existing_ext_ids.items():
+            if k not in external_ids:
+                external_ids[k] = v
+
+    # Materialize the merged detail.
+    if limits_block:
+        detail["limits"] = limits_block
+        if "effective_context" in limits_block:
+            detail["context_tokens"] = limits_block["effective_context"]
+        if "external_context" in limits_block:
+            detail["context_window_external"] = limits_block["external_context"]
+        if "external_output" in limits_block:
+            detail["max_output_tokens_external"] = limits_block["external_output"]
+    if external_ids:
+        detail["external_ids"] = external_ids
+    if benchmarks:
+        detail["benchmarks"] = benchmarks
+    if hf_meta:
+        detail["huggingface_metadata"] = hf_meta
+    if modalities_external:
+        detail["modalities_external"] = sorted(modalities_external)
+    # Materialize modalities union (provider + external).
+    base_modalities: set[str] = set(cast("list[str]", detail.get("modalities", [])))
+    if modalities_external:
+        base_modalities.update(modalities_external)
+    if base_modalities:
+        detail["modalities"] = sorted(base_modalities)
+
+    # Provenance: only sources that actually contributed. Provider
+    # catalog is always credited when it seeded the row.
+    provider_seeded = bool(provider_detail)
+    sources: list[str] = []
+    if provider_seeded and "provider_catalog" not in sources:
+        sources.append("provider_catalog")
+    for src in sorted(used_sources):
+        if src not in sources:
+            sources.append(src)
+    provenance: dict[str, object] = {"sources": sources}
+
+    return detail, provenance, conflicts
+
+
+def _build_source_list(  # pyright: ignore[reportUnusedFunction]
     provenance: dict[str, object],
     *,
     has_openrouter: bool = False,
@@ -1119,26 +2095,79 @@ def _compute_source_backoff(source_name: str, failure_count: int = 0) -> datetim
     return datetime.now(UTC) + timedelta(minutes=cooldown_minutes)
 
 
-def _resolve_aa_record(
+async def _resolve_aa_record(
     model_id: str,
     repo: ModelInfoRepository,
     aa_indexed: dict[str, SourceModelRecord],
 ) -> SourceModelRecord | None:
     """Resolve a local model_id to an Artificial Analysis source record.
 
-    Uses exact alias matching only — no fuzzy matching.
+    Uses exact alias matching only — no fuzzy matching. Resolution
+    rules mirror :func:`resolve_openrouter_record`:
+
+    1. Exact ``model_info_aliases`` row with ``source=artificial_analysis``.
+    2. Direct ``source_model_id == model_id`` match.
     """
     if not aa_indexed:
         return None
 
-    # Check model_info_aliases for an exact AA alias
-    # (We can't await here in a sync context, so we use a different pattern)
-    # Instead, try exact source_model_id match directly
+    alias_strings = await repo.get_aliases_for_model(
+        model_id, source="artificial_analysis"
+    )
+    if len(alias_strings) == 1:
+        record = aa_indexed.get(alias_strings[0])
+        if record is not None:
+            return record
+    elif len(alias_strings) > 1:
+        logger.debug(
+            "Ambiguous Artificial Analysis aliases for %s: %s — skipping",
+            model_id,
+            alias_strings,
+        )
+        return None
+
     direct = aa_indexed.get(model_id)
     if direct is not None:
         return direct
 
     return None
+
+
+_ALIAS_VALID_SOURCES: frozenset[str] = frozenset(
+    {"provider_catalog", "openrouter", "artificial_analysis", "huggingface", "pricing"}
+)
+
+_ALIAS_CONFIDENCE_BY_NAME: dict[str, float] = {
+    "exact": 1.0,
+    "curated": 0.9,
+    "high": 0.9,
+    "medium": 0.6,
+    "low": 0.3,
+}
+
+
+def _alias_confidence_to_float(confidence: str | float | int | None) -> float:
+    """Normalize a configured alias confidence into ``[0.0, 1.0]``.
+
+    String values map to ``_ALIAS_CONFIDENCE_BY_NAME``; numeric values
+    are clamped. ``None`` and unknown strings fall back to ``0.5``
+    (the repository default).
+    """
+    if confidence is None:
+        return 0.5
+    if isinstance(confidence, bool):
+        return 1.0 if confidence else 0.5
+    if isinstance(confidence, (int, float)):
+        return max(0.0, min(1.0, float(confidence)))
+    key = str(confidence).strip().lower()
+    if not key:
+        return 0.5
+    return _ALIAS_CONFIDENCE_BY_NAME.get(key, 0.5)
+
+
+def _is_known_source(source: str) -> bool:
+    """Return True if *source* is one of the configured model-info sources."""
+    return source in _ALIAS_VALID_SOURCES
 
 
 _RAW_PAYLOAD_BOUND_BYTES = 65_536  # 64 KiB

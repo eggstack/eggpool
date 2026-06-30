@@ -232,6 +232,22 @@ class ModelInfoRepository:
             rows = await self._db.fetch_all("SELECT * FROM model_info_canonical")
         return {row["model_id"]: self._row_to_canonical(row) for row in rows}
 
+    async def list_all_canonical(self, limit: int = 1000) -> list[CanonicalModelInfo]:
+        """Return all canonical rows up to ``limit`` for backfill scans.
+
+        The Phase F ``backfill_legacy_detail_blocks`` repair step
+        iterates over every canonical row to find ones whose detail
+        block lacks the nested ``limits`` keys.  Pagination is the
+        caller's responsibility; a small operator dashboard typically
+        has far fewer than 1000 models so a single bounded scan is
+        sufficient for the startup repair.
+        """
+        rows = await self._db.fetch_all(
+            "SELECT * FROM model_info_canonical ORDER BY model_id LIMIT ?",
+            (limit,),
+        )
+        return [self._row_to_canonical(row) for row in rows]
+
     async def get_aliases_for_model(
         self, model_id: str, *, source: str | None = None
     ) -> list[str]:
@@ -249,6 +265,167 @@ class ModelInfoRepository:
                 (model_id,),
             )
         return [row["alias"] for row in rows]
+
+    async def list_alias_rows_for_model(
+        self, model_id: str, *, source: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Return source-keyed alias rows for a model.
+
+        Each row includes ``source``, ``alias``, ``provider_id``,
+        ``confidence``, ``active``, and ``last_seen_at``. Useful for
+        the API alias endpoint so callers can distinguish configured
+        aliases (with confidence) from auto-discovered ones, and can
+        see which source each alias targets.
+        """
+        if source is not None:
+            rows = await self._db.fetch_all(
+                "SELECT source, alias, provider_id, confidence, active, "
+                "last_seen_at FROM model_info_aliases "
+                "WHERE model_id = ? AND source = ? "
+                "ORDER BY source, last_seen_at DESC",
+                (model_id, source),
+            )
+        else:
+            rows = await self._db.fetch_all(
+                "SELECT source, alias, provider_id, confidence, active, "
+                "last_seen_at FROM model_info_aliases "
+                "WHERE model_id = ? "
+                "ORDER BY source, last_seen_at DESC",
+                (model_id,),
+            )
+        return [
+            {
+                "source": row["source"],
+                "alias": row["alias"],
+                "provider_id": row["provider_id"],
+                "confidence": float(row["confidence"])
+                if row["confidence"] is not None
+                else None,
+                "active": bool(row["active"]),
+                "last_seen_at": row["last_seen_at"],
+            }
+            for row in rows
+        ]
+
+    async def get_latest_observations_for_model(
+        self,
+        model_id: str,
+        *,
+        sources: list[str] | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        """Return the latest persisted observation per source for a model.
+
+        Returns a dict keyed by ``source`` whose values are the raw
+        row dicts (``id``, ``source``, ``source_model_id``,
+        ``provider_id``, ``observed_at``, ``confidence``,
+        ``normalized_json``, ``raw_json``).
+
+        "Latest" is the most recently observed_at row per source.
+        When multiple rows exist for a single source (e.g. multiple
+        source_model_ids), the one with the highest confidence wins,
+        falling back to most recent observed_at on ties.
+
+        Used by the canonical detail builder so startup reconciliation
+        can merge existing persisted external data instead of
+        overwriting it with provider-catalog-only detail.
+        """
+        if sources is None:
+            rows = await self._db.fetch_all(
+                "SELECT o.id, o.source, o.source_model_id, o.provider_id, "
+                "o.observed_at, o.confidence, o.raw_hash, "
+                "o.normalized_json, o.raw_json "
+                "FROM model_info_observations o "
+                "INNER JOIN ("
+                "  SELECT source, MAX(observed_at) AS max_obs "
+                "  FROM model_info_observations "
+                "  WHERE model_id = ? "
+                "  GROUP BY source"
+                ") latest "
+                "ON o.source = latest.source "
+                "AND o.observed_at = latest.max_obs "
+                "WHERE o.model_id = ?",
+                (model_id, model_id),
+            )
+        else:
+            placeholders = ",".join("?" for _ in sources)
+            rows = await self._db.fetch_all(
+                "SELECT o.id, o.source, o.source_model_id, o.provider_id, "
+                "o.observed_at, o.confidence, o.raw_hash, "
+                "o.normalized_json, o.raw_json "
+                "FROM model_info_observations o "
+                "INNER JOIN ("
+                "  SELECT source, MAX(observed_at) AS max_obs "
+                "  FROM model_info_observations "
+                "  WHERE model_id = ? "
+                f"  AND source IN ({placeholders}) "
+                "  GROUP BY source"
+                ") latest "
+                "ON o.source = latest.source "
+                "AND o.observed_at = latest.max_obs "
+                "WHERE o.model_id = ?",
+                (model_id, *sources, model_id),
+            )
+
+        result: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            source = row["source"]
+            if source not in result:
+                result[source] = dict(row)
+            else:
+                existing_conf = float(result[source]["confidence"] or 0.0)
+                new_conf = float(row["confidence"] or 0.0)
+                if new_conf > existing_conf:
+                    result[source] = dict(row)
+        return result
+
+    async def get_latest_observation_payloads(
+        self, model_id: str
+    ) -> list[dict[str, object]]:
+        """Return observation payloads for the latest per-source rows.
+
+        Each payload includes ``source``, ``source_model_id``,
+        ``observed_at``, ``confidence``, and the ``normalized_json``
+        dict. Typed fields like ``context_window`` and ``license``
+        live inside the normalized dict — sources should write them
+        there via :class:`SourceModelRecord.normalized` so they
+        survive the round-trip.
+        """
+        if not model_id:
+            return []
+        rows = await self._db.fetch_all(
+            "SELECT o.source, o.source_model_id, o.observed_at, "
+            "o.confidence, o.normalized_json "
+            "FROM model_info_observations o "
+            "INNER JOIN ("
+            "  SELECT source, MAX(observed_at) AS max_obs "
+            "  FROM model_info_observations "
+            "  WHERE model_id = ? "
+            "  GROUP BY source"
+            ") latest "
+            "ON o.source = latest.source "
+            "AND o.observed_at = latest.max_obs "
+            "WHERE o.model_id = ?",
+            (model_id, model_id),
+        )
+        payloads: list[dict[str, object]] = []
+        for row in rows:
+            raw = row["normalized_json"]
+            try:
+                decoded = json.loads(raw) if isinstance(raw, str) else raw
+            except (ValueError, TypeError):
+                decoded = {}
+            if not isinstance(decoded, dict):
+                decoded = {}
+            payloads.append(
+                {
+                    "source": row["source"],
+                    "source_model_id": row["source_model_id"],
+                    "observed_at": row["observed_at"],
+                    "confidence": float(row["confidence"] or 0.0),
+                    "normalized": decoded,
+                }
+            )
+        return payloads
 
     async def list_due(
         self, limit: int = 50, now: datetime | None = None

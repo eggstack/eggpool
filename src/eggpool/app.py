@@ -745,6 +745,20 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
                         logger.info("Model info startup backfill: %s", backfill)
                 except Exception:
                     logger.exception("Model info startup backfill failed")
+                # Phase F: upgrade pre-Phase-B canonical rows whose
+                # ``detail`` lacks the nested ``limits`` block.  This
+                # is a one-shot repair that runs alongside the
+                # regular startup backfill so legacy rows participate
+                # in the normalized detail schema on the next reload.
+                try:
+                    legacy_repair = await model_info.backfill_legacy_detail_blocks()
+                    if legacy_repair["upgraded"] > 0:
+                        logger.info(
+                            "Model info legacy detail backfill: %s",
+                            legacy_repair,
+                        )
+                except Exception:
+                    logger.exception("Model info legacy detail backfill failed")
         except Exception:
             logger.exception("Failed to initialize model info service")
             model_info = None

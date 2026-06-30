@@ -1028,6 +1028,90 @@ class TestDetailAPI:
         assert "raw_json" not in data
         assert "raw_payload" not in data
 
+    @pytest.mark.asyncio()
+    async def test_model_info_detail_reads_nested_limits_block(self) -> None:
+        """Detail endpoint reads from detail['limits'] when present."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from eggpool.api.model_info import handle_model_info_detail
+
+        info = MagicMock()
+        info.model_id = "gpt-4o"
+        info.status = "fresh"
+        info.sparse = False
+        info.summary = "Phase B schema."
+        info.provenance = {"sources": ["provider_catalog", "openrouter"]}
+        info.detail = {
+            "providers": ["openai"],
+            "limits": {
+                "effective_context": 128000,
+                "effective_output": 16384,
+                "external_context": 200000,
+                "external_output": 32000,
+            },
+            "external_ids": {"openrouter": "openai/gpt-4o"},
+        }
+        info.last_seen_at = datetime(2026, 6, 29, 20, 0, tzinfo=UTC)
+        info.last_refreshed_at = datetime(2026, 6, 29, 20, 0, tzinfo=UTC)
+        info.next_refresh_at = None
+        info.conflicts = {}
+
+        mock_service = AsyncMock()
+        mock_service.get_summary.return_value = info
+
+        request = MagicMock()
+        request.app.state.model_info = mock_service
+
+        response = await handle_model_info_detail(request, "gpt-4o")
+        import json
+
+        data = json.loads(response.body)
+        limits = data["detail"]["limits"]
+        assert limits["effective_context"] == 128000
+        assert limits["effective_output"] == 16384
+        assert limits["external_context"] == 200000
+        assert limits["external_output"] == 32000
+
+    @pytest.mark.asyncio()
+    async def test_model_info_detail_falls_back_to_legacy_flat_keys(self) -> None:
+        """Pre-Phase-B canonical rows (flat context_tokens /
+        context_window_external) still produce a populated limits
+        block."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from eggpool.api.model_info import handle_model_info_detail
+
+        info = MagicMock()
+        info.model_id = "legacy-model"
+        info.status = "fresh"
+        info.sparse = False
+        info.summary = "legacy"
+        info.provenance = {"sources": ["provider_catalog", "openrouter"]}
+        info.detail = {
+            "providers": ["openai"],
+            # Legacy flat keys, no nested limits block.
+            "context_tokens": 128000,
+            "context_window_external": 1_000_000,
+        }
+        info.last_seen_at = datetime(2026, 6, 29, 20, 0, tzinfo=UTC)
+        info.last_refreshed_at = datetime(2026, 6, 29, 20, 0, tzinfo=UTC)
+        info.next_refresh_at = None
+        info.conflicts = {}
+
+        mock_service = AsyncMock()
+        mock_service.get_summary.return_value = info
+
+        request = MagicMock()
+        request.app.state.model_info = mock_service
+
+        response = await handle_model_info_detail(request, "legacy-model")
+        import json
+
+        data = json.loads(response.body)
+        limits = data["detail"]["limits"]
+        assert limits["effective_context"] == 128000
+        assert limits["external_context"] == 1_000_000
+
 
 # ===========================================================================
 # 5. Source health tests

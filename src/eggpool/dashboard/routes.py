@@ -372,26 +372,40 @@ async def handle_models(
     account: str | None = None,
     theme: str | None = None,
 ) -> Response:
-    """Render the models page."""
+    """Render the models page.
+
+    The page is catalog-complete: every model known to the catalog
+    cache is listed even if it has zero requests in the requested
+    time window.  Usage stats from ``stats.get_model_stats`` are
+    merged onto the catalog rows so the operator sees activity
+    columns alongside model-info pills for every model.
+    """
     _get_dashboard_config(request)
     time_range = resolve_time_range(period)
     stats = request.app.state.stats
     model_info_service = getattr(request.app.state, "model_info", None)
+    catalog = getattr(request.app.state, "catalog", None)
 
-    # Fetch stats and model-info summaries concurrently
-    models, model_info_summary_map = cast(
-        "tuple[list[dict[str, Any]] | None, dict[str, Any]]",
+    # Fetch stats, model-info summaries, and the catalog snapshot
+    # concurrently so the page renders in a single round-trip.
+    models, model_info_summary_map, catalog_rows = cast(
+        "tuple[list[dict[str, Any]] | None, dict[str, Any], list[dict[str, Any]]]",
         await asyncio.gather(
             stats.get_model_stats(
                 time_range, account_name=account or None, use_cache=True
             ),
             _get_model_info_summary_map(model_info_service),
+            _get_catalog_rows(catalog, account=account or None),
         ),
+    )
+    merged_rows = _merge_models_with_catalog(
+        models if models is not None else [],
+        catalog_rows,
     )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
     return HTMLResponse(
         content=render_models(
-            models if models is not None else [],
+            merged_rows,
             account_filter=account or "",
             period=time_range.label,
             theme_css=theme_css,
@@ -401,6 +415,115 @@ async def handle_models(
             model_info_map=model_info_summary_map,
         )
     )
+
+
+async def _get_catalog_rows(
+    catalog: Any,
+    *,
+    account: str | None = None,
+) -> list[dict[str, Any]]:
+    """Build sparse rows for every catalog model so the page is
+    catalog-complete.
+
+    One row per ``(model_id, provider_id)`` so the page matches the
+    shape of ``stats.get_model_stats`` rows. Returns an empty list
+    when the catalog is unavailable — the page must still render with
+    whatever stats rows the caller already has.
+    """
+    if catalog is None:
+        return []
+    try:
+        provider_entries = catalog.cache.get_provider_model_entries()
+    except Exception:
+        return []
+    rows: list[dict[str, Any]] = []
+    for (model_id, provider_id), _entry in provider_entries.items():
+        # When an account filter is active, only include models the
+        # account actually supports.
+        if account:
+            try:
+                supporting: frozenset[str] = catalog.cache.get_supporting_accounts(
+                    model_id
+                )
+            except Exception:
+                supporting = frozenset()
+            if account not in supporting:
+                continue
+        rows.append(
+            {
+                "model_id": model_id,
+                "provider_id": provider_id,
+                "request_count": 0,
+                "cost_microdollars": 0,
+                "avg_latency_ms": 0.0,
+                "avg_ttft_ms": 0.0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "tokens_per_second": 0.0,
+                "error_count": 0,
+                "exact_count": 0,
+                "derived_count": 0,
+                "partial_count": 0,
+                "estimated_count": 0,
+                "unknown_count": 0,
+                "provider_reported_count": 0,
+                "estimated_cost_fraction": None,
+                "cache_read_ratio": None,
+                "cache_write_ratio": None,
+                "reasoning_output_ratio": None,
+                "avg_cost_per_request": None,
+                "avg_cost_per_1k_tokens": None,
+                "_sparse": True,
+            }
+        )
+    return rows
+
+
+def _merge_models_with_catalog(
+    stats_rows: list[dict[str, Any]],
+    catalog_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Merge usage stats onto catalog rows, deduplicating by model_id.
+
+    Stats rows win on numeric columns (they reflect real activity);
+    catalog rows are preserved when stats has no entry.  The merged
+    list is sorted by request count (descending) so active models
+    appear first; sparse catalog rows fall to the bottom.
+    """
+    stats_by_id: dict[str, dict[str, Any]] = {}
+    for row in stats_rows:
+        mid = row.get("model_id", "")
+        if mid:
+            stats_by_id[mid] = row
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in stats_rows:
+        mid = row.get("model_id", "")
+        if mid:
+            seen.add(mid)
+            row.pop("_sparse", None)
+            row.pop("_display_name", None)
+            row.pop("_providers", None)
+            merged.append(row)
+    for row in catalog_rows:
+        mid = row.get("model_id", "")
+        if mid in seen:
+            continue
+        # Prefer the canonical stats row; otherwise keep the sparse
+        # catalog row (request_count=0). The merge is just
+        # preservation here.
+        stats_row = stats_by_id.get(mid)
+        if stats_row is not None:
+            continue
+        merged.append(row)
+    merged.sort(
+        key=lambda r: (
+            -int(r.get("request_count", 0) or 0),
+            r.get("model_id", ""),
+        )
+    )
+    return merged
 
 
 async def handle_model_detail(
