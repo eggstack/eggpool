@@ -13,19 +13,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --frozen --extra dev
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - name: Run pre-commit checks
+        env:
+          PYTHONHASHSEED: "0"
+          TZ: UTC
+        run: |
+          uv run ruff format --check src/ tests/ scripts/
+          uv run ruff check src/ tests/ scripts/
+          uv run pyright src/ scripts/
+          uv run pytest
 
-      - name: Install build tools
-        run: pip install build
+      - name: Build package
+        run: uv build
 
-      - name: Build wheel and sdist
-        run: python -m build
-
-      - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          files: dist/*
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes dist/*
