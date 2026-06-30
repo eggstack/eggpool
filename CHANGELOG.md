@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.4.6] - 2026-06-30
+
+### Fixed
+
+- **SQLite integer overflow protection for accounting values.** Added `clamp_sqlite_integer()` to prevent overflow when persisting microdollar costs, token counts, and quota reservations to SQLite's 64-bit INTEGER columns. Applied across pricing, cost reporting, quota estimation, and cost calculation paths so extreme upstream metadata or attacker-crafted payloads cannot produce unpersistable values.
+
+## [0.4.5] - 2026-06-30
+
+### Fixed
+
+- **Transcoder preserves `stream` flag in OpenAI-to-Anthropic request encoding.** The `stream` field is now carried through from the incoming OpenAI request to the upstream Anthropic request instead of being dropped, ensuring streaming requests are forwarded correctly.
+
 ## [0.4.4] - 2026-06-30
 
 ### Fixed
