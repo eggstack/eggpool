@@ -1,0 +1,470 @@
+"""Tests for model-info phase 4: serializer, API, dashboard rendering."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from eggpool.api.models import MODEL_INFO_STATUS_DISPLAY, serialize_openai_model
+from eggpool.dashboard.render import _render_model_info_pill
+
+# ---------------------------------------------------------------------------
+# Serializer tests
+# ---------------------------------------------------------------------------
+
+
+class TestSerializeModelInfo:
+    """Tests for the model_info parameter of serialize_openai_model."""
+
+    def test_omits_model_info_when_none(self) -> None:
+        model = {"model_id": "gpt-4", "display_name": "GPT-4"}
+        result = serialize_openai_model(model, model_info=None)
+        assert "eggpool" not in result
+
+    def test_adds_compact_model_info_under_eggpool_namespace(self) -> None:
+        model = {"model_id": "minimax-m3", "display_name": "MiniMax M3"}
+        mi = {
+            "status": "partial",
+            "sparse": True,
+            "summary": "New model detected; metadata sparse.",
+            "sources": ["provider_catalog", "openrouter"],
+            "last_refreshed_at": "2026-06-29T20:00:00+00:00",
+        }
+        result = serialize_openai_model(model, model_info=mi)
+        assert result["eggpool"]["model_info"]["status"] == "partial"
+        assert result["eggpool"]["model_info"]["sparse"] is True
+        assert (
+            result["eggpool"]["model_info"]["summary"]
+            == "New model detected; metadata sparse."
+        )
+        assert result["eggpool"]["model_info"]["sources"] == [
+            "provider_catalog",
+            "openrouter",
+        ]
+        assert (
+            result["eggpool"]["model_info"]["last_refreshed_at"]
+            == "2026-06-29T20:00:00+00:00"
+        )
+
+    def test_does_not_include_raw_observations(self) -> None:
+        model = {"model_id": "m1"}
+        mi = {
+            "status": "fresh",
+            "sparse": False,
+            "summary": "All good.",
+            "sources": ["provider_catalog"],
+            "last_refreshed_at": None,
+        }
+        result = serialize_openai_model(model, model_info=mi)
+        info = result["eggpool"]["model_info"]
+        assert "observations" not in info
+        assert "provenance" not in info
+        assert "conflicts" not in info
+
+    def test_model_info_empty_sources_defaults_to_list(self) -> None:
+        model = {"model_id": "m1"}
+        mi = {
+            "status": "fresh",
+            "sparse": False,
+            "summary": "ok",
+            "sources": [],
+            "last_refreshed_at": None,
+        }
+        result = serialize_openai_model(model, model_info=mi)
+        assert result["eggpool"]["model_info"]["sources"] == []
+
+    def test_model_info_with_limits_preserves_both(self) -> None:
+        model = {
+            "model_id": "m1",
+            "effective_limits": {
+                "context_tokens": 100000,
+                "input_tokens": None,
+                "output_tokens": 4096,
+            },
+        }
+        mi = {
+            "status": "fresh",
+            "sparse": False,
+            "summary": "ok",
+            "sources": [],
+            "last_refreshed_at": None,
+        }
+        result = serialize_openai_model(model, model_info=mi)
+        assert result["eggpool"]["limits"]["context"] == 100000
+        assert result["eggpool"]["model_info"]["status"] == "fresh"
+
+
+# ---------------------------------------------------------------------------
+# Status display mapping tests
+# ---------------------------------------------------------------------------
+
+
+class TestModelInfoStatusDisplay:
+    def test_all_internal_statuses_mapped(self) -> None:
+        expected = {
+            "fresh",
+            "partial",
+            "sparse_new",
+            "stale",
+            "conflicting",
+            "unmatched",
+            "source_unavailable",
+            "manual_override",
+            "withdrawn",
+        }
+        assert set(MODEL_INFO_STATUS_DISPLAY.keys()) == expected
+
+    def test_sparse_new_maps_to_sparse(self) -> None:
+        assert MODEL_INFO_STATUS_DISPLAY["sparse_new"] == "sparse"
+
+
+# ---------------------------------------------------------------------------
+# Dashboard pill rendering tests
+# ---------------------------------------------------------------------------
+
+
+class TestRenderModelInfoPill:
+    def test_returns_dash_when_no_info(self) -> None:
+        pill = _render_model_info_pill(None)
+        assert "—" in pill
+        assert "pill-unknown" in pill
+
+    def test_renders_status_pill_when_summary_exists(self) -> None:
+        info = {
+            "status": "partial",
+            "sparse": False,
+            "summary": "Partial metadata available.",
+            "sources": ["provider_catalog"],
+            "last_refreshed_at": "2026-06-29T20:00:00Z",
+        }
+        pill = _render_model_info_pill(info)
+        assert "pill-partial" in pill
+        assert "partial" in pill
+        assert "Partial metadata available." in pill
+
+    def test_escapes_html_in_summary(self) -> None:
+        info = {
+            "status": "fresh",
+            "sparse": False,
+            "summary": "<script>alert('xss')</script>",
+            "sources": [],
+            "last_refreshed_at": None,
+        }
+        pill = _render_model_info_pill(info)
+        assert "<script>" not in pill
+        assert "&lt;script&gt;" in pill
+
+    def test_handles_sparse_and_conflicting_status_classes(self) -> None:
+        sparse_info = {
+            "status": "sparse_new",
+            "sparse": True,
+            "summary": "New",
+            "sources": [],
+            "last_refreshed_at": None,
+        }
+        pill = _render_model_info_pill(sparse_info)
+        assert "pill-sparse" in pill
+
+        conflict_info = {
+            "status": "conflicting",
+            "sparse": False,
+            "summary": "Conflict",
+            "sources": [],
+            "last_refreshed_at": None,
+        }
+        pill = _render_model_info_pill(conflict_info)
+        assert "pill-conflict" in pill
+
+    def test_sources_in_tooltip(self) -> None:
+        info = {
+            "status": "fresh",
+            "sparse": False,
+            "summary": "ok",
+            "sources": ["provider_catalog", "openrouter"],
+            "last_refreshed_at": "2026-06-29T20:00:00Z",
+        }
+        pill = _render_model_info_pill(info)
+        assert "provider_catalog" in pill
+        assert "openrouter" in pill
+
+
+# ---------------------------------------------------------------------------
+# API endpoint tests (unit-level with mocked service)
+# ---------------------------------------------------------------------------
+
+
+class TestModelInfoAPIEndpoints:
+    """Unit tests for the model-info API handlers using mocked services."""
+
+    @pytest.mark.asyncio()
+    async def test_summary_endpoint_returns_list(self) -> None:
+        from eggpool.api.model_info import handle_model_info_summary
+
+        info = MagicMock()
+        info.model_id = "gpt-4"
+        info.status = "fresh"
+        info.sparse = False
+        info.summary = "All good."
+        info.provenance = {"sources": ["provider_catalog"]}
+        info.detail = {"providers": ["openai"]}
+        info.last_seen_at = datetime(2026, 6, 29, 20, 0, tzinfo=UTC)
+        info.last_refreshed_at = datetime(2026, 6, 29, 20, 0, tzinfo=UTC)
+        info.next_refresh_at = None
+        info.conflicts = {}
+
+        mock_service = AsyncMock()
+        mock_service.get_summary_map.return_value = {"gpt-4": info}
+
+        request = MagicMock()
+        request.app.state.model_info = mock_service
+
+        response = await handle_model_info_summary(request)
+        body = response.body
+        import json
+
+        data = json.loads(body)
+        assert data["object"] == "list"
+        assert len(data["data"]) == 1
+        assert data["data"][0]["model_id"] == "gpt-4"
+        assert data["data"][0]["status"] == "fresh"
+
+    @pytest.mark.asyncio()
+    async def test_detail_endpoint_returns_one_model(self) -> None:
+        from eggpool.api.model_info import handle_model_info_detail
+
+        info = MagicMock()
+        info.model_id = "minimax-m3"
+        info.status = "partial"
+        info.sparse = True
+        info.summary = "Sparse."
+        info.provenance = {"sources": ["provider_catalog"]}
+        info.detail = {"providers": ["minimax"], "context_tokens": 220000}
+        info.last_seen_at = datetime(2026, 6, 29, 20, 0, tzinfo=UTC)
+        info.last_refreshed_at = datetime(2026, 6, 29, 20, 0, tzinfo=UTC)
+        info.next_refresh_at = None
+        info.conflicts = {}
+
+        mock_service = AsyncMock()
+        mock_service.get_summary.return_value = info
+
+        request = MagicMock()
+        request.app.state.model_info = mock_service
+
+        response = await handle_model_info_detail(request, "minimax-m3")
+        import json
+
+        data = json.loads(response.body)
+        assert data["model_id"] == "minimax-m3"
+        assert data["status"] == "partial"
+        assert "detail" in data
+
+    @pytest.mark.asyncio()
+    async def test_sources_endpoint_redacts_secrets(self) -> None:
+        from eggpool.api.model_info import handle_model_info_sources
+
+        mock_service = AsyncMock()
+        mock_service.repo.source_health_snapshot.return_value = {
+            "openrouter": {
+                "enabled": True,
+                "last_success_at": "2026-06-29T20:00:00Z",
+                "last_error_at": None,
+                "last_error_class": None,
+                "last_error_message": None,
+                "cooldown_until": None,
+                "failure_count": 0,
+            }
+        }
+
+        request = MagicMock()
+        request.app.state.model_info = mock_service
+
+        response = await handle_model_info_sources(request)
+        import json
+
+        data = json.loads(response.body)
+        assert data["object"] == "list"
+        entry = data["data"][0]
+        assert entry["source"] == "openrouter"
+        assert entry["enabled"] is True
+        # Ensure secrets are NOT exposed
+        assert "api_key" not in entry
+        assert "token" not in entry
+        assert "last_error_message" not in entry
+
+    @pytest.mark.asyncio()
+    async def test_refresh_endpoint_requires_auth(self) -> None:
+        from eggpool.api.model_info import handle_model_info_refresh
+
+        mock_service = AsyncMock()
+        mock_service.refresh_due_models.return_value = {
+            "refreshed": 5,
+            "total": 10,
+            "skipped": 3,
+        }
+
+        request = MagicMock()
+        request.app.state.model_info = mock_service
+        request.query_params = {}
+
+        response = await handle_model_info_refresh(request)
+        import json
+
+        data = json.loads(response.body)
+        assert data["status"] == "ok"
+        assert data["refreshed"] == 5
+
+    @pytest.mark.asyncio()
+    async def test_disabled_endpoint_returns_503(self) -> None:
+        from eggpool.api.model_info import handle_model_info_summary
+
+        request = MagicMock()
+        request.app.state = MagicMock(spec=[])  # no model_info attr
+
+        response = await handle_model_info_summary(request)
+        assert response.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# Dashboard render integration tests
+# ---------------------------------------------------------------------------
+
+
+class TestRenderModelsWithInfo:
+    def test_models_page_renders_without_model_info_service(self) -> None:
+        from eggpool.dashboard.render import render_models
+
+        models = [
+            {
+                "model_id": "gpt-4",
+                "provider_id": "openai",
+                "request_count": 100,
+                "cost_microdollars": 5000000,
+                "error_count": 2,
+                "input_tokens": 100000,
+                "output_tokens": 50000,
+                "total_tokens": 150000,
+                "avg_latency_ms": 120.5,
+                "avg_ttft_ms": 45.2,
+                "tokens_per_second": 85.3,
+            }
+        ]
+        html = render_models(models)
+        assert "gpt-4" in html
+        assert "openai" in html
+        # No model_info column content when map is empty
+        assert 'class="pill' not in html or "pill-unknown" in html
+
+    def test_models_page_renders_status_pill_when_summary_exists(self) -> None:
+        from eggpool.dashboard.render import render_models
+
+        models = [
+            {
+                "model_id": "gpt-4",
+                "provider_id": "openai",
+                "request_count": 100,
+                "cost_microdollars": 5000000,
+                "error_count": 0,
+                "input_tokens": 100000,
+                "output_tokens": 50000,
+                "total_tokens": 150000,
+                "avg_latency_ms": 120.5,
+                "avg_ttft_ms": 45.2,
+                "tokens_per_second": 85.3,
+            }
+        ]
+        mi_map = {
+            "gpt-4": {
+                "status": "fresh",
+                "sparse": False,
+                "summary": "All good.",
+                "sources": ["provider_catalog"],
+                "last_refreshed_at": "2026-06-29T20:00:00Z",
+            }
+        }
+        html = render_models(models, model_info_map=mi_map)
+        assert "pill-fresh" in html
+        assert "fresh" in html
+
+    def test_models_page_escapes_model_info_summary(self) -> None:
+        from eggpool.dashboard.render import render_models
+
+        models = [
+            {
+                "model_id": "m1",
+                "provider_id": "p1",
+                "request_count": 1,
+                "cost_microdollars": 0,
+                "error_count": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "avg_latency_ms": 0,
+                "avg_ttft_ms": 0,
+                "tokens_per_second": 0,
+            }
+        ]
+        mi_map = {
+            "m1": {
+                "status": "fresh",
+                "sparse": False,
+                "summary": "<img src=x onerror=alert(1)>",
+                "sources": [],
+                "last_refreshed_at": None,
+            }
+        }
+        html = render_models(models, model_info_map=mi_map)
+        assert "<img" not in html
+        assert "&lt;img" in html
+
+    def test_models_page_handles_sparse_and_conflicting_status_classes(self) -> None:
+        from eggpool.dashboard.render import render_models
+
+        models = [
+            {
+                "model_id": "m1",
+                "provider_id": "p1",
+                "request_count": 1,
+                "cost_microdollars": 0,
+                "error_count": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "avg_latency_ms": 0,
+                "avg_ttft_ms": 0,
+                "tokens_per_second": 0,
+            },
+            {
+                "model_id": "m2",
+                "provider_id": "p2",
+                "request_count": 1,
+                "cost_microdollars": 0,
+                "error_count": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "avg_latency_ms": 0,
+                "avg_ttft_ms": 0,
+                "tokens_per_second": 0,
+            },
+        ]
+        mi_map = {
+            "m1": {
+                "status": "sparse_new",
+                "sparse": True,
+                "summary": "New",
+                "sources": [],
+                "last_refreshed_at": None,
+            },
+            "m2": {
+                "status": "conflicting",
+                "sparse": False,
+                "summary": "Conflict",
+                "sources": [],
+                "last_refreshed_at": None,
+            },
+        }
+        html = render_models(models, model_info_map=mi_map)
+        assert "pill-sparse" in html
+        assert "pill-conflict" in html

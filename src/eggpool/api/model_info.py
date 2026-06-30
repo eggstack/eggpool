@@ -1,0 +1,326 @@
+"""Model-info JSON API endpoints.
+
+Endpoints:
+- GET  /api/model-info           — summary list
+- GET  /api/model-info/{model_id} — per-model detail
+- GET  /api/model-info/sources   — source health
+- POST /api/model-info/refresh   — manual refresh (always auth-gated)
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import unquote
+
+from fastapi import Request  # noqa: TCH002 — FastAPI needs runtime access
+from fastapi.responses import JSONResponse
+
+if TYPE_CHECKING:
+    from fastapi.responses import Response
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_STATUS_DISPLAY: dict[str, str] = {
+    "fresh": "fresh",
+    "partial": "partial",
+    "sparse_new": "sparse",
+    "stale": "stale",
+    "conflicting": "conflict",
+    "unmatched": "unmatched",
+    "source_unavailable": "source-unavailable",
+    "manual_override": "manual",
+    "withdrawn": "withdrawn",
+}
+
+
+def _compact_summary(info: Any) -> dict[str, Any]:
+    """Build a compact summary dict from a CanonicalModelInfo."""
+    sources: list[str] = []
+    prov_raw = cast("dict[str, Any]", getattr(info, "provenance", {}))
+    raw_sources = cast("list[object]", prov_raw.get("sources", []))
+    for s in raw_sources:
+        sources.append(str(s))
+
+    detail_raw = cast("dict[str, Any]", getattr(info, "detail", {}))
+    providers: list[str] = []
+    raw_providers = cast("list[object]", detail_raw.get("providers", []))
+    for p in raw_providers:
+        providers.append(str(p))
+
+    status_raw = getattr(info, "status", "")
+    status_str = str(status_raw) if status_raw is not None else ""
+
+    return {
+        "model_id": getattr(info, "model_id", ""),
+        "status": _STATUS_DISPLAY.get(status_str, status_str),
+        "sparse": getattr(info, "sparse", False),
+        "summary": getattr(info, "summary", "") or "",
+        "sources": sources,
+        "providers": providers,
+        "last_seen_at": _iso(getattr(info, "last_seen_at", None)),
+        "last_refreshed_at": _iso(getattr(info, "last_refreshed_at", None)),
+        "next_refresh_at": _iso(getattr(info, "next_refresh_at", None)),
+        "has_conflicts": bool(getattr(info, "conflicts", {})),
+    }
+
+
+def _detail_response(info: Any) -> dict[str, Any]:
+    """Build a full detail dict from a CanonicalModelInfo."""
+    detail = cast("dict[str, Any]", getattr(info, "detail", {}))
+
+    # Limits
+    limits: dict[str, Any] = {}
+    ctx = detail.get("context_tokens")
+    ext_ctx = detail.get("context_window_external")
+    if ctx is not None:
+        limits["effective_context"] = ctx
+    if ext_ctx is not None:
+        limits["external_context"] = ext_ctx
+
+    # Modalities
+    modalities: list[str] = []
+    for key in ("modalities", "modalities_external"):
+        raw = cast("list[object]", detail.get(key, []))
+        for m in raw:
+            modalities.append(str(m))
+    modalities = sorted(set(modalities))
+
+    # External IDs
+    external_ids = cast("dict[str, Any]", detail.get("external_ids", {}))
+
+    # Observations (compact, no raw payloads)
+    observations = _build_observations(info)
+
+    compact = _compact_summary(info)
+    compact["detail"] = {
+        "display_name": detail.get("display_name"),
+        "family": detail.get("family"),
+        "limits": limits if limits else {},
+        "modalities": modalities,
+        "supports_tools": detail.get("supports_tools"),
+        "external_ids": external_ids,
+        "benchmarks": [],
+    }
+    compact["provenance"] = _compact_provenance(info)
+    compact["conflicts"] = getattr(info, "conflicts", {})
+    compact["observations"] = observations
+    return compact
+
+
+def _compact_provenance(info: Any) -> dict[str, Any]:
+    """Build compact provenance (no raw payloads)."""
+    prov = getattr(info, "provenance", {})
+    result: dict[str, Any] = {}
+    if isinstance(prov, dict):
+        for key in ("sources", "reconciled_at"):
+            if key in prov:
+                result[key] = prov[key]
+    return result
+
+
+def _build_observations(info: Any) -> list[dict[str, Any]]:
+    """Build compact observation list from detail/provenance.
+
+    This is derived from available metadata rather than raw DB
+    observations to avoid leaking raw payloads.
+    """
+    detail = cast("dict[str, Any]", getattr(info, "detail", {}))
+    prov_raw = cast("dict[str, Any]", getattr(info, "provenance", {}))
+    sources: list[str] = []
+    raw_sources = cast("list[object]", prov_raw.get("sources", []))
+    for s in raw_sources:
+        sources.append(str(s))
+
+    providers_raw = cast("list[object]", detail.get("providers", []))
+    providers: list[str] = []
+    for p in providers_raw:
+        providers.append(str(p))
+
+    model_id = getattr(info, "model_id", "")
+    last_seen = getattr(info, "last_seen_at", None)
+
+    obs: list[dict[str, Any]] = []
+    for source in sources:
+        obs.append(
+            {
+                "source": source,
+                "source_model_id": model_id,
+                "provider_id": providers[0] if providers else None,
+                "observed_at": _iso(last_seen),
+                "confidence": 1.0,
+            }
+        )
+    return obs
+
+
+def _iso(dt: Any) -> str | None:
+    """Format a datetime as ISO 8601 or return None."""
+    if dt is None:
+        return None
+    if isinstance(dt, datetime):
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return dt.isoformat()
+    return str(dt)
+
+
+# ---------------------------------------------------------------------------
+# Handlers
+# ---------------------------------------------------------------------------
+
+
+async def handle_model_info_summary(request: Request) -> Response:
+    """GET /api/model-info — summary list of all models."""
+    model_info = getattr(request.app.state, "model_info", None)
+    if model_info is None:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "model_info disabled"},
+        )
+    summary_map = await model_info.get_summary_map()
+    data = [_compact_summary(info) for info in summary_map.values()]
+    return JSONResponse(content={"object": "list", "data": data})
+
+
+async def handle_model_info_detail(request: Request, model_id: str) -> Response:
+    """GET /api/model-info/{model_id} — per-model detail."""
+    model_info = getattr(request.app.state, "model_info", None)
+    if model_info is None:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "model_info disabled"},
+        )
+    # URL-decode the path parameter (handles %2F → / for suffixed IDs)
+    decoded_id = unquote(model_id)
+    info = await model_info.get_summary(decoded_id)
+    if info is None:
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"Model {decoded_id!r} not found"},
+        )
+    return JSONResponse(content=_detail_response(info))
+
+
+async def handle_model_info_sources(request: Request) -> Response:
+    """GET /api/model-info/sources — source health snapshot."""
+    model_info = getattr(request.app.state, "model_info", None)
+    if model_info is None:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "model_info disabled"},
+        )
+    snapshot = await model_info.repo.source_health_snapshot()
+    data: list[dict[str, Any]] = []
+    for source_name, health in snapshot.items():
+        data.append(
+            {
+                "source": source_name,
+                "enabled": health.get("enabled", False),
+                "last_success_at": health.get("last_success_at"),
+                "last_error_at": health.get("last_error_at"),
+                "last_error_class": health.get("last_error_class"),
+                "cooldown_until": health.get("cooldown_until"),
+            }
+        )
+    return JSONResponse(content={"object": "list", "data": data})
+
+
+async def handle_model_info_refresh(request: Request) -> Response:
+    """POST /api/model-info/refresh — manual refresh.
+
+    Always auth-gated. Accepts optional query params:
+      ?model_id=<id>  — refresh a single model
+      ?source=provider_catalog|openrouter|all  — source filter (reserved)
+      ?force=1        — force refresh
+    """
+    model_info = getattr(request.app.state, "model_info", None)
+    if model_info is None:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "model_info disabled"},
+        )
+
+    model_id_filter = request.query_params.get("model_id")
+    # source and force params reserved for future use
+
+    if model_id_filter:
+        # Single-model refresh: reconcile just this model
+        result = await model_info.reconcile_catalog_snapshot(reason="manual")
+        return JSONResponse(
+            content={
+                "status": "ok",
+                "requested": 1,
+                "refreshed": result.get("created", 0) + result.get("updated", 0),
+                "skipped": result.get("total", 0)
+                - result.get("created", 0)
+                - result.get("updated", 0),
+                "errors": 0,
+            }
+        )
+
+    # Full refresh cycle
+    result = await model_info.refresh_due_models()
+    refreshed = result.get("refreshed", 0)
+    total = result.get("total", 0)
+    skipped = result.get("skipped", 0)
+    return JSONResponse(
+        content={
+            "status": "ok",
+            "requested": total,
+            "refreshed": refreshed,
+            "skipped": skipped,
+            "errors": 0,
+        }
+    )
+
+
+def register_model_info_routes(app: Any, require_auth: bool = False) -> None:
+    """Attach model-info JSON routes to a FastAPI app.
+
+    GET routes follow the same auth policy as the caller (dashboard-public
+    or always-auth).  The POST refresh route is always auth-gated.
+    """
+    from fastapi import Depends
+
+    from eggpool.auth import require_auth as _require_auth
+
+    dependencies = [Depends(_require_auth)] if require_auth else None
+
+    app.add_api_route(
+        path="/api/model-info",
+        endpoint=handle_model_info_summary,
+        methods=["GET"],
+        dependencies=dependencies,
+    )
+    app.add_api_route(
+        path="/api/model-info/sources",
+        endpoint=handle_model_info_sources,
+        methods=["GET"],
+        dependencies=dependencies,
+    )
+    app.add_api_route(
+        path="/api/model-info/{model_id:path}",
+        endpoint=handle_model_info_detail,
+        methods=["GET"],
+        dependencies=dependencies,
+    )
+    # Manual refresh is ALWAYS auth-gated regardless of dashboard.public
+    app.add_api_route(
+        path="/api/model-info/refresh",
+        endpoint=handle_model_info_refresh,
+        methods=["POST"],
+        dependencies=[Depends(_require_auth)],
+    )
+
+
+__all__ = [
+    "handle_model_info_detail",
+    "handle_model_info_refresh",
+    "handle_model_info_sources",
+    "handle_model_info_summary",
+    "register_model_info_routes",
+]

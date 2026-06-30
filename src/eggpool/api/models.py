@@ -7,6 +7,18 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+MODEL_INFO_STATUS_DISPLAY: dict[str, str] = {
+    "fresh": "fresh",
+    "partial": "partial",
+    "sparse_new": "sparse",
+    "stale": "stale",
+    "conflicting": "conflict",
+    "unmatched": "unmatched",
+    "source_unavailable": "source-unavailable",
+    "manual_override": "manual",
+    "withdrawn": "withdrawn",
+}
+
 
 def serialize_openai_model(
     model: Mapping[str, Any],
@@ -14,17 +26,24 @@ def serialize_openai_model(
     routing_priority: int | None = None,
     routing_priority_max: int | None = None,
     providers: list[str] | None = None,
+    model_info: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Serialize a catalog model entry to OpenAI-compatible model dict.
 
     Includes the namespaced ``eggpool`` extension with base model ID,
-    provider ID, routing priority (when supplied), and effective limits
-    when available.
+    provider ID, routing priority (when supplied), effective limits
+    when available, and optional compact model-info summary.
 
     For collapsed entries (no per-provider ``provider_id``), pass the
     ``routing_priority_max`` (highest priority across contributing
     providers) and ``providers`` list so clients can see the routing
     topology.
+
+    When ``model_info`` is supplied a compact subset is nested under
+    ``eggpool["model_info"]`` — status, sparse flag, summary text,
+    sources list, and last_refreshed_at.  Raw observations, full
+    benchmarks, provenance maps, and conflict details are never
+    included.
     """
     result: dict[str, Any] = {
         "id": model["model_id"],
@@ -69,6 +88,15 @@ def serialize_openai_model(
             limits["output"] = out
         if limits:
             eggpool_meta["limits"] = limits
+
+    if model_info is not None:
+        eggpool_meta["model_info"] = {
+            "status": model_info.get("status"),
+            "sparse": model_info.get("sparse"),
+            "summary": model_info.get("summary"),
+            "sources": model_info.get("sources", []),
+            "last_refreshed_at": model_info.get("last_refreshed_at"),
+        }
 
     if eggpool_meta:
         result["eggpool"] = eggpool_meta

@@ -981,3 +981,55 @@ nav.topnav [data-tooltip]::before {
     transition: none;
   }
 }
+
+/* Model-info status pills */
+.pill {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.8em;
+  line-height: 1.4;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.pill-fresh {
+  background: color-mix(in srgb, #22c55e 20%, transparent);
+  color: #22c55e;
+}
+
+.pill-partial {
+  background: color-mix(in srgb, #eab308 20%, transparent);
+  color: #eab308;
+}
+
+.pill-sparse {
+  background: color-mix(in srgb, #f97316 20%, transparent);
+  color: #f97316;
+}
+
+.pill-stale {
+  background: color-mix(in srgb, #ef4444 20%, transparent);
+  color: #ef4444;
+}
+
+.pill-conflict {
+  background: color-mix(in srgb, #ef4444 25%, transparent);
+  color: #ef4444;
+  font-weight: bold;
+}
+
+.pill-unmatched {
+  background: color-mix(in srgb, var(--text-muted) 20%, transparent);
+  color: var(--text-muted);
+}
+
+.pill-source-unavailable {
+  background: color-mix(in srgb, #a855f7 20%, transparent);
+  color: #a855f7;
+}
+
+.pill-unknown {
+  background: color-mix(in srgb, var(--text-muted) 15%, transparent);
+  color: var(--text-muted);
+}

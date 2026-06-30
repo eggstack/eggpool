@@ -59,6 +59,43 @@ _BandwidthPayload = tuple[
 _PingsPayload = tuple[list[dict[str, Any]], list[dict[str, Any]]]
 
 
+async def _get_model_info_summary_map(
+    model_info_service: Any,
+) -> dict[str, dict[str, Any]]:
+    """Fetch compact model-info summaries keyed by model_id.
+
+    Returns an empty dict when the service is unavailable so dashboard
+    rendering never blocks on model-info.
+    """
+    if model_info_service is None:
+        return {}
+    try:
+        raw_map = await model_info_service.get_summary_map()
+        result: dict[str, dict[str, Any]] = {}
+        for mid, info in raw_map.items():
+            sources: list[str] = []
+            prov_raw = cast("dict[str, Any]", getattr(info, "provenance", {}))
+            raw_sources = cast("list[object]", prov_raw.get("sources", []))
+            for s in raw_sources:
+                sources.append(str(s))
+            status_val = getattr(info, "status", "")
+            status_str = str(status_val) if status_val is not None else ""
+            result[mid] = {
+                "status": status_str,
+                "sparse": getattr(info, "sparse", False),
+                "summary": getattr(info, "summary", "") or "",
+                "sources": sources,
+                "last_refreshed_at": (
+                    info.last_refreshed_at.isoformat()
+                    if info.last_refreshed_at is not None
+                    else None
+                ),
+            }
+        return result
+    except Exception:
+        return {}
+
+
 DEFAULT_REFRESH_S = 15
 
 # Heatmap TimeRange shows the trailing window.  Capped at 90 days so the
@@ -332,8 +369,17 @@ async def handle_models(
     _get_dashboard_config(request)
     time_range = resolve_time_range(period)
     stats = request.app.state.stats
-    models = await stats.get_model_stats(
-        time_range, account_name=account or None, use_cache=True
+    model_info_service = getattr(request.app.state, "model_info", None)
+
+    # Fetch stats and model-info summaries concurrently
+    models, model_info_summary_map = cast(
+        "tuple[list[dict[str, Any]] | None, dict[str, Any]]",
+        await asyncio.gather(
+            stats.get_model_stats(
+                time_range, account_name=account or None, use_cache=True
+            ),
+            _get_model_info_summary_map(model_info_service),
+        ),
     )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
     return HTMLResponse(
@@ -345,6 +391,7 @@ async def handle_models(
             available_themes=available,
             current_theme=current_theme,
             update_info=_get_update_info(request),
+            model_info_map=model_info_summary_map,
         )
     )
 

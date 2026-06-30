@@ -9,7 +9,7 @@ import time
 from contextlib import asynccontextmanager
 from importlib.metadata import version as _get_version
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -22,7 +22,7 @@ from eggpool.accounts.registry import AccountRegistry, account_config_rows
 from eggpool.api.backoff import register_backoff_routes
 from eggpool.api.chat_completions import handle_chat_completions
 from eggpool.api.messages import handle_messages
-from eggpool.api.models import serialize_openai_model
+from eggpool.api.models import MODEL_INFO_STATUS_DISPLAY, serialize_openai_model
 from eggpool.api.stats import register_stats_routes
 from eggpool.auth import require_auth, require_auth_at_startup
 from eggpool.background import TaskSupervisor
@@ -1236,6 +1236,12 @@ def create_app(
         register_stats_routes(app, require_auth=dashboard_require_auth)
         register_backoff_routes(app, require_auth=dashboard_require_auth)
 
+        # Model-info JSON endpoints (same auth policy as dashboard)
+        if config.model_info.enabled:
+            from eggpool.api.model_info import register_model_info_routes
+
+            register_model_info_routes(app, require_auth=dashboard_require_auth)
+
         @app.get("/static/dashboard.css")
         async def dashboard_css() -> Response:  # pyright: ignore[reportUnusedFunction]
             css_path: Path = (
@@ -1451,6 +1457,41 @@ def create_app(
         )
         models = catalog.get_models_for_exposure(health_manager=health_mgr)
 
+        # Build model-info summary map when enabled and available.
+        # A single DB read avoids per-model queries inside the loop.
+        model_info_map: dict[str, Any] = {}
+        mi_config = getattr(config, "model_info", None)
+        mi_service = getattr(request.app.state, "model_info", None)
+        if (
+            mi_config is not None
+            and getattr(mi_config, "include_in_models_endpoint", False)
+            and mi_service is not None
+        ):
+            try:
+                raw_map = await mi_service.get_summary_map()
+                # Build a compact map keyed by model_id for the serializer
+                for mid, info in raw_map.items():
+                    sources: list[str] = []
+                    prov_raw = cast("dict[str, Any]", getattr(info, "provenance", {}))
+                    raw_sources = cast("list[object]", prov_raw.get("sources", []))
+                    for s in raw_sources:
+                        sources.append(str(s))
+                    status_val = getattr(info, "status", "")
+                    status_str = str(status_val) if status_val is not None else ""
+                    model_info_map[mid] = {
+                        "status": MODEL_INFO_STATUS_DISPLAY.get(status_str, status_str),
+                        "sparse": getattr(info, "sparse", False),
+                        "summary": getattr(info, "summary", "") or "",
+                        "sources": sources,
+                        "last_refreshed_at": (
+                            info.last_refreshed_at.isoformat()
+                            if info.last_refreshed_at is not None
+                            else None
+                        ),
+                    }
+            except Exception:
+                logger.debug("Model info enrichment skipped", exc_info=True)
+
         data: list[dict[str, Any]] = []
         for m in models:
             provider_id = m.get("provider_id")
@@ -1475,12 +1516,24 @@ def create_app(
                     ]
                     if priorities:
                         routing_priority_max = max(priorities)
+
+            # Resolve model-info by base_model_id first (for provider-suffixed
+            # entries), then by model_id.
+            mi_summary: dict[str, Any] | None = None
+            if model_info_map:
+                base_id = m.get("base_model_id")
+                if base_id and base_id in model_info_map:
+                    mi_summary = model_info_map[base_id]
+                elif m.get("model_id") in model_info_map:
+                    mi_summary = model_info_map[m["model_id"]]
+
             data.append(
                 serialize_openai_model(
                     m,
                     routing_priority=routing_priority,
                     routing_priority_max=routing_priority_max,
                     providers=providers,
+                    model_info=mi_summary,
                 )
             )
 

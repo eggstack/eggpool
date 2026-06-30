@@ -869,6 +869,65 @@ def _render_pricing_exactness_badge(
     return f'<span class="{css_class}" title="{escape(summary)}">{summary}</span>'
 
 
+# Status-to-CSS-class mapping for model-info pills
+_MODEL_INFO_PILL_CLASSES: dict[str, str] = {
+    "fresh": "pill-fresh",
+    "partial": "pill-partial",
+    "sparse_new": "pill-sparse",
+    "sparse": "pill-sparse",
+    "stale": "pill-stale",
+    "conflicting": "pill-conflict",
+    "conflict": "pill-conflict",
+    "unmatched": "pill-unmatched",
+    "source_unavailable": "pill-source-unavailable",
+    "source-unavailable": "pill-source-unavailable",
+    "manual_override": "pill-partial",
+    "manual": "pill-partial",
+    "withdrawn": "pill-stale",
+}
+
+
+def _render_model_info_pill(info: dict[str, Any] | None) -> str:
+    """Render a compact model-info status pill.
+
+    Returns an empty string when no model-info is available so the
+    column stays clean.  All user-visible text is HTML-escaped and
+    passed as a ``title`` tooltip attribute.
+    """
+    if not info:
+        return (
+            '<span class="pill pill-unknown" title="No model info available">—</span>'
+        )
+
+    status = info.get("status", "unknown")
+    sparse = info.get("sparse", False)
+    summary = info.get("summary", "")
+    sources = info.get("sources", [])
+    last_refreshed = info.get("last_refreshed_at")
+
+    css_class = _MODEL_INFO_PILL_CLASSES.get(status, "pill-unknown")
+
+    # Build tooltip text (plain text, no HTML)
+    tooltip_parts: list[str] = []
+    if summary:
+        tooltip_parts.append(summary)
+    if sources:
+        tooltip_parts.append(f"Sources: {', '.join(sources)}")
+    if last_refreshed:
+        tooltip_parts.append(f"Last checked: {last_refreshed}")
+    tooltip = ". ".join(tooltip_parts) if tooltip_parts else status
+
+    # Display label: short status
+    display = status.replace("_", "-")
+    if sparse and status not in ("sparse", "sparse_new"):
+        display += " (sparse)"
+
+    return (
+        f'<span class="pill {css_class}" title="{escape(tooltip)}">'
+        f"{escape(display)}</span>"
+    )
+
+
 def _render_pricing_warnings(
     accounts: list[dict[str, Any]],
 ) -> str:
@@ -2010,8 +2069,10 @@ def render_models(
     available_themes: list[str] | None = None,
     current_theme: str = "",
     update_info: Any | None = None,
+    model_info_map: dict[str, dict[str, Any]] | None = None,
 ) -> str:
     """Render the models page."""
+    mi_map = model_info_map or {}
     if not models:
         rows_html = '<p class="empty">No model data for this period.</p>'
     else:
@@ -2021,6 +2082,7 @@ def render_models(
             # Priority 1 — always shown
             _th("Model"),
             _th("Provider"),
+            _th("Info"),
             _th("Requests"),
             _th("Cost"),
             _th("Exactness"),
@@ -2100,10 +2162,17 @@ def render_models(
                 avg_cost_per_1k = format_microdollars(avg_cost_per_1k_microdollars)
             req_count = int(row.get("request_count", 0))
             err_count = int(row.get("error_count", 0))
+
+            # Model-info pill
+            model_id = row.get("model_id", "")
+            mi_info = mi_map.get(model_id)
+            info_pill = _render_model_info_pill(mi_info)
+
             parts.append(
                 f"<tr>"
-                f"{_td_priority(escape(row.get('model_id', '')), 1)}"
+                f"{_td_priority(escape(model_id), 1)}"
                 f"{_td_priority(provider, 1)}"
+                f"{_td_priority(info_pill, 1)}"
                 f"{_td_priority(f'{req_count:,}', 1)}"
                 f"{_td_priority(cost, 1)}"
                 f"{_td_priority(exactness, 1)}"

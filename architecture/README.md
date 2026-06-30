@@ -424,6 +424,14 @@ AggregatorError (base)
 - **Error hierarchy**: `ModelInfoSourceFetchError` (subclasses `AggregatorError`) raised by source adapters on network/HTTP/parse failures; caught by `ModelInfoService` and recorded as source-health errors
 - **CLI**: `eggpool modelinfo show/list/refresh` commands for inspection and manual refresh
 - **Config**: `[model_info]` section in `config.toml` with TTL controls, refresh intervals, and source enablement (`[model_info.sources.openrouter]` for OpenRouter)
+- **JSON API endpoints** (phase 4): `src/eggpool/api/model_info.py` registers four endpoints:
+  - `GET /api/model-info` — summary list of all models (status, sparse, summary, sources, timestamps)
+  - `GET /api/model-info/{model_id:path}` — per-model detail (limits, modalities, external IDs, provenance, observations, conflicts)
+  - `GET /api/model-info/sources` — source health snapshot (redacts secrets and raw error messages)
+  - `POST /api/model-info/refresh` — manual refresh (always auth-gated; accepts `?model_id=<id>`, `?source=`, `?force=1`)
+  - Registered in `create_app()` under dashboard auth policy when `config.model_info.enabled`
+- **`/v1/models` enrichment** (phase 4): `serialize_openai_model()` accepts an optional `model_info` mapping; when present, compact fields are nested under `eggpool["model_info"]` (status, sparse, summary, sources, last_refreshed_at). Raw observations, benchmarks, provenance, and conflicts are never included. The `/v1/models` route reads `config.model_info.include_in_models_endpoint` and `app.state.model_info` to build a summary map once before the loop, resolving by `base_model_id` for provider-suffixed entries. Model-info errors are logged and silently omitted.
+- **Dashboard integration** (phase 4): `handle_models()` in `dashboard/routes.py` fetches model-info summaries concurrently with stats via `asyncio.gather()`. `render_models()` renders an "Info" column with colored status pills (`pill-fresh`, `pill-partial`, `pill-sparse`, `pill-stale`, `pill-conflict`, `pill-unmatched`, `pill-source-unavailable`). Tooltips are plain `title` attributes with escaped summary text, sources, and last-refreshed timestamp. All source-provided text is HTML-escaped via `escape()`. CSS added to `dashboard/static/dashboard.css` using theme-compatible colors.
 
 ## Model Context Limits
 
