@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from eggpool.transcoder.json_helpers import token_count_from
+
 
 @dataclass(frozen=True, slots=True)
 class CanonicalUsage:
@@ -57,9 +59,11 @@ def canonicalise_usage(
 
 
 def _canonicalise_openai(raw: dict[str, Any]) -> CanonicalUsage:
-    prompt = int(raw.get("prompt_tokens", 0))
-    completion = int(raw.get("completion_tokens", 0))
-    total = int(raw.get("total_tokens", prompt + completion))
+    prompt = token_count_from(raw, "prompt_tokens")
+    completion = token_count_from(raw, "completion_tokens")
+    total = token_count_from(raw, "total_tokens")
+    if total == 0 and "total_tokens" not in raw:
+        total = prompt + completion
     return CanonicalUsage(
         prompt_tokens=prompt,
         completion_tokens=completion,
@@ -68,11 +72,11 @@ def _canonicalise_openai(raw: dict[str, Any]) -> CanonicalUsage:
 
 
 def _canonicalise_anthropic(raw: dict[str, Any]) -> CanonicalUsage:
-    input_tokens = int(raw.get("input_tokens", 0))
-    output_tokens = int(raw.get("output_tokens", 0))
+    input_tokens = token_count_from(raw, "input_tokens")
+    output_tokens = token_count_from(raw, "output_tokens")
     total = input_tokens + output_tokens
-    cache_creation = int(raw.get("cache_creation_input_tokens", 0))
-    cache_read = int(raw.get("cache_read_input_tokens", 0))
+    cache_creation = token_count_from(raw, "cache_creation_input_tokens")
+    cache_read = token_count_from(raw, "cache_read_input_tokens")
     return CanonicalUsage(
         prompt_tokens=input_tokens,
         completion_tokens=output_tokens,

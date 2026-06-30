@@ -3,7 +3,15 @@
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
+
+from eggpool.transcoder.json_helpers import (
+    as_object,
+    extract_text_blocks,
+    has_non_text_blocks,
+    iter_objects,
+    token_count_from,
+)
 
 if TYPE_CHECKING:
     from eggpool.transcoder.context import TranscodeContext
@@ -53,14 +61,6 @@ DROPPED_FIELDS = (
 )
 
 
-def _extract_text_blocks(blocks: Any) -> list[str]:  # pyright: ignore[reportUnknownParameterType,reportUnknownArgumentType]
-    result: list[str] = []
-    for block in blocks:  # pyright: ignore[reportUnknownVariableType]
-        if isinstance(block, dict) and block.get("type") == "text":  # pyright: ignore[reportUnknownMemberType]
-            result.append(str(block.get("text", "")))  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]
-    return result
-
-
 class OpenAIToAnthropic:
     """Translates OpenAI requests/responses to/from Anthropic format."""
 
@@ -78,15 +78,15 @@ class OpenAIToAnthropic:
         system_parts: list[str] = []
         messages: list[dict[str, Any]] = []
 
-        for msg in payload.get("messages", []):  # pyright: ignore[reportUnknownVariableType]
-            role = str(msg.get("role", ""))  # pyright: ignore[reportUnknownMemberType]
-            content = msg.get("content", "")  # pyright: ignore[reportUnknownMemberType]
+        for msg in iter_objects(payload.get("messages", [])):
+            role = str(msg.get("role", ""))
+            content = msg.get("content", "")
 
             if role in ("system", "developer"):
                 if isinstance(content, str):
                     system_parts.append(content)
                 elif isinstance(content, list):
-                    system_parts.extend(_extract_text_blocks(content))
+                    system_parts.extend(extract_text_blocks(content))
                 continue
 
             if role == "tool":
@@ -102,12 +102,8 @@ class OpenAIToAnthropic:
             if isinstance(content, str):
                 messages.append({"role": role, "content": content})
             elif isinstance(content, list):
-                text_parts = _extract_text_blocks(content)
-                has_non_text = any(
-                    isinstance(b, dict) and b.get("type") != "text"  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]
-                    for b in content  # pyright: ignore[reportUnknownVariableType]
-                )
-                if has_non_text:
+                text_parts = extract_text_blocks(content)
+                if has_non_text_blocks(content):
                     warnings.append(
                         {
                             "kind": "dropped_field",
@@ -165,7 +161,8 @@ class OpenAIToAnthropic:
             if isinstance(stop, str):
                 out["stop_sequences"] = [stop]
             elif isinstance(stop, list):
-                out["stop_sequences"] = [str(s) for s in stop]  # pyright: ignore[reportUnknownVariableType,reportUnknownArgumentType]
+                stop_values = cast("list[object]", stop)
+                out["stop_sequences"] = [str(s) for s in stop_values]
 
         for field in DROPPED_FIELDS:
             if field in payload:
@@ -187,7 +184,7 @@ class OpenAIToAnthropic:
         warnings: list[dict[str, Any]] = []
 
         content_blocks = payload.get("content", [])
-        text_parts = _extract_text_blocks(content_blocks)
+        text_parts = extract_text_blocks(content_blocks)
         content_text = "".join(text_parts)
 
         stop_reason = str(payload.get("stop_reason", "end_turn"))
@@ -202,12 +199,13 @@ class OpenAIToAnthropic:
                 }
             )
 
-        usage = payload.get("usage", {})
-        prompt_tokens = int(usage.get("input_tokens", 0))  # pyright: ignore[reportUnknownMemberType]
-        completion_tokens = int(usage.get("output_tokens", 0))  # pyright: ignore[reportUnknownMemberType]
-        cache_read_tokens = int(usage.get("cache_read_input_tokens", 0))  # pyright: ignore[reportUnknownMemberType]
-        cache_creation_tokens = int(  # pyright: ignore[reportUnknownMemberType]
-            usage.get("cache_creation_input_tokens", 0)  # pyright: ignore[reportUnknownMemberType]
+        usage = as_object(payload.get("usage"))
+        prompt_tokens = token_count_from(usage, "input_tokens")
+        completion_tokens = token_count_from(usage, "output_tokens")
+        cache_read_tokens = token_count_from(usage, "cache_read_input_tokens")
+        cache_creation_tokens = token_count_from(
+            usage,
+            "cache_creation_input_tokens",
         )
 
         out: dict[str, Any] = {
@@ -266,8 +264,9 @@ class OpenAIToAnthropic:
         error_type_raw = upstream_payload.get("type", "api_error")
         error_obj = upstream_payload.get("error", {})
         if isinstance(error_obj, dict):
-            error_type = str(error_obj.get("type", error_type_raw))  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]
-            message = str(error_obj.get("message", str(error_obj)))  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]
+            error_map = as_object(error_obj) or {}
+            error_type = str(error_map.get("type", error_type_raw))
+            message = str(error_map.get("message", str(error_map)))
         else:
             error_type = str(error_type_raw)
             message = str(error_obj)

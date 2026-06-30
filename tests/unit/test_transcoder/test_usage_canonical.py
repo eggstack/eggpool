@@ -53,6 +53,27 @@ def test_empty_usage() -> None:
     assert result.total_tokens == 0
 
 
+def test_malformed_openai_usage_zeroed() -> None:
+    raw = {
+        "prompt_tokens": "not-a-number",
+        "completion_tokens": -7,
+        "total_tokens": float("inf"),
+    }
+    result = canonicalise_usage(raw, protocol="openai")
+    assert result == CanonicalUsage()
+
+
+def test_malformed_anthropic_usage_zeroed() -> None:
+    raw = {
+        "input_tokens": None,
+        "output_tokens": "nan",
+        "cache_creation_input_tokens": -3,
+        "cache_read_input_tokens": object(),
+    }
+    result = canonicalise_usage(raw, protocol="anthropic")
+    assert result == CanonicalUsage()
+
+
 def test_to_dict() -> None:
     u = CanonicalUsage(prompt_tokens=1, completion_tokens=2, total_tokens=3)
     d = u.to_dict()

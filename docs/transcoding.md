@@ -170,8 +170,9 @@ Cache token fields are only populated for Anthropic upstreams.
 
 For request finalization and dashboard accounting, streaming and non-streaming
 responses use the same protocol-specific usage extractors. Malformed, negative,
-or non-finite token counts are treated as zero for internal cost/quota
-calculation; the downstream response body is not rewritten for that reason.
+or non-finite token counts are passed through the shared token-count coercion
+path and treated as zero for internal cost/quota calculation. The downstream
+response body is not rewritten solely for accounting normalization.
 
 ## Provider Notes
 

@@ -337,3 +337,28 @@ class TestDroppedFields:
         result, _ = transcoder.encode_request(payload, _make_context())
 
         assert "stream" not in result
+
+
+class TestMalformedUsage:
+    def test_decode_response_zeroes_invalid_usage(
+        self, transcoder: OpenAIToAnthropic
+    ) -> None:
+        payload = {
+            "id": "msg_1",
+            "model": "claude-3",
+            "content": [{"type": "text", "text": "Hi"}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": "bad",
+                "output_tokens": -2,
+                "cache_read_input_tokens": float("inf"),
+                "cache_creation_input_tokens": None,
+            },
+        }
+        result, _ = transcoder.decode_response(payload, _make_context())
+
+        assert result["usage"] == {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }

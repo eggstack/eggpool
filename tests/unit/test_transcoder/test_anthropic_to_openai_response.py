@@ -215,6 +215,33 @@ class TestUsageMapping:
         assert result["usage"]["input_tokens"] == 0
         assert result["usage"]["output_tokens"] == 0
 
+    def test_usage_invalid_values_zeroed(self, transcoder: AnthropicToOpenAI) -> None:
+        payload = {
+            "id": "cmpl-1",
+            "model": "gpt-4",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Hi"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": "not-a-number",
+                "completion_tokens": -10,
+                "prompt_tokens_details": {
+                    "cached_tokens": float("inf"),
+                    "cache_creation_tokens": None,
+                },
+            },
+        }
+        result, _ = transcoder.decode_response(payload, _make_context())
+
+        assert result["usage"] == {
+            "input_tokens": 0,
+            "output_tokens": 0,
+        }
+
 
 class TestResponseStructure:
     def test_empty_content_returns_empty_blocks(
