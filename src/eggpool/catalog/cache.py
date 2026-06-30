@@ -789,6 +789,7 @@ class ModelCatalogCache:
         model_id: str,
         *,
         client_protocol: str,
+        provider_id: str | None = None,
     ) -> set[str]:
         """Return the set of protocols a model can reach, minus the client protocol.
 
@@ -798,11 +799,13 @@ class ModelCatalogCache:
         supporting = self.get_supporting_accounts(model_id)
         protocols: set[str] = set()
         for account_name in supporting:
-            provider_id = self._account_providers.get(account_name)
-            if provider_id is None:
+            account_provider_id = self._account_providers.get(account_name)
+            if account_provider_id is None:
+                continue
+            if provider_id is not None and account_provider_id != provider_id:
                 continue
             if self._config is not None:
-                provider = self._config.providers.get(provider_id)
+                provider = self._config.providers.get(account_provider_id)
                 if provider is not None:
                     for proto in provider.protocols:
                         protocols.add(proto)
@@ -813,17 +816,21 @@ class ModelCatalogCache:
         self,
         model_id: str,
         protocol: str,
+        *,
+        provider_id: str | None = None,
     ) -> int:
         """Count enabled accounts whose provider supports *protocol* and
         has the model in its catalogue."""
         supporting = self.get_supporting_accounts(model_id)
         n = 0
         for account_name in supporting:
-            provider_id = self._account_providers.get(account_name)
-            if provider_id is None:
+            account_provider_id = self._account_providers.get(account_name)
+            if account_provider_id is None:
+                continue
+            if provider_id is not None and account_provider_id != provider_id:
                 continue
             if self._config is not None:
-                provider = self._config.providers.get(provider_id)
+                provider = self._config.providers.get(account_provider_id)
                 if provider is not None and protocol in provider.protocols:
                     n += 1
         return n

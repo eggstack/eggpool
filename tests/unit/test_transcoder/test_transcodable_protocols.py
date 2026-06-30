@@ -51,6 +51,23 @@ class TestGetTranscodableProtocols:
         result = cache.get_transcodable_protocols("gpt-4", client_protocol="openai")
         assert result == {"anthropic"}
 
+    def test_provider_filter_limits_protocols_to_requested_provider(self) -> None:
+        cache, _config = _build_cache_with_two_providers()
+
+        openai_result = cache.get_transcodable_protocols(
+            "gpt-4",
+            client_protocol="openai",
+            provider_id="openai-prov",
+        )
+        anthropic_result = cache.get_transcodable_protocols(
+            "gpt-4",
+            client_protocol="openai",
+            provider_id="anthropic-prov",
+        )
+
+        assert openai_result == set()
+        assert anthropic_result == {"anthropic"}
+
     def test_client_protocol_excluded(self) -> None:
         cache, _config = _build_cache_with_two_providers()
         result = cache.get_transcodable_protocols("gpt-4", client_protocol="anthropic")
@@ -117,3 +134,35 @@ class TestGetTranscodableProtocols:
         )
         result = cache.get_transcodable_protocols("gpt-4", client_protocol="openai")
         assert result == {"anthropic"}
+
+
+class TestCountEligibleAccountsForProtocol:
+    """Tests for provider-scoped protocol counts."""
+
+    def test_provider_filter_limits_count_to_requested_provider(self) -> None:
+        cache, _config = _build_cache_with_two_providers()
+
+        assert (
+            cache.count_eligible_accounts_for_protocol(
+                "gpt-4",
+                "openai",
+                provider_id="openai-prov",
+            )
+            == 1
+        )
+        assert (
+            cache.count_eligible_accounts_for_protocol(
+                "gpt-4",
+                "openai",
+                provider_id="anthropic-prov",
+            )
+            == 0
+        )
+        assert (
+            cache.count_eligible_accounts_for_protocol(
+                "gpt-4",
+                "anthropic",
+                provider_id="anthropic-prov",
+            )
+            == 1
+        )

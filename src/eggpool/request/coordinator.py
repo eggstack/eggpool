@@ -1858,7 +1858,11 @@ class RequestCoordinator:
             else None
         )
         if provider_cfg is not None:
-            auth_headers = build_upstream_headers(provider_cfg, selected.api_key)
+            auth_headers = build_upstream_headers(
+                provider_cfg,
+                selected.api_key,
+                protocol=context.upstream_protocol,
+            )
             sanitized.update(auth_headers)
             if logger.isEnabledFor(logging.DEBUG):
                 auth_shape = build_auth_headers(provider_cfg, selected.api_key)
@@ -2573,6 +2577,7 @@ class RequestCoordinator:
         candidates = self._catalog.cache.get_transcodable_protocols(
             context.model_id,
             client_protocol=context.protocol,
+            provider_id=context.provider_id,
         )
         if not candidates:
             return None
@@ -2582,6 +2587,7 @@ class RequestCoordinator:
             p: self._catalog.cache.count_eligible_accounts_for_protocol(
                 context.model_id,
                 p,
+                provider_id=context.provider_id,
             )
             for p in candidates
         }

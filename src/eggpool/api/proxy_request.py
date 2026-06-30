@@ -147,6 +147,7 @@ def _infer_upstream_protocol(
     candidates = catalog.cache.get_transcodable_protocols(
         model_id,
         client_protocol=client_protocol,
+        provider_id=provider_id,
     )
     if not candidates:
         return None
@@ -155,6 +156,7 @@ def _infer_upstream_protocol(
         p: catalog.cache.count_eligible_accounts_for_protocol(
             model_id,
             p,
+            provider_id=provider_id,
         )
         for p in candidates
     }

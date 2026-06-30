@@ -291,6 +291,54 @@ class TestGetUpstreamUrlProviderAware:
         )
 
 
+class TestBuildUpstreamHeadersProviderAware:
+    def _make_coordinator(self, config: AppConfig) -> RequestCoordinator:
+        return RequestCoordinator(
+            registry=MagicMock(),
+            catalog=MagicMock(),
+            router=MagicMock(),
+            db=MagicMock(),
+            client_pool=httpx.AsyncClient(),
+            config=config,
+        )
+
+    def test_injects_anthropic_required_header_for_upstream_protocol(self) -> None:
+        config = AppConfig(
+            providers={
+                "anthropic-compatible": ProviderConfig(
+                    id="anthropic-compatible",
+                    base_url="https://api.example.com",
+                    protocols=["anthropic"],
+                    auth={"mode": "api_key", "header": "x-api-key"},
+                )
+            }
+        )
+        coordinator = self._make_coordinator(config)
+        context = _make_context(
+            provider_id="anthropic-compatible",
+            upstream_protocol="anthropic",
+        )
+        selected = SelectedAttempt(
+            proxy_request_id="p-1",
+            db_request_id="db-1",
+            attempt_id=1,
+            reservation_id="r-1",
+            account_id=1,
+            account_name="acct",
+            api_key="sk-test",
+            model_id="gpt-4",
+            estimated_tokens=100,
+            estimated_microdollars=50,
+            attempt_number=1,
+            provider_id="anthropic-compatible",
+        )
+
+        headers = coordinator._build_upstream_headers(context, selected)
+
+        assert headers["x-api-key"] == "sk-test"
+        assert headers["anthropic-version"] == "2023-06-01"
+
+
 class TestCoordinatorInitConfig:
     def test_stores_config(self) -> None:
         registry = MagicMock()

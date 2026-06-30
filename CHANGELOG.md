@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.4.4] - 2026-06-30
+
+### Fixed
+
+- **Provider-scoped transcodable protocol lookup**. `get_transcodable_protocols` and `count_eligible_accounts_for_protocol` on `ModelCatalogCache` now accept an optional `provider_id` filter so protocol inference and eligibility counting only consider accounts that belong to a specific provider. `_infer_upstream_protocol` in `proxy_request.py` and `RequestCoordinator._resolve_upstream_protocol` pass the selected account's `provider_id`, preventing cross-provider protocol leakage when the same model is served by providers with different protocol surfaces.
+- **MiniMax token-plan contract warning**. `check-config` now emits a warning when a MiniMax provider entry targets `api.minimax.io` with `openai` protocol but does not use the `/anthropic` path — token-plan keys hitting the OpenAI `/v1/chat/completions` surface can return upstream `insufficient balance (1008)` errors.
+- **`build_upstream_headers` now receives the upstream protocol**. The coordinator passes `context.upstream_protocol` to `build_upstream_headers` so protocol-specific auth header construction (e.g. `x-api-key` for Anthropic vs `Authorization: Bearer` for OpenAI) uses the correct upstream protocol instead of the client's protocol.
+
 ## [0.4.3] - 2026-06-30
 
 ### Added

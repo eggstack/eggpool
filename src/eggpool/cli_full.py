@@ -11,6 +11,7 @@ import zipfile
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
@@ -597,6 +598,22 @@ def _check_stale_contracts(config: AppConfig, config_path: str) -> list[str]:
             warnings.append(
                 f"[{provider.id}] openai_path is set but 'openai' is not "
                 "in protocols; the field will be ignored"
+            )
+
+        parsed_base = urlsplit(provider.base_url)
+        if (
+            parsed_base.hostname == "api.minimax.io"
+            and "openai" in provider.protocols
+            and parsed_base.path.rstrip("/") != "/anthropic"
+        ):
+            warnings.append(
+                f"[{provider.id}] api.minimax.io token-plan keys should use "
+                "the Anthropic-compatible MiniMax contract "
+                "(base_url='https://api.minimax.io/anthropic', "
+                "protocols=['anthropic'], anthropic_path='/v1/messages', "
+                "auth.header='x-api-key'); the OpenAI "
+                "/v1/chat/completions surface can return upstream "
+                "'insufficient balance (1008)' for token-plan keys"
             )
 
         if endpoint is not None:

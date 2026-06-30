@@ -172,6 +172,29 @@ class TestStaleContractWarnings:
         assert exit_code == 0, output
         assert "openai_path is set but 'openai' is not in protocols" not in output
 
+    def test_minimax_international_openai_surface_warns(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        body = (
+            f'[server]\napi_key = "{SERVER_API_KEY}"\n\n'
+            "[providers.minimax]\n"
+            'id = "minimax"\n'
+            'base_url = "https://api.minimax.io/v1"\n'
+            'protocols = ["openai"]\n'
+            'openai_path = "/chat/completions"\n'
+            "\n[providers.minimax.auth]\n"
+            'mode = "bearer"\n'
+            "\n[[providers.minimax.accounts]]\n"
+            'name = "default"\n'
+            f'api_key = "{ACCOUNT_API_KEY}"\n'
+        )
+        exit_code, output = _run_check_config(tmp_path, body)
+
+        assert exit_code == 0, output
+        assert "api.minimax.io token-plan keys should use" in output
+        assert "insufficient balance (1008)" in output
+
     def test_authorization_static_header_with_non_default_auth_header(
         self,
         tmp_path: Path,
