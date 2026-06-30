@@ -238,10 +238,10 @@ class UpdateChecker:
 
     def _http_get_sync(self) -> httpx.Response | None:
         """Synchronous PyPI GET — runs inside ``asyncio.to_thread``."""
-        get = self._http_get
-        if get is not None:
-            return get(PYPI_URL, timeout=_CHECK_TIMEOUT_S, follow_redirects=True)
-        return httpx.get(PYPI_URL, timeout=_CHECK_TIMEOUT_S, follow_redirects=True)
+        return _fetch_pypi_response_sync(
+            timeout_s=_CHECK_TIMEOUT_S,
+            http_get=self._http_get,
+        )
 
     @staticmethod
     def _is_newer(current: str, latest: str) -> bool:
@@ -369,6 +369,16 @@ def _latest_version_from_response(response: httpx.Response) -> str:
     return latest
 
 
+def _fetch_pypi_response_sync(
+    *,
+    timeout_s: float,
+    http_get: Callable[..., httpx.Response] | None = None,
+) -> httpx.Response:
+    """Fetch PyPI release metadata with the sync client used by CLI paths."""
+    get = http_get or httpx.get
+    return get(PYPI_URL, timeout=timeout_s, follow_redirects=True)
+
+
 def async_check_for_update(
     *,
     package_name: str = "eggpool",
@@ -390,7 +400,7 @@ def async_check_for_update(
     except Exception as exc:  # noqa: BLE001
         return "", "", f"version: {exc}"
     try:
-        response = httpx.get(PYPI_URL, timeout=timeout_s, follow_redirects=True)
+        response = _fetch_pypi_response_sync(timeout_s=timeout_s)
         latest = _latest_version_from_response(response)
     except Exception as exc:  # noqa: BLE001
         return current, "", f"pypi: {exc}"

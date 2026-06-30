@@ -48,9 +48,9 @@ class TranscoderPolicy(BaseModel):
     prefer_native: bool = Field(
         default=True,
         description=(
-            "When true, native-protocol accounts outrank transcodable ones "
-            "during routing regardless of routing_priority. When false, "
-            "transcodable accounts may outrank native ones if their "
-            "routing_priority is higher."
+            "When true, native-protocol accounts win ties against "
+            "transcodable ones inside the selected routing_priority tier. "
+            "When false, transcodable accounts can win whenever their quota "
+            "score ranks ahead."
         ),
     )

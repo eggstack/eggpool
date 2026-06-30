@@ -186,7 +186,7 @@ SQLite via aiosqlite with WAL mode. Single-connection serialization via a lock +
 
 ### Schema Migrations
 
-Ordered SQL migrations in `db/schema/` (0001 through 0036). Checksums tracked in `checksums.json`.
+Ordered SQL migrations in `db/schema/` (0001 through 0038). Checksums tracked in `checksums.json`.
 
 ### Repositories
 
@@ -521,7 +521,7 @@ AggregatorError (base)
 
 ## Model Information
 
-- **Sidecar subsystem**: `model_info/` package provides persistent model metadata sidecar tables (`model_info_canonical`, `model_info_observations`, `model_info_aliases`, `model_info_source_health`) via migration `0036`
+- **Sidecar subsystem**: `model_info/` package provides persistent model metadata sidecar tables (`model_info_canonical`, `model_info_observations`, `model_info_aliases`, `model_info_source_health`) via migration `0036`, with phase 5 hardening and override storage added by migration `0038`
 - **Source adapter pattern**: `ModelInfoSource` protocol in `sources/base.py` defines `name`, `priority`, `fetch_all()`, `fetch_one()`; concrete adapters implement this interface
 - **Provider-native observations**: `ProviderCatalogSource` reads in-memory `ModelCatalogCache` entries and emits `SourceModelRecord`s; no network I/O
 - **OpenRouter metadata source** (phase 3): `OpenRouterModelInfoSource` fetches the OpenRouter `/models` catalog and emits `SourceModelRecord` observations for each entry. TTL-cached per source; uses the shared outbound HTTP client from `OutboundClientManager`. Exact/curated alias matching only (no fuzzy matching). Failures are recorded in source health and never break startup, catalog refresh, or routing
@@ -552,7 +552,7 @@ AggregatorError (base)
 - **Source health hardening** (phase 5): `model_info_source_health` tracks `rate_limited_until` (explicit backoff timestamp), `last_status_code`, `last_payload_count`, and `last_success_duration_ms`. Sources respect `rate_limited_until` to avoid hammering rate-limited APIs. Health data is exposed via `GET /api/model-info/sources`
 - **Detail API enhancements** (phase 5): `GET /api/model-info/{model_id}` returns benchmark data (per-source throughput/latency/pricing), alias list, Hugging Face metadata (pipeline_tags, model_card_url, library_name), and manual override indicators
 - **Richer summary generation** (phase 5): deterministic summaries now include sparse-data warnings, benchmark highlights (e.g., "74 tok/s on Artificial Analysis"), Hugging Face card availability, and conflict annotations when sources disagree on fields
-- **`model_info_overrides` table** (phase 5): migration `0037` adds a `model_info_overrides` table for persisting operator-set overrides to canonical fields. Overridden fields are marked with an `overridden` flag on canonical rows to distinguish from source-provided values
+- **`model_info_overrides` table** (phase 5): migration `0038` adds a `model_info_overrides` table for persisting operator-set overrides to canonical fields. Overridden fields are marked with an `overridden` flag on canonical rows to distinguish from source-provided values
 
 ## Model Context Limits
 

@@ -189,13 +189,13 @@ Transcoding is triggered when the client protocol differs from the selected acco
 
 Providers that support both protocols natively (like OpenCode Go) may never trigger transcoding if accounts are configured with the right protocol flags.
 
-When `prefer_native = true` (the default), the router prefers accounts whose upstream protocol matches the client protocol. Transcoding only fires when no native account is available or when a higher-priority transcodable account is selected by routing rules.
+When `prefer_native = true` (the default), the router uses native protocol as a tie-breaker inside the selected `routing_priority` tier. Transcoding still fires when no native account is available, when a transcodable account has a better quota score, or when a higher-priority provider tier is transcodable.
 
 ## Operator Checklist
 
-Before enabling transcoding in production:
+For production deployments using transcoding:
 
-1. **Review your client mix.** Are your clients actually mixed-protocol? If every client speaks OpenAI, transcoding does nothing.
+1. **Review your client mix.** If every client and every selected upstream account already speak the same protocol, transcoding will stay idle even though it is enabled.
 
 2. **Set `loss_policy = "warn"` first.** Run in warn mode for at least a week to see what fields are being dropped. Check logs for `transcode.loss_warnings` entries.
 
@@ -208,9 +208,9 @@ Before enabling transcoding in production:
    - `finish_reason` / `stop_reason` is correct.
    - Usage values appear in the final chunk.
 
-5. **Check your dashboard.** The Runtime page shows a Transcoding card with total transcoded requests, direction breakdown, and top loss warnings. Monitor this after enabling.
+5. **Check your dashboard.** The Runtime page shows a Transcoding card with total transcoded requests, direction breakdown, and top loss warnings. Monitor this after adding cross-protocol providers or clients.
 
-6. **Verify `prefer_native`.** With `prefer_native = true`, native-protocol accounts always win during routing. This is usually what you want. Set to `false` only if you need routing_priority to override protocol affinity.
+6. **Verify `prefer_native`.** With `prefer_native = true`, native-protocol accounts win score ties inside the selected priority tier. `routing_priority` still selects the provider tier before this tie-breaker runs. Set `prefer_native = false` only if quota score alone should decide same-tier native-versus-transcoded ordering.
 
 7. **Set `loss_policy = "reject"` only if you've confirmed no critical request fields are dropped.** In reject mode, lossy request-body translation returns a 400 before dispatch. Loss warnings discovered while decoding upstream responses are still logged and shown in diagnostics.
 
