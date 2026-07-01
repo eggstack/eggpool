@@ -852,25 +852,68 @@ class UsageWindowRepository:
         }
 
     async def get_all_usage_windows(self, now_iso: str) -> dict[int, dict[str, int]]:
-        """Return 5h/7d/30d costs for every active account in one scan."""
+        """Return 5h/7d/30d cost, request count, and token count per account.
+
+        ``request_count_*`` and ``token_count_*`` are the signals the
+        routing scorer actually reads; cost is retained for audit and
+        dashboard display only. Token count sums the four
+        non-overlapping token columns (input, output, cache_read,
+        cache_write) per request so a single canonical token figure
+        drives load balancing.
+        """
         rows = await self._db.fetch_all(
             "SELECT account_id, "
             "COALESCE(SUM(CASE WHEN started_at >= datetime(?, '-5 hours') "
             "THEN CAST(cost_microdollars AS REAL) ELSE 0 END), 0) AS cost_5h, "
             "COALESCE(SUM(CASE WHEN started_at >= datetime(?, '-7 days') "
             "THEN CAST(cost_microdollars AS REAL) ELSE 0 END), 0) AS cost_7d, "
-            "COALESCE(SUM(CAST(cost_microdollars AS REAL)), 0) AS cost_30d "
+            "COALESCE(SUM(CAST(cost_microdollars AS REAL)), 0) AS cost_30d, "
+            "COALESCE(SUM(CASE WHEN started_at >= datetime(?, '-5 hours') "
+            "THEN 1 ELSE 0 END), 0) AS request_count_5h, "
+            "COALESCE(SUM(CASE WHEN started_at >= datetime(?, '-7 days') "
+            "THEN 1 ELSE 0 END), 0) AS request_count_7d, "
+            "COALESCE(SUM(CASE WHEN started_at >= datetime(?, '-30 days') "
+            "THEN 1 ELSE 0 END), 0) AS request_count_30d, "
+            "COALESCE(SUM(CASE WHEN started_at >= datetime(?, '-5 hours') "
+            "THEN CAST("
+            "COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) "
+            "+ COALESCE(cache_read_tokens, 0) + COALESCE(cache_write_tokens, 0) "
+            "AS REAL) ELSE 0 END), 0) AS token_count_5h, "
+            "COALESCE(SUM(CASE WHEN started_at >= datetime(?, '-7 days') "
+            "THEN CAST("
+            "COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) "
+            "+ COALESCE(cache_read_tokens, 0) + COALESCE(cache_write_tokens, 0) "
+            "AS REAL) ELSE 0 END), 0) AS token_count_7d, "
+            "COALESCE(SUM(CAST("
+            "COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) "
+            "+ COALESCE(cache_read_tokens, 0) + COALESCE(cache_write_tokens, 0) "
+            "AS REAL)), 0) AS token_count_30d "
             "FROM requests "
             "WHERE status != 'pending' "
             "AND started_at >= datetime(?, '-30 days') "
             "GROUP BY account_id",
-            (now_iso, now_iso, now_iso),
+            (
+                now_iso,
+                now_iso,
+                now_iso,
+                now_iso,
+                now_iso,
+                now_iso,
+                now_iso,
+                now_iso,
+            ),
         )
         return {
             int(row["account_id"]): {
                 "5h": clamp_sqlite_aggregate(row["cost_5h"]),
                 "7d": clamp_sqlite_aggregate(row["cost_7d"]),
                 "30d": clamp_sqlite_aggregate(row["cost_30d"]),
+                "request_count_5h": clamp_sqlite_aggregate(row["request_count_5h"]),
+                "request_count_7d": clamp_sqlite_aggregate(row["request_count_7d"]),
+                "request_count_30d": clamp_sqlite_aggregate(row["request_count_30d"]),
+                "token_count_5h": clamp_sqlite_aggregate(row["token_count_5h"]),
+                "token_count_7d": clamp_sqlite_aggregate(row["token_count_7d"]),
+                "token_count_30d": clamp_sqlite_aggregate(row["token_count_30d"]),
             }
             for row in rows
         }

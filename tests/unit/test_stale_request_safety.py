@@ -255,7 +255,9 @@ async def test_stale_finalizer_reconciles_runtime_state(db: Database) -> None:
     )
 
     router.decrement_active_request_count.assert_awaited_once_with("acct-1")
-    quota_estimator.remove_reservation.assert_awaited_once_with("acct-1", 500_000)
+    quota_estimator.remove_reservation.assert_awaited_once_with(
+        "acct-1", 500_000, requests=1, tokens=1000
+    )
 
 
 @pytest.mark.asyncio

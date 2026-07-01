@@ -108,6 +108,43 @@ class TestQuotaEstimator:
         assert tokens == 300
         assert cost == 1500
 
+    @pytest.mark.asyncio()
+    async def test_record_usage_and_snapshot_increments_load_signals(self) -> None:
+        """``record_usage_and_snapshot`` must increment request and token counts.
+
+        These are the signals the routing scorer reads (cost is
+        retained for audit only). One call = one request.
+        """
+        from eggpool.quota.estimation import (
+            AccountQuota,
+            PersistedWindowSnapshot,
+        )
+
+        estimator = QuotaEstimator()
+        quota = AccountQuota(account_name="account1")
+        quota.persisted_snapshot = PersistedWindowSnapshot(account_id=1)
+        estimator.accounts["account1"] = quota
+
+        await estimator.record_usage_and_snapshot(
+            "account1",
+            tokens=10_000,
+            cost_microdollars=0,
+        )
+        await estimator.record_usage_and_snapshot(
+            "account1",
+            tokens=20_000,
+            cost_microdollars=0,
+        )
+
+        snapshot = quota.persisted_snapshot
+        assert snapshot is not None
+        assert snapshot.request_count_5h == 2
+        assert snapshot.request_count_7d == 2
+        assert snapshot.request_count_30d == 2
+        assert snapshot.token_count_5h == 30_000
+        assert snapshot.token_count_7d == 30_000
+        assert snapshot.token_count_30d == 30_000
+
     def test_account_weights(self) -> None:
         """Test account weight management."""
         estimator = QuotaEstimator()
@@ -296,11 +333,23 @@ class TestQuotaFairScorer:
     @pytest.mark.asyncio()
     async def test_score_accounts(self) -> None:
         """Test scoring accounts. Lower score = less utilized = preferred."""
+        from eggpool.quota.estimation import AccountQuota, PersistedWindowSnapshot
+
         estimator = QuotaEstimator()
-        estimator.set_account_limits("account1", capacity_5h_microdollars=10000)
-        estimator.set_account_limits("account2", capacity_5h_microdollars=10000)
-        estimator.record_usage("account1", 100, 5000)
-        estimator.record_usage("account2", 100, 9000)
+        estimator.accounts["account1"] = AccountQuota(
+            account_name="account1",
+            capacity_5h_requests=100,
+            persisted_snapshot=PersistedWindowSnapshot(
+                account_id=1, request_count_5h=50
+            ),
+        )
+        estimator.accounts["account2"] = AccountQuota(
+            account_name="account2",
+            capacity_5h_requests=100,
+            persisted_snapshot=PersistedWindowSnapshot(
+                account_id=2, request_count_5h=90
+            ),
+        )
 
         scorer = QuotaFairScorer(quota_estimator=estimator)
         scores = await scorer.score_accounts(["account1", "account2"])
@@ -371,17 +420,15 @@ class TestQuotaFairScorer:
         estimator = QuotaEstimator()
         estimator.accounts["acct1"] = AccountQuota(
             account_name="acct1",
-            capacity_5h_microdollars=10_000_000,
+            capacity_5h_requests=100,
             persisted_snapshot=PersistedWindowSnapshot(
-                account_id=1, cost_5h=50_000_000, cost_7d=0, cost_30d=0
+                account_id=1, request_count_5h=500
             ),
         )
         estimator.accounts["acct2"] = AccountQuota(
             account_name="acct2",
-            capacity_5h_microdollars=10_000_000,
-            persisted_snapshot=PersistedWindowSnapshot(
-                account_id=2, cost_5h=0, cost_7d=0, cost_30d=0
-            ),
+            capacity_5h_requests=100,
+            persisted_snapshot=PersistedWindowSnapshot(account_id=2),
         )
 
         scorer = QuotaFairScorer(quota_estimator=estimator)

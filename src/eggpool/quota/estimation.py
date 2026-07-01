@@ -119,18 +119,55 @@ class EWMAEstimate:
 
 @dataclass(slots=True)
 class PersistedWindowSnapshot:
-    """Snapshot of persisted window usage for an account."""
+    """Snapshot of persisted window usage for an account.
+
+    The ``cost_*`` fields are retained for audit and dashboard display
+    only; they are NOT consumed by the routing scorer. Routing uses the
+    ``request_count_*`` and ``token_count_*`` fields because cost is
+    unreliable across providers (zero reported, untrusted heuristics,
+    unit confusion, etc.) and the metrics we actually care about for
+    load balancing are request count and token count.
+    """
 
     account_id: int
     cost_5h: int = 0
     cost_7d: int = 0
     cost_30d: int = 0
+    request_count_5h: int = 0
+    request_count_7d: int = 0
+    request_count_30d: int = 0
+    token_count_5h: int = 0
+    token_count_7d: int = 0
+    token_count_30d: int = 0
     loaded_at: float = field(default_factory=time.time)
+
+
+# Soft default capacities for the request/token utilization signal. When
+# an operator has not configured an explicit capacity, these defaults
+# let the scorer produce a meaningful utilization ratio so load stays
+# balanced across peer accounts. They are intentionally generous
+# (roughly one request per ~7 seconds sustained for 5h; ~2B tokens in
+# 30d) so a default-config deployment cannot accidentally cap a
+# healthy account at zero.
+DEFAULT_REQUEST_CAPACITY_5H = 2500
+DEFAULT_REQUEST_CAPACITY_7D = 35_000
+DEFAULT_REQUEST_CAPACITY_30D = 150_000
+DEFAULT_TOKEN_CAPACITY_5H = 500_000_000
+DEFAULT_TOKEN_CAPACITY_7D = 7_000_000_000
+DEFAULT_TOKEN_CAPACITY_30D = 30_000_000_000
 
 
 @dataclass(slots=True)
 class AccountQuota:
-    """Quota state for a single account."""
+    """Quota state for a single account.
+
+    Cost microdollar fields are retained for audit / dashboard display
+    only. The routing scorer consumes ``request_count`` and
+    ``token_count`` from the persisted snapshot (and their
+    offsets/reservations) because cost is unreliable and we want
+    load balancing to track the metrics we actually care about:
+    requests served and tokens processed.
+    """
 
     account_name: str
     daily_window: QuotaWindow = field(
@@ -144,11 +181,25 @@ class AccountQuota:
     capacity_5h_microdollars: int | None = None
     capacity_7d_microdollars: int | None = None
     capacity_30d_microdollars: int | None = None
+    capacity_5h_requests: int | None = None
+    capacity_7d_requests: int | None = None
+    capacity_30d_requests: int | None = None
+    capacity_5h_tokens: int | None = None
+    capacity_7d_tokens: int | None = None
+    capacity_30d_tokens: int | None = None
     persisted_snapshot: PersistedWindowSnapshot | None = None
     five_hour_offset: int = 0
     weekly_offset: int = 0
     monthly_offset: int = 0
+    request_offset_5h: int = 0
+    request_offset_7d: int = 0
+    request_offset_30d: int = 0
+    token_offset_5h: int = 0
+    token_offset_7d: int = 0
+    token_offset_30d: int = 0
     reserved_cost: int = 0
+    reserved_requests: int = 0
+    reserved_tokens: int = 0
 
     def record_usage(
         self,
@@ -255,6 +306,84 @@ class AccountQuota:
             return self.persisted_snapshot.cost_30d
         return 0
 
+    def get_persisted_request_count_5h(self) -> int:
+        """5h request count from the persisted snapshot, or 0."""
+        if self.persisted_snapshot is None:
+            return 0
+        return self.persisted_snapshot.request_count_5h
+
+    def get_persisted_request_count_7d(self) -> int:
+        """7d request count from the persisted snapshot, or 0."""
+        if self.persisted_snapshot is None:
+            return 0
+        return self.persisted_snapshot.request_count_7d
+
+    def get_persisted_request_count_30d(self) -> int:
+        """30d request count from the persisted snapshot, or 0."""
+        if self.persisted_snapshot is None:
+            return 0
+        return self.persisted_snapshot.request_count_30d
+
+    def get_persisted_token_count_5h(self) -> int:
+        """5h token count from the persisted snapshot, or the hourly window."""
+        if self.persisted_snapshot is not None:
+            return self.persisted_snapshot.token_count_5h
+        tokens, _ = self.hourly_window.get_usage()
+        return tokens
+
+    def get_persisted_token_count_7d(self) -> int:
+        """7d token count from the persisted snapshot, or the daily window."""
+        if self.persisted_snapshot is not None:
+            return self.persisted_snapshot.token_count_7d
+        tokens, _ = self.daily_window.get_usage()
+        return tokens
+
+    def get_persisted_token_count_30d(self) -> int:
+        """30d token count from the persisted snapshot, or 0.
+
+        No in-memory 30d window exists, so this falls back to zero
+        when no persisted snapshot is present.
+        """
+        if self.persisted_snapshot is None:
+            return 0
+        return self.persisted_snapshot.token_count_30d
+
+    def get_request_capacity_5h(self) -> int:
+        """Effective 5h request capacity (configured or soft default)."""
+        if self.capacity_5h_requests is not None:
+            return self.capacity_5h_requests
+        return DEFAULT_REQUEST_CAPACITY_5H
+
+    def get_request_capacity_7d(self) -> int:
+        """Effective 7d request capacity (configured or soft default)."""
+        if self.capacity_7d_requests is not None:
+            return self.capacity_7d_requests
+        return DEFAULT_REQUEST_CAPACITY_7D
+
+    def get_request_capacity_30d(self) -> int:
+        """Effective 30d request capacity (configured or soft default)."""
+        if self.capacity_30d_requests is not None:
+            return self.capacity_30d_requests
+        return DEFAULT_REQUEST_CAPACITY_30D
+
+    def get_token_capacity_5h(self) -> int:
+        """Effective 5h token capacity (configured or soft default)."""
+        if self.capacity_5h_tokens is not None:
+            return self.capacity_5h_tokens
+        return DEFAULT_TOKEN_CAPACITY_5H
+
+    def get_token_capacity_7d(self) -> int:
+        """Effective 7d token capacity (configured or soft default)."""
+        if self.capacity_7d_tokens is not None:
+            return self.capacity_7d_tokens
+        return DEFAULT_TOKEN_CAPACITY_7D
+
+    def get_token_capacity_30d(self) -> int:
+        """Effective 30d token capacity (configured or soft default)."""
+        if self.capacity_30d_tokens is not None:
+            return self.capacity_30d_tokens
+        return DEFAULT_TOKEN_CAPACITY_30D
+
 
 # Model family fallback costs (dollars per 1M tokens)
 MODEL_FAMILY_FALLBACKS: dict[str, tuple[float, float]] = {
@@ -340,6 +469,8 @@ class QuotaEstimator:
     _usage_window_repo: UsageWindowRepository | None = field(default=None, repr=False)
     # In-memory reservation tracking for scorer
     _account_reserved_cost: dict[str, int] = field(default_factory=dict[str, int])
+    _account_reserved_requests: dict[str, int] = field(default_factory=dict[str, int])
+    _account_reserved_tokens: dict[str, int] = field(default_factory=dict[str, int])
     # Serializes record_usage + persisted_snapshot updates so concurrent
     # finalizers cannot interleave between the two updates and lose cost
     # increments.
@@ -456,7 +587,9 @@ class QuotaEstimator:
 
         Combines :meth:`record_usage` with the per-window snapshot
         increment so concurrent finalizers cannot interleave between
-        the two updates and lose cost increments.
+        the two updates and lose cost increments. Also increments the
+        per-window request count and token count snapshots, which are
+        the signals the routing scorer actually consumes.
         """
         async with self._snapshot_lock:
             self.record_usage(
@@ -471,6 +604,13 @@ class QuotaEstimator:
                 quota.persisted_snapshot.cost_5h += safe_cost
                 quota.persisted_snapshot.cost_7d += safe_cost
                 quota.persisted_snapshot.cost_30d += safe_cost
+                safe_tokens = max(0, tokens)
+                quota.persisted_snapshot.request_count_5h += 1
+                quota.persisted_snapshot.request_count_7d += 1
+                quota.persisted_snapshot.request_count_30d += 1
+                quota.persisted_snapshot.token_count_5h += safe_tokens
+                quota.persisted_snapshot.token_count_7d += safe_tokens
+                quota.persisted_snapshot.token_count_30d += safe_tokens
 
     def estimate_cost(
         self,
@@ -631,30 +771,77 @@ class QuotaEstimator:
             output_price,
         )
 
-    async def add_reservation(self, account_name: str, cost: int) -> None:
-        """Track an active reservation's estimated cost for scoring."""
+    async def add_reservation(
+        self,
+        account_name: str,
+        cost: int,
+        *,
+        requests: int = 1,
+        tokens: int = 0,
+    ) -> None:
+        """Track an active reservation for scoring.
+
+        ``cost`` is retained for backward compatibility and accounting
+        (it backs the legacy cost-mirror path even though the scorer
+        no longer reads it). The scorer now consumes ``requests`` (a
+        single reservation counts as one in-flight request) and
+        ``tokens`` (the projected token volume for the reservation).
+        Both default to one / zero so existing call sites keep working
+        without modification.
+        """
         async with self._snapshot_lock:
             if account_name not in self._account_reserved_cost:
                 self._account_reserved_cost[account_name] = 0
             self._account_reserved_cost[account_name] = clamp_sqlite_integer(
                 self._account_reserved_cost[account_name] + cost
             )
-            # Keep AccountQuota in sync for eligibility checks
+            if account_name not in self._account_reserved_requests:
+                self._account_reserved_requests[account_name] = 0
+            self._account_reserved_requests[account_name] = clamp_sqlite_integer(
+                self._account_reserved_requests[account_name] + requests
+            )
+            if account_name not in self._account_reserved_tokens:
+                self._account_reserved_tokens[account_name] = 0
+            self._account_reserved_tokens[account_name] = clamp_sqlite_integer(
+                self._account_reserved_tokens[account_name] + tokens
+            )
             quota = self.get_account_quota(account_name)
             if quota is not None:
                 quota.reserved_cost = self._account_reserved_cost[account_name]
+                quota.reserved_requests = self._account_reserved_requests[account_name]
+                quota.reserved_tokens = self._account_reserved_tokens[account_name]
 
-    async def remove_reservation(self, account_name: str, cost: int) -> None:
-        """Remove a reservation's cost from tracking."""
+    async def remove_reservation(
+        self,
+        account_name: str,
+        cost: int,
+        *,
+        requests: int = 1,
+        tokens: int = 0,
+    ) -> None:
+        """Remove a reservation's cost / request / token tracking."""
         async with self._snapshot_lock:
             if account_name in self._account_reserved_cost:
                 self._account_reserved_cost[account_name] = max(
                     0, self._account_reserved_cost[account_name] - cost
                 )
-                # Keep AccountQuota in sync for eligibility checks
-                quota = self.get_account_quota(account_name)
-                if quota is not None:
-                    quota.reserved_cost = self._account_reserved_cost[account_name]
+            if account_name in self._account_reserved_requests:
+                self._account_reserved_requests[account_name] = max(
+                    0, self._account_reserved_requests[account_name] - requests
+                )
+            if account_name in self._account_reserved_tokens:
+                self._account_reserved_tokens[account_name] = max(
+                    0, self._account_reserved_tokens[account_name] - tokens
+                )
+            quota = self.get_account_quota(account_name)
+            if quota is not None:
+                quota.reserved_cost = self._account_reserved_cost.get(account_name, 0)
+                quota.reserved_requests = self._account_reserved_requests.get(
+                    account_name, 0
+                )
+                quota.reserved_tokens = self._account_reserved_tokens.get(
+                    account_name, 0
+                )
 
     async def get_account_reserved_cost(self, account_name: str) -> int:
         """Get total reserved cost for a single account.
@@ -670,13 +857,33 @@ class QuotaEstimator:
     ) -> dict[str, int]:
         """Snapshot reserved costs for ``account_names`` in one lock acquisition.
 
-        Names with no recorded reservation map to ``0``. Used by the
-        scorer to avoid serializing on the snapshot lock when scoring
-        large account lists.
+        Names with no recorded reservation map to ``0``. Retained for
+        backward compatibility with the cost-mirror audit path; the
+        routing scorer no longer reads cost, see
+        :meth:`get_account_reserved_load`.
         """
         async with self._snapshot_lock:
             return {
                 name: self._account_reserved_cost.get(name, 0) for name in account_names
+            }
+
+    async def get_account_reserved_load(
+        self, account_names: list[str]
+    ) -> dict[str, tuple[int, int]]:
+        """Snapshot reserved (requests, tokens) for ``account_names``.
+
+        Single lock acquisition. The routing scorer uses this to fold
+        in-flight reservations into the per-account load without
+        serializing per-name. Names with no recorded reservation map
+        to ``(0, 0)``.
+        """
+        async with self._snapshot_lock:
+            return {
+                name: (
+                    self._account_reserved_requests.get(name, 0),
+                    self._account_reserved_tokens.get(name, 0),
+                )
+                for name in account_names
             }
 
     async def load_persisted_windows(
@@ -703,12 +910,31 @@ class QuotaEstimator:
             if name not in self.accounts:
                 self.accounts[name] = AccountQuota(account_name=name)
             self.accounts[name].weight = acct.get("weight", 1.0)
-            windows = all_windows.get(acct["id"], {"5h": 0, "7d": 0, "30d": 0})
+            windows = all_windows.get(
+                acct["id"],
+                {
+                    "5h": 0,
+                    "7d": 0,
+                    "30d": 0,
+                    "request_count_5h": 0,
+                    "request_count_7d": 0,
+                    "request_count_30d": 0,
+                    "token_count_5h": 0,
+                    "token_count_7d": 0,
+                    "token_count_30d": 0,
+                },
+            )
             self.accounts[name].persisted_snapshot = PersistedWindowSnapshot(
                 account_id=acct["id"],
                 cost_5h=windows["5h"],
                 cost_7d=windows["7d"],
                 cost_30d=windows["30d"],
+                request_count_5h=windows["request_count_5h"],
+                request_count_7d=windows["request_count_7d"],
+                request_count_30d=windows["request_count_30d"],
+                token_count_5h=windows["token_count_5h"],
+                token_count_7d=windows["token_count_7d"],
+                token_count_30d=windows["token_count_30d"],
             )
             if offsets and name in offsets:
                 acct_offsets = offsets[name]

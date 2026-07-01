@@ -61,6 +61,17 @@ async def test_usage_windows_do_not_overflow_on_corrupt_historical_costs() -> No
             "7d": SQLITE_INTEGER_MAX,
             "30d": SQLITE_INTEGER_MAX,
         }
-        assert all_windows[account_id] == one
+        # The all-accounts variant also carries request/token counts
+        # so the scorer can drive load balancing off request and
+        # token volume instead of unreliable cost.
+        assert all_windows[account_id] == {
+            **one,
+            "request_count_5h": 2,
+            "request_count_7d": 2,
+            "request_count_30d": 2,
+            "token_count_5h": 0,
+            "token_count_7d": 0,
+            "token_count_30d": 0,
+        }
     finally:
         await database.disconnect()

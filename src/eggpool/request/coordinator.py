@@ -698,6 +698,8 @@ class RequestCoordinator:
                         await self._quota_estimator.remove_reservation(
                             selected.account_name,
                             selected.estimated_microdollars,
+                            requests=1,
+                            tokens=selected.estimated_tokens,
                         )
                     if result.reservation_released:
                         await self._router.decrement_active_request_count(
@@ -950,15 +952,18 @@ class RequestCoordinator:
                 # 2. Calculate projected request tokens once
                 estimated_tokens = estimate_reservation_tokens(context.original_body)
 
-                # 3. Build per-account estimate map for scoring
-                request_estimates: dict[str, int] = {}
-                if self._quota_estimator is not None:
-                    for acct_name in eligible_account_names:
-                        request_estimates[acct_name] = (
-                            self._quota_estimator.estimate_cost(
-                                acct_name, context.model_id, estimated_tokens
-                            )
-                        )
+                # 3. Build per-account token estimate for scoring. The
+                #    scorer now folds the incoming request's projected
+                #    token count into each account's per-window token
+                #    utilization so the routing decision tracks actual
+                #    workload rather than a (frequently unreliable)
+                #    cost estimate. Every account is treated as
+                #    equally capable of the same incoming workload, so
+                #    the value is identical for all candidates.
+                request_estimates: dict[str, int] = {
+                    acct_name: int(estimated_tokens)
+                    for acct_name in eligible_account_names
+                }
 
                 # 4. Rank accounts once using projected estimates, then
                 #    acquire the circuit-breaker probe slot atomically.
@@ -1133,12 +1138,13 @@ class RequestCoordinator:
                         or DEFAULT_PROVIDER_ID
                     )
 
-                    # 7. Use the exact estimate for the selected account.
-                    estimated_microdollars = request_estimates.get(account_name, 0)
-                    if (
-                        estimated_microdollars == 0
-                        and self._quota_estimator is not None
-                    ):
+                    # 7. Compute the reservation size (cost microdollars) for
+                    #    the selected account. ``request_estimates`` is now
+                    #    an account-name to projected *token count* map for
+                    #    routing scoring; reservation sizing is a separate
+                    #    concern and goes through the cost-estimator.
+                    estimated_microdollars = 0
+                    if self._quota_estimator is not None:
                         estimated_microdollars = self._quota_estimator.estimate_cost(
                             account_name, context.model_id, estimated_tokens
                         )
@@ -1270,10 +1276,17 @@ class RequestCoordinator:
                 await self._router.increment_active_request_count(account_name)
                 active_count_increased = True
 
-                # 12. Add exact reserved amount to in-memory cache
+                # 12. Add exact reserved amount to in-memory cache. The
+                #     cost figure is preserved for the audit path even
+                #     though the scorer no longer reads it; the
+                #     request/token components feed the new load-aware
+                #     scoring signal.
                 if self._quota_estimator is not None:
                     await self._quota_estimator.add_reservation(
-                        account_name, estimated_microdollars
+                        account_name,
+                        estimated_microdollars,
+                        requests=1,
+                        tokens=estimated_tokens,
                     )
             except BaseException:
                 # Compensate: undo the active count increment so
@@ -2461,6 +2474,8 @@ class RequestCoordinator:
                 await self._quota_estimator.remove_reservation(
                     selected.account_name,
                     selected.estimated_microdollars,
+                    requests=1,
+                    tokens=selected.estimated_tokens,
                 )
             await self._router.decrement_active_request_count(
                 selected.account_name,

@@ -40,7 +40,7 @@ async def cleanup_stale_reservations(
                   WHERE requests.id = reservations.request_id
                     AND requests.status = 'pending'
               )
-            RETURNING id, account_id, reserved_microdollars,
+            RETURNING id, account_id, reserved_microdollars, estimated_tokens,
                 (SELECT name FROM accounts WHERE id = reservations.account_id)
                 AS account_name
             """,
@@ -147,7 +147,7 @@ async def reconcile_expired_reservations(
                       WHERE requests.id = reservations.request_id
                         AND requests.status = 'pending'
                   )
-                RETURNING id, account_id, reserved_microdollars,
+                  RETURNING id, account_id, reserved_microdollars, estimated_tokens,
                     (SELECT name FROM accounts WHERE id = reservations.account_id)
                     AS account_name
                 """,
@@ -197,10 +197,16 @@ async def _reconcile_runtime_reservations(
 
         reserved_value = row.get("reserved_microdollars")
         reserved_microdollars = reserved_value if isinstance(reserved_value, int) else 0
+        estimated_tokens_value = row.get("estimated_tokens")
+        estimated_tokens = (
+            estimated_tokens_value if isinstance(estimated_tokens_value, int) else 0
+        )
         if quota_estimator is not None and reserved_microdollars > 0:
             await quota_estimator.remove_reservation(
                 account_name_value,
                 reserved_microdollars,
+                requests=1,
+                tokens=estimated_tokens,
             )
         if router is not None:
             await router.decrement_active_request_count(account_name_value)

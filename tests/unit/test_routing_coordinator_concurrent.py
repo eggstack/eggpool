@@ -1073,7 +1073,14 @@ class TestPublishOrdering:
                 def __init__(self, inner: Any) -> None:
                     self._inner = inner
 
-                async def add_reservation(self, account_name: str, cost: int) -> None:
+                async def add_reservation(
+                    self,
+                    account_name: str,
+                    cost: int,
+                    *,
+                    requests: int = 1,
+                    tokens: int = 0,
+                ) -> None:
                     raise RuntimeError("simulated reservation failure")
 
                 def get_account_quota(self, account_name: str) -> Any:

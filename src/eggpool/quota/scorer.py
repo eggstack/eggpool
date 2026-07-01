@@ -7,10 +7,19 @@ Implements the plan's routing score formula:
               + inflight_count_penalty
               + health_penalty
 
-Where:
-    p5_i = (observed_5h + offset_5h + reserved + estimate) / capacity_5h
-    pw_i = (observed_7d + offset_week + reserved + estimate) / capacity_week
-    pm_i = (observed_30d + offset_month + reserved + estimate) / capacity_month
+Where each window utilization is the maximum of a request-count
+utilization and a token-count utilization:
+
+    p_request = (request_count + reserved_requests + 1) / request_capacity
+    p_token   = (token_count + reserved_tokens + estimated_tokens) / token_capacity
+    p_window  = max(p_request, p_token)
+
+Routing is driven by request count and token count -- NOT cost --
+because cost is unreliable (some upstreams report zero, prices are
+inferred heuristically, unit confusion is a known failure mode) and
+load balancing should track the metrics we actually care about. The
+``cost_*`` fields on the persisted snapshot are retained for audit
+and dashboard display only.
 
 Lower score = less utilized = preferred.
 """
@@ -28,7 +37,13 @@ if TYPE_CHECKING:
 
 @dataclass(slots=True)
 class RoutingScore:
-    """A routing score for an account."""
+    """A routing score for an account.
+
+    Cost microdollar fields are retained for trace / dashboard
+    compatibility but are NOT used by ``final_score``. The routing
+    decision is driven by request count and token count utilization
+    ratios because cost is unreliable.
+    """
 
     account_name: str
     quota_score: float  # Combined quota utilization (lower is better)
@@ -36,13 +51,27 @@ class RoutingScore:
     is_eligible: bool
     inflight_penalty: float = 0.0
     health_penalty: float = 0.0
-    reserved_microdollars: int = 0  # In-flight reservation cost
+    reserved_microdollars: int = 0  # In-flight reservation cost (audit)
+    reserved_requests: int = 0
+    reserved_tokens: int = 0
     cost_5h_microdollars: int = 0
     cost_7d_microdollars: int = 0
     cost_30d_microdollars: int = 0
+    request_count_5h: int = 0
+    request_count_7d: int = 0
+    request_count_30d: int = 0
+    token_count_5h: int = 0
+    token_count_7d: int = 0
+    token_count_30d: int = 0
     capacity_5h_microdollars: int = 0
     capacity_7d_microdollars: int = 0
     capacity_30d_microdollars: int = 0
+    capacity_5h_requests: int = 0
+    capacity_7d_requests: int = 0
+    capacity_30d_requests: int = 0
+    capacity_5h_tokens: int = 0
+    capacity_7d_tokens: int = 0
+    capacity_30d_tokens: int = 0
     active_request_count: int = 0
     random_tiebreaker: float = field(default_factory=random.random)
     # Tier boundary marker from the provider's routing_priority. Higher
@@ -84,19 +113,28 @@ class QuotaFairScorer:
         active_requests: dict[str, int] | None = None,
         request_estimates: dict[str, int] | None = None,
     ) -> list[RoutingScore]:
-        """Score all accounts for routing using the full formula."""
+        """Score all accounts for routing using the full formula.
+
+        ``request_estimates`` is now a mapping of account name to the
+        projected token count of the incoming request (previously: a
+        cost estimate in microdollars). Routing decisions should
+        follow actual workload, so the incoming request's projected
+        token count is folded into the per-window token utilization.
+        """
         active = active_requests or {}
         estimates = request_estimates or {}
         scores: list[RoutingScore] = []
 
-        # Snapshot reserved costs in a single lock acquisition rather
-        # than awaiting the lock once per account.
         if self.quota_estimator:
             reserved_by_name = await self.quota_estimator.get_account_reserved_costs(
                 account_names
             )
+            reserved_load_by_name = (
+                await self.quota_estimator.get_account_reserved_load(account_names)
+            )
         else:
             reserved_by_name = {}
+            reserved_load_by_name = {}
 
         for name in account_names:
             weight = 0.0
@@ -105,12 +143,25 @@ class QuotaFairScorer:
             pw = 0.0
             pm = 0.0
             reserved = reserved_by_name.get(name, 0)
+            reserved_requests, reserved_tokens = reserved_load_by_name.get(name, (0, 0))
             cost_5h = 0
             cost_7d = 0
             cost_30d = 0
-            cap_5h = 0
-            cap_7d = 0
-            cap_30d = 0
+            requests_5h = 0
+            requests_7d = 0
+            requests_30d = 0
+            tokens_5h = 0
+            tokens_7d = 0
+            tokens_30d = 0
+            cap_5h_cost = 0
+            cap_7d_cost = 0
+            cap_30d_cost = 0
+            cap_5h_req = 0
+            cap_7d_req = 0
+            cap_30d_req = 0
+            cap_5h_tok = 0
+            cap_7d_tok = 0
+            cap_30d_tok = 0
 
             if self.quota_estimator:
                 quota = self.quota_estimator.get_account_quota(name)
@@ -121,46 +172,84 @@ class QuotaFairScorer:
                     # Upstream quota_exhausted health makes them
                     # temporarily ineligible when authoritative.
 
-                    # Use persisted window costs when available
+                    # Cost fields are retained for audit; the scorer
+                    # intentionally does NOT use them as a routing
+                    # signal because cost is unreliable across
+                    # providers.
                     cost_5h = quota.get_persisted_cost_5h()
                     cost_7d = quota.get_persisted_cost_7d()
                     cost_30d = quota.get_persisted_cost_30d()
 
-                    cap_5h = (
+                    requests_5h = quota.get_persisted_request_count_5h()
+                    requests_7d = quota.get_persisted_request_count_7d()
+                    requests_30d = quota.get_persisted_request_count_30d()
+                    tokens_5h = quota.get_persisted_token_count_5h()
+                    tokens_7d = quota.get_persisted_token_count_7d()
+                    tokens_30d = quota.get_persisted_token_count_30d()
+
+                    cap_5h_cost = (
                         quota.capacity_5h_microdollars
                         if quota.capacity_5h_microdollars is not None
                         else 0
                     )
-                    cap_7d = (
+                    cap_7d_cost = (
                         quota.capacity_7d_microdollars
                         if quota.capacity_7d_microdollars is not None
                         else 0
                     )
-                    cap_30d = (
+                    cap_30d_cost = (
                         quota.capacity_30d_microdollars
                         if quota.capacity_30d_microdollars is not None
                         else 0
                     )
 
-                    # Get projected request estimate for this account
-                    request_estimate = estimates.get(name, 0)
+                    cap_5h_req = quota.get_request_capacity_5h()
+                    cap_7d_req = quota.get_request_capacity_7d()
+                    cap_30d_req = quota.get_request_capacity_30d()
+                    cap_5h_tok = quota.get_token_capacity_5h()
+                    cap_7d_tok = quota.get_token_capacity_7d()
+                    cap_30d_tok = quota.get_token_capacity_30d()
 
-                    # Calculate utilization ratios per window with
-                    # per-window offsets, reservations, and request estimate
+                    # Projected token count for the incoming request.
+                    # Fall back to 0 so an unknown projection does not
+                    # artificially inflate the score.
+                    request_token_estimate = max(0, estimates.get(name, 0))
+
                     p5 = self._calc_window_utilization(
-                        cost_5h + reserved + request_estimate,
-                        quota.five_hour_offset,
-                        cap_5h,
+                        requests_5h,
+                        reserved_requests,
+                        1,
+                        quota.request_offset_5h,
+                        tokens_5h,
+                        reserved_tokens,
+                        request_token_estimate,
+                        quota.token_offset_5h,
+                        cap_5h_req,
+                        cap_5h_tok,
                     )
                     pw = self._calc_window_utilization(
-                        cost_7d + reserved + request_estimate,
-                        quota.weekly_offset,
-                        cap_7d,
+                        requests_7d,
+                        reserved_requests,
+                        1,
+                        quota.request_offset_7d,
+                        tokens_7d,
+                        reserved_tokens,
+                        request_token_estimate,
+                        quota.token_offset_7d,
+                        cap_7d_req,
+                        cap_7d_tok,
                     )
                     pm = self._calc_window_utilization(
-                        cost_30d + reserved + request_estimate,
-                        quota.monthly_offset,
-                        cap_30d,
+                        requests_30d,
+                        reserved_requests,
+                        1,
+                        quota.request_offset_30d,
+                        tokens_30d,
+                        reserved_tokens,
+                        request_token_estimate,
+                        quota.token_offset_30d,
+                        cap_30d_req,
+                        cap_30d_tok,
                     )
 
             # Base quota score: max of window utilizations
@@ -187,12 +276,26 @@ class QuotaFairScorer:
                     inflight_penalty=inflight,
                     health_penalty=health,
                     reserved_microdollars=reserved,
+                    reserved_requests=reserved_requests,
+                    reserved_tokens=reserved_tokens,
                     cost_5h_microdollars=cost_5h,
                     cost_7d_microdollars=cost_7d,
                     cost_30d_microdollars=cost_30d,
-                    capacity_5h_microdollars=cap_5h,
-                    capacity_7d_microdollars=cap_7d,
-                    capacity_30d_microdollars=cap_30d,
+                    request_count_5h=requests_5h,
+                    request_count_7d=requests_7d,
+                    request_count_30d=requests_30d,
+                    token_count_5h=tokens_5h,
+                    token_count_7d=tokens_7d,
+                    token_count_30d=tokens_30d,
+                    capacity_5h_microdollars=cap_5h_cost,
+                    capacity_7d_microdollars=cap_7d_cost,
+                    capacity_30d_microdollars=cap_30d_cost,
+                    capacity_5h_requests=cap_5h_req,
+                    capacity_7d_requests=cap_7d_req,
+                    capacity_30d_requests=cap_30d_req,
+                    capacity_5h_tokens=cap_5h_tok,
+                    capacity_7d_tokens=cap_7d_tok,
+                    capacity_30d_tokens=cap_30d_tok,
                     active_request_count=int(count),
                 )
             )
@@ -201,15 +304,41 @@ class QuotaFairScorer:
 
     def _calc_window_utilization(
         self,
-        used_cost: int,
-        offset_cost: int,
-        max_cost: int | None,
+        used_requests: int,
+        reserved_requests: int,
+        incoming_requests: int,
+        request_offset: int,
+        used_tokens: int,
+        reserved_tokens: int,
+        incoming_tokens: int,
+        token_offset: int,
+        request_capacity: int,
+        token_capacity: int,
     ) -> float:
-        """Calculate utilization ratio for a single window."""
-        if max_cost is None or max_cost <= 0:
-            return 0.0
-        total = max(0, used_cost + offset_cost)
-        return total / max_cost
+        """Calculate utilization ratio for a single window.
+
+        Returns the maximum of the request-count utilization and the
+        token-count utilization. The wider of the two ratios is the
+        binding constraint for that window: an account can be cheap
+        on token volume but hammered on request count, or vice versa.
+
+        Per-window offsets (operator-supplied known load adjustments)
+        are ADDED to the observed load, mirroring the legacy cost
+        ladder where a positive offset inflates the numerator. A
+        negative offset would *subtract* load, which is occasionally
+        useful for discounting observed noise.
+        """
+        req_total = max(
+            0,
+            used_requests + reserved_requests + incoming_requests + request_offset,
+        )
+        tok_total = max(
+            0,
+            used_tokens + reserved_tokens + incoming_tokens + token_offset,
+        )
+        req_util = req_total / request_capacity if request_capacity > 0 else 0.0
+        tok_util = tok_total / token_capacity if token_capacity > 0 else 0.0
+        return max(req_util, tok_util)
 
     def select_account(self, scores: list[RoutingScore]) -> RoutingScore | None:
         """Select best account. Lower final_score is better.

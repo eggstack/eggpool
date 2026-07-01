@@ -358,8 +358,14 @@ class RequestFinalizer:
         if transitioned:
             if reservation_released:
                 if self._quota_estimator is not None:
+                    # Reverse the in-memory reservation: cost (audit),
+                    # one in-flight request, and the projected token
+                    # volume for the request.
                     await self._quota_estimator.remove_reservation(
-                        selected.account_name, selected.estimated_microdollars
+                        selected.account_name,
+                        selected.estimated_microdollars,
+                        requests=1,
+                        tokens=selected.estimated_tokens,
                     )
 
                 if self._router is not None:

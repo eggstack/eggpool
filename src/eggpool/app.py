@@ -300,7 +300,8 @@ async def _finalize_stale_requests_once(
         rows = await db.execute_returning(
             "SELECT r.id, r.account_id, a.name AS account_name, "
             "       res.id AS reservation_id, "
-            "       res.reserved_microdollars "
+            "       res.reserved_microdollars, "
+            "       res.estimated_tokens "
             "FROM requests r "
             "JOIN accounts a ON a.id = r.account_id "
             "LEFT JOIN reservations res "
@@ -379,10 +380,18 @@ async def _finalize_stale_requests_once(
 
         # Remove in-memory reservation tracking.  The exact reserved
         # amount must be removed so a future cost accounting run does
-        # not double-count the leaked estimate.
+        # not double-count the leaked estimate. The in-flight request
+        # and projected token components are also decremented so the
+        # new load-aware scoring signal stays consistent.
         reserved = row.get("reserved_microdollars") or 0
+        leaked_tokens = row.get("estimated_tokens") or 0
         if reserved and quota_estimator is not None:
-            await quota_estimator.remove_reservation(account_name, int(reserved))
+            await quota_estimator.remove_reservation(
+                account_name,
+                int(reserved),
+                requests=1,
+                tokens=int(leaked_tokens),
+            )
 
     logger.info(
         "Stale request finalizer: cleaned up %d leaked requests",

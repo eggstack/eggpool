@@ -43,6 +43,7 @@ class _MockSelected:
         attempt_id: int,
         reservation_id: str,
         estimated_microdollars: int,
+        estimated_tokens: int = 0,
     ) -> None:
         self.db_request_id = db_request_id
         self.account_name = account_name
@@ -50,6 +51,7 @@ class _MockSelected:
         self.attempt_id = attempt_id
         self.reservation_id = reservation_id
         self.estimated_microdollars = estimated_microdollars
+        self.estimated_tokens = estimated_tokens
         self.attempt_number = 1
         self.provider_id = "default"
 
