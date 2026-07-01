@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import pytest
 import pytest_asyncio
 
+from eggpool.constants import SQLITE_INTEGER_MAX
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
 from eggpool.db.rollup_repository import UsageRollupRepository
@@ -124,6 +125,21 @@ class TestUpsertManyIncrementsCounters:
         assert rows[0]["input_tokens"] == 40
         assert rows[0]["output_tokens"] == 60
         assert rows[0]["request_count"] == 2
+
+    @pytest.mark.asyncio()
+    async def test_cost_microdollars_saturates_on_conflict(
+        self, repo: UsageRollupRepository
+    ) -> None:
+        await repo.upsert_many([_row(cost_microdollars=SQLITE_INTEGER_MAX - 10)])
+        await repo.upsert_many([_row(cost_microdollars=50)])
+
+        rows = await repo.query_timeseries(
+            start="2000-01-01T00:00:00Z",
+            end="2099-12-31T23:59:59Z",
+            bucket_size_s=60,
+        )
+
+        assert rows[0]["cost_microdollars"] == SQLITE_INTEGER_MAX
 
 
 class TestUpsertManyLatencyMinMax:

@@ -9,7 +9,11 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any
 
-from eggpool.constants import DEFAULT_PROVIDER_ID, clamp_sqlite_integer
+from eggpool.constants import (
+    DEFAULT_PROVIDER_ID,
+    clamp_request_cost_microdollars,
+    clamp_sqlite_integer,
+)
 
 if TYPE_CHECKING:
     from eggpool.db.connection import Database
@@ -67,6 +71,11 @@ def _extract_decimal(value: object) -> Decimal | None:
     if number < 0:
         return None
     return number
+
+
+def extract_price_decimal(value: object) -> Decimal | None:
+    """Public wrapper for shared price-number extraction."""
+    return _extract_decimal(value)
 
 
 def _price_unit(value: object) -> str | None:
@@ -503,7 +512,9 @@ class CostCalculator:
                 fallback_cost += self._fallback_microdollars_for_category(
                     "cache_write", cache_write_tokens
                 )
-            cost_microdollars = clamp_sqlite_integer(trusted_cost + fallback_cost)
+            cost_microdollars = clamp_request_cost_microdollars(
+                trusted_cost + fallback_cost
+            )
             return cost_microdollars, "partial"
 
         # All categories priced — pure derived cost. If the integer
@@ -511,7 +522,9 @@ class CostCalculator:
         # to zero (e.g. an extremely cheap rate or tiny token count),
         # downgrade exactness so the request finalizer floors the cost
         # at the reservation estimate rather than recording zero.
-        cost_microdollars = clamp_sqlite_integer(round(trusted_numerator / 1_000_000))
+        cost_microdollars = clamp_request_cost_microdollars(
+            round(trusted_numerator / 1_000_000)
+        )
         exactness = "derived"
         if cost_microdollars == 0 and any(
             (
@@ -541,7 +554,7 @@ class CostCalculator:
         output_cost = (output_tokens / 1000.0) * estimated_output_price
         total_cost = input_cost + output_cost
 
-        return clamp_sqlite_integer(int(total_cost * 1_000_000))
+        return clamp_request_cost_microdollars(int(total_cost * 1_000_000))
 
     @staticmethod
     def _fallback_microdollars_for_category(
@@ -563,4 +576,4 @@ class CostCalculator:
             rate = _CACHE_WRITE_FALLBACK_PER_MILLION_MICRODOLLARS
         else:
             return 0
-        return clamp_sqlite_integer((tokens * rate) // 1_000_000)
+        return clamp_request_cost_microdollars((tokens * rate) // 1_000_000)

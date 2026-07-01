@@ -9,6 +9,10 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
+from eggpool.constants import (
+    MAX_REQUEST_COST_MICRODOLLARS,
+    clamp_request_cost_microdollars,
+)
 from eggpool.db.repositories import (
     AccountEventRepository,
     AttemptRepository,
@@ -223,6 +227,26 @@ class RequestFinalizer:
         ):
             cost_microdollars = selected.estimated_microdollars
 
+        capped_cost_microdollars = clamp_request_cost_microdollars(cost_microdollars)
+        if capped_cost_microdollars != cost_microdollars:
+            logger.warning(
+                "Capping request cost for %s from %s to %s microdollars",
+                getattr(selected, "request_id", "<unknown>"),
+                cost_microdollars,
+                MAX_REQUEST_COST_MICRODOLLARS,
+            )
+            cost_microdollars = capped_cost_microdollars
+        provider_cost_microdollars = (
+            clamp_request_cost_microdollars(data.provider_cost_microdollars)
+            if data.provider_cost_microdollars is not None
+            else None
+        )
+        local_cost_microdollars = (
+            clamp_request_cost_microdollars(local_cost_microdollars)
+            if local_cost_microdollars is not None
+            else None
+        )
+
         # Default is fail-closed: do not persist arbitrary provider
         # error detail. When ``persist_error_detail`` is enabled the
         # shared redactor already returns a bounded string.
@@ -262,7 +286,7 @@ class RequestFinalizer:
                 upstream_connect_ms=data.upstream_connect_ms,
                 upstream_read_ms=data.upstream_read_ms,
                 coordinator_overhead_ms=data.coordinator_overhead_ms,
-                provider_cost_microdollars=data.provider_cost_microdollars,
+                provider_cost_microdollars=provider_cost_microdollars,
                 provider_cost_source=data.provider_cost_source,
                 local_cost_microdollars=local_cost_microdollars,
                 local_cost_exactness=local_cost_exactness,

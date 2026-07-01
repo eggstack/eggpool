@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 from eggpool.catalog.pricing import (
+    extract_price_decimal,
     parse_microdollars_per_million,
     parse_price_per_1k,
 )
@@ -100,6 +102,31 @@ def _safe_parse_price_per_1k(
         return None
 
 
+def _pricing_dict_default_unit(value: object) -> str:
+    """Infer units for ambiguous provider ``pricing`` objects.
+
+    OpenRouter-style pricing uses tiny bare dollars/token values
+    (``0.000003``). Some provider-native catalogs, including MiniMax-shaped
+    payloads, use human-scale bare values such as ``0.2`` for dollars per
+    million tokens. Treating those as dollars/token inflates costs by 1M.
+    """
+    try:
+        number = extract_price_decimal(value)
+    except ValueError:
+        return "token"
+    if number is None:
+        return "token"
+    return "token" if number < Decimal("0.001") else "million"
+
+
+def _safe_parse_pricing_dict_price(category: str, value: object) -> float | None:
+    return _safe_parse_price_per_1k(
+        category,
+        value,
+        default_unit=_pricing_dict_default_unit(value),
+    )
+
+
 def _safe_parse_microdollars(
     category: str, value: object, *, default_unit: str | None = None
 ) -> int | None:
@@ -151,13 +178,9 @@ def resolve_pricing_from_metadata(
             return override_values["input"]
         pricing: dict[str, Any] | None = meta.get("pricing")
         if isinstance(pricing, dict) and "prompt" in pricing:
-            return _safe_parse_price_per_1k(
-                "input", pricing["prompt"], default_unit="token"
-            )
+            return _safe_parse_pricing_dict_price("input", pricing["prompt"])
         if isinstance(pricing, dict) and "input" in pricing:
-            return _safe_parse_price_per_1k(
-                "input", pricing["input"], default_unit="token"
-            )
+            return _safe_parse_pricing_dict_price("input", pricing["input"])
         for upstream_key in (
             "input_price_per_1k",
             "prompt_price_per_1k",
@@ -174,13 +197,9 @@ def resolve_pricing_from_metadata(
             return override_values["output"]
         pricing: dict[str, Any] | None = meta.get("pricing")
         if isinstance(pricing, dict) and "completion" in pricing:
-            return _safe_parse_price_per_1k(
-                "output", pricing["completion"], default_unit="token"
-            )
+            return _safe_parse_pricing_dict_price("output", pricing["completion"])
         if isinstance(pricing, dict) and "output" in pricing:
-            return _safe_parse_price_per_1k(
-                "output", pricing["output"], default_unit="token"
-            )
+            return _safe_parse_pricing_dict_price("output", pricing["output"])
         for upstream_key in (
             "output_price_per_1k",
             "completion_price_per_1k",

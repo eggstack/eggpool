@@ -15,7 +15,7 @@ from eggpool.catalog.pricing import (
     parse_microdollars_per_million,
     parse_price_per_1k,
 )
-from eggpool.constants import SQLITE_INTEGER_MAX
+from eggpool.constants import MAX_REQUEST_COST_MICRODOLLARS, SQLITE_INTEGER_MAX
 
 
 class TestPriceSnapshot:
@@ -231,7 +231,32 @@ class TestCostCalculator:
             output_tokens=SQLITE_INTEGER_MAX,
         )
 
-        assert cost == SQLITE_INTEGER_MAX
+        assert cost == MAX_REQUEST_COST_MICRODOLLARS
+        assert exactness == "derived"
+
+    @pytest.mark.asyncio
+    async def test_calculate_cost_caps_single_request_to_reasonable_bound(
+        self,
+    ) -> None:
+        snapshot = PriceSnapshot(
+            model_id="minimax-m3",
+            input_price_per_1k=None,
+            output_price_per_1k=None,
+            captured_at="2026-06-30T00:00:00",
+            input_per_million_microdollars=200_000_000_000,
+            output_per_million_microdollars=1_100_000_000_000,
+        )
+        mock_repo = AsyncMock()
+        mock_repo.get_latest_snapshot = AsyncMock(return_value=snapshot)
+        calculator = CostCalculator(price_repo=mock_repo)
+
+        cost, exactness = await calculator.calculate_cost(
+            "minimax-m3",
+            input_tokens=20_000_000,
+            output_tokens=20_000_000,
+        )
+
+        assert cost == MAX_REQUEST_COST_MICRODOLLARS
         assert exactness == "derived"
 
     @pytest.mark.asyncio

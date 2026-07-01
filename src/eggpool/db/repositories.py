@@ -11,7 +11,12 @@ from eggpool.catalog.pricing import (
     parse_microdollars_per_million,
     parse_price_per_1k,
 )
-from eggpool.constants import DEFAULT_PROVIDER_ID, DEPRECATED_MODEL_ID
+from eggpool.constants import (
+    DEFAULT_PROVIDER_ID,
+    DEPRECATED_MODEL_ID,
+    clamp_sqlite_aggregate,
+    clamp_sqlite_integer,
+)
 
 if TYPE_CHECKING:
     from eggpool.db.connection import Database
@@ -826,11 +831,11 @@ class UsageWindowRepository:
         row = await self._db.fetch_one(
             "SELECT "
             "COALESCE(SUM(CASE WHEN started_at >= datetime(?, '-5 hours') "
-            "THEN cost_microdollars ELSE 0 END), 0), "
+            "THEN CAST(cost_microdollars AS REAL) ELSE 0 END), 0), "
             "COALESCE(SUM(CASE WHEN started_at >= datetime(?, '-7 days') "
-            "THEN cost_microdollars ELSE 0 END), 0), "
+            "THEN CAST(cost_microdollars AS REAL) ELSE 0 END), 0), "
             "COALESCE(SUM(CASE WHEN started_at >= datetime(?, '-30 days') "
-            "THEN cost_microdollars ELSE 0 END), 0) "
+            "THEN CAST(cost_microdollars AS REAL) ELSE 0 END), 0) "
             "FROM requests "
             "WHERE account_id = ? AND status != 'pending' "
             "AND started_at >= datetime(?, '-30 days')",
@@ -839,9 +844,9 @@ class UsageWindowRepository:
         if row is None:
             return {"5h": 0, "7d": 0, "30d": 0}
         return {
-            "5h": int(row[0]),
-            "7d": int(row[1]),
-            "30d": int(row[2]),
+            "5h": clamp_sqlite_aggregate(row[0]),
+            "7d": clamp_sqlite_aggregate(row[1]),
+            "30d": clamp_sqlite_aggregate(row[2]),
         }
 
     async def get_all_usage_windows(self, now_iso: str) -> dict[int, dict[str, int]]:
@@ -849,10 +854,10 @@ class UsageWindowRepository:
         rows = await self._db.fetch_all(
             "SELECT account_id, "
             "COALESCE(SUM(CASE WHEN started_at >= datetime(?, '-5 hours') "
-            "THEN cost_microdollars ELSE 0 END), 0) AS cost_5h, "
+            "THEN CAST(cost_microdollars AS REAL) ELSE 0 END), 0) AS cost_5h, "
             "COALESCE(SUM(CASE WHEN started_at >= datetime(?, '-7 days') "
-            "THEN cost_microdollars ELSE 0 END), 0) AS cost_7d, "
-            "COALESCE(SUM(cost_microdollars), 0) AS cost_30d "
+            "THEN CAST(cost_microdollars AS REAL) ELSE 0 END), 0) AS cost_7d, "
+            "COALESCE(SUM(CAST(cost_microdollars AS REAL)), 0) AS cost_30d "
             "FROM requests "
             "WHERE status != 'pending' "
             "AND started_at >= datetime(?, '-30 days') "
@@ -861,9 +866,9 @@ class UsageWindowRepository:
         )
         return {
             int(row["account_id"]): {
-                "5h": int(row["cost_5h"]),
-                "7d": int(row["cost_7d"]),
-                "30d": int(row["cost_30d"]),
+                "5h": clamp_sqlite_aggregate(row["cost_5h"]),
+                "7d": clamp_sqlite_aggregate(row["cost_7d"]),
+                "30d": clamp_sqlite_aggregate(row["cost_30d"]),
             }
             for row in rows
         }
@@ -939,12 +944,12 @@ class PriceSnapshotRepository:
         """
         # Auto-convert legacy floats to integer microdollars
         if input_per_million_microdollars is None and input_price_per_1k is not None:
-            input_per_million_microdollars = int(
-                round(input_price_per_1k * 1_000_000_000)
+            input_per_million_microdollars = clamp_sqlite_integer(
+                int(round(input_price_per_1k * 1_000_000_000))
             )
         if output_per_million_microdollars is None and output_price_per_1k is not None:
-            output_per_million_microdollars = int(
-                round(output_price_per_1k * 1_000_000_000)
+            output_per_million_microdollars = clamp_sqlite_integer(
+                int(round(output_price_per_1k * 1_000_000_000))
             )
 
         await self._db.execute_write(

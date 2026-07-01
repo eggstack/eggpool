@@ -10,6 +10,7 @@ import aiosqlite
 import pytest
 
 from eggpool.catalog.pricing import PriceRepository
+from eggpool.constants import SQLITE_INTEGER_MAX
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
 from eggpool.db.repositories import PriceSnapshotRepository
@@ -353,6 +354,36 @@ async def test_price_snapshot_record_from_dict_normalizes_price_strings() -> Non
         assert row["output_per_million_microdollars"] == 15_000_000
         assert row["cache_read_per_million_microdollars"] == 300_000
         assert row["cache_write_per_million_microdollars"] == 750_000
+    finally:
+        await database.disconnect()
+
+
+@pytest.mark.asyncio()
+async def test_price_snapshot_record_clamps_oversized_legacy_float_rates() -> None:
+    database = Database(path=":memory:")
+    await database.connect()
+    try:
+        await _run_migrations(database)
+        await _seed_model(database, "bad-price-model")
+
+        repo = PriceSnapshotRepository(database)
+        async with database.transaction():
+            await repo.record(
+                "bad-price-model",
+                input_price_per_1k=1e20,
+                output_price_per_1k=1e20,
+            )
+
+        row = await database.fetch_one(
+            "SELECT input_per_million_microdollars, "
+            "output_per_million_microdollars "
+            "FROM model_price_snapshots WHERE model_id = ?",
+            ("bad-price-model",),
+        )
+
+        assert row is not None
+        assert row["input_per_million_microdollars"] == SQLITE_INTEGER_MAX
+        assert row["output_per_million_microdollars"] == SQLITE_INTEGER_MAX
     finally:
         await database.disconnect()
 

@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from eggpool.constants import clamp_sqlite_integer
+
 if TYPE_CHECKING:
     from eggpool.db.connection import Database
     from eggpool.db.rollup_repository import UsageRollupRepository
@@ -83,7 +85,9 @@ class _AggregatedDelta:
         self.cache_write_tokens += event.cache_write_tokens
         self.reasoning_tokens += event.reasoning_tokens
         self.thinking_characters += event.thinking_characters
-        self.cost_microdollars += event.cost_microdollars
+        self.cost_microdollars = clamp_sqlite_integer(
+            self.cost_microdollars + event.cost_microdollars
+        )
         self.bytes_received += event.bytes_received
         self.bytes_emitted += event.bytes_emitted
         self.latency_ms_sum += event.latency_ms
@@ -329,7 +333,7 @@ class MetricsWriteCoalescer:
                     "cache_write_tokens": delta.cache_write_tokens,
                     "reasoning_tokens": delta.reasoning_tokens,
                     "thinking_characters": delta.thinking_characters,
-                    "cost_microdollars": delta.cost_microdollars,
+                    "cost_microdollars": clamp_sqlite_integer(delta.cost_microdollars),
                     "bytes_received": delta.bytes_received,
                     "bytes_emitted": delta.bytes_emitted,
                     "latency_ms_sum": delta.latency_ms_sum,

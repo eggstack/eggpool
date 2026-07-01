@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
+
+from eggpool.constants import SQLITE_INTEGER_MAX, clamp_sqlite_integer
 
 if TYPE_CHECKING:
     from eggpool.db.connection import Database
@@ -20,6 +22,14 @@ _GROUP_KEY_EXPR: dict[str, str] = {
     "model": "model_id",
     "account": "CAST(account_id AS TEXT)",
 }
+
+
+def _coerce_non_negative_int(value: object) -> int:
+    try:
+        numeric = int(cast("Any", value))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return clamp_sqlite_integer(numeric)
 
 
 def _append_optional_filters(
@@ -92,7 +102,11 @@ class UsageRollupRepository:
             "cache_write_tokens = cache_write_tokens + excluded.cache_write_tokens, "
             "reasoning_tokens = reasoning_tokens + excluded.reasoning_tokens, "
             "thinking_characters = thinking_characters + excluded.thinking_characters, "
-            "cost_microdollars = cost_microdollars + excluded.cost_microdollars, "
+            "cost_microdollars = CASE "
+            "  WHEN excluded.cost_microdollars <= 0 THEN cost_microdollars "
+            "  WHEN cost_microdollars >= ? - excluded.cost_microdollars THEN ? "
+            "  ELSE cost_microdollars + excluded.cost_microdollars "
+            "END, "
             "bytes_received = bytes_received + excluded.bytes_received, "
             "bytes_emitted = bytes_emitted + excluded.bytes_emitted, "
             "latency_ms_sum = latency_ms_sum + excluded.latency_ms_sum, "
@@ -134,7 +148,7 @@ class UsageRollupRepository:
                 row.get("cache_write_tokens", 0),
                 row.get("reasoning_tokens", 0),
                 row.get("thinking_characters", 0),
-                row.get("cost_microdollars", 0),
+                _coerce_non_negative_int(row.get("cost_microdollars", 0)),
                 row.get("bytes_received", 0),
                 row.get("bytes_emitted", 0),
                 row.get("latency_ms_sum", 0),
@@ -142,6 +156,8 @@ class UsageRollupRepository:
                 row.get("latency_ms_max"),
                 row.get("first_byte_ms_sum", 0),
                 row.get("first_byte_ms_count", 0),
+                SQLITE_INTEGER_MAX,
+                SQLITE_INTEGER_MAX,
             )
             for row in rows
         ]

@@ -1,7 +1,9 @@
 """Project-wide constants."""
 
+import math
 import os
 from pathlib import Path
+from typing import Any, cast
 
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 11300
@@ -26,6 +28,7 @@ API_V1_PREFIX = "/v1"
 MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024  # 10 MB
 MAX_SSE_FRAME_SIZE = 64 * 1024  # 64 KB
 SQLITE_INTEGER_MAX = 2**63 - 1
+MAX_REQUEST_COST_MICRODOLLARS = 250_000_000  # $250 per proxied request
 
 
 def clamp_sqlite_integer(value: int | None) -> int:
@@ -33,6 +36,26 @@ def clamp_sqlite_integer(value: int | None) -> int:
     if value is None or value < 0:
         return 0
     return min(value, SQLITE_INTEGER_MAX)
+
+
+def clamp_request_cost_microdollars(value: int | None) -> int:
+    """Clamp a single request cost to a bounded, human-scale value."""
+    return min(clamp_sqlite_integer(value), MAX_REQUEST_COST_MICRODOLLARS)
+
+
+def clamp_sqlite_aggregate(value: object) -> int:
+    """Clamp aggregate accounting values that may arrive from REAL SQL sums."""
+    if value is None:
+        return 0
+    try:
+        numeric = float(cast("Any", value))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    if not math.isfinite(numeric) or numeric <= 0:
+        return 0
+    if numeric >= SQLITE_INTEGER_MAX:
+        return SQLITE_INTEGER_MAX
+    return int(numeric)
 
 
 # ``PID_FILE`` is kept for backwards compatibility with modules that

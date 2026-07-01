@@ -99,6 +99,24 @@ class TestResolveInputFromMetadata:
         assert result.input_price_per_1k == pytest.approx(0.001)
         assert result.output_price_per_1k == pytest.approx(0.002)
 
+    def test_minimax_style_bare_pricing_defaults_to_per_million(self) -> None:
+        result = resolve_pricing_from_metadata(
+            model_id="MiniMax-M3",
+            provider_id="minimax",
+            model_info={
+                "source_metadata": {
+                    "pricing": {
+                        "input": 0.2,
+                        "output": 1.1,
+                    }
+                }
+            },
+            override_values={},
+        )
+        assert result is not None
+        assert result.input_price_per_1k == pytest.approx(0.0002)
+        assert result.output_price_per_1k == pytest.approx(0.0011)
+
 
 class TestResolveCachePricingVariants:
     """OpenRouter-style cache fields and Anthropic-style flat fields."""
