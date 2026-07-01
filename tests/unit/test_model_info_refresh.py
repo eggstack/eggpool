@@ -452,6 +452,219 @@ class TestRefreshModelInfoService:
         finally:
             await db.disconnect()
 
+    @pytest.mark.asyncio()
+    async def test_manual_refresh_model_id_refreshes_only_requested_model(
+        self,
+    ) -> None:
+        """``refresh_model_info(model_id=...)`` only touches the named
+        model. Other canonical rows are not affected even when they
+        would otherwise be due for refresh."""
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await _run_migrations(db)
+            await _seed_model(db, "model-a")
+            await _seed_model(db, "model-b")
+
+            repo = ModelInfoRepository(db)
+            now = datetime.now(UTC)
+            past = now - timedelta(days=2)
+            for mid in ("model-a", "model-b"):
+                cache = _make_cache(mid)
+                repo_obj = ModelInfoRepository(db)
+                await repo_obj.upsert_canonical(
+                    CanonicalModelInfo(
+                        model_id=mid,
+                        status="partial",
+                        summary="seeded",
+                        sparse=False,
+                        detail={},
+                        provenance={"sources": ["provider_catalog"]},
+                        conflicts={},
+                        first_seen_at=past,
+                        last_seen_at=past,
+                        last_refreshed_at=past,
+                        next_refresh_at=past,  # both due
+                    )
+                )
+
+            cache = _make_cache("model-a")
+            cache._models["model-b"] = dict(cache._models["model-a"])
+            cache._models["model-b"]["model_id"] = "model-b"
+            cache._provider_models[("model-b", "openai")] = dict(
+                cache._models["model-b"]
+            )
+            service = ModelInfoService(ModelInfoConfig(), db, cache)
+
+            result = await service.refresh_model_info("model-a", force=True)
+            assert result["requested"] == 1
+            assert result["refreshed"] == 1
+            assert result["errors"] == 0
+
+            # Only model-a's last_refreshed_at advanced.
+            a = await repo.get_canonical("model-a")
+            b = await repo.get_canonical("model-b")
+            assert a is not None and a.last_refreshed_at is not None
+            assert b is not None and b.last_refreshed_at == past
+            assert a.last_refreshed_at > past
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio()
+    async def test_manual_refresh_source_huggingface_fetches_hf_only_plus_provider(
+        self,
+    ) -> None:
+        """When ``source="huggingface"`` is requested, only the HF
+        source plus provider_catalog are attempted. OpenRouter and AA
+        are not attempted."""
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await _run_migrations(db)
+            await _seed_model(db, "meta-llama/Llama-3-8B")
+
+            cache = _make_cache("meta-llama/Llama-3-8B")
+            config = ModelInfoConfig(
+                sources=ModelInfoSourcesConfig(
+                    openrouter=ModelInfoSourceConfig(enabled=True),
+                    artificial_analysis=ModelInfoSourceConfig(
+                        enabled=True, api_key="dummy"
+                    ),
+                    huggingface=ModelInfoSourceConfig(enabled=True),
+                )
+            )
+            # Hugging Face source only initializes when an outbound
+            # client is wired in.
+            client = _MockHttpClient({"data": []})
+            service = ModelInfoService(config, db, cache, outbound_client=client)
+
+            result = await service.refresh_model_info(
+                "meta-llama/Llama-3-8B",
+                force=True,
+                source="huggingface",
+            )
+            assert "provider_catalog" in result["sources_attempted"]
+            assert "huggingface" in result["sources_attempted"]
+            assert "openrouter" not in result["sources_attempted"]
+            assert "artificial_analysis" not in result["sources_attempted"]
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio()
+    async def test_manual_refresh_reports_source_matched_only_on_record(
+        self,
+    ) -> None:
+        """``sources_matched`` only contains sources that returned a
+        record. Sources that returned ``None`` (no match) are not
+        listed as matched."""
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await _run_migrations(db)
+            await _seed_model(db, "unmatched-model")
+
+            # OpenRouter catalog has no entry for this model.
+            or_payload = _openrouter_payload(
+                _make_or_model("different-model"),
+            )
+            client = _MockHttpClient(or_payload)
+
+            cache = _make_cache("unmatched-model")
+            config = ModelInfoConfig(
+                sources=ModelInfoSourcesConfig(
+                    openrouter=ModelInfoSourceConfig(enabled=True),
+                )
+            )
+            service = ModelInfoService(config, db, cache, outbound_client=client)
+
+            result = await service.refresh_model_info("unmatched-model", force=True)
+            assert "openrouter" in result["sources_attempted"]
+            assert "openrouter" not in result["sources_matched"]
+            assert "provider_catalog" in result["sources_matched"]
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio()
+    async def test_manual_refresh_unknown_model_creates_unmatched_canonical(
+        self,
+    ) -> None:
+        """An unknown model that exists in the catalog cache should
+        still get a canonical row created without crashing."""
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await _run_migrations(db)
+            await _seed_model(db, "brand-new-model")
+
+            cache = _make_cache("brand-new-model")
+            service = ModelInfoService(ModelInfoConfig(), db, cache)
+
+            # No prior canonical row.
+            assert await service.repo.get_canonical("brand-new-model") is None
+
+            result = await service.refresh_model_info("brand-new-model", force=True)
+            assert result["errors"] == 0
+            # Canonical row was created even though no external source matched.
+            assert await service.repo.get_canonical("brand-new-model") is not None
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio()
+    async def test_force_refresh_batch_processes_all_due_canonical_rows(
+        self,
+    ) -> None:
+        """``force_refresh_batch`` bypasses the ``next_refresh_at``
+        gate and refreshes every canonical row in a single bounded
+        call."""
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await _run_migrations(db)
+            await _seed_model(db, "model-a")
+            await _seed_model(db, "model-b")
+
+            now = datetime.now(UTC)
+            future = now + timedelta(hours=1)
+            cache = _make_cache("model-a")
+            cache._models["model-b"] = dict(cache._models["model-a"])
+            cache._models["model-b"]["model_id"] = "model-b"
+            cache._provider_models[("model-b", "openai")] = dict(
+                cache._models["model-b"]
+            )
+
+            service = ModelInfoService(ModelInfoConfig(), db, cache)
+            repo = service.repo
+            for mid in ("model-a", "model-b"):
+                await repo.upsert_canonical(
+                    CanonicalModelInfo(
+                        model_id=mid,
+                        status="partial",
+                        summary="seeded",
+                        sparse=False,
+                        detail={},
+                        provenance={"sources": ["provider_catalog"]},
+                        conflicts={},
+                        first_seen_at=now - timedelta(days=1),
+                        last_seen_at=now - timedelta(hours=1),
+                        last_refreshed_at=now - timedelta(hours=1),
+                        next_refresh_at=future,  # not due
+                    )
+                )
+
+            result = await service.force_refresh_batch(batch_size=10)
+            assert result["requested"] == 2
+            assert result["errors"] == 0
+            assert "provider_catalog" in result["sources_attempted"]
+
+            # Both rows were force-refreshed.
+            for mid in ("model-a", "model-b"):
+                info = await repo.get_canonical(mid)
+                assert info is not None
+                assert info.last_refreshed_at is not None
+                assert info.last_refreshed_at >= now
+        finally:
+            await db.disconnect()
+
 
 # ---------------------------------------------------------------------------
 # API-layer tests
@@ -564,3 +777,48 @@ class TestRefreshModelInfoAPI:
         request = Request(scope, receive)
         response = await handle_model_info_refresh(request)
         assert response.status_code == 503
+
+    @pytest.mark.asyncio()
+    async def test_handle_model_info_refresh_force_no_model_id_runs_batch(
+        self,
+    ) -> None:
+        """``POST /api/model-info/refresh?force=1`` without ``model_id``
+        delegates to ``force_refresh_batch`` and returns the bounded
+        batch counts."""
+        from fastapi import FastAPI, Request
+
+        app = FastAPI()
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await _run_migrations(db)
+            await _seed_model(db, "gpt-x")
+            cache = _make_cache("gpt-x")
+            service = ModelInfoService(ModelInfoConfig(), db, cache)
+            app.state.model_info = service
+
+            scope: dict[str, Any] = {
+                "type": "http",
+                "method": "POST",
+                "path": "/api/model-info/refresh",
+                "headers": [],
+                "query_string": b"force=1",
+                "app": app,
+            }
+
+            async def receive() -> dict[str, Any]:
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            request = Request(scope, receive)
+            response = await handle_model_info_refresh(request)
+            assert response.status_code == 200
+            body = json.loads(response.body)
+            assert body["status"] == "ok"
+            assert body["scope"] == "force_batch"
+            assert "requested" in body
+            assert "refreshed" in body
+            assert "sources_attempted" in body
+            assert "sources_matched" in body
+            assert "observations" in body
+        finally:
+            await db.disconnect()

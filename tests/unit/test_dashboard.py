@@ -1118,7 +1118,7 @@ class TestRenderModels:
 
     def test_renders_empty(self) -> None:
         html = render_models(models=[], period="24h")
-        assert "No model data" in html
+        assert "No models discovered from configured providers." in html
 
     def test_renders_rows(self) -> None:
         models = [
@@ -4278,6 +4278,143 @@ class TestRenderModelDetail:
         assert "downloads" in html
         assert "1000" in html
         assert "text-generation" in html
+
+    def test_detail_renderer_displays_effective_context_from_nested_limits(
+        self,
+    ) -> None:
+        """When ``detail.limits.effective_context`` is set, the
+        renderer surfaces it as the effective context limit."""
+        from datetime import UTC, datetime
+        from types import SimpleNamespace
+
+        from eggpool.dashboard.render import render_model_detail
+
+        now = datetime.now(UTC)
+        info = SimpleNamespace(
+            model_id="test",
+            status="fresh",
+            summary="",
+            sparse=False,
+            detail={"limits": {"effective_context": 256000}},
+            provenance={},
+            conflicts={},
+            first_seen_at=now,
+            last_seen_at=now,
+            last_refreshed_at=None,
+            next_refresh_at=None,
+        )
+        html = render_model_detail(info=info, model_id="test")
+        assert "256,000" in html
+        assert "Effective ctx" in html
+
+    def test_detail_renderer_fallback_displays_legacy_flat_context_tokens(
+        self,
+    ) -> None:
+        """Legacy rows whose ``detail`` still has the pre-Phase-B flat
+        ``context_tokens`` / ``context_window_external`` keys (and no
+        ``limits`` block) must still render a non-empty Limits section
+        while the startup backfill is pending."""
+        from datetime import UTC, datetime
+        from types import SimpleNamespace
+
+        from eggpool.dashboard.render import render_model_detail
+
+        now = datetime.now(UTC)
+        info = SimpleNamespace(
+            model_id="test",
+            status="partial",
+            summary="legacy",
+            sparse=False,
+            detail={
+                "providers": ["openai"],
+                "context_tokens": 128000,
+                "context_window_external": 1_000_000,
+                "max_output_tokens": 16384,
+            },
+            provenance={},
+            conflicts={},
+            first_seen_at=now,
+            last_seen_at=now,
+            last_refreshed_at=None,
+            next_refresh_at=None,
+        )
+        html = render_model_detail(info=info, model_id="test")
+        assert "128,000" in html
+        # 1,000,000 token values render as "1.00 M" by the
+        # format_tokens helper.
+        assert "1.00 M" in html
+        assert "16,384" in html
+        # Effective context label is rendered (sourced from flat
+        # context_tokens via the fallback).
+        assert "Effective ctx" in html
+        assert "External ctx" in html
+
+    def test_api_detail_response_contains_normalized_limits(self) -> None:
+        """The API ``_detail_response`` reader exposes the nested
+        limits block with the expected keys."""
+        from types import SimpleNamespace
+
+        from eggpool.api.model_info import _detail_response
+
+        info = SimpleNamespace(
+            detail={
+                "providers": ["openai"],
+                "limits": {
+                    "effective_context": 128000,
+                    "external_context": 1_000_000,
+                    "effective_output": 16384,
+                    "external_output": 8192,
+                },
+                "modalities": [],
+                "external_ids": {},
+                "benchmarks": [],
+                "huggingface_metadata": {},
+                "family": None,
+                "license": None,
+                "release_date": None,
+                "supports_tools": None,
+                "display_name": None,
+            },
+            provenance={},
+            conflicts={},
+            observations=[],
+            status="fresh",
+            sparse=False,
+            summary="",
+            first_seen_at=None,
+            last_seen_at=None,
+            last_refreshed_at=None,
+            next_refresh_at=None,
+        )
+        response = _detail_response(info)
+        limits = response["detail"]["limits"]
+        assert limits["effective_context"] == 128000
+        assert limits["external_context"] == 1_000_000
+        assert limits["effective_output"] == 16384
+        assert limits["external_output"] == 8192
+
+    def test_context_conflict_detection_reads_normalized_limits(self) -> None:
+        """``build_canonical_detail`` reads ``limits.external_context``
+        (not the legacy ``context_window_external`` flat key) when
+        building conflict records."""
+        from eggpool.model_info.service import build_canonical_detail
+
+        merged, provenance, conflicts = build_canonical_detail(
+            model_id="test",
+            provider_detail={"limits": {"effective_context": 128000}},
+            observation_payloads=[
+                {
+                    "source": "openrouter",
+                    "source_model_id": "test",
+                    "normalized": {"context_window": 2_000_000},
+                },
+            ],
+        )
+        # Conflict should be raised because the 2M external context
+        # differs by more than 10% from the 128K effective limit.
+        assert "context_window" in conflicts
+        assert conflicts["context_window"]["openrouter"] == 2_000_000
+        assert conflicts["context_window"]["provider_catalog"] == 128000
 
     def test_models_page_links_to_detail(self) -> None:
         html = render_models(

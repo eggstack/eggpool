@@ -371,6 +371,9 @@ async def handle_models(
     period: str | None = "24h",
     account: str | None = None,
     theme: str | None = None,
+    info_status: str | None = None,
+    availability: str | None = None,
+    used: str | None = None,
 ) -> Response:
     """Render the models page.
 
@@ -385,6 +388,7 @@ async def handle_models(
     stats = request.app.state.stats
     model_info_service = getattr(request.app.state, "model_info", None)
     catalog = getattr(request.app.state, "catalog", None)
+    app_config = getattr(request.app.state, "config", None)
 
     # Fetch stats, model-info summaries, and the catalog snapshot
     # concurrently so the page renders in a single round-trip.
@@ -395,17 +399,24 @@ async def handle_models(
                 time_range, account_name=account or None, use_cache=True
             ),
             _get_model_info_summary_map(model_info_service),
-            _get_catalog_rows(catalog, account=account or None),
+            _get_catalog_rows(catalog, account=account or None, config=app_config),
         ),
     )
     merged_rows = _merge_models_with_catalog(
         models if models is not None else [],
         catalog_rows,
     )
+    filtered_rows = _apply_model_filters(
+        merged_rows,
+        info_status=info_status,
+        availability=availability,
+        used=used,
+        model_info_map=model_info_summary_map,
+    )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
     return HTMLResponse(
         content=render_models(
-            merged_rows,
+            filtered_rows,
             account_filter=account or "",
             period=time_range.label,
             theme_css=theme_css,
@@ -413,6 +424,10 @@ async def handle_models(
             current_theme=current_theme,
             update_info=_get_update_info(request),
             model_info_map=model_info_summary_map,
+            info_status_filter=info_status or "",
+            availability_filter=availability or "",
+            used_filter=used or "",
+            has_filters=any(v is not None for v in (info_status, availability, used)),
         )
     )
 
@@ -421,25 +436,184 @@ async def _get_catalog_rows(
     catalog: Any,
     *,
     account: str | None = None,
+    config: Any | None = None,
 ) -> list[dict[str, Any]]:
     """Build sparse rows for every catalog model so the page is
     catalog-complete.
 
-    One row per ``(model_id, provider_id)`` so the page matches the
-    shape of ``stats.get_model_stats`` rows. Returns an empty list
-    when the catalog is unavailable — the page must still render with
-    whatever stats rows the caller already has.
+    Row shape follows ``models.collapse_models``:
+
+    * When ``collapse_models`` is false (default), the page lists one
+      row per ``(model_id, provider_id)`` pair — i.e. provider-scoped
+      suffixed rows.  This matches the shape of
+      ``stats.get_model_stats`` rows so the merge is straightforward.
+    * When ``collapse_models`` is true, the page lists one row per
+      unsuffixed model with a ``providers`` list containing every
+      contributing provider id.  This mirrors what
+      ``/v1/models`` exposes in collapsed mode.
+
+    Returns an empty list when the catalog is unavailable — the page
+    must still render with whatever stats rows the caller already has.
+
+    Each row carries:
+
+    * ``base_model_id`` — the unsuffixed canonical key (same as
+      ``model_id`` for collapsed rows; identical to ``model_id`` for
+      suffixed rows when the catalog is provider-scoped).
+    * ``providers`` — the list of contributing provider IDs (single
+      element for provider-scoped rows; the full union for collapsed
+      rows).
+    * ``available`` — derived flag (``True`` when the entry has a
+      resolved protocol; ``False`` when the protocol is unresolved).
+    * ``catalog_status`` — short string pill (``"available"``,
+      ``"unavailable"``, or ``"configured"``).
+    * ``routing_priority`` — pulled from ``config.providers`` when
+      ``config`` is supplied; ``None`` otherwise. Collapsed rows
+      surface the max priority across contributing providers.
+    * ``routing_priority_max`` — collapsed-row convenience: max
+      ``routing_priority`` across the contributing providers.
+    * ``protocol``, ``display_name`` — surfaced from the provider
+      entry so the dashboard can render provider-specific facts.
     """
     if catalog is None:
         return []
+    # Build a provider_id → routing_priority map once when the config
+    # is available so per-row lookup is a cheap dict read.
+    priority_by_provider = _build_provider_priority_map(config)
+    collapse_models = _read_collapse_models(config)
+    if collapse_models:
+        rows = _get_collapsed_catalog_rows(
+            catalog,
+            priority_by_provider=priority_by_provider,
+            account=account,
+        )
+    else:
+        rows = _get_provider_scoped_catalog_rows(
+            catalog,
+            priority_by_provider=priority_by_provider,
+            account=account,
+        )
+    return rows  # type: ignore[no-any-return]
+
+
+def _sparse_row_template(
+    *,
+    model_id: str,
+    base_model_id: str,
+    provider_id: str,
+    providers: list[str],
+    available: bool,
+    catalog_status: str,
+    routing_priority: int | None,
+    routing_priority_max: int | None,
+    protocol: str | None,
+    display_name: str | None,
+) -> dict[str, Any]:
+    """Build a catalog-complete sparse row with zero activity fields.
+
+    Used by both the provider-scoped and collapsed builders so the
+    row shape stays identical regardless of which catalog path was
+    taken.
+    """
+    return {
+        "model_id": model_id,
+        "base_model_id": base_model_id,
+        "provider_id": provider_id,
+        "providers": list(providers),
+        "available": available,
+        "catalog_status": catalog_status,
+        "routing_priority": routing_priority,
+        "routing_priority_max": routing_priority_max,
+        "protocol": protocol,
+        "display_name": display_name,
+        "request_count": 0,
+        "cost_microdollars": 0,
+        "avg_latency_ms": 0.0,
+        "avg_ttft_ms": 0.0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "tokens_per_second": 0.0,
+        "error_count": 0,
+        "exact_count": 0,
+        "derived_count": 0,
+        "partial_count": 0,
+        "estimated_count": 0,
+        "unknown_count": 0,
+        "provider_reported_count": 0,
+        "estimated_cost_fraction": None,
+        "cache_read_ratio": None,
+        "cache_write_ratio": None,
+        "reasoning_output_ratio": None,
+        "avg_cost_per_request": None,
+        "avg_cost_per_1k_tokens": None,
+        "_sparse": True,
+    }
+
+
+def _build_provider_priority_map(config: Any) -> dict[str, int]:
+    """Return ``provider_id -> routing_priority`` from ``config.providers``.
+
+    Defensive against missing or malformed config: returns an empty
+    map when ``config`` is ``None`` or the ``providers`` attribute is
+    unavailable.
+    """
+    priority_by_provider: dict[str, int] = {}
+    if config is None:
+        return priority_by_provider
+    try:
+        providers_cfg_raw = getattr(config, "providers", None)
+        providers_cfg = cast("dict[str, Any] | None", providers_cfg_raw)
+    except Exception:
+        providers_cfg = None
+    if providers_cfg is None:
+        return priority_by_provider
+    items: Any = []
+    try:
+        items = providers_cfg.items()
+    except Exception:
+        items = []
+    for pid_key, pcfg in items:
+        pri = getattr(pcfg, "routing_priority", None)
+        if isinstance(pri, int):
+            priority_by_provider[str(pid_key)] = pri
+    return priority_by_provider
+
+
+def _read_collapse_models(config: Any) -> bool:
+    """Read ``config.models.collapse_models`` defensively.
+
+    Returns ``False`` when ``config`` is unavailable, the ``models``
+    attribute is missing, or the value isn't a boolean — matching
+    the default behavior the dashboard has shipped since Phase D.
+    """
+    if config is None:
+        return False
+    models_cfg = getattr(config, "models", None)
+    if models_cfg is None:
+        return False
+    val = getattr(models_cfg, "collapse_models", None)
+    return bool(val)
+
+
+def _get_provider_scoped_catalog_rows(
+    catalog: Any,
+    *,
+    priority_by_provider: dict[str, int],
+    account: str | None,
+) -> list[dict[str, Any]]:
+    """One row per ``(model_id, provider_id)`` pair.
+
+    Used when ``collapse_models`` is false (the default). Iterates
+    ``catalog.cache.get_provider_model_entries()`` so each suffixed
+    catalog exposure becomes a distinct dashboard row.
+    """
     try:
         provider_entries = catalog.cache.get_provider_model_entries()
     except Exception:
         return []
     rows: list[dict[str, Any]] = []
-    for (model_id, provider_id), _entry in provider_entries.items():
-        # When an account filter is active, only include models the
-        # account actually supports.
+    for (model_id, provider_id), entry in provider_entries.items():
         if account:
             try:
                 supporting: frozenset[str] = catalog.cache.get_supporting_accounts(
@@ -449,35 +623,170 @@ async def _get_catalog_rows(
                 supporting = frozenset()
             if account not in supporting:
                 continue
+        protocol_str, display_name = _entry_protocol_and_name(entry)
+        available = bool(protocol_str)
+        catalog_status = "available" if available else "unavailable"
+        routing_priority = priority_by_provider.get(str(provider_id))
         rows.append(
-            {
-                "model_id": model_id,
-                "provider_id": provider_id,
-                "request_count": 0,
-                "cost_microdollars": 0,
-                "avg_latency_ms": 0.0,
-                "avg_ttft_ms": 0.0,
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "total_tokens": 0,
-                "tokens_per_second": 0.0,
-                "error_count": 0,
-                "exact_count": 0,
-                "derived_count": 0,
-                "partial_count": 0,
-                "estimated_count": 0,
-                "unknown_count": 0,
-                "provider_reported_count": 0,
-                "estimated_cost_fraction": None,
-                "cache_read_ratio": None,
-                "cache_write_ratio": None,
-                "reasoning_output_ratio": None,
-                "avg_cost_per_request": None,
-                "avg_cost_per_1k_tokens": None,
-                "_sparse": True,
-            }
+            _sparse_row_template(
+                model_id=model_id,
+                base_model_id=model_id,
+                provider_id=provider_id,
+                providers=[provider_id],
+                available=available,
+                catalog_status=catalog_status,
+                routing_priority=routing_priority,
+                routing_priority_max=routing_priority,
+                protocol=protocol_str,
+                display_name=display_name,
+            )
         )
     return rows
+
+
+def _get_collapsed_catalog_rows(
+    catalog: Any,
+    *,
+    priority_by_provider: dict[str, int],
+    account: str | None,
+) -> list[dict[str, Any]]:
+    """One row per unsuffixed model with contributing ``providers``.
+
+    Used when ``collapse_models`` is true. Calls
+    ``catalog.get_models_for_exposure()`` which already returns the
+    collapsed view from the catalog layer.  ``provider_id`` is set
+    to the first contributing provider (sorted) so the merge with
+    stats rows keyed by ``(model_id, provider_id)`` still works for
+    entries that report a specific provider.
+
+    Rows where every contributing provider is unresolved
+    (``protocol=None``) still appear, flagged unavailable, so the
+    operator can see collapsed entries that exist in the catalog but
+    cannot currently route.  When the catalog layer excludes them
+    entirely, this helper naturally inherits that filter.
+    """
+    try:
+        entries = catalog.get_models_for_exposure()
+    except Exception:
+        return []
+    rows: list[dict[str, Any]] = []
+    for entry in entries:
+        entry_dict = cast("dict[str, Any] | None", entry)
+        if not isinstance(entry_dict, dict):
+            continue
+        model_id = str(entry_dict.get("model_id", "") or "")
+        if not model_id:
+            continue
+        if account:
+            try:
+                supporting: frozenset[str] = catalog.cache.get_supporting_accounts(
+                    model_id
+                )
+            except Exception:
+                supporting = frozenset()
+            if account not in supporting:
+                continue
+        providers_raw: Any = entry_dict.get("providers")
+        if isinstance(providers_raw, list):
+            providers = [
+                str(p)
+                for p in cast("list[Any]", providers_raw)
+                if isinstance(p, str) and p
+            ]
+        else:
+            providers = []
+        # Pick a primary provider for stats-key matching.  Falls back
+        # to the empty string when nothing contributes; the merge
+        # logic uses ``catalog_by_id`` for that case.
+        primary_provider = providers[0] if providers else ""
+        protocol_str, display_name = _entry_protocol_and_name(entry_dict)
+        # Collapsed entry is "available" only when at least one
+        # contributing provider resolves the protocol.
+        available = bool(protocol_str)
+        catalog_status = "available" if available else "unavailable"
+        priorities: list[int] = [
+            pri
+            for pid in providers
+            if (pri := priority_by_provider.get(pid)) is not None
+        ]
+        routing_priority_max = max(priorities) if priorities else None
+        rows.append(
+            _sparse_row_template(
+                model_id=model_id,
+                base_model_id=model_id,
+                provider_id=primary_provider,
+                providers=providers,
+                available=available,
+                catalog_status=catalog_status,
+                routing_priority=routing_priority_max,
+                routing_priority_max=routing_priority_max,
+                protocol=protocol_str,
+                display_name=display_name,
+            )
+        )
+    return rows
+
+
+def _entry_protocol_and_name(
+    entry: Any,
+) -> tuple[str | None, str | None]:
+    """Extract ``(protocol, display_name)`` from a catalog entry.
+
+    Returns ``(None, None)`` for malformed entries.  ``protocol`` is
+    a string only when the entry has a resolved protocol; the
+    dashboard treats ``protocol=None`` as unavailable.
+    """
+    entry_dict = cast("dict[str, Any] | None", entry)
+    if not isinstance(entry_dict, dict):
+        return None, None
+    protocol_raw: Any = entry_dict.get("protocol")
+    protocol_str: str | None = protocol_raw if isinstance(protocol_raw, str) else None
+    display_name_raw: Any = entry_dict.get("display_name")
+    display_name: str | None = (
+        display_name_raw if isinstance(display_name_raw, str) else None
+    )
+    return protocol_str, display_name
+
+
+def _apply_model_filters(
+    rows: list[dict[str, Any]],
+    *,
+    info_status: str | None = None,
+    availability: str | None = None,
+    used: str | None = None,
+    model_info_map: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Apply post-merge query filters to the merged model row list.
+
+    Filters are applied in order; each narrows the result set.
+    Unknown or ``None`` filter values are ignored (no-op).
+
+    * ``used``: ``"used"`` keeps rows with ``request_count > 0``;
+      ``"unused"`` keeps rows with ``request_count == 0``.
+    * ``info_status``: matches the ``status`` field in the
+      ``model_info_map`` entry for each model.
+    * ``availability``: ``"available"`` keeps models present in the
+      catalog (``_in_catalog`` flag); ``"unavailable"`` keeps the rest.
+    """
+    if not rows:
+        return rows
+    mi_map = model_info_map or {}
+    result = rows
+    if used == "used":
+        result = [r for r in result if int(r.get("request_count", 0) or 0) > 0]
+    elif used == "unused":
+        result = [r for r in result if int(r.get("request_count", 0) or 0) == 0]
+    if info_status is not None:
+        result = [
+            r
+            for r in result
+            if mi_map.get(r.get("model_id", ""), {}).get("status") == info_status
+        ]
+    if availability == "available":
+        result = [r for r in result if r.get("_in_catalog")]
+    elif availability == "unavailable":
+        result = [r for r in result if not r.get("_in_catalog")]
+    return result
 
 
 def _merge_models_with_catalog(
@@ -490,7 +799,34 @@ def _merge_models_with_catalog(
     catalog rows are preserved when stats has no entry.  The merged
     list is sorted by request count (descending) so active models
     appear first; sparse catalog rows fall to the bottom.
+
+    Diagnostic fields that originate from the catalog
+    (``base_model_id``, ``providers``, ``available``,
+    ``catalog_status``, ``routing_priority``, ``routing_priority_max``,
+    ``protocol``, ``display_name``) are preserved on stats rows that
+    share the same ``(model_id, provider_id)`` key, so the dashboard
+    renders provider/protocol facts even for active models.
     """
+    catalog_model_ids: set[str] = {r.get("model_id", "") for r in catalog_rows}
+    catalog_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    catalog_by_id: dict[str, dict[str, Any]] = {}
+    for row in catalog_rows:
+        mid = row.get("model_id", "")
+        pid = row.get("provider_id", "")
+        if mid:
+            catalog_by_id[mid] = row
+        if mid and pid:
+            catalog_by_key[(mid, pid)] = row
+    _diagnostic_keys = (
+        "base_model_id",
+        "providers",
+        "available",
+        "catalog_status",
+        "routing_priority",
+        "routing_priority_max",
+        "protocol",
+        "display_name",
+    )
     stats_by_id: dict[str, dict[str, Any]] = {}
     for row in stats_rows:
         mid = row.get("model_id", "")
@@ -505,6 +841,19 @@ def _merge_models_with_catalog(
             row.pop("_sparse", None)
             row.pop("_display_name", None)
             row.pop("_providers", None)
+            if mid in catalog_model_ids:
+                row["_in_catalog"] = True
+                # Lift the diagnostic fields from the matching catalog
+                # row so active rows still render availability/pill
+                # facts.
+                provider_id = row.get("provider_id", "")
+                catalog_row = catalog_by_key.get(
+                    (mid, provider_id)
+                ) or catalog_by_id.get(mid)
+                if catalog_row is not None:
+                    for key in _diagnostic_keys:
+                        if key in catalog_row and key not in row:
+                            row[key] = catalog_row[key]
             merged.append(row)
     for row in catalog_rows:
         mid = row.get("model_id", "")
@@ -516,6 +865,7 @@ def _merge_models_with_catalog(
         stats_row = stats_by_id.get(mid)
         if stats_row is not None:
             continue
+        row["_in_catalog"] = True
         merged.append(row)
     merged.sort(
         key=lambda r: (

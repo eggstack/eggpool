@@ -255,3 +255,144 @@ class TestBackfillLegacyDetailBlocks:
             assert updated.detail["limits"]["effective_context"] == 128000
         finally:
             await db.disconnect()
+
+    @pytest.mark.asyncio()
+    async def test_repair_merges_latest_hf_observation_into_canonical_detail(
+        self,
+    ) -> None:
+        """A legacy row with a persisted Hugging Face observation row
+        should pick up ``huggingface_metadata`` from the observation
+        during the repair cycle."""
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await _run_migrations(db)
+            await _seed_model(db, "meta-llama/Llama-3.1-8B-Instruct")
+
+            repo = ModelInfoRepository(db)
+            await repo.upsert_canonical(
+                _legacy_canonical("meta-llama/Llama-3.1-8B-Instruct")
+            )
+            hf_record = SourceModelRecord(
+                source="huggingface",
+                source_model_id="meta-llama/Llama-3.1-8B-Instruct",
+                observed_at=datetime.now(UTC),
+                raw_hash="hf-legacy-hash",
+                raw_payload={},
+                normalized={
+                    "pipeline_tag": "text-generation",
+                    "library_name": "transformers",
+                    "downloads": 12345,
+                    "likes": 678,
+                    "tags": ["text-generation", "llama"],
+                    "license": "llama3.1",
+                },
+            )
+            await repo.upsert_observation(
+                hf_record,
+                model_id="meta-llama/Llama-3.1-8B-Instruct",
+                provider_id="openai",
+            )
+
+            cache = _make_cache("meta-llama/Llama-3.1-8B-Instruct")
+            service = ModelInfoService(ModelInfoConfig(), db, cache)
+            result = await service.backfill_legacy_detail_blocks()
+            assert result["upgraded"] == 1
+
+            updated = await repo.get_canonical("meta-llama/Llama-3.1-8B-Instruct")
+            assert updated is not None
+            hf_meta = updated.detail.get("huggingface_metadata", {})
+            assert hf_meta.get("pipeline_tag") == "text-generation"
+            assert hf_meta.get("library_name") == "transformers"
+            assert hf_meta.get("downloads") == 12345
+            assert hf_meta.get("likes") == 678
+            assert hf_meta.get("license") == "llama3.1"
+            assert "huggingface" in updated.provenance.get("sources", [])
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio()
+    async def test_repair_removes_unmatched_sources_from_provenance(
+        self,
+    ) -> None:
+        """A legacy row whose provenance claims Hugging Face but has
+        no persisted HF observation should have the source removed
+        from provenance during repair."""
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await _run_migrations(db)
+            await _seed_model(db, "gpt-4o")
+
+            repo = ModelInfoRepository(db)
+            now = datetime.now(UTC)
+            legacy_row = CanonicalModelInfo(
+                model_id="gpt-4o",
+                status="partial",
+                summary="legacy",
+                sparse=False,
+                detail={
+                    "providers": ["openai"],
+                    "context_tokens": 128000,
+                },
+                # Pre-Phase-B provenance over-claimed sources even when
+                # no observation rows existed.
+                provenance={
+                    "sources": [
+                        "provider_catalog",
+                        "openrouter",
+                        "huggingface",
+                        "artificial_analysis",
+                    ],
+                    "reconciled_at": (now - timedelta(days=1)).isoformat(),
+                },
+                conflicts={},
+                first_seen_at=now - timedelta(days=2),
+                last_seen_at=now - timedelta(hours=1),
+                last_refreshed_at=now - timedelta(hours=1),
+                next_refresh_at=now + timedelta(hours=1),
+            )
+            await repo.upsert_canonical(legacy_row)
+
+            cache = _make_cache("gpt-4o")
+            service = ModelInfoService(ModelInfoConfig(), db, cache)
+            result = await service.backfill_legacy_detail_blocks()
+            assert result["upgraded"] == 1
+
+            updated = await repo.get_canonical("gpt-4o")
+            assert updated is not None
+            # Only sources with persisted observations appear in
+            # provenance. With no observations on disk, only the
+            # provider_catalog source survives.
+            assert "huggingface" not in updated.provenance["sources"]
+            assert "openrouter" not in updated.provenance["sources"]
+            assert "artificial_analysis" not in updated.provenance["sources"]
+            assert "provider_catalog" in updated.provenance["sources"]
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio()
+    async def test_repair_is_idempotent(self) -> None:
+        """Running the repair twice produces the same upgraded row
+        without re-upgrading it (the second run reports
+        ``upgraded=0``)."""
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await _run_migrations(db)
+            await _seed_model(db, "gpt-4o")
+
+            repo = ModelInfoRepository(db)
+            await repo.upsert_canonical(_legacy_canonical("gpt-4o"))
+
+            cache = _make_cache("gpt-4o")
+            service = ModelInfoService(ModelInfoConfig(), db, cache)
+
+            first = await service.backfill_legacy_detail_blocks()
+            assert first["upgraded"] == 1
+
+            second = await service.backfill_legacy_detail_blocks()
+            assert second["upgraded"] == 0
+            assert second["skipped"] == 1
+        finally:
+            await db.disconnect()

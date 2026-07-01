@@ -958,6 +958,48 @@ def _render_model_info_pill(info: dict[str, Any] | None) -> str:
     )
 
 
+def _render_availability_pill(row: dict[str, Any]) -> str:
+    """Render a compact availability pill for a catalog row.
+
+    Reads ``catalog_status`` / ``available`` from the merged row and
+    surfaces a ``pill-available`` / ``pill-unavailable` /
+    ``pill-configured` indicator. When neither flag is present (e.g.
+    legacy traffic-only row with no catalog backing), the pill reads
+    "—" so the column stays clean.
+    """
+    status = row.get("catalog_status")
+    if status is None:
+        # Fall back to the ``available`` boolean if set.
+        if row.get("available") is True:
+            status = "available"
+        elif row.get("available") is False:
+            status = "unavailable"
+        else:
+            return (
+                '<span class="pill pill-unknown" '
+                'data-tooltip="No catalog data" '
+                'aria-label="No catalog data">—</span>'
+            )
+    status_str = str(status)
+    css_map: dict[str, str] = {
+        "available": "pill-available",
+        "unavailable": "pill-unavailable",
+        "configured": "pill-configured",
+    }
+    tooltip_map: dict[str, str] = {
+        "available": "Catalog entry with resolved protocol; can be routed.",
+        "unavailable": "Catalog entry without resolved protocol; cannot be routed.",
+        "configured": "Catalog entry discovered; routing status pending.",
+    }
+    css_class = css_map.get(status_str, "pill-unknown")
+    tooltip = tooltip_map.get(status_str, status_str)
+    return (
+        f'<span class="pill {css_class}" data-tooltip="{escape(tooltip)}" '
+        f'aria-label="{escape(tooltip)}">'
+        f"{escape(status_str)}</span>"
+    )
+
+
 def _render_pricing_warnings(
     accounts: list[dict[str, Any]],
 ) -> str:
@@ -2100,11 +2142,20 @@ def render_models(
     current_theme: str = "",
     update_info: Any | None = None,
     model_info_map: dict[str, dict[str, Any]] | None = None,
+    info_status_filter: str = "",
+    availability_filter: str = "",
+    used_filter: str = "",
+    has_filters: bool = False,
 ) -> str:
     """Render the models page."""
     mi_map = model_info_map or {}
     if not models:
-        rows_html = '<p class="empty">No model data for this period.</p>'
+        if has_filters:
+            rows_html = '<p class="empty">No models match the selected filters.</p>'
+        else:
+            rows_html = (
+                '<p class="empty">No models discovered from configured providers.</p>'
+            )
     else:
         parts = [
             '<table class="data">',
@@ -2112,6 +2163,7 @@ def render_models(
             # Priority 1 — always shown
             _th("Model"),
             _th("Provider"),
+            _th("Avail."),
             _th("Info"),
             _th("Requests"),
             _th("Cost"),
@@ -2125,6 +2177,7 @@ def render_models(
             _th("Avg TTFT", priority=2),
             _th("TPS", priority=2),
             # Priority 3 — desktop-only
+            _th("Priority", priority=3),
             _th("Est. cost", priority=3),
             _th("Cache R", priority=3),
             _th("Cache W", priority=3),
@@ -2142,6 +2195,11 @@ def render_models(
             total_tok = format_tokens(row.get("total_tokens", 0))
             tps = format_tokens_per_second(row.get("tokens_per_second", 0.0))
             provider = escape(row.get("provider_id", ""))
+            avail_html = _render_availability_pill(row)
+            routing_priority = row.get("routing_priority")
+            priority_html = (
+                str(int(routing_priority)) if isinstance(routing_priority, int) else "—"
+            )
             exact = int(row.get("exact_count", 0) or 0)
             derived = int(row.get("derived_count", 0) or 0)
             partial_count = int(row.get("partial_count", 0) or 0)
@@ -2193,9 +2251,14 @@ def render_models(
             req_count = int(row.get("request_count", 0))
             err_count = int(row.get("error_count", 0))
 
-            # Model-info pill
+            # Model-info pill. Provider-suffixed rows store the
+            # canonical lookup key under ``base_model_id`` so the
+            # dashboard looks up by the unsuffixed ID first and falls
+            # back to the literal row model_id when the catalog
+            # entry has no provider suffix.
             model_id = row.get("model_id", "")
-            mi_info = mi_map.get(model_id)
+            base_id = row.get("base_model_id", "") or model_id
+            mi_info = mi_map.get(base_id) or mi_map.get(model_id)
             info_pill = _render_model_info_pill(mi_info)
 
             model_link = (
@@ -2208,6 +2271,7 @@ def render_models(
                 f"<tr>"
                 f"{_td_priority(model_link, 1)}"
                 f"{_td_priority(provider, 1)}"
+                f"{_td_priority(avail_html, 1)}"
                 f"{_td_priority(info_pill, 1)}"
                 f"{_td_priority(f'{req_count:,}', 1)}"
                 f"{_td_priority(cost, 1)}"
@@ -2219,6 +2283,7 @@ def render_models(
                 f"{_td_priority(latency, 2)}"
                 f"{_td_priority(ttft, 2)}"
                 f"{_td_priority(tps, 2)}"
+                f"{_td_priority(priority_html, 3)}"
                 f"{_td_priority(est_cost_pct, 3)}"
                 f"{_td_priority(cache_read_str, 3)}"
                 f"{_td_priority(cache_write_str, 3)}"
@@ -2230,17 +2295,61 @@ def render_models(
         parts.append("</tbody></table>")
         rows_html = "".join(parts)
 
-    filter_form = f"""
-<form method="get" class="filter-form">
-  <label>Account:
-    <input type="text" name="account" value="{escape_attr(account_filter)}"
-           placeholder="(all)">
-  </label>
-  <input type="hidden" name="period" value="{escape_attr(period)}">
-  <input type="hidden" name="theme" value="{escape_attr(current_theme)}">
-  <button type="submit">Apply</button>
-</form>
-"""
+    def _sel(name: str, value: str, current: str) -> str:
+        """Render a <select> option with the selected attr."""
+        sel = " selected" if value == current else ""
+        return f'<option value="{escape_attr(value)}"{sel}>{escape(name)}</option>'
+
+    used_options = "".join(
+        _sel(n, v, used_filter)
+        for n, v in [
+            ("All", ""),
+            ("Used", "used"),
+            ("Unused", "unused"),
+        ]
+    )
+    info_options = "".join(
+        _sel(n, v, info_status_filter)
+        for n, v in [
+            ("All", ""),
+            ("Fresh", "fresh"),
+            ("Partial", "partial"),
+            ("Sparse", "sparse_new"),
+            ("Stale", "stale"),
+            ("Conflict", "conflicting"),
+            ("Unmatched", "unmatched"),
+        ]
+    )
+    avail_options = "".join(
+        _sel(n, v, availability_filter)
+        for n, v in [
+            ("All", ""),
+            ("Available", "available"),
+            ("Unavailable", "unavailable"),
+        ]
+    )
+    filter_form = (
+        '<form method="get" class="filter-form">'
+        "<label>Account: "
+        f'<input type="text" name="account" '
+        f'value="{escape_attr(account_filter)}" placeholder="(all)">'
+        "</label>"
+        "<label>Used: "
+        f'<select name="used">{used_options}</select>'
+        "</label>"
+        "<label>Info: "
+        f'<select name="info_status">{info_options}</select>'
+        "</label>"
+        "<label>Availability: "
+        f'<select name="availability">{avail_options}</select>'
+        "</label>"
+        f'<input type="hidden" name="period" '
+        f'value="{escape_attr(period)}">'
+        f'<input type="hidden" name="theme" '
+        f'value="{escape_attr(current_theme)}">'
+        '<button type="submit">Apply</button>'
+        "</form>"
+    )
 
     body = f"""
 <h2>Models</h2>
@@ -2323,15 +2432,35 @@ def render_model_detail(
         else _EM_DASH
     )
 
-    # Limits
+    # Limits — read the normalized nested block first, then fall back to
+    # pre-Phase-B flat keys (context_tokens, context_window_external,
+    # max_output_tokens, max_output_tokens_external) for legacy rows
+    # that haven't been backfilled yet. The startup backfill
+    # (``backfill_legacy_detail_blocks``) lifts every such row on the
+    # next launch; this fallback only covers the race window before
+    # that runs.
     limits: dict[str, object] = cast("dict[str, object]", detail.get("limits", {}))
     ctx = limits.get("effective_context")
+    if ctx is None:
+        ctx = detail.get("context_tokens")
     ext_ctx = limits.get("external_context")
+    if ext_ctx is None:
+        ext_ctx = detail.get("context_window_external")
+    eff_out = limits.get("effective_output")
+    if eff_out is None:
+        eff_out = detail.get("max_output_tokens")
+    ext_out = limits.get("external_output")
+    if ext_out is None:
+        ext_out = detail.get("max_output_tokens_external")
     limits_parts: list[str] = []
     if ctx is not None:
-        limits_parts.append(f"Effective: {format_tokens(int(ctx))}")  # type: ignore[arg-type]
+        limits_parts.append(f"Effective ctx: {format_tokens(int(ctx))}")  # type: ignore[arg-type]
     if ext_ctx is not None:
-        limits_parts.append(f"External: {format_tokens(int(ext_ctx))}")  # type: ignore[arg-type]
+        limits_parts.append(f"External ctx: {format_tokens(int(ext_ctx))}")  # type: ignore[arg-type]
+    if eff_out is not None:
+        limits_parts.append(f"Effective out: {format_tokens(int(eff_out))}")  # type: ignore[arg-type]
+    if ext_out is not None:
+        limits_parts.append(f"External out: {format_tokens(int(ext_out))}")  # type: ignore[arg-type]
     limits_html = " &middot; ".join(limits_parts) if limits_parts else "—"
 
     # Modalities

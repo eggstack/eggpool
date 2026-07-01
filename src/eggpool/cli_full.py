@@ -3039,6 +3039,113 @@ def modelinfo_refresh(ctx: click.Context, provider_catalog_only: bool) -> None:
     asyncio.run(_run())
 
 
+@modelinfo.command("aliases")
+@click.argument("model_id")
+@click.option("--source", default=None, help="Filter by source.")
+@click.pass_context
+def modelinfo_aliases(ctx: click.Context, model_id: str, source: str | None) -> None:
+    """Show configured and discovered aliases for a model."""
+    config_path = ctx.obj["config_path"]
+    config = AppConfig.from_toml(config_path)
+
+    async def _run() -> None:
+        from eggpool.db.connection import Database
+        from eggpool.db.migrations import MigrationRunner
+        from eggpool.model_info.service import ModelInfoService
+
+        db = Database(
+            path=config.database.path,
+            busy_timeout_ms=config.database.busy_timeout_ms,
+            wal=config.database.wal,
+            synchronous=config.database.synchronous,
+        )
+        await db.connect()
+        try:
+            await MigrationRunner(db).run()
+            from eggpool.catalog.cache import ModelCatalogCache
+
+            cache = ModelCatalogCache()
+            cache.set_config(config)
+            service = ModelInfoService(config.model_info, db, cache)
+            rows = await service.repo.list_alias_rows_for_model(model_id, source=source)
+            if not rows:
+                click.echo(
+                    f"No aliases found for {model_id!r}.",
+                    err=True,
+                )
+                sys.exit(1)
+            click.echo(f"Aliases for {model_id}:")
+            click.echo(
+                f"  {'Source':<20} {'Alias':<40} {'Provider':<16} "
+                f"{'Confidence':<12} {'Active':<8} Last seen"
+            )
+            click.echo("  " + "-" * 115)
+            for row in rows:
+                conf = row["confidence"]
+                conf_str = f"{conf:.1f}" if conf is not None else "—"
+                active_str = "yes" if row["active"] else "no"
+                last_seen = row["last_seen_at"] or "—"
+                click.echo(
+                    f"  {row['source']:<20} {row['alias']:<40} "
+                    f"{row['provider_id'] or '—':<16} {conf_str:<12} "
+                    f"{active_str:<8} {last_seen}"
+                )
+        finally:
+            await db.disconnect()
+
+    asyncio.run(_run())
+
+
+@modelinfo.command("repair")
+@click.option(
+    "--limit",
+    default=200,
+    show_default=True,
+    help="Maximum number of canonical rows to process.",
+)
+@click.pass_context
+def modelinfo_repair(ctx: click.Context, limit: int) -> None:
+    """Repair legacy canonical detail blocks (Phase F backfill).
+
+    Finds canonical rows whose ``detail`` lacks the normalized
+    ``limits`` block and rebuilds them from provider catalog data
+    plus persisted external observations.  Idempotent.
+    """
+    config_path = ctx.obj["config_path"]
+    config = AppConfig.from_toml(config_path)
+
+    async def _run() -> None:
+        from eggpool.db.connection import Database
+        from eggpool.db.migrations import MigrationRunner
+        from eggpool.model_info.service import ModelInfoService
+
+        db = Database(
+            path=config.database.path,
+            busy_timeout_ms=config.database.busy_timeout_ms,
+            wal=config.database.wal,
+            synchronous=config.database.synchronous,
+        )
+        await db.connect()
+        try:
+            await MigrationRunner(db).run()
+            from eggpool.catalog.cache import ModelCatalogCache
+
+            cache = ModelCatalogCache()
+            cache.set_config(config)
+            service = ModelInfoService(config.model_info, db, cache)
+            click.echo(f"Running legacy detail backfill (limit={limit})...")
+            result = await service.backfill_legacy_detail_blocks(limit=limit)
+            click.echo(f"  Scanned: {result['scanned']}")
+            click.echo(f"  Upgraded: {result['upgraded']}")
+            click.echo(f"  Skipped: {result['skipped']}")
+            click.echo(f"  Errors: {result['errors']}")
+            click.echo("Done.")
+        finally:
+            await db.disconnect()
+
+    asyncio.run(_run())
+
+
 @cli.group()
 def dashboard() -> None:
     """Dashboard configuration commands."""

@@ -332,6 +332,27 @@ async def handle_model_info_refresh(request: Request) -> Response:
         )
 
     # Full refresh cycle
+    if force:
+        # force=1 without model_id: refresh a bounded batch of all
+        # catalog models regardless of ``next_refresh_at``. Bounded so
+        # a single endpoint hit does not block the event loop for
+        # minutes on large fleets.
+        batch_result = await model_info.force_refresh_batch(
+            batch_size=model_info._config.max_models_per_cycle,
+        )
+        return JSONResponse(
+            content={
+                "status": "ok",
+                "scope": "force_batch",
+                "requested": batch_result.get("requested", 0),
+                "refreshed": batch_result.get("refreshed", 0),
+                "skipped": batch_result.get("skipped", 0),
+                "errors": batch_result.get("errors", 0),
+                "sources_attempted": batch_result.get("sources_attempted", []),
+                "sources_matched": batch_result.get("sources_matched", []),
+                "observations": batch_result.get("observations", 0),
+            }
+        )
     result = await model_info.refresh_due_models()
     refreshed = result.get("refreshed", 0)
     total = result.get("total", 0)

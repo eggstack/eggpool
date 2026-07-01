@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from eggpool.errors import ModelInfoSourceFetchError
 from eggpool.model_info.dedup import canonical_needs_update
@@ -1023,6 +1023,76 @@ class ModelInfoService:
             "observations": observations_persisted,
         }
 
+    async def force_refresh_batch(
+        self,
+        *,
+        batch_size: int | None = None,
+    ) -> dict[str, object]:
+        """Force-refresh a bounded batch of catalog models.
+
+        Unlike :meth:`refresh_due_models` this method bypasses the
+        ``next_refresh_at`` gate: every canonical row is force-refreshed
+        up to ``batch_size`` rows in this single call. The batch is
+        bounded so a single endpoint hit cannot block the event loop
+        for minutes on large fleets; callers can invoke this method
+        repeatedly to drain the catalog.
+
+        Returns aggregate counts:
+
+        * ``requested`` — number of canonical rows selected for refresh.
+        * ``refreshed`` — rows whose canonical detail actually changed.
+        * ``skipped`` — rows where the merged payload matched the
+          persisted row byte-for-byte.
+        * ``errors`` — exceptions raised while refreshing a row (the
+          batch keeps going on per-row failure).
+        * ``sources_attempted`` / ``sources_matched`` — union across
+          all rows in the batch.
+        * ``observations`` — total observations persisted across all
+          rows.
+        """
+        if batch_size is None:
+            batch_size = self._config.max_models_per_cycle
+        # Cap the batch to a hard ceiling so a runaway caller can't
+        # request tens of thousands of model refreshes in one shot.
+        if batch_size <= 0:
+            batch_size = 1
+
+        all_rows = await self._repo.list_all_canonical(limit=batch_size)
+        requested = len(all_rows)
+
+        refreshed = 0
+        skipped = 0
+        errors = 0
+        sources_attempted: set[str] = set()
+        sources_matched: set[str] = set()
+        observations = 0
+
+        for canonical in all_rows:
+            mid = canonical.model_id
+            try:
+                result = await self.refresh_model_info(mid, force=True)
+            except Exception:
+                logger.exception("force_refresh_batch: unhandled error for %s", mid)
+                errors += 1
+                continue
+            refreshed += _safe_int_count(result.get("refreshed"))
+            skipped += _safe_int_count(result.get("skipped"))
+            observations += _safe_int_count(result.get("observations"))
+            for s in cast("list[str]", result.get("sources_attempted", [])):
+                sources_attempted.add(s)
+            for s in cast("list[str]", result.get("sources_matched", [])):
+                sources_matched.add(s)
+
+        return {
+            "requested": requested,
+            "refreshed": refreshed,
+            "skipped": skipped,
+            "errors": errors,
+            "sources_attempted": sorted(sources_attempted),
+            "sources_matched": sorted(sources_matched),
+            "observations": observations,
+        }
+
     async def _persist_source_observation(
         self,
         record: SourceModelRecord,
@@ -1728,6 +1798,24 @@ def _detect_benchmark_conflicts(  # pyright: ignore[reportUnusedFunction]
     return conflicts
 
 
+def _safe_int_count(value: Any) -> int:
+    """Coerce a count value from a result dict to a non-negative int.
+
+    Used to defensively read counts returned from
+    :meth:`refresh_model_info` and other helpers that pass dict[str,
+    object] across the public surface. ``None`` and any non-numeric
+    value collapse to ``0`` so pyright stays happy and the aggregator
+    never raises on unexpected payloads.
+    """
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return max(0, value)
+    if isinstance(value, float):
+        return max(0, int(value))
+    return 0
+
+
 def _normalize_observation_payload(
     source: str,
     payload: dict[str, object],
@@ -1783,6 +1871,19 @@ def _normalize_observation_payload(
             out["modalities_external"] = sorted(modalities)
         if payload.get("display_name"):
             out["display_name_openrouter"] = payload["display_name"]
+        # Advisory pricing from OpenRouter — surfaced as
+        # ``pricing_observation`` so callers can show $/Mtok figures
+        # without the values colliding with provider-reported pricing.
+        pricing_obs: dict[str, object] = {}
+        in_price = payload.get("input_price_per_1k")
+        if isinstance(in_price, (int, float)) and in_price >= 0:
+            pricing_obs["input_price_per_1k"] = float(in_price)
+        out_price = payload.get("output_price_per_1k")
+        if isinstance(out_price, (int, float)) and out_price >= 0:
+            pricing_obs["output_price_per_1k"] = float(out_price)
+        if pricing_obs:
+            pricing_obs["source"] = "openrouter"
+            out["pricing_observation"] = pricing_obs
     elif source == "artificial_analysis":
         benchmarks = payload.get("benchmarks")
         if isinstance(benchmarks, list) and benchmarks:
@@ -1924,11 +2025,22 @@ def build_canonical_detail(
                 "modalities_external",
                 "benchmarks",
                 "huggingface_metadata",
+                "pricing_observation",
             }:
                 continue
             if key not in detail or detail[key] in (None, ""):
                 detail[key] = val
                 contributed = True
+        if "pricing_observation" in fragment:
+            pricing_obs = cast("dict[str, object]", fragment["pricing_observation"])
+            existing_pricing = cast(
+                "dict[str, object]", detail.get("pricing_observation", {})
+            )
+            for pk, pv in pricing_obs.items():
+                if pk not in existing_pricing:
+                    existing_pricing[pk] = pv
+            detail["pricing_observation"] = existing_pricing
+            contributed = True
         if contributed:
             used_sources.add(source)
 
@@ -2014,6 +2126,18 @@ def build_canonical_detail(
         for k, v in existing_ext_ids.items():
             if k not in external_ids:
                 external_ids[k] = v
+        existing_pricing_obs = cast(
+            "dict[str, object]",
+            existing_detail.get("pricing_observation", {}),
+        )
+        if existing_pricing_obs:
+            detail_pricing = cast(
+                "dict[str, object]", detail.get("pricing_observation", {})
+            )
+            for pk, pv in existing_pricing_obs.items():
+                if pk not in detail_pricing:
+                    detail_pricing[pk] = pv
+            detail["pricing_observation"] = detail_pricing
 
     # Materialize the merged detail.
     if limits_block:
