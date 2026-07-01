@@ -385,6 +385,45 @@ class TestUsageInMessageDelta:
         assert "usage" in finish_data
         assert finish_data["usage"]["completion_tokens"] == 7
 
+    @pytest.mark.asyncio
+    async def test_usage_includes_cache_tokens_in_prompt_total(self) -> None:
+        transcoder = AnthropicToOpenAIStreaming()
+        await transcoder.feed(
+            _anthropic_sse(
+                "message_start",
+                message_id="msg-1",
+                model="claude-3",
+                usage={
+                    "input_tokens": 850,
+                    "cache_read_input_tokens": 75_000,
+                    "cache_creation_input_tokens": 4_000,
+                },
+            )
+        )
+
+        raw = await transcoder.feed(
+            _anthropic_sse(
+                "message_delta",
+                stop_reason="end_turn",
+                usage={"output_tokens": 25},
+            )
+        )
+
+        frames = _parse_sse_frames(b"".join(raw))
+        finish_frame = next(
+            f
+            for f in frames
+            if f["data"] != "[DONE]" and json.loads(f["data"])["choices"]
+        )
+        finish_data = json.loads(finish_frame["data"])
+        assert finish_data["usage"]["prompt_tokens"] == 79_850
+        assert finish_data["usage"]["completion_tokens"] == 25
+        assert finish_data["usage"]["total_tokens"] == 79_875
+        assert finish_data["usage"]["prompt_tokens_details"] == {
+            "cached_tokens": 75_000,
+            "cache_creation_tokens": 4_000,
+        }
+
 
 class TestEmptyStream:
     @pytest.mark.asyncio

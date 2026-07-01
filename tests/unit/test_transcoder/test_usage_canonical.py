@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from eggpool.transcoder.usage import CanonicalUsage, canonicalise_usage
+from eggpool.transcoder.usage import (
+    CanonicalUsage,
+    canonicalise_usage,
+    merge_anthropic_usage,
+    openai_usage_from_anthropic_usage,
+)
 
 
 def test_openai_usage() -> None:
@@ -83,4 +88,41 @@ def test_to_dict() -> None:
         "total_tokens": 3,
         "cache_creation_tokens": 0,
         "cache_read_tokens": 0,
+    }
+
+
+def test_openai_usage_from_anthropic_usage_includes_cache_in_prompt() -> None:
+    result = openai_usage_from_anthropic_usage(
+        {
+            "input_tokens": 850,
+            "output_tokens": 25,
+            "cache_read_input_tokens": 75_000,
+            "cache_creation_input_tokens": 4_000,
+        }
+    )
+
+    assert result["prompt_tokens"] == 79_850
+    assert result["completion_tokens"] == 25
+    assert result["total_tokens"] == 79_875
+    assert result["prompt_tokens_details"] == {
+        "cached_tokens": 75_000,
+        "cache_creation_tokens": 4_000,
+    }
+
+
+def test_merge_anthropic_usage_combines_stream_start_and_delta() -> None:
+    result = merge_anthropic_usage(
+        {
+            "input_tokens": 850,
+            "cache_read_input_tokens": 75_000,
+            "cache_creation_input_tokens": 4_000,
+        },
+        {"output_tokens": 25},
+    )
+
+    assert result == {
+        "input_tokens": 850,
+        "cache_read_input_tokens": 75_000,
+        "cache_creation_input_tokens": 4_000,
+        "output_tokens": 25,
     }

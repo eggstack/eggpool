@@ -14,7 +14,6 @@ from eggpool.transcoder.json_helpers import (
     has_non_text_blocks,
     iter_objects,
     split_base64_data_uri,
-    token_count_from,
 )
 
 if TYPE_CHECKING:
@@ -23,6 +22,7 @@ if TYPE_CHECKING:
     from eggpool.transcoder.policy import TranscoderFeatures
 
 from eggpool.transcoder.policy import build_reasoning_fields
+from eggpool.transcoder.usage import openai_usage_from_anthropic_usage
 
 _ANTHROPIC_IMAGE_SIZE_LIMIT = 5 * 1024 * 1024  # 5 MB
 _ANTHROPIC_PDF_SIZE_LIMIT = 32 * 1024 * 1024  # 32 MB
@@ -742,13 +742,6 @@ class OpenAIToAnthropic:
             )
 
         usage = as_object(payload.get("usage"))
-        prompt_tokens = token_count_from(usage, "input_tokens")
-        completion_tokens = token_count_from(usage, "output_tokens")
-        cache_read_tokens = token_count_from(usage, "cache_read_input_tokens")
-        cache_creation_tokens = token_count_from(
-            usage,
-            "cache_creation_input_tokens",
-        )
 
         message: dict[str, Any] = {
             "role": "assistant",
@@ -778,20 +771,8 @@ class OpenAIToAnthropic:
                     "finish_reason": finish_reason,
                 }
             ],
-            "usage": {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": prompt_tokens + completion_tokens,
-            },
+            "usage": openai_usage_from_anthropic_usage(usage),
         }
-
-        if cache_read_tokens > 0 or cache_creation_tokens > 0:
-            prompt_tokens_details: dict[str, int] = {}
-            if cache_read_tokens > 0:
-                prompt_tokens_details["cached_tokens"] = cache_read_tokens
-            if cache_creation_tokens > 0:
-                prompt_tokens_details["cache_creation_tokens"] = cache_creation_tokens
-            out["usage"]["prompt_tokens_details"] = prompt_tokens_details
 
         return out, warnings
 

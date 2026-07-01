@@ -31,6 +31,10 @@ if TYPE_CHECKING:
     from eggpool.transcoder.policy import TranscoderFeatures
 
 from eggpool.transcoder.policy import build_reasoning_fields
+from eggpool.transcoder.usage import (
+    merge_anthropic_usage,
+    openai_usage_from_anthropic_usage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -702,6 +706,7 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
         self._model = ""
         self._emitted_usage = False
         self._done_emitted = False
+        self._anthropic_usage: dict[str, int] = {}
         self._tool_blocks: dict[int, _OpenAIToolCall] = {}
         self._openai_tool_index: dict[int, int] = {}
         self._next_openai_tool_index = 0
@@ -876,6 +881,12 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
         self._started = True
         self._id = str(msg.get("id", ""))
         self._model = str(msg.get("model", ""))
+        usage = msg.get("usage")
+        if isinstance(usage, dict):
+            self._anthropic_usage = merge_anthropic_usage(
+                self._anthropic_usage,
+                cast("dict[str, Any]", usage),
+            )
         return [
             self._openai_frame(
                 {
@@ -1032,27 +1043,23 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
                 and not self._emitted_usage
             ):
                 self._emitted_usage = True
-                usage_typed = cast("dict[str, Any]", usage)
-                frame["usage"] = {
-                    "prompt_tokens": usage_typed.get(
-                        "input_tokens",
-                        0,
-                    ),
-                    "completion_tokens": usage_typed.get(
-                        "output_tokens",
-                        0,
-                    ),
-                    "total_tokens": (
-                        usage_typed.get("input_tokens", 0)
-                        + usage_typed.get("output_tokens", 0)
-                    ),
-                }
+                usage_typed = merge_anthropic_usage(
+                    self._anthropic_usage,
+                    cast("dict[str, Any]", usage),
+                )
+                self._anthropic_usage = usage_typed
+                frame["usage"] = openai_usage_from_anthropic_usage(usage_typed)
             out.append(self._openai_frame(frame))
         elif (
             self._include_usage and isinstance(usage, dict) and not self._emitted_usage
         ):
             self._emitted_usage = True
-            usage_typed = cast("dict[str, Any]", usage)
+            usage_typed = merge_anthropic_usage(
+                self._anthropic_usage,
+                cast("dict[str, Any]", usage),
+            )
+            self._anthropic_usage = usage_typed
+            usage_payload = openai_usage_from_anthropic_usage(usage_typed)
             out.append(
                 self._openai_frame(
                     {
@@ -1061,23 +1068,7 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
                         "created": 0,
                         "model": self._model,
                         "choices": [],
-                        "usage": {
-                            "prompt_tokens": usage_typed.get(
-                                "input_tokens",
-                                0,
-                            ),
-                            "completion_tokens": usage_typed.get(
-                                "output_tokens",
-                                0,
-                            ),
-                            "total_tokens": (
-                                usage_typed.get("input_tokens", 0)
-                                + usage_typed.get(
-                                    "output_tokens",
-                                    0,
-                                )
-                            ),
-                        },
+                        "usage": usage_payload,
                     },
                 ),
             )

@@ -127,9 +127,9 @@ class TestUsageMapping:
         }
         result, _ = transcoder.decode_response(payload, _make_context())
 
-        assert result["usage"]["prompt_tokens"] == 20
+        assert result["usage"]["prompt_tokens"] == 28
         assert result["usage"]["completion_tokens"] == 8
-        assert result["usage"]["total_tokens"] == 28
+        assert result["usage"]["total_tokens"] == 36
         assert result["usage"]["prompt_tokens_details"]["cached_tokens"] == 3
         assert result["usage"]["prompt_tokens_details"]["cache_creation_tokens"] == 5
 
@@ -147,6 +147,8 @@ class TestUsageMapping:
         }
         result, _ = transcoder.decode_response(payload, _make_context())
 
+        assert result["usage"]["prompt_tokens"] == 27
+        assert result["usage"]["total_tokens"] == 35
         assert result["usage"]["prompt_tokens_details"]["cached_tokens"] == 7
         assert "cache_creation_tokens" not in result["usage"]["prompt_tokens_details"]
 
