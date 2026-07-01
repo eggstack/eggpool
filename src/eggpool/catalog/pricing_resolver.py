@@ -17,12 +17,13 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 from eggpool.catalog.pricing import (
     extract_price_decimal,
     parse_microdollars_per_million,
     parse_price_per_1k,
+    price_unit,
 )
 
 logger = logging.getLogger(__name__)
@@ -102,28 +103,97 @@ def _safe_parse_price_per_1k(
         return None
 
 
-def _pricing_dict_default_unit(value: object) -> str:
-    """Infer units for ambiguous provider ``pricing`` objects.
+# Pricing dicts that carry no unit suffix on individual fields (e.g.
+# ``pricing: {prompt: "0.000003"}``) are ambiguous: the same bare number
+# could mean dollars/token (OpenRouter) or dollars/million (Anthropic-style
+# vendors, MiniMax, and many other Anthropic-compatible endpoints). The
+# mistake is catastrophic — misreading a per-million value as per-token
+# inflates downstream cost by 1,000,000x.
+#
+# Generalizable resolution rules, in order of priority:
+#
+#   1. Sibling agreement — if any OTHER field in the same ``pricing`` dict
+#      carries an explicit per-token / per-1k / per-million suffix, the
+#      siblings share units. OpenRouter uses ``$0.000003`` (per-token)
+#      while Anthropic-style catalogs use human-scale values
+#      (``0.2`` = $0.20/M). Reading siblings is provider-agnostic and
+#      catches MiniMax, OpenAI-Compat-vendors, and any future catalog
+#      that mixes both styles.
+#
+#   2. Numeric scale — when no sibling carries an explicit unit, look at
+#      the magnitude of all numeric siblings. OpenRouter per-token values
+#      cluster below ``1e-3``; per-million values cluster above. A
+#      majority-of-siblings rule avoids the single-value ambiguity.
+#
+#   3. Safe default — if both signals are inconclusive (one value, or
+#      mixed magnitudes), default to ``per-million``. Per-million is
+#      conservative for under-reporting and matches the Anthropic API
+#      convention; per-token interpretation is what produced the bug.
+_PRICING_PER_TOKEN_CEILING = Decimal("0.001")
 
-    OpenRouter-style pricing uses tiny bare dollars/token values
-    (``0.000003``). Some provider-native catalogs, including MiniMax-shaped
-    payloads, use human-scale bare values such as ``0.2`` for dollars per
-    million tokens. Treating those as dollars/token inflates costs by 1M.
+
+def _explicit_unit_for_pricing_dict_value(value: object) -> str | None:
+    """Return the unit if ``value`` carries an explicit suffix, else None."""
+    if not isinstance(value, str):
+        return None
+    return price_unit(value)
+
+
+def _pricing_dict_default_unit(value: object, siblings: dict[str, Any]) -> str:
+    """Resolve the default unit for an ambiguous bare-numeric pricing field.
+
+    ``siblings`` are the other fields in the same ``pricing`` dict. When
+    even one sibling carries an explicit unit suffix, every sibling
+    inherits it (openrouter and Anthropic-style catalogs are uniform
+    within a payload). When no sibling carries a suffix, the unit is
+    inferred from the magnitudes of the parseable numeric siblings,
+    defaulting to per-million when the signal is inconclusive.
     """
-    try:
-        number = extract_price_decimal(value)
-    except ValueError:
+    # Rule 1: explicit sibling unit. Cheap and unambiguous when present.
+    for sibling_value in siblings.values():
+        unit = _explicit_unit_for_pricing_dict_value(sibling_value)
+        if unit is not None:
+            return unit
+
+    # Rule 2: numeric-scale consensus across siblings. Collect every
+    # parseable numeric magnitude; if the majority are below the
+    # per-token ceiling, treat the dict as per-token, otherwise
+    # per-million. A single-value dict falls through to rule 3.
+    magnitudes: list[Decimal] = []
+    for sibling_value in (value, *siblings.values()):
+        if _explicit_unit_for_pricing_dict_value(sibling_value) is not None:
+            continue
+        try:
+            number = extract_price_decimal(sibling_value)
+        except ValueError:
+            continue
+        if number is None:
+            continue
+        magnitudes.append(number)
+
+    per_token_count = sum(1 for m in magnitudes if m < _PRICING_PER_TOKEN_CEILING)
+    per_million_count = len(magnitudes) - per_token_count
+
+    if per_token_count > per_million_count and per_token_count > 0:
         return "token"
-    if number is None:
-        return "token"
-    return "token" if number < Decimal("0.001") else "million"
+    if per_million_count > per_token_count and per_million_count > 0:
+        return "million"
+
+    # Rule 3: inconclusive. Default to per-million — the Anthropic
+    # convention and the direction that does not produce runaway
+    # inflation when an upstream is wrong about its units.
+    return "million"
 
 
-def _safe_parse_pricing_dict_price(category: str, value: object) -> float | None:
+def _safe_parse_pricing_dict_price(
+    category: str, value: object, siblings: dict[str, Any] | None = None
+) -> float | None:
+    if siblings is None:
+        siblings = {}
     return _safe_parse_price_per_1k(
         category,
         value,
-        default_unit=_pricing_dict_default_unit(value),
+        default_unit=_pricing_dict_default_unit(value, siblings),
     )
 
 
@@ -173,14 +243,36 @@ def resolve_pricing_from_metadata(
     def _has_override(key: str) -> bool:
         return override_values.get(key) is not None
 
+    def _pricing_siblings(exclude: str) -> dict[str, Any]:
+        """Return sibling fields of ``pricing`` excluding ``exclude``.
+
+        Used as the cross-key context for unit disambiguation. Including
+        the value's own key is unnecessary because each call site asks
+        for one specific category and the disambiguator inspects every
+        other numeric sibling for scale consensus.
+        """
+        pricing = meta.get("pricing")
+        if not isinstance(pricing, dict):
+            return {}
+        pricing_dict = cast("dict[str, Any]", pricing)
+        siblings: dict[str, Any] = {}
+        for k, v in pricing_dict.items():
+            if k != exclude:
+                siblings[k] = v
+        return siblings
+
     def _input() -> float | None:
         if _has_override("input"):
             return override_values["input"]
         pricing: dict[str, Any] | None = meta.get("pricing")
         if isinstance(pricing, dict) and "prompt" in pricing:
-            return _safe_parse_pricing_dict_price("input", pricing["prompt"])
+            return _safe_parse_pricing_dict_price(
+                "input", pricing["prompt"], _pricing_siblings("prompt")
+            )
         if isinstance(pricing, dict) and "input" in pricing:
-            return _safe_parse_pricing_dict_price("input", pricing["input"])
+            return _safe_parse_pricing_dict_price(
+                "input", pricing["input"], _pricing_siblings("input")
+            )
         for upstream_key in (
             "input_price_per_1k",
             "prompt_price_per_1k",
@@ -197,9 +289,15 @@ def resolve_pricing_from_metadata(
             return override_values["output"]
         pricing: dict[str, Any] | None = meta.get("pricing")
         if isinstance(pricing, dict) and "completion" in pricing:
-            return _safe_parse_pricing_dict_price("output", pricing["completion"])
+            return _safe_parse_pricing_dict_price(
+                "output",
+                pricing["completion"],
+                _pricing_siblings("completion"),
+            )
         if isinstance(pricing, dict) and "output" in pricing:
-            return _safe_parse_pricing_dict_price("output", pricing["output"])
+            return _safe_parse_pricing_dict_price(
+                "output", pricing["output"], _pricing_siblings("output")
+            )
         for upstream_key in (
             "output_price_per_1k",
             "completion_price_per_1k",

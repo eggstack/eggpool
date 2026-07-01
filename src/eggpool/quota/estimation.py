@@ -326,6 +326,16 @@ class QuotaEstimator:
     # Config
     default_safety_factor: float = 1.15
     default_unknown_reservation_microdollars: int = 1_000_000
+    # Outlier rejection band for EWMA updates. An incoming observation
+    # whose ``cost_per_token`` diverges from the existing EWMA estimate
+    # by more than this factor (either above or below) is treated as an
+    # outlier and excluded from the rolling estimate. Without this guard
+    # a single misread upstream price (e.g. misclassified dollars/M as
+    # dollars/token) permanently inflates the model reservation and
+    # contaminates downstream cost floors. The band is generous enough
+    # to admit genuine price changes (e.g. switching providers) while
+    # tight enough to filter the catastrophic 1,000,000x class of bug.
+    ewma_outlier_max_ratio: float = 100.0
     # Optional persisted window repo for loading actual usage
     _usage_window_repo: UsageWindowRepository | None = field(default=None, repr=False)
     # In-memory reservation tracking for scorer
@@ -336,7 +346,7 @@ class QuotaEstimator:
     _snapshot_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def set_usage_window_repo(self, repo: UsageWindowRepository) -> None:
-        """Set the persisted usage window repository."""
+        """Set the persisted usage window repo for loading actual usage."""
         self._usage_window_repo = repo
 
     def record_usage(
@@ -353,13 +363,33 @@ class QuotaEstimator:
         self.accounts[account_name].record_usage(tokens, cost_microdollars, timestamp)
 
         # Update EWMA estimates if model and token data available. The
-        # LRU helpers cap memory growth at ``ewma_hard_cap`` per-bucket
+        # LRU helpers above bound memory growth at ``ewma_hard_cap`` per-bucket
         # and at the outer-dict level; cost estimation falls through to
         # the next tier on cache miss.
         if model_id and tokens > 0 and cost_microdollars > 0:
             cost_per_token = cost_microdollars / tokens
             self._record_account_model_ewma(account_name, model_id, cost_per_token)
             self._record_global_model_ewma(model_id, cost_per_token)
+
+    def _is_outlier(self, cost_per_token: float, model_id: str) -> bool:
+        """Reject EWMA observations that diverge from the running estimate.
+
+        An outlier is any observation whose ``cost_per_token`` is more
+        than ``ewma_outlier_max_ratio`` times the existing estimate in
+        either direction. The first observation for a model is never an
+        outlier (no prior to compare against); the band only kicks in
+        once we have enough history to know what "normal" looks like.
+        """
+        existing = self.global_model_ewma.get(model_id)
+        if existing is None or existing.sample_count < 1:
+            return False
+        baseline = existing.estimate_cost_per_token
+        if baseline <= 0:
+            return False
+        ratio = cost_per_token / baseline
+        return ratio > self.ewma_outlier_max_ratio or ratio < (
+            1.0 / self.ewma_outlier_max_ratio
+        )
 
     def _record_account_model_ewma(
         self, account_name: str, model_id: str, cost_per_token: float
@@ -374,7 +404,15 @@ class QuotaEstimator:
             a long tail of distinct account names cannot grow the
             outer dict without bound. A new account pushes out the
             least-recently-touched account's entire bucket.
+
+        Outlier observations are silently dropped from the rolling
+        estimate; the raw usage is still recorded on the daily/hourly
+        windows by ``record_usage`` so quota accounting reflects the
+        actual spend. Only the EWMA used by future cost estimation is
+        protected from contamination.
         """
+        if self._is_outlier(cost_per_token, model_id):
+            return
         bucket = self.account_model_ewma.get(account_name)
         if bucket is None:
             bucket = OrderedDict[str, EWMAEstimate]()
@@ -390,7 +428,15 @@ class QuotaEstimator:
         bucket[model_id].update(cost_per_token)
 
     def _record_global_model_ewma(self, model_id: str, cost_per_token: float) -> None:
-        """Insert/move-to-end in ``global_model_ewma``, evicting LRU on overflow."""
+        """Insert/move-to-end in ``global_model_ewma``, evicting LRU on overflow.
+
+        See :meth:`_record_account_model_ewma` for the outlier-rejection
+        rationale. We compute the outlier check against the *global*
+        estimate so that a localized account with one bad observation
+        cannot poison its peers.
+        """
+        if self._is_outlier(cost_per_token, model_id):
+            return
         if model_id in self.global_model_ewma:
             self.global_model_ewma.move_to_end(model_id)
         else:

@@ -92,6 +92,16 @@ def _price_unit(value: object) -> str | None:
     return None
 
 
+def price_unit(value: object) -> str | None:
+    """Public wrapper for :func:`_price_unit` used by sibling-aware resolvers.
+
+    Returns the explicit unit suffix carried by a string price value
+    (``"token"``, ``"1k"``, or ``"million"``), or ``None`` when the
+    value carries no unit. Non-string inputs always return ``None``.
+    """
+    return _price_unit(value)
+
+
 def parse_price_per_1k(value: object, *, default_unit: str = "1k") -> float | None:
     """Parse dollars-per-token/1K/million into legacy dollars-per-1K.
 
@@ -189,6 +199,15 @@ _GENERIC_OUTPUT_FALLBACK_DOLLARS_PER_1K = 0.015  # $15 / 1M
 # token"). Provider-reported billed cost still wins in the finalizer;
 # this bound only applies to EggPool-derived snapshot rates.
 _MAX_TRUSTED_RATE_PER_MILLION_MICRODOLLARS = 1_000_000_000  # $1,000 / 1M
+
+# Per-request sanity ceiling on the implicit cost-per-token implied by
+# ``calculate_cost``. Above this rate the finalizer downgrades the
+# exactness label to ``estimated`` so the reservation floor takes over
+# rather than an inflated derived value. Set above the most expensive
+# legitimate frontier model (e.g. o1-pro at ~$60/M output ≈ 60
+# microdollars/token) but well below the 1,000,000 microdollars/token
+# that the upstream unit-misclassification bug produces.
+_MAX_TRUSTED_COST_PER_TOKEN_MICRODOLLARS = 1_000  # $1 / token
 
 
 def coerce_token_count(value: object) -> int:
@@ -554,6 +573,27 @@ class CostCalculator:
             )
         ):
             exactness = "estimated"
+        # Per-request sanity check on the implicit cost-per-token. An
+        # inflated snapshot rate (the unit-misclassification class of
+        # bug) produces a derived cost whose per-token rate exceeds
+        # every legitimate frontier model. Downgrade the exactness
+        # label to ``estimated`` so the finalizer applies the
+        # reservation floor (which is bounded by the
+        # MAX_REQUEST_COST_MICRODOLLARS clamp) rather than recording
+        # the inflated derived value as authoritative spend. The
+        # dashboard surfaces the discrepancy via the exactness label.
+        if exactness == "derived" and total_tokens > 0:
+            implicit_cost_per_token = cost_microdollars / total_tokens
+            if implicit_cost_per_token > _MAX_TRUSTED_COST_PER_TOKEN_MICRODOLLARS:
+                logger.warning(
+                    "Derived cost for %s/%s implies %s microdollars/token "
+                    "(> %s trust ceiling). Treating as estimated.",
+                    model_id,
+                    provider_id or "*",
+                    implicit_cost_per_token,
+                    _MAX_TRUSTED_COST_PER_TOKEN_MICRODOLLARS,
+                )
+                exactness = "estimated"
         return cost_microdollars, exactness
 
     def _estimate_cost(self, input_tokens: int, output_tokens: int) -> int:
