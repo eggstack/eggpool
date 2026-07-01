@@ -2769,12 +2769,9 @@ def stats_transcoding(
         if as_json:
             import json as json_mod
 
-            serializable = dict(stats_data)
-            if "per_direction" in serializable:
-                serializable["per_direction"] = {
-                    f"{k[0]}→{k[1]}": v
-                    for k, v in serializable["per_direction"].items()
-                }
+            from eggpool.stats import serialize_transcoding_stats
+
+            serializable = serialize_transcoding_stats(stats_data)
             click.echo(json_mod.dumps(serializable, indent=2, default=str))
             return 0
 

@@ -222,6 +222,33 @@ class TestTranscodingJsonEndpoint:
         assert data["per_direction"] == {}
         assert data["top_loss_warnings"] == []
 
+    def test_serializes_direction_tuple_keys(
+        self,
+        migrated_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        class _StatsService:
+            def __init__(self, db: object) -> None:
+                self.db = db
+
+            async def get_transcoding_stats(self, period: str) -> dict[str, Any]:
+                return {
+                    "total": 3,
+                    "native_count": 1,
+                    "transcoded_count": 2,
+                    "per_direction": {("openai", "anthropic"): 2},
+                    "top_loss_warnings": [],
+                    "period_seen": period,
+                }
+
+        monkeypatch.setattr("eggpool.stats.StatsService", _StatsService)
+
+        response = migrated_client.get("/api/stats/transcoding?period=7d")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["per_direction"] == {"openai→anthropic": 2}
+        assert data["period_seen"] == "7d"
+
     def test_respects_period_query_param(self, migrated_client: TestClient) -> None:
         response = migrated_client.get("/api/stats/transcoding?period=7d")
         assert response.status_code == 200

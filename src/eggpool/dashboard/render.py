@@ -7,6 +7,7 @@ small. All values rendered into HTML are escaped via the `escape` module.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from html import escape as _html_escape
 from typing import TYPE_CHECKING, Any, cast
@@ -2473,28 +2474,28 @@ def render_model_detail(
     last_seen = info.last_seen_at
     last_refreshed = info.last_refreshed_at
     next_refresh = info.next_refresh_at
-    detail: dict[str, object] = info.detail or {}
-    provenance: dict[str, object] = info.provenance or {}
-    conflicts: dict[str, object] = info.conflicts or {}
+    detail = _as_mapping(info.detail)
+    provenance = _as_mapping(info.provenance)
+    conflicts = _as_mapping(info.conflicts)
 
     # Status pill
     pill_info: dict[str, Any] = {
         "status": status_str,
         "sparse": sparse,
         "summary": summary,
-        "sources": list(cast("list[str]", provenance.get("sources", []))),
+        "sources": _as_str_list(provenance.get("sources")),
         "last_refreshed_at": (last_refreshed.isoformat() if last_refreshed else None),
     }
     status_pill = _render_model_info_pill(pill_info)
 
     # Sources list
-    sources: list[str] = list(cast("list[str]", provenance.get("sources", [])))
+    sources = _as_str_list(provenance.get("sources"))
     sources_html = (
         ", ".join(f"<code>{escape(s)}</code>" for s in sources) if sources else _EM_DASH
     )
 
     # Provider IDs
-    providers: list[str] = list(cast("list[str]", detail.get("providers", [])))
+    providers = _as_str_list(detail.get("providers"))
     providers_html = (
         ", ".join(f"<code>{escape(p)}</code>" for p in providers)
         if providers
@@ -2508,7 +2509,7 @@ def render_model_detail(
     # (``backfill_legacy_detail_blocks``) lifts every such row on the
     # next launch; this fallback only covers the race window before
     # that runs.
-    limits: dict[str, object] = cast("dict[str, object]", detail.get("limits", {}))
+    limits = _as_mapping(detail.get("limits"))
     ctx = limits.get("effective_context")
     if ctx is None:
         ctx = detail.get("context_tokens")
@@ -2521,19 +2522,18 @@ def render_model_detail(
     ext_out = limits.get("external_output")
     if ext_out is None:
         ext_out = detail.get("max_output_tokens_external")
-    limits_parts: list[str] = []
-    if ctx is not None:
-        limits_parts.append(f"Effective ctx: {format_tokens(int(ctx))}")  # type: ignore[arg-type]
-    if ext_ctx is not None:
-        limits_parts.append(f"External ctx: {format_tokens(int(ext_ctx))}")  # type: ignore[arg-type]
-    if eff_out is not None:
-        limits_parts.append(f"Effective out: {format_tokens(int(eff_out))}")  # type: ignore[arg-type]
-    if ext_out is not None:
-        limits_parts.append(f"External out: {format_tokens(int(ext_out))}")  # type: ignore[arg-type]
+    limits_parts = _render_model_limit_parts(
+        {
+            "Effective ctx": ctx,
+            "External ctx": ext_ctx,
+            "Effective out": eff_out,
+            "External out": ext_out,
+        }
+    )
     limits_html = " &middot; ".join(limits_parts) if limits_parts else "—"
 
     # Modalities
-    modalities: list[str] = list(cast("list[str]", detail.get("modalities", [])))
+    modalities = _as_str_list(detail.get("modalities"))
     modalities_html = ", ".join(escape(m) for m in modalities) if modalities else "—"
 
     # Tool support
@@ -2553,9 +2553,7 @@ def render_model_detail(
     release_html = escape(str(release_date)) if release_date else "—"
 
     # External IDs
-    external_ids: dict[str, object] = cast(
-        "dict[str, object]", detail.get("external_ids", {})
-    )
+    external_ids = _as_mapping(detail.get("external_ids"))
     ext_id_parts: list[str] = []
     for ext_source, ext_id in external_ids.items():
         src_esc = escape(str(ext_source))
@@ -2564,14 +2562,10 @@ def render_model_detail(
     ext_ids_html = "<br>".join(ext_id_parts) if ext_id_parts else _EM_DASH
 
     # Benchmarks
-    benchmarks: list[object] = list(cast("list[object]", detail.get("benchmarks", [])))
-    benchmarks_html = _render_benchmarks_table(benchmarks)
+    benchmarks_html = _render_benchmarks_table(detail.get("benchmarks"))
 
     # HuggingFace metadata
-    hf_metadata: dict[str, object] = cast(
-        "dict[str, object]", detail.get("huggingface_metadata", {})
-    )
-    hf_html = _render_hf_metadata(hf_metadata)
+    hf_html = _render_hf_metadata(detail.get("huggingface_metadata"))
 
     # Conflicts
     conflicts_html = _render_conflicts_section(conflicts)
@@ -2689,22 +2683,32 @@ def render_model_detail(
     )
 
 
-def _render_benchmarks_table(benchmarks: list[object]) -> str:
+def _render_model_limit_parts(values: Mapping[str, object]) -> list[str]:
+    parts: list[str] = []
+    for label, raw_value in values.items():
+        value = _coerce_positive_int(raw_value)
+        if value is not None:
+            parts.append(f"{label}: {format_tokens(value)}")
+    return parts
+
+
+def _render_benchmarks_table(benchmarks: object) -> str:
     """Render a benchmarks section if benchmark data is available."""
-    if not benchmarks:
+    if not isinstance(benchmarks, list):
         return ""
+    benchmark_items = cast("list[object]", benchmarks)
     rows: list[str] = []
-    for bm in benchmarks:
-        if not isinstance(bm, dict):
+    for bm in benchmark_items:
+        bm_map = _as_mapping(bm)
+        if not bm_map:
             continue
-        bm_dict: dict[str, Any] = bm  # type: ignore[assignment]
-        source = escape(str(bm_dict.get("source", "")))
-        name = escape(str(bm_dict.get("benchmark", bm_dict.get("name", ""))))
-        score = bm_dict.get("score")
-        rank = bm_dict.get("rank")
-        percentile = bm_dict.get("percentile")
-        observed = bm_dict.get("observed_at", "")
-        caveat = bm_dict.get("caveat", "")
+        source = escape(str(bm_map.get("source", "")))
+        name = escape(str(bm_map.get("benchmark", bm_map.get("name", ""))))
+        score = bm_map.get("score")
+        rank = bm_map.get("rank")
+        percentile = bm_map.get("percentile")
+        observed = bm_map.get("observed_at", "")
+        caveat = bm_map.get("caveat", "")
         value_parts: list[str] = []
         if score is not None:
             value_parts.append(f"Score: {escape(str(score))}")
@@ -2730,8 +2734,9 @@ def _render_benchmarks_table(benchmarks: list[object]) -> str:
     )
 
 
-def _render_hf_metadata(hf_metadata: dict[str, object]) -> str:
+def _render_hf_metadata(hf_metadata: object) -> str:
     """Render Hugging Face metadata section if available."""
+    hf_metadata = _as_mapping(hf_metadata)
     if not hf_metadata:
         return ""
     parts: list[str] = []
@@ -2740,9 +2745,9 @@ def _render_hf_metadata(hf_metadata: dict[str, object]) -> str:
         if val is not None:
             parts.append(f"<tr><th>{escape(key)}</th><td>{escape(str(val))}</td></tr>")
     tags = hf_metadata.get("tags")
-    if isinstance(tags, list) and tags:
-        tags_list: list[str] = tags  # type: ignore[assignment]
-        tags_html = ", ".join(escape(str(t)) for t in tags_list[:10])
+    tags_list = _as_str_list(tags)
+    if tags_list:
+        tags_html = ", ".join(escape(tag) for tag in tags_list[:10])
         parts.append(f"<tr><th>Tags</th><td>{tags_html}</td></tr>")
     if not parts:
         return ""
@@ -2753,17 +2758,17 @@ def _render_hf_metadata(hf_metadata: dict[str, object]) -> str:
     )
 
 
-def _render_conflicts_section(conflicts: dict[str, object]) -> str:
+def _render_conflicts_section(conflicts: Mapping[str, object]) -> str:
     """Render a conflicts section if any conflicts exist."""
     if not conflicts:
         return ""
     rows: list[str] = []
     for field, val in conflicts.items():
-        if isinstance(val, dict):
-            val_dict: dict[str, Any] = val  # type: ignore[assignment]
-            sources_vals: dict[str, Any] = val_dict.get("sources", {})  # type: ignore[assignment]
-            selected = val_dict.get("selected", "")
-            reason = val_dict.get("reason", "")
+        val_map = _as_mapping(val)
+        if val_map:
+            sources_vals = _as_mapping(val_map.get("sources"))
+            selected = val_map.get("selected", "")
+            reason = val_map.get("reason", "")
             sources_str = (
                 ", ".join(
                     f"{escape(str(k))}: {escape(str(v))}"
@@ -4083,6 +4088,47 @@ def _as_dict(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}
     return cast("dict[str, Any]", value)
+
+
+def _as_mapping(value: object) -> dict[str, Any]:
+    """Coerce ``value`` to a dict for untrusted dashboard sidecar payloads."""
+    if not isinstance(value, Mapping):
+        return {}
+    typed = cast("Mapping[object, Any]", value)
+    return {str(key): item for key, item in typed.items()}
+
+
+def _as_str_list(value: object) -> list[str]:
+    """Return a string list for list-like dashboard sidecar fields."""
+    items: list[object] | tuple[object, ...] | set[object] | frozenset[object]
+    if isinstance(value, list):
+        items = cast("list[object]", value)
+    elif isinstance(value, tuple):
+        items = cast("tuple[object, ...]", value)
+    elif isinstance(value, set):
+        items = cast("set[object]", value)
+    elif isinstance(value, frozenset):
+        items = cast("frozenset[object]", value)
+    else:
+        return []
+    return [str(item) for item in items if item is not None]
+
+
+def _coerce_positive_int(value: object) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, float):
+        parsed = int(value)
+    elif isinstance(value, str):
+        try:
+            parsed = int(value)
+        except ValueError:
+            return None
+    else:
+        return None
+    return parsed if parsed > 0 else None
 
 
 def render_reliability(

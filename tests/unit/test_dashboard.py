@@ -4349,6 +4349,43 @@ class TestRenderModelDetail:
         assert "Effective ctx" in html
         assert "External ctx" in html
 
+    def test_detail_renderer_tolerates_malformed_sidecar_fields(self) -> None:
+        from datetime import UTC, datetime
+        from types import SimpleNamespace
+
+        from eggpool.dashboard.render import render_model_detail
+
+        now = datetime.now(UTC)
+        info = SimpleNamespace(
+            model_id="test",
+            status="fresh",
+            summary="malformed",
+            sparse=False,
+            detail={
+                "limits": "not-a-dict",
+                "context_tokens": "unknown",
+                "providers": "not-a-list",
+                "modalities": "not-a-list",
+                "external_ids": "not-a-dict",
+                "benchmarks": "not-a-list",
+                "huggingface_metadata": ["not", "a", "dict"],
+            },
+            provenance={"sources": "not-a-list"},
+            conflicts={"context": {"sources": "not-a-dict", "selected": "catalog"}},
+            first_seen_at=now,
+            last_seen_at=now,
+            last_refreshed_at=None,
+            next_refresh_at=None,
+        )
+        html = render_model_detail(info=info, model_id="test")
+        assert "malformed" in html
+        assert "Provider / Callability" in html
+        assert "<tr><th>Limits</th><td>—</td></tr>" in html
+        assert "<tr><th>Providers</th><td>—</td></tr>" in html
+        assert "Benchmarks" not in html
+        assert "Hugging Face" not in html
+        assert "Conflicts" in html
+
     def test_api_detail_response_contains_normalized_limits(self) -> None:
         """The API ``_detail_response`` reader exposes the nested
         limits block with the expected keys."""

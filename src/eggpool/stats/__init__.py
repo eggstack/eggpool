@@ -31,6 +31,7 @@ from eggpool.stats.service import (
     resolve_period,
     resolve_time_range,
 )
+from eggpool.stats.transcoding import serialize_transcoding_stats
 
 __all__ = [
     "PERIOD_PRESETS",
@@ -58,4 +59,5 @@ __all__ = [
     "fetch_transcoding_stats",
     "resolve_period",
     "resolve_time_range",
+    "serialize_transcoding_stats",
 ]

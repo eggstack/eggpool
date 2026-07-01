@@ -1369,14 +1369,12 @@ async def handle_transcoding_stats_json(request: Request) -> Response:
     """Return transcoding statistics as JSON."""
     _get_dashboard_config(request)
     db = request.app.state.db
-    from starlette.responses import JSONResponse as _JSONResponse
-
-    from eggpool.stats import StatsService
+    from eggpool.stats import StatsService, serialize_transcoding_stats
 
     period = request.query_params.get("period", "24h")
     stats_service = StatsService(db)
     data = await stats_service.get_transcoding_stats(period)
-    return _JSONResponse(content=data)
+    return JSONResponse(content=serialize_transcoding_stats(data))
 
 
 def register_dashboard_routes(app: Any, require_auth: bool = False) -> None:

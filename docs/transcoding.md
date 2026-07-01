@@ -603,6 +603,13 @@ eggpool stats transcoding --period 7d
 eggpool stats transcoding --period 30d --json
 ```
 
+### Monitor via API
+
+`GET /api/stats/transcoding?period=24h` returns the same counters as the
+Runtime card. JSON responses encode direction keys as strings such as
+`"openai→anthropic"` under `per_direction`; Python-internal tuple keys are never
+exposed on the API surface.
+
 ### Disable transcoding (deprecated escape hatch)
 
 Set `enabled = false` in `[transcoder]` and restart. All requests will now require protocol match — a client speaking OpenAI to an Anthropic-only account will get a protocol mismatch error. This option is deprecated; transcoding will become unconditionally on in a future release.
