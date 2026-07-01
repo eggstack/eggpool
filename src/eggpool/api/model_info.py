@@ -16,6 +16,8 @@ from urllib.parse import unquote
 from fastapi import Request  # noqa: TCH002 — FastAPI needs runtime access
 from fastapi.responses import JSONResponse
 
+from eggpool.routing.provider import parse_model_provider
+
 if TYPE_CHECKING:
     from fastapi.responses import Response
 
@@ -292,14 +294,52 @@ async def handle_model_info_aliases(request: Request, model_id: str) -> Response
     )
 
 
+_ALLOWED_REFRESH_SOURCES: frozenset[str] = frozenset(
+    {
+        "",
+        "all",
+        "provider_catalog",
+        "openrouter",
+        "artificial_analysis",
+        "huggingface",
+    }
+)
+
+
+def _normalize_refresh_source(source_filter: str | None) -> str | None:
+    """Validate the ``source`` query param and normalize ``all`` -> ``None``.
+
+    Returns ``None`` when the filter is absent or empty (also when it
+    equals ``"all"``).  Returns the literal filter string when it is
+    one of the configured source names.  Raises ``ValueError`` for
+    any other value so the caller can return HTTP 400.
+    """
+    if source_filter is None:
+        return None
+    if source_filter in _ALLOWED_REFRESH_SOURCES:
+        return None if source_filter in ("", "all") else source_filter
+    raise ValueError(f"unknown model-info source: {source_filter}")
+
+
 async def handle_model_info_refresh(request: Request) -> Response:
     """POST /api/model-info/refresh — manual refresh.
 
     Always auth-gated. Accepts optional query params:
-      ?model_id=<id>  — refresh a single model (provider suffix accepted)
+      ?model_id=<id>  — refresh a single model. Provider-suffixed
+                        IDs (``gpt-4o/openai``) are accepted; the
+                        suffix is stripped via
+                        :func:`parse_model_provider` so the canonical
+                        base model row is refreshed with the provider
+                        value forwarded as the ``provider_id``
+                        filter.
       ?source=provider_catalog|openrouter|artificial_analysis|huggingface
                      — restrict single-model refresh to one source
+                        (in addition to the always-run provider
+                        catalog).  ``all`` (or absent) means every
+                        enabled source.
       ?force=1        — force refresh even if not due
+
+    Unknown ``source`` values are rejected with HTTP 400.
     """
     model_info = getattr(request.app.state, "model_info", None)
     if model_info is None:
@@ -308,28 +348,62 @@ async def handle_model_info_refresh(request: Request) -> Response:
             content={"error": "model_info disabled"},
         )
 
-    model_id_filter = request.query_params.get("model_id")
+    raw_model_id = request.query_params.get("model_id")
     source_filter = request.query_params.get("source")
     force = request.query_params.get("force") in {"1", "true", "yes"}
 
-    if model_id_filter:
+    try:
+        source_arg = _normalize_refresh_source(source_filter)
+    except ValueError as err:
+        return JSONResponse(status_code=400, content={"error": str(err)})
+
+    if raw_model_id:
+        requested_model_id = unquote(raw_model_id)
+        # Parse a provider suffix off the URL-decoded id so the
+        # canonical base model row is refreshed and the provider
+        # value is forwarded to the service for narrower source
+        # matching.  Unknown suffix fragments fall through to the
+        # base-id path so legacy callers that pass a literal model
+        # id (e.g. ``gpt-4o/openrouter`` when ``openrouter`` is not
+        # a configured provider) still work.
+        config = getattr(request.app.state, "config", None)
+        known_providers: set[str] | None = None
+        if config is not None:
+            providers_cfg: Any = None
+            try:
+                # ``getattr`` defensively against configs that raised
+                # on attribute access; the cast narrows to ``dict``
+                # so ``str(k)`` below is well-typed.
+                providers_cfg = cast("dict[str, Any]", getattr(config, "providers", {}))
+            except Exception:
+                providers_cfg = None
+            if isinstance(providers_cfg, dict):
+                typed_providers_cfg = cast("dict[str, Any]", providers_cfg)
+                known_providers = {str(k) for k in typed_providers_cfg}
+        lookup_id, provider_suffix = parse_model_provider(
+            requested_model_id, known_providers
+        )
         result = await model_info.refresh_model_info(
-            model_id_filter, source=source_filter, force=force
+            lookup_id,
+            provider_id=provider_suffix,
+            source=source_arg,
+            force=force,
         )
-        return JSONResponse(
-            content={
-                "status": "ok",
-                "scope": "model",
-                "model_id": model_id_filter,
-                "requested": result.get("requested", 0),
-                "refreshed": result.get("refreshed", 0),
-                "skipped": result.get("skipped", 0),
-                "errors": result.get("errors", 0),
-                "sources_attempted": result.get("sources_attempted", []),
-                "sources_matched": result.get("sources_matched", []),
-                "observations": result.get("observations", 0),
-            }
-        )
+        body: dict[str, Any] = {
+            "status": "ok",
+            "scope": "model",
+            "requested_model_id": requested_model_id,
+            "model_id": lookup_id,
+            "provider_id": provider_suffix,
+            "requested": result.get("requested", 0),
+            "refreshed": result.get("refreshed", 0),
+            "skipped": result.get("skipped", 0),
+            "errors": result.get("errors", 0),
+            "sources_attempted": result.get("sources_attempted", []),
+            "sources_matched": result.get("sources_matched", []),
+            "observations": result.get("observations", 0),
+        }
+        return JSONResponse(content=body)
 
     # Full refresh cycle
     if force:

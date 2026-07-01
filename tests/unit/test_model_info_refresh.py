@@ -822,3 +822,512 @@ class TestRefreshModelInfoAPI:
             assert "observations" in body
         finally:
             await db.disconnect()
+
+
+class TestRefreshModelInfoAPIClosure:
+    """Plan §Defect 2 — the refresh endpoint must:
+
+    * Strip a ``/provider`` suffix from ``?model_id=`` via
+      :func:`parse_model_provider` so callers can pass either a
+      canonical base id (``gpt-4o``) or a provider-suffixed id
+      (``gpt-4o/openai``) and the canonical row is refreshed
+      either way.
+    * Forward the stripped provider suffix to the service as the
+      ``provider_id`` filter (for ``source="provider_catalog"``
+      narrowing).
+    * Validate the ``?source=`` filter against an allow-list and
+      return HTTP 400 on unknown values.
+    * Treat ``source=all`` (or absent) as ``None`` so every enabled
+      source runs.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_provider_suffixed_model_id_normalizes_to_canonical(
+        self,
+    ) -> None:
+        """``POST /api/model-info/refresh?model_id=gpt-4o/openai``
+        calls ``refresh_model_info`` with ``model_id="gpt-4o"`` and
+        ``provider_id="openai"``, not with the literal suffixed
+        string.
+        """
+        from fastapi import FastAPI, Request
+
+        from eggpool.dashboard.routes import _get_dashboard_config  # noqa: F401
+
+        app = FastAPI()
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await _run_migrations(db)
+            await _seed_model(db, "gpt-4o")
+            cache = _make_cache("gpt-4o")
+            service = ModelInfoService(ModelInfoConfig(), db, cache)
+            app.state.model_info = service
+
+            captured: dict[str, Any] = {}
+            original = service.refresh_model_info
+
+            async def _wrapped(
+                model_id: str,
+                *,
+                provider_id: str | None = None,
+                source: str | None = None,
+                force: bool = False,
+            ) -> dict[str, Any]:
+                captured["model_id"] = model_id
+                captured["provider_id"] = provider_id
+                captured["source"] = source
+                captured["force"] = force
+                return await original(
+                    model_id,
+                    provider_id=provider_id,
+                    source=source,
+                    force=force,
+                )
+
+            service.refresh_model_info = _wrapped  # type: ignore[method-assign]
+
+            class _Providers(dict):
+                def __init__(self) -> None:
+                    super().__init__(openai=object())
+
+            class _Config:
+                providers = _Providers()
+
+            app.state.config = _Config()
+
+            scope: dict[str, Any] = {
+                "type": "http",
+                "method": "POST",
+                "path": "/api/model-info/refresh",
+                "headers": [],
+                "query_string": b"model_id=gpt-4o/openai&force=1",
+                "app": app,
+            }
+
+            async def receive() -> dict[str, Any]:
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            request = Request(scope, receive)
+            response = await handle_model_info_refresh(request)
+            assert response.status_code == 200
+            body = json.loads(response.body)
+            assert body["status"] == "ok"
+            assert body["scope"] == "model"
+            assert body["requested_model_id"] == "gpt-4o/openai"
+            assert body["model_id"] == "gpt-4o"
+            assert body["provider_id"] == "openai"
+            assert captured["model_id"] == "gpt-4o"
+            assert captured["provider_id"] == "openai"
+            assert captured["force"] is True
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio()
+    async def test_unsuffixed_model_id_yields_provider_none(self) -> None:
+        """An unsuffixed id passes ``provider_id=None`` through the
+        API — no parse happens and no suffix is reported back."""
+        from fastapi import FastAPI, Request
+
+        from eggpool.models.config import ProviderConfig
+
+        app = FastAPI()
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await _run_migrations(db)
+            await _seed_model(db, "gpt-4o")
+            cache = _make_cache("gpt-4o")
+            service = ModelInfoService(ModelInfoConfig(), db, cache)
+            app.state.model_info = service
+
+            captured: dict[str, Any] = {}
+
+            async def _wrapped(
+                model_id: str,
+                *,
+                provider_id: str | None = None,
+                source: str | None = None,
+                force: bool = False,
+            ) -> dict[str, Any]:
+                captured["model_id"] = model_id
+                captured["provider_id"] = provider_id
+                return {
+                    "requested": 1,
+                    "refreshed": 1,
+                    "skipped": 0,
+                    "errors": 0,
+                    "sources_attempted": ["provider_catalog"],
+                    "sources_matched": ["provider_catalog"],
+                    "observations": 1,
+                }
+
+            service.refresh_model_info = _wrapped  # type: ignore[method-assign]
+
+            class _Config:
+                providers = {"openai": ProviderConfig.model_construct()}
+
+            app.state.config = _Config()
+
+            scope: dict[str, Any] = {
+                "type": "http",
+                "method": "POST",
+                "path": "/api/model-info/refresh",
+                "headers": [],
+                "query_string": b"model_id=gpt-4o&force=1",
+                "app": app,
+            }
+
+            async def receive() -> dict[str, Any]:
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            request = Request(scope, receive)
+            response = await handle_model_info_refresh(request)
+            assert response.status_code == 200
+            body = json.loads(response.body)
+            assert body["model_id"] == "gpt-4o"
+            assert body["provider_id"] is None
+            assert body["requested_model_id"] == "gpt-4o"
+            assert captured["provider_id"] is None
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio()
+    async def test_unknown_source_returns_http_400(self) -> None:
+        """Unrecognized ``?source=`` values are rejected with
+        HTTP 400 — the service is not called."""
+        from fastapi import FastAPI, Request
+
+        from eggpool.models.config import ProviderConfig
+
+        app = FastAPI()
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await _run_migrations(db)
+            cache = ModelCatalogCache()
+            service = ModelInfoService(ModelInfoConfig(), db, cache)
+            app.state.model_info = service
+
+            called = False
+
+            async def _fail(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+                nonlocal called
+                called = True
+                return {}
+
+            service.refresh_model_info = _fail  # type: ignore[method-assign]
+
+            class _Config:
+                providers = {"openai": ProviderConfig.model_construct()}
+
+            app.state.config = _Config()
+
+            scope: dict[str, Any] = {
+                "type": "http",
+                "method": "POST",
+                "path": "/api/model-info/refresh",
+                "headers": [],
+                "query_string": b"model_id=gpt-4o&source=bad&force=1",
+                "app": app,
+            }
+
+            async def receive() -> dict[str, Any]:
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            request = Request(scope, receive)
+            response = await handle_model_info_refresh(request)
+            assert response.status_code == 400
+            body = json.loads(response.body)
+            assert "error" in body
+            assert "bad" in body["error"]
+            assert called is False
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio()
+    async def test_source_all_maps_to_none(self) -> None:
+        """``?source=all`` normalizes to ``None`` so every enabled
+        source can run."""
+        from fastapi import FastAPI, Request
+
+        from eggpool.models.config import ProviderConfig
+
+        app = FastAPI()
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await _run_migrations(db)
+            await _seed_model(db, "gpt-4o")
+            cache = _make_cache("gpt-4o")
+            service = ModelInfoService(ModelInfoConfig(), db, cache)
+            app.state.model_info = service
+
+            captured: dict[str, Any] = {}
+
+            async def _wrapped(
+                model_id: str,
+                *,
+                provider_id: str | None = None,
+                source: str | None = None,
+                force: bool = False,
+            ) -> dict[str, Any]:
+                captured["source"] = source
+                return {
+                    "requested": 1,
+                    "refreshed": 1,
+                    "skipped": 0,
+                    "errors": 0,
+                    "sources_attempted": ["provider_catalog"],
+                    "sources_matched": ["provider_catalog"],
+                    "observations": 1,
+                }
+
+            service.refresh_model_info = _wrapped  # type: ignore[method-assign]
+
+            class _Config:
+                providers = {"openai": ProviderConfig.model_construct()}
+
+            app.state.config = _Config()
+
+            for source_value in ("all", ""):
+                captured.clear()
+                scope: dict[str, Any] = {
+                    "type": "http",
+                    "method": "POST",
+                    "path": "/api/model-info/refresh",
+                    "headers": [],
+                    "query_string": (f"model_id=gpt-4o&source={source_value}".encode()),
+                    "app": app,
+                }
+
+                async def receive() -> dict[str, Any]:
+                    return {"type": "http.request", "body": b"", "more_body": False}
+
+                request = Request(scope, receive)
+                response = await handle_model_info_refresh(request)
+                assert response.status_code == 200
+                # Both ``all`` and ``""`` map to ``None``.
+                assert captured["source"] is None
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio()
+    async def test_provider_catalog_source_is_provider_only(self) -> None:
+        """``?source=provider_catalog`` passes through to the service
+        so the per-provider record selection runs; the service
+        layer's existing logic treats provider-catalog as always on,
+        while external sources still run because the source filter
+        names a known configured source value (the service filters
+        external branches by exact string match against ``None`` or
+        the named source).
+        """
+        from fastapi import FastAPI, Request
+
+        from eggpool.models.config import ProviderConfig
+
+        app = FastAPI()
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await _run_migrations(db)
+            await _seed_model(db, "gpt-4o")
+            cache = _make_cache("gpt-4o")
+            service = ModelInfoService(ModelInfoConfig(), db, cache)
+            app.state.model_info = service
+
+            captured: dict[str, Any] = {}
+
+            async def _wrapped(
+                model_id: str,
+                *,
+                provider_id: str | None = None,
+                source: str | None = None,
+                force: bool = False,
+            ) -> dict[str, Any]:
+                captured["source"] = source
+                return {
+                    "requested": 1,
+                    "refreshed": 1,
+                    "skipped": 0,
+                    "errors": 0,
+                    "sources_attempted": ["provider_catalog"],
+                    "sources_matched": ["provider_catalog"],
+                    "observations": 1,
+                }
+
+            service.refresh_model_info = _wrapped  # type: ignore[method-assign]
+
+            class _Config:
+                providers = {"openai": ProviderConfig.model_construct()}
+
+            app.state.config = _Config()
+
+            scope: dict[str, Any] = {
+                "type": "http",
+                "method": "POST",
+                "path": "/api/model-info/refresh",
+                "headers": [],
+                "query_string": b"model_id=gpt-4o&source=provider_catalog&force=1",
+                "app": app,
+            }
+
+            async def receive() -> dict[str, Any]:
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            request = Request(scope, receive)
+            response = await handle_model_info_refresh(request)
+            assert response.status_code == 200
+            # The API forwards the literal ``provider_catalog`` to
+            # the service, which honors it as "provider-only" by
+            # always running the provider branch.
+            assert captured["source"] == "provider_catalog"
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio()
+    async def test_url_encoded_provider_suffix_is_decoded(self) -> None:
+        """``%2F`` in ``?model_id=`` is URL-decoded before
+        ``parse_model_provider`` runs so callers that don't
+        pre-encode the slash still get the right split."""
+        from fastapi import FastAPI, Request
+
+        from eggpool.models.config import ProviderConfig
+
+        app = FastAPI()
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await _run_migrations(db)
+            await _seed_model(db, "gpt-4o")
+            cache = _make_cache("gpt-4o")
+            service = ModelInfoService(ModelInfoConfig(), db, cache)
+            app.state.model_info = service
+
+            captured: dict[str, Any] = {}
+
+            async def _wrapped(
+                model_id: str,
+                *,
+                provider_id: str | None = None,
+                source: str | None = None,
+                force: bool = False,
+            ) -> dict[str, Any]:
+                captured["model_id"] = model_id
+                captured["provider_id"] = provider_id
+                return {
+                    "requested": 1,
+                    "refreshed": 1,
+                    "skipped": 0,
+                    "errors": 0,
+                    "sources_attempted": ["provider_catalog"],
+                    "sources_matched": ["provider_catalog"],
+                    "observations": 1,
+                }
+
+            service.refresh_model_info = _wrapped  # type: ignore[method-assign]
+
+            class _Config:
+                providers = {"openai": ProviderConfig.model_construct()}
+
+            app.state.config = _Config()
+
+            scope: dict[str, Any] = {
+                "type": "http",
+                "method": "POST",
+                "path": "/api/model-info/refresh",
+                "headers": [],
+                "query_string": b"model_id=gpt-4o%2Fopenai&force=1",
+                "app": app,
+            }
+
+            async def receive() -> dict[str, Any]:
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            request = Request(scope, receive)
+            response = await handle_model_info_refresh(request)
+            assert response.status_code == 200
+            body = json.loads(response.body)
+            assert captured["model_id"] == "gpt-4o"
+            assert captured["provider_id"] == "openai"
+            assert body["model_id"] == "gpt-4o"
+            assert body["provider_id"] == "openai"
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio()
+    async def test_unknown_provider_suffix_falls_back_to_full_id(self) -> None:
+        """A suffix that doesn't match any configured provider is
+        ignored so the literal id (minus the slash segment?) is
+        looked up.  ``parse_model_provider`` returns the input
+        unchanged when the suffix isn't in ``known_providers`` so
+        legacy callers that pass ``gpt-4o/openrouter`` even when
+        ``openrouter`` is not configured still get a refresh on the
+        literal id."""
+        from fastapi import FastAPI, Request
+
+        from eggpool.models.config import ProviderConfig
+
+        app = FastAPI()
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await _run_migrations(db)
+            cache = ModelCatalogCache()
+            service = ModelInfoService(ModelInfoConfig(), db, cache)
+            app.state.model_info = service
+
+            captured: dict[str, Any] = {}
+
+            async def _wrapped(
+                model_id: str,
+                *,
+                provider_id: str | None = None,
+                source: str | None = None,
+                force: bool = False,
+            ) -> dict[str, Any]:
+                captured["model_id"] = model_id
+                captured["provider_id"] = provider_id
+                return {
+                    "requested": 1,
+                    "refreshed": 1,
+                    "skipped": 0,
+                    "errors": 0,
+                    "sources_attempted": ["provider_catalog"],
+                    "sources_matched": [],
+                    "observations": 0,
+                }
+
+            service.refresh_model_info = _wrapped  # type: ignore[method-assign]
+
+            # Only ``openai`` is configured; ``unknown`` suffix must
+            # not be treated as a provider filter.
+            class _Config:
+                providers = {"openai": ProviderConfig.model_construct()}
+
+            app.state.config = _Config()
+
+            scope: dict[str, Any] = {
+                "type": "http",
+                "method": "POST",
+                "path": "/api/model-info/refresh",
+                "headers": [],
+                "query_string": b"model_id=gpt-4o/unknown&force=1",
+                "app": app,
+            }
+
+            async def receive() -> dict[str, Any]:
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            request = Request(scope, receive)
+            response = await handle_model_info_refresh(request)
+            assert response.status_code == 200
+            # The unknown suffix is left intact so the literal id
+            # is the lookup key — no silent canonicalization.
+            assert captured["model_id"] == "gpt-4o/unknown"
+            assert captured["provider_id"] is None
+            body = json.loads(response.body)
+            assert body["model_id"] == "gpt-4o/unknown"
+            assert body["provider_id"] is None
+        finally:
+            await db.disconnect()

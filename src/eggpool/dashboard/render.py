@@ -10,6 +10,7 @@ import json
 from datetime import UTC, date, datetime, timedelta
 from html import escape as _html_escape
 from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import quote
 
 if TYPE_CHECKING:
     from eggpool.model_info.types import CanonicalModelInfo
@@ -2261,8 +2262,16 @@ def render_models(
             mi_info = mi_map.get(base_id) or mi_map.get(model_id)
             info_pill = _render_model_info_pill(mi_info)
 
+            # URL path-encode the model id so provider suffixes
+            # (``/``), query metacharacters (``?``), and any future
+            # characters that would change the route's path/query
+            # shape are emitted as percent escapes.  The route
+            # ``/models/{model_id:path}`` plus the detail handler's
+            # ``unquote()`` round-trip recovers the original id on
+            # the server side.
+            quoted_model_id = quote(str(model_id or ""), safe="")
             model_link = (
-                f'<a href="/models/{escape_attr(model_id)}'
+                f'<a href="/models/{quoted_model_id}'
                 f'?theme={escape_attr(current_theme)}">'
                 f"{escape(model_id)}</a>"
             )

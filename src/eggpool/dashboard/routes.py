@@ -389,6 +389,7 @@ async def handle_models(
     model_info_service = getattr(request.app.state, "model_info", None)
     catalog = getattr(request.app.state, "catalog", None)
     app_config = getattr(request.app.state, "config", None)
+    collapse_models = _read_collapse_models(app_config)
 
     # Fetch stats, model-info summaries, and the catalog snapshot
     # concurrently so the page renders in a single round-trip.
@@ -401,6 +402,11 @@ async def handle_models(
             _get_model_info_summary_map(model_info_service),
             _get_catalog_rows(catalog, account=account or None, config=app_config),
         ),
+    )
+    merged_rows = _merge_models_with_catalog(
+        models if models is not None else [],
+        catalog_rows,
+        collapse_models=collapse_models,
     )
     merged_rows = _merge_models_with_catalog(
         models if models is not None else [],
@@ -764,7 +770,9 @@ def _apply_model_filters(
     * ``used``: ``"used"`` keeps rows with ``request_count > 0``;
       ``"unused"`` keeps rows with ``request_count == 0``.
     * ``info_status``: matches the ``status`` field in the
-      ``model_info_map`` entry for each model.
+      ``model_info_map`` entry for each model.  Looks up by
+      ``base_model_id`` first (the canonical unsuffixed key) and
+      falls back to the literal ``model_id`` for legacy rows.
     * ``availability``: ``"available"`` keeps models present in the
       catalog (``_in_catalog`` flag); ``"unavailable"`` keeps the rest.
     """
@@ -777,11 +785,17 @@ def _apply_model_filters(
     elif used == "unused":
         result = [r for r in result if int(r.get("request_count", 0) or 0) == 0]
     if info_status is not None:
-        result = [
-            r
-            for r in result
-            if mi_map.get(r.get("model_id", ""), {}).get("status") == info_status
-        ]
+        normalized = _normalize_info_status_filter(info_status)
+
+        def _matches(row: dict[str, Any]) -> bool:
+            base_id = str(row.get("base_model_id") or "")
+            literal = str(row.get("model_id") or "")
+            mi_entry = mi_map.get(base_id) or mi_map.get(literal)
+            if mi_entry is None:
+                return False
+            return mi_entry.get("status") == normalized
+
+        result = [r for r in result if _matches(r)]
     if availability == "available":
         result = [r for r in result if r.get("_in_catalog")]
     elif availability == "unavailable":
@@ -789,34 +803,88 @@ def _apply_model_filters(
     return result
 
 
+# Display-to-canonical status aliases.  The dashboard's filter UI
+# historically accepts the canonical names (``sparse_new``,
+# ``conflicting``, ``source_unavailable``, ``manual_override``) but
+# compact summaries expose the display labels (``sparse``,
+# ``conflict``, ``source-unavailable``, ``manual``).  Both forms are
+# honored so that ``?info_status=sparse`` and
+# ``?info_status=sparse_new`` filter the same set of rows.
+_STATUS_ALIASES: dict[str, str] = {
+    "sparse": "sparse_new",
+    "sparse_new": "sparse_new",
+    "conflict": "conflicting",
+    "conflicting": "conflicting",
+    "source-unavailable": "source_unavailable",
+    "source_unavailable": "source_unavailable",
+    "manual": "manual_override",
+    "manual_override": "manual_override",
+    "withdrawn": "withdrawn",
+}
+
+
+def _normalize_info_status_filter(value: str) -> str:
+    """Normalize an info-status filter value to its canonical form."""
+    return _STATUS_ALIASES.get(value, value)
+
+
+def _model_row_key(row: dict[str, Any], *, collapse_models: bool) -> tuple[str, str]:
+    """Compute the dedupe key for a merge row.
+
+    In provider-scoped mode the key is ``(model_id, provider_id)`` so
+    sibling provider exposures for the same base model remain
+    distinct.  In collapsed mode the key collapses to
+    ``(model_id, "")`` so one row per base model wins.
+    """
+    model_id = str(row.get("model_id") or "")
+    if collapse_models:
+        return (model_id, "")
+    provider_id = str(row.get("provider_id") or "")
+    return (model_id, provider_id)
+
+
 def _merge_models_with_catalog(
     stats_rows: list[dict[str, Any]],
     catalog_rows: list[dict[str, Any]],
+    *,
+    collapse_models: bool = False,
 ) -> list[dict[str, Any]]:
-    """Merge usage stats onto catalog rows, deduplicating by model_id.
+    """Merge usage stats onto catalog rows.
 
     Stats rows win on numeric columns (they reflect real activity);
     catalog rows are preserved when stats has no entry.  The merged
     list is sorted by request count (descending) so active models
     appear first; sparse catalog rows fall to the bottom.
 
+    Dedup behavior depends on ``collapse_models``:
+
+    * ``collapse_models=False`` (provider-scoped): keys are
+      ``(model_id, provider_id)`` so an unused sibling provider for
+      the same base model is not suppressed by an active provider's
+      stats row.
+    * ``collapse_models=True``: keys collapse to ``(model_id, "")`` so
+      one row per base model wins (the ``providers`` list on the
+      catalog row carries every contributing provider).
+
     Diagnostic fields that originate from the catalog
     (``base_model_id``, ``providers``, ``available``,
     ``catalog_status``, ``routing_priority``, ``routing_priority_max``,
     ``protocol``, ``display_name``) are preserved on stats rows that
-    share the same ``(model_id, provider_id)`` key, so the dashboard
-    renders provider/protocol facts even for active models.
+    share the same dedupe key, so the dashboard renders
+    provider/protocol facts even for active models.  Legacy stats
+    rows that lack ``provider_id`` fall back to ``catalog_by_id`` for
+    diagnostic fields but do not suppress provider-scoped catalog
+    rows.
     """
-    catalog_model_ids: set[str] = {r.get("model_id", "") for r in catalog_rows}
     catalog_by_key: dict[tuple[str, str], dict[str, Any]] = {}
     catalog_by_id: dict[str, dict[str, Any]] = {}
     for row in catalog_rows:
-        mid = row.get("model_id", "")
-        pid = row.get("provider_id", "")
-        if mid:
-            catalog_by_id[mid] = row
-        if mid and pid:
-            catalog_by_key[(mid, pid)] = row
+        key = _model_row_key(row, collapse_models=collapse_models)
+        mid, _pid = key
+        if not mid:
+            continue
+        catalog_by_id.setdefault(mid, row)
+        catalog_by_key.setdefault(key, row)
     _diagnostic_keys = (
         "base_model_id",
         "providers",
@@ -827,50 +895,41 @@ def _merge_models_with_catalog(
         "protocol",
         "display_name",
     )
-    stats_by_id: dict[str, dict[str, Any]] = {}
-    for row in stats_rows:
-        mid = row.get("model_id", "")
-        if mid:
-            stats_by_id[mid] = row
     merged: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    seen_keys: set[tuple[str, str]] = set()
     for row in stats_rows:
-        mid = row.get("model_id", "")
-        if mid:
-            seen.add(mid)
-            row.pop("_sparse", None)
-            row.pop("_display_name", None)
-            row.pop("_providers", None)
-            if mid in catalog_model_ids:
-                row["_in_catalog"] = True
-                # Lift the diagnostic fields from the matching catalog
-                # row so active rows still render availability/pill
-                # facts.
-                provider_id = row.get("provider_id", "")
-                catalog_row = catalog_by_key.get(
-                    (mid, provider_id)
-                ) or catalog_by_id.get(mid)
-                if catalog_row is not None:
-                    for key in _diagnostic_keys:
-                        if key in catalog_row and key not in row:
-                            row[key] = catalog_row[key]
-            merged.append(row)
+        key = _model_row_key(row, collapse_models=collapse_models)
+        mid, pid = key
+        if not mid:
+            continue
+        seen_keys.add(key)
+        row.pop("_sparse", None)
+        row.pop("_display_name", None)
+        row.pop("_providers", None)
+        # Find the matching catalog row: exact key first, then fall
+        # back to the id-only map for legacy stats rows that lack
+        # ``provider_id`` in provider-scoped mode.
+        catalog_row = catalog_by_key.get(key)
+        if catalog_row is None and not collapse_models and not pid:
+            catalog_row = catalog_by_id.get(mid)
+        if catalog_row is not None:
+            row["_in_catalog"] = True
+            for k in _diagnostic_keys:
+                if k in catalog_row and k not in row:
+                    row[k] = catalog_row[k]
+        merged.append(row)
     for row in catalog_rows:
-        mid = row.get("model_id", "")
-        if mid in seen:
+        key = _model_row_key(row, collapse_models=collapse_models)
+        if not key[0] or key in seen_keys:
             continue
-        # Prefer the canonical stats row; otherwise keep the sparse
-        # catalog row (request_count=0). The merge is just
-        # preservation here.
-        stats_row = stats_by_id.get(mid)
-        if stats_row is not None:
-            continue
+        seen_keys.add(key)
         row["_in_catalog"] = True
         merged.append(row)
     merged.sort(
         key=lambda r: (
             -int(r.get("request_count", 0) or 0),
             r.get("model_id", ""),
+            str(r.get("provider_id") or ""),
         )
     )
     return merged

@@ -242,6 +242,15 @@ The `/timeseries` page replaces the old "table of bucket counts" with a stacked-
 - `_status_badge_tooltip()` at `src/eggpool/dashboard/render.py:61` maps status badge names (`cooldown_active`, `auth_failed`, `rate_limited`, `quota_exhausted`, `circuit_open`, ...) to human descriptions; status badges in event tables carry `data-tooltip` from the same mapping
 - Topbar opt-ins: theme selector (`Switch dashboard theme`), period selector (`Select time range`), refresh `↻` button (`Reload this page`)
 
+### Models Page Merge and Detail Links
+
+- `_merge_models_with_catalog()` (`src/eggpool/dashboard/routes.py`) honors `[models].collapse_models`:
+  - `collapse_models=false` dedupes by `(model_id, provider_id)` so an unused sibling provider for a used base model is **not** suppressed by an active sibling's stats row; the catalog-complete view shows every provider-scope row.
+  - `collapse_models=true` dedupes by `model_id` only so the collapsed view stays one row per base model.
+  - `_model_row_key()` is the single source of truth for the key computation; legacy stats rows that omit `provider_id` fall back to `catalog_by_id[model_id]` for diagnostic fields but do **not** suppress provider-scoped catalog rows.
+- `render_models()` percent-encodes the detail-link path segment via `urllib.parse.quote(safe="")` (in `src/eggpool/dashboard/render.py`) so model ids containing provider suffixes (`/`) or query/HTML metacharacters (`?`, `#`, `<`, `>`, `"`) round-trip cleanly through `/models/{model_id:path}` + the detail handler's `unquote()`. The stats-row merge preserves the literal model id; only the emitted `<a href>` is percent-encoded.
+- The dashboard's `?info_status=` filter accepts both canonical status names (`sparse_new`, `conflicting`, `source_unavailable`, `manual_override`) and the display aliases the compact `/api/model-info` summary exposes (`sparse`, `conflict`, `source-unavailable`, `manual`). `_normalize_info_status_filter()` in `src/eggpool/dashboard/routes.py` owns the mapping; new statuses only need to be added there and in `_STATUS_ALIASES`.
+
 ## Update Checker
 
 - `UpdateChecker` is the single source of truth for "is there a newer eggpool release available?"

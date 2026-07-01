@@ -249,6 +249,322 @@ class TestMergeModelsWithCatalog:
         assert "_sparse" not in merged[0]
 
 
+class TestMergeProviderScopedClosure:
+    """Plan §Defect 1 — provider-scoped merge must dedupe by
+    ``(model_id, provider_id)`` so an unused sibling provider for the
+    same base model is not suppressed by an active sibling's stats
+    row.  Collapsed mode continues to dedupe by model_id only.
+    """
+
+    def test_provider_scoped_keeps_unused_sibling_provider(self) -> None:
+        """A stats row with activity on ``(gpt-4o, openai)`` must
+        not suppress the unused ``(gpt-4o, openrouter)`` catalog
+        row.  Both pairs render."""
+        from eggpool.dashboard.routes import _merge_models_with_catalog
+
+        catalog_rows = [
+            {
+                "model_id": "gpt-4o",
+                "provider_id": "openai",
+                "request_count": 0,
+                "_sparse": True,
+            },
+            {
+                "model_id": "gpt-4o",
+                "provider_id": "openrouter",
+                "request_count": 0,
+                "_sparse": True,
+            },
+        ]
+        stats_rows = [
+            {
+                "model_id": "gpt-4o",
+                "provider_id": "openai",
+                "request_count": 12,
+                "cost_microdollars": 60,
+            },
+        ]
+        merged = _merge_models_with_catalog(
+            stats_rows, catalog_rows, collapse_models=False
+        )
+        keys = sorted((r.get("model_id"), r.get("provider_id")) for r in merged)
+        assert keys == [
+            ("gpt-4o", "openai"),
+            ("gpt-4o", "openrouter"),
+        ]
+        # Active row carries real traffic.
+        by_key = {(r["model_id"], r["provider_id"]): r for r in merged}
+        assert by_key[("gpt-4o", "openai")]["request_count"] == 12
+        # Unused sibling remains a sparse catalog row.
+        assert by_key[("gpt-4o", "openrouter")]["request_count"] == 0
+        assert by_key[("gpt-4o", "openrouter")].get("_in_catalog") is True
+
+    def test_provider_scoped_legacy_stats_without_provider_does_not_hide_providers(
+        self,
+    ) -> None:
+        """A legacy stats row that omits ``provider_id`` falls back
+        to ``catalog_by_id`` for diagnostic fields but does NOT
+        suppress provider-scoped catalog rows with explicit
+        provider IDs."""
+        from eggpool.dashboard.routes import _merge_models_with_catalog
+
+        catalog_rows = [
+            {
+                "model_id": "gpt-4o",
+                "provider_id": "openai",
+                "base_model_id": "gpt-4o",
+                "available": True,
+                "catalog_status": "available",
+                "routing_priority": 5,
+                "providers": ["openai"],
+                "protocol": "openai",
+                "request_count": 0,
+                "_sparse": True,
+            },
+            {
+                "model_id": "gpt-4o",
+                "provider_id": "openrouter",
+                "base_model_id": "gpt-4o",
+                "available": True,
+                "catalog_status": "available",
+                "routing_priority": 4,
+                "providers": ["openrouter"],
+                "protocol": "openai",
+                "request_count": 0,
+                "_sparse": True,
+            },
+        ]
+        stats_rows = [
+            {
+                "model_id": "gpt-4o",
+                "request_count": 12,
+                "cost_microdollars": 60,
+            },
+        ]
+        merged = _merge_models_with_catalog(
+            stats_rows, catalog_rows, collapse_models=False
+        )
+        keys = sorted((r.get("model_id"), r.get("provider_id") or "") for r in merged)
+        # Both explicit-provider catalog rows must render alongside
+        # the legacy stats row that uses model_id-only dedup.
+        provider_pairs = [
+            (mid, pid) for mid, pid in keys if pid in ("openai", "openrouter")
+        ]
+        assert provider_pairs == [
+            ("gpt-4o", "openai"),
+            ("gpt-4o", "openrouter"),
+        ]
+
+    def test_collapsed_still_dedupes_by_model_id(self) -> None:
+        """In collapsed mode the merge keeps one row per
+        unsuffixed model_id and lifts ``providers`` from the
+        catalog row onto the stats row."""
+        from eggpool.dashboard.routes import _merge_models_with_catalog
+
+        catalog_rows = [
+            {
+                "model_id": "gpt-4o",
+                "provider_id": "openai",
+                "base_model_id": "gpt-4o",
+                "providers": ["openai", "openrouter"],
+                "available": True,
+                "catalog_status": "available",
+                "routing_priority": 5,
+                "routing_priority_max": 5,
+                "protocol": "openai",
+                "request_count": 0,
+                "_sparse": True,
+            },
+        ]
+        stats_rows = [
+            {
+                "model_id": "gpt-4o",
+                "provider_id": "openai",
+                "request_count": 12,
+                "cost_microdollars": 60,
+            },
+        ]
+        merged = _merge_models_with_catalog(
+            stats_rows, catalog_rows, collapse_models=True
+        )
+        gpt_rows = [r for r in merged if r.get("model_id") == "gpt-4o"]
+        assert len(gpt_rows) == 1
+        # Catalog diagnostic fields are lifted onto the active row.
+        assert gpt_rows[0]["providers"] == ["openai", "openrouter"]
+        assert gpt_rows[0]["available"] is True
+        assert gpt_rows[0]["request_count"] == 12
+
+    def test_collapse_models_kwarg_defaults_to_provider_scoped(self) -> None:
+        """When ``collapse_models`` is omitted the merge keeps
+        provider-scoped behavior — the historical default."""
+        from eggpool.dashboard.routes import _merge_models_with_catalog
+
+        catalog_rows = [
+            {
+                "model_id": "gpt-4o",
+                "provider_id": "openai",
+                "request_count": 0,
+                "_sparse": True,
+            },
+            {
+                "model_id": "gpt-4o",
+                "provider_id": "openrouter",
+                "request_count": 0,
+                "_sparse": True,
+            },
+        ]
+        stats_rows = [
+            {
+                "model_id": "gpt-4o",
+                "provider_id": "openai",
+                "request_count": 12,
+            },
+        ]
+        merged_default = _merge_models_with_catalog(stats_rows, catalog_rows)
+        merged_explicit = _merge_models_with_catalog(
+            stats_rows, catalog_rows, collapse_models=False
+        )
+        default_keys = sorted(
+            (r.get("model_id"), r.get("provider_id")) for r in merged_default
+        )
+        explicit_keys = sorted(
+            (r.get("model_id"), r.get("provider_id")) for r in merged_explicit
+        )
+        assert default_keys == explicit_keys
+
+    @pytest.mark.asyncio()
+    async def test_models_page_catalog_complete_mixed_used_unused_provider_rows(
+        self,
+    ) -> None:
+        """End-to-end: the Models page renders every
+        ``(model_id, provider_id)`` catalog exposure even when one
+        provider has traffic and another does not."""
+        from fastapi import FastAPI
+        from starlette.requests import Request
+
+        from eggpool.dashboard.routes import handle_models
+
+        catalog = _FakeCatalogService(_make_cache())
+
+        class _StubStats:
+            async def get_model_stats(
+                self,
+                _range: Any,
+                *,
+                account_name: str | None = None,
+                use_cache: bool = True,
+            ) -> list[dict[str, Any]]:
+                # Only ``gpt-4o/openai`` has traffic; ``gpt-4o/azure``
+                # is an unused sibling. The fixture cache exposes
+                # gpt-4o under both providers.
+                return [
+                    {
+                        "model_id": "gpt-4o",
+                        "provider_id": "openai",
+                        "request_count": 12,
+                        "cost_microdollars": 60,
+                        "input_tokens": 1200,
+                        "output_tokens": 600,
+                        "total_tokens": 1800,
+                        "tokens_per_second": 0.0,
+                        "avg_latency_ms": 200.0,
+                        "avg_ttft_ms": 80.0,
+                        "error_count": 0,
+                        "exact_count": 6,
+                        "derived_count": 6,
+                        "partial_count": 0,
+                        "estimated_count": 0,
+                        "unknown_count": 0,
+                        "provider_reported_count": 12,
+                        "estimated_cost_fraction": 0.1,
+                        "cache_read_ratio": 0.0,
+                        "cache_write_ratio": 0.0,
+                        "reasoning_output_ratio": 0.0,
+                        "avg_cost_per_request": 5,
+                        "avg_cost_per_1k_tokens": 3,
+                    },
+                ]
+
+        class _StubDashboardConfig:
+            enabled = True
+            themes_dir = ""
+            theme = "default"
+
+        class _StubConfig:
+            dashboard = _StubDashboardConfig()
+
+        app = FastAPI()
+        app.state.stats = _StubStats()
+        app.state.config = _StubConfig()
+        app.state.model_info = None
+        app.state.catalog = catalog
+        app.state.stats_db = None
+        app.state.dashboard_db = None
+
+        scope: dict[str, Any] = {
+            "type": "http",
+            "method": "GET",
+            "path": "/models",
+            "headers": [],
+            "query_string": b"period=24h",
+            "app": app,
+        }
+
+        async def receive() -> dict[str, Any]:
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        request = Request(scope, receive)
+        response = await handle_models(request)
+        assert response.status_code == 200
+        body = response.body.decode("utf-8")
+        # Unused sibling provider still appears.
+        assert ">azure<" in body
+        # Active provider still appears.
+        assert ">openai<" in body
+
+
+class TestInfoStatusFilterAliases:
+    """Plan §Optional tightening — the info_status filter must
+    accept both the canonical status names (``sparse_new``,
+    ``conflicting``) and the display aliases the compact
+    ``/api/model-info`` summary exposes (``sparse``,
+    ``conflict``).
+    """
+
+    def test_info_status_filter_accepts_sparse_and_sparse_new(self) -> None:
+        from eggpool.dashboard.routes import _apply_model_filters
+
+        rows = [
+            {
+                "model_id": "gpt-4o",
+                "base_model_id": "gpt-4o",
+                "request_count": 10,
+            },
+            {
+                "model_id": "llama-3-8b",
+                "base_model_id": "llama-3-8b",
+                "request_count": 5,
+            },
+        ]
+        mi_map = {
+            "gpt-4o": {"status": "sparse_new"},
+            "llama-3-8b": {"status": "conflicting"},
+        }
+        canonical = _apply_model_filters(
+            rows, info_status="sparse_new", model_info_map=mi_map
+        )
+        assert [r["model_id"] for r in canonical] == ["gpt-4o"]
+        # The display alias ``sparse`` resolves to the canonical
+        # ``sparse_new`` and matches the same row.
+        alias = _apply_model_filters(rows, info_status="sparse", model_info_map=mi_map)
+        assert [r["model_id"] for r in alias] == ["gpt-4o"]
+        # ``conflict`` (display) → ``conflicting`` (canonical).
+        alias_conflict = _apply_model_filters(
+            rows, info_status="conflict", model_info_map=mi_map
+        )
+        assert [r["model_id"] for r in alias_conflict] == ["llama-3-8b"]
+
+
 class TestHandleModelsRendersCatalogComplete:
     """End-to-end smoke: the handler merges stats + catalog and
     delegates to ``render_models``."""
@@ -619,8 +935,12 @@ class TestModelsPageFilterIntegration:
         response = await handle_models(request, used="unused")
         assert response.status_code == 200
         body = response.body.decode("utf-8")
-        # Active row with traffic is filtered out.
-        assert "gpt-4o" not in body
+        # The active ``gpt-4o/openai`` row (count=10) is filtered out
+        # by ``used=unused``.  The unused provider-scoped sibling
+        # ``gpt-4o/azure`` stays visible because the Models page is
+        # catalog-complete in provider-scoped mode.
+        assert "openai" not in body
+        assert "azure" in body
         # Zero-usage catalog-only models appear.
         assert "claude-opus-4" in body
         assert "llama-3-8b" in body
@@ -1296,9 +1616,12 @@ class TestModelDetailLinkURLEncoding:
         ), detail_links
 
     def test_link_handles_model_id_with_special_chars(self) -> None:
-        """Defensive: characters that need HTML-escaping (quotes,
-        angle brackets) must be escaped so the link href is well-
-        formed, but route-relevant characters survive."""
+        """Defensive: characters that would break the route path or
+        terminate the href attribute (``?``, ``#``, ``<``, ``>``,
+        ``"``) must be percent-encoded so the emitted markup is
+        safe and routes correctly.  The detail handler
+        (``/models/{model_id:path}``) ``unquote()``s the path so
+        the original characters are recovered server-side."""
         from eggpool.dashboard.render import render_models
 
         rows = [
@@ -1333,24 +1656,26 @@ class TestModelDetailLinkURLEncoding:
             },
         ]
         html = render_models(rows, period="24h")
-        # Use raw-string scanning instead of an HTMLParser — the
-        # parser decodes ``&quot;`` etc. back to ``"``, ``<``, ``>``
-        # which makes the unescaped-attribute check impossible.  We
-        # want to verify the raw emitted href markup is well-formed.
         import re
 
         href_pattern = re.compile(r'href="([^"]*)"')
         raw_hrefs = href_pattern.findall(html)
         detail_links = [h for h in raw_hrefs if h.startswith("/models/")]
         assert detail_links
-        # ``<``, ``>``, ``"`` must NOT appear as raw bytes inside the
-        # href attribute — they would terminate the attribute value.
-        # (HTML-escaped forms like ``&quot;`` are fine.)
+        # None of the raw HTML-special characters may appear inside
+        # the href attribute — they would terminate the quoted value
+        # or change the URL grammar.  The percent-encoded forms
+        # (``%22`` for ``"``, ``%3C`` for ``<``, ``%3E`` for ``>``)
+        # prove that ``urllib.parse.quote`` was applied to the path
+        # segment.
         for href in detail_links:
             assert "<" not in href
             assert ">" not in href
             assert '"' not in href
-            # ``&quot;`` confirms proper HTML escaping.
-            assert "&quot;" in href
-            assert "&lt;" in href
-            assert "&gt;" in href
+            # The percent-encoded forms prove that
+            # ``urllib.parse.quote`` was applied to the path
+            # segment.  ``%3C`` encodes ``<``, ``%3E`` encodes
+            # ``>``, ``%22`` encodes ``"``.
+            assert "%3C" in href
+            assert "%3E" in href
+            assert "%22" in href
