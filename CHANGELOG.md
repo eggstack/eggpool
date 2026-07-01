@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.4.7] - 2026-07-01
+
+### Changed
+
+- **Pruned stale skills, plans, and documentation.** Removed duplicate `.agents/skills/` directory (identical to `.opencode/skills/`). Removed 35 orphaned completed plans from `plans/` (retained 10 plans still referenced from architecture docs). Updated `AGENTS.md` file organization with `_share` directory. Updated `architecture/README.md` package structure to include missing modules (`config.py`, `config_utils.py`, `deploy_user.py`, `onboard.py`, `toml_edit.py`).
+
 ## [0.4.6] - 2026-06-30
 
 ### Fixed
