@@ -10,6 +10,10 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from eggpool.catalog.capabilities import (  # noqa: TCH001
+    CapabilitySource,
+    CapabilityStatus,
+)
 from eggpool.catalog.pricing import (
     parse_microdollars_per_million,
     parse_price_per_1k,
@@ -463,6 +467,9 @@ class ProviderConfig(BaseModel):
     routing_priority: int = Field(default=0, ge=0)
     accounts: list[AccountConfig] = Field(default_factory=list[AccountConfig])
     model_overrides: dict[str, ModelOverrideConfig] = Field(default_factory=dict)
+    model_capabilities: dict[str, ModelCapabilitiesOverrideConfig] = Field(
+        default_factory=dict,
+    )
     auth: ProviderAuthConfig = Field(default_factory=ProviderAuthConfig)
     headers: list[ProviderStaticHeaderConfig] = Field(
         default_factory=list[ProviderStaticHeaderConfig]
@@ -656,6 +663,91 @@ class ModelOverrideConfig(ModelLimitOverrideConfig):
         return parse_microdollars_per_million(value)
 
 
+class ThinkingCapabilityOverrideConfig(BaseModel):
+    """Override fields for the thinking/reasoning capability.
+
+    When ``status`` is ``None`` the entire override is a no-op (all other
+    fields should also be ``None``).  When ``status`` is set but ``source``
+    is omitted it defaults to ``"manual_override"``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: CapabilityStatus | None = None
+    source: CapabilitySource | None = None
+    native_protocols: list[str] | None = None
+    budget_tokens_min: int | None = None
+    budget_tokens_max: int | None = None
+    effort_to_budget_tokens: dict[str, int] | None = None
+    notes: str | None = None
+
+    @field_validator("native_protocols", mode="after")
+    @classmethod
+    def validate_native_protocols(cls, value: list[str] | None) -> list[str] | None:
+        """Reject unknown protocol names."""
+        if value is None:
+            return None
+        allowed = {"openai", "anthropic"}
+        for proto in value:
+            if proto not in allowed:
+                raise ConfigError(
+                    f"Unknown native protocol {proto!r}; "
+                    f"must be one of {sorted(allowed)}"
+                )
+        return value
+
+    @model_validator(mode="after")
+    def validate_thinking_overrides(self) -> ThinkingCapabilityOverrideConfig:
+        """Enforce cross-field constraints for thinking overrides."""
+        # When status is None the override is a no-op — all other fields
+        # should be None too.  We silently accept and clear them so callers
+        # don't have to be precise about every key.
+        if self.status is None:
+            self.source = None
+            self.native_protocols = None
+            self.budget_tokens_min = None
+            self.budget_tokens_max = None
+            self.effort_to_budget_tokens = None
+            self.notes = None
+            return self
+
+        # Default source to manual_override when status is set but source is not.
+        if self.source is None:
+            self.source = "manual_override"
+
+        if self.budget_tokens_min is not None and self.budget_tokens_min <= 0:
+            raise ConfigError("budget_tokens_min must be > 0")
+        if self.budget_tokens_max is not None and self.budget_tokens_max <= 0:
+            raise ConfigError("budget_tokens_max must be > 0")
+        if (
+            self.budget_tokens_min is not None
+            and self.budget_tokens_max is not None
+            and self.budget_tokens_min > self.budget_tokens_max
+        ):
+            raise ConfigError(
+                f"budget_tokens_min ({self.budget_tokens_min}) exceeds "
+                f"budget_tokens_max ({self.budget_tokens_max})"
+            )
+        if self.effort_to_budget_tokens is not None:
+            for effort, tokens in self.effort_to_budget_tokens.items():
+                if tokens <= 0:
+                    raise ConfigError(
+                        f"effort_to_budget_tokens[{effort!r}] must be > 0, got {tokens}"
+                    )
+        return self
+
+
+class ModelCapabilitiesOverrideConfig(BaseModel):
+    """Per-model capability overrides.
+
+    Wraps capability-specific override blocks (currently only ``thinking``).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    thinking: ThinkingCapabilityOverrideConfig | None = None
+
+
 class DnsCacheConfig(BaseModel):
     """Bounded in-memory DNS cache settings.
 
@@ -835,6 +927,9 @@ class AppConfig(BaseModel):
     accounts: list[AccountConfig] = Field(default_factory=list[AccountConfig])
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
     model_overrides: dict[str, ModelOverrideConfig] = Field(default_factory=dict)
+    model_capabilities: dict[str, ModelCapabilitiesOverrideConfig] = Field(
+        default_factory=dict,
+    )
     transcoder: TranscoderPolicy = Field(default_factory=TranscoderPolicy)
     model_info: ModelInfoConfig = Field(default_factory=ModelInfoConfig)
 

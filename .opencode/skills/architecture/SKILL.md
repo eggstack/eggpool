@@ -276,6 +276,38 @@ The `/timeseries` page replaces the old "table of bucket counts" with a stacked-
 - `client_requests_thinking()` heuristic detects thinking-related keys in request body; `has_thinking_support()` checks status
 - Protocol compatibility alone does not imply thinking support — the schema captures this explicitly
 
+### Config Overrides
+
+`ThinkingCapabilityOverrideConfig` in `src/eggpool/models/config.py` provides operator-controlled model capability overrides that persist through catalog refresh cycles.
+
+**Global overrides** — apply to all providers:
+```toml
+[model_capabilities."minimax-m3".thinking]
+status = "supported"
+native_protocols = ["anthropic"]
+budget_tokens_min = 1024
+budget_tokens_max = 16384
+```
+
+**Provider-scoped overrides** — take precedence over global:
+```toml
+[providers.minimax.model_capabilities."minimax-m3".thinking]
+status = "supported"
+native_protocols = ["anthropic"]
+```
+
+**Override fields**: `status`, `source` (defaults to `"manual_override"`), `native_protocols`, `budget_tokens_min`, `budget_tokens_max`, `effort_to_budget_tokens`, `notes`.
+
+**Validation rules**:
+- `status = None` makes the override a no-op (all other fields silently cleared)
+- `budget_tokens_min` and `budget_tokens_max` must be > 0
+- `budget_tokens_min` must not exceed `budget_tokens_max`
+- `effort_to_budget_tokens` values must be > 0
+- `native_protocols` must be one of `"openai"` or `"anthropic"`
+- Extra fields are forbidden
+
+**Precedence**: defaults → discovered (provider catalog / model-info) → global overrides → provider-scoped overrides. The `source` field tracks provenance; `"manual_override"` marks operator-supplied values. Capabilities are serialized in `/v1/models` responses under the `eggpool.capabilities` extension field.
+
 ## Model Context Limits
 
 - `ModelLimitOverrideConfig` provides reusable limit fields (context, input, output, enforcement)

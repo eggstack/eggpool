@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from eggpool.catalog.capabilities import (
+    dict_to_model_capabilities,
+    serialize_model_capabilities,
+)
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
@@ -97,6 +102,13 @@ def serialize_openai_model(
             "sources": model_info.get("sources", []),
             "last_refreshed_at": model_info.get("last_refreshed_at"),
         }
+
+    raw_caps = model.get("capabilities", {})
+    if raw_caps:
+        caps = dict_to_model_capabilities(raw_caps)
+        caps_dict = serialize_model_capabilities(caps)
+        if caps_dict:
+            eggpool_meta["capabilities"] = caps_dict
 
     if eggpool_meta:
         result["eggpool"] = eggpool_meta

@@ -10,6 +10,11 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, cast
 
+from eggpool.catalog.capabilities import (
+    apply_capability_overrides,
+    dict_to_model_capabilities,
+    model_capabilities_to_dict,
+)
 from eggpool.catalog.limits import EffectiveModelLimits, conservative_limits
 from eggpool.constants import DEPRECATED_MODEL_ID
 from eggpool.routing.provider import parse_model_provider
@@ -444,8 +449,8 @@ class ModelCatalogCache:
             return bool(eligible_accounts) and visible_accounts == eligible_accounts
         return expose_mode in {"union", "healthy_union"} and bool(visible_accounts)
 
-    @staticmethod
     def _copy_exposed_model(
+        self,
         model_info: dict[str, Any],
         *,
         model_id: str,
@@ -461,6 +466,37 @@ class ModelCatalogCache:
             model_copy["base_model_id"] = model_id
             model_copy["provider_id"] = provider_id
         model_copy["available_accounts"] = sorted(available_accounts)
+
+        base_capabilities: dict[str, Any] = model_info.get("capabilities", {})
+        if base_capabilities:
+            base_caps = dict_to_model_capabilities(base_capabilities)
+        else:
+            base_caps = dict_to_model_capabilities({})
+
+        global_overrides: dict[str, dict[str, object]] = {}
+        provider_overrides: dict[str, dict[str, object]] = {}
+        if self._config is not None:
+            global_overrides = {
+                k: v.model_dump(exclude_none=True)
+                for k, v in self._config.model_capabilities.items()
+            }
+            if provider_id is not None:
+                provider_cfg = self._config.providers.get(provider_id)
+                if provider_cfg is not None:
+                    provider_overrides = {
+                        k: v.model_dump(exclude_none=True)
+                        for k, v in provider_cfg.model_capabilities.items()
+                    }
+
+        final_caps = apply_capability_overrides(
+            model_id,
+            base_caps,
+            global_overrides,
+            provider_overrides,
+            provider_id=provider_id,
+        )
+        model_copy["capabilities"] = model_capabilities_to_dict(final_caps)
+
         return model_copy
 
     def _select_unsuffixed_model_info(

@@ -73,6 +73,23 @@ catalog_withdrawal_policy = "preserve_until_health"
 loss_policy = "warn"      # "warn" or "reject" for loss-of-information
 prefer_native = true      # prefer native-protocol accounts in routing
 
+# ─── Model Capability Overrides ─────────────────────────────────────
+# Operator-controlled overrides for model capabilities. These take
+# precedence over discovered provider/catalog data and persist through
+# refresh cycles.
+#
+# Global overrides apply to all providers:
+# [model_capabilities."minimax-m3".thinking]
+# status = "supported"
+# native_protocols = ["anthropic"]
+# budget_tokens_min = 1024
+# budget_tokens_max = 16384
+#
+# Provider-scoped overrides take precedence over global:
+# [providers.minimax.model_capabilities."minimax-m3".thinking]
+# status = "supported"
+# native_protocols = ["anthropic"]
+
 [routing]
 strategy = "quota_fair"
 near_tie_epsilon = 0.1

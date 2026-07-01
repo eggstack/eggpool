@@ -21,7 +21,7 @@ Capability semantics:
 from __future__ import annotations
 
 import logging
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel, Field
 
@@ -353,6 +353,207 @@ def serialize_model_capabilities(
     thinking = serialize_thinking_for_models(capabilities.thinking)
     if thinking:
         result["thinking"] = thinking
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Override conversion helpers
+# ---------------------------------------------------------------------------
+
+
+def thinking_override_to_capability(
+    override: dict[str, object] | None,
+) -> ThinkingCapability:
+    """Convert a config override dict into a :class:`ThinkingCapability`.
+
+    If *override* is ``None`` or every value is ``None``, returns a
+    default (no-op) ``ThinkingCapability``.
+    """
+    if override is None:
+        return ThinkingCapability()
+
+    status = override.get("status")
+    source = override.get("source")
+    native_protocols = override.get("native_protocols")
+    budget_min = override.get("budget_tokens_min")
+    budget_max = override.get("budget_tokens_max")
+    effort = override.get("effort_to_budget_tokens")
+    notes = override.get("notes")
+
+    fields = (status, source, native_protocols, budget_min, budget_max, effort, notes)
+    has_any = any(v is not None for v in fields)
+    if not has_any:
+        return ThinkingCapability()
+
+    if status is None:
+        status = "unknown"
+    if source is None and status != "unknown":
+        source = "manual_override"
+    if native_protocols is None:
+        native_protocols = []
+
+    native_list: list[str] = []
+    native_val = cast("list[object] | None", native_protocols)
+    if isinstance(native_val, list):
+        native_list = [str(p) for p in native_val]
+
+    cap_status: CapabilityStatus = cast(
+        "CapabilityStatus",
+        str(status) if status is not None else "unknown",
+    )
+    cap_source: CapabilitySource = cast(
+        "CapabilitySource",
+        str(source) if source is not None else "unknown",
+    )
+    effort_dict: dict[str, int] | None = None
+    if isinstance(effort, dict):
+        effort_dict = {str(k): int(v) for k, v in effort.items()}  # type: ignore[arg-type]
+    return ThinkingCapability(
+        status=cap_status,
+        source=cap_source,
+        native_protocols=native_list,
+        budget_tokens_min=budget_min if isinstance(budget_min, int) else None,
+        budget_tokens_max=budget_max if isinstance(budget_max, int) else None,
+        effort_to_budget_tokens=effort_dict,
+        notes=str(notes) if notes is not None else None,
+    )
+
+
+def model_capabilities_override_to_config(
+    override: dict[str, object] | None,
+) -> ModelCapabilities:
+    """Convert a ``ModelCapabilitiesOverrideConfig`` dict into ModelCapabilities.
+
+    The *override* dict may contain a ``thinking`` key whose value is a
+    dict compatible with :func:`thinking_override_to_capability`.
+    """
+    if override is None:
+        return ModelCapabilities()
+
+    thinking_raw = override.get("thinking")
+    thinking: ThinkingCapability
+    if isinstance(thinking_raw, dict):
+        thinking = thinking_override_to_capability(
+            cast("dict[str, object]", thinking_raw),
+        )
+    else:
+        thinking = ThinkingCapability()
+
+    return ModelCapabilities(thinking=thinking)
+
+
+def apply_capability_overrides(
+    model_id: str,
+    base: ModelCapabilities,
+    global_overrides: dict[str, dict[str, object]],
+    provider_overrides: dict[str, dict[str, object]],
+    provider_id: str | None = None,
+) -> ModelCapabilities:
+    """Apply a 3-layer override chain to *base* capabilities.
+
+    Precedence (lowest → highest):
+
+    1. *base* (discovered / provider catalog data)
+    2. ``global_overrides[model_id]``
+    3. ``provider_overrides[model_id]`` (only when *provider_id* matches)
+    """
+    result = base
+
+    global_ov = global_overrides.get(model_id)
+    if global_ov is not None:
+        override_cap = model_capabilities_override_to_config(global_ov)
+        result = merge_model_capabilities(result, override_cap)
+
+    if provider_id is not None:
+        provider_ov = provider_overrides.get(model_id)
+        if provider_ov is not None:
+            override_cap = model_capabilities_override_to_config(provider_ov)
+            result = merge_model_capabilities(result, override_cap)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Dict ↔ typed-model conversion
+# ---------------------------------------------------------------------------
+
+
+def dict_to_model_capabilities(data: dict[str, object]) -> ModelCapabilities:
+    """Convert a plain dict (from the catalog cache) into :class:`ModelCapabilities`.
+
+    Only thinking-related fields are extracted.  Unknown keys are
+    ignored so the function degrades gracefully with future schema
+    extensions.
+    """
+    thinking_raw = data.get("thinking")
+    if not isinstance(thinking_raw, dict):
+        return ModelCapabilities()
+
+    tr = cast("dict[str, object]", thinking_raw)
+    tc_status = str(tr.get("status", "unknown"))
+    tc_source = str(tr.get("source", "unknown"))
+    native_raw = tr.get("native_protocols")
+    native_protos: list[str] = []
+    native_val = cast("list[object] | None", native_raw)
+    if isinstance(native_val, list):
+        native_protos = [str(p) for p in native_val]
+    bmin_raw = tr.get("budget_tokens_min")
+    bmax_raw = tr.get("budget_tokens_max")
+    effort_raw = tr.get("effort_to_budget_tokens")
+    notes_raw = tr.get("notes")
+    effort_dict: dict[str, int] | None = None
+    if isinstance(effort_raw, dict):
+        effort_dict = {str(k): int(v) for k, v in effort_raw.items()}  # type: ignore[arg-type]
+
+    return ModelCapabilities(
+        thinking=ThinkingCapability(
+            status=cast("CapabilityStatus", tc_status),
+            source=cast("CapabilitySource", tc_source),
+            native_protocols=native_protos,
+            budget_tokens_min=bmin_raw if isinstance(bmin_raw, int) else None,
+            budget_tokens_max=bmax_raw if isinstance(bmax_raw, int) else None,
+            effort_to_budget_tokens=effort_dict,
+            notes=str(notes_raw) if notes_raw is not None else None,
+        ),
+    )
+
+
+def model_capabilities_to_dict(capabilities: ModelCapabilities) -> dict[str, object]:
+    """Convert :class:`ModelCapabilities` back to a plain dict for storage.
+
+    The output is suitable for the catalog cache ``capabilities`` field.
+    ``None`` / empty values are filtered out.
+    """
+    result: dict[str, object] = {}
+    tc = capabilities.thinking
+
+    if tc.status in ("supported", "mixed"):
+        result["supports_tools"] = True
+
+    thinking_dict: dict[str, object] = {}
+    if tc.status != "unknown":
+        thinking_dict["status"] = tc.status
+    if tc.source != "unknown":
+        thinking_dict["source"] = tc.source
+    if tc.native_protocols:
+        thinking_dict["native_protocols"] = list(tc.native_protocols)
+    if tc.client_controls:
+        thinking_dict["client_controls"] = {
+            proto: ctrl.model_dump(exclude_none=True)
+            for proto, ctrl in tc.client_controls.items()
+        }
+    if tc.budget_tokens_min is not None:
+        thinking_dict["budget_tokens_min"] = tc.budget_tokens_min
+    if tc.budget_tokens_max is not None:
+        thinking_dict["budget_tokens_max"] = tc.budget_tokens_max
+    if tc.effort_to_budget_tokens is not None:
+        thinking_dict["effort_to_budget_tokens"] = dict(tc.effort_to_budget_tokens)
+    if tc.notes is not None:
+        thinking_dict["notes"] = tc.notes
+
+    if thinking_dict:
+        result["thinking"] = thinking_dict
+
     return result
 
 
