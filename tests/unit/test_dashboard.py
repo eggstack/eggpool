@@ -1369,13 +1369,13 @@ class TestRenderNav:
 
     def test_timeseries_link_present(self) -> None:
         """Timeseries link appears in the navigation."""
-        html = _render_nav("overview", "24h")
-        assert "/timeseries" in html
-        assert "Timeseries" in html
+        _burger, nav = _render_nav("overview", "24h")
+        assert "/timeseries" in nav
+        assert "Timeseries" in nav
 
     def test_all_expected_links_present(self) -> None:
         """All dashboard pages are linked from navigation."""
-        html = _render_nav("", "24h")
+        _burger, nav = _render_nav("", "24h")
         for href in (
             "/",
             "/accounts",
@@ -1384,27 +1384,27 @@ class TestRenderNav:
             "/events",
             "/timeseries",
         ):
-            assert href in html
+            assert href in nav
 
     def test_active_nav_highlighted(self) -> None:
         """The active nav item gets the 'active' CSS class."""
-        html = _render_nav("timeseries", "24h")
-        assert 'class="active"' in html
-        assert 'href="/timeseries' in html
+        _burger, nav = _render_nav("timeseries", "24h")
+        assert 'class="active"' in nav
+        assert 'href="/timeseries' in nav
 
     def test_non_active_nav_not_highlighted(self) -> None:
         """Non-active nav items do not get the 'active' class on their link."""
-        html = _render_nav("overview", "24h")
+        _burger, nav = _render_nav("overview", "24h")
         # Only one link should have class="active" (the overview link)
-        assert html.count('class="active"') == 1
+        assert nav.count('class="active"') == 1
         # The timeseries link should have class="" (inactive)
-        assert 'class="" href="/timeseries' in html
+        assert 'class="" href="/timeseries' in nav
 
     def test_bandwidth_link_present(self) -> None:
         """Bandwidth link appears in the navigation."""
-        html = _render_nav("overview", "24h")
-        assert "/bandwidth" in html
-        assert "Bandwidth" in html
+        _burger, nav = _render_nav("overview", "24h")
+        assert "/bandwidth" in nav
+        assert "Bandwidth" in nav
 
 
 class TestFormatBytes:
@@ -2608,13 +2608,14 @@ class TestTooltipStylesheet:
         css = self._load_css()
         assert "pointer-events: none" in css
 
-    def test_topnav_burger_suppresses_tooltip_when_expanded(self) -> None:
-        """When the menu is open the burger icon's tooltip must be
-        suppressed so hovering the close button does not show stale
-        "Open page menu" copy that no longer matches the icon."""
+    def test_topnav_burger_has_no_tooltip_suppression_rule(self) -> None:
+        """The burger button no longer renders a `data-tooltip`
+        attribute (the hamburger glyph is self-explanatory on a phone)
+        so the expanded-state tooltip suppression rule has been
+        retired.  Verify the selector is gone from the stylesheet."""
         css = self._load_css()
-        assert '.topnav-burger[aria-expanded="true"]::after' in css
-        assert '.topnav-burger[aria-expanded="true"]::before' in css
+        assert '.topnav-burger[aria-expanded="true"]::after' not in css
+        assert '.topnav-burger[aria-expanded="true"]::before' not in css
 
     def test_topnav_burger_x_translates_match_square_viewbox(self) -> None:
         """The burger icon is rendered against a 24x24 square viewBox
@@ -2655,6 +2656,96 @@ class TestTooltipStylesheet:
         html = _render_metric_card(title="Pending requests", metric="0", sub="—")
         assert 'data-tooltip-pos="bottom"' in html
         assert "data-tooltip=" in html
+
+    def test_mobile_h1_shrinks_to_content(self) -> None:
+        """On phone-sized viewports the brand title must shrink to
+        its intrinsic content width so the burger button, the title,
+        and the refresh icon can share a single row.  The previous
+        layout stretched h1 to 100% width and centered its text,
+        which forced it onto its own row beneath the icons and wasted
+        a row of vertical space."""
+        h1_block = self._first_mobile_block_for("header.topbar h1")
+        assert "flex: 0 0 auto" in h1_block
+        # Sanity: no full-width stretch and no centering remain.
+        assert "flex: 1 1 100%" not in h1_block
+        assert "text-align: center" not in h1_block
+
+    def test_mobile_burger_is_first_flex_item(self) -> None:
+        """The burger must carry `order: 0` in the mobile media query
+        so flex layout renders it ahead of the h1 and the nav — even
+        though the burger is the first DOM child of `<header>`, the
+        explicit order keeps the reading order burger → h1 → nav
+        locked in case anyone reorders the DOM later."""
+        burger_block = self._first_mobile_block_for(".topnav-burger")
+        assert "order: 0" in burger_block
+
+    def test_mobile_nav_drops_width_100(self) -> None:
+        """On wide viewports `nav.topnav` is pushed right via
+        `margin-left: auto` and the menu inside it is 100% wide.  On
+        mobile the nav is no longer a right-aligned full-width column;
+        it shares a row with the burger and the brand.  Verify the
+        mobile override no longer sets `width: 100%` on the nav."""
+        nav_block = self._first_mobile_block_for("nav.topnav")
+        assert "width: 100%" not in nav_block
+
+    @staticmethod
+    def _first_mobile_block_for(selector: str) -> str:
+        """Find the first rule body in the @media (max-width: 760px)
+        block whose selector matches ``selector``.  Handles nested
+        @media queries (e.g. @media (max-width: 480px)) by tracking
+        brace depth so we never truncate the outer block early, and
+        matches the selector with arbitrary leading whitespace so the
+        indented rule inside the mobile block is found."""
+        from pathlib import Path
+
+        css = (
+            Path(__file__).parent.parent.parent
+            / "src"
+            / "eggpool"
+            / "dashboard"
+            / "static"
+            / "dashboard.css"
+        ).read_text(encoding="utf-8")
+
+        # Find the actual `@media (max-width: 760px) {` block opener,
+        # not the first text match — there is a comment upthread that
+        # mentions the same selector string inside a block comment.
+        match = re.search(r"@media \(max-width: 760px\)\s*\{", css)
+        assert match is not None, "@media (max-width: 760px) block not found"
+        mobile_start = match.start()
+        # Walk the braces from the opening `{` of the outer @media to
+        # find its matching `}`.  Anything in between is inside the
+        # mobile media query block (including nested @media queries).
+        open_brace = css.index("{", mobile_start)
+        depth = 1
+        i = open_brace + 1
+        while depth > 0 and i < len(css):
+            ch = css[i]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+            i += 1
+        mobile_block = css[mobile_start:i]
+        # Locate the selector with optional leading whitespace before
+        # the brace — the mobile block indents rules with two spaces.
+        needle = selector + " {"
+        rule_start = -1
+        search_from = 0
+        while True:
+            found = mobile_block.find(needle, search_from)
+            if found == -1:
+                break
+            # Confirm the character just before the selector is
+            # whitespace so we don't match e.g. `nav.topnav.topnav-open`.
+            if found == 0 or mobile_block[found - 1] in " \t\n":
+                rule_start = found
+                break
+            search_from = found + 1
+        assert rule_start != -1, f"selector {selector!r} not found in mobile block"
+        rule_open = mobile_block.index("{", rule_start)
+        rule_close = mobile_block.index("}", rule_open)
+        return mobile_block[rule_start:rule_close]
 
 
 class TestTooltipStylizedEverywhere:
@@ -3358,105 +3449,159 @@ class TestRenderNavUpdated:
     """Tests for the new reliability/routing/traces nav entries."""
 
     def test_reliability_link_present(self) -> None:
-        html = _render_nav("overview", "24h")
-        assert "/reliability" in html
-        assert "Reliability" in html
+        _burger, nav = _render_nav("overview", "24h")
+        assert "/reliability" in nav
+        assert "Reliability" in nav
 
     def test_routing_link_present(self) -> None:
-        html = _render_nav("overview", "24h")
-        assert "/routing" in html
-        assert "Routing" in html
+        _burger, nav = _render_nav("overview", "24h")
+        assert "/routing" in nav
+        assert "Routing" in nav
 
     def test_traces_link_present(self) -> None:
-        html = _render_nav("overview", "24h")
-        assert "/traces" in html
-        assert "Traces" in html
+        _burger, nav = _render_nav("overview", "24h")
+        assert "/traces" in nav
+        assert "Traces" in nav
 
     def test_active_routing_highlighted(self) -> None:
-        html = _render_nav("routing", "24h")
-        assert html.count('class="active"') == 1
-        assert 'href="/routing' in html
+        _burger, nav = _render_nav("routing", "24h")
+        assert nav.count('class="active"') == 1
+        assert 'href="/routing' in nav
 
 
 class TestHamburgerNav:
     """Mobile navigation: burger button toggles a vertical dropdown menu.
 
-    On viewports ≥761px the burger is hidden via CSS and the 12 page
+    The burger button is hoisted out of ``<nav class="topnav">`` and
+    rendered as a sibling so the mobile topbar can lay the burger, the
+    brand title, and the refresh icon out inline on a single row
+    (saves a row of vertical space on phone-sized viewports).  On
+    viewports ≥761px the burger is hidden via CSS and the 12 page
     links render inline inside `.topnav-menu`.  On narrower viewports
     the burger is visible and the menu opens when JS toggles
-    `.topnav-open` on the ancestor `nav.topnav`.  The theme selector
+    `.topnav-open` on the sibling `nav.topnav`.  The theme selector
     lives inside the menu so it is only reachable on narrow viewports
-    when the menu is expanded; the manual refresh button stays outside
-    the menu so it remains reachable on every viewport.
+    when the menu is expanded; the manual refresh button stays inside
+    the nav (but outside the menu) so it remains reachable on every
+    viewport.
+
+    `_render_nav()` returns ``(burger, nav)`` — the burger button HTML
+    and the ``<nav>`` HTML as separate strings so the template can
+    place the burger *before* the ``<h1>`` while keeping the nav
+    after it.
     """
 
     def test_burger_button_with_inline_svg_present(self) -> None:
-        html = _render_nav("overview", "24h")
-        assert '<button class="topnav-burger"' in html
-        assert 'class="topnav-burger-icon"' in html
-        assert 'class="bar bar-1"' in html
-        assert 'class="bar bar-2"' in html
-        assert 'class="bar bar-3"' in html
+        burger, nav = _render_nav("overview", "24h")
+        assert '<button class="topnav-burger"' in burger
+        assert 'class="topnav-burger-icon"' in burger
+        assert 'class="bar bar-1"' in burger
+        assert 'class="bar bar-2"' in burger
+        assert 'class="bar bar-3"' in burger
 
     def test_burger_initial_aria_state(self) -> None:
-        html = _render_nav("overview", "24h")
-        burger_open = html.find('<button class="topnav-burger"')
-        assert burger_open != -1
-        assert 'aria-expanded="false"' in html[burger_open:]
-        assert 'aria-controls="topnav-menu"' in html
+        burger, _nav = _render_nav("overview", "24h")
+        assert 'aria-expanded="false"' in burger
+        assert 'aria-controls="topnav-menu"' in burger
 
-    def test_burger_carries_open_and_close_tooltips(self) -> None:
-        """The burger advertises two tooltips so the JS handler can swap
-        between them when the menu opens/closes.  Both labels must be
-        present in the initial markup."""
-        html = _render_nav("overview", "24h")
-        assert 'data-tooltip="Open page menu"' in html
-        assert 'data-tooltip-open-label="Close page menu"' in html
+    def test_burger_has_no_tooltip_attributes(self) -> None:
+        """The hamburger glyph is self-explanatory on a phone; the
+        burger button must not render a ``data-tooltip`` (or its
+        companion ``data-tooltip-open-label``) so the dashboard never
+        shows a tooltip popup over the icon."""
+        burger, _nav = _render_nav("overview", "24h")
+        assert "data-tooltip" not in burger
+        assert "data-tooltip-open-label" not in burger
+
+    def test_burger_keeps_aria_label(self) -> None:
+        """Even though the visible tooltip is gone, the burger still
+        needs an ``aria-label`` for assistive tech.  JS swaps it to
+        ``"Close page menu"`` when the menu opens."""
+        burger, _nav = _render_nav("overview", "24h")
+        assert 'aria-label="Open page menu"' in burger
 
     def test_burger_uses_square_viewbox(self) -> None:
         """The 24x24 square viewBox keeps the rotated X strokes meeting
         at the icon's geometric center without sub-pixel clipping
         against a non-square viewBox."""
-        html = _render_nav("overview", "24h")
-        assert 'viewBox="0 0 24 24"' in html
-        assert 'width="24" height="24"' in html
+        burger, _nav = _render_nav("overview", "24h")
+        assert 'viewBox="0 0 24 24"' in burger
+        assert 'width="24" height="24"' in burger
 
-    def test_topnav_menu_lives_after_burger(self) -> None:
-        html = _render_nav("overview", "24h")
+    def test_burger_is_outside_nav_topnav(self) -> None:
+        """The burger button is a direct child of ``<header class="topbar">``
+        — NOT a descendant of ``<nav class="topnav">`` — so the mobile
+        topbar can lay it out inline with the brand title and the
+        refresh icon on a single row."""
+        burger, nav = _render_nav("overview", "24h")
+        assert "topnav-burger" not in nav
+        # The burger HTML itself contains no `<nav>` wrapper.
+        assert "<nav" not in burger
+
+    def test_menu_and_refresh_live_inside_nav(self) -> None:
+        """The dropdown menu and the refresh button remain descendants
+        of ``<nav class="topnav">`` so the wide-viewport margin-left:
+        auto still pushes the menu+refresh to the right of the brand."""
+        burger, nav = _render_nav("overview", "24h", available_themes=["dark"])
+        assert "topnav-burger" not in nav
+        assert '<div class="topnav-menu" id="topnav-menu">' in nav
+        assert "topnav-refresh" in nav
+        # Burger is wholly outside the nav markup.
+        assert "topnav-burger" not in nav
+
+    def test_template_places_burger_before_h1(self) -> None:
+        """The page template renders the burger button *before* the
+        ``<h1>EggPool</h1>`` element so the mobile topbar lays the
+        burger, brand, and refresh icon out as [burger][EggPool][↻]
+        on a single row.  This regression test catches any future
+        template edit that reorders them."""
+        from eggpool.dashboard.render import _render_layout
+
+        html = _render_layout(
+            title="test",
+            body="<p>body</p>",
+            active_nav="overview",
+            period="24h",
+            available_themes=[],
+            current_theme="",
+        )
         burger_pos = html.find('<button class="topnav-burger"')
-        menu_open_pos = html.find('<div class="topnav-menu" id="topnav-menu">')
+        h1_pos = html.find("<h1>")
         assert burger_pos != -1
-        assert menu_open_pos > burger_pos
-        assert menu_open_pos != -1
+        assert h1_pos != -1
+        assert burger_pos < h1_pos, (
+            "burger button must render before the brand title so the "
+            "mobile topbar lays them out as [burger][EggPool]"
+        )
 
     def test_theme_selector_inside_menu(self) -> None:
         """The theme selector lives inside the dropdown menu on narrow
         viewports so it only renders when the user expands the burger.
         On wide viewports the menu is always visible so the selector
         stays reachable."""
-        html = _render_nav("overview", "24h", available_themes=["dark"])
-        menu_start = html.find('<div class="topnav-menu" id="topnav-menu">')
-        menu_end = html.find("</div>", menu_start)
-        theme_pos = html.find("theme-selector")
+        _burger, nav = _render_nav("overview", "24h", available_themes=["dark"])
+        menu_start = nav.find('<div class="topnav-menu" id="topnav-menu">')
+        menu_end = nav.find("</div>", menu_start)
+        theme_pos = nav.find("theme-selector")
         assert menu_start != -1
         assert menu_end != -1
         assert theme_pos != -1
         assert menu_start < theme_pos < menu_end
 
     def test_refresh_button_outside_menu(self) -> None:
-        html = _render_nav("overview", "24h", available_themes=["dark"])
-        menu_close = html.find("</div>", html.find('<div class="topnav-menu"'))
-        theme_pos = html.find("topnav-refresh")
+        _burger, nav = _render_nav("overview", "24h", available_themes=["dark"])
+        menu_close = nav.find("</div>", nav.find('<div class="topnav-menu"'))
+        theme_pos = nav.find("topnav-refresh")
         assert menu_close != -1
         assert theme_pos > menu_close
 
     def test_all_page_links_inside_menu(self) -> None:
-        html = _render_nav("overview", "24h")
-        menu_start = html.find('<div class="topnav-menu" id="topnav-menu">')
-        menu_end = html.find("</div>", menu_start)
+        _burger, nav = _render_nav("overview", "24h")
+        menu_start = nav.find('<div class="topnav-menu" id="topnav-menu">')
+        menu_end = nav.find("</div>", menu_start)
         for path in ("/reliability", "/routing", "/accounts", "/models"):
-            assert html.find(path) > menu_start
-            assert html.find(path) < menu_end
+            assert nav.find(path) > menu_start
+            assert nav.find(path) < menu_end
 
 
 class TestDashboardScriptAlwaysLoaded:

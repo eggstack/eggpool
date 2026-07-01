@@ -810,29 +810,30 @@ label.trace-limit {
 
 @media (max-width: 760px) {
   header.topbar {
-    align-items: flex-start;
+    align-items: center;
   }
 
-  /* Center the brand title and stack the nav full-width below it
-     so the brand line does not waste a row alongside the burger
-     button.  The h1 takes the full content width and the text is
-     centered within, while the burger and refresh button keep
-     their own intrinsic width and re-flow via `flex-wrap`. */
+  /* Lay the burger button, the brand title, and the refresh icon out
+     inline on a single row so the topbar stops wasting a row of
+     vertical space on phone-sized viewports.  The h1 shrinks to its
+     intrinsic content width (`flex: 0 0 auto`) instead of stretching
+     to 100% and centering, and `order` keeps burger (0) → h1 (1) →
+     nav (2) reading order intact inside the wrapping flex container. */
   header.topbar h1 {
-    flex: 1 1 100%;
+    flex: 0 0 auto;
     order: 1;
-    text-align: center;
   }
 
-  /* The burger + refresh row stays above the dropdown menu when the
-     menu is expanded.  The menu carries an explicit `width: 100%`,
-     so by giving it the highest `order` we let flex-wrap push it to
-     its own row beneath the controls.  On a closed menu the menu is
-     `display: none` and the burger + refresh share a single row. */
+  /* The burger sits as the first item in the topbar row on mobile.
+     `order: 0` keeps it ahead of the h1 and the nav so the visual
+     reading order matches the DOM order. */
   .topnav-burger {
     order: 0;
   }
 
+  /* The refresh button keeps its in-nav slot so the wide-viewport
+     markup ordering (refresh after the menu) does not have to change.
+     Inside the nav it sits at order 1, ahead of the menu (order 3). */
   .topnav-refresh {
     order: 1;
   }
@@ -841,9 +842,15 @@ label.trace-limit {
     order: 3;
   }
 
+  /* The nav is no longer the right-aligned wide-viewport column on
+     mobile; it shares a row with the burger and the brand title.
+     `margin-left: auto` is intentionally dropped here so the burger,
+     h1, and refresh stay tightly grouped on the same row instead of
+     being pushed apart by an auto margin.  `width: auto` lets the
+     nav hug its content (the refresh button + the hidden menu). */
   nav.topnav {
     order: 2;
-    width: 100%;
+    width: auto;
     margin-left: 0;
   }
 
@@ -872,7 +879,7 @@ label.trace-limit {
 
   /* Nav links collapse into a burger-driven dropdown on narrow
      viewports.  The burger button stays visible and the menu only
-     opens when JS toggles `.topnav-open` on the ancestor
+     opens when JS toggles `.topnav-open` on the sibling
      `nav.topnav`.  This replaces the older `<details>/<summary>`
      disclosure pattern because the `<details>` element hides its
      non-summary children at the user-agent level when not `open`,
@@ -1139,18 +1146,10 @@ nav.topnav [data-tooltip]::before {
   border-bottom-color: var(--card-border);
 }
 
-/* The burger button swaps meaning between "open menu" and "close
-   menu" depending on `aria-expanded`.  Suppress the tooltip when the
-   menu is open so hovering the close button does not show stale
-   "Open page menu" copy that no longer matches the icon.  The
-   companion JS handler also removes the `data-tooltip` attribute
-   while expanded; this rule is the CSS safety net for any browser
-   or extension that does not strip the attribute. */
-.topnav-burger[aria-expanded="true"]::after,
-.topnav-burger[aria-expanded="true"]::before {
-  opacity: 0 !important;
-  pointer-events: none;
-}
+/* The burger button no longer carries a `data-tooltip` attribute
+   (the hamburger glyph is self-explanatory on phones), so no
+   expanded-state tooltip suppression rule is needed here.  Kept the
+   icon animation (`bar-1`/`bar-2`/`bar-3` X morph) above. */
 
 @media (prefers-reduced-motion: reduce) {
   [data-tooltip]::after,

@@ -456,7 +456,7 @@ def _render_layout(
     When loaded it is appended at the end of ``<body>`` so it never
     blocks HTML parsing on the critical path.
     """
-    nav = _render_nav(active_nav, period, available_themes, current_theme)
+    burger, nav = _render_nav(active_nav, period, available_themes, current_theme)
     theme_href = f"/static/theme.css?theme={_html_escape(current_theme)}"
     theme_link = f'<link rel="stylesheet" href="{theme_href}">' if current_theme else ""
     script_block = (
@@ -501,6 +501,7 @@ def _render_layout(
   <circle class="shape" cx="174" cy="132" r="5" />
 </svg>
 <header class="topbar">
+  {burger}
   <h1><a href="/?period={_html_escape(period)}&amp;theme={
         _html_escape(current_theme)
     }">EggPool</a></h1>
@@ -571,8 +572,17 @@ def _render_nav(
     period: str,
     available_themes: list[str] | None = None,
     current_theme: str = "",
-) -> str:
-    """Render the top navigation bar with theme selector."""
+) -> tuple[str, str]:
+    """Render the top navigation bar with theme selector.
+
+    Returns ``(burger, nav)``. The burger button is hoisted out of the
+    ``<nav>`` element so the mobile topbar can lay it out inline with
+    the brand title and the refresh icon on a single row (saves a row
+    of vertical space on phone-sized viewports). On wider viewports the
+    burger is hidden via CSS, so its DOM position does not affect the
+    desktop layout where the brand sits on the left and the nav links
+    push to the right via ``margin-left: auto`` on the ``<nav>``.
+    """
     items = [
         ("overview", "/", "Overview"),
         ("reliability", "/reliability", "Reliability"),
@@ -587,20 +597,17 @@ def _render_nav(
         ("timeseries", "/timeseries", "Timeseries"),
         ("runtime", "/runtime", "Runtime"),
     ]
-    parts = ['<nav class="topnav">']
     # Mobile burger button + collapsible menu panel. The CSS layer hides
     # the burger and reveals `.topnav-menu` inline on viewports ≥761px;
     # on narrower viewports the burger is shown and the menu only opens
-    # when JS toggles `.topnav-open` on the nav (see
-    # `dashboard.js#initNavToggle`). The theme selector lives INSIDE the
-    # menu so it is only reachable on narrow viewports when the menu is
-    # expanded (saves vertical space in the collapsed state) and the
-    # manual refresh button stays outside the menu so it is always
-    # reachable.
-    parts.append(
+    # when JS toggles `.topnav-open` on the sibling `nav.topnav` (see
+    # `dashboard.js#initNavToggle`). The burger no longer carries a
+    # tooltip — the hamburger glyph is self-explanatory and the button
+    # is reachable on phones where screen space is at a premium.  The
+    # `aria-label` continues to swap between "Open page menu" and "Close
+    # page menu" so screen readers announce the current state.
+    burger = (
         '<button class="topnav-burger" type="button" '
-        'data-tooltip="Open page menu" '
-        'data-tooltip-open-label="Close page menu" '
         'aria-label="Open page menu" '
         'aria-expanded="false" aria-controls="topnav-menu">'
         '<svg class="topnav-burger-icon" viewBox="0 0 24 24" '
@@ -611,6 +618,7 @@ def _render_nav(
         "</svg>"
         "</button>"
     )
+    parts = ['<nav class="topnav">']
     parts.append('<div class="topnav-menu" id="topnav-menu">')
     for key, href, label in items:
         cls = "active" if key == active_nav else ""
@@ -657,7 +665,7 @@ def _render_nav(
     )
 
     parts.append("</nav>")
-    return "".join(parts)
+    return burger, "".join(parts)
 
 
 def _render_period_selector(

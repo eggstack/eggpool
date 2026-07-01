@@ -887,55 +887,45 @@
   // dropdown.  On viewports ≥761px the burger is hidden via CSS and
   // the menu is always rendered inline, so the JS is a no-op there.
   // On narrower viewports the burger is visible and the menu only
-  // shows when `.topnav-open` is set on the ancestor `nav.topnav`.
+  // shows when `.topnav-open` is set on the sibling `nav.topnav`
+  // (the burger itself is a direct child of `header.topbar`, not a
+  // descendant of `nav.topnav`, so the topbar lays burger / h1 /
+  // nav out inline on a single row on mobile).
   //
   // Dismissal rules:
   // - click the burger again to close
   // - press Escape inside the nav to close and return focus to the
   //   burger
   // - click any menu link to close (lets navigation proceed)
-  // - click anywhere outside the nav to close
+  // - click anywhere outside both the nav and the burger to close
   //
   // Re-init is idempotent via the `__eggpoolNavWired` flag, matching
   // the pattern used by `initUpdateCommandCopy` and the timeseries
   // controls so the auto-refresh loop does not stack handlers.
   namespace.initNavToggle = function initNavToggle() {
-    const burger = document.querySelector("nav.topnav .topnav-burger");
-    const menu = document.querySelector("nav.topnav .topnav-menu");
+    const burger = document.querySelector("header.topbar .topnav-burger");
+    const menu = document.querySelector("header.topbar .topnav-menu");
     if (!burger || !menu) return;
-    const nav = burger.closest("nav.topnav");
+    const nav = document.querySelector("header.topbar nav.topnav");
     if (!nav) return;
     if (burger.__eggpoolNavWired) return;
     burger.__eggpoolNavWired = true;
 
-    // Cache the original tooltip + aria-label rendered by
-    // `_render_nav` so we can restore them when the menu closes.
-    // The expanded state should not advertise "Open page menu" —
-    // hovering the X icon after the menu is open otherwise shows
-    // stale copy that no longer matches the button's behaviour.
-    const originalTooltip = burger.getAttribute("data-tooltip") || "";
-    const openTooltip =
-      burger.getAttribute("data-tooltip-open-label") || originalTooltip;
+    // The burger no longer renders a `data-tooltip` attribute (the
+    // hamburger glyph is self-explanatory on a phone) so we only
+    // have to swap the `aria-label` between the open and close copy
+    // for assistive tech.  Capture the original label once so we can
+    // restore it on close without re-reading it from the DOM.
     const originalAriaLabel = burger.getAttribute("aria-label") || "";
 
     const setOpen = function (open) {
       if (open) {
         nav.classList.add("topnav-open");
         burger.setAttribute("aria-expanded", "true");
-        if (openTooltip) {
-          burger.setAttribute("data-tooltip", openTooltip);
-        } else {
-          burger.removeAttribute("data-tooltip");
-        }
         burger.setAttribute("aria-label", "Close page menu");
       } else {
         nav.classList.remove("topnav-open");
         burger.setAttribute("aria-expanded", "false");
-        if (originalTooltip) {
-          burger.setAttribute("data-tooltip", originalTooltip);
-        } else {
-          burger.removeAttribute("data-tooltip");
-        }
         burger.setAttribute("aria-label", originalAriaLabel);
       }
     };
@@ -970,7 +960,11 @@
     document.addEventListener("click", function (event) {
       const target = event.target;
       if (!(target instanceof Node)) return;
-      if (nav.contains(target)) return;
+      // The burger button is a sibling of `<nav>`, not a descendant,
+      // so it is NOT covered by `nav.contains(target)`.  Check it
+      // explicitly — otherwise clicking the burger to open the menu
+      // would immediately re-close it via this outside-click handler.
+      if (nav.contains(target) || burger.contains(target)) return;
       setOpen(false);
     });
   };
