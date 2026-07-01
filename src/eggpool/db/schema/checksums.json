@@ -37,6 +37,7 @@
         "0035_routing_decision_score_components.sql": "0919dba8580f7b653abde2a44c401efad540cb78460d7987c737fa9adf413f83",
         "0036_model_info.sql": "3232df4468e01ba2efb08c7e66d448db9cf9e1cb415500e1d7c1110522b1db54",
         "0037_model_info_failure_count.sql": "49e61feede88857f1ec954db073afaddf2be7dcd070acf2c1e139a9fe519b55c",
-        "0038_model_info_phase5.sql": "cbb9ce933596e4f4c5753a6526c354df242b2f943eba8bbf2de7d00a29247a85"
+        "0038_model_info_phase5.sql": "cbb9ce933596e4f4c5753a6526c354df242b2f943eba8bbf2de7d00a29247a85",
+        "0039_thinking_observability.sql": "e44b8b1463684f116ec63450878456fb9548ea419afa22950cd750f730bb4d19"
     }
 }

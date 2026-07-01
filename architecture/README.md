@@ -72,6 +72,20 @@ Key invariants:
 - **Structured observability persistence (migrations 0026-0029)** every `request_attempts` row carries provider/model/protocol/retry_category/latency/bytes/streamed/is_retry_outcome; every routing decision is persisted to `routing_decisions` in the same transaction as the `request_attempts` INSERT; safety-net tasks (`_crash_recovery`, `_finalize_stale_requests_once`, `reconcile_expired_reservations`) record `operational_events` rows inside the same transaction as the durable state mutation; latency is decomposed into `upstream_connect_ms / upstream_read_ms / coordinator_overhead_ms` so the dashboard can distinguish network vs upstream vs eggpool-side bottlenecks
 - **Runtime metrics are best-effort and process-local** — the `/api/stats/runtime` endpoint and `eggpool runtime-status` CLI command gather process topology, memory, background task state, database health, OS load average (`os.getloadavg` + normalized per-core), and a bounded rolling-window dispatch-overhead distribution via `DispatchOverheadRecorder` (`src/eggpool/runtime_dispatch.py`); failed probes return `null` rather than raising, `probe_errors` is capped to 16 truncated entries, and the endpoint is always auth-gated even with a public dashboard
 
+### Thinking/Reasoning Observability
+
+Phase 10 adds structured observability for thinking/reasoning decisions:
+
+- **In-memory counters** (`src/eggpool/metrics/thinking.py`): `ThinkingMetricsCounter` tracks decision outcomes with low-cardinality labels (protocol, decision, capability_status, provider_id). Counters: `requested`, `transcoded`, `dropped`, `rejected`, `unknown_capability`, `unsupported_capability`, `budget_clamped`, `stream_delta`, `response_block`.
+
+- **Request trace**: each request that involves thinking carries a `thinking_trace` dict on `ProxyRequestContext` with fields: `requested`, `client_protocol`, `request_fields`, `requested_effort`, `resolved_budget_tokens`, `budget_clamped`, `capability_status`, `capability_source`, `upstream_protocol`, `upstream_fields`, `decision`. This is serialized to `thinking_trace_json` on the `requests` table (migration `0039`) and exposed in `/api/stats/recent/{id}`.
+
+- **API surfaces**: `GET /api/stats/thinking` returns the counter snapshot. `/api/stats/runtime` includes `thinking_metrics` in the snapshot.
+
+- **Dashboard**: overview page shows a Thinking/Reasoning stat card with total count and per-decision breakdown.
+
+See `plans/thinking_reasoning_phase_10_observability.md` for the full design.
+
 ## Multi-Provider Architecture
 
 EggPool supports 27+ upstream providers (OpenCode Go, OpenAI, Anthropic, Groq, DeepInfra, Gemini, xAI, Mistral, SiliconFlow, DeepSeek, Together, Fireworks, OpenRouter, Alibaba, MiniMax, and more), each with its own base URL, account pool, supported protocols, and model catalog. See `docs/providers.md` for the full roster.

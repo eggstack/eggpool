@@ -82,6 +82,7 @@ class FinalizationData:
     provider_cost_microdollars: int | None = None
     provider_cost_source: str | None = None
     upstream_protocol: str | None = None
+    thinking_trace_json: str | None = None
 
 
 class RequestFinalizer:
@@ -291,6 +292,7 @@ class RequestFinalizer:
                 local_cost_microdollars=local_cost_microdollars,
                 local_cost_exactness=local_cost_exactness,
                 upstream_protocol=data.upstream_protocol,
+                thinking_trace_json=data.thinking_trace_json,
             )
 
             # 4. Finalize attempt only if request transitioned and attempt

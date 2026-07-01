@@ -39,6 +39,7 @@ from eggpool.health.health_manager import (
     FailureCategory,
     classify_failure_category,
 )
+from eggpool.metrics.thinking import get_counter
 from eggpool.providers.client_pool import ProviderClientPool
 from eggpool.providers.contract import (
     build_auth_headers,
@@ -130,6 +131,11 @@ def _prepare_error_detail(value: object | None, persist: bool) -> str | None:
     return redact_error_detail(str(value))
 
 
+def _serialize_thinking_trace(trace: dict[str, Any] | None) -> str | None:
+    """Serialize thinking trace to JSON for persistence."""
+    return json.dumps(trace) if trace else None
+
+
 def _safe_ratio(numerator: int, denominator: int) -> float | None:
     """Return ``numerator / denominator`` as a utilization ratio.
 
@@ -166,6 +172,7 @@ class ProxyRequestContext:
     upstream_protocol: str = ""
     transcode_required: bool = False
     transcode_context: TranscodeContext | None = None
+    thinking_trace: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if not self.upstream_protocol:
@@ -441,6 +448,85 @@ class RequestCoordinator:
                     context.upstream_body = encode_json_body(translated)
                     context.transcode_context.loss_warnings.extend(warnings)
 
+                    # Determine thinking decision from transcoder warnings
+                    if context.thinking_trace is not None:
+                        thinking_warnings = [
+                            w
+                            for w in context.transcode_context.loss_warnings
+                            if w.get("kind")
+                            in (
+                                "thinking_signature_dropped",
+                                "reasoning_content_dropped",
+                                "budget_clamped",
+                                "unknown_effort",
+                                "budget_rejected",
+                                "budget_resolution_no_input",
+                                "dropped_field",
+                            )
+                            and "thinking" in str(w.get("field", ""))
+                        ]
+                        if any(
+                            w.get("kind") == "reasoning_content_dropped"
+                            for w in thinking_warnings
+                        ):
+                            context.thinking_trace["decision"] = "dropped"
+                        elif any(
+                            w.get("kind") == "budget_clamped" for w in thinking_warnings
+                        ):
+                            context.thinking_trace["decision"] = "clamped"
+                            context.thinking_trace["budget_clamped"] = True
+                        elif any(
+                            w.get("kind") == "budget_rejected"
+                            for w in thinking_warnings
+                        ):
+                            context.thinking_trace["decision"] = "rejected"
+                        else:
+                            context.thinking_trace["decision"] = "transcoded"
+
+                        # Record the final thinking decision
+                        _thinking_counter = get_counter()
+                        decision = context.thinking_trace["decision"]
+                        if decision == "transcoded":
+                            await _thinking_counter.increment_transcoded(
+                                client_protocol=context.thinking_trace[
+                                    "client_protocol"
+                                ],
+                                upstream_protocol=context.upstream_protocol,
+                                provider_id="unknown",
+                            )
+                        elif decision == "dropped":
+                            await _thinking_counter.increment_dropped(
+                                client_protocol=context.thinking_trace[
+                                    "client_protocol"
+                                ],
+                                upstream_protocol=context.upstream_protocol,
+                                reason="reasoning_content_dropped",
+                            )
+                        elif decision == "clamped":
+                            await _thinking_counter.increment_budget_clamped(
+                                client_protocol=context.thinking_trace[
+                                    "client_protocol"
+                                ],
+                                provider_id="unknown",
+                            )
+                        elif decision == "rejected":
+                            await _thinking_counter.increment_rejected(
+                                client_protocol=context.thinking_trace[
+                                    "client_protocol"
+                                ],
+                                capability_status="budget_rejected",
+                            )
+
+                # Native path: thinking controls pass through unchanged
+                if (
+                    context.thinking_trace is not None
+                    and context.thinking_trace["decision"] == "none"
+                ):
+                    context.thinking_trace["decision"] = "passthrough"
+                    context.thinking_trace["upstream_protocol"] = (
+                        context.upstream_protocol
+                    )
+
         last_error: Exception | None = None
         last_upstream_response: tuple[int, list[tuple[str, str]], bytes] | None = None
         attempt_num = 0
@@ -471,6 +557,9 @@ class RequestCoordinator:
                                 request_id=db_request_id,
                                 status="error",
                                 error_class=type(err).__name__,
+                                thinking_trace_json=_serialize_thinking_trace(
+                                    context.thinking_trace
+                                ),
                             )
                 break
             except AuthenticationError as err:
@@ -690,6 +779,25 @@ class RequestCoordinator:
                     except (json.JSONDecodeError, ValueError):
                         pass
                 thinking_req = classify_thinking_request(body_dict, context.protocol)
+                # Record thinking observability trace
+                if thinking_req.required:
+                    _thinking_counter = get_counter()
+                    await _thinking_counter.increment_requested(
+                        client_protocol=thinking_req.client_protocol,
+                    )
+                    context.thinking_trace = {
+                        "requested": True,
+                        "client_protocol": thinking_req.client_protocol,
+                        "request_fields": list(thinking_req.fields),
+                        "requested_effort": thinking_req.requested_effort,
+                        "resolved_budget_tokens": None,
+                        "budget_clamped": False,
+                        "capability_status": None,
+                        "capability_source": None,
+                        "upstream_protocol": None,
+                        "upstream_fields": [],
+                        "decision": "none",
+                    }
                 _capability_policy: dict[str, str] | None = None
                 if self._transcoder_policy is not None and hasattr(
                     self._transcoder_policy, "capability_policy"
@@ -729,6 +837,17 @@ class RequestCoordinator:
                     # least one attempt means every eligible candidate has
                     # been tried in this request (502).
                     if thinking_req.required:
+                        # Record thinking rejection
+                        _thinking_counter = get_counter()
+                        await _thinking_counter.increment_rejected(
+                            client_protocol=thinking_req.client_protocol,
+                            capability_status="no_eligible_providers",
+                        )
+                        if context.thinking_trace is not None:
+                            context.thinking_trace["decision"] = "rejected"
+                            context.thinking_trace["capability_status"] = (
+                                "no_eligible_providers"
+                            )
                         raise CapabilityError(
                             model_id=context.model_id,
                             capability="thinking",
@@ -857,6 +976,17 @@ class RequestCoordinator:
                     # list while the registry still has enabled states
                     # means the eligible subset was exhausted mid-request.
                     if thinking_req.required:
+                        # Record thinking rejection
+                        _thinking_counter = get_counter()
+                        await _thinking_counter.increment_rejected(
+                            client_protocol=thinking_req.client_protocol,
+                            capability_status="no_eligible_providers",
+                        )
+                        if context.thinking_trace is not None:
+                            context.thinking_trace["decision"] = "rejected"
+                            context.thinking_trace["capability_status"] = (
+                                "no_eligible_providers"
+                            )
                         raise CapabilityError(
                             model_id=context.model_id,
                             capability="thinking",
@@ -1123,6 +1253,9 @@ class RequestCoordinator:
                     upstream_latency_ms=elapsed_ms,
                     bytes_received=len(context.original_body),
                     upstream_protocol=context.upstream_protocol,
+                    thinking_trace_json=_serialize_thinking_trace(
+                        context.thinking_trace
+                    ),
                 ),
             )
             raise
@@ -1296,6 +1429,9 @@ class RequestCoordinator:
                         usage.reported_cost_source if usage else None
                     ),
                     upstream_protocol=context.upstream_protocol,
+                    thinking_trace_json=_serialize_thinking_trace(
+                        context.thinking_trace
+                    ),
                 ),
             )
 
@@ -1646,6 +1782,9 @@ class RequestCoordinator:
                         provider_cost_microdollars=usage_result.reported_cost_microdollars,
                         provider_cost_source=usage_result.reported_cost_source,
                         upstream_protocol=context.upstream_protocol,
+                        thinking_trace_json=_serialize_thinking_trace(
+                            context.thinking_trace
+                        ),
                     ),
                 )
 
@@ -1725,6 +1864,9 @@ class RequestCoordinator:
                                             usage_result.reported_cost_source
                                         ),
                                         upstream_protocol=context.upstream_protocol,
+                                        thinking_trace_json=_serialize_thinking_trace(
+                                            context.thinking_trace
+                                        ),
                                     ),
                                 )
                             ),
@@ -1780,6 +1922,9 @@ class RequestCoordinator:
                         ),
                         provider_cost_source=usage_result.reported_cost_source,
                         upstream_protocol=context.upstream_protocol,
+                        thinking_trace_json=_serialize_thinking_trace(
+                            context.thinking_trace
+                        ),
                     ),
                 )
                 raise
@@ -2202,6 +2347,7 @@ class RequestCoordinator:
                 ),
                 bytes_received=len(context.original_body),
                 upstream_protocol=context.upstream_protocol,
+                thinking_trace_json=_serialize_thinking_trace(context.thinking_trace),
             ),
         )
 
@@ -2264,6 +2410,9 @@ class RequestCoordinator:
                     health_already_applied=health_already_applied,
                     bytes_received=len(context.original_body),
                     upstream_protocol=context.upstream_protocol,
+                    thinking_trace_json=_serialize_thinking_trace(
+                        context.thinking_trace
+                    ),
                 ),
             )
         elif context.client_metadata.get("db_request_id") is not None:
@@ -2303,6 +2452,9 @@ class RequestCoordinator:
                     upstream_latency_ms=elapsed_ms,
                     bytes_received=len(context.original_body),
                     upstream_protocol=context.upstream_protocol,
+                    thinking_trace_json=_serialize_thinking_trace(
+                        context.thinking_trace
+                    ),
                 ),
             )
 

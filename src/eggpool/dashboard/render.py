@@ -1518,6 +1518,68 @@ def _render_bandwidth_heatmap(
     return f'<div class="heatmap">{svg}{overlay}</div>'
 
 
+def _render_thinking_stats(thinking_stats: dict[str, Any] | None) -> str:
+    """Render the Thinking/Reasoning metrics card for the overview page.
+
+    Shows total thinking requests, per-decision breakdown, and
+    per-protocol breakdown when data is available.  Returns an empty
+    string when the counter snapshot is empty so the layout stays
+    clean during idle periods.
+    """
+    if not thinking_stats:
+        return ""
+    total = int(thinking_stats.get("total", 0) or 0)
+    if total == 0:
+        return ""
+    label_breakdown: dict[str, dict[str, int]] = thinking_stats.get(
+        "label_breakdown", {}
+    )
+
+    # Per-decision breakdown from the "requested" category
+    requested_keys: dict[str, int] = label_breakdown.get("requested", {})
+    requested_total = sum(requested_keys.values())
+
+    # Per-decision breakdown from specific decision categories
+    transcoded = sum(label_breakdown.get("transcoded", {}).values())
+    dropped = sum(label_breakdown.get("dropped", {}).values())
+    rejected = sum(label_breakdown.get("rejected", {}).values())
+    unknown_cap = sum(label_breakdown.get("unknown_capability", {}).values())
+    unsupported_cap = sum(label_breakdown.get("unsupported_capability", {}).values())
+    budget_clamped = sum(label_breakdown.get("budget_clamped", {}).values())
+
+    sub_parts: list[str] = []
+    if requested_total > 0:
+        sub_parts.append(f"{requested_total:,} requested")
+    if transcoded > 0:
+        sub_parts.append(f"{transcoded:,} transcoded")
+    if dropped > 0:
+        sub_parts.append(f"{dropped:,} dropped")
+    if rejected > 0:
+        sub_parts.append(f"{rejected:,} rejected")
+    if unknown_cap > 0:
+        sub_parts.append(f"{unknown_cap:,} unknown cap")
+    if unsupported_cap > 0:
+        sub_parts.append(f"{unsupported_cap:,} unsupported cap")
+    if budget_clamped > 0:
+        sub_parts.append(f"{budget_clamped:,} budget-clamped")
+    sub_text = " · ".join(sub_parts) if sub_parts else "no decisions recorded"
+
+    return f"""
+<section class="cards">
+  {
+        _render_metric_card(
+            title="Thinking/Reasoning",
+            metric=f"{total:,}",
+            sub=sub_text,
+            tooltip="In-memory thinking/reasoning observability counters. "
+            "Tracks per-request thinking decisions made by the transcoder "
+            "and routing layers.",
+        )
+    }
+</section>
+"""
+
+
 def render_overview(
     overview: dict[str, Any],
     accounts: list[dict[str, Any]],
@@ -1542,6 +1604,7 @@ def render_overview(
     show_disabled: bool = False,
     disabled_count: int = 0,
     enabled_count: int = 0,
+    thinking_stats: dict[str, Any] | None = None,
 ) -> str:
     """Render the overview dashboard page.
 
@@ -1561,6 +1624,11 @@ def render_overview(
     ``accounts`` list with ``account_enabled == 1``. It drives the
     panel-header "X enabled · Y disabled" chip and stays accurate
     whether or not ``show_disabled`` is on.
+
+    ``thinking_stats`` is the snapshot from
+    ``eggpool.metrics.thinking.get_counter().snapshot()``. When
+    provided and non-empty, a Thinking/Reasoning metric card is
+    rendered alongside the existing token and streaming cards.
     """
     summary = overview.get("summary", {})
     imbalance = overview.get("imbalance", {})
@@ -1712,6 +1780,8 @@ def render_overview(
         )
     }
 </section>
+
+{_render_thinking_stats(thinking_stats)}
 
 <section class="panel">
   <div class="panel-header">
@@ -4705,6 +4775,7 @@ def render_traces(
             _th("In", priority=2),
             _th("Out", priority=2),
             # Priority 3 — desktop only
+            _th("Thinking", priority=3),
             _th("ID", priority=3),
             "</tr></thead><tbody>",
         ]
@@ -4727,6 +4798,11 @@ def render_traces(
                 else "—"
             )
             proxy_id = short_id(str(row.get("proxy_request_id", "") or ""))
+            reasoning_tokens = int(row.get("reasoning_tokens") or 0)
+            thinking_chars = int(row.get("thinking_characters") or 0)
+            thinking_used = reasoning_tokens > 0 or thinking_chars > 0
+            thinking_cls = "yes" if thinking_used else "no"
+            thinking_display = format_tokens(reasoning_tokens) if thinking_used else "—"
             parts.append(
                 f"<tr>"
                 f"{_td_priority(ts, 1)}"
@@ -4739,6 +4815,7 @@ def render_traces(
                 f"{_td_priority(error_class, 2)}"
                 f"{_td_priority(in_tok, 2)}"
                 f"{_td_priority(out_tok, 2)}"
+                f"{_td_priority(thinking_display, 3, class_=thinking_cls)}"
                 f"{_td_priority(proxy_id, 3)}"
                 f"</tr>"
             )

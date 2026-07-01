@@ -374,6 +374,7 @@ class RequestRepository:
         local_cost_microdollars: int | None = None,
         local_cost_exactness: str | None = None,
         upstream_protocol: str | None = None,
+        thinking_trace_json: str | None = None,
     ) -> bool:
         """Finalize a request only if it is still pending.
 
@@ -394,7 +395,7 @@ class RequestRepository:
             "coordinator_overhead_ms = ?, "
             "provider_cost_microdollars = ?, provider_cost_source = ?, "
             "local_cost_microdollars = ?, local_cost_exactness = ?, "
-            "upstream_protocol = ? "
+            "upstream_protocol = ?, thinking_trace_json = ? "
             "WHERE id = ? AND status = 'pending'",
             (
                 status,
@@ -423,6 +424,7 @@ class RequestRepository:
                 local_cost_microdollars,
                 local_cost_exactness,
                 upstream_protocol,
+                thinking_trace_json,
                 request_id,
             ),
         )

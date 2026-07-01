@@ -292,6 +292,10 @@ async def handle_overview(
         time_range, account_stats=accounts, use_cache=True
     )
 
+    from eggpool.metrics.thinking import get_counter
+
+    thinking_stats = await get_counter().snapshot()
+
     refresh_s = dashboard_config.refresh_interval_s
     theme_css, heatmap_colors, current_theme, available = _get_theme_data(
         request, theme
@@ -319,6 +323,7 @@ async def handle_overview(
         show_disabled=show_disabled,
         disabled_count=disabled_count,
         enabled_count=enabled_count,
+        thinking_stats=thinking_stats,
     )
     return HTMLResponse(content=html)
 

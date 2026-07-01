@@ -35,6 +35,7 @@ See `architecture/README.md` for the full design overview.
 - The Runtime dashboard renders two new cards in the resource row: `Load average` (1m primary metric, with `load/core` subtitle and CPU count when available) and `Dispatch overhead` (avg as primary, p95/p99/max + sample count in subtitle). The static `Threads` (configured-server-threads) and the normal `Processes` cards were removed to make room; `processes.process_count_warning = True` surfaces a warning-only panel instead
 - `RuntimeMetricsService.snapshot()` adds two new top-level sections: `load` (with `available` flag — `false` on platforms without `os.getloadavg`) and `dispatch_overhead` (empty stub when no recorder is wired). Both follow the existing probe-error best-effort pattern — failures append a bounded string to `probe_errors` and return `{"error": str(exc)}`
 - No SQLite migration. No new dependency. Stdlib only (`collections.deque`, `threading`, `time.perf_counter_ns`, `os.getloadavg`, `os.cpu_count`). Operator can disable the recorder by simply not passing it; the snapshot still returns an empty stub
+- **Thinking/reasoning observability**: in-memory counters (`ThinkingMetricsCounter`) track thinking decision outcomes. Per-request trace stored as `thinking_trace_json`. Exposed via `/api/stats/thinking` and dashboard overview. See `architecture/README.md` § Thinking/Reasoning Observability.
 
 ## Process Model
 

@@ -20,11 +20,14 @@ Endpoints:
 - GET /api/stats/recent/{request_id}  (always auth-gated)
 - GET /api/stats/recent-requests  (always auth-gated)
 - GET /api/stats/update  (always auth-gated, in api/update.py)
+- GET /api/stats/thinking
 - GET /api/events
 """
 
 from __future__ import annotations
 
+import contextlib
+import json
 from typing import TYPE_CHECKING, Any
 
 from fastapi import Request  # noqa: TCH002 — FastAPI needs runtime access
@@ -283,6 +286,11 @@ async def handle_request_trace(request: Request, request_id: int) -> Response:
         )
     decisions = await stats.get_routing_decisions_for_request(request_id)
     trace["routing_decisions"] = decisions
+    if trace and "request" in trace:
+        thinking_json = trace["request"].get("thinking_trace_json")
+        if thinking_json:
+            with contextlib.suppress(json.JSONDecodeError, TypeError):
+                trace["request"]["thinking_trace"] = json.loads(thinking_json)
     return JSONResponse(content=trace)
 
 
@@ -439,6 +447,20 @@ async def handle_pricing_provenance(request: Request) -> Response:
     stats = request.app.state.stats
     rows = await fetch_pricing_provenance_stats(stats._db)
     return JSONResponse(content={"snapshots": rows})
+
+
+async def handle_thinking_stats(request: Request) -> Response:
+    """GET /api/stats/thinking.
+
+    Returns in-memory thinking/reasoning observability counters.
+    Counters are low-cardinality (protocol, decision, capability_status)
+    and track per-request thinking decisions across the system.
+    """
+    from eggpool.metrics.thinking import get_counter
+
+    counter = get_counter()
+    snapshot = await counter.snapshot()
+    return JSONResponse(content=snapshot)
 
 
 async def handle_recent_requests(
@@ -626,6 +648,12 @@ def register_stats_routes(app: Any, require_auth: bool = False) -> None:
         methods=["GET"],
         dependencies=dependencies,
     )
+    app.add_api_route(
+        path="/api/stats/thinking",
+        endpoint=handle_thinking_stats,
+        methods=["GET"],
+        dependencies=dependencies,
+    )
 
     # Per-request trace endpoint.  Per-request traces expose the
     # selected model, prompt volume, and error detail that operators
@@ -672,6 +700,7 @@ __all__ = [
     "handle_routing_selection_breakdown",
     "handle_routing_skew_summary",
     "handle_summary",
+    "handle_thinking_stats",
     "handle_timeseries",
     "register_stats_routes",
 ]

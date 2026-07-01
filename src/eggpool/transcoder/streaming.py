@@ -705,6 +705,11 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
         self._tool_blocks: dict[int, _OpenAIToolCall] = {}
         self._openai_tool_index: dict[int, int] = {}
         self._next_openai_tool_index = 0
+        self._thinking_delta_count: int = 0
+
+    @property
+    def thinking_delta_count(self) -> int:
+        return self._thinking_delta_count
 
     async def feed(self, chunk: bytes) -> list[bytes]:
         self._observer.observe(chunk)
@@ -906,6 +911,7 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
                 return []
             if self._features is not None and not self._features.thinking:
                 return []
+            self._thinking_delta_count += 1
             delta_fields = build_reasoning_fields(
                 self._reasoning_field_names,
                 thinking_text,

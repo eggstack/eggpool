@@ -183,6 +183,9 @@ class RuntimeMetricsService:
         # DNS cache health
         result["dns_cache"] = self._snapshot_dns_cache(probe_errors)
 
+        # Thinking/reasoning observability counters
+        result["thinking_metrics"] = await self._snapshot_thinking_metrics(probe_errors)
+
         return result
 
     # -- Server / process ---------------------------------------------------
@@ -567,6 +570,21 @@ class RuntimeMetricsService:
         except Exception as exc:
             _append_probe_error(probe_errors, f"DNS cache snapshot failed: {exc}")
             return {"error": str(exc)}
+
+    async def _snapshot_thinking_metrics(
+        self, probe_errors: list[str]
+    ) -> dict[str, Any]:
+        """Best-effort snapshot of thinking/reasoning observability counters."""
+        from eggpool.metrics.thinking import get_counter
+
+        try:
+            counter = get_counter()
+            return await counter.snapshot()
+        except Exception as exc:
+            _append_probe_error(
+                probe_errors, f"Thinking metrics snapshot failed: {exc}"
+            )
+            return {"total": 0, "counters": {}, "label_breakdown": {}}
 
     def _snapshot_load(self, probe_errors: list[str]) -> dict[str, Any]:
         """Best-effort snapshot of the OS load average."""
