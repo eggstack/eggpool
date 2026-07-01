@@ -7,6 +7,9 @@ thinking/reasoning implementation:
   OpenAI ``reasoning_effort`` requests, even when the preflight
   translation already wrote an intermediate Anthropic budget into
   ``upstream_body``.
+- Selected-provider recompute leaves ``thinking_trace.upstream_fields``
+  accurate (``["thinking"]`` when it wrote the field, preserved verbatim
+  when an earlier path already populated the list).
 - Explicit client budgets are still validated/clamped against the
   selected provider's min/max.
 - Strict-policy rejections at dispatch time are client-side validation
@@ -14,8 +17,6 @@ thinking/reasoning implementation:
   finalize the durable attempt, release the reservation (durable and
   in-memory), decrement the active request count, release the health
   slot, and record a ``decision = "rejected"`` thinking trace.
-- Pre-selection capability rejections must not try to finalize a
-  non-existent attempt.
 - Streaming and non-streaming dispatch paths share identical cleanup
   semantics.
 """
@@ -370,12 +371,107 @@ class TestSelectedProviderEffortMappingWins:
             assert ctx.thinking_trace["resolved_budget_tokens"] == 32768
             assert ctx.thinking_trace["capability_status"] == "supported"
             assert ctx.thinking_trace["capability_source"] == "manual_override"
+            assert ctx.thinking_trace["upstream_fields"] == ["thinking"]
+        finally:
+            os.environ.pop(f"K_{name}", None)
+
+
+class TestUpstreamFieldsPreservedFromPreflight:
+    """Test 2: pre-populated ``upstream_fields`` are preserved, not overwritten.
+
+    The normal preflight translation populates ``upstream_fields`` before
+    selected-provider recompute runs. The recompute must not stomp on
+    a non-empty list, even when it writes/validates Anthropic
+    ``thinking.budget_tokens`` itself.
+    """
+
+    def test_existing_upstream_fields_are_preserved(self) -> None:
+        from eggpool.accounts.registry import AccountRegistry
+        from eggpool.catalog.cache import ModelCatalogCache
+        from eggpool.models.config import AppConfig
+
+        name = "0001"
+        os.environ[f"K_{name}"] = "k"
+        try:
+            config = AppConfig.model_validate(
+                {
+                    "providers": {
+                        "test-provider": {
+                            "id": "test-provider",
+                            "base_url": "https://api.example.com/v1",
+                            "protocols": ["anthropic"],
+                            "routing_priority": 0,
+                            "accounts": [
+                                {
+                                    "name": name,
+                                    "api_key_env": f"K_{name}",
+                                    "weight": 1.0,
+                                }
+                            ],
+                        }
+                    }
+                }
+            )
+            registry = AccountRegistry(config)
+            cache = ModelCatalogCache()
+            provider_caps = ThinkingCapability(
+                status="supported",
+                source="manual_override",
+                effort_to_budget_tokens={"high": 32768},
+            )
+            policy = _policy(strict=False, high_default=16384)
+            coordinator = _build_coordinator_sync(
+                registry=registry,
+                cache=cache,
+                selected_provider_caps=provider_caps,
+                policy=policy,
+            )
+            original_body = (
+                b'{"model":"test-model",'
+                b'"messages":[{"role":"user","content":"hi"}],'
+                b'"reasoning_effort":"high"}'
+            )
+            upstream_body = (
+                b'{"model":"test-model",'
+                b'"messages":[{"role":"user","content":"hi"}],'
+                b'"thinking":{"type":"enabled","budget_tokens":16384}}'
+            )
+            ctx = _make_context(
+                original_body=original_body,
+                upstream_body=upstream_body,
+                model_id="test-model",
+            )
+            # Simulate an earlier code path (e.g. preflight translation)
+            # that already recorded which Anthropic fields were written
+            # upstream. The recompute must preserve this list verbatim.
+            assert ctx.thinking_trace is not None
+            ctx.thinking_trace["upstream_fields"] = [
+                "thinking",
+                "some_future_field",
+            ]
+            selected = _make_selected_attempt(
+                attempt_id=1,
+                reservation_id="1",
+                account_name=name,
+                provider_id="test-provider",
+            )
+
+            coordinator._apply_selected_provider_transcode_adjustments(
+                context=ctx,
+                selected=selected,
+            )
+
+            assert ctx.thinking_trace is not None
+            assert ctx.thinking_trace["upstream_fields"] == [
+                "thinking",
+                "some_future_field",
+            ]
         finally:
             os.environ.pop(f"K_{name}", None)
 
 
 class TestExplicitAnthropicBudgetClamped:
-    """Test 2: explicit Anthropic budgets are clamped against selected provider."""
+    """Test 3: explicit Anthropic budgets are clamped against selected provider."""
 
     def test_explicit_budget_above_max_is_clamped(self) -> None:
         from eggpool.accounts.registry import AccountRegistry
@@ -464,7 +560,7 @@ class TestExplicitAnthropicBudgetClamped:
 
 
 class TestStrictSelectedProviderRejectionCleansUp:
-    """Test 3: strict clamp rejection cleans up state and re-raises.
+    """Test 4: strict clamp rejection cleans up state and re-raises.
 
     Asserts the lifecycle invariants:
 
@@ -626,6 +722,24 @@ class TestStrictSelectedProviderRejectionCleansUp:
                 assert ctx.thinking_trace["decision"] == "rejected"
                 assert ctx.thinking_trace["provider_id"] == "test-provider"
 
+                # --- No upstream health penalty ----------------------
+                # Capability rejection is a client-validation failure,
+                # not an upstream-attempt signal. The cleanup helper
+                # releases the probe slot via
+                # ``health_manager.release_request`` but never calls
+                # ``record_failure``/``record_rate_limit``/
+                # ``record_quota_exhausted``/``disable_model``/etc., so
+                # the account must remain fully healthy after the
+                # cleanup.
+                assert health_manager.is_account_healthy(name) is True
+                health_state = health_manager.get_account_health(name)
+                assert health_state.consecutive_failures == 0
+                assert health_state.health_state == "healthy"
+                assert health_state.disabled_models == {}
+                assert health_state.disabled_until is None
+                assert health_state.disabled_reason == ""
+                assert health_state.cooldown_until == 0.0
+
                 # --- Request row finalized --------------------------
                 request_row = await db.fetch_one(
                     "SELECT status, error_class FROM requests WHERE id = ?",
@@ -641,7 +755,7 @@ class TestStrictSelectedProviderRejectionCleansUp:
 
 
 class TestStrictStreamingRejectionCleansUp:
-    """Test 4: streaming strict rejection cleans up identically."""
+    """Test 5: streaming strict rejection cleans up identically."""
 
     @pytest.mark.asyncio()
     async def test_streaming_strict_rejection_finalizes_state(self) -> None:
@@ -781,6 +895,14 @@ class TestStrictStreamingRejectionCleansUp:
                 # entrypoint never produced a response generator.
                 assert ctx.thinking_trace is not None
                 assert ctx.thinking_trace["decision"] == "rejected"
+
+                # Streaming cleanup must match the non-streaming path:
+                # no upstream health penalty is applied.
+                assert health_manager.is_account_healthy(name) is True
+                health_state = health_manager.get_account_health(name)
+                assert health_state.consecutive_failures == 0
+                assert health_state.health_state == "healthy"
+                assert health_state.disabled_models == {}
             finally:
                 await db.disconnect()
         finally:
@@ -788,7 +910,7 @@ class TestStrictStreamingRejectionCleansUp:
 
 
 class TestCleanupHelperIdempotent:
-    """Test 5: the cleanup helper is safe to invoke once.
+    """Test 6: the cleanup helper is safe to invoke once.
 
     The cleanup branch only marks the attempt terminal because
     ``AttemptFinalizer.finalize_failed_attempt`` is itself idempotent.
@@ -909,8 +1031,17 @@ class TestCleanupHelperIdempotent:
                     selected=selected,
                     err=err,
                 )
-                # Second invocation must not crash and must leave the
-                # active count / in-memory reservation untouched.
+                # Capture runtime state before the second invocation.
+                # ``AttemptFinalizer.finalize_failed_attempt`` is itself
+                # idempotent — its second call returns
+                # ``reservation_released=False``, so the cleanup helper's
+                # ``if finalize_result.reservation_released:`` branch is
+                # skipped and neither the in-memory reservation nor the
+                # active request count are decremented a second time.
+                # The release_reason/probe slot release calls on the
+                # second invocation are also no-ops against already-cleared
+                # state. This is the invariant that lets callers treat
+                # the helper as fire-and-forget safe.
                 state_before = state.active_request_count
                 quota_before = quota_estimator._account_reserved_cost.get(name, 0)
                 await coordinator._finalize_selected_capability_rejection(
@@ -922,6 +1053,14 @@ class TestCleanupHelperIdempotent:
                 assert (
                     quota_estimator._account_reserved_cost.get(name, 0) == quota_before
                 )
+                # Neither the first nor the second cleanup call should
+                # record any upstream health penalty. The account stays
+                # fully healthy through both invocations.
+                assert health_manager.is_account_healthy(name) is True
+                health_state = health_manager.get_account_health(name)
+                assert health_state.consecutive_failures == 0
+                assert health_state.health_state == "healthy"
+                assert health_state.disabled_models == {}
             finally:
                 await db.disconnect()
         finally:
