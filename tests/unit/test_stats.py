@@ -453,6 +453,132 @@ class TestFetchRecentEvents:
         assert len(rows) == 1
         assert rows[0]["event_type"] == "cooldown_active"
 
+    @pytest.mark.asyncio()
+    async def test_filters_by_time_range(self, seeded_db: Database) -> None:
+        async with seeded_db.transaction():
+            await seeded_db.execute_write(
+                """
+                INSERT INTO account_events
+                    (account_id, event_type, details, created_at)
+                VALUES (
+                    (SELECT id FROM accounts WHERE name = ?),
+                    ?, ?, ?
+                )
+                """,
+                (
+                    "acct_a",
+                    "cooldown_active",
+                    '{"seconds": 60}',
+                    "2024-01-01 00:00:00",
+                ),
+            )
+            await seeded_db.execute_write(
+                """
+                INSERT INTO account_events
+                    (account_id, event_type, details, created_at)
+                VALUES (
+                    (SELECT id FROM accounts WHERE name = ?),
+                    ?, ?, ?
+                )
+                """,
+                (
+                    "acct_a",
+                    "auth_failed",
+                    "{}",
+                    "2024-02-01 00:00:00",
+                ),
+            )
+        rows = await queries.fetch_recent_events(
+            seeded_db,
+            10,
+            start="2024-01-15 00:00:00",
+            end="2024-01-31 23:59:59",
+        )
+        assert rows == []
+
+
+class TestFetchEventTypesInRange:
+    """Tests for fetch_event_types_in_range."""
+
+    @pytest.mark.asyncio()
+    async def test_returns_empty_when_no_events(self, db: Database) -> None:
+        rows = await queries.fetch_event_types_in_range(
+            db, "2024-01-01 00:00:00", "2024-01-02 00:00:00"
+        )
+        assert rows == []
+
+    @pytest.mark.asyncio()
+    async def test_returns_distinct_sorted_types(self, seeded_db: Database) -> None:
+        async with seeded_db.transaction():
+            await seeded_db.execute_write(
+                """
+                INSERT INTO account_events
+                    (account_id, event_type, details, created_at)
+                VALUES (
+                    (SELECT id FROM accounts WHERE name = ?),
+                    ?, ?, ?
+                )
+                """,
+                (
+                    "acct_a",
+                    "cooldown_active",
+                    "{}",
+                    "2024-01-01 12:00:00",
+                ),
+            )
+            await seeded_db.execute_write(
+                """
+                INSERT INTO account_events
+                    (account_id, event_type, details, created_at)
+                VALUES (
+                    (SELECT id FROM accounts WHERE name = ?),
+                    ?, ?, ?
+                )
+                """,
+                (
+                    "acct_a",
+                    "cooldown_active",
+                    "{}",
+                    "2024-01-01 13:00:00",
+                ),
+            )
+            await seeded_db.execute_write(
+                """
+                INSERT INTO account_events
+                    (account_id, event_type, details, created_at)
+                VALUES (
+                    (SELECT id FROM accounts WHERE name = ?),
+                    ?, ?, ?
+                )
+                """,
+                (
+                    "acct_a",
+                    "auth_failed",
+                    "{}",
+                    "2024-01-01 14:00:00",
+                ),
+            )
+            await seeded_db.execute_write(
+                """
+                INSERT INTO account_events
+                    (account_id, event_type, details, created_at)
+                VALUES (
+                    (SELECT id FROM accounts WHERE name = ?),
+                    ?, ?, ?
+                )
+                """,
+                (
+                    "acct_a",
+                    "model_discovered",
+                    "{}",
+                    "2023-12-31 23:59:59",
+                ),
+            )
+        rows = await queries.fetch_event_types_in_range(
+            seeded_db, "2024-01-01 00:00:00", "2024-01-02 00:00:00"
+        )
+        assert rows == ["auth_failed", "cooldown_active"]
+
 
 class TestFetchActiveReservations:
     """Tests for fetch_active_reservations."""
@@ -816,6 +942,28 @@ class TestStatsService:
         service = StatsService(seeded_db)
         events = await service.get_recent_events(10)
         assert isinstance(events, list)
+
+    @pytest.mark.asyncio()
+    async def test_get_recent_events_with_time_range(self, seeded_db: Database) -> None:
+        service = StatsService(seeded_db)
+        time_range = TimeRange(
+            start=__import__("datetime").datetime.fromisoformat("2000-01-01"),
+            end=__import__("datetime").datetime.fromisoformat("2099-12-31"),
+            label="custom",
+        )
+        events = await service.get_recent_events(10, time_range=time_range)
+        assert isinstance(events, list)
+
+    @pytest.mark.asyncio()
+    async def test_get_event_types_in_range(self, seeded_db: Database) -> None:
+        service = StatsService(seeded_db)
+        time_range = TimeRange(
+            start=__import__("datetime").datetime.fromisoformat("2000-01-01"),
+            end=__import__("datetime").datetime.fromisoformat("2099-12-31"),
+            label="custom",
+        )
+        types = await service.get_event_types_in_range(time_range)
+        assert isinstance(types, list)
 
     @pytest.mark.asyncio()
     async def test_get_dashboard_overview(self, seeded_db: Database) -> None:

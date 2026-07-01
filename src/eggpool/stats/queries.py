@@ -510,13 +510,27 @@ async def fetch_recent_events(
     db: Database,
     limit: int = 50,
     event_type: str | None = None,
+    start: str = "",
+    end: str = "",
 ) -> list[dict[str, Any]]:
-    """Get recent account events, optionally filtered by type."""
+    """Get recent account events, optionally filtered by type and time range.
+
+    ``start`` and ``end`` are inclusive/exclusive ISO 8601 bounds against
+    ``account_events.created_at``; either or both may be empty to leave
+    that side unbounded. They compose with ``event_type`` via AND.
+    """
     params: list[Any] = []
-    type_filter = ""
+    conditions: list[str] = []
     if event_type is not None:
-        type_filter = " WHERE ae.event_type = ?"
+        conditions.append("ae.event_type = ?")
         params.append(event_type)
+    if start:
+        conditions.append("ae.created_at >= ?")
+        params.append(_format_dt(start))
+    if end:
+        conditions.append("ae.created_at < ?")
+        params.append(_format_dt(end))
+    where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
 
     sql = f"""
     SELECT
@@ -528,13 +542,34 @@ async def fetch_recent_events(
         ae.created_at
     FROM account_events ae
     JOIN accounts a ON a.id = ae.account_id
-    {type_filter}
+    {where_clause}
     ORDER BY ae.created_at DESC
     LIMIT ?
     """
     params.append(limit)
     rows = await db.fetch_all(sql, tuple(params))
     return [dict(row) for row in rows]
+
+
+async def fetch_event_types_in_range(
+    db: Database,
+    start: str,
+    end: str,
+) -> list[str]:
+    """Distinct ``event_type`` values present in ``account_events`` for the window.
+
+    Returned alphabetically so the dropdown is stable across renders.
+    Used by the events page to populate the type filter with only the
+    values that actually occur within the selected period.
+    """
+    sql = """
+    SELECT DISTINCT ae.event_type AS event_type
+    FROM account_events ae
+    WHERE ae.created_at >= ? AND ae.created_at < ?
+    ORDER BY ae.event_type ASC
+    """
+    rows = await db.fetch_all(sql, (_format_dt(start), _format_dt(end)))
+    return [str(row["event_type"]) for row in rows]
 
 
 async def fetch_active_reservations(

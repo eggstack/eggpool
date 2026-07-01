@@ -24,6 +24,7 @@ from eggpool.stats.queries import (
     fetch_attempt_stats,
     fetch_bandwidth_timeseries,
     fetch_error_breakdown,
+    fetch_event_types_in_range,
     fetch_exactness_breakdown,
     fetch_grouped_timeseries,
     fetch_ip_stats,
@@ -894,10 +895,27 @@ class StatsService:
         )
 
     async def get_recent_events(
-        self, limit: int = 50, event_type: str | None = None
+        self,
+        limit: int = 50,
+        event_type: str | None = None,
+        time_range: TimeRange | None = None,
     ) -> list[dict[str, Any]]:
-        """Get recent account events."""
-        return await fetch_recent_events(self._db, limit, event_type)
+        """Get recent account events, optionally bounded by ``time_range``."""
+        if time_range is None:
+            return await fetch_recent_events(self._db, limit, event_type)
+        return await fetch_recent_events(
+            self._db,
+            limit,
+            event_type,
+            start=time_range.start_str(),
+            end=time_range.end_str(),
+        )
+
+    async def get_event_types_in_range(self, time_range: TimeRange) -> list[str]:
+        """Distinct ``event_type`` values present in the given window."""
+        return await fetch_event_types_in_range(
+            self._db, time_range.start_str(), time_range.end_str()
+        )
 
     async def get_utilization_imbalance(
         self,

@@ -1167,14 +1167,26 @@ async def handle_events(
 ) -> Response:
     """Render the events page."""
     _get_dashboard_config(request)
+    time_range = resolve_time_range(period)
     stats = request.app.state.stats
-    events = await stats.get_recent_events(limit=100, event_type=type_filter or None)
+    events, available_types = cast(
+        "tuple[list[dict[str, Any]], list[str]]",
+        await asyncio.gather(
+            stats.get_recent_events(
+                limit=100,
+                event_type=type_filter or None,
+                time_range=time_range,
+            ),
+            stats.get_event_types_in_range(time_range),
+        ),
+    )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
     return HTMLResponse(
         content=render_events(
             events,
             event_type=type_filter or "",
-            period="recent",
+            available_types=available_types,
+            period=time_range.label,
             theme_css=theme_css,
             available_themes=available,
             current_theme=current_theme,
@@ -1274,6 +1286,7 @@ async def handle_bandwidth(
     theme_css, heatmap_colors, current_theme, available = _get_theme_data(
         request, theme
     )
+    account_options = _collect_account_options(request)
     return HTMLResponse(
         content=render_bandwidth(
             summary=summary,
@@ -1282,6 +1295,7 @@ async def handle_bandwidth(
             bucket=bucket,
             period=time_range.label,
             account_filter=account or "",
+            account_options=account_options,
             theme_css=theme_css,
             heatmap_colors=heatmap_colors,
             available_themes=available,

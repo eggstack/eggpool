@@ -2809,6 +2809,7 @@ def _render_conflicts_section(conflicts: Mapping[str, object]) -> str:
 def render_events(
     events: list[dict[str, Any]],
     event_type: str = "",
+    available_types: list[str] | None = None,
     period: str = "24h",
     theme_css: str = "",
     available_themes: list[str] | None = None,
@@ -2854,15 +2855,25 @@ def render_events(
         parts.append("</tbody></table>")
         rows_html = "".join(parts)
 
+    type_select_options: list[tuple[str, str]] = [("", "(all types)")]
+    for t in available_types or []:
+        if t:
+            type_select_options.append((t, t))
+    type_options_html = "".join(
+        f'<option value="{escape_attr(value)}"'
+        f"{' selected' if value == event_type else ''}>"
+        f"{escape(label)}</option>"
+        for value, label in type_select_options
+    )
+
     filter_form = f"""
 <form method="get" class="filter-form">
   <label>Type:
-    <input type="text" name="type" value="{escape_attr(event_type)}"
-           placeholder="(all)">
+    <select name="type" data-auto-submit="1">{type_options_html}</select>
   </label>
   <input type="hidden" name="period" value="{escape_attr(period)}">
   <input type="hidden" name="theme" value="{escape_attr(current_theme)}">
-  <button type="submit">Apply</button>
+  <noscript><button type="submit">Apply</button></noscript>
 </form>
 """
 
@@ -3268,6 +3279,7 @@ def render_bandwidth(
     bucket: str = "hour",
     period: str = "24h",
     account_filter: str = "",
+    account_options: list[str] | None = None,
     theme_css: str = "",
     heatmap_colors: list[str] | None = None,
     available_themes: list[str] | None = None,
@@ -3278,16 +3290,26 @@ def render_bandwidth(
     bytes_in = format_bytes(summary.get("total_bytes_received", 0))
     bytes_out = format_bytes(summary.get("total_bytes_emitted", 0))
 
+    account_select_options: list[tuple[str, str]] = [("", "(all accounts)")]
+    for name in account_options or []:
+        if name:
+            account_select_options.append((name, name))
+    account_options_html = "".join(
+        f'<option value="{escape_attr(value)}"'
+        f"{' selected' if value == account_filter else ''}>"
+        f"{escape(label)}</option>"
+        for value, label in account_select_options
+    )
+
     filter_form = f"""
 <form method="get" class="filter-form">
   <label>Account:
-    <input type="text" name="account" value="{escape_attr(account_filter)}"
-           placeholder="(all)">
+    <select name="account" data-auto-submit="1">{account_options_html}</select>
   </label>
   <input type="hidden" name="period" value="{escape_attr(period)}">
   <input type="hidden" name="bucket" value="{escape_attr(bucket)}">
   <input type="hidden" name="theme" value="{escape_attr(current_theme)}">
-  <button type="submit">Apply</button>
+  <noscript><button type="submit">Apply</button></noscript>
 </form>
 """
 
@@ -4867,9 +4889,16 @@ def render_traces(
 
     filter_form = f"""
 <form method="get" class="filter-form">
-  <label>Limit:
-    <input type="number" name="limit" value="{escape_attr(limit_label)}"
-           min="10" max="500">
+  <label class="trace-limit">Limit:
+    <span class="number-stepper" data-stepper-for="limit">
+      <button type="button" class="number-stepper-btn"
+              data-stepper-action="dec" aria-label="Decrease limit">−</button>
+      <input type="number" name="limit" id="limit"
+             value="{escape_attr(limit_label)}"
+             min="10" max="500" data-stepper-input="1">
+      <button type="button" class="number-stepper-btn"
+              data-stepper-action="inc" aria-label="Increase limit">+</button>
+    </span>
   </label>
   <input type="hidden" name="period" value="{escape_attr(period)}">
   <input type="hidden" name="theme" value="{escape_attr(current_theme)}">

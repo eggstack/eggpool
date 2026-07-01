@@ -616,6 +616,11 @@
       console.error("EggPoolDashboard: initUpdateCommandCopy failed", err);
     }
     try {
+      namespace.initNumberSteppers();
+    } catch (err) {
+      console.error("EggPoolDashboard: initNumberSteppers failed", err);
+    }
+    try {
       if (document.getElementById("timeseries-chart")) {
         namespace.reinitTimeseriesChart();
       }
@@ -823,6 +828,56 @@
           } else {
             periodForm.submit();
           }
+        });
+      }
+    }
+  };
+
+  // Wire the themed -/+ boxes around `.number-stepper` inputs so they
+  // increment / decrement the value within the input's [min,max]
+  // bounds.  Falls through silently when the surrounding input is
+  // missing ``min``/``max`` (treated as unbounded); clamps otherwise.
+  // Re-init is idempotent via the `__eggpoolStepperWired` flag, matching
+  // the pattern used by `initUpdateCommandCopy` and the timeseries
+  // controls so the auto-refresh loop does not stack handlers.
+  namespace.initNumberSteppers = function initNumberSteppers() {
+    const steppers = document.querySelectorAll(".number-stepper");
+    for (let i = 0; i < steppers.length; i++) {
+      const stepper = steppers[i];
+      if (stepper.__eggpoolStepperWired) continue;
+      stepper.__eggpoolStepperWired = true;
+      const input = stepper.querySelector(
+        'input[data-stepper-input], input[type="number"]'
+      );
+      if (!input) continue;
+      const minAttr = input.getAttribute("min");
+      const maxAttr = input.getAttribute("max");
+      const min = minAttr !== null && minAttr !== "" ? Number(minAttr) : null;
+      const max = maxAttr !== null && maxAttr !== "" ? Number(maxAttr) : null;
+      const stepAttr = input.getAttribute("step");
+      const step =
+        stepAttr !== null && stepAttr !== "" && Number(stepAttr) > 0
+          ? Number(stepAttr)
+          : 1;
+      const buttons = stepper.querySelectorAll(
+        "button[data-stepper-action]"
+      );
+      const adjust = function (delta) {
+        const current = Number(input.value);
+        const base = Number.isFinite(current) ? current : (min !== null ? min : 0);
+        let next = base + delta;
+        if (min !== null && Number.isFinite(min) && next < min) next = min;
+        if (max !== null && Number.isFinite(max) && next > max) next = max;
+        input.value = String(next);
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      };
+      for (let b = 0; b < buttons.length; b++) {
+        const btn = buttons[b];
+        btn.addEventListener("click", function (event) {
+          event.preventDefault();
+          const action = btn.getAttribute("data-stepper-action");
+          adjust(action === "inc" ? step : -step);
+          input.focus();
         });
       }
     }

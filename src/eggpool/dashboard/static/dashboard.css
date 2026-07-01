@@ -581,6 +581,83 @@ td.no { color: var(--color-error); font-weight: 600; }
   cursor: pointer;
 }
 
+/* Number stepper — themed -/+ boxes flanking the input on the traces
+   page.  Visually replaces the browser's native spinner buttons
+   (which sit stacked on the right and can't be themed to look like
+   bordered boxes) with two bordered buttons that match the existing
+   filter-form control palette. */
+.number-stepper {
+  display: inline-flex;
+  align-items: stretch;
+  margin-left: 0.35rem;
+  vertical-align: middle;
+}
+
+.number-stepper-btn {
+  font: inherit;
+  padding: 0 0.55rem;
+  border: 1px solid var(--card-border);
+  background: var(--card-bg);
+  color: var(--page-text);
+  cursor: pointer;
+  line-height: 1;
+  min-width: 1.75rem;
+}
+
+.number-stepper-btn[data-stepper-action="dec"] {
+  border-right: none;
+  border-radius: 2px 0 0 2px;
+}
+
+.number-stepper-btn[data-stepper-action="inc"] {
+  border-left: none;
+  border-radius: 0 2px 2px 0;
+}
+
+.number-stepper-btn:hover {
+  background: var(--button-bg-hover);
+}
+
+.number-stepper-btn:active {
+  background: var(--button-bg-active);
+}
+
+.number-stepper-btn:focus-visible {
+  outline: 1px solid var(--accent-color);
+  outline-offset: 1px;
+  position: relative;
+  z-index: 1;
+}
+
+.number-stepper > input[type="number"] {
+  /* Hide the native spinner so the themed +/- boxes are the only
+     visible controls.  Firefox honours `appearance: textfield` while
+     WebKit needs both vendor pseudo-elements hidden. */
+  -moz-appearance: textfield;
+  appearance: textfield;
+  margin: 0;
+  border-radius: 0;
+  text-align: center;
+  width: 4rem;
+  padding-left: 0.35rem;
+  padding-right: 0.35rem;
+}
+
+.number-stepper > input[type="number"]::-webkit-outer-spin-button,
+.number-stepper > input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+
+/* Visually-emphasize the label on the traces page so the "Limit:" text
+   reads as a control caption rather than free-flowing copy. */
+label.trace-limit {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
 .empty {
   color: var(--text-muted);
   font-style: italic;

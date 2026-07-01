@@ -1183,8 +1183,33 @@ class TestRenderEvents:
         assert "cooldown_active" in html
 
     def test_event_type_filter_in_form(self) -> None:
-        html = render_events(events=[], event_type="cooldown_active", period="24h")
-        assert 'value="cooldown_active"' in html
+        html = render_events(
+            events=[],
+            event_type="cooldown_active",
+            available_types=["cooldown_active", "model_discovered"],
+            period="24h",
+        )
+        assert (
+            '<option value="cooldown_active" selected>cooldown_active</option>' in html
+        )
+
+    def test_event_type_dropdown_uses_available_types(self) -> None:
+        html = render_events(
+            events=[],
+            event_type="auth_failed",
+            available_types=["auth_failed", "cooldown_active", "model_discovered"],
+            period="24h",
+        )
+        assert "<select" in html
+        assert 'name="type"' in html
+        assert "(all types)" in html
+        assert '<option value="auth_failed" selected>auth_failed</option>' in html
+        assert '<option value="cooldown_active">cooldown_active</option>' in html
+        assert '<option value="model_discovered">model_discovered</option>' in html
+
+    def test_event_type_dropdown_auto_submits(self) -> None:
+        html = render_events(events=[], period="24h")
+        assert 'data-auto-submit="1"' in html
 
     def test_does_not_load_chart_js(self) -> None:
         html = render_events(events=[], period="24h")
@@ -1522,8 +1547,24 @@ class TestRenderBandwidthPage:
             daily=[],
             timeseries=[],
             account_filter="acct_a",
+            account_options=["acct_a", "acct_b"],
         )
-        assert 'value="acct_a"' in html
+        assert '<option value="acct_a" selected>acct_a</option>' in html
+        assert "<select" in html
+        assert 'name="account"' in html
+        assert "(all accounts)" in html
+
+    def test_account_dropdown_uses_options(self) -> None:
+        html = render_bandwidth(
+            summary={"total_bytes_received": 0, "total_bytes_emitted": 0},
+            daily=[],
+            timeseries=[],
+            account_filter="acct_b",
+            account_options=["acct_a", "acct_b", "acct_c"],
+        )
+        assert '<option value="acct_a">acct_a</option>' in html
+        assert '<option value="acct_b" selected>acct_b</option>' in html
+        assert '<option value="acct_c">acct_c</option>' in html
 
     def test_does_not_load_chart_js(self) -> None:
         html = render_bandwidth(
@@ -3062,6 +3103,19 @@ class TestRenderTraces:
             recent_requests=[],
         )
         assert "/static/chart.js" not in html
+
+    def test_renders_number_stepper_around_limit(self) -> None:
+        html = render_traces(
+            period="recent",
+            limit=50,
+            recent_requests=[],
+        )
+        assert "number-stepper" in html
+        assert 'data-stepper-action="dec"' in html
+        assert 'data-stepper-action="inc"' in html
+        assert 'data-stepper-input="1"' in html
+        assert 'name="limit"' in html
+        assert 'value="50"' in html
 
 
 class TestRenderLatencyExtension:
