@@ -56,6 +56,8 @@ def _make_cache() -> ModelCatalogCache:
     # Mark accounts so the supporting-account filter has data.
     cache._account_support["gpt-4o"] = frozenset({"acct-a"})
     cache._account_support["llama-3-8b"] = frozenset({"acct-b"})
+    cache.set_account_provider("acct-a", "openai")
+    cache.set_account_provider("acct-b", "meta")
     return cache
 
 
@@ -142,9 +144,8 @@ class TestGetCatalogRows:
         catalog = _FakeCatalogService(_make_cache())
         rows = await _get_catalog_rows(catalog, account="acct-a")
         ids = sorted((r["model_id"], r["provider_id"]) for r in rows)
-        # acct-a supports gpt-4o only.
+        # acct-a supports gpt-4o through its own provider only.
         assert ids == [
-            ("gpt-4o", "azure"),
             ("gpt-4o", "openai"),
         ]
 
@@ -1402,6 +1403,87 @@ class TestCollapseModelsRouting:
         assert gpt["catalog_status"] == "available"
 
     @pytest.mark.asyncio()
+    async def test_handle_models_uses_collapsed_merge_when_enabled(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The handler must pass ``collapse_models`` through to the merge.
+
+        A stale second merge using the default provider-scoped keying
+        would render both the active stats row and the sparse collapsed
+        catalog row for the same model.
+        """
+        from fastapi import FastAPI
+        from starlette.requests import Request
+
+        from eggpool.dashboard import routes as routes_module
+        from eggpool.models.config import ModelsConfig
+
+        captured: dict[str, Any] = {}
+
+        def _capture_render_models(
+            rows: list[dict[str, Any]],
+            **_kwargs: Any,
+        ) -> str:
+            captured["rows"] = rows
+            return "<html></html>"
+
+        monkeypatch.setattr(routes_module, "render_models", _capture_render_models)
+
+        class _StubStats:
+            async def get_model_stats(
+                self,
+                _range: Any,
+                *,
+                account_name: str | None = None,
+                use_cache: bool = True,
+            ) -> list[dict[str, Any]]:
+                return [
+                    {
+                        "model_id": "gpt-4o",
+                        "provider_id": "openai",
+                        "request_count": 12,
+                    }
+                ]
+
+        class _StubDashboardConfig:
+            enabled = True
+            themes_dir = ""
+            theme = "default"
+
+        class _StubConfig:
+            dashboard = _StubDashboardConfig()
+            models = ModelsConfig.model_construct(collapse_models=True)
+            providers: dict[str, Any] = {}
+
+        app = FastAPI()
+        app.state.stats = _StubStats()
+        app.state.config = _StubConfig()
+        app.state.model_info = None
+        app.state.catalog = _FakeCatalogService(_make_cache())
+
+        scope: dict[str, Any] = {
+            "type": "http",
+            "method": "GET",
+            "path": "/models",
+            "headers": [],
+            "query_string": b"period=24h",
+            "app": app,
+        }
+
+        async def receive() -> dict[str, Any]:
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        response = await routes_module.handle_models(Request(scope, receive))
+
+        assert response.status_code == 200
+        rows = cast("list[dict[str, Any]]", captured["rows"])
+        gpt_rows = [r for r in rows if r.get("model_id") == "gpt-4o"]
+        assert len(gpt_rows) == 1
+        assert gpt_rows[0]["request_count"] == 12
+        assert gpt_rows[0]["providers"] == ["azure", "openai"]
+
+    @pytest.mark.asyncio()
     async def test_collapse_models_default_is_provider_scoped(self) -> None:
         """When ``collapse_models`` is missing from the config the
         dashboard must keep the historical provider-scoped shape."""
@@ -1421,6 +1503,17 @@ class TestCollapseModelsRouting:
             ("gpt-4o", "openai"),
             ("llama-3-8b", "meta"),
         ]
+
+    def test_read_collapse_models_ignores_non_bool_values(self) -> None:
+        from eggpool.dashboard.routes import _read_collapse_models
+
+        class _Models:
+            collapse_models = "false"
+
+        class _Config:
+            models = _Models()
+
+        assert _read_collapse_models(_Config()) is False
 
 
 class TestModelInfoPillUsesBaseModelId:

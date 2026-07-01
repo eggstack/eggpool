@@ -413,10 +413,6 @@ async def handle_models(
         catalog_rows,
         collapse_models=collapse_models,
     )
-    merged_rows = _merge_models_with_catalog(
-        models if models is not None else [],
-        catalog_rows,
-    )
     filtered_rows = _apply_model_filters(
         merged_rows,
         info_status=info_status,
@@ -604,7 +600,33 @@ def _read_collapse_models(config: Any) -> bool:
     if models_cfg is None:
         return False
     val = getattr(models_cfg, "collapse_models", None)
-    return bool(val)
+    return val if isinstance(val, bool) else False
+
+
+def _account_provider_for_supported_model(
+    cache: Any,
+    *,
+    model_id: str,
+    account: str,
+) -> str | None:
+    """Return the account's provider when it supports ``model_id``.
+
+    The catalog cache tracks model support by account and separately
+    tracks each account's provider.  Account-filtered provider-scoped
+    rows need both facts: model-level support alone would let sibling
+    provider rows leak into an account-specific view.
+    """
+    try:
+        supporting: frozenset[str] = cache.get_supporting_accounts(model_id)
+    except Exception:
+        return None
+    if account not in supporting:
+        return None
+    try:
+        provider_id = cache.get_provider_for_account(account)
+    except Exception:
+        return None
+    return str(provider_id) if provider_id else None
 
 
 def _get_provider_scoped_catalog_rows(
@@ -626,13 +648,12 @@ def _get_provider_scoped_catalog_rows(
     rows: list[dict[str, Any]] = []
     for (model_id, provider_id), entry in provider_entries.items():
         if account:
-            try:
-                supporting: frozenset[str] = catalog.cache.get_supporting_accounts(
-                    model_id
-                )
-            except Exception:
-                supporting = frozenset()
-            if account not in supporting:
+            account_provider = _account_provider_for_supported_model(
+                catalog.cache,
+                model_id=model_id,
+                account=account,
+            )
+            if account_provider != provider_id:
                 continue
         protocol_str, display_name = _entry_protocol_and_name(entry)
         available = bool(protocol_str)
@@ -688,14 +709,14 @@ def _get_collapsed_catalog_rows(
         model_id = str(entry_dict.get("model_id", "") or "")
         if not model_id:
             continue
+        account_provider: str | None = None
         if account:
-            try:
-                supporting: frozenset[str] = catalog.cache.get_supporting_accounts(
-                    model_id
-                )
-            except Exception:
-                supporting = frozenset()
-            if account not in supporting:
+            account_provider = _account_provider_for_supported_model(
+                catalog.cache,
+                model_id=model_id,
+                account=account,
+            )
+            if account_provider is None:
                 continue
         providers_raw: Any = entry_dict.get("providers")
         if isinstance(providers_raw, list):
@@ -706,11 +727,26 @@ def _get_collapsed_catalog_rows(
             ]
         else:
             providers = []
+        if account_provider is not None:
+            if providers and account_provider not in providers:
+                continue
+            providers = [account_provider]
         # Pick a primary provider for stats-key matching.  Falls back
         # to the empty string when nothing contributes; the merge
         # logic uses ``catalog_by_id`` for that case.
         primary_provider = providers[0] if providers else ""
-        protocol_str, display_name = _entry_protocol_and_name(entry_dict)
+        provider_entry = None
+        if account_provider is not None:
+            try:
+                provider_entry = catalog.cache.get_provider_model_entry(
+                    model_id,
+                    account_provider,
+                )
+            except Exception:
+                provider_entry = None
+        protocol_str, display_name = _entry_protocol_and_name(
+            provider_entry or entry_dict
+        )
         # Collapsed entry is "available" only when at least one
         # contributing provider resolves the protocol.
         available = bool(protocol_str)
