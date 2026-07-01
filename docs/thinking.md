@@ -611,6 +611,34 @@ The vestigial `supports_tools: True` field has been removed from `model_capabili
 
 When the Anthropic-style top-level `thinking` block is dropped during Anthropic→OpenAI transcoding (no verified mapping), the warning now uses an **explicit** kind `anthropic_top_level_thinking_dropped` instead of the generic `dropped_field` bucket. Operators can configure `loss_policy = "reject"` per-subsystem and have this drop attributed accurately to the thinking trace.
 
+### Phase H — Final Provider Budget Cleanup
+
+This final cleanup pass closes two semantic gaps left after Phase C:
+
+#### Original Client Intent Is Preserved Through Translation
+
+The post-selection recompute previously forwarded the **already-translated** Anthropic `thinking.budget_tokens` value as both `requested_effort` and `requested_budget_tokens` to `resolve_thinking_budget()`. Because the resolver prioritises `requested_budget_tokens` over `requested_effort`, the selected provider's `effort_to_budget_tokens` mapping was silently bypassed for OpenAI `reasoning_effort` clients.
+
+The new `_extract_original_thinking_budget_inputs()` helper parses `context.original_body` (not `context.upstream_body`) and returns either `(effort, None)` for OpenAI clients or `(None, budget)` for Anthropic clients. The recompute now passes **only** the original client intent, so:
+
+- OpenAI `reasoning_effort = "high"` against a provider whose `effort_to_budget_tokens.high = 32768` produces an Anthropic body with `thinking.budget_tokens = 32768` even when global defaults are `16384`.
+- Anthropic `thinking.budget_tokens = 50000` against a provider whose `budget_tokens_max = 8192` is still clamped/validated against the **selected** provider's min/max.
+
+#### Post-Selection Capability Rejection Cleans Up State
+
+Phase C noted that strict rejections propagate as `CapabilityError`, but did not handle the durable-state side effects already in flight by the time the recompute runs (request row, attempt row, reservation, active request count, health slot). The new `_finalize_selected_capability_rejection()` helper runs on rejection and:
+
+- Finalizes the attempt row with `release_reason = "capability_rejected"`, `retry_category = "never"`, `status_code = 400`.
+- Releases the reservation durably and removes it from the in-memory quota estimator.
+- Decrements the router's active request count for the selected account.
+- Releases the health-manager probe slot.
+- Marks `thinking_trace.decision = "rejected"` and stamps `provider_id` on the trace.
+- Finalizes the request row as `client_error` with `thinking_trace_json` persisted.
+- Increments the thinking-metrics rejected counter with the rejection reason (`strict_clamp` / `unknown_effort_strict` / `capability_rejected`).
+- Does **not** record a health failure — this is a client-validation outcome, not an account health signal.
+
+The streaming and non-streaming dispatch paths share identical cleanup semantics via `_apply_selected_provider_transcode_adjustments()` (Phase 3 of the cleanup plan).
+
 ---
 
 ## 12. Tests for Closing-Pass Behavior
@@ -621,4 +649,5 @@ The closing pass adds regression coverage in:
 - `tests/unit/test_capabilities.py` — Phase A, Phase D (`is_thinking_warning`, `classify_thinking_warning_decision`)
 - `tests/unit/test_transcoder/test_budget_resolver.py` — Phase B (`BudgetResolutionError` is a `CapabilityError`)
 - `tests/unit/test_transcoder/test_anthropic_to_openai_body.py` — Phase G (explicit kind)
+- `tests/unit/test_thinking_budget_provider_cleanup.py` — Phase H (selected-provider effort mapping, clamp validation, strict-rejection cleanup invariants, streaming parity, idempotency)
 - `tests/contract/test_transcoder_contract.py` — Phase A integration (annotated `claude-3` with `status = "supported"`)
