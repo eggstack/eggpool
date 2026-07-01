@@ -682,6 +682,54 @@ The model-info corrective plan in `plans/model-info-corrective-catalog-models-an
 - **Detail API legacy schema (Phase E)**: `handle_model_info_detail()` reads `detail["limits"]` first and falls back to the legacy flat keys only when the nested block is absent. Combined with Phase B's normalization, every pre-Phase-B canonical row remains API-readable; new writes always use the nested schema.
 - **Legacy detail backfill (Phase F)**: `ModelInfoService.backfill_legacy_detail_blocks(limit=200)` walks `repo.list_all_canonical(limit)` and lifts pre-Phase-B flat keys into `detail["limits"]` via the private `_legacy_flat_keys_to_limits()`. Observation-derived `external_*` keys can overwrite stale legacy seeds so fresh OpenRouter/Artificial Analysis data wins. The provenance `backfilled_limits=True` marker prevents double-lift. Wired into `app.py` startup immediately after `backfill_missing_canonical()`.
 
+## Model Capabilities
+
+Protocol-neutral capability schema in `src/eggpool/catalog/capabilities.py` provides a structured representation for model capabilities, currently focused on thinking/reasoning. The schema decouples capability knowledge from any specific transcoder implementation so catalog, routing, serialization, and config code can import it without circular dependencies.
+
+### Capability Model
+
+- **`ThinkingCapability`** — structured thinking/reasoning capability with `status` (`CapabilityStatus`), `source` (`CapabilitySource`), `native_protocols`, `client_controls` (per-protocol field mappings), `budget_tokens_min`/`budget_tokens_max`, and `effort_to_budget_tokens`
+- **`ModelCapabilities`** — top-level container holding a `ThinkingCapability` field; designed to grow future capability families (vision, tools, structured outputs, prompt caching, logprobs)
+- **`ThinkingClientControls`** — per-protocol field mappings for request, response, and streaming delta fields
+- **`CapabilityStatus`** — `Literal["supported", "unsupported", "unknown", "mixed", "conflicting"]` where `"unknown"` means no data observed (not `"unsupported"`)
+- **`CapabilitySource`** — `Literal["provider_catalog", "model_info", "manual_override", "heuristic", "aggregate", "unknown"]`
+
+### Merge Semantics
+
+Capability merge order is deterministic (lowest to highest priority):
+
+1. Built-in safe defaults (absent capability = `"unknown"`)
+2. Provider catalog / model-info data
+3. Global model overrides
+4. Provider-scoped model overrides
+
+`merge_thinking_capabilities()` and `merge_model_capabilities()` implement override-wins semantics: the higher-priority value wins; on tie, the override is preferred. Manual overrides win over discovered metadata.
+
+### Aggregate Semantics
+
+Collapsed model entries may represent multiple providers. `aggregate_thinking_status()` derives a single status:
+
+- `"supported"` only if every backing provider is `"supported"`
+- `"unsupported"` only if every backing provider is `"unsupported"`
+- `"unknown"` if all are `"unknown"`
+- `"conflicting"` if any entry is `"conflicting"`
+- `"mixed"` otherwise
+
+`aggregate_thinking_capabilities()` produces a conservative aggregate: union of native protocols, last-wins per-protocol client controls, conservative budget bounds (max of mins, min of maxes).
+
+### Serialization
+
+`serialize_model_capabilities()` produces a compact dict for the `/v1/models` response under the `eggpool.capabilities` namespace. Unknown/empty values are omitted.
+
+### Request-Level Helpers
+
+- `client_requests_thinking()` — heuristic check for thinking-related keys in the request body; returns `False` for unsupported/unknown/conflicting statuses
+- `has_thinking_support()` — `True` when status is `"supported"` or `"mixed"`
+
+### Design Principle
+
+Protocol compatibility alone does not imply thinking support. An OpenAI-protocol model may or may not support reasoning controls; an Anthropic-protocol model may or may not support extended thinking. The capability schema captures this explicitly.
+
 ## Model Context Limits
 
 EggPool supports configurable effective context limits per model per provider, allowing operators to advertise smaller context windows than the provider physically supports.

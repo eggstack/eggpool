@@ -264,6 +264,18 @@ The `/timeseries` page replaces the old "table of bucket counts" with a stacked-
 - PyPI failures are non-fatal and reflected in `last_check_error`; the checker preserves the previous `latest_version` on failure so the indicator still surfaces a known-newer release during momentary outages
 - The checker never auto-installs; it is passive notification only
 
+## Model Capabilities
+
+- Protocol-neutral capability schema in `src/eggpool/catalog/capabilities.py`
+- `ThinkingCapability` — structured thinking/reasoning model with status, source, native protocols, per-protocol client controls, and budget bounds
+- `ModelCapabilities` — top-level container; extensible to future capability families (vision, tools, structured outputs, prompt caching, logprobs)
+- `CapabilityStatus` = `"supported" | "unsupported" | "unknown" | "mixed" | "conflicting"` — `"unknown"` means no data observed, not `"unsupported"`
+- Merge order: defaults → provider catalog/model-info → global overrides → provider-scoped overrides; manual overrides win
+- Aggregate semantics: `"supported"` only if all providers supported; `"mixed"` when states vary; `"conflicting"` when explicit metadata disagrees
+- `serialize_model_capabilities()` produces compact dict for `/v1/models` under `eggpool.capabilities`
+- `client_requests_thinking()` heuristic detects thinking-related keys in request body; `has_thinking_support()` checks status
+- Protocol compatibility alone does not imply thinking support — the schema captures this explicitly
+
 ## Model Context Limits
 
 - `ModelLimitOverrideConfig` provides reusable limit fields (context, input, output, enforcement)
