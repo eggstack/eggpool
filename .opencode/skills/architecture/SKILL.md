@@ -74,7 +74,6 @@ See `architecture/README.md` for the full design overview.
 - Recognized fast commands: `croncheck` (pure status probe) and `ensure-running` (check-and-spawn watchdog)
 - Everything else falls through to `eggpool.cli_full` (the heavy Click CLI)
 - Public symbol forwarding via PEP 562 `__getattr__` keeps `from eggpool.cli import cli` working for tests without forcing the heavy CLI graph to load at `eggpool.cli` import time
-- See `plans/lightweight-cli-watchdog.md` for the full design
 
 ## Database Invariants
 

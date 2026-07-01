@@ -61,6 +61,7 @@ CI sets `PYTHONHASHSEED=0` and `TZ=UTC`; reproduce locally for deterministic res
 - DB schema: `src/eggpool/db/schema/`
 - Scripts: `scripts/` (operational, also type-checked by pyright)
 - Deployment: `deploy/`
+- Shared assets: `src/eggpool/_share/` (bundled config examples for pipx installs)
 
 ## Architecture Index
 

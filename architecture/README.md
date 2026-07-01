@@ -31,16 +31,21 @@ src/eggpool/
 ├── auth.py            # Local API key authentication (constant-time)
 ├── cli.py             # CLI bootstrap entry point (tiny, dispatches fast-path then Click)
 ├── cli_full.py        # Click CLI commands (heavy imports)
-├── fastcli.py         # Fast-path CLI (stdlib-only, croncheck/ensure-running)
-├── errors.py          # Exception hierarchy
-├── logging.py         # Structured logging setup
-├── runtime.py         # Process management (restart, stop, PID lifecycle)
-├── runtime_metrics.py # Runtime/ops metrics: process, memory, DB, background tasks, OS load average
-├── runtime_dispatch.py # Bounded rolling-window recorder for EggPool-local upstream dispatch overhead
-├── runtime_paths.py   # PID file and log path resolution (stdlib-only)
-├── update_checker.py  # PyPI update checker (background + CLI)
+├── config.py          # Config file helpers
+├── config_utils.py    # Configuration utility functions for CLI and integrations
+├── constants.py       # Project-wide constants
 ├── cost_recompute.py  # Cost recompute CLI command
-└── constants.py       # Project-wide constants
+├── deploy_user.py     # Deploy user and path resolution
+├── errors.py          # Exception hierarchy
+├── fastcli.py         # Fast-path CLI (stdlib-only, croncheck/ensure-running)
+├── logging.py         # Structured logging setup
+├── onboard.py         # Interactive onboarding script
+├── runtime.py         # Process management (restart, stop, PID lifecycle)
+├── runtime_dispatch.py # Bounded rolling-window recorder for EggPool-local upstream dispatch overhead
+├── runtime_metrics.py # Runtime/ops metrics: process, memory, DB, background tasks, OS load average
+├── runtime_paths.py   # PID file and log path resolution (stdlib-only)
+├── toml_edit.py       # Small, formatting-preserving edits for scalar TOML section values
+└── update_checker.py  # PyPI update checker (background + CLI)
 ```
 
 `integrations/common.py` owns configsetup context construction, catalog-backed
