@@ -149,6 +149,11 @@ helper modules without changing runtime behaviour:
 - Routing eligibility accepts a `transcode_eligibility` parameter
 - Helper modules: `ids.py` (tool-call ID map), `usage.py` (usage
   canonicalisation), `errors.py` (upstream error envelope parser)
+- **Runtime wiring**: `RequestCoordinator` receives `config.transcoder`
+  via the `transcoder_policy` constructor parameter so that
+  `self._transcoder_policy.features` gates per-feature transcoding
+  during actual dispatch. `app.state.transcoder_policy` remains set
+  for preflight helpers and diagnostics in `proxy_request.py`.
 
 **Phase 2 — Body translation**: text-only, non-streaming request/response
 body translation is implemented in `src/eggpool/transcoder/`. The

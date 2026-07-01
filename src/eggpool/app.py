@@ -948,6 +948,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         account_backoff_repo=account_backoff_repo,
         metrics_coalescer=metrics_coalescer,
         dispatch_overhead_recorder=dispatch_overhead_recorder,
+        transcoder_policy=config.transcoder,
     )
     app.state.coordinator = coordinator
 

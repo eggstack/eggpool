@@ -9,6 +9,7 @@ preserves protocol semantics in both directions.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import TYPE_CHECKING, Any
 
@@ -32,7 +33,7 @@ from eggpool.models.config import AppConfig
 from eggpool.request.coordinator import RequestCoordinator
 from eggpool.routing.router import Router
 from eggpool.stats import StatsService
-from eggpool.transcoder.policy import TranscoderPolicy
+from eggpool.transcoder.policy import TranscoderFeatures, TranscoderPolicy
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -844,3 +845,243 @@ async def test_native_protocol_skips_transcoding(
     body = response.json()
     assert body["type"] == "message"
     assert body["content"][0]["text"] == "OK"
+
+
+# ---------------------------------------------------------------------------
+# 8. Phase 1 regression: coordinator receives transcoder policy from startup
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reasoning_effort_translated_when_thinking_enabled(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    app: FastAPI,
+) -> None:
+    """OpenAI reasoning_effort is translated to Anthropic thinking when enabled."""
+    app.state.coordinator._transcoder_policy = TranscoderPolicy(
+        enabled=True,
+        prefer_native=True,
+        features=TranscoderFeatures(thinking=True),
+    )
+
+    request_body = {
+        "model": "claude-3",
+        "messages": [{"role": "user", "content": "test"}],
+        "reasoning_effort": "medium",
+    }
+
+    with respx.mock:
+        captured: dict[str, Any] = {}
+
+        respx.post(f"{UPSTREAM_BASE}{ANTHROPIC_PATH}").mock(
+            side_effect=lambda request: (
+                captured.update({"body": request.content}),
+                httpx.Response(
+                    200,
+                    json={
+                        "id": "msg-1",
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "OK"}],
+                        "model": "claude-3",
+                        "stop_reason": "end_turn",
+                        "usage": {"input_tokens": 5, "output_tokens": 2},
+                    },
+                ),
+            )[-1]
+        )
+
+        response = await client.post(
+            "/v1/chat/completions",
+            json=request_body,
+            headers=auth_headers,
+        )
+
+    assert response.status_code == 200
+    upstream_body = json.loads(captured["body"])
+    assert upstream_body["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+
+
+@pytest.mark.asyncio
+async def test_reasoning_effort_dropped_when_thinking_disabled(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    app: FastAPI,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """OpenAI reasoning_effort is dropped when thinking transcoding is disabled."""
+    app.state.coordinator._transcoder_policy = TranscoderPolicy(
+        enabled=True,
+        prefer_native=True,
+        features=TranscoderFeatures(thinking=False),
+    )
+
+    request_body = {
+        "model": "claude-3",
+        "messages": [{"role": "user", "content": "test"}],
+        "reasoning_effort": "medium",
+    }
+
+    with respx.mock:
+        captured: dict[str, Any] = {}
+
+        respx.post(f"{UPSTREAM_BASE}{ANTHROPIC_PATH}").mock(
+            side_effect=lambda request: (
+                captured.update({"body": request.content}),
+                httpx.Response(
+                    200,
+                    json={
+                        "id": "msg-1",
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "OK"}],
+                        "model": "claude-3",
+                        "stop_reason": "end_turn",
+                        "usage": {"input_tokens": 5, "output_tokens": 2},
+                    },
+                ),
+            )[-1]
+        )
+
+        with caplog.at_level(logging.INFO, logger="eggpool.request.coordinator"):
+            response = await client.post(
+                "/v1/chat/completions",
+                json=request_body,
+                headers=auth_headers,
+            )
+
+    assert response.status_code == 200
+    upstream_body = json.loads(captured["body"])
+    assert "thinking" not in upstream_body
+    assert upstream_body.get("reasoning_effort") is None
+
+    warning_texts = [r.message for r in caplog.records]
+    assert any(
+        "reasoning_effort" in t and "thinking_disabled" in t for t in warning_texts
+    ), (
+        "Expected a dropped_field loss warning for reasoning_effort with "
+        "reason=thinking_disabled in coordinator logs"
+    )
+
+
+@pytest.mark.asyncio
+async def test_assistant_reasoning_content_survives_when_enabled(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    app: FastAPI,
+) -> None:
+    """Assistant reasoning_content becomes Anthropic thinking block when enabled."""
+    app.state.coordinator._transcoder_policy = TranscoderPolicy(
+        enabled=True,
+        prefer_native=True,
+        features=TranscoderFeatures(thinking=True),
+    )
+
+    request_body = {
+        "model": "claude-3",
+        "messages": [
+            {"role": "user", "content": "test"},
+            {
+                "role": "assistant",
+                "reasoning_content": "Let me think about this...",
+                "content": "The answer is 42.",
+            },
+            {"role": "user", "content": "continue"},
+        ],
+        "max_tokens": 100,
+    }
+
+    with respx.mock:
+        captured: dict[str, Any] = {}
+
+        respx.post(f"{UPSTREAM_BASE}{ANTHROPIC_PATH}").mock(
+            side_effect=lambda request: (
+                captured.update({"body": request.content}),
+                httpx.Response(
+                    200,
+                    json={
+                        "id": "msg-1",
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "OK"}],
+                        "model": "claude-3",
+                        "stop_reason": "end_turn",
+                        "usage": {"input_tokens": 5, "output_tokens": 2},
+                    },
+                ),
+            )[-1]
+        )
+
+        response = await client.post(
+            "/v1/chat/completions",
+            json=request_body,
+            headers=auth_headers,
+        )
+
+    assert response.status_code == 200
+    upstream_body = json.loads(captured["body"])
+    assistant_msg = upstream_body["messages"][1]
+    assert assistant_msg["content"][0] == {
+        "type": "thinking",
+        "thinking": "Let me think about this...",
+    }
+    assert assistant_msg["content"][1] == {
+        "type": "text",
+        "text": "The answer is 42.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_coordinator_policy_not_default(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    app: FastAPI,
+) -> None:
+    """Coordinator uses the policy it was given, not a stale default."""
+    policy = TranscoderPolicy(
+        enabled=True,
+        prefer_native=True,
+        features=TranscoderFeatures(thinking=True),
+    )
+    app.state.coordinator._transcoder_policy = policy
+
+    assert app.state.coordinator._transcoder_policy is policy
+    assert app.state.coordinator._transcoder_policy.features.thinking is True
+
+    request_body = {
+        "model": "claude-3",
+        "messages": [{"role": "user", "content": "test"}],
+        "reasoning_effort": "high",
+    }
+
+    with respx.mock:
+        captured: dict[str, Any] = {}
+
+        respx.post(f"{UPSTREAM_BASE}{ANTHROPIC_PATH}").mock(
+            side_effect=lambda request: (
+                captured.update({"body": request.content}),
+                httpx.Response(
+                    200,
+                    json={
+                        "id": "msg-1",
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "OK"}],
+                        "model": "claude-3",
+                        "stop_reason": "end_turn",
+                        "usage": {"input_tokens": 5, "output_tokens": 2},
+                    },
+                ),
+            )[-1]
+        )
+
+        response = await client.post(
+            "/v1/chat/completions",
+            json=request_body,
+            headers=auth_headers,
+        )
+
+    assert response.status_code == 200
+    upstream_body = json.loads(captured["body"])
+    assert upstream_body["thinking"] == {"type": "enabled", "budget_tokens": 16384}
