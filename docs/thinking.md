@@ -551,3 +551,74 @@ native_protocols = ["anthropic"]
   budget_tokens_max = 8192
   ```
 - Switch to `budget_resolution_policy = "strict"` to catch clamping before dispatch.
+
+---
+
+## 11. Closing-Pass Hardening
+
+This section documents the semantic hardening applied to thinking/reasoning handling in the **closing pass** (Phase A–G).
+
+### Phase A — Missing Capability Metadata Is `unknown`
+
+Routing now treats a catalog entry with **no** `capabilities.thinking` block as semantically equivalent to an explicit `status = "unknown"`. Previously, missing metadata would silently fall through to `"supported"`, masking misconfiguration.
+
+The helper `extract_thinking_status_from_entry()` (`src/eggpool/catalog/capabilities.py`) is the single source of truth for this classification — both `get_eligible_accounts()` and `Router._collect_gate_status()` route through it.
+
+Operator impact:
+- Models with unconfigured thinking capability now participate in the `unknown_thinking` policy evaluation (default: `reject`).
+- Add a manual override to opt in:
+  ```toml
+  [model_capabilities."<model-id>".thinking]
+  status = "supported"
+  source = "manual_override"
+  ```
+
+### Phase B — `BudgetResolutionError` Is a `CapabilityError`
+
+`BudgetResolutionError` (raised when strict policy rejects an unknown effort level or a clamped budget) is now a subclass of `CapabilityError`. The proxy layer's existing `except CapabilityError` handler automatically renders it as **HTTP 400** without any manual mapping code. The error carries rich kwargs (`model_id`, `requested_budget_tokens`, `resolved_budget_tokens`, `budget_resolution_policy`, `reason`, `provider_id`) for diagnostic logging.
+
+### Phase C — Per-Provider Budget Recompute at Dispatch
+
+After route selection but before upstream dispatch, `RequestCoordinator._recompute_thinking_budget_for_selected_provider()` re-runs `resolve_thinking_budget()` against the **selected provider's** capability (not the collapsed model-level one). This means:
+
+- Provider-scoped `[providers.<id>.model_capabilities."<model-id>".thinking]` overrides take effect at dispatch time, not only at preflight translation.
+- Strict rejections here flow through the same `CapabilityError` → HTTP 400 path as Phase B.
+- The selected capability is recorded on the request trace under `thinking_trace.capability_status` / `thinking_trace.capability_source`.
+
+### Phase D — Trace Decisions + Rejection Attribution
+
+The transcoding trace now records a single string `decision` field with one of:
+
+| Value | Meaning |
+|---|---|
+| `passthrough` | No thinking-related warnings (native or no thinking controls) |
+| `transcoded` | A thinking-related warning present (e.g. budget resolution input) |
+| `dropped` | A thinking field was dropped (`reasoning_content_dropped`, `thinking_signature_dropped`, `anthropic_top_level_thinking_dropped`) |
+| `clamped` | `budget_clamped` warning present |
+| `rejected` | `budget_rejected` warning present (strict policy) |
+
+Rejections from capability-aware routing are attributed with the relevant thinking status (`unknown` vs `unsupported`) so the rejection counter and the operator-facing reason distinguish them.
+
+### Phase E — Top-Level `reasoning_content` Detection
+
+`classify_thinking_request()` now detects top-level `reasoning_content` on assistant messages (string or list). Clients that attach thinking text alongside `content` without going through `reasoning_content` content-blocks are now correctly classified as thinking-required.
+
+### Phase F — `supports_tools` Removed from `ModelCapabilities`
+
+The vestigial `supports_tools: True` field has been removed from `model_capabilities_to_dict()`. Tool support is owned by transcoder features (`[transcoder.features] tools = true`), not by `ModelCapabilities`. Tests pin the removal.
+
+### Phase G — Explicit `anthropic_top_level_thinking_dropped` Kind
+
+When the Anthropic-style top-level `thinking` block is dropped during Anthropic→OpenAI transcoding (no verified mapping), the warning now uses an **explicit** kind `anthropic_top_level_thinking_dropped` instead of the generic `dropped_field` bucket. Operators can configure `loss_policy = "reject"` per-subsystem and have this drop attributed accurately to the thinking trace.
+
+---
+
+## 12. Tests for Closing-Pass Behavior
+
+The closing pass adds regression coverage in:
+
+- `tests/unit/test_capability_routing.py` — Phase A (`extract_thinking_status_from_entry`), Phase E (top-level `reasoning_content`)
+- `tests/unit/test_capabilities.py` — Phase A, Phase D (`is_thinking_warning`, `classify_thinking_warning_decision`)
+- `tests/unit/test_transcoder/test_budget_resolver.py` — Phase B (`BudgetResolutionError` is a `CapabilityError`)
+- `tests/unit/test_transcoder/test_anthropic_to_openai_body.py` — Phase G (explicit kind)
+- `tests/contract/test_transcoder_contract.py` — Phase A integration (annotated `claude-3` with `status = "supported"`)

@@ -325,13 +325,35 @@ async def app(config: AppConfig) -> AsyncGenerator[FastAPI]:
     )
     application.state.coordinator = coordinator
 
-    # Register claude-3 (anthropic) with both accounts
+    # Register claude-3 (anthropic) with both accounts.
+    # Per the closing pass (Phase A) we annotate ``thinking.status =
+    # supported`` so the capability-aware routing filter lets requests
+    # through. Earlier versions of this test loaded ``capabilities={}``
+    # which Phase A interprets as ``unknown``; the closing pass
+    # hardens routing to fail closed on missing metadata.
+    claude_caps = {
+        "thinking": {
+            "status": "supported",
+            "source": "manual_override",
+        },
+    }
     catalog.cache.load_model(
         model_id="claude-3",
         display_name="Claude 3",
         protocol="anthropic",
-        capabilities={},
+        capabilities=claude_caps,
         source_metadata={},
+    )
+    catalog.cache.set_provider_model_entry(
+        model_id="claude-3",
+        provider_id="test-provider",
+        model_info={
+            "model_id": "claude-3",
+            "display_name": "Claude 3",
+            "protocol": "anthropic",
+            "capabilities": claude_caps,
+            "source_metadata": {},
+        },
     )
     catalog.cache.add_account_support("claude-3", "test-acct")
     catalog.cache.set_account_provider("test-acct", "test-provider")
@@ -340,8 +362,19 @@ async def app(config: AppConfig) -> AsyncGenerator[FastAPI]:
         model_id="claude-3",
         display_name="Claude 3",
         protocol="anthropic",
-        capabilities={},
+        capabilities=claude_caps,
         source_metadata={},
+    )
+    catalog.cache.set_provider_model_entry(
+        model_id="claude-3",
+        provider_id="anthropic-provider",
+        model_info={
+            "model_id": "claude-3",
+            "display_name": "Claude 3",
+            "protocol": "anthropic",
+            "capabilities": claude_caps,
+            "source_metadata": {},
+        },
     )
     catalog.cache.add_account_support("claude-3", "anthropic-acct")
     catalog.cache.set_account_provider("anthropic-acct", "anthropic-provider")

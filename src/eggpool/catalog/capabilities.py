@@ -21,6 +21,7 @@ Capability semantics:
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Literal, cast
 
@@ -610,13 +611,14 @@ def model_capabilities_to_dict(capabilities: ModelCapabilities) -> dict[str, obj
     """Convert :class:`ModelCapabilities` back to a plain dict for storage.
 
     The output is suitable for the catalog cache ``capabilities`` field.
-    ``None`` / empty values are filtered out.
+    ``None`` / empty values are filtered out. ``supports_tools`` is
+    **not** written here — tool support is tracked in the
+    catalog/model layer (e.g. via ``supports_tools`` on the per-model
+    row) and is independent of the thinking capability.  Emitting it
+    inside this dict would conflate unrelated capability metadata.
     """
     result: dict[str, object] = {}
     tc = capabilities.thinking
-
-    if tc.status in ("supported", "mixed"):
-        result["supports_tools"] = True
 
     thinking_dict: dict[str, object] = {}
     if tc.status != "unknown":
@@ -727,6 +729,22 @@ def classify_thinking_request(
                                 fields.append("reasoning_content")
                 elif isinstance(content, str) and "reasoning_content" in fields:
                     pass  # already flagged
+                # Phase E: top-level ``reasoning_content`` on assistant
+                # messages is the common OpenAI-compatible shape. Only
+                # treat it as a thinking signal when the value is a
+                # non-empty string or list — empty/null values mean the
+                # upstream model did not actually reason.
+                top_rc_obj: object = msg_dict.get("reasoning_content")
+                if (
+                    isinstance(top_rc_obj, str)
+                    and top_rc_obj.strip()
+                    and "reasoning_content" not in fields
+                ) or (
+                    isinstance(top_rc_obj, list)
+                    and top_rc_obj
+                    and "reasoning_content" not in fields
+                ):
+                    fields.append("reasoning_content")
 
     return ThinkingRequestRequirement(
         required=len(fields) > 0,
@@ -768,6 +786,97 @@ def has_thinking_support(capability: ThinkingCapability) -> bool:
     return capability.status in ("supported", "mixed")
 
 
+# Canonical warning `kind` values emitted by the transcoder and budget
+# resolver when reasoning/thinking controls are handled.  Distinct from
+# the broader ``dropped_field`` family, which carries unrelated loss
+# signals (e.g. ``tools[].function.strict``).
+THINKING_WARNING_KINDS: frozenset[str] = frozenset(
+    {
+        "thinking_signature_dropped",
+        "reasoning_content_dropped",
+        "budget_clamped",
+        "unknown_effort",
+        "budget_rejected",
+        "budget_resolution_no_input",
+        "anthropic_top_level_thinking_dropped",
+    }
+)
+
+# Field names whose presence marks a generic ``dropped_field`` warning
+# as thinking-related.  Substring match is intentional — paths like
+# ``messages[].content[].thinking`` should also be picked up.
+THINKING_FIELD_SUBSTRINGS: tuple[str, ...] = (
+    "thinking",
+    "reasoning_effort",
+    "reasoning",
+    "reasoning_content",
+    "thinking_budget",
+    "thinking_delta",
+)
+
+
+def is_thinking_warning(warning: object) -> bool:
+    """Return ``True`` if *warning* pertains to a thinking control.
+
+    Classifies by ``kind`` first (preferred — robust across all
+    thinking-related subsystems including the budget resolver, which
+    emits warnings without a ``field`` key) and falls back to a
+    ``dropped_field`` heuristic for warnings whose field names contain
+    known reasoning/thinking substrings.
+    """
+    if not isinstance(warning, Mapping):
+        return False
+    mapping: Mapping[str, object] = warning  # pyright: ignore[reportUnknownVariableType]
+    kind_obj: object = mapping.get("kind")  # pyright: ignore[reportUnknownMemberType]
+    if isinstance(kind_obj, str) and kind_obj in THINKING_WARNING_KINDS:
+        return True
+    if kind_obj == "dropped_field":
+        field_obj: object = mapping.get("field")  # pyright: ignore[reportUnknownMemberType]
+        if isinstance(field_obj, str):
+            lowered = field_obj.lower()
+            return any(sub in lowered for sub in THINKING_FIELD_SUBSTRINGS)
+    return False
+
+
+def classify_thinking_warning_decision(warnings: Iterable[object]) -> str:
+    """Classify a transcoding trace into a thinking decision label.
+
+    Returns one of:
+    - ``"rejected"``: budget policy strict rejection (``budget_rejected``)
+    - ``"clamped"``: ``budget_clamped`` warning present
+    - ``"dropped"``: ``reasoning_content_dropped`` / ``thinking_signature_dropped``
+    - ``"transcoded"``: any other thinking-related warning
+    - ``"passthrough"``: no thinking-related warnings
+    """
+    thinking_warnings = [w for w in warnings if is_thinking_warning(w)]
+    if not thinking_warnings:
+        return "passthrough"
+    if any(_warning_kind(w) == "budget_rejected" for w in thinking_warnings):
+        return "rejected"
+    if any(_warning_kind(w) == "budget_clamped" for w in thinking_warnings):
+        return "clamped"
+    if any(
+        _warning_kind(w)
+        in (
+            "reasoning_content_dropped",
+            "thinking_signature_dropped",
+            "anthropic_top_level_thinking_dropped",
+        )
+        for w in thinking_warnings
+    ):
+        return "dropped"
+    return "transcoded"
+
+
+def _warning_kind(warning: object) -> str | None:
+    """Extract the ``kind`` field from a warning mapping, defensively."""
+    if isinstance(warning, Mapping):
+        kind_obj: object = warning.get("kind")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        if isinstance(kind_obj, str):
+            return kind_obj
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Capability-aware routing eligibility
 # ---------------------------------------------------------------------------
@@ -778,6 +887,33 @@ WarnDropPolicy = Literal["warn_drop"]
 AllowWithWarningPolicy = Literal["allow_with_warning"]
 RouteBestEffortPolicy = Literal["route_best_effort"]
 FilterPolicy = Literal["filter"]
+
+
+def extract_thinking_status_from_entry(
+    entry: Mapping[str, object] | None,
+) -> CapabilityStatus:
+    """Best-effort extraction of thinking capability status from a catalog entry.
+
+    Returns ``"unknown"`` when the entry is ``None``, the ``capabilities``
+    block is missing or not a dict, or the ``thinking`` sub-block is absent.
+    This is the canonical "fail-open to unknown" helper so every routing
+    decision treats missing capability metadata as semantically equivalent to
+    an explicit ``ThinkingCapability(status="unknown")``, allowing the
+    configured ``[transcoder.capability_policy].unknown_thinking`` policy to
+    apply consistently.
+    """
+    if entry is None:
+        return "unknown"
+    caps_raw_obj: object = entry.get("capabilities")  # pyright: ignore[reportUnknownMemberType]
+    if not isinstance(caps_raw_obj, dict):
+        return "unknown"
+    caps_raw: dict[str, object] = caps_raw_obj  # pyright: ignore[reportUnknownVariableType]
+    thinking_raw_obj: object = caps_raw.get("thinking")  # pyright: ignore[reportUnknownMemberType]
+    if not isinstance(thinking_raw_obj, dict):
+        return "unknown"
+    thinking_raw: dict[str, object] = thinking_raw_obj  # pyright: ignore[reportUnknownVariableType]
+    caps = dict_to_model_capabilities({"thinking": thinking_raw})
+    return caps.thinking.status
 
 
 def check_candidate_thinking_eligibility(

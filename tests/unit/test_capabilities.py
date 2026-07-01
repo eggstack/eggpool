@@ -9,8 +9,11 @@ from eggpool.catalog.capabilities import (
     aggregate_model_capabilities,
     aggregate_thinking_capabilities,
     aggregate_thinking_status,
+    classify_thinking_warning_decision,
     client_requests_thinking,
+    extract_thinking_status_from_entry,
     has_thinking_support,
+    is_thinking_warning,
     merge_model_capabilities,
     merge_thinking_capabilities,
     serialize_model_capabilities,
@@ -599,3 +602,132 @@ class TestSerializeThinkingProviderStatuses:
             "p1": "supported",
             "p2": "unsupported",
         }
+
+
+# ---------------------------------------------------------------------------
+# Closing-pass: extract_thinking_status_from_entry (Phase A)
+# ---------------------------------------------------------------------------
+
+
+class TestExtractThinkingStatusFromEntry:
+    """Phase A helper: missing capability metadata == ``unknown``.
+
+    Routing now treats an absent ``capabilities.thinking`` block as an
+    explicit ``unknown`` status so the configured
+    ``[transcoder.capability_policy].unknown_thinking`` policy applies
+    uniformly — no silent fall-through to ``supported``.
+    """
+
+    def test_none_entry_is_unknown(self) -> None:
+        assert extract_thinking_status_from_entry(None) == "unknown"
+
+    def test_empty_entry_is_unknown(self) -> None:
+        assert extract_thinking_status_from_entry({}) == "unknown"
+
+    def test_capabilities_without_thinking_is_unknown(self) -> None:
+        assert (
+            extract_thinking_status_from_entry(
+                {"capabilities": {}},
+            )
+            == "unknown"
+        )
+
+    def test_explicit_supported(self) -> None:
+        entry = {
+            "capabilities": {
+                "thinking": {"status": "supported"},
+            },
+        }
+        assert extract_thinking_status_from_entry(entry) == "supported"
+
+    def test_explicit_unsupported(self) -> None:
+        entry = {
+            "capabilities": {
+                "thinking": {"status": "unsupported"},
+            },
+        }
+        assert extract_thinking_status_from_entry(entry) == "unsupported"
+
+    def test_thinking_block_not_a_dict_is_unknown(self) -> None:
+        entry = {"capabilities": {"thinking": "supported"}}
+        assert extract_thinking_status_from_entry(entry) == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Closing-pass: is_thinking_warning + classify_thinking_warning_decision
+# ---------------------------------------------------------------------------
+
+
+class TestIsThinkingWarning:
+    def test_budget_rejected_warning_matches(self) -> None:
+        assert is_thinking_warning({"kind": "budget_rejected"}) is True
+
+    def test_budget_clamped_warning_matches(self) -> None:
+        assert is_thinking_warning({"kind": "budget_clamped"}) is True
+
+    def test_dropped_field_with_thinking_field_matches(self) -> None:
+        assert (
+            is_thinking_warning(
+                {"kind": "dropped_field", "field": "thinking"},
+            )
+            is True
+        )
+
+    def test_dropped_field_unrelated_does_not_match(self) -> None:
+        assert (
+            is_thinking_warning(
+                {"kind": "dropped_field", "field": "top_p"},
+            )
+            is False
+        )
+
+    def test_unrelated_warning_does_not_match(self) -> None:
+        assert (
+            is_thinking_warning({"kind": "dropped_field", "field": "stream"}) is False
+        )
+
+    def test_non_mapping_input_is_false(self) -> None:
+        assert is_thinking_warning("not a mapping") is False
+        assert is_thinking_warning(None) is False
+
+
+class TestClassifyThinkingWarningDecision:
+    def test_no_warnings_is_passthrough(self) -> None:
+        assert classify_thinking_warning_decision([]) == "passthrough"
+
+    def test_only_unrelated_warnings_is_passthrough(self) -> None:
+        warnings = [{"kind": "dropped_field", "field": "top_p"}]
+        assert classify_thinking_warning_decision(warnings) == "passthrough"
+
+    def test_budget_rejected_decision(self) -> None:
+        warnings = [{"kind": "budget_rejected"}]
+        assert classify_thinking_warning_decision(warnings) == "rejected"
+
+    def test_budget_clamped_decision(self) -> None:
+        warnings = [{"kind": "budget_clamped"}]
+        assert classify_thinking_warning_decision(warnings) == "clamped"
+
+    def test_reasoning_content_dropped_decision(self) -> None:
+        warnings = [{"kind": "reasoning_content_dropped"}]
+        assert classify_thinking_warning_decision(warnings) == "dropped"
+
+    def test_thinking_signature_dropped_decision(self) -> None:
+        warnings = [{"kind": "thinking_signature_dropped"}]
+        assert classify_thinking_warning_decision(warnings) == "dropped"
+
+    def test_anthropic_top_level_thinking_dropped_is_dropped(self) -> None:
+        """Phase G warning is classified as ``dropped``.
+
+        The Anthropic top-level ``thinking`` block is dropped when
+        transcoding to OpenAI because there is no verified mapping;
+        this is semantically a drop event from the client's
+        perspective.
+        """
+        warnings = [{"kind": "anthropic_top_level_thinking_dropped"}]
+        assert classify_thinking_warning_decision(warnings) == "dropped"
+
+    def test_other_thinking_warning_is_transcoded(self) -> None:
+        """A thinking-related kind not in the explicit drop/reject/clamp
+        buckets falls through to ``transcoded``."""
+        warnings = [{"kind": "budget_resolution_no_input"}]
+        assert classify_thinking_warning_decision(warnings) == "transcoded"

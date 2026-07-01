@@ -11,6 +11,12 @@ from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 
+# ThinkingCapability is imported at runtime (not TYPE_CHECKING) because the
+# per-provider capability lookup helpers instantiate it directly.
+from eggpool.catalog.capabilities import (
+    ThinkingCapability,
+    ThinkingRequestRequirement,
+)
 from eggpool.constants import DEFAULT_PROVIDER_ID
 from eggpool.db.repositories import (
     AccountBackoffRepository,
@@ -76,7 +82,6 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from eggpool.accounts.registry import AccountRegistry
-    from eggpool.catalog.capabilities import ThinkingCapability
     from eggpool.catalog.pricing import CostCalculator
     from eggpool.catalog.service import CatalogService
     from eggpool.db.connection import Database
@@ -449,83 +454,98 @@ class RequestCoordinator:
                     context.transcode_context.loss_warnings.extend(warnings)
 
                     # Determine thinking decision from transcoder warnings
+                    # using the canonical kind-based classifier (Phase D).
                     if context.thinking_trace is not None:
+                        from eggpool.catalog.capabilities import (
+                            classify_thinking_warning_decision,
+                            is_thinking_warning,
+                        )
+
+                        all_warnings = context.transcode_context.loss_warnings
+                        decision = classify_thinking_warning_decision(
+                            all_warnings,
+                        )
+                        context.thinking_trace["decision"] = decision
                         thinking_warnings = [
-                            w
-                            for w in context.transcode_context.loss_warnings
-                            if w.get("kind")
-                            in (
-                                "thinking_signature_dropped",
-                                "reasoning_content_dropped",
-                                "budget_clamped",
-                                "unknown_effort",
-                                "budget_rejected",
-                                "budget_resolution_no_input",
-                                "dropped_field",
-                            )
-                            and "thinking" in str(w.get("field", ""))
+                            w for w in all_warnings if is_thinking_warning(w)
                         ]
-                        if any(
-                            w.get("kind") == "reasoning_content_dropped"
-                            for w in thinking_warnings
-                        ):
-                            context.thinking_trace["decision"] = "dropped"
-                        elif any(
+                        if decision == "clamped" and any(
                             w.get("kind") == "budget_clamped" for w in thinking_warnings
                         ):
-                            context.thinking_trace["decision"] = "clamped"
                             context.thinking_trace["budget_clamped"] = True
-                        elif any(
-                            w.get("kind") == "budget_rejected"
-                            for w in thinking_warnings
-                        ):
-                            context.thinking_trace["decision"] = "rejected"
-                        else:
-                            context.thinking_trace["decision"] = "transcoded"
 
-                        # Record the final thinking decision
+                        # Surface resolved budget + upstream field metadata
+                        # whenever the early translation has produced a
+                        # concrete ``thinking`` block.  Phase C
+                        # supplements this in the dispatch path with the
+                        # selected provider's override.
+                        thinking_block_obj: object = translated.get("thinking")  # pyright: ignore[reportUnknownMemberType, reportUnknownMemberType]
+                        if isinstance(thinking_block_obj, dict):
+                            thinking_block: dict[str, object] = thinking_block_obj  # pyright: ignore[reportUnknownVariableType]
+                            budget_value_obj: object = thinking_block.get(
+                                "budget_tokens"
+                            )  # pyright: ignore[reportUnknownMemberType]
+                            if isinstance(budget_value_obj, (int, float)):
+                                budget_value = budget_value_obj
+                                context.thinking_trace["resolved_budget_tokens"] = int(
+                                    budget_value,
+                                )
+                                if not context.thinking_trace.get("upstream_fields"):
+                                    context.thinking_trace["upstream_fields"] = [
+                                        "thinking",
+                                    ]
+                        if context.upstream_protocol == "anthropic":
+                            context.thinking_trace["upstream_protocol"] = (
+                                context.upstream_protocol
+                            )
+
+                        # Record the final thinking decision. Strict
+                        # rejection is rare (it propagates as a
+                        # CapabilityError), but if it slips through as
+                        # a warning we still want a counter increment
+                        # for visibility.
                         _thinking_counter = get_counter()
-                        decision = context.thinking_trace["decision"]
+                        client_proto = context.thinking_trace["client_protocol"]
                         if decision == "transcoded":
                             await _thinking_counter.increment_transcoded(
-                                client_protocol=context.thinking_trace[
-                                    "client_protocol"
-                                ],
-                                upstream_protocol=context.upstream_protocol,
+                                client_protocol=client_proto,
+                                upstream_protocol=context.upstream_protocol
+                                or "unknown",
                                 provider_id="unknown",
                             )
                         elif decision == "dropped":
                             await _thinking_counter.increment_dropped(
-                                client_protocol=context.thinking_trace[
-                                    "client_protocol"
-                                ],
-                                upstream_protocol=context.upstream_protocol,
+                                client_protocol=client_proto,
+                                upstream_protocol=context.upstream_protocol
+                                or "unknown",
                                 reason="reasoning_content_dropped",
                             )
                         elif decision == "clamped":
                             await _thinking_counter.increment_budget_clamped(
-                                client_protocol=context.thinking_trace[
-                                    "client_protocol"
-                                ],
+                                client_protocol=client_proto,
                                 provider_id="unknown",
                             )
                         elif decision == "rejected":
                             await _thinking_counter.increment_rejected(
-                                client_protocol=context.thinking_trace[
-                                    "client_protocol"
-                                ],
+                                client_protocol=client_proto,
                                 capability_status="budget_rejected",
                             )
 
-                # Native path: thinking controls pass through unchanged
-                if (
-                    context.thinking_trace is not None
-                    and context.thinking_trace["decision"] == "none"
-                ):
-                    context.thinking_trace["decision"] = "passthrough"
-                    context.thinking_trace["upstream_protocol"] = (
-                        context.upstream_protocol
-                    )
+                # Native path: thinking controls pass through unchanged.
+                # Phase D: when transcoding is disabled but the client
+                # still asked for thinking, mark the trace as
+                # passthrough so observability surfaces the decision.
+                if context.thinking_trace is not None:
+                    decision_value = context.thinking_trace.get("decision", "none")
+                    if decision_value == "none":
+                        context.thinking_trace["decision"] = "passthrough"
+                        context.thinking_trace["upstream_protocol"] = (
+                            context.upstream_protocol
+                        )
+                    elif decision_value == "passthrough":
+                        context.thinking_trace["upstream_protocol"] = (
+                            context.upstream_protocol
+                        )
 
         last_error: Exception | None = None
         last_upstream_response: tuple[int, list[tuple[str, str]], bytes] | None = None
@@ -837,8 +857,25 @@ class RequestCoordinator:
                     # least one attempt means every eligible candidate has
                     # been tried in this request (502).
                     if thinking_req.required:
-                        # Record thinking rejection
+                        # Record thinking rejection. Phase D: also
+                        # bump capability-specific counters when the
+                        # collapsed model status explains the
+                        # rejection.
                         _thinking_counter = get_counter()
+                        rejected_status = (
+                            await self._determine_thinking_rejection_status(
+                                context=context,
+                                thinking_req=thinking_req,
+                            )
+                        )
+                        if rejected_status == "unknown":
+                            await _thinking_counter.increment_unknown_capability(
+                                client_protocol=thinking_req.client_protocol,
+                            )
+                        elif rejected_status == "unsupported":
+                            await _thinking_counter.increment_unsupported_capability(
+                                client_protocol=thinking_req.client_protocol,
+                            )
                         await _thinking_counter.increment_rejected(
                             client_protocol=thinking_req.client_protocol,
                             capability_status="no_eligible_providers",
@@ -846,7 +883,7 @@ class RequestCoordinator:
                         if context.thinking_trace is not None:
                             context.thinking_trace["decision"] = "rejected"
                             context.thinking_trace["capability_status"] = (
-                                "no_eligible_providers"
+                                rejected_status or "no_eligible_providers"
                             )
                         raise CapabilityError(
                             model_id=context.model_id,
@@ -855,7 +892,9 @@ class RequestCoordinator:
                             message=(
                                 f"Model {context.model_id!r} is available, "
                                 f"but no eligible provider is known to "
-                                f"support requested thinking controls."
+                                f"support requested thinking controls "
+                                f"(thinking capability status: "
+                                f"{rejected_status or 'unknown'})."
                             ),
                         )
                     if context.attempted_accounts:
@@ -976,8 +1015,23 @@ class RequestCoordinator:
                     # list while the registry still has enabled states
                     # means the eligible subset was exhausted mid-request.
                     if thinking_req.required:
-                        # Record thinking rejection
+                        # Record thinking rejection with capability
+                        # status (Phase D).
                         _thinking_counter = get_counter()
+                        rejected_status = (
+                            await self._determine_thinking_rejection_status(
+                                context=context,
+                                thinking_req=thinking_req,
+                            )
+                        )
+                        if rejected_status == "unknown":
+                            await _thinking_counter.increment_unknown_capability(
+                                client_protocol=thinking_req.client_protocol,
+                            )
+                        elif rejected_status == "unsupported":
+                            await _thinking_counter.increment_unsupported_capability(
+                                client_protocol=thinking_req.client_protocol,
+                            )
                         await _thinking_counter.increment_rejected(
                             client_protocol=thinking_req.client_protocol,
                             capability_status="no_eligible_providers",
@@ -985,7 +1039,7 @@ class RequestCoordinator:
                         if context.thinking_trace is not None:
                             context.thinking_trace["decision"] = "rejected"
                             context.thinking_trace["capability_status"] = (
-                                "no_eligible_providers"
+                                rejected_status or "no_eligible_providers"
                             )
                         raise CapabilityError(
                             model_id=context.model_id,
@@ -994,7 +1048,9 @@ class RequestCoordinator:
                             message=(
                                 f"Model {context.model_id!r} is available, "
                                 f"but no eligible provider is known to "
-                                f"support requested thinking controls."
+                                f"support requested thinking controls "
+                                f"(thinking capability status: "
+                                f"{rejected_status or 'unknown'})."
                             ),
                         )
                     if self._all_accounts_attempted(context):
@@ -1274,6 +1330,20 @@ class RequestCoordinator:
             context.upstream_protocol, selected.provider_id
         )
 
+        # Phase C: re-resolve ``thinking.budget_tokens`` for the
+        # selected provider. Strict rejections propagate as
+        # :class:`CapabilityError` so the client sees a 400 before
+        # any upstream dispatch.
+        if context.transcode_required and selected.provider_id:
+            self._recompute_thinking_budget_for_selected_provider(
+                context=context,
+                selected=selected,
+                thinking_capability=self._resolve_selected_thinking_capability(
+                    model_id=context.model_id,
+                    provider_id=selected.provider_id,
+                ),
+            )
+
         response: httpx.Response | None = None
         try:
             client = self._get_client(selected.provider_id, selected.account_name)
@@ -1508,6 +1578,20 @@ class RequestCoordinator:
         upstream_url = self._get_upstream_url(
             context.upstream_protocol, selected.provider_id
         )
+
+        # Phase C: re-resolve ``thinking.budget_tokens`` for the
+        # selected provider. Strict rejections propagate as
+        # :class:`CapabilityError` so the client sees a 400 before
+        # any upstream dispatch.
+        if context.transcode_required and selected.provider_id:
+            self._recompute_thinking_budget_for_selected_provider(
+                context=context,
+                selected=selected,
+                thinking_capability=self._resolve_selected_thinking_capability(
+                    model_id=context.model_id,
+                    provider_id=selected.provider_id,
+                ),
+            )
 
         # Inject stream_options.include_usage for OpenAI
         body_to_send = context.body_for_upstream
@@ -2103,6 +2187,142 @@ class RequestCoordinator:
         if protocol == "anthropic":
             return "/messages"
         return "/chat/completions"
+
+    def _resolve_selected_thinking_capability(
+        self,
+        *,
+        model_id: str,
+        provider_id: str,
+    ) -> ThinkingCapability:
+        """Best-effort lookup of the selected provider's thinking capability.
+
+        Returns :class:`ThinkingCapability` with status ``"unknown"`` when
+        the provider entry is missing or carries no capability metadata.
+        Used by post-selection helpers to apply provider-specific
+        ``effort_to_budget_tokens`` overrides and min/max clamps for
+        collapsed model ids.
+        """
+        from eggpool.catalog.capabilities import dict_to_model_capabilities
+
+        entry = self._catalog.cache.get_provider_model_entry(model_id, provider_id)
+        if entry is None:
+            return ThinkingCapability()
+        caps_raw: object = entry.get("capabilities")  # pyright: ignore[reportUnknownMemberType]
+        if not isinstance(caps_raw, dict):
+            return ThinkingCapability()
+        caps_dict: dict[str, object] = caps_raw  # pyright: ignore[reportUnknownVariableType]
+        return dict_to_model_capabilities(caps_dict).thinking
+
+    async def _determine_thinking_rejection_status(
+        self,
+        *,
+        context: ProxyRequestContext,
+        thinking_req: ThinkingRequestRequirement,
+    ) -> str | None:
+        """Inspect the collapsed capability to attribute a thinking rejection.
+
+        Returns ``"unknown"`` or ``"unsupported"`` when the collapsed
+        model's thinking status matches the rejection reason. Returns
+        ``None`` when the status cannot be determined (caller falls
+        back to the generic ``no_eligible_providers`` reason).
+        """
+        from eggpool.catalog.capabilities import extract_thinking_status_from_entry
+
+        try:
+            collapsed_entry = self._catalog.cache.get_model(context.model_id)
+            status = extract_thinking_status_from_entry(collapsed_entry)
+        except Exception:  # noqa: BLE001
+            return None
+        if status in ("unknown", "unsupported"):
+            return status
+        # ``thinking_req`` is currently unused; reserved for future
+        # per-request overrides that may classify differently.
+        del thinking_req
+        return None
+
+    def _recompute_thinking_budget_for_selected_provider(
+        self,
+        *,
+        context: ProxyRequestContext,
+        selected: SelectedAttempt,
+        thinking_capability: ThinkingCapability,
+    ) -> None:
+        """Re-resolve ``thinking.budget_tokens`` for the selected provider.
+
+        The preflight translation in :meth:`execute` uses the collapsed
+        (best-effort) capability, which may under- or over-restrict
+        thinking budgets for provider-specific overrides. This helper
+        runs :func:`resolve_thinking_budget` against the selected
+        provider's capability and overwrites the ``thinking`` block in
+        ``context.upstream_body`` with the resolved budget.
+
+        Strict-policy rejections propagate as :class:`CapabilityError`
+        so the client receives an HTTP 400 before any upstream dispatch.
+        """
+        from eggpool.transcoder.budget_resolver import resolve_thinking_budget
+
+        if not context.transcode_required:
+            return
+        body = context.upstream_body
+        if body is None:
+            return
+        try:
+            payload_obj: object = json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            return
+        if not isinstance(payload_obj, dict):
+            return
+        payload: dict[str, object] = payload_obj  # pyright: ignore[reportUnknownVariableType]
+        thinking_block_obj: object = payload.get("thinking")  # pyright: ignore[reportUnknownMemberType]
+        if not isinstance(thinking_block_obj, dict):
+            return
+        thinking_block: dict[str, object] = thinking_block_obj  # pyright: ignore[reportUnknownVariableType]
+        budget_value_obj: object = thinking_block.get("budget_tokens")  # pyright: ignore[reportUnknownMemberType]
+        if not isinstance(budget_value_obj, (int, float)):
+            return
+        budget_value = budget_value_obj
+        budget_defaults: dict[str, int] | None = None
+        policy = "lenient"
+        if self._transcoder_policy is not None:
+            budget_defaults = self._transcoder_policy.thinking_budget_defaults.as_dict()
+            policy = self._transcoder_policy.budget_resolution_policy
+        original_body_obj: object
+        try:
+            original_body_obj = json.loads(context.original_body)
+        except (json.JSONDecodeError, ValueError):
+            original_body_obj = None
+        requested_effort: str | None = None
+        if isinstance(original_body_obj, dict):
+            original_body: dict[str, object] = original_body_obj  # pyright: ignore[reportUnknownVariableType]
+            requested_effort_obj: object = original_body.get("reasoning_effort")  # pyright: ignore[reportUnknownMemberType]
+            if isinstance(requested_effort_obj, str):
+                requested_effort = requested_effort_obj
+        resolution = resolve_thinking_budget(
+            model_id=context.model_id,
+            provider_id=selected.provider_id,
+            requested_effort=requested_effort,
+            requested_budget_tokens=int(budget_value),
+            capability=thinking_capability,
+            budget_defaults=budget_defaults,
+            budget_resolution_policy=policy,
+        )
+        thinking_block["budget_tokens"] = resolution.budget_tokens
+        if context.thinking_trace is not None:
+            context.thinking_trace["resolved_budget_tokens"] = resolution.budget_tokens
+            context.thinking_trace["capability_status"] = thinking_capability.status
+            context.thinking_trace["capability_source"] = thinking_capability.source
+        context.upstream_body = encode_json_body(payload_obj)  # pyright: ignore[reportUnknownArgumentType]
+        if context.transcode_context is not None:
+            context.transcode_context.loss_warnings.extend(resolution.warnings)
+            if resolution.clamped:
+                context.transcode_context.loss_warnings.append(
+                    {
+                        "kind": "budget_clamped",
+                        "reason": "provider_specific_override",
+                        "resolved": resolution.budget_tokens,
+                        "provider_id": selected.provider_id,
+                    }
+                )
 
     def _build_upstream_headers(
         self,

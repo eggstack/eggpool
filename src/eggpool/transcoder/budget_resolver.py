@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from eggpool.catalog.capabilities import ThinkingCapability
+from eggpool.errors import CapabilityError
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +107,13 @@ def resolve_thinking_budget(
             )
             raise BudgetResolutionError(
                 f"Budget {requested_budget_tokens} clamped to {budget} "
-                f"for {model_id} (strict policy)"
+                f"for {model_id} (strict policy)",
+                model_id=model_id,
+                requested_budget_tokens=requested_budget_tokens,
+                resolved_budget_tokens=budget,
+                budget_resolution_policy=budget_resolution_policy,
+                reason="strict_clamp",
+                provider_id=provider_id,
             )
 
         return ThinkingBudgetResolution(
@@ -182,7 +189,13 @@ def _resolve_effort(
                     }
                 )
                 raise BudgetResolutionError(
-                    f"Budget {raw} clamped to {budget} for {model_id} (strict policy)"
+                    f"Budget {raw} clamped to {budget} for {model_id} (strict policy)",
+                    model_id=model_id,
+                    requested_budget_tokens=raw,
+                    resolved_budget_tokens=budget,
+                    budget_resolution_policy=budget_resolution_policy,
+                    reason="strict_clamp",
+                    provider_id=provider_id,
                 )
 
             return ThinkingBudgetResolution(
@@ -213,7 +226,13 @@ def _resolve_effort(
                     }
                 )
                 raise BudgetResolutionError(
-                    f"Budget {raw} clamped to {budget} for {model_id} (strict policy)"
+                    f"Budget {raw} clamped to {budget} for {model_id} (strict policy)",
+                    model_id=model_id,
+                    requested_budget_tokens=raw,
+                    resolved_budget_tokens=budget,
+                    budget_resolution_policy=budget_resolution_policy,
+                    reason="strict_clamp",
+                    provider_id=provider_id,
                 )
 
             return ThinkingBudgetResolution(
@@ -244,7 +263,13 @@ def _resolve_effort(
                 }
             )
             raise BudgetResolutionError(
-                f"Budget {raw} clamped to {budget} for {model_id} (strict policy)"
+                f"Budget {raw} clamped to {budget} for {model_id} (strict policy)",
+                model_id=model_id,
+                requested_budget_tokens=raw,
+                resolved_budget_tokens=budget,
+                budget_resolution_policy=budget_resolution_policy,
+                reason="strict_clamp",
+                provider_id=provider_id,
             )
 
         return ThinkingBudgetResolution(
@@ -275,7 +300,12 @@ def _resolve_effort(
             }
         )
         raise BudgetResolutionError(
-            f"Unknown effort {effort!r} for {model_id} (strict policy)"
+            f"Unknown effort {effort!r} for {model_id} (strict policy)",
+            model_id=model_id,
+            requested_effort=effort,
+            budget_resolution_policy=budget_resolution_policy,
+            reason="unknown_effort_strict",
+            provider_id=provider_id,
         )
 
     # Lenient: use medium as conservative fallback
@@ -341,5 +371,52 @@ def _clamp_budget(
     return value, clamped, warnings
 
 
-class BudgetResolutionError(Exception):
-    """Raised when the budget resolver rejects a request (strict mode)."""
+class BudgetResolutionError(CapabilityError):
+    """Raised when the budget resolver rejects a request (strict mode).
+
+    Inherits from :class:`CapabilityError` so the request layer's existing
+    capability-error renderer converts it into a protocol-appropriate
+    ``capability_error`` response (HTTP 400) without a special case. The
+    default ``requested_fields`` list carries the resolved budget token,
+    capability id, and policy reason so operators can distinguish a
+    clamping rejection (``reason="strict_clamp"``) from an unknown-effort
+    rejection (``reason="unknown_effort_strict"``).
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        model_id: str = "",
+        requested_budget_tokens: int | None = None,
+        requested_effort: str | None = None,
+        resolved_budget_tokens: int | None = None,
+        budget_resolution_policy: str = "strict",
+        reason: str = "",
+        provider_id: str | None = None,
+    ) -> None:
+        detail_fields: list[str] = ["thinking.budget"]
+        if reason:
+            detail_fields.append(f"reason={reason}")
+        if budget_resolution_policy:
+            detail_fields.append(f"policy={budget_resolution_policy}")
+        if provider_id:
+            detail_fields.append(f"provider={provider_id}")
+        if resolved_budget_tokens is not None:
+            detail_fields.append(f"resolved={resolved_budget_tokens}")
+        if requested_budget_tokens is not None:
+            detail_fields.append(f"requested={requested_budget_tokens}")
+        if requested_effort:
+            detail_fields.append(f"effort={requested_effort}")
+        super().__init__(
+            model_id=model_id,
+            capability="thinking",
+            requested_fields=detail_fields,
+            message=message,
+        )
+        self.reason = reason
+        self.budget_resolution_policy = budget_resolution_policy
+        self.provider_id = provider_id
+        self.requested_budget_tokens = requested_budget_tokens
+        self.resolved_budget_tokens = resolved_budget_tokens
+        self.requested_effort = requested_effort

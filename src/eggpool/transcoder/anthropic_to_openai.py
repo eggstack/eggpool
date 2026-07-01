@@ -524,7 +524,25 @@ class AnthropicToOpenAI:
             if translated_choice is not None:
                 out["tool_choice"] = translated_choice
 
+        # Phase G: Anthropic top-level ``thinking`` is intentionally
+        # dropped because no verified OpenAI-compatible control
+        # mapping exists. Emit a precise structured warning so
+        # operators can distinguish it from generic field drops and
+        # ``loss_policy="reject"`` can attribute the rejection
+        # accurately.
+        if "thinking" in payload:
+            warnings.append(
+                {
+                    "kind": "anthropic_top_level_thinking_dropped",
+                    "field": "thinking",
+                    "reason": "openai_request_no_verified_mapping",
+                }
+            )
         for field in DROPPED_FIELDS:
+            if field == "thinking":
+                # Handled explicitly above with a precise kind; do not
+                # also emit the generic dropped_field warning.
+                continue
             if field in payload:
                 warnings.append(
                     {

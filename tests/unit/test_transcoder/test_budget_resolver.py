@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from eggpool.catalog.capabilities import ThinkingCapability
+from eggpool.errors import AggregatorError, CapabilityError
 from eggpool.transcoder.budget_resolver import (
     BudgetResolutionError,
     resolve_thinking_budget,
@@ -345,3 +346,53 @@ class TestBudgetResolutionViaTranscoder:
             features=None,
         )
         assert any(w.get("kind") == "dropped_field" for w in warnings)
+
+
+class TestClosingPassBudgetResolutionError:
+    """Phase B: BudgetResolutionError must be a CapabilityError subclass.
+
+    The proxy layer already catches :class:`CapabilityError` and returns
+    HTTP 400; the closing pass promotes
+    :class:`BudgetResolutionError` so it flows through the same renderer
+    instead of bubbling up as an unhandled 500.
+    """
+
+    def test_budget_resolution_error_is_capability_error(self) -> None:
+        err = BudgetResolutionError(
+            "strict rejection",
+            model_id="claude-3",
+            requested_budget_tokens=1024,
+            resolved_budget_tokens=512,
+            budget_resolution_policy="strict",
+            reason="clamped",
+        )
+        assert isinstance(err, CapabilityError)
+        # CapabilityError is rendered as HTTP 400 by the proxy layer;
+        # this test pins that subclassing promotes the rendering
+        # automatically (no manual mapping required).
+        assert isinstance(err, AggregatorError)
+
+    def test_strict_policy_rejection_via_resolver_is_capability_error(self) -> None:
+        """Strict policy raises BudgetResolutionError on clamp."""
+        capability = ThinkingCapability(
+            status="supported",
+            source="manual_override",
+            budget_tokens_min=512,
+            budget_tokens_max=1024,
+        )
+        with pytest.raises(BudgetResolutionError) as excinfo:
+            resolve_thinking_budget(
+                model_id="claude-3",
+                provider_id="anthropic",
+                requested_effort=None,
+                requested_budget_tokens=2048,
+                capability=capability,
+                budget_defaults=None,
+                budget_resolution_policy="strict",
+            )
+        # Catching as CapabilityError must work; this is the path the
+        # proxy layer takes.
+        try:
+            raise excinfo.value
+        except CapabilityError as ce:
+            assert ce is excinfo.value

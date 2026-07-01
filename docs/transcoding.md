@@ -359,6 +359,7 @@ The following `kind` values may appear on `TranscodeContext.loss_warnings`:
 | `document_unsupported_media` | An Anthropic document had a non-PDF media type and was dropped | `field`, `media_type` |
 | `thinking_signature_dropped` | An Anthropic thinking block's cryptographic signature was dropped during translation | `field` |
 | `reasoning_content_dropped` | A thinking/reasoning content block was dropped because the feature was disabled | `field` |
+| `anthropic_top_level_thinking_dropped` | The Anthropic top-level `thinking` block was dropped when transcoding to OpenAI (no verified mapping) | `reason` |
 | `response_format_to_system_prompt` | An OpenAI `response_format` was coerced to a system-prompt instruction | `field` |
 | `top_k_dropped` | Anthropic `top_k` was dropped (OpenAI has no top-k sampling knob) | `field` |
 

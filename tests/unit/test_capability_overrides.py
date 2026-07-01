@@ -510,7 +510,9 @@ class TestModelCapabilitiesToDict:
         d = model_capabilities_to_dict(caps)
         assert d["thinking"]["status"] == "supported"
         assert d["thinking"]["source"] == "model_info"
-        assert d["supports_tools"] is True
+        # Phase F: ``supports_tools`` is no longer a top-level capability
+        # surface; tool support is owned by transcoder features.
+        assert "supports_tools" not in d
 
     def test_mixed_thinking(self) -> None:
         caps = ModelCapabilities(
@@ -518,7 +520,11 @@ class TestModelCapabilitiesToDict:
         )
         d = model_capabilities_to_dict(caps)
         assert d["thinking"]["status"] == "mixed"
-        assert d["supports_tools"] is True
+        # Phase F: ``supports_tools`` is no longer a top-level capability
+        # surface; tool support is owned by transcoder features, not
+        # ``ModelCapabilities``. Asserting its absence here pins the
+        # removal so a regression re-introducing it is caught.
+        assert "supports_tools" not in d
 
     def test_unsupported_no_tools_key(self) -> None:
         caps = ModelCapabilities(

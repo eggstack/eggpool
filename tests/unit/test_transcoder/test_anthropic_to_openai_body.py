@@ -229,7 +229,10 @@ class TestDroppedFields:
 
         thinking_warnings = [w for w in warnings if w.get("field") == "thinking"]
         assert len(thinking_warnings) == 1
-        assert thinking_warnings[0]["reason"] == "openai_unsupported"
+        # Phase G: explicit structured warning kind for top-level
+        # Anthropic ``thinking`` dropped to OpenAI upstream.
+        assert thinking_warnings[0]["kind"] == "anthropic_top_level_thinking_dropped"
+        assert thinking_warnings[0]["reason"] == "openai_request_no_verified_mapping"
 
     def test_tools_translated_to_function_shape(
         self, transcoder: AnthropicToOpenAI

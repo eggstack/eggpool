@@ -6,6 +6,7 @@ import json
 import time
 from typing import TYPE_CHECKING, Any, cast
 
+from eggpool.transcoder.budget_resolver import BudgetResolutionError
 from eggpool.transcoder.json_helpers import (
     as_object,
     decode_base64_payload,
@@ -479,10 +480,7 @@ class OpenAIToAnthropic:
 
         reasoning_effort = payload.get("reasoning_effort")
         if reasoning_effort is not None and features is not None and features.thinking:
-            from eggpool.transcoder.budget_resolver import (
-                BudgetResolutionError,
-                resolve_thinking_budget,
-            )
+            from eggpool.transcoder.budget_resolver import resolve_thinking_budget
 
             try:
                 resolution = resolve_thinking_budget(
@@ -498,14 +496,20 @@ class OpenAIToAnthropic:
                     "budget_tokens": resolution.budget_tokens,
                 }
                 warnings.extend(resolution.warnings)
-            except BudgetResolutionError as exc:
-                warnings.append(
-                    {
-                        "kind": "budget_rejected",
-                        "reason": str(exc),
-                        "model_id": payload.get("model", "unknown"),
-                    }
-                )
+            except Exception as exc:
+                # BudgetResolutionError (strict policy) inherits from
+                # CapabilityError and propagates up to the renderer, which
+                # converts it to an HTTP 400 with a protocol-appropriate
+                # ``capability_error`` body. Other exceptions are
+                # non-capability errors and bubble unchanged.
+                if isinstance(exc, BudgetResolutionError):
+                    warnings.append(
+                        {
+                            "kind": "budget_rejected",
+                            "reason": getattr(exc, "reason", "strict_reject"),
+                            "model_id": payload.get("model", "unknown"),
+                        }
+                    )
                 raise
         elif reasoning_effort is not None:
             warnings.append(

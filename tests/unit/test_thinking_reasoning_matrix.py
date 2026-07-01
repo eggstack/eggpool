@@ -967,7 +967,10 @@ class TestGroup6AnthropicToOpenAIRequestTranscoding:
             features=_features(),
         )
         assert "thinking" not in result
-        assert any(w.get("kind") == "dropped_field" for w in warnings)
+        # Phase G: explicit kind, not the generic dropped_field bucket.
+        assert any(
+            w.get("kind") == "anthropic_top_level_thinking_dropped" for w in warnings
+        )
 
     def test_anthropic_thinking_content_in_history(self) -> None:
         payload = {
@@ -1006,7 +1009,9 @@ class TestGroup6AnthropicToOpenAIRequestTranscoding:
             _make_context(client="anthropic", upstream="openai"),
             features=_features(),
         )
-        assert any(w.get("kind") == "dropped_field" for w in warnings)
+        assert any(
+            w.get("kind") == "anthropic_top_level_thinking_dropped" for w in warnings
+        )
 
 
 # ---------------------------------------------------------------------------

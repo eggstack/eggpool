@@ -132,6 +132,58 @@ class TestClassifyThinkingRequest:
         req = classify_thinking_request(body, "openai")
         assert req.required is False
 
+    def test_top_level_reasoning_content_on_assistant_string(self) -> None:
+        """Phase E: top-level ``reasoning_content`` on assistant messages.
+
+        Some clients (e.g. OpenAI Responses-style) attach thinking text
+        as a top-level ``reasoning_content`` string alongside ``content``.
+        The classifier must detect this and mark the request as
+        thinking-required so capability-aware routing applies.
+        """
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": "final answer",
+                    "reasoning_content": "Let me think...",
+                }
+            ]
+        }
+        req = classify_thinking_request(body, "openai")
+        assert req.required is True
+        assert "reasoning_content" in req.fields
+
+    def test_top_level_reasoning_content_empty_string_does_not_trigger(self) -> None:
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": "final answer",
+                    "reasoning_content": "",
+                }
+            ]
+        }
+        req = classify_thinking_request(body, "openai")
+        assert req.required is False
+
+    def test_top_level_reasoning_content_list(self) -> None:
+        """Phase E: ``reasoning_content`` may also be a list of segments."""
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": "done",
+                    "reasoning_content": [
+                        {"type": "text", "text": "step 1"},
+                        {"type": "text", "text": "step 2"},
+                    ],
+                }
+            ]
+        }
+        req = classify_thinking_request(body, "openai")
+        assert req.required is True
+        assert "reasoning_content" in req.fields
+
 
 # ---------------------------------------------------------------------------
 # check_candidate_thinking_eligibility
@@ -298,7 +350,15 @@ class TestEligibilityWithThinking:
         )
         assert len(eligible) == 1
 
-    def test_no_thinking_field_in_entry_passes_all(self) -> None:
+    def test_no_thinking_field_in_entry_fails_to_unknown(self) -> None:
+        """Phase A: missing thinking metadata is treated as ``unknown``.
+
+        Default ``unknown_thinking="reject"`` removes the candidate so
+        requests with no capability metadata fail closed. Operators must
+        either provide capability metadata or set the policy to
+        ``allow_with_warning``/``route_best_effort`` to keep the
+        account eligible.
+        """
         cache = MagicMock()
         cache.get_provider_for_account.return_value = "p1"
         cache.get_provider_model_entry.return_value = {
@@ -316,6 +376,49 @@ class TestEligibilityWithThinking:
             required=True, client_protocol="openai", fields=["reasoning_effort"]
         )
         eligible = get_eligible_accounts(states, "m1", cache, thinking_requirement=req)
+        assert len(eligible) == 0
+
+    def test_no_thinking_field_in_entry_allow_with_warning_passes(self) -> None:
+        cache = MagicMock()
+        cache.get_provider_for_account.return_value = "p1"
+        cache.get_provider_model_entry.return_value = {
+            "model_id": "m1",
+            "protocol": "openai",
+            "capabilities": {},
+        }
+        cache.is_account_model_available.return_value = True
+        states = [
+            __import__(
+                "eggpool.accounts.state", fromlist=["AccountRuntimeState"]
+            ).AccountRuntimeState(name="acct1", enabled=True)
+        ]
+        req = ThinkingRequestRequirement(
+            required=True, client_protocol="openai", fields=["reasoning_effort"]
+        )
+        policy = {"unknown_thinking": "allow_with_warning"}
+        eligible = get_eligible_accounts(
+            states, "m1", cache, thinking_requirement=req, capability_policy=policy
+        )
+        assert len(eligible) == 1
+
+    def test_no_entry_at_all_allow_with_warning_passes(self) -> None:
+        """Phase A: completely missing entry is also ``unknown``."""
+        cache = MagicMock()
+        cache.get_provider_for_account.return_value = "p1"
+        cache.get_provider_model_entry.return_value = None
+        cache.is_account_model_available.return_value = True
+        states = [
+            __import__(
+                "eggpool.accounts.state", fromlist=["AccountRuntimeState"]
+            ).AccountRuntimeState(name="acct1", enabled=True)
+        ]
+        req = ThinkingRequestRequirement(
+            required=True, client_protocol="openai", fields=["reasoning_effort"]
+        )
+        policy = {"unknown_thinking": "allow_with_warning"}
+        eligible = get_eligible_accounts(
+            states, "m1", cache, thinking_requirement=req, capability_policy=policy
+        )
         assert len(eligible) == 1
 
 

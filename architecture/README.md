@@ -103,6 +103,18 @@ Phase 11 adds a comprehensive regression test matrix (`tests/unit/test_thinking_
 
 See `plans/thinking_reasoning_phase_11_test_matrix.md` for the full plan.
 
+### Thinking/Reasoning Closing Pass
+
+The closing pass (`plans/thinking_reasoning_closing_pass.md`) hardens the thinking/reasoning subsystem against silent semantic gaps:
+
+- **Phase A — Missing metadata == `unknown`.** `extract_thinking_status_from_entry()` is the canonical helper used by `get_eligible_accounts()` and `Router._collect_gate_status()`. Catalog entries with no `capabilities.thinking` block now participate in the `[transcoder.capability_policy].unknown_thinking` policy evaluation rather than silently being treated as `supported`.
+- **Phase B — `BudgetResolutionError` is a `CapabilityError`.** Strict-policy rejections now flow through the existing 400 renderer without manual mapping.
+- **Phase C — Per-provider budget recompute.** `RequestCoordinator._recompute_thinking_budget_for_selected_provider()` re-runs `resolve_thinking_budget()` against the selected provider's capability at dispatch, so provider-scoped overrides take effect at the right phase.
+- **Phase D — Trace decisions and rejection attribution.** `classify_thinking_warning_decision()` collapses the loss-warning list into a single `decision` field (`passthrough` / `transcoded` / `dropped` / `clamped` / `rejected`). `_determine_thinking_rejection_status()` attributes routing rejections to `unknown` vs `unsupported`.
+- **Phase E — Top-level `reasoning_content` detection.** `classify_thinking_request()` now detects top-level `reasoning_content` strings/lists on assistant messages.
+- **Phase F — `supports_tools` removed.** Tool support is owned by transcoder features, not `ModelCapabilities`.
+- **Phase G — Explicit Anthropic top-level thinking drop kind.** `anthropic_top_level_thinking_dropped` is now an explicit warning kind rather than the generic `dropped_field` bucket.
+
 ## Multi-Provider Architecture
 
 EggPool supports 27+ upstream providers (OpenCode Go, OpenAI, Anthropic, Groq, DeepInfra, Gemini, xAI, Mistral, SiliconFlow, DeepSeek, Together, Fireworks, OpenRouter, Alibaba, MiniMax, and more), each with its own base URL, account pool, supported protocols, and model catalog. See `docs/providers.md` for the full roster.

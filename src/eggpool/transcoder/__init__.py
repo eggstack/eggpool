@@ -53,6 +53,8 @@ LOSS_WARNING_KINDS: frozenset[str] = frozenset(
         # Phase 6.3 (thinking)
         "thinking_signature_dropped",
         "reasoning_content_dropped",
+        # Phase G (closing pass): explicit top-level thinking drop
+        "anthropic_top_level_thinking_dropped",
         # Phase 7 (thinking budget resolution)
         "budget_clamped",
         "unknown_effort",

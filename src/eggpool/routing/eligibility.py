@@ -74,7 +74,7 @@ def get_eligible_accounts(
     """
     from eggpool.catalog.capabilities import (
         check_candidate_thinking_eligibility,
-        dict_to_model_capabilities,
+        extract_thinking_status_from_entry,
     )
 
     eligible: list[AccountRuntimeState] = []
@@ -133,33 +133,30 @@ def get_eligible_accounts(
             continue
 
         # Capability-aware routing: filter candidates by thinking support
-        # when the client explicitly requested thinking.
+        # when the client explicitly requested thinking. Missing capability
+        # metadata semantically equals an explicit ``unknown`` status — the
+        # configured ``unknown_thinking`` policy decides whether to reject,
+        # warn, or allow best-effort.
         if thinking_requirement is not None and thinking_requirement.required:
             account_provider = catalog.get_provider_for_account(state.name)
             if account_provider is not None:
                 entry = catalog.get_provider_model_entry(model_id, account_provider)
-                if entry is not None:
-                    caps_raw = entry.get("capabilities", {})
-                    if isinstance(caps_raw, dict) and "thinking" in caps_raw:
-                        caps = dict_to_model_capabilities(
-                            {"thinking": caps_raw["thinking"]}
-                        )
-                        status = caps.thinking.status
-                        if not check_candidate_thinking_eligibility(
-                            status,
-                            unsupported_action=unsupported_action,
-                            unknown_action=unknown_action,
-                            mixed_action=mixed_action,
-                        ):
-                            continue
-                        _log_capability_warning(
-                            state=state,
-                            model_id=model_id,
-                            account_provider=account_provider,
-                            status=status,
-                            unsupported_action=unsupported_action,
-                            unknown_action=unknown_action,
-                        )
+                status = extract_thinking_status_from_entry(entry)
+                if not check_candidate_thinking_eligibility(
+                    status,
+                    unsupported_action=unsupported_action,
+                    unknown_action=unknown_action,
+                    mixed_action=mixed_action,
+                ):
+                    continue
+                _log_capability_warning(
+                    state=state,
+                    model_id=model_id,
+                    account_provider=account_provider,
+                    status=status,
+                    unsupported_action=unsupported_action,
+                    unknown_action=unknown_action,
+                )
 
         eligible.append(state)
     return eligible
