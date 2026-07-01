@@ -780,10 +780,7 @@ def _default_opencode_go_thinking_capabilities() -> dict[
 
 def _provider_is_canonical_opencode_go(provider: ProviderConfig) -> bool:
     """Return whether *provider* is the bundled OpenCode Go endpoint."""
-    return (
-        provider.id == DEFAULT_PROVIDER_ID
-        and provider.base_url.rstrip("/") == _OPENCODE_GO_BASE_URL
-    )
+    return provider.base_url.rstrip("/") == _OPENCODE_GO_BASE_URL
 
 
 def _seed_builtin_provider_capabilities(provider: ProviderConfig) -> None:

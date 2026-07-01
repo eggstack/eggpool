@@ -649,13 +649,19 @@ class ModelCatalogCache:
             # Track contributing providers so /v1/models can surface
             # routing priorities and provider list for collapsed entries.
             model_info_copy["providers"] = list(provider_ids)
+            if len(provider_ids) == 1:
+                model_info_copy = self._copy_with_capability_overrides(
+                    model_info_copy,
+                    model_id=model_id,
+                    provider_id=provider_ids[0],
+                )
 
             # For collapsed entries, aggregate capabilities across all
             # visible providers so the /v1/models response can show
             # per-provider status when providers disagree.
             provider_capabilities: dict[str, dict[str, Any]] = {}
             for pid in provider_ids:
-                pinfo = self._provider_models.get((model_id, pid))
+                pinfo = self.get_provider_model_entry(model_id, pid)
                 if pinfo is not None:
                     provider_capabilities[pid] = pinfo.get("capabilities", {})
             if len(provider_capabilities) > 1:

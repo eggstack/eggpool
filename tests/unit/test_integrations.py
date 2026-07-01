@@ -28,6 +28,7 @@ from eggpool.integrations.common import (
     TARGET_SPECS,
     ConfigsetupTargetSpec,
     IntegrationContext,
+    _apply_capabilities,
     _apply_limits,
     _openai_client_needs_transcoder,
     _persist_transcoder_enabled,
@@ -231,6 +232,36 @@ class TestIntegrationContext:
     def test_integration_context_frozen(self, ctx_empty: IntegrationContext) -> None:
         with pytest.raises(AttributeError):
             ctx_empty.api_key = "new_key"  # type: ignore[misc]
+
+    def test_apply_capabilities_adds_opencode_go_thinking_override(self) -> None:
+        from eggpool.models.config import AppConfig
+
+        config = AppConfig.from_dict(
+            {
+                "providers": {
+                    "opencode-go": {
+                        "id": "opencode-go",
+                        "base_url": "https://opencode.ai/zen/go/v1",
+                        "protocols": ["openai", "anthropic"],
+                        "accounts": [{"name": "acct1", "api_key": "sk-test"}],
+                    }
+                }
+            }
+        )
+        models = [
+            {
+                "model_id": "mimo-v2.5/opencode-go",
+                "base_model_id": "mimo-v2.5",
+                "provider_id": "opencode-go",
+                "capabilities": {},
+            }
+        ]
+
+        result = _apply_capabilities(models, config)
+
+        thinking = result[0]["capabilities"]["thinking"]
+        assert thinking["status"] == "supported"
+        assert thinking["supported_efforts"] == ["low", "medium", "high"]
 
 
 # ---------------------------------------------------------------------------

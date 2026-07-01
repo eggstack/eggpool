@@ -118,6 +118,27 @@ def test_explicit_opencode_go_provider_seeds_mimo_thinking_capability() -> None:
     assert thinking.status == "supported"
 
 
+def test_canonical_opencode_go_clone_seeds_mimo_thinking_capability() -> None:
+    config = AppConfig.from_dict(
+        {
+            "providers": {
+                "opencode-go-plan-a": {
+                    "id": "opencode-go-plan-a",
+                    "base_url": "https://opencode.ai/zen/go/v1",
+                    "protocols": ["openai", "anthropic"],
+                    "accounts": [{"name": "personal", "api_key": "sk-test"}],
+                }
+            }
+        }
+    )
+
+    thinking = (
+        config.providers["opencode-go-plan-a"].model_capabilities["mimo-v2.5"].thinking
+    )
+    assert thinking is not None
+    assert thinking.status == "supported"
+
+
 def test_opencode_go_builtin_capability_does_not_clobber_operator_override() -> None:
     config = AppConfig.from_dict(
         {

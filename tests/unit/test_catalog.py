@@ -18,6 +18,7 @@ from eggpool.catalog.normalizer import (
     normalize_models,
     normalize_openai_models,
 )
+from eggpool.models.config import AppConfig
 
 
 def test_hydrate_account_age_uses_its_provider_metadata() -> None:
@@ -915,6 +916,37 @@ def test_collapsed_entry_includes_providers_list() -> None:
     assert len(result) == 1
     # Providers list is sorted lexicographically for stable output.
     assert result[0]["providers"] == ["generalcompute", "minimax", "opencode-go"]
+
+
+def test_collapsed_single_provider_applies_provider_capability_overrides() -> None:
+    config = AppConfig.from_dict(
+        {
+            "providers": {
+                "opencode-go": {
+                    "id": "opencode-go",
+                    "base_url": "https://opencode.ai/zen/go/v1",
+                    "protocols": ["openai", "anthropic"],
+                    "accounts": [{"name": "a1", "api_key": "sk-test"}],
+                }
+            }
+        }
+    )
+    cache = ModelCatalogCache()
+    cache.set_config(config)
+    cache.update_from_account(
+        "a1",
+        "opencode-go",
+        [{"model_id": "mimo-v2.5", "protocol": "openai", "capabilities": {}}],
+    )
+
+    result = cache.get_models_for_exposure("union", {"a1"})
+
+    assert result[0]["capabilities"]["thinking"]["status"] == "supported"
+    assert result[0]["capabilities"]["thinking"]["supported_efforts"] == [
+        "low",
+        "medium",
+        "high",
+    ]
 
 
 def test_collapsed_entry_providers_excludes_uneligible() -> None:

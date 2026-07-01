@@ -7,8 +7,13 @@ import contextlib
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
+from eggpool.catalog.capabilities import (
+    apply_capability_overrides,
+    dict_to_model_capabilities,
+    model_capabilities_to_dict,
+)
 from eggpool.catalog.limits import ModelLimitResolver
 from eggpool.config_utils import (
     detect_lan_ip,
@@ -241,6 +246,60 @@ def _merge_static_models(
     return models_data
 
 
+def _apply_capabilities(
+    models_data: list[dict[str, Any]],
+    config: AppConfig,
+) -> list[dict[str, Any]]:
+    """Apply configured capability overrides to integration catalog rows."""
+    if not models_data:
+        return models_data
+    global_overrides: dict[str, dict[str, object]] = {
+        k: cast("dict[str, object]", v.model_dump(exclude_none=True))
+        for k, v in config.model_capabilities.items()
+    }
+    provider_overrides_by_id: dict[str, dict[str, dict[str, object]]] = {
+        provider_id: {
+            k: cast("dict[str, object]", v.model_dump(exclude_none=True))
+            for k, v in provider_cfg.model_capabilities.items()
+        }
+        for provider_id, provider_cfg in config.providers.items()
+    }
+    for model in models_data:
+        model_id = str(model.get("base_model_id") or model.get("model_id") or "")
+        if not model_id:
+            continue
+        provider_raw = model.get("provider_id")
+        provider_id = provider_raw if isinstance(provider_raw, str) else None
+        base_capabilities_raw = model.get("capabilities", {})
+        base_capabilities_dict = (
+            cast("dict[str, object]", base_capabilities_raw)
+            if isinstance(base_capabilities_raw, dict)
+            else {}
+        )
+        provider_overrides = (
+            provider_overrides_by_id.get(provider_id, {})
+            if provider_id is not None
+            else {}
+        )
+        base_capabilities = dict_to_model_capabilities(base_capabilities_dict)
+        final_capabilities = apply_capability_overrides(
+            model_id,
+            base_capabilities,
+            global_overrides,
+            provider_overrides,
+            provider_id=provider_id,
+        )
+        structured = model_capabilities_to_dict(final_capabilities)
+        merged: dict[str, object] = dict(base_capabilities_dict)
+        thinking = structured.get("thinking")
+        if thinking is not None:
+            merged["thinking"] = thinking
+        else:
+            merged.pop("thinking", None)
+        model["capabilities"] = merged
+    return models_data
+
+
 def _apply_limits(
     models_data: list[dict[str, Any]],
     config: AppConfig,
@@ -364,6 +423,7 @@ def build_integration_context(
         with contextlib.suppress(Exception):
             models_data = _load_catalog(config, collapse_models)
         models_data = _merge_static_models(models_data, config, collapse_models)
+        models_data = _apply_capabilities(models_data, config)
         models_data = _apply_limits(models_data, config, collapse_models)
         if enable_transcoder_for_openai_clients:
             transcoder_mutated = _persist_transcoder_enabled(config_path, config)

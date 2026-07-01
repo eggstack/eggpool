@@ -241,9 +241,14 @@ class CatalogService:
         provider_cfg: ProviderConfig | None,
     ) -> bool:
         """Return whether this provider is the bundled OpenCode Go endpoint."""
-        if provider_id != DEFAULT_PROVIDER_ID or provider_cfg is None:
+        del provider_id
+        if provider_cfg is None:
             return False
-        return provider_cfg.base_url.rstrip("/") == "https://opencode.ai/zen/go/v1"
+        base_url = getattr(provider_cfg, "base_url", None)
+        return (
+            isinstance(base_url, str)
+            and base_url.rstrip("/") == "https://opencode.ai/zen/go/v1"
+        )
 
     async def _enrich_opencode_go_models(
         self,
