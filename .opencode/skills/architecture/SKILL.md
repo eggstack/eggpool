@@ -316,6 +316,18 @@ native_protocols = ["anthropic"]
 
 **Precedence**: defaults → discovered (provider catalog / model-info) → global overrides → provider-scoped overrides. The `source` field tracks provenance; `"manual_override"` marks operator-supplied values. Capabilities are serialized in `/v1/models` responses under the `eggpool.capabilities` extension field.
 
+### Capability-Aware Routing
+
+- `classify_thinking_request()` in `src/eggpool/catalog/capabilities.py` inspects the request body for OpenAI `reasoning_effort` / `reasoning` and Anthropic `thinking` / `thinking_budget` indicators plus assistant history `reasoning_content` blocks
+- Returns a `ThinkingRequestRequirement` dataclass (`required`, `client_protocol`, `fields`, `requested_effort`, `requested_budget_tokens`)
+- Threaded through `get_eligible_accounts()` → `Router._selection_candidates()` → `select_account()` / `select_accounts_for_failover()`
+- Each candidate's thinking capability status is checked via `check_candidate_thinking_eligibility()` against `[transcoder.capability_policy]` settings
+- `CapabilityPolicy` (in `src/eggpool/transcoder/policy.py`) controls three policy axes: `unsupported_thinking` (`reject` | `warn_drop` | `route_best_effort`), `unknown_thinking` (`reject` | `allow_with_warning` | `route_best_effort`), `mixed_collapsed_thinking` (`filter` | `reject` | `allow`)
+- Default policy is `reject` for all — a client explicitly asking for thinking gets either a compatible upstream or a clear `CapabilityError` (HTTP 400)
+- Requests without thinking controls route exactly as before (no capability check)
+- `CapabilityError` is distinct from `ModelNotFoundError` (404) and `ModelUnavailableError` (503)
+- The `explain_account_eligibility()` diagnostic includes a `thinking_support` gate and `thinking_unsupported` / `thinking_unknown` / `thinking_conflicting` reason codes
+
 ## Model Context Limits
 
 - `ModelLimitOverrideConfig` provides reusable limit fields (context, input, output, enforcement)

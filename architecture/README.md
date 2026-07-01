@@ -630,7 +630,8 @@ AggregatorError (base)
 ├── AccountSuspendedError
 ├── RequestTooLargeError
 ├── ModelInfoSourceFetchError
-└── ContextLimitExceededError
+├── ContextLimitExceededError
+└── CapabilityError (model_id, capability, requested_fields attributes)
 ```
 
 ## Model Information
@@ -766,6 +767,28 @@ Example collapsed mixed shape:
 
 - `client_requests_thinking()` — heuristic check for thinking-related keys in the request body; returns `False` for unsupported/unknown/conflicting statuses
 - `has_thinking_support()` — `True` when status is `"supported"` or `"mixed"`
+- `classify_thinking_request()` — classifies whether a request explicitly requires thinking support, returning a `ThinkingRequestRequirement` with `required`, `client_protocol`, `fields`, `requested_effort`, and `requested_budget_tokens`
+- `check_candidate_thinking_eligibility()` — determines whether a candidate model/provider is eligible for a thinking request based on its capability status and the configured policy
+
+### Capability-Aware Routing
+
+When a client sends a request with explicit thinking/reasoning controls, EggPool routes to ensure the upstream model can honor those controls. The pipeline is:
+
+1. **Request classification** (`classify_thinking_request`): inspects the body for OpenAI `reasoning_effort`/`reasoning` and Anthropic `thinking`/`thinking_budget` indicators, plus assistant history `reasoning_content` blocks
+2. **Eligibility filtering** (`get_eligible_accounts`): each candidate's thinking capability status (from the catalog cache) is checked against `[transcoder.capability_policy]` settings
+3. **Candidate selection** (`select_account`/`select_accounts_for_failover`): only thinking-eligible candidates are considered; `CapabilityError` is raised if none remain
+4. **Error responses**: `CapabilityError` (HTTP 400) is distinct from `ModelNotFoundError` (404) and `ModelUnavailableError` (503)
+
+**Policy configuration** (`[transcoder.capability_policy]`):
+
+```toml
+[transcoder.capability_policy]
+unsupported_thinking = "reject"       # reject | warn_drop | route_best_effort
+unknown_thinking = "reject"           # reject | allow_with_warning | route_best_effort
+mixed_collapsed_thinking = "filter"   # filter | reject | allow
+```
+
+Default policy is `reject` for all axes — a client explicitly asking for thinking gets either a compatible upstream or a clear error. The `route_best_effort` escape hatch ignores the status entirely. `CapabilityError` carries `model_id`, `capability`, `requested_fields`, and a human-readable `message`.
 
 ### Design Principle
 

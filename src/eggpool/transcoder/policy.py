@@ -20,6 +20,44 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class CapabilityPolicy(BaseModel):
+    """Policy for capability-aware routing decisions.
+
+    Controls how EggPool routes requests that explicitly ask for
+    thinking/reasoning support when the candidate model's capability
+    status is not ``"supported"``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    unsupported_thinking: Literal["reject", "warn_drop", "route_best_effort"] = Field(
+        default="reject",
+        description=(
+            "How to handle candidates whose thinking status is 'unsupported'. "
+            "'reject' excludes them from routing. 'warn_drop' routes but "
+            "logs a warning. 'route_best_effort' ignores the status entirely."
+        ),
+    )
+    unknown_thinking: Literal["reject", "allow_with_warning", "route_best_effort"] = (
+        Field(
+            default="reject",
+            description=(
+                "How to handle candidates whose thinking status is 'unknown'. "
+                "'reject' excludes them. 'allow_with_warning' routes but logs. "
+                "'route_best_effort' ignores the status."
+            ),
+        )
+    )
+    mixed_collapsed_thinking: Literal["filter", "reject", "allow"] = Field(
+        default="filter",
+        description=(
+            "How to handle collapsed-model entries with mixed provider "
+            "thinking support. 'filter' narrows to supported providers. "
+            "'reject' excludes the model. 'allow' ignores the status."
+        ),
+    )
+
+
 class TranscoderFeatures(BaseModel):
     """Per-feature opt-in flags for Phase 6 sub-phases.
 
@@ -113,5 +151,14 @@ class TranscoderPolicy(BaseModel):
         description=(
             "Per-feature opt-in flags for Phase 6 sub-phases. Each flag "
             "defaults to false; enable individual features as needed."
+        ),
+    )
+
+    capability_policy: CapabilityPolicy = Field(
+        default_factory=CapabilityPolicy,
+        description=(
+            "Capability-aware routing policy. Controls how requests with "
+            "explicit thinking/reasoning controls are routed when the "
+            "candidate model's capability status is not 'supported'."
         ),
     )

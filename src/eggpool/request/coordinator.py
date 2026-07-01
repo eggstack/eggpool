@@ -24,6 +24,7 @@ from eggpool.db.repositories import (
 from eggpool.errors import (
     AggregatorError,
     AuthenticationError,
+    CapabilityError,
     DatabaseError,
     ModelNotFoundError,
     ModelUnavailableError,
@@ -644,6 +645,29 @@ class RequestCoordinator:
             # SQLite has committed the durable rows.  See the docstring
             # above for the ordering invariant.
             async with self._db.transaction():
+                # 0. Classify thinking requirement from request body
+                from eggpool.catalog.capabilities import classify_thinking_request
+
+                body_dict: dict[str, object] = {}
+                if context.original_body:
+                    try:
+                        parsed: object = json.loads(context.original_body)
+                        if isinstance(parsed, dict):
+                            body_dict = parsed  # type: ignore[assignment]
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+                thinking_req = classify_thinking_request(body_dict, context.protocol)
+                _capability_policy: dict[str, str] | None = None
+                if self._transcoder_policy is not None and hasattr(
+                    self._transcoder_policy, "capability_policy"
+                ):
+                    cp = self._transcoder_policy.capability_policy
+                    _capability_policy = {
+                        "unsupported_thinking": cp.unsupported_thinking,
+                        "unknown_thinking": cp.unknown_thinking,
+                        "mixed_collapsed_thinking": cp.mixed_collapsed_thinking,
+                    }
+
                 # 1. Get eligible account names excluding attempted ones
                 eligible_account_names = self._router.get_eligible_account_names(
                     context.model_id,
@@ -657,6 +681,10 @@ class RequestCoordinator:
                         if context.transcode_required
                         else None
                     ),
+                    thinking_requirement=thinking_req
+                    if thinking_req.required
+                    else None,
+                    capability_policy=_capability_policy,
                 )
 
                 if not eligible_account_names:
@@ -667,6 +695,17 @@ class RequestCoordinator:
                     # accounts at all (503). An empty result after at
                     # least one attempt means every eligible candidate has
                     # been tried in this request (502).
+                    if thinking_req.required:
+                        raise CapabilityError(
+                            model_id=context.model_id,
+                            capability="thinking",
+                            requested_fields=thinking_req.fields,
+                            message=(
+                                f"Model {context.model_id!r} is available, "
+                                f"but no eligible provider is known to "
+                                f"support requested thinking controls."
+                            ),
+                        )
                     if context.attempted_accounts:
                         raise UpstreamExhaustedError(
                             f"All eligible accounts attempted for model "
@@ -713,6 +752,10 @@ class RequestCoordinator:
                         else None
                     ),
                     client_protocol=context.protocol,
+                    thinking_requirement=thinking_req
+                    if thinking_req.required
+                    else None,
+                    capability_policy=_capability_policy,
                 )
                 for candidate_state, score in ranked_candidates:
                     # Acquire the circuit-breaker probe slot. If the
@@ -751,6 +794,10 @@ class RequestCoordinator:
                             else None
                         ),
                         client_protocol=context.protocol,
+                        thinking_requirement=thinking_req
+                        if thinking_req.required
+                        else None,
+                        capability_policy=_capability_policy,
                     )
                     if (
                         selected_state is not None
@@ -776,6 +823,17 @@ class RequestCoordinator:
                     # ``context.attempted_accounts``; an empty candidate
                     # list while the registry still has enabled states
                     # means the eligible subset was exhausted mid-request.
+                    if thinking_req.required:
+                        raise CapabilityError(
+                            model_id=context.model_id,
+                            capability="thinking",
+                            requested_fields=thinking_req.fields,
+                            message=(
+                                f"Model {context.model_id!r} is available, "
+                                f"but no eligible provider is known to "
+                                f"support requested thinking controls."
+                            ),
+                        )
                     if self._all_accounts_attempted(context):
                         raise UpstreamExhaustedError(
                             f"All eligible accounts attempted for model "

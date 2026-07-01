@@ -21,6 +21,7 @@ Capability semantics:
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Literal, cast
 
 from pydantic import BaseModel, Field
@@ -649,6 +650,93 @@ def model_capabilities_to_dict(capabilities: ModelCapabilities) -> dict[str, obj
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True, slots=True)
+class ThinkingRequestRequirement:
+    """Result of classifying whether a request needs thinking support."""
+
+    required: bool
+    client_protocol: str
+    fields: list[str]
+    requested_effort: str | None = None
+    requested_budget_tokens: int | None = None
+
+
+def classify_thinking_request(
+    request_body: dict[str, object],
+    client_protocol: str,
+) -> ThinkingRequestRequirement:
+    """Classify whether a request explicitly requires thinking support.
+
+    Inspects the request body for OpenAI and Anthropic thinking indicators
+    and returns a structured result that routing can use to filter
+    candidates.  Unlike ``client_requests_thinking``, this function does
+    **not** consult the model capability — it only inspects the client's
+    intent.
+    """
+    fields: list[str] = []
+    effort: str | None = None
+    budget: int | None = None
+
+    # OpenAI indicators
+    if "reasoning_effort" in request_body:
+        fields.append("reasoning_effort")
+        val: object = request_body["reasoning_effort"]
+        if isinstance(val, str):
+            effort = val
+
+    if "reasoning" in request_body:
+        fields.append("reasoning")
+
+    # Anthropic indicators
+    if "thinking" in request_body:
+        fields.append("thinking")
+        thinking_val: object = request_body["thinking"]
+        if isinstance(thinking_val, dict):
+            thinking_dict = cast("dict[str, object]", thinking_val)
+            budget_val: object = thinking_dict.get("budget_tokens")
+            if isinstance(budget_val, (int, float)):
+                budget = int(budget_val)
+
+    if "thinking_budget" in request_body:
+        fields.append("thinking_budget")
+        tb_val: object = request_body["thinking_budget"]
+        if isinstance(tb_val, (int, float)):
+            budget = int(tb_val)
+
+    # Assistant history indicators (reasoning_content must be preserved)
+    messages: object = request_body.get("messages")
+    if isinstance(messages, list):
+        msg_list = cast("list[object]", messages)
+        for msg in msg_list:
+            if not isinstance(msg, dict):
+                continue
+            msg_dict = cast("dict[str, object]", msg)
+            role: object = msg_dict.get("role")
+            if role == "assistant":
+                content: object = msg_dict.get("content")
+                if isinstance(content, list):
+                    block_list = cast("list[object]", content)
+                    for block in block_list:
+                        if isinstance(block, dict):
+                            block_dict = cast("dict[str, object]", block)
+                            block_type: object = block_dict.get("type")
+                            if (
+                                block_type == "reasoning_content"
+                                and "reasoning_content" not in fields
+                            ):
+                                fields.append("reasoning_content")
+                elif isinstance(content, str) and "reasoning_content" in fields:
+                    pass  # already flagged
+
+    return ThinkingRequestRequirement(
+        required=len(fields) > 0,
+        client_protocol=client_protocol,
+        fields=fields,
+        requested_effort=effort,
+        requested_budget_tokens=budget,
+    )
+
+
 def client_requests_thinking(
     request_body: dict[str, object],
     capability: ThinkingCapability,
@@ -678,3 +766,51 @@ def has_thinking_support(capability: ThinkingCapability) -> bool:
     means at least one backing provider supports it).
     """
     return capability.status in ("supported", "mixed")
+
+
+# ---------------------------------------------------------------------------
+# Capability-aware routing eligibility
+# ---------------------------------------------------------------------------
+
+# Policy action type aliases (mirrors the Literal types in CapabilityPolicy)
+RejectPolicy = Literal["reject"]
+WarnDropPolicy = Literal["warn_drop"]
+AllowWithWarningPolicy = Literal["allow_with_warning"]
+RouteBestEffortPolicy = Literal["route_best_effort"]
+FilterPolicy = Literal["filter"]
+
+
+def check_candidate_thinking_eligibility(
+    capability_status: CapabilityStatus,
+    *,
+    unsupported_action: str = "reject",
+    unknown_action: str = "reject",
+    mixed_action: str = "filter",
+) -> bool:
+    """Determine whether a candidate is eligible for a thinking request.
+
+    Parameters:
+        capability_status: the model/provider's thinking capability status.
+        unsupported_action: policy for ``"unsupported"`` status.
+        unknown_action: policy for ``"unknown"`` status.
+        mixed_action: policy for ``"mixed"`` status.
+
+    Returns ``True`` when the candidate should be considered for routing.
+
+    ``"supported"`` candidates are always eligible.
+    ``"conflicting"`` candidates are always rejected (operator must
+    resolve via manual override).
+    """
+    if capability_status == "supported":
+        return True
+    if capability_status == "conflicting":
+        return False
+    if capability_status == "unsupported":
+        return unsupported_action != "reject"
+    if capability_status == "unknown":
+        return unknown_action != "reject"
+    if capability_status == "mixed":
+        # "mixed" in per-provider context means this specific provider
+        # supports it; only reject if policy says "reject".
+        return mixed_action != "reject"
+    return False

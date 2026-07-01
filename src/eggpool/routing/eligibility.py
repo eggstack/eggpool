@@ -8,6 +8,7 @@ An account is eligible only when all of the following are true:
 - Supports the requested model (with recent catalog refresh)
 - Supports the requested protocol
 - Has not exceeded any configured local concurrency ceiling
+- Supports thinking if explicitly requested (capability-aware routing)
 
 Note: local quota estimates are advisory in the default routing mode
 ("score_only"). They influence rank but must not hard-exclude accounts
@@ -26,6 +27,7 @@ if TYPE_CHECKING:
 
     from eggpool.accounts.state import AccountRuntimeState
     from eggpool.catalog.cache import ModelCatalogCache
+    from eggpool.catalog.capabilities import ThinkingRequestRequirement
     from eggpool.health.health_manager import HealthManager
     from eggpool.quota.estimation import QuotaEstimator
 
@@ -42,6 +44,8 @@ def get_eligible_accounts(
     account_supports_protocol: Callable[[str, str], bool] | None = None,
     quota_estimator: QuotaEstimator | None = None,
     local_quota_mode: str = "score_only",
+    thinking_requirement: ThinkingRequestRequirement | None = None,
+    capability_policy: dict[str, str] | None = None,
 ) -> list[AccountRuntimeState]:
     """Get accounts eligible for routing a specific model.
 
@@ -58,14 +62,25 @@ def get_eligible_accounts(
     - belongs to the specified provider (if provider_id is given)
     - when ``local_quota_mode="hard_cap"``, configured local quota
       capacity is not exceeded (when ``quota_estimator`` is supplied)
+    - supports thinking when explicitly requested (capability-aware routing)
 
     In the default ``local_quota_mode="score_only"`` mode, local quota
     estimates influence routing rank only and never hard-exclude
     accounts. Switch to ``"hard_cap"`` to restore the pre-suppression
     behavior where locally over-quota accounts are excluded.
     """
+    from eggpool.catalog.capabilities import (
+        check_candidate_thinking_eligibility,
+        dict_to_model_capabilities,
+    )
+
     eligible: list[AccountRuntimeState] = []
     apply_local_quota_gate = local_quota_mode == "hard_cap"
+    policy = capability_policy or {}
+    unsupported_action = policy.get("unsupported_thinking", "reject")
+    unknown_action = policy.get("unknown_thinking", "reject")
+    mixed_action = policy.get("mixed_collapsed_thinking", "filter")
+
     for state in all_states:
         if not state.is_eligible():
             continue
@@ -106,11 +121,34 @@ def get_eligible_accounts(
         ):
             continue
 
-        if catalog.is_account_model_available(
+        if not catalog.is_account_model_available(
             state.name,
             model_id,
             max_age_s=stale_after_s,
             protocol=protocol,
         ):
-            eligible.append(state)
+            continue
+
+        # Capability-aware routing: filter candidates by thinking support
+        # when the client explicitly requested thinking.
+        if thinking_requirement is not None and thinking_requirement.required:
+            account_provider = catalog.get_provider_for_account(state.name)
+            if account_provider is not None:
+                entry = catalog.get_provider_model_entry(model_id, account_provider)
+                if entry is not None:
+                    caps_raw = entry.get("capabilities", {})
+                    if isinstance(caps_raw, dict) and "thinking" in caps_raw:
+                        caps = dict_to_model_capabilities(
+                            {"thinking": caps_raw["thinking"]}
+                        )
+                        status = caps.thinking.status
+                        if not check_candidate_thinking_eligibility(
+                            status,
+                            unsupported_action=unsupported_action,
+                            unknown_action=unknown_action,
+                            mixed_action=mixed_action,
+                        ):
+                            continue
+
+        eligible.append(state)
     return eligible

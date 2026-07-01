@@ -15,6 +15,7 @@ from eggpool.auth import require_auth
 from eggpool.catalog.protocols import ProtocolMismatchError, ProtocolName
 from eggpool.constants import MAX_REQUEST_BODY_BYTES
 from eggpool.errors import (
+    CapabilityError,
     CatalogUnavailableError,
     ContextLimitExceededError,
     ModelNotFoundError,
@@ -392,6 +393,12 @@ async def handle_proxy_request(
             status_code=404,
             message=str(exc),
             error_type=endpoint.not_found_error_type,
+        )
+    except CapabilityError as exc:
+        return endpoint.error_response(
+            status_code=400,
+            message=str(exc),
+            error_type="capability_error",
         )
     except (
         NoEligibleAccountError,

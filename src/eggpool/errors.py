@@ -95,6 +95,23 @@ class ModelInfoSourceFetchError(AggregatorError):
     """Raised when a model-info source fetch fails (network, HTTP, parse)."""
 
 
+class CapabilityError(AggregatorError):
+    """Raised when a request requires a capability the model does not support."""
+
+    def __init__(
+        self,
+        *,
+        model_id: str,
+        capability: str,
+        requested_fields: list[str],
+        message: str,
+    ) -> None:
+        self.model_id = model_id
+        self.capability = capability
+        self.requested_fields = requested_fields
+        super().__init__(message)
+
+
 class ContextLimitExceededError(AggregatorError):
     """Raised when estimated request context exceeds the configured limit."""
 

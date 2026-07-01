@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 
     from eggpool.accounts.registry import AccountRegistry
     from eggpool.accounts.state import AccountRuntimeState
+    from eggpool.catalog.capabilities import ThinkingRequestRequirement
     from eggpool.catalog.service import CatalogService
     from eggpool.health.health_manager import HealthManager
 
@@ -281,6 +282,8 @@ class Router:
         protocol: str | None = None,
         transcode_eligibility: set[str] | None = None,
         client_protocol: str | None = None,
+        thinking_requirement: ThinkingRequestRequirement | None = None,
+        capability_policy: dict[str, str] | None = None,
     ) -> AccountRuntimeState | None:
         """Select an account for the given model.
 
@@ -289,7 +292,13 @@ class Router:
         ``QuotaFairScorer`` is used to load balance within it.
         """
         candidates = self._selection_candidates(
-            model_id, exclude_accounts, provider_id, protocol, transcode_eligibility
+            model_id,
+            exclude_accounts,
+            provider_id,
+            protocol,
+            transcode_eligibility,
+            thinking_requirement=thinking_requirement,
+            capability_policy=capability_policy,
         )
         tiers = candidates.tiered()
         if not tiers:
@@ -348,6 +357,8 @@ class Router:
         protocol: str | None = None,
         client_protocol: str | None = None,
         transcode_eligibility: set[str] | None = None,
+        thinking_requirement: ThinkingRequestRequirement | None = None,
+        capability_policy: dict[str, str] | None = None,
     ) -> list[tuple[AccountRuntimeState, RoutingScore]]:
         """Score and rank eligible accounts for a model.
 
@@ -356,7 +367,13 @@ class Router:
         diagnostics without exposing private scoring internals.
         """
         candidates = self._selection_candidates(
-            model_id, None, provider_id, protocol, transcode_eligibility
+            model_id,
+            None,
+            provider_id,
+            protocol,
+            transcode_eligibility,
+            thinking_requirement=thinking_requirement,
+            capability_policy=capability_policy,
         )
         tiers = candidates.tiered()
         result: list[tuple[AccountRuntimeState, RoutingScore]] = []
@@ -387,6 +404,8 @@ class Router:
         protocol: str | None = None,
         transcode_eligibility: set[str] | None = None,
         include_gates: bool = False,
+        thinking_requirement: ThinkingRequestRequirement | None = None,
+        capability_policy: dict[str, str] | None = None,
     ) -> list[dict[str, Any]]:
         """Return one row per registered account explaining eligibility.
 
@@ -395,8 +414,10 @@ class Router:
         ``"disabled"``, ``"auth_failed"``, ``"quota_exhausted"``,
         ``"cooldown"``, ``"rate_limited"``, ``"circuit_open"``,
         ``"no_provider"``, ``"wrong_provider"``, ``"no_model"``,
-        ``"model_stale"``, ``"no_protocol"``, ``"protocol_mismatch"``
-        otherwise) and a short ``reason_detail`` for dashboard display.
+        ``"model_stale"``, ``"no_protocol"``, ``"protocol_mismatch"``,
+        ``"thinking_unsupported"``, ``"thinking_unknown"``,
+        ``"thinking_conflicting"`` otherwise) and a short ``reason_detail``
+        for dashboard display.
         Used by ``eggpool accounts explain`` to surface why a model
         is routing only to a subset of accounts.
 
@@ -404,8 +425,8 @@ class Router:
         ``gates`` dict that exposes every gate's pass/fail status
         (config, credentials, health, circuit, provider, protocol,
         model support, freshness, provider-metadata, protocol match,
-        local quota). The dict is informational — the canonical
-        outcome is still ``eligible`` / ``reason_code``.
+        local quota, thinking support). The dict is informational — the
+        canonical decision still comes from ``_classify_eligibility``.
         """
         all_states: list[AccountRuntimeState] = []
         seen: set[str] = set()
@@ -423,6 +444,8 @@ class Router:
                 provider_id=provider_id,
                 protocol=protocol,
                 transcode_eligibility=transcode_eligibility,
+                thinking_requirement=thinking_requirement,
+                capability_policy=capability_policy,
             )
             row: dict[str, Any] = {
                 "account_name": state.name,
@@ -437,6 +460,8 @@ class Router:
                     provider_id=provider_id,
                     protocol=protocol,
                     transcode_eligibility=transcode_eligibility,
+                    thinking_requirement=thinking_requirement,
+                    capability_policy=capability_policy,
                 )
                 gates["final_eligible"] = eligible
                 row["gates"] = gates
@@ -451,6 +476,8 @@ class Router:
         provider_id: str | None,
         protocol: str | None,
         transcode_eligibility: set[str] | None,
+        thinking_requirement: ThinkingRequestRequirement | None = None,
+        capability_policy: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Collect pass/fail booleans for every routing gate on one account.
 
@@ -513,6 +540,23 @@ class Router:
             local_quota_gate = (
                 quota.get_remaining_capacity() > 0.0 if quota is not None else True
             )
+
+        # Thinking support gate
+        thinking_support: str | None = None
+        if thinking_requirement is not None and thinking_requirement.required:
+            account_provider = cache.get_provider_for_account(state.name)
+            if account_provider is not None:
+                entry = cache.get_provider_model_entry(model_id, account_provider)
+                if entry is not None:
+                    from eggpool.catalog.capabilities import dict_to_model_capabilities
+
+                    caps_raw = entry.get("capabilities", {})
+                    if isinstance(caps_raw, dict) and "thinking" in caps_raw:
+                        caps = dict_to_model_capabilities(
+                            {"thinking": caps_raw["thinking"]}
+                        )
+                        thinking_support = caps.thinking.status
+
         return {
             "config_enabled": state.enabled,
             "credentials_usable": self._registry.has_usable_credentials(state.name),
@@ -531,6 +575,7 @@ class Router:
             "provider_model_protocol": provider_model_protocol,
             "protocol_match": protocol_match,
             "local_quota_gate": local_quota_gate,
+            "thinking_support": thinking_support,
             "final_eligible": None,
         }
 
@@ -542,6 +587,8 @@ class Router:
         provider_id: str | None,
         protocol: str | None,
         transcode_eligibility: set[str] | None,
+        thinking_requirement: ThinkingRequestRequirement | None = None,
+        capability_policy: dict[str, str] | None = None,
     ) -> tuple[bool, str, str]:
         """Decide whether ``state`` can serve ``model_id`` and why not.
 
@@ -711,6 +758,49 @@ class Router:
                 ),
             )
 
+        # Capability-aware routing: check thinking support
+        if thinking_requirement is not None and thinking_requirement.required:
+            from eggpool.catalog.capabilities import (
+                check_candidate_thinking_eligibility,
+                dict_to_model_capabilities,
+            )
+
+            account_provider = self._catalog.cache.get_provider_for_account(state.name)
+            if account_provider is not None:
+                entry = self._catalog.cache.get_provider_model_entry(
+                    model_id, account_provider
+                )
+                if entry is not None:
+                    caps_raw = entry.get("capabilities", {})
+                    if isinstance(caps_raw, dict) and "thinking" in caps_raw:
+                        caps = dict_to_model_capabilities(
+                            {"thinking": caps_raw["thinking"]}
+                        )
+                        status = caps.thinking.status
+                        policy = capability_policy or {}
+                        if not check_candidate_thinking_eligibility(
+                            status,
+                            unsupported_action=policy.get(
+                                "unsupported_thinking", "reject"
+                            ),
+                            unknown_action=policy.get("unknown_thinking", "reject"),
+                            mixed_action=policy.get(
+                                "mixed_collapsed_thinking", "filter"
+                            ),
+                        ):
+                            label = status.replace(" ", "_")
+                            return (
+                                False,
+                                f"thinking_{label}",
+                                (
+                                    f"Account {state.name!r} has thinking "
+                                    f"status {status!r} for model "
+                                    f"{model_id!r}; client requested "
+                                    f"thinking controls "
+                                    f"({thinking_requirement.fields!r})."
+                                ),
+                            )
+
         return True, "ok", "Account is eligible to serve this request."
 
     def get_eligible_account_names(
@@ -720,6 +810,8 @@ class Router:
         provider_id: str | None = None,
         protocol: str | None = None,
         transcode_eligibility: set[str] | None = None,
+        thinking_requirement: ThinkingRequestRequirement | None = None,
+        capability_policy: dict[str, str] | None = None,
     ) -> list[str]:
         """Get eligible account names for a model.
 
@@ -728,7 +820,13 @@ class Router:
         eligibility order, not priority order.
         """
         candidates = self._selection_candidates(
-            model_id, exclude_accounts, provider_id, protocol, transcode_eligibility
+            model_id,
+            exclude_accounts,
+            provider_id,
+            protocol,
+            transcode_eligibility,
+            thinking_requirement=thinking_requirement,
+            capability_policy=capability_policy,
         )
         return candidates.names
 
@@ -742,6 +840,8 @@ class Router:
         protocol: str | None = None,
         transcode_eligibility: set[str] | None = None,
         client_protocol: str | None = None,
+        thinking_requirement: ThinkingRequestRequirement | None = None,
+        capability_policy: dict[str, str] | None = None,
     ) -> list[tuple[AccountRuntimeState, RoutingScore]]:
         """Select multiple accounts for failover, ranked by score.
 
@@ -757,7 +857,13 @@ class Router:
             return []
 
         candidates = self._selection_candidates(
-            model_id, exclude_accounts, provider_id, protocol, transcode_eligibility
+            model_id,
+            exclude_accounts,
+            provider_id,
+            protocol,
+            transcode_eligibility,
+            thinking_requirement=thinking_requirement,
+            capability_policy=capability_policy,
         )
         tiers = candidates.tiered()
         if not tiers:
@@ -876,6 +982,8 @@ class Router:
         provider_id: str | None,
         protocol: str | None,
         transcode_eligibility: set[str] | None = None,
+        thinking_requirement: ThinkingRequestRequirement | None = None,
+        capability_policy: dict[str, str] | None = None,
     ) -> RoutingCandidates:
         """Return eligible runtime states and indexes for a routing decision."""
         eligible = get_eligible_accounts(
@@ -890,6 +998,8 @@ class Router:
             account_supports_protocol=self._registry.account_supports_protocol,
             quota_estimator=self._quota_estimator,
             local_quota_mode=self._local_quota_mode,
+            thinking_requirement=thinking_requirement,
+            capability_policy=capability_policy,
         )
         if exclude_accounts:
             eligible = [
