@@ -9,65 +9,20 @@ Endpoints:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import unquote
 
 from fastapi import Request  # noqa: TCH002 — FastAPI needs runtime access
 from fastapi.responses import JSONResponse
 
+from eggpool.model_info.presentation import (
+    compact_model_info_summary,
+    iso_datetime,
+)
 from eggpool.routing.provider import parse_model_provider
 
 if TYPE_CHECKING:
     from fastapi.responses import Response
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-_STATUS_DISPLAY: dict[str, str] = {
-    "fresh": "fresh",
-    "partial": "partial",
-    "sparse_new": "sparse",
-    "stale": "stale",
-    "conflicting": "conflict",
-    "unmatched": "unmatched",
-    "source_unavailable": "source-unavailable",
-    "manual_override": "manual",
-    "withdrawn": "withdrawn",
-}
-
-
-def _compact_summary(info: Any) -> dict[str, Any]:
-    """Build a compact summary dict from a CanonicalModelInfo."""
-    sources: list[str] = []
-    prov_raw = cast("dict[str, Any]", getattr(info, "provenance", {}))
-    raw_sources = cast("list[object]", prov_raw.get("sources", []))
-    for s in raw_sources:
-        sources.append(str(s))
-
-    detail_raw = cast("dict[str, Any]", getattr(info, "detail", {}))
-    providers: list[str] = []
-    raw_providers = cast("list[object]", detail_raw.get("providers", []))
-    for p in raw_providers:
-        providers.append(str(p))
-
-    status_raw = getattr(info, "status", "")
-    status_str = str(status_raw) if status_raw is not None else ""
-
-    return {
-        "model_id": getattr(info, "model_id", ""),
-        "status": _STATUS_DISPLAY.get(status_str, status_str),
-        "sparse": getattr(info, "sparse", False),
-        "summary": getattr(info, "summary", "") or "",
-        "sources": sources,
-        "providers": providers,
-        "last_seen_at": _iso(getattr(info, "last_seen_at", None)),
-        "last_refreshed_at": _iso(getattr(info, "last_refreshed_at", None)),
-        "next_refresh_at": _iso(getattr(info, "next_refresh_at", None)),
-        "has_conflicts": bool(getattr(info, "conflicts", {})),
-    }
 
 
 def _detail_response(info: Any) -> dict[str, Any]:
@@ -126,7 +81,7 @@ def _detail_response(info: Any) -> dict[str, Any]:
     # Observations (compact, no raw payloads)
     observations = _build_observations(info)
 
-    compact = _compact_summary(info)
+    compact = compact_model_info_summary(info)
     compact["detail"] = {
         "display_name": detail.get("display_name"),
         "family": detail.get("family"),
@@ -184,22 +139,11 @@ def _build_observations(info: Any) -> list[dict[str, Any]]:
                 "source": source,
                 "source_model_id": model_id,
                 "provider_id": providers[0] if providers else None,
-                "observed_at": _iso(last_seen),
+                "observed_at": iso_datetime(last_seen),
                 "confidence": 1.0,
             }
         )
     return obs
-
-
-def _iso(dt: Any) -> str | None:
-    """Format a datetime as ISO 8601 or return None."""
-    if dt is None:
-        return None
-    if isinstance(dt, datetime):
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=UTC)
-        return dt.isoformat()
-    return str(dt)
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +160,7 @@ async def handle_model_info_summary(request: Request) -> Response:
             content={"error": "model_info disabled"},
         )
     summary_map = await model_info.get_summary_map()
-    data = [_compact_summary(info) for info in summary_map.values()]
+    data = [compact_model_info_summary(info) for info in summary_map.values()]
     return JSONResponse(content={"object": "list", "data": data})
 
 

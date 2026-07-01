@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -119,6 +120,43 @@ class TestModelInfoStatusDisplay:
 
     def test_sparse_new_maps_to_sparse(self) -> None:
         assert MODEL_INFO_STATUS_DISPLAY["sparse_new"] == "sparse"
+
+    def test_status_filter_aliases_normalize_to_canonical(self) -> None:
+        from eggpool.model_info.presentation import normalize_model_info_status_filter
+
+        assert normalize_model_info_status_filter("sparse") == "sparse_new"
+        assert normalize_model_info_status_filter("sparse_new") == "sparse_new"
+        assert normalize_model_info_status_filter("source-unavailable") == (
+            "source_unavailable"
+        )
+        assert normalize_model_info_status_filter("fresh") == "fresh"
+
+
+class TestCompactModelInfoSummary:
+    def test_compact_summary_can_emit_display_or_canonical_status(self) -> None:
+        from eggpool.model_info.presentation import compact_model_info_summary
+
+        info = SimpleNamespace(
+            model_id="gpt-4o",
+            status="sparse_new",
+            sparse=True,
+            summary="Sparse metadata.",
+            provenance={"sources": ["provider_catalog", "openrouter"]},
+            detail={"providers": ["openai"]},
+            conflicts={},
+            last_seen_at=datetime(2026, 6, 29, 20, 0, tzinfo=UTC),
+            last_refreshed_at=None,
+            next_refresh_at=None,
+        )
+
+        display = compact_model_info_summary(info)
+        canonical = compact_model_info_summary(info, display_status=False)
+
+        assert display["status"] == "sparse"
+        assert canonical["status"] == "sparse_new"
+        assert display["sources"] == ["provider_catalog", "openrouter"]
+        assert display["providers"] == ["openai"]
+        assert display["last_seen_at"] == "2026-06-29T20:00:00+00:00"
 
 
 # ---------------------------------------------------------------------------

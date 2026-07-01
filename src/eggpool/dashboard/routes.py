@@ -31,6 +31,10 @@ from eggpool.dashboard.render import (
     render_traces,
 )
 from eggpool.errors import ConfigError
+from eggpool.model_info.presentation import (
+    compact_model_info_summary,
+    normalize_model_info_status_filter,
+)
 from eggpool.stats import TimeRange, resolve_time_range
 from eggpool.stats.grouped_timeseries import clamp_grouped_limit
 from eggpool.stats.queries import fetch_disabled_account_count
@@ -72,27 +76,10 @@ async def _get_model_info_summary_map(
         return {}
     try:
         raw_map = await model_info_service.get_summary_map()
-        result: dict[str, dict[str, Any]] = {}
-        for mid, info in raw_map.items():
-            sources: list[str] = []
-            prov_raw = cast("dict[str, Any]", getattr(info, "provenance", {}))
-            raw_sources = cast("list[object]", prov_raw.get("sources", []))
-            for s in raw_sources:
-                sources.append(str(s))
-            status_val = getattr(info, "status", "")
-            status_str = str(status_val) if status_val is not None else ""
-            result[mid] = {
-                "status": status_str,
-                "sparse": getattr(info, "sparse", False),
-                "summary": getattr(info, "summary", "") or "",
-                "sources": sources,
-                "last_refreshed_at": (
-                    info.last_refreshed_at.isoformat()
-                    if info.last_refreshed_at is not None
-                    else None
-                ),
-            }
-        return result
+        return {
+            mid: compact_model_info_summary(info, display_status=False)
+            for mid, info in raw_map.items()
+        }
     except Exception:
         return {}
 
@@ -826,7 +813,7 @@ def _apply_model_filters(
     elif used == "unused":
         result = [r for r in result if int(r.get("request_count", 0) or 0) == 0]
     if info_status is not None:
-        normalized = _normalize_info_status_filter(info_status)
+        normalized = normalize_model_info_status_filter(info_status)
 
         def _matches(row: dict[str, Any]) -> bool:
             base_id = str(row.get("base_model_id") or "")
@@ -834,7 +821,8 @@ def _apply_model_filters(
             mi_entry = mi_map.get(base_id) or mi_map.get(literal)
             if mi_entry is None:
                 return False
-            return mi_entry.get("status") == normalized
+            entry_status = str(mi_entry.get("status") or "")
+            return normalize_model_info_status_filter(entry_status) == normalized
 
         result = [r for r in result if _matches(r)]
     if availability == "available":
@@ -842,31 +830,6 @@ def _apply_model_filters(
     elif availability == "unavailable":
         result = [r for r in result if not r.get("_in_catalog")]
     return result
-
-
-# Display-to-canonical status aliases.  The dashboard's filter UI
-# historically accepts the canonical names (``sparse_new``,
-# ``conflicting``, ``source_unavailable``, ``manual_override``) but
-# compact summaries expose the display labels (``sparse``,
-# ``conflict``, ``source-unavailable``, ``manual``).  Both forms are
-# honored so that ``?info_status=sparse`` and
-# ``?info_status=sparse_new`` filter the same set of rows.
-_STATUS_ALIASES: dict[str, str] = {
-    "sparse": "sparse_new",
-    "sparse_new": "sparse_new",
-    "conflict": "conflicting",
-    "conflicting": "conflicting",
-    "source-unavailable": "source_unavailable",
-    "source_unavailable": "source_unavailable",
-    "manual": "manual_override",
-    "manual_override": "manual_override",
-    "withdrawn": "withdrawn",
-}
-
-
-def _normalize_info_status_filter(value: str) -> str:
-    """Normalize an info-status filter value to its canonical form."""
-    return _STATUS_ALIASES.get(value, value)
 
 
 def _model_row_key(row: dict[str, Any], *, collapse_models: bool) -> tuple[str, str]:

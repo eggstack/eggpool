@@ -9,7 +9,7 @@ import time
 from contextlib import asynccontextmanager
 from importlib.metadata import version as _get_version
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -22,7 +22,7 @@ from eggpool.accounts.registry import AccountRegistry, account_config_rows
 from eggpool.api.backoff import register_backoff_routes
 from eggpool.api.chat_completions import handle_chat_completions
 from eggpool.api.messages import handle_messages
-from eggpool.api.models import MODEL_INFO_STATUS_DISPLAY, serialize_openai_model
+from eggpool.api.models import serialize_openai_model
 from eggpool.api.stats import register_stats_routes
 from eggpool.auth import require_auth, require_auth_at_startup
 from eggpool.background import TaskSupervisor
@@ -61,6 +61,7 @@ from eggpool.errors import (
 from eggpool.health.health_manager import HealthManager
 from eggpool.logging import configure_logging
 from eggpool.metrics.buffer import MetricsWriteCoalescer
+from eggpool.model_info.presentation import compact_model_info_summary
 from eggpool.models.api import HealthResponse
 from eggpool.models.config import AppConfig
 from eggpool.providers.client_pool import ProviderClientPool
@@ -1534,26 +1535,10 @@ def create_app(
         ):
             try:
                 raw_map = await mi_service.get_summary_map()
-                # Build a compact map keyed by model_id for the serializer
-                for mid, info in raw_map.items():
-                    sources: list[str] = []
-                    prov_raw = cast("dict[str, Any]", getattr(info, "provenance", {}))
-                    raw_sources = cast("list[object]", prov_raw.get("sources", []))
-                    for s in raw_sources:
-                        sources.append(str(s))
-                    status_val = getattr(info, "status", "")
-                    status_str = str(status_val) if status_val is not None else ""
-                    model_info_map[mid] = {
-                        "status": MODEL_INFO_STATUS_DISPLAY.get(status_str, status_str),
-                        "sparse": getattr(info, "sparse", False),
-                        "summary": getattr(info, "summary", "") or "",
-                        "sources": sources,
-                        "last_refreshed_at": (
-                            info.last_refreshed_at.isoformat()
-                            if info.last_refreshed_at is not None
-                            else None
-                        ),
-                    }
+                model_info_map = {
+                    mid: compact_model_info_summary(info)
+                    for mid, info in raw_map.items()
+                }
             except Exception:
                 logger.debug("Model info enrichment skipped", exc_info=True)
 

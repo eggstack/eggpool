@@ -565,6 +565,18 @@ class TestInfoStatusFilterAliases:
         )
         assert [r["model_id"] for r in alias_conflict] == ["llama-3-8b"]
 
+    def test_info_status_filters_normalize_display_status_entries(self) -> None:
+        from eggpool.dashboard.routes import _apply_model_filters
+
+        rows = [{"model_id": "gpt-4o", "base_model_id": "gpt-4o"}]
+        mi_map = {"gpt-4o": {"status": "sparse"}}
+
+        result = _apply_model_filters(
+            rows, info_status="sparse_new", model_info_map=mi_map
+        )
+
+        assert [r["model_id"] for r in result] == ["gpt-4o"]
+
 
 class TestHandleModelsRendersCatalogComplete:
     """End-to-end smoke: the handler merges stats + catalog and

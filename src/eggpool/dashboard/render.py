@@ -12,6 +12,8 @@ from html import escape as _html_escape
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote
 
+from eggpool.model_info.presentation import display_model_info_status
+
 if TYPE_CHECKING:
     from eggpool.model_info.types import CanonicalModelInfo
 
@@ -903,18 +905,6 @@ _MODEL_INFO_PILL_CLASSES: dict[str, str] = {
     "withdrawn": "pill-stale",
 }
 
-_STATUS_DISPLAY: dict[str, str] = {
-    "fresh": "fresh",
-    "partial": "partial",
-    "sparse_new": "sparse",
-    "stale": "stale",
-    "conflicting": "conflict",
-    "unmatched": "unmatched",
-    "source_unavailable": "source-unavailable",
-    "manual_override": "manual",
-    "withdrawn": "withdrawn",
-}
-
 
 def _render_model_info_pill(info: dict[str, Any] | None) -> str:
     """Render a compact model-info status pill.
@@ -948,7 +938,7 @@ def _render_model_info_pill(info: dict[str, Any] | None) -> str:
     tooltip = ". ".join(tooltip_parts) if tooltip_parts else status
 
     # Display label: short status
-    display = status.replace("_", "-")
+    display = display_model_info_status(status)
     if sparse and status not in ("sparse", "sparse_new"):
         display += " (sparse)"
 
@@ -2477,7 +2467,7 @@ def render_model_detail(
     # Extract fields from the CanonicalModelInfo object
     status_raw = info.status
     status_str = str(status_raw)
-    status_display = _STATUS_DISPLAY.get(status_str, status_str)
+    status_display = display_model_info_status(status_str)
     sparse = info.sparse
     summary = info.summary or ""
     last_seen = info.last_seen_at

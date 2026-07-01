@@ -8,21 +8,14 @@ from eggpool.catalog.capabilities import (
     dict_to_model_capabilities,
     serialize_model_capabilities,
 )
+from eggpool.model_info.presentation import (
+    MODEL_INFO_STATUS_DISPLAY as _MODEL_INFO_STATUS_DISPLAY,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-MODEL_INFO_STATUS_DISPLAY: dict[str, str] = {
-    "fresh": "fresh",
-    "partial": "partial",
-    "sparse_new": "sparse",
-    "stale": "stale",
-    "conflicting": "conflict",
-    "unmatched": "unmatched",
-    "source_unavailable": "source-unavailable",
-    "manual_override": "manual",
-    "withdrawn": "withdrawn",
-}
+MODEL_INFO_STATUS_DISPLAY = _MODEL_INFO_STATUS_DISPLAY
 
 
 def serialize_openai_model(
