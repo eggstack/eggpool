@@ -324,6 +324,8 @@ native_protocols = ["anthropic"]
 - Each candidate's thinking capability status is checked via `check_candidate_thinking_eligibility()` against `[transcoder.capability_policy]` settings
 - `CapabilityPolicy` (in `src/eggpool/transcoder/policy.py`) controls three policy axes: `unsupported_thinking` (`reject` | `warn_drop` | `route_best_effort`), `unknown_thinking` (`reject` | `allow_with_warning` | `route_best_effort`), `mixed_collapsed_thinking` (`filter` | `reject` | `allow`)
 - Default policy is `reject` for all — a client explicitly asking for thinking gets either a compatible upstream or a clear `CapabilityError` (HTTP 400)
+- `mixed_collapsed_thinking = "filter"` silently drops providers without thinking support when a model is served by multiple providers; if no supported providers remain, the original unfiltered list is returned (falling through to standard rejection). `"allow"` keeps all providers; `"reject"` rejects the entire request
+- `conflicting` status is always rejected. An operator resolves conflicts via manual overrides (`[model_capabilities."<model>".thinking]`), which are merged before the eligibility check runs — the merged status already reflects the resolution
 - Requests without thinking controls route exactly as before (no capability check)
 - `CapabilityError` is distinct from `ModelNotFoundError` (404) and `ModelUnavailableError` (503)
 - The `explain_account_eligibility()` diagnostic includes a `thinking_support` gate and `thinking_unsupported` / `thinking_unknown` / `thinking_conflicting` reason codes

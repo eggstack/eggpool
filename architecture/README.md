@@ -788,7 +788,7 @@ unknown_thinking = "reject"           # reject | allow_with_warning | route_best
 mixed_collapsed_thinking = "filter"   # filter | reject | allow
 ```
 
-Default policy is `reject` for all axes — a client explicitly asking for thinking gets either a compatible upstream or a clear error. The `route_best_effort` escape hatch ignores the status entirely. `CapabilityError` carries `model_id`, `capability`, `requested_fields`, and a human-readable `message`.
+Default policy is `reject` for all axes — a client explicitly asking for thinking gets either a compatible upstream or a clear error. The `route_best_effort` escape hatch ignores the status entirely. `mixed_collapsed_thinking = "filter"` silently drops non-thinking providers when a model is served by multiple providers; if no supported providers remain, the original unfiltered list is returned. `conflicting` status is always rejected — operators resolve conflicts via manual overrides (`[model_capabilities."<model>".thinking]`), which are merged before the eligibility check runs. `CapabilityError` carries `model_id`, `capability`, `requested_fields`, and a human-readable `message`.
 
 ### Design Principle
 

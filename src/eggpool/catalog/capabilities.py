@@ -798,8 +798,11 @@ def check_candidate_thinking_eligibility(
     Returns ``True`` when the candidate should be considered for routing.
 
     ``"supported"`` candidates are always eligible.
-    ``"conflicting"`` candidates are always rejected (operator must
-    resolve via manual override).
+    ``"conflicting"`` candidates are always rejected.  An operator can
+    resolve a conflict by setting a manual override
+    (``[model_capabilities."<model>".thinking]``) that sets ``status``
+    to a non-conflicting value; the override is merged before this
+    check runs, so the merged status will already reflect the resolution.
     """
     if capability_status == "supported":
         return True

@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from eggpool.catalog.capabilities import (
+    ModelCapabilities,
     ThinkingCapability,
     ThinkingRequestRequirement,
     check_candidate_thinking_eligibility,
@@ -369,3 +370,222 @@ class TestCapabilityPolicyConfig:
             capability_policy=CapabilityPolicy(unsupported_thinking="warn_drop")
         )
         assert tp.capability_policy.unsupported_thinking == "warn_drop"
+
+
+# ---------------------------------------------------------------------------
+# Mixed collapsed thinking filter
+# ---------------------------------------------------------------------------
+
+
+class TestMixedCollapsedThinkingFilter:
+    """Tests for _filter_mixed_collapsed_thinking on Router."""
+
+    def _make_router_with_multi_provider(
+        self,
+        accounts: list[tuple[str, str, str]],
+    ) -> MagicMock:
+        """Create a mock Router with multiple accounts/providers.
+
+        accounts: list of (account_name, provider_id, thinking_status)
+        """
+        from eggpool.catalog.capabilities import model_capabilities_to_dict
+
+        cache = MagicMock()
+        support_map: dict[str, str] = {}
+        entry_map: dict[tuple[str, str], dict] = {}
+        support_accounts: dict[str, set[str]] = {}
+
+        for acct, provider, status in accounts:
+            support_map[acct] = provider
+            caps = model_capabilities_to_dict(
+                __import__(
+                    "eggpool.catalog.capabilities", fromlist=["ModelCapabilities"]
+                ).ModelCapabilities(thinking=ThinkingCapability(status=status))
+            )
+            entry = {
+                "model_id": "m1",
+                "protocol": "openai",
+                "capabilities": caps,
+            }
+            entry_map[("m1", provider)] = entry
+            support_accounts.setdefault("m1", set()).add(acct)
+
+        def get_provider_for_account(name: str) -> str | None:
+            return support_map.get(name)
+
+        def get_provider_model_entry(model_id: str, provider_id: str) -> dict | None:
+            return entry_map.get((model_id, provider_id))
+
+        cache.get_provider_for_account = MagicMock(side_effect=get_provider_for_account)
+        cache.get_provider_model_entry = MagicMock(side_effect=get_provider_model_entry)
+
+        catalog = MagicMock()
+        catalog.cache = cache
+
+        router = MagicMock()
+        router._catalog = catalog
+        router._filter_mixed_collapsed_thinking = (
+            __import__(
+                "eggpool.routing.router", fromlist=["Router"]
+            ).Router._filter_mixed_collasted_thinking.__get__(router)
+            if False
+            else None
+        )
+
+        # Bind the real method to the mock router
+        from eggpool.routing.router import Router
+
+        router._filter_mixed_collapsed_thinking = (
+            Router._filter_mixed_collapsed_thinking.__get__(router)
+        )
+
+        return router
+
+    def test_filter_drops_unsupported_providers(self) -> None:
+        router = self._make_router_with_multi_provider(
+            [
+                ("acct1", "p1", "supported"),
+                ("acct2", "p2", "unsupported"),
+            ]
+        )
+        states = [
+            __import__(
+                "eggpool.accounts.state", fromlist=["AccountRuntimeState"]
+            ).AccountRuntimeState(name="acct1", enabled=True),
+            __import__(
+                "eggpool.accounts.state", fromlist=["AccountRuntimeState"]
+            ).AccountRuntimeState(name="acct2", enabled=True),
+        ]
+        req = ThinkingRequestRequirement(
+            required=True, client_protocol="openai", fields=["reasoning_effort"]
+        )
+        policy = {"mixed_collapsed_thinking": "filter"}
+        result = router._filter_mixed_collapsed_thinking(
+            states, "m1", thinking_requirement=req, capability_policy=policy
+        )
+        names = [s.name for s in result]
+        assert "acct1" in names
+        assert "acct2" not in names
+
+    def test_filter_keeps_all_when_allow(self) -> None:
+        router = self._make_router_with_multi_provider(
+            [
+                ("acct1", "p1", "supported"),
+                ("acct2", "p2", "unsupported"),
+            ]
+        )
+        states = [
+            __import__(
+                "eggpool.accounts.state", fromlist=["AccountRuntimeState"]
+            ).AccountRuntimeState(name="acct1", enabled=True),
+            __import__(
+                "eggpool.accounts.state", fromlist=["AccountRuntimeState"]
+            ).AccountRuntimeState(name="acct2", enabled=True),
+        ]
+        req = ThinkingRequestRequirement(
+            required=True, client_protocol="openai", fields=["reasoning_effort"]
+        )
+        policy = {"mixed_collapsed_thinking": "allow"}
+        result = router._filter_mixed_collapsed_thinking(
+            states, "m1", thinking_requirement=req, capability_policy=policy
+        )
+        names = [s.name for s in result]
+        assert "acct1" in names
+        assert "acct2" in names
+
+    def test_filter_falls_through_when_no_supported(self) -> None:
+        router = self._make_router_with_multi_provider(
+            [
+                ("acct1", "p1", "unsupported"),
+                ("acct2", "p2", "unsupported"),
+            ]
+        )
+        states = [
+            __import__(
+                "eggpool.accounts.state", fromlist=["AccountRuntimeState"]
+            ).AccountRuntimeState(name="acct1", enabled=True),
+            __import__(
+                "eggpool.accounts.state", fromlist=["AccountRuntimeState"]
+            ).AccountRuntimeState(name="acct2", enabled=True),
+        ]
+        req = ThinkingRequestRequirement(
+            required=True, client_protocol="openai", fields=["reasoning_effort"]
+        )
+        policy = {"mixed_collapsed_thinking": "filter"}
+        result = router._filter_mixed_collapsed_thinking(
+            states, "m1", thinking_requirement=req, capability_policy=policy
+        )
+        names = [s.name for s in result]
+        assert "acct1" in names
+        assert "acct2" in names
+
+    def test_filter_noop_when_single_provider(self) -> None:
+        router = self._make_router_with_multi_provider(
+            [
+                ("acct1", "p1", "unsupported"),
+            ]
+        )
+        states = [
+            __import__(
+                "eggpool.accounts.state", fromlist=["AccountRuntimeState"]
+            ).AccountRuntimeState(name="acct1", enabled=True),
+        ]
+        req = ThinkingRequestRequirement(
+            required=True, client_protocol="openai", fields=["reasoning_effort"]
+        )
+        policy = {"mixed_collapsed_thinking": "filter"}
+        result = router._filter_mixed_collapsed_thinking(
+            states, "m1", thinking_requirement=req, capability_policy=policy
+        )
+        assert len(result) == 1
+        assert result[0].name == "acct1"
+
+    def test_filter_noop_when_thinking_not_required(self) -> None:
+        router = self._make_router_with_multi_provider(
+            [
+                ("acct1", "p1", "supported"),
+                ("acct2", "p2", "unsupported"),
+            ]
+        )
+        states = [
+            __import__(
+                "eggpool.accounts.state", fromlist=["AccountRuntimeState"]
+            ).AccountRuntimeState(name="acct1", enabled=True),
+            __import__(
+                "eggpool.accounts.state", fromlist=["AccountRuntimeState"]
+            ).AccountRuntimeState(name="acct2", enabled=True),
+        ]
+        req = ThinkingRequestRequirement(
+            required=False, client_protocol="openai", fields=[]
+        )
+        policy = {"mixed_collapsed_thinking": "filter"}
+        result = router._filter_mixed_collapsed_thinking(
+            states, "m1", thinking_requirement=req, capability_policy=policy
+        )
+        assert len(result) == 2
+
+
+# ---------------------------------------------------------------------------
+# Conflicting status manual override
+# ---------------------------------------------------------------------------
+
+
+class TestConflictingStatusOverride:
+    def test_conflicting_resolved_by_catalog_merge(self) -> None:
+        """When an override sets status='supported', the merged status
+        is 'supported' and check_candidate_thinking_eligibility allows it."""
+        from eggpool.catalog.capabilities import apply_capability_overrides
+
+        base = ModelCapabilities(thinking=ThinkingCapability(status="conflicting"))
+        result = apply_capability_overrides(
+            "m1",
+            base,
+            global_overrides={"m1": {"thinking": {"status": "supported"}}},
+            provider_overrides={},
+        )
+        assert result.thinking.status == "supported"
+        assert check_candidate_thinking_eligibility(result.thinking.status) is True
+
+    def test_conflicting_stays_rejected_without_override(self) -> None:
+        """Without an override, conflicting status is rejected."""
+        assert check_candidate_thinking_eligibility("conflicting") is False

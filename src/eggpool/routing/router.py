@@ -1010,10 +1010,73 @@ class Router:
             provider_id=provider_id,
             eligible=eligible,
         )
+        eligible = self._filter_mixed_collapsed_thinking(
+            eligible,
+            model_id,
+            thinking_requirement=thinking_requirement,
+            capability_policy=capability_policy,
+        )
         return RoutingCandidates(
             states=eligible,
             by_name={state.name: state for state in eligible},
         )
+
+    def _filter_mixed_collapsed_thinking(
+        self,
+        eligible: list[AccountRuntimeState],
+        model_id: str,
+        *,
+        thinking_requirement: ThinkingRequestRequirement | None = None,
+        capability_policy: dict[str, str] | None = None,
+    ) -> list[AccountRuntimeState]:
+        """Filter mixed-provider models under ``mixed_collapsed_thinking``.
+
+        When ``mixed_action="filter"`` and a model is served by multiple
+        providers, silently drop providers whose thinking status is not
+        ``"supported"``.  If no providers remain after filtering, return
+        the original unfiltered list so the request falls through to the
+        standard rejection path.
+        """
+        if thinking_requirement is None or not thinking_requirement.required:
+            return eligible
+
+        policy = capability_policy or {}
+        mixed_action = policy.get("mixed_collapsed_thinking", "filter")
+        if mixed_action != "filter":
+            return eligible
+
+        from eggpool.catalog.capabilities import dict_to_model_capabilities
+
+        provider_support: dict[str, list[AccountRuntimeState]] = {}
+        for state in eligible:
+            acct_provider = self._catalog.cache.get_provider_for_account(state.name)
+            provider_support.setdefault(acct_provider or "", []).append(state)
+
+        if len(provider_support) <= 1:
+            return eligible
+
+        thinking_capable: list[AccountRuntimeState] = []
+        for _provider_id, accounts in provider_support.items():
+            for state in accounts:
+                acct_provider = self._catalog.cache.get_provider_for_account(state.name)
+                if acct_provider is None:
+                    continue
+                entry = self._catalog.cache.get_provider_model_entry(
+                    model_id, acct_provider
+                )
+                if entry is None:
+                    continue
+                caps_raw = entry.get("capabilities", {})
+                if not isinstance(caps_raw, dict) or "thinking" not in caps_raw:
+                    continue
+                caps = dict_to_model_capabilities({"thinking": caps_raw["thinking"]})
+                if caps.thinking.status == "supported":
+                    thinking_capable.append(state)
+
+        if not thinking_capable:
+            return eligible
+
+        return thinking_capable
 
     def _maybe_trigger_missing_account_recovery(
         self,
