@@ -341,6 +341,7 @@ native_protocols = ["anthropic"]
 - `ModelLimitResolver` resolves per-field with precedence: provider > global > upstream > unknown
 - `conservative_limits()` merges provider limits for unsuffixed model exposure (minimum across providers)
 - `eggpool configsetup opencode --json-only` generates OpenCode config with explicit model limits
+- Models with `capabilities.thinking.status = "supported"` receive a `"thinking": "supported"` annotation; all other statuses (`unknown`, `unsupported`, `mixed`, `conflicting`) are omitted so the config never claims thinking support without confirmed upstream backing
 - Effective limits are configuration-derived; no database migration needed for static overrides
 
 ## In-Memory Bounds

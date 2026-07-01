@@ -298,3 +298,311 @@ def test_output_no_status_contamination() -> None:
     parsed = json.loads(output)
     assert isinstance(parsed, dict)
     assert "provider" in parsed
+
+
+# ---------------------------------------------------------------------------
+# Thinking capability annotation tests
+# ---------------------------------------------------------------------------
+
+
+def test_thinking_supported_model_gets_annotation() -> None:
+    """A model with thinking.status='supported' receives a thinking field."""
+    models = [
+        {
+            "model_id": "o3-mini/openai",
+            "display_name": "o3-mini",
+            "provider_id": "openai",
+            "capabilities": {
+                "thinking": {
+                    "status": "supported",
+                    "source": "provider_catalog",
+                    "native_protocols": ["openai"],
+                }
+            },
+            "effective_limits": {},
+        }
+    ]
+    result = build_opencode_provider_config(
+        base_url="http://host:8080/v1",
+        api_key="ep_key",
+        models=models,
+    )
+    entry = result["provider"]["eggpool"]["models"]["o3-mini/openai"]
+    assert entry["thinking"] == "supported"
+
+
+def test_thinking_unknown_model_no_annotation() -> None:
+    """A model with thinking.status='unknown' does NOT get a thinking field."""
+    models = [
+        {
+            "model_id": "gpt-4o/openai",
+            "display_name": "GPT-4o",
+            "provider_id": "openai",
+            "capabilities": {
+                "thinking": {
+                    "status": "unknown",
+                    "source": "unknown",
+                }
+            },
+            "effective_limits": {},
+        }
+    ]
+    result = build_opencode_provider_config(
+        base_url="http://host:8080/v1",
+        api_key="ep_key",
+        models=models,
+    )
+    entry = result["provider"]["eggpool"]["models"]["gpt-4o/openai"]
+    assert "thinking" not in entry
+
+
+def test_thinking_unsupported_model_no_annotation() -> None:
+    """A model with thinking.status='unsupported' does NOT get a thinking field."""
+    models = [
+        {
+            "model_id": "gpt-4o-mini/openai",
+            "display_name": "GPT-4o Mini",
+            "provider_id": "openai",
+            "capabilities": {
+                "thinking": {
+                    "status": "unsupported",
+                    "source": "provider_catalog",
+                }
+            },
+            "effective_limits": {},
+        }
+    ]
+    result = build_opencode_provider_config(
+        base_url="http://host:8080/v1",
+        api_key="ep_key",
+        models=models,
+    )
+    entry = result["provider"]["eggpool"]["models"]["gpt-4o-mini/openai"]
+    assert "thinking" not in entry
+
+
+def test_thinking_mixed_collapsed_model_no_annotation() -> None:
+    """A collapsed model with thinking.status='mixed' does not claim thinking."""
+    models = [
+        {
+            "model_id": "claude-sonnet-4",
+            "display_name": "Claude Sonnet 4",
+            "capabilities": {
+                "thinking": {
+                    "status": "mixed",
+                    "source": "aggregate",
+                    "providers": {
+                        "anthropic": "supported",
+                        "openrouter": "unsupported",
+                    },
+                }
+            },
+            "effective_limits": {},
+        }
+    ]
+    result = build_opencode_provider_config(
+        base_url="http://host:8080/v1",
+        api_key="ep_key",
+        models=models,
+    )
+    entry = result["provider"]["eggpool"]["models"]["claude-sonnet-4"]
+    assert "thinking" not in entry
+
+
+def test_thinking_conflicting_model_no_annotation() -> None:
+    """A model with thinking.status='conflicting' does NOT get a thinking field."""
+    models = [
+        {
+            "model_id": "mystery-model/provider-x",
+            "display_name": "Mystery Model",
+            "provider_id": "provider-x",
+            "capabilities": {
+                "thinking": {
+                    "status": "conflicting",
+                    "source": "aggregate",
+                }
+            },
+            "effective_limits": {},
+        }
+    ]
+    result = build_opencode_provider_config(
+        base_url="http://host:8080/v1",
+        api_key="ep_key",
+        models=models,
+    )
+    entry = result["provider"]["eggpool"]["models"]["mystery-model/provider-x"]
+    assert "thinking" not in entry
+
+
+def test_thinking_with_no_capabilities_no_annotation() -> None:
+    """A model with no capabilities dict at all does NOT get a thinking field."""
+    models = [
+        {
+            "model_id": "plain-model",
+            "display_name": "Plain Model",
+            "effective_limits": {},
+        }
+    ]
+    result = build_opencode_provider_config(
+        base_url="http://host:8080/v1",
+        api_key="ep_key",
+        models=models,
+    )
+    entry = result["provider"]["eggpool"]["models"]["plain-model"]
+    assert "thinking" not in entry
+
+
+def test_thinking_supported_with_limits() -> None:
+    """A supported thinking model also gets limits emitted correctly."""
+    models = [
+        {
+            "model_id": "o3/openai",
+            "display_name": "o3",
+            "provider_id": "openai",
+            "capabilities": {
+                "thinking": {
+                    "status": "supported",
+                    "source": "provider_catalog",
+                }
+            },
+            "effective_limits": {
+                "context_tokens": 200000,
+                "output_tokens": 100000,
+            },
+        }
+    ]
+    result = build_opencode_provider_config(
+        base_url="http://host:8080/v1",
+        api_key="ep_key",
+        models=models,
+    )
+    entry = result["provider"]["eggpool"]["models"]["o3/openai"]
+    assert entry["thinking"] == "supported"
+    assert entry["limit"]["context"] == 200000
+    assert entry["limit"]["output"] == 100000
+
+
+def test_mixed_providers_only_supported_gets_annotation() -> None:
+    """Only models with supported thinking status get the annotation."""
+    models = [
+        {
+            "model_id": "o3-mini/openai",
+            "display_name": "o3-mini",
+            "provider_id": "openai",
+            "capabilities": {
+                "thinking": {"status": "supported", "source": "provider_catalog"}
+            },
+            "effective_limits": {},
+        },
+        {
+            "model_id": "gpt-4o/openai",
+            "display_name": "GPT-4o",
+            "provider_id": "openai",
+            "capabilities": {"thinking": {"status": "unknown", "source": "unknown"}},
+            "effective_limits": {},
+        },
+        {
+            "model_id": "gpt-4o-mini/openai",
+            "display_name": "GPT-4o Mini",
+            "provider_id": "openai",
+            "capabilities": {
+                "thinking": {"status": "unsupported", "source": "provider_catalog"}
+            },
+            "effective_limits": {},
+        },
+        {
+            "model_id": "claude-sonnet-4",
+            "display_name": "Claude Sonnet 4",
+            "capabilities": {"thinking": {"status": "mixed", "source": "aggregate"}},
+            "effective_limits": {},
+        },
+    ]
+    result = build_opencode_provider_config(
+        base_url="http://host:8080/v1",
+        api_key="ep_key",
+        models=models,
+    )
+    all_models = result["provider"]["eggpool"]["models"]
+    assert all_models["o3-mini/openai"]["thinking"] == "supported"
+    assert "thinking" not in all_models["gpt-4o/openai"]
+    assert "thinking" not in all_models["gpt-4o-mini/openai"]
+    assert "thinking" not in all_models["claude-sonnet-4"]
+
+
+def test_all_models_included_regardless_of_thinking() -> None:
+    """All models appear in the generated config regardless of thinking status."""
+    models = [
+        {
+            "model_id": "o3-mini/openai",
+            "display_name": "o3-mini",
+            "provider_id": "openai",
+            "capabilities": {
+                "thinking": {"status": "supported", "source": "provider_catalog"}
+            },
+            "effective_limits": {},
+        },
+        {
+            "model_id": "gpt-4o/openai",
+            "display_name": "GPT-4o",
+            "provider_id": "openai",
+            "capabilities": {"thinking": {"status": "unknown", "source": "unknown"}},
+            "effective_limits": {},
+        },
+        {
+            "model_id": "gpt-4o-mini/openai",
+            "display_name": "GPT-4o Mini",
+            "provider_id": "openai",
+            "capabilities": {},
+            "effective_limits": {},
+        },
+        {
+            "model_id": "claude-sonnet-4/anthropic",
+            "display_name": "Claude Sonnet 4",
+            "provider_id": "anthropic",
+            "capabilities": {"thinking": {"status": "mixed", "source": "aggregate"}},
+            "effective_limits": {},
+        },
+    ]
+    result = build_opencode_provider_config(
+        base_url="http://host:8080/v1",
+        api_key="ep_key",
+        models=models,
+    )
+    all_models = result["provider"]["eggpool"]["models"]
+    assert set(all_models.keys()) == {
+        "o3-mini/openai",
+        "gpt-4o/openai",
+        "gpt-4o-mini/openai",
+        "claude-sonnet-4/anthropic",
+    }
+
+
+def test_thinking_json_round_trip() -> None:
+    """Thinking annotations survive JSON serialization round-trip."""
+    models = [
+        {
+            "model_id": "o3-mini/openai",
+            "display_name": "o3-mini",
+            "provider_id": "openai",
+            "capabilities": {
+                "thinking": {"status": "supported", "source": "provider_catalog"}
+            },
+            "effective_limits": {"context_tokens": 200000},
+        },
+        {
+            "model_id": "gpt-4o/openai",
+            "display_name": "GPT-4o",
+            "provider_id": "openai",
+            "capabilities": {"thinking": {"status": "unknown", "source": "unknown"}},
+            "effective_limits": {},
+        },
+    ]
+    json_str = build_opencode_config_json(
+        base_url="http://host:8080/v1",
+        api_key="ep_key",
+        models=models,
+    )
+    parsed = json.loads(json_str)
+    all_models = parsed["provider"]["eggpool"]["models"]
+    assert all_models["o3-mini/openai"]["thinking"] == "supported"
+    assert "thinking" not in all_models["gpt-4o/openai"]
