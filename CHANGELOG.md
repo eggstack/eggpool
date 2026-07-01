@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.4.8] - 2026-07-01
+
+### Changed
+
+- Refined model-info status from enriched detail and normalized provider-suffixed lookups.
+- Centralized Anthropic usage token mapping into usage module.
+- Added model capabilities normalizer and routing eligibility enhancements.
+- Fixed burger icon transform-box to fill-box for correct rotation pivots.
+
 ## [0.4.7] - 2026-07-01
 
 ### Changed
