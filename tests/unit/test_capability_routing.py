@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+import os
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
+
+import pytest
 
 from eggpool.catalog.capabilities import (
     ModelCapabilities,
@@ -13,6 +18,9 @@ from eggpool.catalog.capabilities import (
 )
 from eggpool.errors import CapabilityError
 from eggpool.routing.eligibility import get_eligible_accounts
+
+if TYPE_CHECKING:
+    from eggpool.catalog.cache import ModelCatalogCache
 
 # ---------------------------------------------------------------------------
 # classify_thinking_request
@@ -589,3 +597,314 @@ class TestConflictingStatusOverride:
     def test_conflicting_stays_rejected_without_override(self) -> None:
         """Without an override, conflicting status is rejected."""
         assert check_candidate_thinking_eligibility("conflicting") is False
+
+
+# ---------------------------------------------------------------------------
+# Warning logging for non-reject policies
+# ---------------------------------------------------------------------------
+
+
+class TestCapabilityWarningLogging:
+    """get_eligible_accounts must emit structured warnings when warn_drop
+    or allow_with_warning policies let a candidate through."""
+
+    def _make_cache(
+        self, account: str, provider: str, model_id: str, thinking_status: str
+    ) -> MagicMock:
+        from eggpool.catalog.capabilities import model_capabilities_to_dict
+
+        caps = model_capabilities_to_dict(
+            ModelCapabilities(thinking=ThinkingCapability(status=thinking_status))
+        )
+        cache = MagicMock()
+        cache.get_provider_for_account.return_value = provider
+        cache.get_provider_model_entry.return_value = {
+            "model_id": model_id,
+            "protocol": "openai",
+            "capabilities": caps,
+        }
+        cache.is_account_model_available.return_value = True
+        return cache
+
+    def test_warn_drop_emits_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        from eggpool.accounts.state import AccountRuntimeState
+
+        cache = self._make_cache("acct1", "p1", "m1", "unsupported")
+        states = [AccountRuntimeState(name="acct1", enabled=True)]
+        req = ThinkingRequestRequirement(
+            required=True, client_protocol="openai", fields=["reasoning_effort"]
+        )
+        policy = {
+            "unsupported_thinking": "warn_drop",
+            "unknown_thinking": "reject",
+            "mixed_collapsed_thinking": "filter",
+        }
+
+        with caplog.at_level(logging.WARNING, logger="eggpool.routing.eligibility"):
+            eligible = get_eligible_accounts(
+                states,
+                "m1",
+                cache,
+                thinking_requirement=req,
+                capability_policy=policy,
+            )
+
+        assert len(eligible) == 1
+        assert any(
+            "capability_routing" in record.message
+            and "thinking=unsupported" in record.message
+            and "policy=warn_drop" in record.message
+            for record in caplog.records
+        )
+
+    def test_allow_with_warning_emits_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from eggpool.accounts.state import AccountRuntimeState
+
+        cache = MagicMock()
+        cache.get_provider_for_account.return_value = "p1"
+        cache.get_provider_model_entry.return_value = {
+            "model_id": "m1",
+            "protocol": "openai",
+            "capabilities": {
+                "thinking": {"status": "unknown", "source": "provider_catalog"},
+            },
+        }
+        cache.is_account_model_available.return_value = True
+        states = [AccountRuntimeState(name="acct1", enabled=True)]
+        req = ThinkingRequestRequirement(
+            required=True, client_protocol="openai", fields=["reasoning_effort"]
+        )
+        policy = {
+            "unsupported_thinking": "reject",
+            "unknown_thinking": "allow_with_warning",
+            "mixed_collapsed_thinking": "filter",
+        }
+
+        with caplog.at_level(logging.WARNING, logger="eggpool.routing.eligibility"):
+            eligible = get_eligible_accounts(
+                states,
+                "m1",
+                cache,
+                thinking_requirement=req,
+                capability_policy=policy,
+            )
+
+        assert len(eligible) == 1
+        assert any(
+            "capability_routing" in record.message
+            and "thinking=unknown" in record.message
+            and "policy=allow_with_warning" in record.message
+            for record in caplog.records
+        )
+
+    def test_reject_does_not_emit_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from eggpool.accounts.state import AccountRuntimeState
+
+        cache = self._make_cache("acct1", "p1", "m1", "unsupported")
+        states = [AccountRuntimeState(name="acct1", enabled=True)]
+        req = ThinkingRequestRequirement(
+            required=True, client_protocol="openai", fields=["reasoning_effort"]
+        )
+        policy = {
+            "unsupported_thinking": "reject",
+            "unknown_thinking": "reject",
+            "mixed_collapsed_thinking": "filter",
+        }
+
+        with caplog.at_level(logging.WARNING, logger="eggpool.routing.eligibility"):
+            eligible = get_eligible_accounts(
+                states,
+                "m1",
+                cache,
+                thinking_requirement=req,
+                capability_policy=policy,
+            )
+
+        assert len(eligible) == 0
+        assert not any(
+            "capability_routing" in record.message for record in caplog.records
+        )
+
+    def test_route_best_effort_does_not_emit_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from eggpool.accounts.state import AccountRuntimeState
+
+        cache = self._make_cache("acct1", "p1", "m1", "unsupported")
+        states = [AccountRuntimeState(name="acct1", enabled=True)]
+        req = ThinkingRequestRequirement(
+            required=True, client_protocol="openai", fields=["reasoning_effort"]
+        )
+        policy = {
+            "unsupported_thinking": "route_best_effort",
+            "unknown_thinking": "route_best_effort",
+            "mixed_collapsed_thinking": "filter",
+        }
+
+        with caplog.at_level(logging.WARNING, logger="eggpool.routing.eligibility"):
+            eligible = get_eligible_accounts(
+                states,
+                "m1",
+                cache,
+                thinking_requirement=req,
+                capability_policy=policy,
+            )
+
+        assert len(eligible) == 1
+        assert not any(
+            "capability_routing" in record.message for record in caplog.records
+        )
+
+
+# ---------------------------------------------------------------------------
+# Coordinator integration: CapabilityError raised end-to-end
+# ---------------------------------------------------------------------------
+
+
+class TestCoordinatorCapabilityError:
+    """Coordinator._select_and_persist_attempt must raise CapabilityError
+    when a thinking request has no eligible provider under the default
+    reject policy."""
+
+    @pytest.mark.asyncio()
+    async def test_thinking_required_no_eligible_raises_capability_error(
+        self,
+    ) -> None:
+        import httpx
+
+        from eggpool.accounts.registry import AccountRegistry
+        from eggpool.catalog.cache import ModelCatalogCache
+        from eggpool.catalog.capabilities import model_capabilities_to_dict
+        from eggpool.db.connection import Database
+        from eggpool.db.migrations import MigrationRunner
+        from eggpool.db.repositories import (
+            AttemptRepository,
+            RequestRepository,
+            ReservationRepository,
+            RoutingDecisionRepository,
+        )
+        from eggpool.models.config import AppConfig
+        from eggpool.request.coordinator import (
+            ProxyRequestContext,
+            RequestCoordinator,
+        )
+        from eggpool.routing.router import Router
+        from eggpool.transcoder.policy import TranscoderPolicy
+
+        name = "0001"
+        os.environ[f"K_{name}"] = "k"
+        try:
+            config = AppConfig.model_validate(
+                {
+                    "providers": {
+                        "test-provider": {
+                            "id": "test-provider",
+                            "base_url": "https://api.example.com/v1",
+                            "protocols": ["openai"],
+                            "routing_priority": 0,
+                            "accounts": [
+                                {
+                                    "name": name,
+                                    "api_key_env": f"K_{name}",
+                                    "weight": 1.0,
+                                }
+                            ],
+                        }
+                    }
+                }
+            )
+            registry = AccountRegistry(config)
+
+            cache = ModelCatalogCache()
+            caps = model_capabilities_to_dict(
+                ModelCapabilities(thinking=ThinkingCapability(status="unsupported"))
+            )
+            cache.update_from_account(
+                name,
+                "test-provider",
+                [
+                    {
+                        "model_id": "test-model",
+                        "protocol": "openai",
+                        "capabilities": caps,
+                    }
+                ],
+            )
+
+            router = Router(registry, _MockCatalog(cache))  # type: ignore[arg-type]
+            db = Database(path=":memory:")
+            await db.connect()
+            try:
+                runner = MigrationRunner(db)
+                await runner.run()
+
+                async with db.transaction():
+                    await db.execute_insert(
+                        "INSERT INTO models (model_id, display_name, protocol) "
+                        "VALUES (?, ?, ?)",
+                        ("test-model", "test-model", "openai"),
+                    )
+                    await db.execute_insert(
+                        "INSERT INTO accounts "
+                        "(name, api_key_env, enabled, weight) "
+                        "VALUES (?, ?, 1, ?)",
+                        (name, f"K_{name}", 1.0),
+                    )
+                    row = await db.fetch_one(
+                        "SELECT id FROM accounts WHERE name = ?", (name,)
+                    )
+                    assert row is not None
+                    await db.execute_insert(
+                        "INSERT INTO account_models "
+                        "(account_id, model_id, enabled) VALUES (?, ?, 1)",
+                        (int(row["id"]), "test-model"),
+                    )
+
+                coordinator = RequestCoordinator(
+                    registry=registry,
+                    catalog=_MockCatalog(cache),  # type: ignore[arg-type]
+                    router=router,
+                    db=db,
+                    client_pool=httpx.AsyncClient(),
+                    request_repo=RequestRepository(db),
+                    reservation_repo=ReservationRepository(db),
+                    attempt_repo=AttemptRepository(db),
+                    routing_decision_repo=RoutingDecisionRepository(db),
+                    health_manager=None,
+                    transcoder_policy=TranscoderPolicy(),
+                )
+
+                ctx = ProxyRequestContext(
+                    request_id="req-thinking",
+                    protocol="openai",
+                    model_id="test-model",
+                    streaming=False,
+                    original_body=b'{"model":"test-model",'
+                    b'"messages":[{"role":"user","content":"hi"}],'
+                    b'"reasoning_effort":"high"}',
+                    incoming_headers={},
+                )
+                with pytest.raises(CapabilityError) as exc_info:
+                    await coordinator._select_and_persist_attempt(ctx, 1)
+                assert exc_info.value.model_id == "test-model"
+                assert exc_info.value.capability == "thinking"
+                assert exc_info.value.requested_fields == ["reasoning_effort"]
+            finally:
+                await db.disconnect()
+        finally:
+            os.environ.pop(f"K_{name}", None)
+
+
+class _MockCatalog:
+    """Mock catalog service exposing only the ``cache`` attribute."""
+
+    def __init__(self, cache: ModelCatalogCache) -> None:
+        self._cache = cache
+
+    @property
+    def cache(self) -> ModelCatalogCache:
+        return self._cache

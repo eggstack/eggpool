@@ -13,7 +13,12 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from eggpool.api.chat_completions import handle_chat_completions
-from eggpool.api.errors import anthropic_error_response, openai_error_response
+from eggpool.api.errors import (
+    anthropic_capability_error_response,
+    anthropic_error_response,
+    openai_capability_error_response,
+    openai_error_response,
+)
 from eggpool.api.messages import handle_messages
 from eggpool.auth import require_auth
 from eggpool.catalog.cache import ModelCatalogCache
@@ -676,3 +681,129 @@ def test_anthropic_error_response_default_type() -> None:
     resp = anthropic_error_response(400, "msg")
     data = json.loads(resp.body.decode())
     assert data["error"]["type"] == "invalid_request_error"
+
+
+def test_openai_capability_error_response_structure() -> None:
+    """openai_capability_error_response emits the Phase 6 plan shape."""
+    resp = openai_capability_error_response(
+        400,
+        "Model x is available, but no eligible provider supports thinking",
+        capability="thinking",
+        requested_fields=["reasoning_effort"],
+        model="gpt-4o",
+    )
+    assert resp.status_code == 400
+    data = json.loads(resp.body.decode())
+    assert data["error"]["message"] == (
+        "Model x is available, but no eligible provider supports thinking"
+    )
+    assert data["error"]["type"] == "capability_error"
+    assert data["error"]["code"] == "400"
+    assert data["error"]["capability"] == "thinking"
+    assert data["error"]["requested_fields"] == ["reasoning_effort"]
+    assert data["error"]["model"] == "gpt-4o"
+
+
+def test_anthropic_capability_error_response_structure() -> None:
+    """anthropic_capability_error_response emits the Phase 6 plan shape."""
+    resp = anthropic_capability_error_response(
+        400,
+        "Model x is available, but no eligible provider supports thinking",
+        capability="thinking",
+        requested_fields=["thinking", "thinking_budget"],
+        model="claude-3-opus",
+    )
+    assert resp.status_code == 400
+    data = json.loads(resp.body.decode())
+    assert data["type"] == "error"
+    assert data["error"]["type"] == "capability_error"
+    assert data["error"]["message"] == (
+        "Model x is available, but no eligible provider supports thinking"
+    )
+    assert data["error"]["capability"] == "thinking"
+    assert data["error"]["requested_fields"] == ["thinking", "thinking_budget"]
+    assert data["error"]["model"] == "claude-3-opus"
+
+
+def test_openai_capability_error_response_copies_fields() -> None:
+    """requested_fields must not be retained by reference."""
+    fields = ["reasoning_effort"]
+    resp = openai_capability_error_response(
+        400, "msg", capability="thinking", requested_fields=fields, model="m"
+    )
+    fields.append("modified")
+    data = json.loads(resp.body.decode())
+    assert data["error"]["requested_fields"] == ["reasoning_effort"]
+
+
+@pytest.mark.asyncio
+async def test_capability_error_handler_routes_to_openai_renderer() -> None:
+    """handle_chat_completions uses openai_capability_error_response on
+    CapabilityError and emits the full diagnostic JSON shape."""
+    from eggpool.errors import CapabilityError
+
+    app = _make_real_chat_app()
+    app.state.coordinator.execute = AsyncMock(
+        side_effect=CapabilityError(
+            model_id="gpt-4o",
+            capability="thinking",
+            requested_fields=["reasoning_effort"],
+            message="No eligible provider supports thinking",
+        )
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-4o",
+                "messages": [],
+                "reasoning_effort": "high",
+            },
+        )
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"]["type"] == "capability_error"
+    assert body["error"]["capability"] == "thinking"
+    assert body["error"]["requested_fields"] == ["reasoning_effort"]
+    assert body["error"]["model"] == "gpt-4o"
+    assert body["error"]["message"] == "No eligible provider supports thinking"
+    assert body["error"]["code"] == "400"
+
+
+@pytest.mark.asyncio
+async def test_capability_error_handler_routes_to_anthropic_renderer() -> None:
+    """handle_messages uses anthropic_capability_error_response on CapabilityError."""
+    from eggpool.errors import CapabilityError
+
+    app = _make_real_messages_app()
+    app.state.coordinator.execute = AsyncMock(
+        side_effect=CapabilityError(
+            model_id="claude-3-opus",
+            capability="thinking",
+            requested_fields=["thinking"],
+            message="No eligible provider supports thinking",
+        )
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/messages",
+            json={
+                "model": "claude-3-opus",
+                "messages": [{"role": "user", "content": "hi"}],
+                "thinking": {"type": "enabled", "budget_tokens": 1024},
+            },
+        )
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["type"] == "error"
+    assert body["error"]["type"] == "capability_error"
+    assert body["error"]["capability"] == "thinking"
+    assert body["error"]["requested_fields"] == ["thinking"]
+    assert body["error"]["model"] == "claude-3-opus"
+    assert body["error"]["message"] == "No eligible provider supports thinking"

@@ -20,6 +20,7 @@ disablement, catalog/protocol incompatibility, or an explicit
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -30,6 +31,8 @@ if TYPE_CHECKING:
     from eggpool.catalog.capabilities import ThinkingRequestRequirement
     from eggpool.health.health_manager import HealthManager
     from eggpool.quota.estimation import QuotaEstimator
+
+logger = logging.getLogger(__name__)
 
 
 def get_eligible_accounts(
@@ -149,6 +152,51 @@ def get_eligible_accounts(
                             mixed_action=mixed_action,
                         ):
                             continue
+                        _log_capability_warning(
+                            state=state,
+                            model_id=model_id,
+                            account_provider=account_provider,
+                            status=status,
+                            unsupported_action=unsupported_action,
+                            unknown_action=unknown_action,
+                        )
 
         eligible.append(state)
     return eligible
+
+
+def _log_capability_warning(
+    *,
+    state: AccountRuntimeState,
+    model_id: str,
+    account_provider: str | None,
+    status: str,
+    unsupported_action: str,
+    unknown_action: str,
+) -> None:
+    """Emit a warning when a non-reject capability policy allows a candidate.
+
+    ``warn_drop`` and ``allow_with_warning`` let an ``unsupported`` or
+    ``unknown`` candidate through the eligibility gate so operators can
+    keep traffic flowing while the catalog catches up.  That silent
+    fall-through defeats the purpose of capability-aware routing, so we
+    log a structured warning each time it happens.  ``reject`` and
+    ``route_best_effort`` produce no warning (the former drops, the
+    latter explicitly opts out of awareness).
+    """
+    if status == "unsupported" and unsupported_action == "warn_drop":
+        logger.warning(
+            "capability_routing: account=%s model=%s provider=%s thinking=unsupported "
+            "policy=warn_drop (candidate retained with warning)",
+            state.name,
+            model_id,
+            account_provider,
+        )
+    elif status == "unknown" and unknown_action == "allow_with_warning":
+        logger.warning(
+            "capability_routing: account=%s model=%s provider=%s thinking=unknown "
+            "policy=allow_with_warning (candidate retained with warning)",
+            state.name,
+            model_id,
+            account_provider,
+        )

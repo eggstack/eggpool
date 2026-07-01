@@ -11,6 +11,10 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
+from eggpool.api.errors import (
+    anthropic_capability_error_response,
+    openai_capability_error_response,
+)
 from eggpool.auth import require_auth
 from eggpool.catalog.protocols import ProtocolMismatchError, ProtocolName
 from eggpool.constants import MAX_REQUEST_BODY_BYTES
@@ -395,10 +399,17 @@ async def handle_proxy_request(
             error_type=endpoint.not_found_error_type,
         )
     except CapabilityError as exc:
-        return endpoint.error_response(
+        renderer = (
+            anthropic_capability_error_response
+            if endpoint.protocol == "anthropic"
+            else openai_capability_error_response
+        )
+        return renderer(
             status_code=400,
             message=str(exc),
-            error_type="capability_error",
+            capability=exc.capability,
+            requested_fields=exc.requested_fields,
+            model=exc.model_id,
         )
     except (
         NoEligibleAccountError,
