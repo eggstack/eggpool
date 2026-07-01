@@ -720,7 +720,7 @@ The model-info corrective plan in `plans/model-info-corrective-catalog-models-an
 
 ## Model Capabilities
 
-Protocol-neutral capability schema in `src/eggpool/catalog/capabilities.py` provides a structured representation for model capabilities, currently focused on thinking/reasoning. The schema decouples capability knowledge from any specific transcoder implementation so catalog, routing, serialization, and config code can import it without circular dependencies.
+Protocol-neutral capability schema in `src/eggpool/catalog/capabilities.py` provides a structured representation for model capabilities, currently focused on thinking/reasoning. The schema decouples capability knowledge from any specific transcoder implementation so catalog, routing, serialization, and config code can import it without circular dependencies. See `docs/thinking.md` for the full operator guide.
 
 ### Capability Model
 

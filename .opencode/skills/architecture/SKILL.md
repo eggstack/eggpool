@@ -280,6 +280,7 @@ The `/timeseries` page replaces the old "table of bucket counts" with a stacked-
 - `serialize_model_capabilities()` produces compact dict for `/v1/models` under `eggpool.capabilities`; includes per-protocol client control field mappings (`openai_request_fields`, etc.) and per-provider status for collapsed entries
 - `client_requests_thinking()` heuristic detects thinking-related keys in request body; `has_thinking_support()` checks status
 - Protocol compatibility alone does not imply thinking support — the schema captures this explicitly
+- See `docs/thinking.md` for the full operator guide (enabling, configuration, overrides, routing policy, budget mapping, troubleshooting)
 
 ### Model-Info Capability Enrichment
 

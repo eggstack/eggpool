@@ -18,6 +18,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Model metadata enrichment from provider catalogs, OpenRouter, Artificial Analysis, and Hugging Face
 - Designed for lightweight deployments (Raspberry Pi, SBCs)
 - Transparent protocol transcoding between OpenAI and Anthropic request formats
+- Thinking/reasoning capability-aware routing with configurable budget mapping
 
 ## Quick Start
 
@@ -156,6 +157,7 @@ When `[dashboard].enabled = true`, a multi-page dashboard is served at `/` with 
 | Filesystem layout | [docs/filesystem-layout.md](docs/filesystem-layout.md) |
 | Network & DNS diagnostics | [docs/network-diagnostics.md](docs/network-diagnostics.md) |
 | Protocol transcoding | [docs/transcoding.md](docs/transcoding.md) |
+| Thinking & reasoning | [docs/thinking.md](docs/thinking.md) |
 
 ## Development
 
