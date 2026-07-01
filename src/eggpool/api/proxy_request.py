@@ -30,7 +30,7 @@ from eggpool.request.coordinator import (
     RequestCoordinator,
 )
 from eggpool.request.limits import (
-    ESTIMATED_BYTES_PER_TOKEN,
+    ESTIMATED_CONTEXT_BYTES_PER_TOKEN_FLOOR,
 )
 from eggpool.request.limits import (
     check_context_limits as _check_context_limits,
@@ -327,7 +327,8 @@ async def handle_proxy_request(
                 translated_body = json.dumps(preflight.translated_payload).encode()
                 if preflight.tool_token_padding > 0:
                     translated_body += b"\x00" * (
-                        preflight.tool_token_padding * ESTIMATED_BYTES_PER_TOKEN
+                        preflight.tool_token_padding
+                        * ESTIMATED_CONTEXT_BYTES_PER_TOKEN_FLOOR
                     )
                 _check_context_limits(
                     model_id=model_id,

@@ -15,6 +15,7 @@ from eggpool.catalog.cache import ModelCatalogCache
 from eggpool.catalog.limits import EffectiveModelLimits
 from eggpool.errors import ContextLimitExceededError
 from eggpool.request.limits import (
+    estimate_context_input_tokens,
     estimate_input_tokens,
     estimate_reservation_tokens,
     requested_output_tokens,
@@ -62,6 +63,18 @@ def test_context_input_estimate_is_conservative_and_unbounded() -> None:
     assert estimate_input_tokens(b"x" * 6000) == 2_000
     assert estimate_input_tokens(b"x" * 6001) == 2_001
     assert estimate_input_tokens(b"x" * 1_000_000) == 333_334
+
+
+def test_context_limit_estimate_uses_decoded_text_not_json_escape_overhead() -> None:
+    payload = {
+        "model": "m1",
+        "max_tokens": 500,
+        "messages": [{"role": "user", "content": "a\n" * 3_800}],
+    }
+    body = json.dumps(payload).encode()
+
+    assert estimate_input_tokens(body) + 500 > 3_000
+    assert estimate_context_input_tokens(body, payload) + 500 < 3_000
 
 
 def test_reservation_input_estimate_is_bounded() -> None:
@@ -150,7 +163,10 @@ def test_large_request_cannot_bypass_context_limit_estimate_cap() -> None:
             model_id="m1",
             provider_id=None,
             body=b"x" * 1_000_000,
-            payload={"model": "m1"},
+            payload={
+                "model": "m1",
+                "messages": [{"role": "user", "content": "x" * 1_000_000}],
+            },
             protocol="openai",
             catalog_cache=cache,
         )
@@ -252,7 +268,7 @@ def test_unsuffixed_request_uses_conservative_provider_limits() -> None:
         _check_context_limits(
             model_id="m1",
             provider_id=None,
-            body=b"x" * 3_003,
+            body=b"x" * 8_008,
             payload={"model": "m1"},
             protocol="openai",
             catalog_cache=cache,

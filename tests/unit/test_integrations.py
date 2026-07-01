@@ -28,6 +28,7 @@ from eggpool.integrations.common import (
     TARGET_SPECS,
     ConfigsetupTargetSpec,
     IntegrationContext,
+    _apply_limits,
     _openai_client_needs_transcoder,
     _persist_transcoder_enabled,
     list_catalog_model_ids,
@@ -782,6 +783,67 @@ class TestResolveServerApiKey:
         r = ServerKeyResolution(api_key="k", source="inline")
         with pytest.raises(AttributeError):
             r.api_key = "new"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Integration catalog limit tests
+# ---------------------------------------------------------------------------
+
+
+class TestIntegrationCatalogLimits:
+    def test_provider_suffixed_models_keep_provider_specific_limits(self) -> None:
+        config = _make_appconfig(
+            providers={
+                "minimax": ProviderConfig(
+                    id="minimax",
+                    base_url="https://api.minimax.io/anthropic",
+                    protocols=["anthropic"],
+                    accounts=[AccountConfig(name="mm", api_key_env="MM_KEY")],
+                    model_overrides={
+                        "MiniMax-M3": {
+                            "max_context_tokens": 160_000,
+                            "max_output_tokens": 16_384,
+                        }
+                    },
+                ),
+                "tiny": ProviderConfig(
+                    id="tiny",
+                    base_url="https://tiny.example/v1",
+                    protocols=["openai"],
+                    accounts=[AccountConfig(name="tiny", api_key_env="TINY_KEY")],
+                    model_overrides={
+                        "MiniMax-M3": {
+                            "max_context_tokens": 512,
+                            "max_output_tokens": 256,
+                        }
+                    },
+                ),
+            }
+        )
+        models = [
+            {
+                "model_id": "MiniMax-M3/minimax",
+                "base_model_id": "MiniMax-M3",
+                "provider_id": "minimax",
+                "capabilities": {},
+                "source_metadata": {},
+            },
+            {
+                "model_id": "MiniMax-M3/tiny",
+                "base_model_id": "MiniMax-M3",
+                "provider_id": "tiny",
+                "capabilities": {},
+                "source_metadata": {},
+            },
+        ]
+
+        applied = _apply_limits(models, config, collapse_models=False)
+
+        by_id = {m["model_id"]: m["effective_limits"] for m in applied}
+        assert by_id["MiniMax-M3/minimax"]["context_tokens"] == 160_000
+        assert by_id["MiniMax-M3/minimax"]["output_tokens"] == 16_384
+        assert by_id["MiniMax-M3/tiny"]["context_tokens"] == 512
+        assert by_id["MiniMax-M3/tiny"]["output_tokens"] == 256
 
 
 # ---------------------------------------------------------------------------
