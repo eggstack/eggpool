@@ -17,6 +17,7 @@ from eggpool.transcoder.json_helpers import (
 )
 
 if TYPE_CHECKING:
+    from eggpool.catalog.capabilities import ThinkingCapability
     from eggpool.transcoder.context import TranscodeContext
     from eggpool.transcoder.policy import TranscoderFeatures
 
@@ -220,6 +221,9 @@ class OpenAIToAnthropic:
         context: TranscodeContext,
         *,
         features: TranscoderFeatures | None = None,
+        thinking_capability: ThinkingCapability | None = None,
+        budget_defaults: dict[str, int] | None = None,
+        budget_resolution_policy: str = "lenient",
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         warnings: list[dict[str, Any]] = []
         out: dict[str, Any] = {}
@@ -473,10 +477,34 @@ class OpenAIToAnthropic:
 
         reasoning_effort = payload.get("reasoning_effort")
         if reasoning_effort is not None and features is not None and features.thinking:
-            effort = str(reasoning_effort).lower()
-            budget_map = {"low": 1024, "medium": 4096, "high": 16384}
-            budget = budget_map.get(effort, 4096)
-            out["thinking"] = {"type": "enabled", "budget_tokens": budget}
+            from eggpool.transcoder.budget_resolver import (
+                BudgetResolutionError,
+                resolve_thinking_budget,
+            )
+
+            try:
+                resolution = resolve_thinking_budget(
+                    model_id=payload.get("model", "unknown"),
+                    provider_id=None,
+                    requested_effort=str(reasoning_effort),
+                    capability=thinking_capability,
+                    budget_defaults=budget_defaults,
+                    budget_resolution_policy=budget_resolution_policy,
+                )
+                out["thinking"] = {
+                    "type": "enabled",
+                    "budget_tokens": resolution.budget_tokens,
+                }
+                warnings.extend(resolution.warnings)
+            except BudgetResolutionError as exc:
+                warnings.append(
+                    {
+                        "kind": "budget_rejected",
+                        "reason": str(exc),
+                        "model_id": payload.get("model", "unknown"),
+                    }
+                )
+                raise
         elif reasoning_effort is not None:
             warnings.append(
                 {

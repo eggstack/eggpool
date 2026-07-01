@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+from eggpool.transcoder.budget_resolver import (
+    BudgetResolutionError,
+    ThinkingBudgetResolution,
+    resolve_thinking_budget,
+)
 from eggpool.transcoder.context import TranscodeContext
 from eggpool.transcoder.errors import UpstreamErrorEnvelope
 from eggpool.transcoder.ids import ToolCallIdMap
-from eggpool.transcoder.policy import TranscoderFeatures, TranscoderPolicy
+from eggpool.transcoder.policy import (
+    ThinkingBudgetDefaults,
+    TranscoderFeatures,
+    TranscoderPolicy,
+)
 from eggpool.transcoder.protocol import BodyTranscoder, select_transcoder
 from eggpool.transcoder.static_headers import PROTOCOL_REQUIRED_STATIC_HEADERS
 from eggpool.transcoder.streaming import (
@@ -44,6 +53,11 @@ LOSS_WARNING_KINDS: frozenset[str] = frozenset(
         # Phase 6.3 (thinking)
         "thinking_signature_dropped",
         "reasoning_content_dropped",
+        # Phase 7 (thinking budget resolution)
+        "budget_clamped",
+        "unknown_effort",
+        "budget_rejected",
+        "budget_resolution_no_input",
         # Phase 6.4 (structured outputs)
         "response_format_to_system_prompt",
         # Phase 6.5 (anthropic primitives)
@@ -53,15 +67,19 @@ LOSS_WARNING_KINDS: frozenset[str] = frozenset(
 
 __all__ = [
     "BodyTranscoder",
+    "BudgetResolutionError",
     "LOSS_WARNING_KINDS",
     "PROTOCOL_REQUIRED_STATIC_HEADERS",
     "StreamingTranscoder",
+    "ThinkingBudgetDefaults",
+    "ThinkingBudgetResolution",
     "TranscodeContext",
     "TranscoderFeatures",
     "TranscoderPolicy",
     "ToolCallIdMap",
     "UpstreamErrorEnvelope",
     "canonicalise_usage",
+    "resolve_thinking_budget",
     "select_streaming_transcoder",
     "select_transcoder",
 ]

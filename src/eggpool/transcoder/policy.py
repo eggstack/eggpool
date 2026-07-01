@@ -111,6 +111,37 @@ class TranscoderFeatures(BaseModel):
     )
 
 
+class ThinkingBudgetDefaults(BaseModel):
+    """Global effort→budget token mapping for thinking/reasoning.
+
+    These defaults are used when the resolved model's
+    ``ThinkingCapability.effort_to_budget_tokens`` does not contain the
+    requested effort level.  Values must be > 0.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    low: int = Field(
+        default=1024,
+        description="Budget tokens for 'low' reasoning effort.",
+        gt=0,
+    )
+    medium: int = Field(
+        default=4096,
+        description="Budget tokens for 'medium' reasoning effort.",
+        gt=0,
+    )
+    high: int = Field(
+        default=16384,
+        description="Budget tokens for 'high' reasoning effort.",
+        gt=0,
+    )
+
+    def as_dict(self) -> dict[str, int]:
+        """Return the mapping as a plain dict for the budget resolver."""
+        return {"low": self.low, "medium": self.medium, "high": self.high}
+
+
 class TranscoderPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -160,5 +191,24 @@ class TranscoderPolicy(BaseModel):
             "Capability-aware routing policy. Controls how requests with "
             "explicit thinking/reasoning controls are routed when the "
             "candidate model's capability status is not 'supported'."
+        ),
+    )
+
+    thinking_budget_defaults: ThinkingBudgetDefaults = Field(
+        default_factory=ThinkingBudgetDefaults,
+        description=(
+            "Global effort→budget token mapping used when the model's "
+            "capability does not carry a per-model mapping. Values are "
+            "clamped to the model's budget_tokens_min/max when known."
+        ),
+    )
+
+    budget_resolution_policy: Literal["lenient", "strict"] = Field(
+        default="lenient",
+        description=(
+            "How to handle budget resolution edge cases. 'lenient' uses "
+            "a conservative fallback for unknown effort levels and allows "
+            "clamping. 'strict' rejects unknown efforts and clamped "
+            "budgets before dispatch."
         ),
     )

@@ -15,6 +15,7 @@ from eggpool.transcoder.json_helpers import (
 )
 
 if TYPE_CHECKING:
+    from eggpool.catalog.capabilities import ThinkingCapability
     from eggpool.transcoder.context import TranscodeContext
     from eggpool.transcoder.policy import TranscoderFeatures
 
@@ -236,6 +237,9 @@ class AnthropicToOpenAI:
         context: TranscodeContext,
         *,
         features: TranscoderFeatures | None = None,
+        thinking_capability: ThinkingCapability | None = None,
+        budget_defaults: dict[str, int] | None = None,
+        budget_resolution_policy: str = "lenient",
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         warnings: list[dict[str, Any]] = []
         out: dict[str, Any] = {}

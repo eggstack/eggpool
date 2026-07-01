@@ -73,6 +73,19 @@ catalog_withdrawal_policy = "preserve_until_health"
 loss_policy = "warn"      # "warn" or "reject" for loss-of-information
 prefer_native = true      # prefer native-protocol accounts in routing
 
+# Global effort→budget token mapping for thinking/reasoning.
+# Values are used when the model's capability does not carry a
+# per-model effort_to_budget_tokens mapping.
+# [transcoder.thinking_budget_defaults]
+# low = 1024
+# medium = 4096
+# high = 16384
+
+# How to handle budget resolution edge cases.
+# "lenient" (default): use conservative fallback for unknown efforts, allow clamping.
+# "strict": reject unknown efforts and clamped budgets before dispatch.
+# budget_resolution_policy = "lenient"
+
 # ─── Model Capability Overrides ─────────────────────────────────────
 # Operator-controlled overrides for model capabilities. These take
 # precedence over discovered provider/catalog data and persist through

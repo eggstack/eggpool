@@ -75,6 +75,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from eggpool.accounts.registry import AccountRegistry
+    from eggpool.catalog.capabilities import ThinkingCapability
     from eggpool.catalog.pricing import CostCalculator
     from eggpool.catalog.service import CatalogService
     from eggpool.db.connection import Database
@@ -400,10 +401,42 @@ class RequestCoordinator:
                         if self._transcoder_policy is not None
                         else None
                     )
+                    _thinking_cap: ThinkingCapability | None = None
+                    _budget_defaults: dict[str, int] | None = None
+                    _budget_policy = "lenient"
+                    if self._transcoder_policy is not None:
+                        _budget_defaults = (
+                            self._transcoder_policy.thinking_budget_defaults.as_dict()
+                        )
+                        _budget_policy = (
+                            self._transcoder_policy.budget_resolution_policy
+                        )
+                    # Look up thinking capability from catalog cache for
+                    # budget resolution (best-effort; None is safe).
+                    try:
+                        from eggpool.catalog.capabilities import (
+                            dict_to_model_capabilities,
+                        )
+
+                        model_info = self._catalog.cache.get_model(
+                            context.model_id,
+                        )
+                        if model_info is not None:
+                            caps_raw: dict[str, Any] = model_info.get(
+                                "capabilities",
+                                {},
+                            )  # type: ignore[assignment]
+                            caps = dict_to_model_capabilities(caps_raw)
+                            _thinking_cap = caps.thinking
+                    except Exception:  # noqa: BLE001
+                        pass  # best-effort; resolver has its own fallbacks
                     translated, warnings = transcoder.encode_request(
                         cast("dict[str, Any]", payload),
                         context.transcode_context,
                         features=_features,
+                        thinking_capability=_thinking_cap,
+                        budget_defaults=_budget_defaults,
+                        budget_resolution_policy=_budget_policy,
                     )
                     context.upstream_body = encode_json_body(translated)
                     context.transcode_context.loss_warnings.extend(warnings)
