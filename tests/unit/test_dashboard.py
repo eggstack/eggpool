@@ -2575,6 +2575,23 @@ class TestTooltipStylesheet:
         assert "translateY(11px) rotate(45deg)" in css
         assert "translateY(-11px) rotate(-45deg)" in css
 
+    def test_topnav_burger_bars_pivot_on_own_bbox(self) -> None:
+        """Each bar must rotate around its own bounding box, not the
+        SVG viewBox center.  The default `transform-box: view-box`
+        on SVG elements makes `transform-origin: 50% 50%` resolve
+        against the 24x24 viewBox in older Chromium builds, which
+        combined with the ±11px translate would land the rotated
+        strokes well off (12,12) and visibly lopsided.  Force
+        ``transform-box: fill-box`` so each <rect> pivots on its
+        own center (12,1) / (12,23)."""
+        css = self._load_css()
+        assert ".topnav-burger-icon .bar" in css
+        bar_block_start = css.index(".topnav-burger-icon .bar")
+        bar_block_end = css.index("}", bar_block_start)
+        bar_block = css[bar_block_start:bar_block_end]
+        assert "transform-box: fill-box" in bar_block
+        assert "transform-origin: 50% 50%" in bar_block
+
     def test_metric_card_tooltip_anchored_below(self) -> None:
         """The dashboard's topbar is sticky and sits at z-index 5 above
         the main content (z-index 1), so a tooltip rendered above a

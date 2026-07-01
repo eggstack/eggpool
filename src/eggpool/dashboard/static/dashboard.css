@@ -694,10 +694,24 @@ td.no { color: var(--color-error); font-weight: 600; }
    without sub-pixel clipping against a non-square viewBox.  Each
    bar's center sits at y=1, y=12, y=23 in the closed state and the
    two outer bars translate by ±11px to land at the shared center
-   (y=12) when forming the X. */
+   (y=12) when forming the X.
+
+   `transform-box: fill-box` pins `transform-origin` to each <rect>'s
+   own bounding box so the rotation pivots around the bar's center
+   (12,1) or (12,23).  Without it the default `view-box` reference
+   makes `50% 50%` resolve to (12,12) of the viewBox, which combined
+   with the translate would push the rotated strokes well off the
+   icon center and produce a visibly lopsided X.  See Chromium bug
+   1572193 for the historical inconsistency between default
+   `transform-box` values for SVG elements. */
+.topnav-burger-icon .bar {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  transition: transform 160ms ease, opacity 120ms ease;
+}
+
 .topnav-burger[aria-expanded="true"] .topnav-burger-icon .bar-1 {
   transform: translateY(11px) rotate(45deg);
-  transform-origin: 50% 50%;
 }
 
 .topnav-burger[aria-expanded="true"] .topnav-burger-icon .bar-2 {
@@ -706,11 +720,6 @@ td.no { color: var(--color-error); font-weight: 600; }
 
 .topnav-burger[aria-expanded="true"] .topnav-burger-icon .bar-3 {
   transform: translateY(-11px) rotate(-45deg);
-  transform-origin: 50% 50%;
-}
-
-.topnav-burger-icon .bar {
-  transition: transform 160ms ease, opacity 120ms ease;
 }
 
 .topnav-menu {
