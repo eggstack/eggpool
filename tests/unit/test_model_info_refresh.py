@@ -231,6 +231,67 @@ class TestRefreshModelInfoService:
             await db.disconnect()
 
     @pytest.mark.asyncio()
+    async def test_summary_uses_preserved_benchmarks_on_provider_only_refresh(
+        self,
+    ) -> None:
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await _run_migrations(db)
+            await _seed_model(db, "gpt-x")
+
+            cache = _make_cache("gpt-x")
+            config = ModelInfoConfig(
+                sources=ModelInfoSourcesConfig(
+                    openrouter=ModelInfoSourceConfig(enabled=False),
+                    artificial_analysis=ModelInfoSourceConfig(enabled=False),
+                    huggingface=ModelInfoSourceConfig(enabled=False),
+                )
+            )
+            service = ModelInfoService(config, db, cache)
+
+            now = datetime.now(UTC)
+            info = CanonicalModelInfo(
+                model_id="gpt-x",
+                status="sparse_new",
+                summary="Benchmark metadata available from Artificial Analysis.",
+                sparse=True,
+                detail={
+                    "benchmarks": [
+                        {
+                            "name": "Artificial Analysis Intelligence Index",
+                            "score": 80.0,
+                            "source": "artificial_analysis",
+                        }
+                    ],
+                },
+                provenance={"sources": ["provider_catalog", "artificial_analysis"]},
+                conflicts={},
+                first_seen_at=now - timedelta(days=1),
+                last_seen_at=now - timedelta(hours=1),
+                last_refreshed_at=now - timedelta(hours=1),
+                next_refresh_at=now - timedelta(minutes=1),
+            )
+            await service.repo.upsert_canonical(info)
+
+            result = await service.refresh_model_info(
+                "gpt-x",
+                source="provider_catalog",
+                force=True,
+            )
+            assert result["errors"] == 0
+
+            updated = await service.repo.get_canonical("gpt-x")
+            assert updated is not None
+            assert updated.status == "partial"
+            assert updated.sparse is False
+            assert updated.detail.get("benchmarks")
+            assert "Benchmark metadata available" in updated.summary
+            assert "Public benchmark metadata unavailable" not in updated.summary
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio()
     async def test_force_false_skips_when_not_due(self) -> None:
         db = Database(path=":memory:")
         await db.connect()

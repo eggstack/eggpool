@@ -146,6 +146,33 @@ def _build_observations(info: Any) -> list[dict[str, Any]]:
     return obs
 
 
+def _known_provider_ids(request: Request) -> set[str] | None:
+    """Return configured provider IDs for provider-suffix parsing."""
+    config = getattr(request.app.state, "config", None)
+    if config is None:
+        return None
+    try:
+        providers_cfg: object = getattr(config, "providers", {})
+    except Exception:
+        return None
+    if not isinstance(providers_cfg, dict):
+        return None
+    return {str(k) for k in cast("dict[object, Any]", providers_cfg)}
+
+
+def _decode_model_info_lookup_id(
+    request: Request,
+    model_id: str,
+) -> tuple[str, str, str | None]:
+    """Decode a path/query model id and strip a configured provider suffix."""
+    decoded_id = unquote(model_id)
+    lookup_id, provider_suffix = parse_model_provider(
+        decoded_id,
+        _known_provider_ids(request),
+    )
+    return decoded_id, lookup_id, provider_suffix
+
+
 # ---------------------------------------------------------------------------
 # Handlers
 # ---------------------------------------------------------------------------
@@ -173,8 +200,12 @@ async def handle_model_info_detail(request: Request, model_id: str) -> Response:
             content={"error": "model_info disabled"},
         )
     # URL-decode the path parameter (handles %2F → / for suffixed IDs)
-    decoded_id = unquote(model_id)
-    info = await model_info.get_summary(decoded_id)
+    # and look up the canonical row behind configured provider suffixes.
+    decoded_id, lookup_id, _provider_suffix = _decode_model_info_lookup_id(
+        request,
+        model_id,
+    )
+    info = await model_info.get_summary(lookup_id)
     if info is None:
         return JSONResponse(
             status_code=404,
@@ -302,7 +333,9 @@ async def handle_model_info_refresh(request: Request) -> Response:
         return JSONResponse(status_code=400, content={"error": str(err)})
 
     if raw_model_id:
-        requested_model_id = unquote(raw_model_id)
+        requested_model_id, lookup_id, provider_suffix = _decode_model_info_lookup_id(
+            request, raw_model_id
+        )
         # Parse a provider suffix off the URL-decoded id so the
         # canonical base model row is refreshed and the provider
         # value is forwarded to the service for narrower source
@@ -310,23 +343,6 @@ async def handle_model_info_refresh(request: Request) -> Response:
         # base-id path so legacy callers that pass a literal model
         # id (e.g. ``gpt-4o/openrouter`` when ``openrouter`` is not
         # a configured provider) still work.
-        config = getattr(request.app.state, "config", None)
-        known_providers: set[str] | None = None
-        if config is not None:
-            providers_cfg: Any = None
-            try:
-                # ``getattr`` defensively against configs that raised
-                # on attribute access; the cast narrows to ``dict``
-                # so ``str(k)`` below is well-typed.
-                providers_cfg = cast("dict[str, Any]", getattr(config, "providers", {}))
-            except Exception:
-                providers_cfg = None
-            if isinstance(providers_cfg, dict):
-                typed_providers_cfg = cast("dict[str, Any]", providers_cfg)
-                known_providers = {str(k) for k in typed_providers_cfg}
-        lookup_id, provider_suffix = parse_model_provider(
-            requested_model_id, known_providers
-        )
         result = await model_info.refresh_model_info(
             lookup_id,
             provider_id=provider_suffix,

@@ -276,6 +276,12 @@ class ModelInfoService:
                 # does not manage (e.g. benchmark conflicts).
                 for key, val in existing.conflicts.items():
                     conflicts.setdefault(key, val)
+            status, sparse = _refine_status_from_detail(
+                status=status,
+                sparse=sparse,
+                detail=merged_detail,
+            )
+            next_refresh = self._compute_next_refresh(status, now)
 
             if existing is None:
                 first_seen = now
@@ -382,6 +388,12 @@ class ModelInfoService:
                     )
                 )
                 self._propagate_enriched_capabilities(model_id, merged_detail)
+                status, sparse = _refine_status_from_detail(
+                    status=status,
+                    sparse=sparse,
+                    detail=merged_detail,
+                )
+                next_refresh = self._compute_next_refresh(status, now)
                 provenance: dict[str, object] = {
                     **merged_provenance,
                     "reconciled_at": now.isoformat(),
@@ -406,7 +418,7 @@ class ModelInfoService:
                     first_seen_at=now,
                     last_seen_at=now,
                     last_refreshed_at=None,
-                    next_refresh_at=now,
+                    next_refresh_at=next_refresh,
                 )
                 to_write.append(info)
                 created += 1
@@ -685,6 +697,17 @@ class ModelInfoService:
             # Override status to 'conflicting' when a material context conflict exists
             if conflicts and "context_window" in conflicts:
                 status = cast("ModelInfoStatus", "conflicting")
+            status, sparse = _refine_status_from_detail(
+                status=status,
+                sparse=sparse,
+                detail=merged_detail,
+            )
+            next_refresh = self._scheduler.next_refresh_for(
+                status=status,
+                first_seen_at=existing.first_seen_at,
+                last_refreshed_at=existing.last_refreshed_at,
+                now=now,
+            )
 
             # Provenance: keep prior reconciled_at and other meta, but
             # let build_canonical_detail decide which sources actually
@@ -696,12 +719,8 @@ class ModelInfoService:
                 "reconciled_at": now.isoformat(),
             }
 
-            has_benchmarks = any(
-                p.get("source") == "artificial_analysis" for p in observation_payloads
-            ) and bool(aa_record and aa_record.benchmarks)
-            has_hf_metadata = any(
-                p.get("source") == "huggingface" for p in observation_payloads
-            )
+            has_benchmarks = bool(merged_detail.get("benchmarks"))
+            has_hf_metadata = bool(merged_detail.get("huggingface_metadata"))
 
             info = CanonicalModelInfo(
                 model_id=model_id,
@@ -965,6 +984,11 @@ class ModelInfoService:
         status, sparse = self._classify_model(lookup_id)
         if conflicts and "context_window" in conflicts:
             status = cast("ModelInfoStatus", "conflicting")
+        status, sparse = _refine_status_from_detail(
+            status=status,
+            sparse=sparse,
+            detail=merged_detail,
+        )
 
         provenance: dict[str, object] = {
             **existing.provenance,
@@ -974,12 +998,8 @@ class ModelInfoService:
             "requested_source": source,
         }
 
-        has_benchmarks = any(
-            p.get("source") == "artificial_analysis" for p in observation_payloads
-        ) and bool(aa_record and aa_record.benchmarks)
-        has_hf_metadata = any(
-            p.get("source") == "huggingface" for p in observation_payloads
-        )
+        has_benchmarks = bool(merged_detail.get("benchmarks"))
+        has_hf_metadata = bool(merged_detail.get("huggingface_metadata"))
 
         next_refresh = self._scheduler.next_refresh_for(
             status=status,
@@ -2527,6 +2547,49 @@ def _bound_raw_payload(record: SourceModelRecord) -> SourceModelRecord:
         sparse=record.sparse,
         notes=record.notes,
     )
+
+
+def _refine_status_from_detail(
+    *,
+    status: ModelInfoStatus,
+    sparse: bool,
+    detail: dict[str, object],
+) -> tuple[ModelInfoStatus, bool]:
+    """Promote sparse rows once merged detail has external enrichment."""
+    if status != "sparse_new" or not sparse:
+        return status, sparse
+    if not _detail_has_external_enrichment(detail):
+        return status, sparse
+    return cast("ModelInfoStatus", "partial"), False
+
+
+def _detail_has_external_enrichment(detail: dict[str, object]) -> bool:
+    benchmarks = detail.get("benchmarks")
+    if isinstance(benchmarks, list) and benchmarks:
+        return True
+
+    hf_metadata = detail.get("huggingface_metadata")
+    if isinstance(hf_metadata, dict) and hf_metadata:
+        return True
+
+    external_ids = detail.get("external_ids")
+    if isinstance(external_ids, dict) and external_ids:
+        return True
+
+    limits = detail.get("limits")
+    if isinstance(limits, dict):
+        typed_limits = cast("dict[str, object]", limits)
+        for key in ("external_context", "external_output"):
+            value = typed_limits.get(key)
+            if isinstance(value, (int, float)) and value > 0:
+                return True
+
+    for key in ("family", "license", "release_date"):
+        value = detail.get(key)
+        if isinstance(value, str) and value.strip():
+            return True
+
+    return False
 
 
 def _generate_summary(

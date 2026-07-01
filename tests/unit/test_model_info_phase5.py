@@ -39,6 +39,7 @@ from eggpool.models.config import (
     ModelInfoConfig,
     ModelInfoSourceConfig,
     ModelInfoSourcesConfig,
+    ProviderConfig,
 )
 
 if TYPE_CHECKING:
@@ -881,6 +882,39 @@ class TestDetailAPI:
         assert len(benchmarks) == 1
         assert benchmarks[0]["name"] == "MMLU"
         assert benchmarks[0]["score"] == 88.7
+
+    @pytest.mark.asyncio()
+    async def test_model_info_detail_normalizes_provider_suffixed_id(self) -> None:
+        """Provider-suffixed detail URLs read the canonical model row."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from eggpool.api.model_info import handle_model_info_detail
+
+        info = MagicMock()
+        info.model_id = "gpt-4o"
+        info.status = "fresh"
+        info.sparse = False
+        info.summary = "All good."
+        info.provenance = {"sources": ["provider_catalog"]}
+        info.detail = {}
+        info.last_seen_at = datetime(2026, 6, 29, 20, 0, tzinfo=UTC)
+        info.last_refreshed_at = datetime(2026, 6, 29, 20, 0, tzinfo=UTC)
+        info.next_refresh_at = None
+        info.conflicts = {}
+
+        mock_service = AsyncMock()
+        mock_service.get_summary.return_value = info
+
+        request = MagicMock()
+        request.app.state.model_info = mock_service
+        request.app.state.config.providers = {
+            "openai": ProviderConfig.model_construct()
+        }
+
+        response = await handle_model_info_detail(request, "gpt-4o%2Fopenai")
+
+        assert response.status_code == 200
+        mock_service.get_summary.assert_awaited_once_with("gpt-4o")
 
     @pytest.mark.asyncio()
     async def test_model_info_detail_includes_aliases_and_conflicts(self) -> None:
