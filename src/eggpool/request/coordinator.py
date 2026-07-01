@@ -1326,6 +1326,16 @@ class RequestCoordinator:
                         cast("dict[str, Any]", upstream_payload),
                         context.transcode_context,
                         features=_features,
+                        reasoning_field_names=(
+                            self._transcoder_policy.openai_reasoning_fields.non_stream
+                            if self._transcoder_policy is not None
+                            else None
+                        ),
+                        emit_compat_aliases=(
+                            self._transcoder_policy.openai_reasoning_fields.emit_compat_aliases
+                            if self._transcoder_policy is not None
+                            else False
+                        ),
                     )
                     body = encode_json_body(translated)
                     context.transcode_context.loss_warnings.extend(decode_warnings)
@@ -1564,6 +1574,21 @@ class RequestCoordinator:
                     upstream_protocol=context.upstream_protocol,
                     include_usage=include_usage,
                     transcode_context=context.transcode_context,
+                    features=(
+                        self._transcoder_policy.features
+                        if self._transcoder_policy is not None
+                        else None
+                    ),
+                    reasoning_field_names=(
+                        self._transcoder_policy.openai_reasoning_fields.stream_delta
+                        if self._transcoder_policy is not None
+                        else None
+                    ),
+                    emit_compat_aliases=(
+                        self._transcoder_policy.openai_reasoning_fields.emit_compat_aliases
+                        if self._transcoder_policy is not None
+                        else False
+                    ),
                 )
                 async for chunk in upstream_response.aiter_bytes():
                     if first_byte_ms == 0.0:

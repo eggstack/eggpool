@@ -303,17 +303,36 @@ A `pause_turn` loss warning is also appended to `TranscodeContext.loss_warnings`
 
 OpenAI's `stream_options.include_usage` flag has no Anthropic analogue, so the wrapper object is dropped with a `dropped_field` warning when transcoding to an Anthropic upstream. The single field inside (`include_usage: bool`) is significant for usage accounting, so the transcoder lifts it onto `TranscodeContext.request_include_usage` before the streaming transcoder runs. The streaming transcoder reads `request_include_usage` from the context to decide whether to forward upstream usage chunks to the OpenAI client. The reverse direction (Anthropic → OpenAI) does not need this — OpenAI clients receive usage only when `stream_options.include_usage` was set on the request, which it wasn't.
 
-#### Thinking streaming (Phase 6.3)
+#### Thinking streaming (Phase 6.3 + Phase 8)
 
-Anthropic `thinking_delta` events translate to OpenAI `delta.reasoning` strings. Order is preserved: thinking comes before tool_use comes before text in Anthropic, and `reasoning_content` comes before `content` in OpenAI.
+Anthropic `thinking_delta` events translate to OpenAI reasoning delta fields. The field names are configurable via `[transcoder.openai_reasoning_fields]` — `stream_delta` (default `["reasoning"]`) controls streaming field names. Order is preserved: thinking comes before tool_use comes before text in Anthropic, and reasoning content comes before content in OpenAI.
 
 | Upstream event | Emitted client delta |
 |---|---|
 | `content_block_start` (`type: thinking`) | (nothing — block is started lazily) |
-| `content_block_delta` (`type: thinking_delta`, `thinking: <text>`) | `delta.reasoning: <text>` |
+| `content_block_delta` (`type: thinking_delta`, `thinking: <text>`) | `delta.<reasoning_field>: <text>` |
 | `content_block_stop` (thinking index) | (nothing) |
 
-Thinking deltas and text deltas are emitted independently — a stream may contain both `delta.reasoning` and `delta.content` chunks on the same request.
+When `[transcoder.features].thinking = false`, streaming thinking deltas are dropped (consistent with non-streaming behavior). When `emit_compat_aliases = true`, multiple field names are emitted per delta.
+
+Thinking deltas and text deltas are emitted independently — a stream may contain both reasoning and content chunks on the same request.
+
+#### Response-field compatibility (Phase 8)
+
+EggPool makes the JSON field names used for reasoning content configurable via `[transcoder.openai_reasoning_fields]`. This controls both non-streaming and streaming output.
+
+```toml
+[transcoder.openai_reasoning_fields]
+non_stream = ["reasoning_content"]    # message field(s) for reasoning
+stream_delta = ["reasoning"]          # delta field(s) for reasoning
+emit_compat_aliases = false           # emit extra aliases?
+```
+
+The first entry in each list is always emitted. Additional entries are only included when `emit_compat_aliases = true`. This is useful for clients that recognize different field names.
+
+**Non-streaming**: `OpenAIToAnthropic.decode_response` emits reasoning content in the configured `non_stream` field(s) on `choices[].message`.
+
+**Streaming**: `AnthropicToOpenAIStreaming` emits reasoning deltas in the configured `stream_delta` field(s) on `choices[].delta`. Streaming is feature-gated consistently with non-streaming — when `[transcoder.features].thinking = false`, streaming thinking deltas are dropped with no output.
 
 #### Loss-warning kinds
 

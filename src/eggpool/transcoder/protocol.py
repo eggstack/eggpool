@@ -35,6 +35,8 @@ class BodyTranscoder(Protocol):
         context: TranscodeContext,
         *,
         features: TranscoderFeatures | None = None,
+        reasoning_field_names: list[str] | None = None,
+        emit_compat_aliases: bool = False,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]: ...
 
     def reencode_error(

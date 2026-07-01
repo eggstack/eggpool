@@ -28,6 +28,9 @@ if TYPE_CHECKING:
     from eggpool.proxy.usage import StreamUsageResult
     from eggpool.transcoder.context import TranscodeContext
     from eggpool.transcoder.ids import ToolCallIdMap
+    from eggpool.transcoder.policy import TranscoderFeatures
+
+from eggpool.transcoder.policy import build_reasoning_fields
 
 logger = logging.getLogger(__name__)
 
@@ -685,9 +688,15 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
         *,
         include_usage: bool = True,
         transcode_context: TranscodeContext | None = None,
+        features: TranscoderFeatures | None = None,
+        reasoning_field_names: list[str] | None = None,
+        emit_compat_aliases: bool = False,
     ) -> None:
         super().__init__("openai", "anthropic", transcode_context=transcode_context)
         self._include_usage = include_usage
+        self._features = features
+        self._reasoning_field_names = reasoning_field_names or ["reasoning"]
+        self._emit_compat_aliases = emit_compat_aliases
         self._started = False
         self._id = ""
         self._model = ""
@@ -895,6 +904,13 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
             thinking_text = delta.get("thinking", "")
             if not thinking_text:
                 return []
+            if self._features is not None and not self._features.thinking:
+                return []
+            delta_fields = build_reasoning_fields(
+                self._reasoning_field_names,
+                thinking_text,
+                emit_compat_aliases=self._emit_compat_aliases,
+            )
             return [
                 self._openai_frame(
                     {
@@ -905,7 +921,7 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
                         "choices": [
                             {
                                 "index": 0,
-                                "delta": {"reasoning": thinking_text},
+                                "delta": delta_fields,
                                 "finish_reason": None,
                             }
                         ],
@@ -1146,6 +1162,9 @@ def select_streaming_transcoder(
     upstream_protocol: str,
     include_usage: bool = True,
     transcode_context: TranscodeContext | None = None,
+    features: TranscoderFeatures | None = None,
+    reasoning_field_names: list[str] | None = None,
+    emit_compat_aliases: bool = False,
 ) -> StreamingTranscoder | None:
     """Return the streaming transcoder for a protocol pair.
 
@@ -1157,6 +1176,9 @@ def select_streaming_transcoder(
         return AnthropicToOpenAIStreaming(
             include_usage=include_usage,
             transcode_context=transcode_context,
+            features=features,
+            reasoning_field_names=reasoning_field_names,
+            emit_compat_aliases=emit_compat_aliases,
         )
     if client_protocol == "anthropic" and upstream_protocol == "openai":
         return OpenAIToAnthropicStreaming(

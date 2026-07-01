@@ -142,6 +142,63 @@ class ThinkingBudgetDefaults(BaseModel):
         return {"low": self.low, "medium": self.medium, "high": self.high}
 
 
+class OpenAIReasoningFields(BaseModel):
+    """Configurable OpenAI-compatible reasoning field names.
+
+    Controls which JSON field names EggPool uses when exposing
+    upstream thinking/reasoning content in OpenAI-compatible responses.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    non_stream: list[str] = Field(
+        default=["reasoning_content"],
+        description=(
+            "Field name(s) on the non-streaming message object for "
+            "reasoning content. The first entry is always emitted; "
+            "additional entries are only emitted when "
+            "emit_compat_aliases is true."
+        ),
+    )
+    stream_delta: list[str] = Field(
+        default=["reasoning"],
+        description=(
+            "Field name(s) on the streaming delta object for reasoning "
+            "content. The first entry is always emitted; additional "
+            "entries are only emitted when emit_compat_aliases is true."
+        ),
+    )
+    emit_compat_aliases: bool = Field(
+        default=False,
+        description=(
+            "When true, emit additional reasoning field aliases beyond "
+            "the primary field. Only enable when all downstream clients "
+            " tolerate extra fields."
+        ),
+    )
+
+
+def build_reasoning_fields(
+    field_names: list[str],
+    value: str,
+    *,
+    emit_compat_aliases: bool = False,
+) -> dict[str, str]:
+    """Build a dict with configured reasoning field names.
+
+    Returns a dict suitable for inclusion in a message or delta object.
+    The first field name is always emitted; additional entries are only
+    included when *emit_compat_aliases* is true.
+    """
+    if not field_names:
+        return {}
+    result: dict[str, str] = {field_names[0]: value}
+    if emit_compat_aliases and len(field_names) > 1:
+        for name in field_names[1:]:
+            result[name] = value
+    return result
+
+
 class TranscoderPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -210,5 +267,14 @@ class TranscoderPolicy(BaseModel):
             "a conservative fallback for unknown effort levels and allows "
             "clamping. 'strict' rejects unknown efforts and clamped "
             "budgets before dispatch."
+        ),
+    )
+
+    openai_reasoning_fields: OpenAIReasoningFields = Field(
+        default_factory=OpenAIReasoningFields,
+        description=(
+            "Configurable field names for OpenAI-compatible reasoning "
+            "content output. Controls non-streaming and streaming field "
+            "emission."
         ),
     )

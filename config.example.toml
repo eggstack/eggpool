@@ -86,6 +86,14 @@ prefer_native = true      # prefer native-protocol accounts in routing
 # "strict": reject unknown efforts and clamped budgets before dispatch.
 # budget_resolution_policy = "lenient"
 
+# Configurable OpenAI-compatible reasoning field names.
+# Controls which JSON field names EggPool uses when exposing
+# upstream thinking/reasoning content in responses.
+# [transcoder.openai_reasoning_fields]
+# non_stream = ["reasoning_content"]    # message field(s) for non-streaming
+# stream_delta = ["reasoning"]          # delta field(s) for streaming
+# emit_compat_aliases = false           # emit extra aliases when true
+
 # ─── Model Capability Overrides ─────────────────────────────────────
 # Operator-controlled overrides for model capabilities. These take
 # precedence over discovered provider/catalog data and persist through

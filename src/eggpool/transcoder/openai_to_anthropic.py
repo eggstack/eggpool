@@ -21,6 +21,8 @@ if TYPE_CHECKING:
     from eggpool.transcoder.context import TranscodeContext
     from eggpool.transcoder.policy import TranscoderFeatures
 
+from eggpool.transcoder.policy import build_reasoning_fields
+
 _ANTHROPIC_IMAGE_SIZE_LIMIT = 5 * 1024 * 1024  # 5 MB
 _ANTHROPIC_PDF_SIZE_LIMIT = 32 * 1024 * 1024  # 32 MB
 
@@ -627,6 +629,8 @@ class OpenAIToAnthropic:
         context: TranscodeContext,
         *,
         features: TranscoderFeatures | None = None,
+        reasoning_field_names: list[str] | None = None,
+        emit_compat_aliases: bool = False,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         warnings: list[dict[str, Any]] = []
         id_map = context.id_map
@@ -747,7 +751,14 @@ class OpenAIToAnthropic:
             "content": content_text,
         }
         if reasoning_content is not None:
-            message["reasoning_content"] = reasoning_content
+            field_names = reasoning_field_names or ["reasoning_content"]
+            message.update(
+                build_reasoning_fields(
+                    field_names,
+                    reasoning_content,
+                    emit_compat_aliases=emit_compat_aliases,
+                )
+            )
         if tool_calls:
             message["tool_calls"] = tool_calls
 
