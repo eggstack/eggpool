@@ -205,6 +205,7 @@ def _parse_entry_to_record(
     # Tool / reasoning support
     supports_tools = _opt_bool(raw, "supported_parameters", _has_tool_value)
     supports_reasoning = _opt_bool(raw, "supported_parameters", _has_reasoning_value)
+    thinking_capability = _extract_thinking_capability(raw)
 
     # Pricing (advisory, not cost-calculation truth)
     pricing_raw: object = raw.get("pricing") or {}
@@ -243,6 +244,7 @@ def _parse_entry_to_record(
         modalities=modalities,
         supports_tools=supports_tools,
         supports_reasoning=supports_reasoning,
+        thinking_capability=thinking_capability,
         input_price_per_1k=input_price,
         output_price_per_1k=output_price,
         confidence=0.5,
@@ -297,6 +299,29 @@ def _has_reasoning_value(items: list[str]) -> bool:
     return any(
         "reasoning" in item.lower() or "thinking" in item.lower() for item in items
     )
+
+
+def _extract_thinking_capability(raw: dict[str, object]) -> dict[str, object] | None:
+    """Extract explicit thinking/reasoning API-control capability.
+
+    Only returns a capability dict when the source explicitly documents
+    API-control support (e.g. via supported_parameters listing reasoning
+    or thinking). Vague descriptions like "reasoning model" are NOT
+    sufficient.
+    """
+    params = raw.get("supported_parameters")
+    if not isinstance(params, list):
+        return None
+    str_params = [str(p).lower() for p in cast("list[object]", params)]
+    has_reasoning = any("reasoning" in p or "thinking" in p for p in str_params)
+    if not has_reasoning:
+        return None
+    return {
+        "status": "supported",
+        "source": "model_info",
+        "confidence": "high",
+        "notes": "OpenRouter reports reasoning/thinking in supported_parameters",
+    }
 
 
 def _parse_modalities(raw: dict[str, object]) -> frozenset[str]:

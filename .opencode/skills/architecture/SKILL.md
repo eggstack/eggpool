@@ -276,6 +276,14 @@ The `/timeseries` page replaces the old "table of bucket counts" with a stacked-
 - `client_requests_thinking()` heuristic detects thinking-related keys in request body; `has_thinking_support()` checks status
 - Protocol compatibility alone does not imply thinking support — the schema captures this explicitly
 
+### Model-Info Capability Enrichment
+
+- `build_canonical_detail()` merges thinking capability metadata from provider catalogs and external model-info sources into the canonical detail's `capabilities.thinking` block
+- Merge priority: provider_catalog (authoritative) > external model-info (advisory) > global config override > provider-scoped config override
+- Provider catalog data always outranks external source data; when two external sources disagree, the status is set to `"conflicting"`
+- Only explicit API-control evidence (e.g. OpenRouter `supported_parameters` listing "reasoning"/"thinking") produces `status = "supported"`; vague "reasoning model" descriptions stay `unknown`
+- `_propagate_enriched_capabilities()` writes enriched thinking capability back to the catalog cache so `_copy_exposed_model` picks it up before config overrides are applied
+
 ### Config Overrides
 
 `ThinkingCapabilityOverrideConfig` in `src/eggpool/models/config.py` provides operator-controlled model capability overrides that persist through catalog refresh cycles.

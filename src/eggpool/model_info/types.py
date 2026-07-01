@@ -69,6 +69,7 @@ class SourceModelRecord:
     modalities: frozenset[str] = frozenset()
     supports_tools: bool | None = None
     supports_reasoning: bool | None = None
+    thinking_capability: dict[str, object] | None = None
     input_price_per_1k: float | None = None
     output_price_per_1k: float | None = None
     benchmarks: tuple[BenchmarkObservation, ...] = ()

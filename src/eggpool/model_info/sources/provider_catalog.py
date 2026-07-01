@@ -65,6 +65,9 @@ class ProviderCatalogSource:
 
         caps_raw = entry.get("capabilities")
         caps = cast("dict[str, object]", caps_raw) if isinstance(caps_raw, dict) else {}
+        thinking_cap = (
+            caps.get("thinking") if isinstance(caps.get("thinking"), dict) else None
+        )
 
         modalities: frozenset[str] = frozenset({"text"})
         if caps.get("supports_vision"):
@@ -97,6 +100,9 @@ class ProviderCatalogSource:
             supports_tools=(
                 bool(caps.get("supports_tools")) if "supports_tools" in caps else None
             ),
+            thinking_capability=dict(cast("dict[str, object]", thinking_cap))
+            if isinstance(thinking_cap, dict)
+            else None,
             confidence=1.0,
             sparse=True,
             aliases=aliases,

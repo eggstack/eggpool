@@ -24,7 +24,7 @@ Treat source observations conservatively:
 
 - Explicit API documentation for `thinking`, `reasoning_effort`, `reasoning_content`, or equivalent provider-native controls can set `status = supported`.
 - Explicit documentation that the provider/model does not support the field can set `status = unsupported`.
-- Descriptions such as “reasoning model,” “thinking model,” or benchmark reasoning capability should not imply API-control support. Represent these as notes or leave API-control status `unknown`.
+- Descriptions such as \u201creasoning model,\u201d \u201cthinking model,\u201d or benchmark reasoning capability should not imply API-control support. Represent these as notes or leave API-control status `unknown`.
 - If two sources disagree and neither is a manual override, preserve conflict information rather than silently choosing one.
 
 ## Suggested normalized detail block
@@ -74,4 +74,23 @@ Overeager inference is the main correctness risk. Prefer `unknown` over false su
 
 ## Completion check
 
-Use a synthetic provider catalog fixture declaring Anthropic thinking support and another fixture with only “reasoning model” prose. Confirm the first yields `supported` and the second remains `unknown` for API-control support.
+Use a synthetic provider catalog fixture declaring Anthropic thinking support and another fixture with only \u201creasoning model\u201d prose. Confirm the first yields `supported` and the second remains `unknown` for API-control support.
+
+## Implementation Status
+
+**Completed.** All acceptance criteria met:
+
+- [x] Model-info records can carry optional thinking capability metadata (`SourceModelRecord.thinking_capability`)
+- [x] Explicit provider metadata can populate thinking support (`ProviderCatalogSource`)
+- [x] Vague reasoning-model descriptions do not produce `supported` API-control status (only explicit `supported_parameters` evidence)
+- [x] Conflicts are represented via `status = "conflicting"` with details in `notes`
+- [x] Manual overrides still win (applied via existing `apply_capability_overrides` chain after enrichment)
+- [x] Tests cover explicit support, explicit unsupported, vague source, conflict, and override precedence
+
+### Files modified
+
+- `src/eggpool/model_info/types.py` — `thinking_capability` field on `SourceModelRecord`
+- `src/eggpool/model_info/sources/provider_catalog.py` — extracts thinking from catalog cache
+- `src/eggpool/model_info/sources/openrouter.py` — `_extract_thinking_capability()` from `supported_parameters`
+- `src/eggpool/model_info/service.py` — `_normalize_observation_payload`, `_merge_thinking_contributions`, `build_canonical_detail`, `_propagate_enriched_capabilities`
+- `tests/unit/test_model_info_capability_enrichment.py` — 34 tests covering all acceptance criteria

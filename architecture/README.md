@@ -730,6 +730,23 @@ Collapsed model entries may represent multiple providers. `aggregate_thinking_st
 
 Protocol compatibility alone does not imply thinking support. An OpenAI-protocol model may or may not support reasoning controls; an Anthropic-protocol model may or may not support extended thinking. The capability schema captures this explicitly.
 
+### Model-Info Capability Enrichment
+
+`build_canonical_detail()` in `src/eggpool/model_info/service.py` merges thinking capability metadata from provider catalogs and external model-info sources into the canonical detail block under `capabilities.thinking`. The merge priority is:
+
+1. **Provider catalog** data (highest — authoritative)
+2. **External model-info** data (OpenRouter, etc. — advisory)
+3. **Global config override** (`[model_capabilities."<model_id>".thinking]`)
+4. **Provider-scoped config override** (`[providers.<id>.model_capabilities."<model_id>".thinking]`)
+
+Provider catalog data always outranks external source data. When two external sources disagree, the merged status is set to `"conflicting"` with details preserved in the `notes` field.
+
+Only explicit API-control documentation produces `status = "supported"`. For example, OpenRouter's `supported_parameters` listing "reasoning" or "thinking" is treated as explicit API-control evidence. Vague descriptions like "reasoning model" or "thinking model" do NOT produce `status = "supported"` — they remain `unknown`.
+
+`_propagate_enriched_capabilities()` writes the enriched thinking capability back to the catalog cache during reconciliation, so `_copy_exposed_model` picks it up before config overrides are applied. Provider-native thinking capabilities (source == "provider_catalog") are never overwritten by model-info enrichment.
+
+See `plans/thinking_reasoning_phase_04_model_info_enrichment.md` for the full design.
+
 ## Model Context Limits
 
 EggPool supports configurable effective context limits per model per provider, allowing operators to advertise smaller context windows than the provider physically supports.

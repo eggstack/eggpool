@@ -269,6 +269,7 @@ class ModelInfoService:
                 observation_payloads=observation_payloads,
                 existing_detail=existing.detail if existing is not None else None,
             )
+            self._propagate_enriched_capabilities(model_id, merged_detail)
             conflicts = dict(merged_conflicts)
             if existing is not None:
                 # Preserve pre-existing conflict rows build_canonical_detail
@@ -380,6 +381,7 @@ class ModelInfoService:
                         observation_payloads=observation_payloads,
                     )
                 )
+                self._propagate_enriched_capabilities(model_id, merged_detail)
                 provenance: dict[str, object] = {
                     **merged_provenance,
                     "reconciled_at": now.isoformat(),
@@ -430,6 +432,7 @@ class ModelInfoService:
                         existing_detail=existing.detail,
                     )
                 )
+                self._propagate_enriched_capabilities(model_id, merged_detail)
                 # Preserve any pre-existing conflict rows.
                 conflicts = dict(merged_conflicts)
                 for key, val in existing.conflicts.items():
@@ -672,6 +675,7 @@ class ModelInfoService:
                 observation_payloads=observation_payloads,
                 existing_detail=existing.detail,
             )
+            self._propagate_enriched_capabilities(model_id, merged_detail)
             conflicts = merged_conflicts
             # Preserve any pre-existing conflict rows (e.g. benchmark
             # conflicts) that build_canonical_detail doesn't manage.
@@ -953,6 +957,7 @@ class ModelInfoService:
             observation_payloads=observation_payloads,
             existing_detail=existing.detail,
         )
+        self._propagate_enriched_capabilities(lookup_id, merged_detail)
         conflicts: dict[str, object] = dict(merged_conflicts)
         for key, val in existing.conflicts.items():
             conflicts.setdefault(key, val)
@@ -1130,6 +1135,36 @@ class ModelInfoService:
                     source=record.source,
                     confidence=record.confidence,
                 )
+
+    def _propagate_enriched_capabilities(
+        self, model_id: str, merged_detail: dict[str, object]
+    ) -> None:
+        """Write model-info enriched capabilities back to the catalog cache.
+
+        This ensures that ``_copy_exposed_model`` in the catalog cache
+        picks up thinking capability metadata discovered by model-info
+        sources, before config overrides are applied.
+        """
+        caps = cast("dict[str, object]", merged_detail.get("capabilities", {}))
+        thinking = caps.get("thinking")
+        if not isinstance(thinking, dict) or not thinking:
+            return
+        # Update every provider entry for this model
+        for (mid, _pid), entry in self._catalog._provider_models.items():  # pyright: ignore[reportPrivateUsage]
+            if mid != model_id:
+                continue
+            entry_caps = cast("dict[str, object]", entry.get("capabilities", {}))
+            # Provider catalog thinking takes precedence over model-info
+            existing_thinking = cast(
+                "dict[str, object] | None", entry_caps.get("thinking")
+            )
+            if (
+                isinstance(existing_thinking, dict)
+                and existing_thinking.get("source") == "provider_catalog"
+            ):
+                continue  # Don't overwrite provider-native data
+            entry_caps["thinking"] = thinking
+            entry["capabilities"] = entry_caps
 
     async def run_periodic_refresh(self) -> None:
         """Background loop that refreshes due models periodically."""
@@ -1405,6 +1440,7 @@ class ModelInfoService:
                         existing_detail=detail,
                     )
                 )
+                self._propagate_enriched_capabilities(canonical.model_id, merged_detail)
                 conflicts: dict[str, object] = dict(merged_conflicts)
                 for key, val in canonical.conflicts.items():
                     conflicts.setdefault(key, val)
@@ -1890,6 +1926,10 @@ def _normalize_observation_payload(
             out["benchmarks"] = list(cast("list[object]", benchmarks))
         if payload.get("display_name"):
             out["display_name_artificial_analysis"] = payload["display_name"]
+    # Generic thinking_capability extraction from any source
+    thinking_cap = payload.get("thinking_capability")
+    if isinstance(thinking_cap, dict) and thinking_cap:
+        out["thinking_capability"] = dict(cast("dict[str, object]", thinking_cap))
     return out
 
 
@@ -1921,6 +1961,67 @@ def _legacy_flat_keys_to_limits(
     if isinstance(ext_out, (int, float)) and ext_out > 0:
         limits["external_output"] = int(ext_out)
     return limits
+
+
+def _merge_thinking_contributions(
+    contributions: list[dict[str, object]],
+) -> dict[str, object]:
+    """Merge thinking capability contributions from multiple sources.
+
+    Priority: provider_catalog > external sources.
+    When two external sources disagree, preserve conflict information.
+    Manual overrides are NOT handled here — they are applied later
+    in the override chain.
+    """
+    if not contributions:
+        return {}
+    if len(contributions) == 1:
+        return dict(cast("dict[str, object]", contributions[0]["thinking"]))
+
+    # Sort: provider_catalog first, then by source name
+    sorted_contribs = sorted(
+        contributions,
+        key=lambda c: (0 if c["source"] == "provider_catalog" else 1, str(c["source"])),
+    )
+
+    # Start with provider catalog if present, otherwise first external
+    base = dict(cast("dict[str, object]", sorted_contribs[0]["thinking"]))
+    base_status = str(base.get("status", "unknown"))
+    base_source = str(sorted_contribs[0]["source"])
+
+    # Check for conflicts among external sources
+    external_statuses: list[tuple[str, str]] = []
+    for contrib in sorted_contribs[1:]:
+        src = str(contrib["source"])
+        thinking = cast("dict[str, object]", contrib["thinking"])
+        status = str(thinking.get("status", "unknown"))
+        if status != "unknown":
+            external_statuses.append((src, status))
+
+    # If we have provider_catalog data, it wins
+    if base_source == "provider_catalog" and base_status != "unknown":
+        return base
+
+    # If no provider catalog, check for conflicts among external sources
+    if external_statuses:
+        unique_statuses = {s for _, s in external_statuses}
+        if len(unique_statuses) > 1:
+            # Conflict between external sources
+            base["status"] = "conflicting"
+            base["source"] = "model_info"
+            base["notes"] = (
+                f"Conflicting claims: "
+                f"{', '.join(f'{src}={status}' for src, status in external_statuses)}"
+            )
+            return base
+        # All external sources agree
+        _first_src, first_status = external_statuses[0]
+        if first_status != "unknown":
+            base["status"] = first_status
+            base["source"] = "model_info"
+            return base
+
+    return base
 
 
 def build_canonical_detail(
@@ -1974,6 +2075,20 @@ def build_canonical_detail(
         cast("list[str]", detail.get("modalities_external", []))
     )
     conflicts: dict[str, object] = {}
+
+    # Collect thinking capabilities from all sources
+    thinking_contributions: list[dict[str, object]] = []
+    provider_thinking_raw = cast(
+        "dict[str, object]", provider_detail.get("capabilities", {})
+    ).get("thinking")
+    if isinstance(provider_thinking_raw, dict) and provider_thinking_raw:
+        thinking_contributions.append(
+            {
+                "thinking": dict(cast("dict[str, object]", provider_thinking_raw)),
+                "source": "provider_catalog",
+                "confidence": "high",
+            }
+        )
 
     for obs in observation_payloads:
         source = str(obs.get("source", ""))
@@ -2040,6 +2155,17 @@ def build_canonical_detail(
                 if pk not in existing_pricing:
                     existing_pricing[pk] = pv
             detail["pricing_observation"] = existing_pricing
+            contributed = True
+        if "thinking_capability" in fragment:
+            thinking_contributions.append(
+                {
+                    "thinking": dict(
+                        cast("dict[str, object]", fragment["thinking_capability"])
+                    ),
+                    "source": source,
+                    "confidence": source,
+                }
+            )
             contributed = True
         if contributed:
             used_sources.add(source)
@@ -2138,6 +2264,30 @@ def build_canonical_detail(
                 if pk not in detail_pricing:
                     detail_pricing[pk] = pv
             detail["pricing_observation"] = detail_pricing
+        existing_thinking = cast(
+            "dict[str, object]",
+            existing_detail.get("capabilities", {}),
+        ).get("thinking")
+        if (
+            isinstance(existing_thinking, dict)
+            and existing_thinking
+            and not thinking_contributions
+        ):
+            # Only add from existing_detail if no contributions yet
+            thinking_contributions.append(
+                {
+                    "thinking": dict(cast("dict[str, object]", existing_thinking)),
+                    "source": "existing_detail",
+                    "confidence": "low",
+                }
+            )
+
+    # Merge thinking capabilities
+    if thinking_contributions:
+        merged_thinking = _merge_thinking_contributions(thinking_contributions)
+        caps_block = cast("dict[str, object]", detail.get("capabilities", {}))
+        caps_block["thinking"] = merged_thinking
+        detail["capabilities"] = caps_block
 
     # Materialize the merged detail.
     if limits_block:
@@ -2320,6 +2470,7 @@ def _strip_raw_payload(record: SourceModelRecord) -> SourceModelRecord:
         modalities=record.modalities,
         supports_tools=record.supports_tools,
         supports_reasoning=record.supports_reasoning,
+        thinking_capability=record.thinking_capability,
         input_price_per_1k=record.input_price_per_1k,
         output_price_per_1k=record.output_price_per_1k,
         benchmarks=record.benchmarks,
@@ -2366,6 +2517,7 @@ def _bound_raw_payload(record: SourceModelRecord) -> SourceModelRecord:
         modalities=record.modalities,
         supports_tools=record.supports_tools,
         supports_reasoning=record.supports_reasoning,
+        thinking_capability=record.thinking_capability,
         input_price_per_1k=record.input_price_per_1k,
         output_price_per_1k=record.output_price_per_1k,
         benchmarks=record.benchmarks,
