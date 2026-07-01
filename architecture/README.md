@@ -86,6 +86,23 @@ Phase 10 adds structured observability for thinking/reasoning decisions:
 
 See `plans/thinking_reasoning_phase_10_observability.md` for the full design.
 
+### Thinking/Reasoning Test Matrix
+
+Phase 11 adds a comprehensive regression test matrix (`tests/unit/test_thinking_reasoning_matrix.py`) covering all thinking/reasoning subsystems:
+
+1. **Config and capability schema** — default values, merge semantics, aggregate status computation, policy defaults
+2. **/v1/models serialization** — provider-scoped models, collapsed models, client control field flattening, budget bounds
+3. **Request classification** — OpenAI reasoning_effort, Anthropic thinking, assistant reasoning_content history
+4. **Routing eligibility** — supported/unsupported/unknown provider filtering, mixed collapsed filter policy
+5. **OpenAI-to-Anthropic request transcoding** — reasoning_effort→thinking budget, reasoning_content→thinking blocks, budget resolution
+6. **Anthropic-to-OpenAI request transcoding** — thinking field handling, thinking content in history
+7. **Non-streaming response translation** — thinking→reasoning_content, redacted thinking drops
+8. **Streaming response translation** — thinking_delta→reasoning_delta, ordering preservation
+9. **App/coordinator integration** — TranscoderPolicy injection, feature flag gating
+10. **Observability** — counter increments, event dispatch, request trace metadata
+
+See `plans/thinking_reasoning_phase_11_test_matrix.md` for the full plan.
+
 ## Multi-Provider Architecture
 
 EggPool supports 27+ upstream providers (OpenCode Go, OpenAI, Anthropic, Groq, DeepInfra, Gemini, xAI, Mistral, SiliconFlow, DeepSeek, Together, Fireworks, OpenRouter, Alibaba, MiniMax, and more), each with its own base URL, account pool, supported protocols, and model catalog. See `docs/providers.md` for the full roster.
