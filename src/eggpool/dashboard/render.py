@@ -7,6 +7,7 @@ small. All values rendered into HTML are escaped via the `escape` module.
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from html import escape as _html_escape
@@ -24,6 +25,7 @@ from eggpool.dashboard.escape import (
     format_age_seconds,
     format_bytes,
     format_int,
+    format_interval_seconds,
     format_latency,
     format_microdollars,
     format_percent,
@@ -3691,6 +3693,8 @@ def render_runtime(
     # Background tasks table
     if background_tasks:
         task_rows: list[str] = []
+        # Render "now" once so all rows share a coherent snapshot.
+        now_ts = time.time()
         for task in background_tasks:
             name = escape(str(task.get("name", "")))
             running = bool(task.get("running", False))
@@ -3698,15 +3702,41 @@ def render_runtime(
             cancelled = bool(task.get("cancelled", False))
             restarts = int(task.get("restart_count", 0) or 0)
             max_restarts = task.get("max_restarts")
+            interval_s = task.get("interval_s")
+            last_completed_at = task.get("last_completed_at")
             status = "running" if running else ("cancelled" if cancelled else "stopped")
             status_cls = "yes" if running else ("no" if cancelled else "")
             max_str = format_int(max_restarts) if max_restarts is not None else "—"
+            interval_str = format_interval_seconds(interval_s)
+            # "Next run" is the projected wall-clock time the loop
+            # will fire next, derived from the last completed iteration
+            # + the configured interval. If the task has never completed
+            # (still in its first sleep / just registered) we cannot
+            # estimate next run and render an em-dash. If the projected
+            # time is already in the past the task is overdue and we
+            # surface the magnitude with an explicit marker.
+            if (
+                isinstance(interval_s, (int, float))
+                and interval_s > 0
+                and isinstance(last_completed_at, (int, float))
+                and last_completed_at > 0
+            ):
+                next_run_at = float(last_completed_at) + float(interval_s)
+                delta_s = next_run_at - now_ts
+                if delta_s <= 0:
+                    next_run_str = f"overdue {format_age_seconds(-delta_s)}"
+                else:
+                    next_run_str = f"in {format_age_seconds(delta_s)}"
+            else:
+                next_run_str = "—"
             task_rows.append(
                 f"<tr>"
                 f"{_td_priority(escape(name), 1)}"
                 f"{_td_priority(status, 1, class_=status_cls)}"
                 f"{_td_priority(str(restarts), 2)}"
                 f"{_td_priority(max_str, 2)}"
+                f"{_td_priority(interval_str, 2)}"
+                f"{_td_priority(next_run_str, 3)}"
                 f"{_td_priority('yes' if done else 'no', 3)}"
                 f"</tr>"
             )
@@ -3719,7 +3749,9 @@ def render_runtime(
             # Priority 2 — shown on tablet+
             + _th("Restarts", priority=2)
             + _th("Max restarts", priority=2)
+            + _th("Interval", priority=2)
             # Priority 3 — desktop only
+            + _th("Next run", priority=3)
             + _th("Done", priority=3)
             + "</tr></thead><tbody>"
             + f"{''.join(task_rows)}"

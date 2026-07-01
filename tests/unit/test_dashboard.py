@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from html.parser import HTMLParser
 from typing import Any
 
@@ -4078,6 +4079,136 @@ class TestRenderRuntimeNetwork:
         }
         html = render_runtime(snapshot)
         assert "7 / 50" in html
+
+
+class TestRenderRuntimeBackgroundTasks:
+    """Tests for the background-tasks table on the runtime page."""
+
+    @staticmethod
+    def _base_snapshot() -> dict[str, Any]:
+        return {
+            "server": {"pid": 1, "uptime_seconds": 0, "configured_server_threads": 1},
+            "memory": {},
+            "processes": {},
+            "db": {},
+            "routing_runtime": {},
+            "outbound_client": {"build_count": 0, "request_count": 0, "error_count": 0},
+            "provider_client_pool": {"build_count": 0, "providers": {}},
+            "dns_cache": {"enabled": False},
+        }
+
+    def test_table_includes_interval_and_next_run_columns(self) -> None:
+        snapshot = self._base_snapshot()
+        # Two rows: one with a known interval + completed run, one with
+        # unknown cadence (interval_s=None) to exercise the "—" path.
+        snapshot["background_tasks"] = [
+            {
+                "name": "catalog_refresh",
+                "registered": True,
+                "running": False,
+                "done": False,
+                "cancelled": False,
+                "iteration_count": 1,
+                "restart_count": 0,
+                "max_restarts": 10,
+                "last_started_at": 0.0,
+                "last_completed_at": 0.0,
+                "last_failure_at": None,
+                "last_error_at": None,
+                "last_error_class": None,
+                "interval_s": 300.0,
+            },
+            {
+                "name": "mystery",
+                "registered": True,
+                "running": False,
+                "done": False,
+                "cancelled": False,
+                "iteration_count": 0,
+                "restart_count": 0,
+                "max_restarts": 10,
+                "last_started_at": None,
+                "last_completed_at": None,
+                "last_failure_at": None,
+                "last_error_at": None,
+                "last_error_class": None,
+                "interval_s": None,
+            },
+        ]
+        html = render_runtime(snapshot)
+        # Interval column header is present and the rendered values
+        # match the configured cadence (or "—" when unknown).
+        assert '<th data-priority="2">Interval</th>' in html
+        assert '<th data-priority="3">Next run</th>' in html
+        assert '<td data-priority="2">5m</td>' in html
+        # Unknown cadence renders as em-dash in both Interval and Next run.
+        assert '<td data-priority="2">—</td>' in html
+        assert '<td data-priority="3">—</td>' in html
+
+    def test_next_run_countdown_with_known_completion(self) -> None:
+        snapshot = self._base_snapshot()
+        # Pretend the last completion was 30s ago with a 5m cadence;
+        # next run should render as "in 4m30s".
+        snapshot["background_tasks"] = [
+            {
+                "name": "checkpoint",
+                "registered": True,
+                "running": True,
+                "done": False,
+                "cancelled": False,
+                "iteration_count": 7,
+                "restart_count": 0,
+                "max_restarts": 10,
+                "last_started_at": 0.0,
+                "last_completed_at": time.time() - 30,
+                "last_failure_at": None,
+                "last_error_at": None,
+                "last_error_class": None,
+                "interval_s": 300.0,
+            },
+        ]
+        html = render_runtime(snapshot)
+        # The countdown is approximate (depends on render-time now);
+        # only require the "in " prefix and a "4m" prefix.
+        match = re.search(
+            r'<td data-priority="3">in 4m\d+s</td>',
+            html,
+        )
+        assert match is not None, html
+
+    def test_next_run_marks_overdue(self) -> None:
+        snapshot = self._base_snapshot()
+        # Last completion was 10 minutes ago with a 1m cadence → overdue.
+        snapshot["background_tasks"] = [
+            {
+                "name": "stale_request_finalizer",
+                "registered": True,
+                "running": True,
+                "done": False,
+                "cancelled": False,
+                "iteration_count": 1,
+                "restart_count": 0,
+                "max_restarts": 10,
+                "last_started_at": 0.0,
+                "last_completed_at": time.time() - 600,
+                "last_failure_at": None,
+                "last_error_at": None,
+                "last_error_class": None,
+                "interval_s": 60.0,
+            },
+        ]
+        html = render_runtime(snapshot)
+        match = re.search(
+            r'<td data-priority="3">overdue 9m\d+s</td>',
+            html,
+        )
+        assert match is not None, html
+
+    def test_empty_state_still_works(self) -> None:
+        snapshot = self._base_snapshot()
+        snapshot["background_tasks"] = []
+        html = render_runtime(snapshot)
+        assert "No background tasks registered." in html
 
 
 class TestRenderRuntimeDispatchAndLoad:

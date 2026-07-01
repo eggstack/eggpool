@@ -558,7 +558,11 @@ def _register_update_checker(
         update_checker._client = await outbound_manager.get_client()  # pyright: ignore[reportPrivateUsage]
         await update_checker.run_periodic()
 
-    supervisor.register("update_checker", _run_with_client)
+    supervisor.register(
+        "update_checker",
+        _run_with_client,
+        interval_s=24 * 60 * 60,
+    )
     return update_checker
 
 
@@ -1009,6 +1013,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
                 config.models.refresh_interval_s,
                 model_info if config.model_info.enabled else None,
             ),
+            interval_s=float(config.models.refresh_interval_s),
         )
 
     # Register model info periodic refresh task
@@ -1020,6 +1025,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         supervisor.register(
             "model_info_refresh",
             lambda: model_info.run_periodic_refresh(),
+            interval_s=float(config.model_info.refresh_interval_s),
         )
 
     # Register periodic backfill of canonical rows for models that lack
@@ -1029,6 +1035,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         supervisor.register(
             "model_info_canonical_backfill",
             lambda: model_info.run_backfill_missing_canonical(),
+            interval_s=60.0,
         )
 
     # Register retention cleanup task (runs every hour)
@@ -1050,7 +1057,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
                 router=router,
             )
 
-    supervisor.register("retention_cleanup", _retention_cleanup)
+    supervisor.register("retention_cleanup", _retention_cleanup, interval_s=3600.0)
 
     # Register periodic checkpoint task (runs every 4 hours)
     async def _periodic_checkpoint() -> None:
@@ -1058,7 +1065,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             await asyncio.sleep(14400)
             await checkpoint_database(db)
 
-    supervisor.register("checkpoint", _periodic_checkpoint)
+    supervisor.register("checkpoint", _periodic_checkpoint, interval_s=14400.0)
 
     # Register periodic usage window refresh (every 60 seconds)
     async def _refresh_usage_windows() -> None:
@@ -1069,7 +1076,11 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             except Exception:
                 logger.exception("Failed to refresh usage windows")
 
-    supervisor.register("usage_window_refresh", _refresh_usage_windows)
+    supervisor.register(
+        "usage_window_refresh",
+        _refresh_usage_windows,
+        interval_s=60.0,
+    )
 
     # Register stale request finalizer (runs every 60s).  Default
     # threshold matches the upstream read_timeout so legitimate
@@ -1085,7 +1096,11 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             max_pending_seconds=config.upstream.read_timeout_s,
         )
 
-    supervisor.register("stale_request_finalizer", _stale_request_loop)
+    supervisor.register(
+        "stale_request_finalizer",
+        _stale_request_loop,
+        interval_s=60.0,
+    )
 
     # Register periodic prune of stale per-account model state
     # (model_availability + disabled_models). Runs every 60s so an
@@ -1097,6 +1112,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         supervisor.register(
             "health_disabled_models_prune",
             lambda: _prune_health_disabled_models_loop(app.state),
+            interval_s=60.0,
         )
     except Exception:  # noqa: BLE001 - best-effort registration
         logger.exception(
@@ -1110,6 +1126,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         supervisor.register(
             "metrics_flush",
             lambda: metrics_coalescer.run(metrics_stop_event),
+            interval_s=float(config.metrics.flush_interval_s),
         )
 
     # Periodic PyPI update check (default 24h). Drives the dashboard
@@ -1138,6 +1155,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
                 config_path=resolved_config_path,
                 env_path=resolved_env_path,
             ),
+            interval_s=float(config.backup.interval_s),
         )
 
     # 21. Start background tasks

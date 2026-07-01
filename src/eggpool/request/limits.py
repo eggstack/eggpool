@@ -152,21 +152,30 @@ def _positive_limit(value: Any) -> int | None:
 
 
 def _estimate_json_value_tokens(value: object) -> int:
-    """Estimate tokens represented by a decoded JSON-compatible value."""
+    """Estimate tokens represented by a decoded JSON-compatible value.
+
+    The tokenizer for chat-format requests renders messages as a flat string
+    (``<|start|>{role}\\n{content}<|end|>\\n``); it does not pay per-key,
+    per-list-item, or per-bracket tokens.  Counting JSON structure as if the
+    model sees it double-counts and inflates estimates for highly structured
+    payloads (large ``tools`` arrays, long ``messages`` histories).  Only a
+    small per-key-value separator cost is added to approximate the role
+    label and colon that the model actually sees.
+    """
     if isinstance(value, str):
         return _estimate_string_tokens(value)
     if isinstance(value, Mapping):
         mapping = cast("Mapping[object, object]", value)
-        total = 4
+        total = 1
         for key, child in mapping.items():
             total += _estimate_string_tokens(str(key)) + _estimate_json_value_tokens(
                 child
             )
-            total += 2
+            total += 1
         return total
     if isinstance(value, list):
         items = cast("list[object]", value)
-        return 2 + sum(_estimate_json_value_tokens(item) + 1 for item in items)
+        return sum(_estimate_json_value_tokens(item) for item in items)
     if value is None or isinstance(value, bool):
         return 1
     if isinstance(value, (int, float)):

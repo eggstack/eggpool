@@ -77,6 +77,49 @@ def test_context_limit_estimate_uses_decoded_text_not_json_escape_overhead() -> 
     assert estimate_context_input_tokens(body, payload) + 500 < 3_000
 
 
+def test_context_limit_estimate_does_not_count_json_structure_overhead() -> None:
+    """Structural JSON overhead (map base, key separators, list commas) does
+    not appear in the model's rendered token stream.  Highly structured
+    payloads with many tool definitions and messages should not be inflated
+    by per-element overhead that does not exist in the tokenizer output.
+    """
+    payload = {
+        "model": "m1",
+        "max_tokens": 500,
+        "messages": [
+            {"role": "user", "content": "hello world " * 100},
+            {"role": "assistant", "content": "hi there " * 100},
+        ],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": f"tool_{i}",
+                    "description": "x" * 200,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "a": {"type": "string", "description": "x" * 50},
+                            "b": {"type": "string", "description": "x" * 50},
+                            "c": {"type": "string", "description": "x" * 50},
+                        },
+                    },
+                },
+            }
+            for i in range(20)
+        ],
+    }
+    body = json.dumps(payload).encode()
+
+    content_chars = 200 * (5 + 5) + 20 * (200 + 3 * 50)
+    expected_text_tokens = (content_chars + 3) // 4
+    estimate = estimate_context_input_tokens(body, payload)
+    overhead = estimate - expected_text_tokens
+    assert overhead < 2_000, (
+        f"Structural overhead too large: {overhead} tokens over content estimate"
+    )
+
+
 def test_reservation_input_estimate_is_bounded() -> None:
     assert estimate_reservation_tokens(b"x" * 1_000_000) == 128_000
 
@@ -170,6 +213,59 @@ def test_large_request_cannot_bypass_context_limit_estimate_cap() -> None:
             protocol="openai",
             catalog_cache=cache,
         )
+
+
+def test_realistic_opencode_payload_below_context_limit_is_forwarded() -> None:
+    """A realistic OpenCode-style payload that fits the model's actual
+    context window must not be spuriously rejected by structural overhead
+    that does not exist in the model's token stream.
+    """
+    cache = MockCatalogCache(
+        {
+            "effective_limits": {
+                "context_tokens": 160_000,
+                "output_tokens": 16_384,
+                "enforce": True,
+            }
+        }
+    )
+    msgs = []
+    for i in range(50):
+        role = "user" if i % 2 == 0 else "assistant"
+        msgs.append({"role": role, "content": "y" * 3_900})
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": f"tool_{i}",
+                "description": "x" * 300,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "File path."},
+                        "content": {"type": "string", "description": "Content."},
+                    },
+                },
+            },
+        }
+        for i in range(30)
+    ]
+    payload = {
+        "model": "MiniMax-M3",
+        "max_tokens": 16_384,
+        "messages": msgs,
+        "tools": tools,
+        "stream": True,
+    }
+    body = json.dumps(payload).encode()
+    _check_context_limits(
+        model_id="MiniMax-M3",
+        provider_id=None,
+        body=body,
+        payload=payload,
+        protocol="openai",
+        catalog_cache=cache,
+    )
 
 
 def test_input_specific_limit_is_enforced() -> None:

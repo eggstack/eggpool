@@ -322,6 +322,26 @@ async def test_background_tasks_with_supervisor(db: Database) -> None:
     assert task["last_failure_at"] is None
     assert task["last_error_at"] is None
     assert task["last_error_class"] is None
+    # interval_s is plumbed through to the runtime-metrics snapshot so
+    # the dashboard can show "how often" each task runs. None means
+    # the cadence is unknown.
+    assert task["interval_s"] is None
+
+
+@pytest.mark.asyncio
+async def test_background_tasks_interval_s_plumbed(db: Database) -> None:
+    from eggpool.background import TaskSupervisor
+
+    supervisor = TaskSupervisor()
+
+    async def dummy() -> None:
+        await asyncio.sleep(3600)
+
+    supervisor.register("interval-task", dummy, max_restarts=5, interval_s=42.0)
+    service = _make_service(db, supervisor=supervisor)
+    snapshot = await service.snapshot()
+    task = snapshot["background_tasks"][0]
+    assert task["interval_s"] == 42.0
 
 
 @pytest.mark.asyncio

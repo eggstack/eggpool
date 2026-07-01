@@ -198,6 +198,43 @@ def format_age_seconds(value: float | int | None) -> str:
     return f"{days}d{hrs}h"
 
 
+def format_interval_seconds(value: float | int | None) -> str:
+    """Format a wall-clock interval (cadence) in seconds.
+
+    Mirrors :func:`format_age_seconds` but uses coarser units: a
+    background task that runs every 5 minutes renders as ``"5m"``
+    rather than ``"5m0s"``, and daily / multi-day intervals are shown
+    as ``"1d"`` / ``"7d"``. Returns ``"—"`` for ``None`` and rounds
+    sub-second values up to ``"<1s"`` to keep the dashboard tidy.
+    """
+    if value is None:
+        return "—"
+    seconds = float(value)
+    if seconds <= 0:
+        return "—"
+    if seconds < 1:
+        return "<1s"
+    if seconds < 60:
+        return f"{int(round(seconds))}s"
+    minutes = seconds / 60
+    if minutes < 60:
+        rounded = int(round(minutes))
+        if abs(minutes - rounded) < 0.05:
+            return f"{rounded}m"
+        return f"{minutes:.1f}m"
+    hours = minutes / 60
+    if hours < 24:
+        rounded = int(round(hours))
+        if abs(hours - rounded) < 0.05:
+            return f"{rounded}h"
+        return f"{hours:.1f}h"
+    days = hours / 24
+    rounded = int(round(days))
+    if abs(days - rounded) < 0.05:
+        return f"{rounded}d"
+    return f"{days:.1f}d"
+
+
 def format_percent100(value: float | int | None, digits: int = 1) -> str:
     """Format a percentage value that is already in 0–100 scale.
 

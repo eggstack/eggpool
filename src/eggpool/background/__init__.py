@@ -34,6 +34,7 @@ class SupervisedTask:
     _last_error_at: float = 0.0
     _last_error_class: str | None = None
     _iteration_count: int = 0
+    _interval_s: float | None = None
 
     async def start(self) -> None:
         """Start the supervised task."""
@@ -128,6 +129,7 @@ class SupervisedTask:
             "last_failure_at": self._last_failure or None,
             "last_error_at": self._last_error_at or None,
             "last_error_class": self._last_error_class,
+            "interval_s": self._interval_s,
         }
 
 
@@ -142,14 +144,25 @@ class TaskSupervisor:
         name: str,
         coro_factory: Callable[[], Coroutine[Any, Any, None]],
         max_restarts: int = 10,
+        interval_s: float | None = None,
     ) -> SupervisedTask:
-        """Register a new supervised task."""
+        """Register a new supervised task.
+
+        ``interval_s`` is the wall-clock cadence between successive
+        iterations of *coro_factory* (i.e. the ``asyncio.sleep`` the
+        loop awaits between runs). It is exposed in the runtime-metrics
+        snapshot so the dashboard can show "how often" each task runs
+        and estimate the time until its next run. ``None`` (default)
+        means the cadence is unknown — the task is registered without
+        timing metadata and the dashboard renders ``"—"``.
+        """
         if name in self._tasks:
             raise ValueError(f"Task {name!r} is already registered")
         task = SupervisedTask(
             name=name,
             _coro_factory=coro_factory,
             _max_restarts=max_restarts,
+            _interval_s=interval_s,
         )
         self._tasks[name] = task
         return task
