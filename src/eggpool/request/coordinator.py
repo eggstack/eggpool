@@ -2366,7 +2366,7 @@ class RequestCoordinator:
             context.thinking_trace["resolved_budget_tokens"] = resolution.budget_tokens
             context.thinking_trace["capability_status"] = thinking_capability.status
             context.thinking_trace["capability_source"] = thinking_capability.source
-            if context.thinking_trace.get("upstream_fields") is None:
+            if not context.thinking_trace.get("upstream_fields"):
                 context.thinking_trace["upstream_fields"] = ["thinking"]
         context.upstream_body = encode_json_body(payload_obj)  # pyright: ignore[reportUnknownArgumentType]
         if context.transcode_context is not None:
