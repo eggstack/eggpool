@@ -347,6 +347,14 @@ persist_redacted_error_detail = false
 # header = "Authorization"
 # scheme = "Bearer"
 #
+# # OpenCode Go exposes low/medium/high thinking controls for mimo-v2.5.
+# [providers.opencode-go.model_capabilities."mimo-v2.5".thinking]
+# status = "supported"
+# source = "provider_catalog"
+# native_protocols = ["openai", "anthropic"]
+# supported_efforts = ["low", "medium", "high"]
+# effort_to_budget_tokens = { low = 1024, med = 4096, medium = 4096, high = 16384 }
+#
 # # Provider-specific model context limits override upstream metadata.
 # # Use the base model ID (not the provider-suffixed ID).
 # [providers.opencode-go.model_overrides."MiniMax-M3"]

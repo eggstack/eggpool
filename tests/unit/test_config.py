@@ -75,6 +75,92 @@ def test_load_valid_config(valid_config: Path) -> None:
         del os.environ["TEST_KEY_2"]
 
 
+def test_legacy_opencode_go_accounts_seed_mimo_thinking_capability() -> None:
+    config = AppConfig.from_dict(
+        {
+            "accounts": [
+                {"name": "personal", "api_key": "sk-test"},
+            ],
+        }
+    )
+
+    provider = config.providers["opencode-go"]
+    thinking = provider.model_capabilities["mimo-v2.5"].thinking
+    assert thinking is not None
+    assert thinking.status == "supported"
+    assert thinking.source == "provider_catalog"
+    assert thinking.native_protocols == ["openai", "anthropic"]
+    assert thinking.supported_efforts == ["low", "medium", "high"]
+    assert thinking.effort_to_budget_tokens == {
+        "low": 1024,
+        "med": 4096,
+        "medium": 4096,
+        "high": 16384,
+    }
+
+
+def test_explicit_opencode_go_provider_seeds_mimo_thinking_capability() -> None:
+    config = AppConfig.from_dict(
+        {
+            "providers": {
+                "opencode-go": {
+                    "id": "opencode-go",
+                    "base_url": "https://opencode.ai/zen/go/v1",
+                    "protocols": ["openai", "anthropic"],
+                    "accounts": [{"name": "personal", "api_key": "sk-test"}],
+                }
+            }
+        }
+    )
+
+    thinking = config.providers["opencode-go"].model_capabilities["mimo-v2.5"].thinking
+    assert thinking is not None
+    assert thinking.status == "supported"
+
+
+def test_opencode_go_builtin_capability_does_not_clobber_operator_override() -> None:
+    config = AppConfig.from_dict(
+        {
+            "providers": {
+                "opencode-go": {
+                    "id": "opencode-go",
+                    "base_url": "https://opencode.ai/zen/go/v1",
+                    "accounts": [{"name": "personal", "api_key": "sk-test"}],
+                    "model_capabilities": {
+                        "mimo-v2.5": {
+                            "thinking": {
+                                "status": "unsupported",
+                                "source": "manual_override",
+                            }
+                        }
+                    },
+                }
+            }
+        }
+    )
+
+    thinking = config.providers["opencode-go"].model_capabilities["mimo-v2.5"].thinking
+    assert thinking is not None
+    assert thinking.status == "unsupported"
+    assert thinking.source == "manual_override"
+
+
+def test_noncanonical_opencode_go_provider_does_not_seed_mimo_capability() -> None:
+    config = AppConfig.from_dict(
+        {
+            "providers": {
+                "opencode-go": {
+                    "id": "opencode-go",
+                    "base_url": "https://example.com/v1",
+                    "accounts": [{"name": "personal", "api_key": "sk-test"}],
+                }
+            }
+        }
+    )
+
+    assert config.providers["opencode-go"].model_capabilities == {}
+
+
 def test_database_worker_threads_two_allowed() -> None:
     cfg = DatabaseConfig(worker_threads=2)
     assert cfg.worker_threads == 2

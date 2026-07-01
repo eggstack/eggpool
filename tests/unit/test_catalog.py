@@ -4,7 +4,15 @@ from __future__ import annotations
 
 import time
 
+import httpx
+import pytest
+
 from eggpool.catalog.cache import ModelCatalogCache, parse_model_id
+from eggpool.catalog.models_dev import (
+    apply_supported_efforts_to_capabilities,
+    derive_opencode_go_supported_efforts,
+    fetch_models_dev_provider_models,
+)
 from eggpool.catalog.normalizer import (
     normalize_anthropic_models,
     normalize_models,
@@ -58,6 +66,105 @@ def test_normalize_openai_models() -> None:
     # Fail-closed: normalizer no longer assigns protocol; resolved by catalog
     assert models[0]["protocol"] is None
     assert models[0]["capabilities"]["context_window"] == 8192
+
+
+def test_normalize_openai_reasoning_options_to_thinking_capability() -> None:
+    raw = {
+        "data": [
+            {
+                "id": "deepseek-v4-flash",
+                "name": "DeepSeek V4 Flash",
+                "reasoning": True,
+                "reasoning_options": [
+                    {"type": "toggle"},
+                    {"type": "effort", "values": ["low", "medium", "high", "max"]},
+                ],
+            }
+        ]
+    }
+
+    model = normalize_openai_models(raw)[0]
+    thinking = model["capabilities"]["thinking"]
+
+    assert thinking["status"] == "supported"
+    assert thinking["source"] == "provider_catalog"
+    assert thinking["supported_efforts"] == ["low", "medium", "high", "max"]
+    assert thinking["effort_to_budget_tokens"]["max"] == 32768
+
+
+def test_normalize_supported_parameters_to_thinking_capability() -> None:
+    raw = {
+        "data": [
+            {
+                "id": "provider-reasoning-model",
+                "name": "Reasoning Model",
+                "supported_parameters": ["tools", "reasoning_effort"],
+            }
+        ]
+    }
+
+    model = normalize_openai_models(raw)[0]
+    thinking = model["capabilities"]["thinking"]
+
+    assert thinking["status"] == "supported"
+    assert thinking["client_controls"]["openai"]["request_fields"] == [
+        "reasoning_effort",
+        "reasoning",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_models_dev_provider_models_extracts_provider_rows() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://models.dev/api.json"
+        return httpx.Response(
+            200,
+            json={
+                "opencode-go": {
+                    "models": {
+                        "mimo-v2.5": {
+                            "id": "mimo-v2.5",
+                            "reasoning": True,
+                        }
+                    }
+                }
+            },
+            request=request,
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        rows = await fetch_models_dev_provider_models(client, "opencode-go")
+
+    assert rows["mimo-v2.5"]["reasoning"] is True
+
+
+def test_models_dev_derives_opencode_go_efforts_from_opencode_rules() -> None:
+    assert derive_opencode_go_supported_efforts(
+        "mimo-v2.5",
+        {"reasoning": True},
+    ) == ["low", "medium", "high"]
+    assert derive_opencode_go_supported_efforts(
+        "deepseek-v4-flash",
+        {"reasoning": True},
+    ) == ["low", "medium", "high", "max"]
+
+
+def test_apply_supported_efforts_updates_capability_budget_map() -> None:
+    capabilities = {
+        "thinking": {
+            "status": "supported",
+            "source": "provider_catalog",
+        }
+    }
+
+    merged = apply_supported_efforts_to_capabilities(
+        capabilities,
+        efforts=["low", "medium", "high", "max"],
+    )
+
+    thinking = merged["thinking"]
+    assert thinking["supported_efforts"] == ["low", "medium", "high", "max"]
+    assert thinking["effort_to_budget_tokens"]["max"] == 32768
 
 
 def test_normalize_anthropic_models() -> None:

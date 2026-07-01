@@ -421,6 +421,126 @@ class TestEligibilityWithThinking:
         )
         assert len(eligible) == 1
 
+    def test_provider_capability_override_is_visible_to_eligibility(self) -> None:
+        """Provider overrides must apply before the thinking gate runs."""
+        from eggpool.accounts.state import AccountRuntimeState
+        from eggpool.catalog.cache import ModelCatalogCache
+        from eggpool.models.config import AppConfig
+
+        config = AppConfig.from_dict(
+            {
+                "providers": {
+                    "opencode-go": {
+                        "id": "opencode-go",
+                        "base_url": "https://opencode.ai/zen/go/v1",
+                        "protocols": ["openai", "anthropic"],
+                        "accounts": [{"name": "acct1", "api_key": "sk-test"}],
+                    }
+                }
+            }
+        )
+        cache = ModelCatalogCache()
+        cache.set_config(config)
+        cache.update_from_account(
+            "acct1",
+            "opencode-go",
+            [
+                {
+                    "model_id": "mimo-v2.5",
+                    "display_name": "mimo-v2.5",
+                    "protocol": "openai",
+                    "capabilities": {},
+                    "source_metadata": {},
+                }
+            ],
+        )
+        req = ThinkingRequestRequirement(
+            required=True,
+            client_protocol="openai",
+            fields=["reasoning_effort"],
+        )
+
+        eligible = get_eligible_accounts(
+            [AccountRuntimeState(name="acct1", enabled=True)],
+            "mimo-v2.5",
+            cache,
+            protocol="openai",
+            thinking_requirement=req,
+        )
+
+        assert [state.name for state in eligible] == ["acct1"]
+        entry = cache.get_provider_model_entry("mimo-v2.5", "opencode-go")
+        assert entry is not None
+        assert entry["capabilities"]["thinking"]["status"] == "supported"
+
+    def test_requested_effort_filters_candidate_when_efforts_known(self) -> None:
+        """Known supported efforts narrow routing for effort-specific requests."""
+        from eggpool.accounts.state import AccountRuntimeState
+
+        cache = MagicMock()
+        cache.get_provider_for_account.return_value = "p1"
+        cache.is_account_model_available.return_value = True
+        cache.get_provider_model_entry.return_value = {
+            "model_id": "m1",
+            "provider_id": "p1",
+            "capabilities": {
+                "thinking": {
+                    "status": "supported",
+                    "source": "provider_catalog",
+                    "supported_efforts": ["low", "medium", "high"],
+                }
+            },
+        }
+        req = ThinkingRequestRequirement(
+            required=True,
+            client_protocol="openai",
+            fields=["reasoning_effort"],
+            requested_effort="max",
+        )
+
+        eligible = get_eligible_accounts(
+            [AccountRuntimeState(name="acct1", enabled=True)],
+            "m1",
+            cache,
+            thinking_requirement=req,
+        )
+
+        assert eligible == []
+
+    def test_requested_effort_allows_candidate_when_effort_known(self) -> None:
+        """Effort aliases are accepted when a provider advertises the mode."""
+        from eggpool.accounts.state import AccountRuntimeState
+
+        cache = MagicMock()
+        cache.get_provider_for_account.return_value = "p1"
+        cache.is_account_model_available.return_value = True
+        cache.get_provider_model_entry.return_value = {
+            "model_id": "m1",
+            "provider_id": "p1",
+            "capabilities": {
+                "thinking": {
+                    "status": "supported",
+                    "source": "provider_catalog",
+                    "supported_efforts": ["low", "medium", "high"],
+                }
+            },
+        }
+        req = ThinkingRequestRequirement(
+            required=True,
+            client_protocol="openai",
+            fields=["reasoning_effort"],
+            requested_effort="med",
+        )
+
+        eligible = get_eligible_accounts(
+            [AccountRuntimeState(name="acct1", enabled=True)],
+            "m1",
+            cache,
+            thinking_requirement=req,
+        )
+
+        assert [state.name for state in eligible] == ["acct1"]
+
 
 # ---------------------------------------------------------------------------
 # CapabilityError

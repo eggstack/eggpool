@@ -24,7 +24,17 @@ from eggpool.catalog.catalog_resolvers import (
 )
 from eggpool.catalog.fetcher import fetch_models_for_account
 from eggpool.catalog.limits import ModelLimitResolver, extract_upstream_limits
-from eggpool.catalog.normalizer import normalize_models
+from eggpool.catalog.models_dev import (
+    OPENCODE_GO_MODELS_DEV_PROVIDER_ID,
+    apply_supported_efforts_to_capabilities,
+    derive_opencode_go_supported_efforts,
+    fetch_models_dev_provider_models,
+    merge_models_dev_metadata,
+)
+from eggpool.catalog.normalizer import (
+    extract_capabilities_from_metadata,
+    normalize_models,
+)
 from eggpool.catalog.pricing_aliases import (
     PricingAliasResolver,
     seed_default_aliases,
@@ -198,10 +208,84 @@ class CatalogService:
         # ready (catalog aliases live in ``model_pricing_aliases``).
         self._alias_resolver: PricingAliasResolver | None = None
         self._catalog_pipeline: CatalogResolverPipeline | None = None
+        self._models_dev_provider_cache: dict[
+            str, tuple[float, dict[str, dict[str, Any]]]
+        ] = {}
 
     def _catalog_http_client(self) -> CatalogHttpClient | None:
         """Return the long-lived client used for external catalog lookups."""
         return self._outbound_client or self._httpx_client
+
+    async def _get_models_dev_provider_models(
+        self,
+        provider_id: str,
+    ) -> dict[str, dict[str, Any]]:
+        """Fetch models.dev provider rows with a small in-process TTL."""
+        cached = self._models_dev_provider_cache.get(provider_id)
+        now = time.time()
+        if cached is not None:
+            cached_at, models = cached
+            if now - cached_at < 300:
+                return models
+        client = self._catalog_http_client()
+        if client is None:
+            return {}
+        models = await fetch_models_dev_provider_models(client, provider_id)
+        if models:
+            self._models_dev_provider_cache[provider_id] = (now, models)
+        return models
+
+    @staticmethod
+    def _is_canonical_opencode_go_provider(
+        provider_id: str,
+        provider_cfg: ProviderConfig | None,
+    ) -> bool:
+        """Return whether this provider is the bundled OpenCode Go endpoint."""
+        if provider_id != DEFAULT_PROVIDER_ID or provider_cfg is None:
+            return False
+        return provider_cfg.base_url.rstrip("/") == "https://opencode.ai/zen/go/v1"
+
+    async def _enrich_opencode_go_models(
+        self,
+        provider_id: str,
+        provider_cfg: ProviderConfig | None,
+        models: list[dict[str, Any]],
+    ) -> None:
+        """Enrich canonical OpenCode Go rows with models.dev metadata."""
+        if not self._is_canonical_opencode_go_provider(provider_id, provider_cfg):
+            return
+        provider_models = await self._get_models_dev_provider_models(
+            OPENCODE_GO_MODELS_DEV_PROVIDER_ID
+        )
+        if not provider_models:
+            return
+        for model in models:
+            metadata = provider_models.get(str(model.get("model_id")))
+            if metadata is None:
+                continue
+            merge_models_dev_metadata(model, metadata)
+            capabilities_raw = model.get("capabilities", {})
+            capabilities = (
+                dict(cast("dict[str, Any]", capabilities_raw))
+                if isinstance(capabilities_raw, dict)
+                else {}
+            )
+            capabilities.update(
+                extract_capabilities_from_metadata(
+                    metadata,
+                    protocol=model.get("protocol")
+                    if isinstance(model.get("protocol"), str)
+                    else None,
+                )
+            )
+            efforts = derive_opencode_go_supported_efforts(
+                str(model.get("model_id")),
+                metadata,
+            )
+            model["capabilities"] = apply_supported_efforts_to_capabilities(
+                capabilities,
+                efforts=efforts,
+            )
 
     def set_price_change_callback(
         self, callback: Callable[[str, str | None], None]
@@ -735,6 +819,7 @@ class CatalogService:
                 update = self._cache.update_from_account(account_name, provider_id, [])
                 return AccountCatalogOutcome.SUCCESS_EMPTY, update
             provider_cfg = provider_cfg or self._config.providers.get(provider_id)
+            await self._enrich_opencode_go_models(provider_id, provider_cfg, models)
 
             # Apply per-model protocol resolution (Section 11)
             for model in models:

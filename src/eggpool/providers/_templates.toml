@@ -28,6 +28,14 @@ probe_model = "gpt-5.5-mini"
 probe_protocol = "openai"
 require_models = true
 
+[providers.opencode-go.model_capabilities."mimo-v2.5".thinking]
+status = "supported"
+source = "provider_catalog"
+native_protocols = ["openai", "anthropic"]
+supported_efforts = ["low", "medium", "high"]
+effort_to_budget_tokens = { low = 1024, med = 4096, medium = 4096, high = 16384 }
+notes = "OpenCode Go exposes low/medium/high thinking controls."
+
 [providers.minimax]
 # MiniMax International — Anthropic-compatible endpoint for token-plan keys.
 # Token-plan keys from minimax.io use the Anthropic-compatible transport

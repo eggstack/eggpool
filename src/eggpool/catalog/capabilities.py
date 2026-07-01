@@ -79,6 +79,7 @@ class ThinkingCapability(BaseModel):
     )
     budget_tokens_min: int | None = None
     budget_tokens_max: int | None = None
+    supported_efforts: list[str] = Field(default_factory=list)
     effort_to_budget_tokens: dict[str, int] | None = None
     notes: str | None = None
 
@@ -181,6 +182,11 @@ def merge_thinking_capabilities(
         if override.effort_to_budget_tokens is not None
         else base.effort_to_budget_tokens
     )
+    supported_efforts = (
+        override.supported_efforts
+        if override.supported_efforts
+        else base.supported_efforts
+    )
     notes = override.notes if override.notes is not None else base.notes
 
     return ThinkingCapability(
@@ -190,6 +196,7 @@ def merge_thinking_capabilities(
         client_controls=controls,
         budget_tokens_min=budget_min,
         budget_tokens_max=budget_max,
+        supported_efforts=supported_efforts,
         effort_to_budget_tokens=effort,
         notes=notes,
     )
@@ -285,11 +292,17 @@ def aggregate_thinking_capabilities(
         budget_min = None
         budget_max = None
 
-    # Merge effort_to_budget_tokens: last-wins.
+    # Merge effort metadata: last-wins for budget mappings, union for
+    # advertised effort labels so collapsed entries keep every known
+    # client-selectable mode visible.
     effort: dict[str, int] | None = None
+    supported_efforts: list[str] = []
     for c in capabilities:
         if c.effort_to_budget_tokens is not None:
             effort = dict(c.effort_to_budget_tokens)
+        for item in c.supported_efforts:
+            if item not in supported_efforts:
+                supported_efforts.append(item)
 
     return ThinkingCapability(
         status=agg_status,
@@ -298,6 +311,7 @@ def aggregate_thinking_capabilities(
         client_controls=controls,
         budget_tokens_min=budget_min,
         budget_tokens_max=budget_max,
+        supported_efforts=supported_efforts,
         effort_to_budget_tokens=effort,
     )
 
@@ -363,6 +377,8 @@ def serialize_thinking_for_models(
         result["budget_tokens_min"] = capability.budget_tokens_min
     if capability.budget_tokens_max is not None:
         result["budget_tokens_max"] = capability.budget_tokens_max
+    if capability.supported_efforts:
+        result["supported_efforts"] = list(capability.supported_efforts)
     if capability.effort_to_budget_tokens is not None:
         result["effort_to_budget_tokens"] = dict(capability.effort_to_budget_tokens)
 
@@ -418,10 +434,20 @@ def thinking_override_to_capability(
     native_protocols = override.get("native_protocols")
     budget_min = override.get("budget_tokens_min")
     budget_max = override.get("budget_tokens_max")
+    supported_efforts = override.get("supported_efforts")
     effort = override.get("effort_to_budget_tokens")
     notes = override.get("notes")
 
-    fields = (status, source, native_protocols, budget_min, budget_max, effort, notes)
+    fields = (
+        status,
+        source,
+        native_protocols,
+        budget_min,
+        budget_max,
+        supported_efforts,
+        effort,
+        notes,
+    )
     has_any = any(v is not None for v in fields)
     if not has_any:
         return ThinkingCapability()
@@ -448,13 +474,28 @@ def thinking_override_to_capability(
     )
     effort_dict: dict[str, int] | None = None
     if isinstance(effort, dict):
-        effort_dict = {str(k): int(v) for k, v in effort.items()}  # type: ignore[arg-type]
+        raw_effort = cast("dict[object, object]", effort)
+        parsed_effort: dict[str, int] = {}
+        for key, value in raw_effort.items():
+            if isinstance(value, int):
+                parsed_effort[str(key)] = value
+            elif isinstance(value, str):
+                try:
+                    parsed_effort[str(key)] = int(value)
+                except ValueError:
+                    continue
+        effort_dict = parsed_effort
+    supported_effort_list: list[str] = []
+    if isinstance(supported_efforts, list):
+        raw_supported_efforts = cast("list[object]", supported_efforts)
+        supported_effort_list = [str(v) for v in raw_supported_efforts]
     return ThinkingCapability(
         status=cap_status,
         source=cap_source,
         native_protocols=native_list,
         budget_tokens_min=budget_min if isinstance(budget_min, int) else None,
         budget_tokens_max=budget_max if isinstance(budget_max, int) else None,
+        supported_efforts=supported_effort_list,
         effort_to_budget_tokens=effort_dict,
         notes=str(notes) if notes is not None else None,
     )
@@ -540,11 +581,16 @@ def dict_to_model_capabilities(data: dict[str, object]) -> ModelCapabilities:
         native_protos = [str(p) for p in native_val]
     bmin_raw = tr.get("budget_tokens_min")
     bmax_raw = tr.get("budget_tokens_max")
+    supported_efforts_raw = tr.get("supported_efforts")
     effort_raw = tr.get("effort_to_budget_tokens")
     notes_raw = tr.get("notes")
     effort_dict: dict[str, int] | None = None
     if isinstance(effort_raw, dict):
         effort_dict = {str(k): int(v) for k, v in effort_raw.items()}  # type: ignore[arg-type]
+    supported_efforts: list[str] = []
+    supported_efforts_val = cast("list[object] | None", supported_efforts_raw)
+    if isinstance(supported_efforts_val, list):
+        supported_efforts = [str(v) for v in supported_efforts_val]
 
     # Parse per-protocol client controls.
     client_controls_raw = tr.get("client_controls")
@@ -601,6 +647,7 @@ def dict_to_model_capabilities(data: dict[str, object]) -> ModelCapabilities:
             client_controls=client_controls,
             budget_tokens_min=bmin_raw if isinstance(bmin_raw, int) else None,
             budget_tokens_max=bmax_raw if isinstance(bmax_raw, int) else None,
+            supported_efforts=supported_efforts,
             effort_to_budget_tokens=effort_dict,
             notes=str(notes_raw) if notes_raw is not None else None,
         ),
@@ -636,6 +683,8 @@ def model_capabilities_to_dict(capabilities: ModelCapabilities) -> dict[str, obj
         thinking_dict["budget_tokens_min"] = tc.budget_tokens_min
     if tc.budget_tokens_max is not None:
         thinking_dict["budget_tokens_max"] = tc.budget_tokens_max
+    if tc.supported_efforts:
+        thinking_dict["supported_efforts"] = list(tc.supported_efforts)
     if tc.effort_to_budget_tokens is not None:
         thinking_dict["effort_to_budget_tokens"] = dict(tc.effort_to_budget_tokens)
     if tc.notes is not None:
@@ -914,6 +963,44 @@ def extract_thinking_status_from_entry(
     thinking_raw: dict[str, object] = thinking_raw_obj  # pyright: ignore[reportUnknownVariableType]
     caps = dict_to_model_capabilities({"thinking": thinking_raw})
     return caps.thinking.status
+
+
+def _normalize_effort_label(value: str) -> str:
+    """Normalize common effort aliases for capability comparisons."""
+    lowered = value.strip().lower()
+    if lowered == "med":
+        return "medium"
+    return lowered
+
+
+def candidate_supports_requested_effort(
+    entry: Mapping[str, object] | None,
+    requested_effort: str | None,
+) -> bool:
+    """Return whether a catalog entry supports the requested effort level.
+
+    An empty ``supported_efforts`` list means the provider did not expose
+    effort-level metadata, so the caller falls back to status-only routing.
+    """
+    if requested_effort is None:
+        return True
+    if entry is None:
+        return True
+    caps_raw_obj: object = entry.get("capabilities")  # pyright: ignore[reportUnknownMemberType]
+    if not isinstance(caps_raw_obj, dict):
+        return True
+    caps_raw: dict[str, object] = caps_raw_obj  # pyright: ignore[reportUnknownVariableType]
+    thinking_raw_obj: object = caps_raw.get("thinking")  # pyright: ignore[reportUnknownMemberType]
+    if not isinstance(thinking_raw_obj, dict):
+        return True
+    thinking_raw: dict[str, object] = thinking_raw_obj  # pyright: ignore[reportUnknownVariableType]
+    caps = dict_to_model_capabilities({"thinking": thinking_raw})
+    supported = caps.thinking.supported_efforts
+    if not supported:
+        return True
+    requested = _normalize_effort_label(requested_effort)
+    supported_normalized = {_normalize_effort_label(value) for value in supported}
+    return requested in supported_normalized
 
 
 def check_candidate_thinking_eligibility(

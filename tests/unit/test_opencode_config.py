@@ -306,7 +306,7 @@ def test_output_no_status_contamination() -> None:
 
 
 def test_thinking_supported_model_gets_annotation() -> None:
-    """A model with thinking.status='supported' receives a thinking field."""
+    """A supported thinking model receives OpenCode reasoning metadata."""
     models = [
         {
             "model_id": "o3-mini/openai",
@@ -317,6 +317,7 @@ def test_thinking_supported_model_gets_annotation() -> None:
                     "status": "supported",
                     "source": "provider_catalog",
                     "native_protocols": ["openai"],
+                    "supported_efforts": ["low", "medium", "high"],
                 }
             },
             "effective_limits": {},
@@ -328,7 +329,12 @@ def test_thinking_supported_model_gets_annotation() -> None:
         models=models,
     )
     entry = result["provider"]["eggpool"]["models"]["o3-mini/openai"]
-    assert entry["thinking"] == "supported"
+    assert entry["reasoning"] is True
+    assert entry["variants"] == {
+        "low": {"reasoningEffort": "low"},
+        "medium": {"reasoningEffort": "medium"},
+        "high": {"reasoningEffort": "high"},
+    }
 
 
 def test_thinking_unknown_model_no_annotation() -> None:
@@ -354,6 +360,7 @@ def test_thinking_unknown_model_no_annotation() -> None:
     )
     entry = result["provider"]["eggpool"]["models"]["gpt-4o/openai"]
     assert "thinking" not in entry
+    assert "reasoning" not in entry
 
 
 def test_thinking_unsupported_model_no_annotation() -> None:
@@ -379,6 +386,7 @@ def test_thinking_unsupported_model_no_annotation() -> None:
     )
     entry = result["provider"]["eggpool"]["models"]["gpt-4o-mini/openai"]
     assert "thinking" not in entry
+    assert "reasoning" not in entry
 
 
 def test_thinking_mixed_collapsed_model_no_annotation() -> None:
@@ -407,6 +415,7 @@ def test_thinking_mixed_collapsed_model_no_annotation() -> None:
     )
     entry = result["provider"]["eggpool"]["models"]["claude-sonnet-4"]
     assert "thinking" not in entry
+    assert "reasoning" not in entry
 
 
 def test_thinking_conflicting_model_no_annotation() -> None:
@@ -432,6 +441,7 @@ def test_thinking_conflicting_model_no_annotation() -> None:
     )
     entry = result["provider"]["eggpool"]["models"]["mystery-model/provider-x"]
     assert "thinking" not in entry
+    assert "reasoning" not in entry
 
 
 def test_thinking_with_no_capabilities_no_annotation() -> None:
@@ -450,6 +460,7 @@ def test_thinking_with_no_capabilities_no_annotation() -> None:
     )
     entry = result["provider"]["eggpool"]["models"]["plain-model"]
     assert "thinking" not in entry
+    assert "reasoning" not in entry
 
 
 def test_thinking_supported_with_limits() -> None:
@@ -477,7 +488,7 @@ def test_thinking_supported_with_limits() -> None:
         models=models,
     )
     entry = result["provider"]["eggpool"]["models"]["o3/openai"]
-    assert entry["thinking"] == "supported"
+    assert entry["reasoning"] is True
     assert entry["limit"]["context"] == 200000
     assert entry["limit"]["output"] == 100000
 
@@ -523,10 +534,13 @@ def test_mixed_providers_only_supported_gets_annotation() -> None:
         models=models,
     )
     all_models = result["provider"]["eggpool"]["models"]
-    assert all_models["o3-mini/openai"]["thinking"] == "supported"
+    assert all_models["o3-mini/openai"]["reasoning"] is True
     assert "thinking" not in all_models["gpt-4o/openai"]
+    assert "reasoning" not in all_models["gpt-4o/openai"]
     assert "thinking" not in all_models["gpt-4o-mini/openai"]
+    assert "reasoning" not in all_models["gpt-4o-mini/openai"]
     assert "thinking" not in all_models["claude-sonnet-4"]
+    assert "reasoning" not in all_models["claude-sonnet-4"]
 
 
 def test_all_models_included_regardless_of_thinking() -> None:
@@ -604,5 +618,6 @@ def test_thinking_json_round_trip() -> None:
     )
     parsed = json.loads(json_str)
     all_models = parsed["provider"]["eggpool"]["models"]
-    assert all_models["o3-mini/openai"]["thinking"] == "supported"
+    assert all_models["o3-mini/openai"]["reasoning"] is True
     assert "thinking" not in all_models["gpt-4o/openai"]
+    assert "reasoning" not in all_models["gpt-4o/openai"]

@@ -386,6 +386,33 @@ class TestFormatProviderBlock:
         assert config.providers["ollama-local"].accounts[0].api_key is None
         assert "api_key =" not in block
 
+    def test_opencode_go_template_includes_mimo_thinking_capability(
+        self, tmp_path: Path
+    ) -> None:
+        """The bundled OpenCode Go template carries known thinking metadata."""
+        from eggpool.models.config import AppConfig
+
+        data = load_provider_templates()["opencode-go"]["data"]
+        assert "model_capabilities" in data
+        block = _format_provider_block(
+            "opencode-go", data, "OPENCODE_KEY", "opencode-go-0001"
+        )
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(block, encoding="utf-8")
+
+        cfg = AppConfig.from_toml(str(config_file))
+        thinking = cfg.providers["opencode-go"].model_capabilities["mimo-v2.5"].thinking
+        assert thinking is not None
+        assert thinking.status == "supported"
+        assert thinking.source == "provider_catalog"
+        assert thinking.supported_efforts == ["low", "medium", "high"]
+        assert thinking.effort_to_budget_tokens == {
+            "low": 1024,
+            "med": 4096,
+            "medium": 4096,
+            "high": 16384,
+        }
+
     def test_emits_routing_priority_for_new_provider(self) -> None:
         """New provider blocks include a routing_priority = 0 default."""
         data = {"base_url": "https://example.com", "protocols": ["openai"]}

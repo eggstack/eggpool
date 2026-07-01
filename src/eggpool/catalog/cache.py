@@ -467,6 +467,23 @@ class ModelCatalogCache:
             model_copy["base_model_id"] = model_id
             model_copy["provider_id"] = provider_id
         model_copy["available_accounts"] = sorted(available_accounts)
+        model_copy = self._copy_with_capability_overrides(
+            model_copy,
+            model_id=model_id,
+            provider_id=provider_id,
+        )
+
+        return model_copy
+
+    def _copy_with_capability_overrides(
+        self,
+        model_info: dict[str, Any],
+        *,
+        model_id: str,
+        provider_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Return a copy of *model_info* with configured capabilities applied."""
+        model_copy = dict(model_info)
 
         base_capabilities: dict[str, Any] = model_info.get("capabilities", {})
         if base_capabilities:
@@ -496,7 +513,14 @@ class ModelCatalogCache:
             provider_overrides,
             provider_id=provider_id,
         )
-        model_copy["capabilities"] = model_capabilities_to_dict(final_caps)
+        structured_capabilities = model_capabilities_to_dict(final_caps)
+        merged_capabilities = dict(base_capabilities)
+        thinking_capability = structured_capabilities.get("thinking")
+        if thinking_capability is not None:
+            merged_capabilities["thinking"] = thinking_capability
+        else:
+            merged_capabilities.pop("thinking", None)
+        model_copy["capabilities"] = merged_capabilities
 
         return model_copy
 
@@ -777,7 +801,16 @@ class ModelCatalogCache:
         provider_id: str,
     ) -> dict[str, Any] | None:
         """Return exact provider metadata without a global fallback."""
-        return self._provider_models.get((model_id, provider_id))
+        entry = self._provider_models.get((model_id, provider_id))
+        if entry is None:
+            return None
+        if self._config is None:
+            return entry
+        return self._copy_with_capability_overrides(
+            entry,
+            model_id=model_id,
+            provider_id=provider_id,
+        )
 
     def get_model_for_account(
         self, model_id: str, account_name: str

@@ -73,6 +73,7 @@ def get_eligible_accounts(
     behavior where locally over-quota accounts are excluded.
     """
     from eggpool.catalog.capabilities import (
+        candidate_supports_requested_effort,
         check_candidate_thinking_eligibility,
         extract_thinking_status_from_entry,
     )
@@ -147,6 +148,11 @@ def get_eligible_accounts(
                     unsupported_action=unsupported_action,
                     unknown_action=unknown_action,
                     mixed_action=mixed_action,
+                ):
+                    continue
+                if not candidate_supports_requested_effort(
+                    entry,
+                    thinking_requirement.requested_effort,
                 ):
                     continue
                 _log_capability_warning(

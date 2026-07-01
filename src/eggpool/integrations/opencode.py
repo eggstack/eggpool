@@ -3,31 +3,37 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
 
-def _extract_thinking_status(caps: dict[str, Any]) -> str | None:
-    """Extract thinking capability status from a capabilities dict.
+def _extract_thinking_metadata(
+    caps: dict[str, Any],
+) -> tuple[bool, list[str]]:
+    """Extract OpenCode-compatible thinking metadata.
 
-    Returns the status string only when it is ``"supported"`` — all other
-    statuses (``"unknown"``, ``"unsupported"``, ``"mixed"``, ``"conflicting"``)
-    are omitted so the generated config never claims thinking support for
-    models without confirmed upstream backing.
+    Returns ``(supported, efforts)``. Unsupported, unknown, mixed, and
+    conflicting statuses are omitted so generated configs never claim
+    support without confirmed upstream backing.
     """
-    thinking = caps.get("thinking")  # pyright: ignore[reportUnknownMemberType]
+    thinking = caps.get("thinking")
     if not isinstance(thinking, dict):
-        return None
-    status = thinking.get(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-        "status",
-    )
+        return False, []
+    thinking_dict = cast("dict[str, object]", thinking)
+    status = thinking_dict.get("status")
     if not isinstance(status, str):
-        return None
-    if status == "supported":
-        return "supported"
-    return None
+        return False, []
+    if status != "supported":
+        return False, []
+    efforts_raw = thinking_dict.get("supported_efforts")
+    efforts: list[str] = []
+    if isinstance(efforts_raw, list):
+        for item in cast("list[object]", efforts_raw):
+            if isinstance(item, str) and item not in efforts:
+                efforts.append(item)
+    return True, efforts
 
 
 def build_opencode_provider_config(
@@ -54,9 +60,9 @@ def build_opencode_provider_config(
         picker disambiguates providers serving the same upstream model.
 
         Models whose ``capabilities.thinking.status`` is ``"supported"``
-        receive a ``thinking`` annotation in the generated entry so
-        OpenCode users can discover thinking-capable models without
-        relying on usage history.
+        receive OpenCode-compatible ``reasoning`` metadata. When
+        ``supported_efforts`` is known, per-effort variants are generated
+        using the OpenAI-compatible ``reasoningEffort`` option.
     """
     model_map: dict[str, Any] = {}
     for m in models:
@@ -90,9 +96,13 @@ def build_opencode_provider_config(
             entry["limit"] = limit
 
         caps = m.get("capabilities", {})
-        thinking_status = _extract_thinking_status(caps)
-        if thinking_status is not None:
-            entry["thinking"] = thinking_status
+        thinking_supported, thinking_efforts = _extract_thinking_metadata(caps)
+        if thinking_supported:
+            entry["reasoning"] = True
+        if thinking_efforts:
+            entry["variants"] = {
+                effort: {"reasoningEffort": effort} for effort in thinking_efforts
+            }
 
         if entry:
             model_map[model_id] = entry

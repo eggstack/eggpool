@@ -761,6 +761,7 @@ class Router:
         # whether the candidate stays eligible or is rejected up-front.
         if thinking_requirement is not None and thinking_requirement.required:
             from eggpool.catalog.capabilities import (
+                candidate_supports_requested_effort,
                 check_candidate_thinking_eligibility,
                 extract_thinking_status_from_entry,
             )
@@ -788,6 +789,20 @@ class Router:
                             f"{model_id!r}; client requested "
                             f"thinking controls "
                             f"({thinking_requirement.fields!r})."
+                        ),
+                    )
+                if not candidate_supports_requested_effort(
+                    entry,
+                    thinking_requirement.requested_effort,
+                ):
+                    return (
+                        False,
+                        "thinking_effort_unsupported",
+                        (
+                            f"Account {state.name!r} does not advertise "
+                            f"thinking effort "
+                            f"{thinking_requirement.requested_effort!r} "
+                            f"for model {model_id!r}."
                         ),
                     )
 

@@ -678,6 +678,7 @@ class ThinkingCapabilityOverrideConfig(BaseModel):
     native_protocols: list[str] | None = None
     budget_tokens_min: int | None = None
     budget_tokens_max: int | None = None
+    supported_efforts: list[str] | None = None
     effort_to_budget_tokens: dict[str, int] | None = None
     notes: str | None = None
 
@@ -707,6 +708,7 @@ class ThinkingCapabilityOverrideConfig(BaseModel):
             self.native_protocols = None
             self.budget_tokens_min = None
             self.budget_tokens_max = None
+            self.supported_efforts = None
             self.effort_to_budget_tokens = None
             self.notes = None
             return self
@@ -746,6 +748,50 @@ class ModelCapabilitiesOverrideConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     thinking: ThinkingCapabilityOverrideConfig | None = None
+
+
+_OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1"
+_OPENCODE_GO_THINKING_MODELS: frozenset[str] = frozenset({"mimo-v2.5"})
+
+
+def _default_opencode_go_thinking_capabilities() -> dict[
+    str, ModelCapabilitiesOverrideConfig
+]:
+    """Return built-in capability metadata for the canonical OpenCode Go host."""
+    return {
+        model_id: ModelCapabilitiesOverrideConfig(
+            thinking=ThinkingCapabilityOverrideConfig(
+                status="supported",
+                source="provider_catalog",
+                native_protocols=["openai", "anthropic"],
+                supported_efforts=["low", "medium", "high"],
+                effort_to_budget_tokens={
+                    "low": 1024,
+                    "med": 4096,
+                    "medium": 4096,
+                    "high": 16384,
+                },
+                notes="OpenCode Go exposes low/medium/high thinking controls.",
+            )
+        )
+        for model_id in _OPENCODE_GO_THINKING_MODELS
+    }
+
+
+def _provider_is_canonical_opencode_go(provider: ProviderConfig) -> bool:
+    """Return whether *provider* is the bundled OpenCode Go endpoint."""
+    return (
+        provider.id == DEFAULT_PROVIDER_ID
+        and provider.base_url.rstrip("/") == _OPENCODE_GO_BASE_URL
+    )
+
+
+def _seed_builtin_provider_capabilities(provider: ProviderConfig) -> None:
+    """Seed known provider capabilities without clobbering operator overrides."""
+    if not _provider_is_canonical_opencode_go(provider):
+        return
+    for model_id, capability in _default_opencode_go_thinking_capabilities().items():
+        provider.model_capabilities.setdefault(model_id, capability)
 
 
 class DnsCacheConfig(BaseModel):
@@ -950,6 +996,8 @@ class AppConfig(BaseModel):
                 )
             }
             self.accounts = []
+        for provider in self.providers.values():
+            _seed_builtin_provider_capabilities(provider)
         return self
 
     @model_validator(mode="after")
