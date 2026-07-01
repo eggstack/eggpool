@@ -184,6 +184,12 @@ _CACHE_WRITE_FALLBACK_PER_MILLION_MICRODOLLARS = 3_750_000  # $3.75 / 1M
 _GENERIC_INPUT_FALLBACK_DOLLARS_PER_1K = 0.003  # $3 / 1M
 _GENERIC_OUTPUT_FALLBACK_DOLLARS_PER_1K = 0.015  # $15 / 1M
 
+# Local derived pricing above this rate is almost certainly a unit
+# interpretation bug (for example treating "$0.20 / 1M" as "$0.20 per
+# token"). Provider-reported billed cost still wins in the finalizer;
+# this bound only applies to EggPool-derived snapshot rates.
+_MAX_TRUSTED_RATE_PER_MILLION_MICRODOLLARS = 1_000_000_000  # $1,000 / 1M
+
 
 def coerce_token_count(value: object) -> int:
     """Coerce a provider token count to a non-negative int.
@@ -452,6 +458,19 @@ class CostCalculator:
         cache_read_rate = snapshot.cache_read_per_million_microdollars
         cache_write_rate = snapshot.cache_write_per_million_microdollars
 
+        if (
+            (input_tokens > 0 and _rate_is_implausible(input_rate))
+            or (output_tokens > 0 and _rate_is_implausible(output_rate))
+            or (cache_read_tokens > 0 and _rate_is_implausible(cache_read_rate))
+            or (cache_write_tokens > 0 and _rate_is_implausible(cache_write_rate))
+        ):
+            logger.warning(
+                "Ignoring implausible local pricing snapshot for %s/%s",
+                model_id,
+                provider_id or "*",
+            )
+            return self._estimate_cost(input_tokens, output_tokens), "estimated"
+
         # Track which nonzero categories are missing a trusted rate so
         # we can fill them with a per-category fallback rather than
         # wholesale replacing the cost with a generic full-request
@@ -577,3 +596,7 @@ class CostCalculator:
         else:
             return 0
         return clamp_request_cost_microdollars((tokens * rate) // 1_000_000)
+
+
+def _rate_is_implausible(rate: int | None) -> bool:
+    return rate is not None and rate > _MAX_TRUSTED_RATE_PER_MILLION_MICRODOLLARS

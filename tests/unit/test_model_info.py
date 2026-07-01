@@ -572,6 +572,52 @@ async def test_reconcile_creates_partial_for_models_with_context_limit() -> None
 
 
 @pytest.mark.asyncio()
+async def test_context_only_provider_metadata_is_not_sparse() -> None:
+    """Effective provider limits are real model-info, not a sparse placeholder."""
+    db = Database(path=":memory:")
+    await db.connect()
+    try:
+        await _run_migrations(db)
+        await _seed_model(db, "context-model", "context-model")
+
+        from eggpool.catalog.cache import ModelCatalogCache
+
+        cache = ModelCatalogCache()
+        now_ts = datetime.now(UTC).timestamp()
+        entry = {
+            "model_id": "context-model",
+            "display_name": "context-model",
+            "protocol": "openai",
+            "capabilities": {},
+            "source_metadata": {},
+            "first_seen_at": now_ts,
+            "last_seen_at": now_ts,
+            "discovered_limits": {},
+            "effective_limits": {
+                "context_tokens": 128000,
+                "input_tokens": 128000,
+                "output_tokens": 8192,
+                "enforce": True,
+            },
+        }
+        cache._models["context-model"] = entry
+        cache._provider_models[("context-model", "test-provider")] = dict(entry)
+
+        service = ModelInfoService(ModelInfoConfig(), db, cache)
+        await service.reconcile_catalog_snapshot(reason="test")
+
+        info = await service.get_summary("context-model")
+        assert info is not None
+        assert info.status == "partial"
+        assert info.sparse is False
+        assert info.summary is not None
+        assert "128k" in info.summary
+        assert "public benchmark metadata unavailable" not in info.summary.lower()
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio()
 async def test_summary_mentions_sparse_for_new_sparse_model() -> None:
     """Summary explicitly says metadata is sparse for sparse_new models."""
     db = Database(path=":memory:")

@@ -1144,8 +1144,17 @@ class TestRenderModels:
         assert "25.0 tok/s" in html
 
     def test_account_filter_shown(self) -> None:
-        html = render_models(models=[], account_filter="acct_a", period="24h")
-        assert 'value="acct_a"' in html
+        html = render_models(
+            models=[],
+            account_filter="acct_a",
+            account_options=["acct_a", "acct_b"],
+            period="24h",
+        )
+        assert '<select name="account">' in html
+        assert '<input type="text" name="account"' not in html
+        assert 'value="acct_a" selected' in html
+        assert 'value="acct_b"' in html
+        assert "(any account)" in html
 
     def test_does_not_load_chart_js(self) -> None:
         html = render_models(models=[], period="24h")

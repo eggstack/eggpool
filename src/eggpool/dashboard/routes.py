@@ -189,7 +189,16 @@ def _collect_account_options(request: Request) -> list[str]:
     config = getattr(request.app.state, "config", None)
     if config is None:
         return []
-    return [acct.name for acct in config.all_accounts() if acct.name]
+    all_accounts = getattr(config, "all_accounts", None)
+    if not callable(all_accounts):
+        return []
+    accounts = cast("list[Any]", cast("Any", all_accounts)())
+    names: list[str] = []
+    for acct in accounts:
+        name = getattr(acct, "name", None)
+        if isinstance(name, str) and name:
+            names.append(name)
+    return names
 
 
 def _collect_model_options(request: Request) -> list[str]:
@@ -408,6 +417,7 @@ async def handle_models(
         model_info_map=model_info_summary_map,
     )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
+    account_options = _collect_account_options(request)
     return HTMLResponse(
         content=render_models(
             filtered_rows,
@@ -422,6 +432,7 @@ async def handle_models(
             availability_filter=availability or "",
             used_filter=used or "",
             has_filters=any(v is not None for v in (info_status, availability, used)),
+            account_options=account_options,
         )
     )
 

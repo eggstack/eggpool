@@ -1396,6 +1396,26 @@ class TestSummaryGeneration:
         )
         assert "public benchmark metadata unavailable" in summary.lower()
 
+    def test_summary_with_provider_limits_skips_benchmark_unavailable_note(
+        self,
+    ) -> None:
+        """Provider-native limits are real detail even without benchmark metadata."""
+        summary = _generate_summary(
+            model_id="minimax-m3",
+            status="partial",
+            sparse=False,
+            detail={
+                "providers": ["minimax"],
+                "limits": {
+                    "effective_context": 1_000_000,
+                    "effective_output": 40_000,
+                },
+            },
+            has_benchmarks=False,
+        )
+        assert "1M" in summary
+        assert "public benchmark metadata unavailable" not in summary.lower()
+
     def test_summary_fresh_no_benchmarks(self) -> None:
         """Fresh model without benchmarks does not get benchmark note."""
         summary = _generate_summary(

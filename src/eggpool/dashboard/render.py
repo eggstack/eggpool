@@ -2208,6 +2208,7 @@ def render_models(
     availability_filter: str = "",
     used_filter: str = "",
     has_filters: bool = False,
+    account_options: list[str] | None = None,
 ) -> str:
     """Render the models page."""
     mi_map = model_info_map or {}
@@ -2398,11 +2399,17 @@ def render_models(
             ("Unavailable", "unavailable"),
         ]
     )
+    account_select_options: list[tuple[str, str]] = [("", "(any account)")]
+    for name in account_options or []:
+        if name:
+            account_select_options.append((name, name))
+    account_options_html = "".join(
+        _sel(label, value, account_filter) for value, label in account_select_options
+    )
     filter_form = (
         '<form method="get" class="filter-form">'
         "<label>Account: "
-        f'<input type="text" name="account" '
-        f'value="{escape_attr(account_filter)}" placeholder="(all)">'
+        f'<select name="account">{account_options_html}</select>'
         "</label>"
         "<label>Used: "
         f'<select name="used">{used_options}</select>'

@@ -212,7 +212,7 @@ class TestCostCalculator:
         assert exactness == "derived"
 
     @pytest.mark.asyncio
-    async def test_calculate_cost_clamps_extreme_snapshot_rate(self) -> None:
+    async def test_calculate_cost_ignores_extreme_snapshot_rate(self) -> None:
         snapshot = PriceSnapshot(
             model_id="minimax-m3",
             input_price_per_1k=None,
@@ -232,10 +232,10 @@ class TestCostCalculator:
         )
 
         assert cost == MAX_REQUEST_COST_MICRODOLLARS
-        assert exactness == "derived"
+        assert exactness == "estimated"
 
     @pytest.mark.asyncio
-    async def test_calculate_cost_caps_single_request_to_reasonable_bound(
+    async def test_calculate_cost_ignores_minimax_unit_inflated_snapshot(
         self,
     ) -> None:
         snapshot = PriceSnapshot(
@@ -252,12 +252,12 @@ class TestCostCalculator:
 
         cost, exactness = await calculator.calculate_cost(
             "minimax-m3",
-            input_tokens=20_000_000,
-            output_tokens=20_000_000,
+            input_tokens=10_000,
+            output_tokens=2_000,
         )
 
-        assert cost == MAX_REQUEST_COST_MICRODOLLARS
-        assert exactness == "derived"
+        assert cost == 60_000
+        assert exactness == "estimated"
 
     @pytest.mark.asyncio
     async def test_calculate_cost_with_cache_tokens(self) -> None:

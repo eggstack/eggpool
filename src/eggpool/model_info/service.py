@@ -393,7 +393,12 @@ class ModelInfoService:
                     sparse=sparse,
                     detail=merged_detail,
                 )
-                next_refresh = self._compute_next_refresh(status, now)
+                # New catalog rows should be eligible for the next
+                # model-info cycle immediately. Otherwise every new
+                # sparse row waits sparse_new_initial_ttl_s before it
+                # can fetch external metadata, leaving the dashboard
+                # stuck on provider-only summaries after discovery.
+                next_refresh = now
                 provenance: dict[str, object] = {
                     **merged_provenance,
                     "reconciled_at": now.isoformat(),
@@ -1600,7 +1605,10 @@ class ModelInfoService:
         filled = sum(indicators)
         missing = len(indicators) - filled
 
-        sparse = missing >= 4
+        has_actionable_provider_metadata = (
+            has_context_limit or has_tools_or_vision or has_pricing_state
+        )
+        sparse = missing >= 4 and not has_actionable_provider_metadata
 
         if sparse:
             return (cast("ModelInfoStatus", "sparse_new"), True)
@@ -1968,7 +1976,13 @@ def _legacy_flat_keys_to_limits(
     * ``max_output_tokens_external`` → ``external_output``
     """
     limits: dict[str, object] = {}
-    ctx = detail.get("context_tokens")
+    existing_limits = detail.get("limits")
+    existing_limits_dict = (
+        cast("dict[str, object]", existing_limits)
+        if isinstance(existing_limits, dict)
+        else {}
+    )
+    ctx = existing_limits_dict.get("effective_context") or detail.get("context_tokens")
     if isinstance(ctx, (int, float)) and ctx > 0:
         limits["effective_context"] = int(ctx)
     ext_ctx = detail.get("context_window_external")
@@ -2622,7 +2636,9 @@ def _generate_summary(
     else:
         parts.append("Provider information unavailable.")
 
-    ctx = detail.get("context_tokens")
+    limits = detail.get("limits")
+    limits_dict = cast("dict[str, object]", limits) if isinstance(limits, dict) else {}
+    ctx = limits_dict.get("effective_context") or detail.get("context_tokens")
     if isinstance(ctx, (int, float)) and ctx > 0:
         if ctx >= 1_000_000:
             parts.append(f"Context window: {ctx / 1_000_000:.0f}M tokens.")
@@ -2663,7 +2679,33 @@ def _generate_summary(
             "are currently unavailable."
         )
 
-    if status in ("sparse_new", "partial") and not has_benchmarks:
+    has_actionable_provider_metadata = _detail_has_actionable_provider_metadata(detail)
+    if (
+        status in ("sparse_new", "partial")
+        and not has_benchmarks
+        and not has_actionable_provider_metadata
+    ):
         parts.append("Public benchmark metadata unavailable.")
 
     return " ".join(parts)
+
+
+def _detail_has_actionable_provider_metadata(detail: dict[str, object]) -> bool:
+    """Return True when provider-native detail has facts worth displaying."""
+    limits = detail.get("limits")
+    if isinstance(limits, dict):
+        typed_limits = cast("dict[str, object]", limits)
+        for key in ("effective_context", "effective_input", "effective_output"):
+            value = typed_limits.get(key)
+            if isinstance(value, (int, float)) and value > 0:
+                return True
+
+    for key in ("context_tokens", "input_tokens", "output_tokens"):
+        value = detail.get(key)
+        if isinstance(value, (int, float)) and value > 0:
+            return True
+
+    return (
+        detail.get("supports_tools") is not None
+        or detail.get("supports_vision") is not None
+    )
