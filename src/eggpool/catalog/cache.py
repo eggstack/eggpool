@@ -11,6 +11,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, cast
 
 from eggpool.catalog.capabilities import (
+    aggregate_model_capabilities,
     apply_capability_overrides,
     dict_to_model_capabilities,
     model_capabilities_to_dict,
@@ -624,6 +625,29 @@ class ModelCatalogCache:
             # Track contributing providers so /v1/models can surface
             # routing priorities and provider list for collapsed entries.
             model_info_copy["providers"] = list(provider_ids)
+
+            # For collapsed entries, aggregate capabilities across all
+            # visible providers so the /v1/models response can show
+            # per-provider status when providers disagree.
+            provider_capabilities: dict[str, dict[str, Any]] = {}
+            for pid in provider_ids:
+                pinfo = self._provider_models.get((model_id, pid))
+                if pinfo is not None:
+                    provider_capabilities[pid] = pinfo.get("capabilities", {})
+            if len(provider_capabilities) > 1:
+                agg_caps = aggregate_model_capabilities(
+                    [
+                        dict_to_model_capabilities(c)
+                        for c in provider_capabilities.values()
+                    ],
+                )
+                model_info_copy["capabilities"] = model_capabilities_to_dict(
+                    agg_caps,
+                )
+                model_info_copy["_provider_thinking_statuses"] = {
+                    pid: dict_to_model_capabilities(c).thinking.status
+                    for pid, c in provider_capabilities.items()
+                }
 
             merged_limits = self._merged_effective_limits(model_id, provider_ids)
             if merged_limits is not None:

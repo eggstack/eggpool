@@ -500,3 +500,102 @@ class TestProtocolDoesNotImplyThinking:
         )
         assert has_thinking_support(mc.thinking)
         assert "anthropic" in mc.thinking.native_protocols
+
+
+# ---------------------------------------------------------------------------
+# Serialization: client control fields
+# ---------------------------------------------------------------------------
+
+
+class TestSerializeThinkingClientControls:
+    def test_client_control_fields_emitted(self) -> None:
+        cap = ThinkingCapability(
+            status="supported",
+            source="provider_catalog",
+            native_protocols=["anthropic"],
+            client_controls={
+                "openai": ThinkingClientControls(
+                    request_fields=["reasoning_effort"],
+                    response_fields=["reasoning_content"],
+                    stream_delta_fields=["reasoning"],
+                ),
+                "anthropic": ThinkingClientControls(
+                    request_fields=["thinking"],
+                    response_block_types=["thinking"],
+                ),
+            },
+        )
+        result = serialize_thinking_for_models(cap)
+        assert result["status"] == "supported"
+        assert result["openai_request_fields"] == ["reasoning_effort"]
+        assert result["openai_response_fields"] == ["reasoning_content"]
+        assert result["openai_stream_delta_fields"] == ["reasoning"]
+        assert result["anthropic_request_fields"] == ["thinking"]
+        assert result["anthropic_response_block_types"] == ["thinking"]
+
+    def test_client_control_fields_omitted_when_empty(self) -> None:
+        cap = ThinkingCapability(
+            status="supported",
+            source="provider_catalog",
+        )
+        result = serialize_thinking_for_models(cap)
+        assert "openai_request_fields" not in result
+        assert "anthropic_request_fields" not in result
+
+    def test_effort_to_budget_tokens_emitted(self) -> None:
+        cap = ThinkingCapability(
+            status="supported",
+            effort_to_budget_tokens={"low": 1024, "medium": 4096, "high": 16384},
+        )
+        result = serialize_thinking_for_models(cap)
+        assert result["effort_to_budget_tokens"] == {
+            "low": 1024,
+            "medium": 4096,
+            "high": 16384,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Serialization: provider_statuses for collapsed entries
+# ---------------------------------------------------------------------------
+
+
+class TestSerializeThinkingProviderStatuses:
+    def test_provider_statuses_emitted(self) -> None:
+        cap = ThinkingCapability(
+            status="mixed",
+            source="aggregate",
+        )
+        result = serialize_thinking_for_models(
+            cap,
+            provider_statuses={"minimax": "supported", "openrouter": "unknown"},
+        )
+        assert result["status"] == "mixed"
+        assert result["providers"] == {
+            "minimax": "supported",
+            "openrouter": "unknown",
+        }
+
+    def test_provider_statuses_omitted_when_none(self) -> None:
+        cap = ThinkingCapability(status="supported", source="provider_catalog")
+        result = serialize_thinking_for_models(cap)
+        assert "providers" not in result
+
+    def test_provider_statuses_omitted_when_empty(self) -> None:
+        cap = ThinkingCapability(status="supported", source="provider_catalog")
+        result = serialize_thinking_for_models(cap, provider_statuses={})
+        assert "providers" not in result
+
+    def test_model_capabilities_forwards_provider_statuses(self) -> None:
+        mc = ModelCapabilities(
+            thinking=ThinkingCapability(status="mixed", source="aggregate"),
+        )
+        result = serialize_model_capabilities(
+            mc,
+            provider_statuses={"p1": "supported", "p2": "unsupported"},
+        )
+        assert result["thinking"]["status"] == "mixed"
+        assert result["thinking"]["providers"] == {
+            "p1": "supported",
+            "p2": "unsupported",
+        }

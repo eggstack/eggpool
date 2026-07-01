@@ -320,37 +320,76 @@ def aggregate_model_capabilities(
 
 def serialize_thinking_for_models(
     capability: ThinkingCapability,
+    *,
+    provider_statuses: dict[str, CapabilityStatus] | None = None,
 ) -> dict[str, object]:
     """Serialize a :class:`ThinkingCapability` for the ``/v1/models`` response.
 
     Returns a compact dict suitable for inclusion in the model object's
     ``capabilities`` field.  Unknown/empty values are omitted to keep
     the serialized form minimal.
+
+    When *provider_statuses* is supplied (for collapsed/aggregate
+    entries), a ``providers`` dict maps each provider ID to its
+    individual thinking status so clients can see per-provider truth.
     """
     result: dict[str, object] = {"status": capability.status}
     if capability.source != "unknown":
         result["source"] = capability.source
     if capability.native_protocols:
         result["native_protocols"] = list(capability.native_protocols)
+
+    # Client control field mappings — per-protocol request/response/streaming
+    # fields that a client can use to drive thinking/reasoning controls.
+    if capability.client_controls:
+        for proto, ctrl in sorted(capability.client_controls.items()):
+            prefix = proto.lower()
+            if ctrl.request_fields:
+                result[f"{prefix}_request_fields"] = list(ctrl.request_fields)
+            if ctrl.response_fields:
+                result[f"{prefix}_response_fields"] = list(ctrl.response_fields)
+            if ctrl.stream_delta_fields:
+                result[f"{prefix}_stream_delta_fields"] = list(
+                    ctrl.stream_delta_fields,
+                )
+            if ctrl.response_block_types:
+                result[f"{prefix}_response_block_types"] = list(
+                    ctrl.response_block_types,
+                )
+
     if capability.budget_tokens_min is not None:
         result["budget_tokens_min"] = capability.budget_tokens_min
     if capability.budget_tokens_max is not None:
         result["budget_tokens_max"] = capability.budget_tokens_max
     if capability.effort_to_budget_tokens is not None:
         result["effort_to_budget_tokens"] = dict(capability.effort_to_budget_tokens)
+
+    # Per-provider status breakdown for aggregate (collapsed) entries.
+    if provider_statuses:
+        result["providers"] = dict(provider_statuses)
+
     return result
 
 
 def serialize_model_capabilities(
     capabilities: ModelCapabilities,
+    *,
+    provider_statuses: dict[str, CapabilityStatus] | None = None,
 ) -> dict[str, object]:
     """Serialize :class:`ModelCapabilities` for the ``/v1/models`` response.
 
     Returns a dict with a ``thinking`` key containing the compact
     serialized form.  Only non-default capability families are included.
+
+    When *provider_statuses* is supplied (for collapsed/aggregate
+    entries), per-provider thinking status is forwarded to the thinking
+    serializer.
     """
     result: dict[str, object] = {}
-    thinking = serialize_thinking_for_models(capabilities.thinking)
+    thinking = serialize_thinking_for_models(
+        capabilities.thinking,
+        provider_statuses=provider_statuses,
+    )
     if thinking:
         result["thinking"] = thinking
     return result
@@ -505,11 +544,59 @@ def dict_to_model_capabilities(data: dict[str, object]) -> ModelCapabilities:
     if isinstance(effort_raw, dict):
         effort_dict = {str(k): int(v) for k, v in effort_raw.items()}  # type: ignore[arg-type]
 
+    # Parse per-protocol client controls.
+    client_controls_raw = tr.get("client_controls")
+    client_controls: dict[str, ThinkingClientControls] = {}
+    if isinstance(client_controls_raw, dict):
+        cc_dict = cast("dict[str, object]", client_controls_raw)
+        for proto, ctrl_raw in cc_dict.items():
+            if isinstance(ctrl_raw, dict):
+                ctrl_dict = cast("dict[str, object]", ctrl_raw)
+                request_fields_raw = cast(
+                    "list[object] | None",
+                    ctrl_dict.get("request_fields"),
+                )
+                response_fields_raw = cast(
+                    "list[object] | None",
+                    ctrl_dict.get("response_fields"),
+                )
+                stream_delta_raw = cast(
+                    "list[object] | None",
+                    ctrl_dict.get("stream_delta_fields"),
+                )
+                block_types_raw = cast(
+                    "list[object] | None",
+                    ctrl_dict.get("response_block_types"),
+                )
+                client_controls[str(proto)] = ThinkingClientControls(
+                    request_fields=(
+                        [str(f) for f in request_fields_raw]
+                        if isinstance(request_fields_raw, list)
+                        else []
+                    ),
+                    response_fields=(
+                        [str(f) for f in response_fields_raw]
+                        if isinstance(response_fields_raw, list)
+                        else []
+                    ),
+                    stream_delta_fields=(
+                        [str(f) for f in stream_delta_raw]
+                        if isinstance(stream_delta_raw, list)
+                        else []
+                    ),
+                    response_block_types=(
+                        [str(f) for f in block_types_raw]
+                        if isinstance(block_types_raw, list)
+                        else []
+                    ),
+                )
+
     return ModelCapabilities(
         thinking=ThinkingCapability(
             status=cast("CapabilityStatus", tc_status),
             source=cast("CapabilitySource", tc_source),
             native_protocols=native_protos,
+            client_controls=client_controls,
             budget_tokens_min=bmin_raw if isinstance(bmin_raw, int) else None,
             budget_tokens_max=bmax_raw if isinstance(bmax_raw, int) else None,
             effort_to_budget_tokens=effort_dict,

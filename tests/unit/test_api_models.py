@@ -151,3 +151,177 @@ def test_suffixed_entry_omits_collapsed_fields() -> None:
     assert result["eggpool"]["routing_priority"] == 3
     assert "routing_priority_max" not in result["eggpool"]
     assert "providers" not in result["eggpool"]
+
+
+# ---------------------------------------------------------------------------
+# Capability exposure
+# ---------------------------------------------------------------------------
+
+
+def test_provider_scoped_model_with_thinking_capability() -> None:
+    """Provider-scoped entry emits capabilities.thinking with client controls."""
+    model = {
+        "model_id": "claude-sonnet-4-20250514/anthropic",
+        "base_model_id": "claude-sonnet-4-20250514",
+        "provider_id": "anthropic",
+        "display_name": "Claude Sonnet 4",
+        "capabilities": {
+            "thinking": {
+                "status": "supported",
+                "source": "provider_catalog",
+                "native_protocols": ["anthropic"],
+                "client_controls": {
+                    "openai": {
+                        "request_fields": ["reasoning_effort"],
+                        "response_fields": ["reasoning_content"],
+                        "stream_delta_fields": ["reasoning"],
+                    },
+                    "anthropic": {
+                        "request_fields": ["thinking"],
+                        "response_block_types": ["thinking"],
+                    },
+                },
+                "effort_to_budget_tokens": {
+                    "low": 1024,
+                    "medium": 4096,
+                    "high": 16384,
+                },
+            },
+        },
+    }
+    result = serialize_openai_model(model, routing_priority=2)
+    caps = result["eggpool"]["capabilities"]["thinking"]
+    assert caps["status"] == "supported"
+    assert caps["source"] == "provider_catalog"
+    assert caps["native_protocols"] == ["anthropic"]
+    assert caps["openai_request_fields"] == ["reasoning_effort"]
+    assert caps["openai_response_fields"] == ["reasoning_content"]
+    assert caps["openai_stream_delta_fields"] == ["reasoning"]
+    assert caps["anthropic_request_fields"] == ["thinking"]
+    assert caps["anthropic_response_block_types"] == ["thinking"]
+    assert caps["effort_to_budget_tokens"] == {
+        "low": 1024,
+        "medium": 4096,
+        "high": 16384,
+    }
+
+
+def test_collapsed_model_all_supported() -> None:
+    """Collapsed entry with all providers supported omits per-provider breakdown."""
+    model = {
+        "model_id": "claude-sonnet-4-20250514",
+        "capabilities": {
+            "thinking": {
+                "status": "supported",
+                "source": "aggregate",
+                "native_protocols": ["anthropic"],
+            },
+        },
+    }
+    result = serialize_openai_model(
+        model,
+        providers=["anthropic", "opencode-go"],
+        routing_priority_max=2,
+    )
+    caps = result["eggpool"]["capabilities"]["thinking"]
+    assert caps["status"] == "supported"
+    assert "providers" not in caps
+
+
+def test_collapsed_model_all_unknown() -> None:
+    """Collapsed entry with all providers unknown shows unknown."""
+    model = {
+        "model_id": "some-model",
+        "capabilities": {
+            "thinking": {
+                "status": "unknown",
+                "source": "aggregate",
+            },
+        },
+    }
+    result = serialize_openai_model(
+        model,
+        providers=["p1", "p2"],
+        routing_priority_max=1,
+    )
+    caps = result["eggpool"]["capabilities"]["thinking"]
+    assert caps["status"] == "unknown"
+    assert "providers" not in caps
+
+
+def test_collapsed_model_mixed_status() -> None:
+    """Collapsed entry with mixed status includes per-provider breakdown."""
+    model = {
+        "model_id": "minimax-m3",
+        "capabilities": {
+            "thinking": {
+                "status": "mixed",
+                "source": "aggregate",
+                "native_protocols": ["anthropic"],
+            },
+        },
+        "_provider_thinking_statuses": {
+            "minimax": "supported",
+            "openrouter": "unknown",
+        },
+    }
+    result = serialize_openai_model(
+        model,
+        providers=["minimax", "openrouter"],
+        routing_priority_max=1,
+    )
+    caps = result["eggpool"]["capabilities"]["thinking"]
+    assert caps["status"] == "mixed"
+    assert caps["providers"] == {
+        "minimax": "supported",
+        "openrouter": "unknown",
+    }
+
+
+def test_collapsed_model_unsupported_status() -> None:
+    """Collapsed entry with all providers unsupported shows unsupported."""
+    model = {
+        "model_id": "legacy-model",
+        "capabilities": {
+            "thinking": {
+                "status": "unsupported",
+                "source": "aggregate",
+            },
+        },
+    }
+    result = serialize_openai_model(
+        model,
+        providers=["p1"],
+        routing_priority_max=0,
+    )
+    caps = result["eggpool"]["capabilities"]["thinking"]
+    assert caps["status"] == "unsupported"
+    assert "providers" not in caps
+
+
+def test_no_capabilities_when_empty() -> None:
+    """Model with no capabilities omits eggpool.capabilities entirely."""
+    model = {
+        "model_id": "gpt-4",
+        "display_name": "GPT-4",
+    }
+    result = serialize_openai_model(model)
+    assert "eggpool" not in result
+
+
+def test_unknown_capability_not_coerced_to_unsupported() -> None:
+    """Unknown capability status stays unknown, not coerced to unsupported."""
+    model = {
+        "model_id": "some-model/provider",
+        "base_model_id": "some-model",
+        "provider_id": "provider",
+        "capabilities": {
+            "thinking": {
+                "status": "unknown",
+                "source": "unknown",
+            },
+        },
+    }
+    result = serialize_openai_model(model)
+    caps = result["eggpool"]["capabilities"]["thinking"]
+    assert caps["status"] == "unknown"

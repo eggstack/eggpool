@@ -106,7 +106,11 @@ def serialize_openai_model(
     raw_caps = model.get("capabilities", {})
     if raw_caps:
         caps = dict_to_model_capabilities(raw_caps)
-        caps_dict = serialize_model_capabilities(caps)
+        provider_statuses = model.get("_provider_thinking_statuses")
+        caps_dict = serialize_model_capabilities(
+            caps,
+            provider_statuses=provider_statuses,
+        )
         if caps_dict:
             eggpool_meta["capabilities"] = caps_dict
 

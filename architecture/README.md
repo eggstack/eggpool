@@ -719,7 +719,48 @@ Collapsed model entries may represent multiple providers. `aggregate_thinking_st
 
 ### Serialization
 
-`serialize_model_capabilities()` produces a compact dict for the `/v1/models` response under the `eggpool.capabilities` namespace. Unknown/empty values are omitted.
+`serialize_model_capabilities()` and `serialize_thinking_for_models()` produce a compact dict for the `/v1/models` response under the `eggpool.capabilities` namespace. Unknown/empty values are omitted.
+
+**Provider-scoped entries** emit the full thinking capability shape including per-protocol client control field mappings (`openai_request_fields`, `openai_response_fields`, `openai_stream_delta_fields`, `anthropic_request_fields`, `anthropic_response_block_types`) when available.
+
+**Collapsed entries** (unsuffixed model IDs) aggregate capabilities across all visible providers. When the aggregate status is `"mixed"` or `"conflicting"`, a `providers` dict maps each provider ID to its individual thinking status so clients can see per-provider truth without overclaiming support.
+
+Example provider-scoped shape:
+```json
+{
+  "id": "minimax-m3/minimax",
+  "eggpool": {
+    "capabilities": {
+      "thinking": {
+        "status": "supported",
+        "source": "provider_catalog",
+        "native_protocols": ["anthropic"],
+        "openai_request_fields": ["reasoning_effort"],
+        "openai_response_fields": ["reasoning_content"],
+        "openai_stream_delta_fields": ["reasoning"],
+        "anthropic_request_fields": ["thinking"],
+        "anthropic_response_block_types": ["thinking"],
+        "effort_to_budget_tokens": {"low": 1024, "medium": 4096, "high": 16384}
+      }
+    }
+  }
+}
+```
+
+Example collapsed mixed shape:
+```json
+{
+  "id": "minimax-m3",
+  "eggpool": {
+    "capabilities": {
+      "thinking": {
+        "status": "mixed",
+        "providers": {"minimax": "supported", "openrouter": "unknown"}
+      }
+    }
+  }
+}
+```
 
 ### Request-Level Helpers
 
