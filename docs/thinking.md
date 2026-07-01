@@ -639,6 +639,13 @@ Phase C noted that strict rejections propagate as `CapabilityError`, but did not
 
 The streaming and non-streaming dispatch paths share identical cleanup semantics via `_apply_selected_provider_transcode_adjustments()` (Phase 3 of the cleanup plan).
 
+### Phase I — Final Polish
+
+This small polish pass (`plans/thinking_reasoning_final_polish.md`) hardens the trace metadata and the no-health-penalty guarantee after Phase H:
+
+- **`upstream_fields` is always populated when the recompute writes.** `_recompute_thinking_budget_for_selected_provider()` treats an empty list the same as `None` when deciding whether to populate `thinking_trace.upstream_fields = ["thinking"]`. A pre-populated non-empty list is preserved verbatim so future paths can stack additional upstream fields without being clobbered. The preflight translation already populates the field, so this is a defensive change for non-preflight paths (synthetic requests, future providers, alternate code paths).
+- **No-health-penalty guarantee is test-pinned.** The strict-rejection cleanup tests now assert `HealthManager.is_account_healthy()` stays `True` and the underlying `AccountHealth` fields (`consecutive_failures`, `health_state`, `disabled_models`, `disabled_until`, `disabled_reason`, `cooldown_until`) stay at their default values after both the non-streaming and streaming cleanup paths, and through a double invocation. Capability rejection remains a client-validation outcome and never records an upstream health signal.
+
 ---
 
 ## 12. Tests for Closing-Pass Behavior
@@ -649,5 +656,5 @@ The closing pass adds regression coverage in:
 - `tests/unit/test_capabilities.py` — Phase A, Phase D (`is_thinking_warning`, `classify_thinking_warning_decision`)
 - `tests/unit/test_transcoder/test_budget_resolver.py` — Phase B (`BudgetResolutionError` is a `CapabilityError`)
 - `tests/unit/test_transcoder/test_anthropic_to_openai_body.py` — Phase G (explicit kind)
-- `tests/unit/test_thinking_budget_provider_cleanup.py` — Phase H (selected-provider effort mapping, clamp validation, strict-rejection cleanup invariants, streaming parity, idempotency)
+- `tests/unit/test_thinking_budget_provider_cleanup.py` — Phase H (selected-provider effort mapping, clamp validation, strict-rejection cleanup invariants, streaming parity, idempotency) and Phase I (`upstream_fields` population + preservation, no-health-penalty regression)
 - `tests/contract/test_transcoder_contract.py` — Phase A integration (annotated `claude-3` with `status = "supported"`)
