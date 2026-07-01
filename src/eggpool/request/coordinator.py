@@ -141,6 +141,47 @@ def _serialize_thinking_trace(trace: dict[str, Any] | None) -> str | None:
     return json.dumps(trace) if trace else None
 
 
+def _extract_original_thinking_budget_inputs(
+    context: ProxyRequestContext,
+) -> tuple[str | None, int | None]:
+    """Extract the original client thinking controls from ``context.original_body``.
+
+    Returns ``(requested_effort, requested_budget_tokens)`` so callers can
+    distinguish an OpenAI-style ``reasoning_effort`` request from an
+    Anthropic-style explicit ``thinking.budget_tokens`` request.
+
+    The post-selection budget recompute must resolve against the original
+    client intent rather than the already-translated ``upstream_body``,
+    because the resolver prioritises an explicit ``requested_budget_tokens``
+    value over the capability's ``effort_to_budget_tokens`` mapping. If we
+    forwarded the translated Anthropic budget here, the provider's effort
+    override would never be consulted for OpenAI clients.
+
+    Returns ``(None, None)`` when the body cannot be parsed as a JSON
+    object or when no thinking controls are present.
+    """
+    try:
+        original_body_obj: object = json.loads(context.original_body)
+    except (json.JSONDecodeError, ValueError):
+        return (None, None)
+    if not isinstance(original_body_obj, dict):
+        return (None, None)
+    original_body: dict[str, object] = original_body_obj  # pyright: ignore[reportUnknownVariableType]
+    effort_obj: object = original_body.get("reasoning_effort")  # pyright: ignore[reportUnknownMemberType]
+    if isinstance(effort_obj, str) and effort_obj:
+        return (effort_obj, None)
+    thinking_obj: object = original_body.get("thinking")  # pyright: ignore[reportUnknownMemberType]
+    if isinstance(thinking_obj, dict):
+        thinking_dict: dict[str, object] = thinking_obj  # pyright: ignore[reportUnknownVariableType]
+        budget_obj: object = thinking_dict.get("budget_tokens")  # pyright: ignore[reportUnknownMemberType]
+        if isinstance(budget_obj, (int, float)):
+            return (None, int(budget_obj))
+    budget_obj = original_body.get("thinking_budget")  # pyright: ignore[reportUnknownMemberType]
+    if isinstance(budget_obj, (int, float)):
+        return (None, int(budget_obj))
+    return (None, None)
+
+
 def _safe_ratio(numerator: int, denominator: int) -> float | None:
     """Return ``numerator / denominator`` as a utilization ratio.
 
@@ -1332,17 +1373,22 @@ class RequestCoordinator:
 
         # Phase C: re-resolve ``thinking.budget_tokens`` for the
         # selected provider. Strict rejections propagate as
-        # :class:`CapabilityError` so the client sees a 400 before
-        # any upstream dispatch.
-        if context.transcode_required and selected.provider_id:
-            self._recompute_thinking_budget_for_selected_provider(
+        # :class:`CapabilityError`; the cleanup branch finalizes the
+        # attempt, releases the reservation, decrements the active
+        # request count, and frees the health slot before re-raising so
+        # the proxy layer renders an HTTP 400 with no leaked state.
+        try:
+            self._apply_selected_provider_transcode_adjustments(
                 context=context,
                 selected=selected,
-                thinking_capability=self._resolve_selected_thinking_capability(
-                    model_id=context.model_id,
-                    provider_id=selected.provider_id,
-                ),
             )
+        except CapabilityError as err:
+            await self._finalize_selected_capability_rejection(
+                context=context,
+                selected=selected,
+                err=err,
+            )
+            raise
 
         response: httpx.Response | None = None
         try:
@@ -1581,17 +1627,22 @@ class RequestCoordinator:
 
         # Phase C: re-resolve ``thinking.budget_tokens`` for the
         # selected provider. Strict rejections propagate as
-        # :class:`CapabilityError` so the client sees a 400 before
-        # any upstream dispatch.
-        if context.transcode_required and selected.provider_id:
-            self._recompute_thinking_budget_for_selected_provider(
+        # :class:`CapabilityError`; the cleanup branch finalizes the
+        # attempt, releases the reservation, decrements the active
+        # request count, and frees the health slot before re-raising so
+        # the proxy layer renders an HTTP 400 with no leaked state.
+        try:
+            self._apply_selected_provider_transcode_adjustments(
                 context=context,
                 selected=selected,
-                thinking_capability=self._resolve_selected_thinking_capability(
-                    model_id=context.model_id,
-                    provider_id=selected.provider_id,
-                ),
             )
+        except CapabilityError as err:
+            await self._finalize_selected_capability_rejection(
+                context=context,
+                selected=selected,
+                err=err,
+            )
+            raise
 
         # Inject stream_options.include_usage for OpenAI
         body_to_send = context.body_for_upstream
@@ -2256,8 +2307,21 @@ class RequestCoordinator:
         provider's capability and overwrites the ``thinking`` block in
         ``context.upstream_body`` with the resolved budget.
 
+        Resolution uses the **original** client thinking controls
+        (``reasoning_effort`` for OpenAI, explicit ``thinking.budget_tokens``
+        for Anthropic), not the already-translated ``upstream_body``
+        budget. Forwarding the translated value would short-circuit the
+        resolver's effort mapping because ``requested_budget_tokens``
+        is consulted before ``requested_effort``; for OpenAI clients
+        that would prevent the selected provider's
+        ``effort_to_budget_tokens`` override from taking effect.
+
         Strict-policy rejections propagate as :class:`CapabilityError`
         so the client receives an HTTP 400 before any upstream dispatch.
+        Callers must wrap invocations with
+        :meth:`_finalize_selected_capability_rejection` so durable
+        attempt state and runtime counters are cleaned up before the
+        error is re-raised.
         """
         from eggpool.transcoder.budget_resolver import resolve_thinking_budget
 
@@ -2280,28 +2344,19 @@ class RequestCoordinator:
         budget_value_obj: object = thinking_block.get("budget_tokens")  # pyright: ignore[reportUnknownMemberType]
         if not isinstance(budget_value_obj, (int, float)):
             return
-        budget_value = budget_value_obj
         budget_defaults: dict[str, int] | None = None
         policy = "lenient"
         if self._transcoder_policy is not None:
             budget_defaults = self._transcoder_policy.thinking_budget_defaults.as_dict()
             policy = self._transcoder_policy.budget_resolution_policy
-        original_body_obj: object
-        try:
-            original_body_obj = json.loads(context.original_body)
-        except (json.JSONDecodeError, ValueError):
-            original_body_obj = None
-        requested_effort: str | None = None
-        if isinstance(original_body_obj, dict):
-            original_body: dict[str, object] = original_body_obj  # pyright: ignore[reportUnknownVariableType]
-            requested_effort_obj: object = original_body.get("reasoning_effort")  # pyright: ignore[reportUnknownMemberType]
-            if isinstance(requested_effort_obj, str):
-                requested_effort = requested_effort_obj
+        original_effort, original_budget = _extract_original_thinking_budget_inputs(
+            context,
+        )
         resolution = resolve_thinking_budget(
             model_id=context.model_id,
             provider_id=selected.provider_id,
-            requested_effort=requested_effort,
-            requested_budget_tokens=int(budget_value),
+            requested_effort=original_effort,
+            requested_budget_tokens=original_budget,
             capability=thinking_capability,
             budget_defaults=budget_defaults,
             budget_resolution_policy=policy,
@@ -2311,6 +2366,8 @@ class RequestCoordinator:
             context.thinking_trace["resolved_budget_tokens"] = resolution.budget_tokens
             context.thinking_trace["capability_status"] = thinking_capability.status
             context.thinking_trace["capability_source"] = thinking_capability.source
+            if context.thinking_trace.get("upstream_fields") is None:
+                context.thinking_trace["upstream_fields"] = ["thinking"]
         context.upstream_body = encode_json_body(payload_obj)  # pyright: ignore[reportUnknownArgumentType]
         if context.transcode_context is not None:
             context.transcode_context.loss_warnings.extend(resolution.warnings)
@@ -2323,6 +2380,132 @@ class RequestCoordinator:
                         "provider_id": selected.provider_id,
                     }
                 )
+
+    def _apply_selected_provider_transcode_adjustments(
+        self,
+        *,
+        context: ProxyRequestContext,
+        selected: SelectedAttempt,
+    ) -> None:
+        """Apply provider-specific thinking-budget overrides before dispatch.
+
+        Centralises the selected-provider recompute so streaming and
+        non-streaming dispatch paths run identical logic. Strict-policy
+        rejections from :func:`resolve_thinking_budget` propagate as
+        :class:`CapabilityError`; callers MUST wrap this method with
+        :meth:`_finalize_selected_capability_rejection` so the durable
+        attempt row, in-memory reservation, active request count, and
+        health-manager slot are released before the error is re-raised.
+
+        This helper is a no-op when the request is not transcoded, when
+        no provider was resolved, or when the upstream body lacks the
+        ``thinking`` block the recompute needs to overwrite.
+        """
+        if not context.transcode_required or not selected.provider_id:
+            return
+        thinking_capability = self._resolve_selected_thinking_capability(
+            model_id=context.model_id,
+            provider_id=selected.provider_id,
+        )
+        self._recompute_thinking_budget_for_selected_provider(
+            context=context,
+            selected=selected,
+            thinking_capability=thinking_capability,
+        )
+
+    async def _finalize_selected_capability_rejection(
+        self,
+        *,
+        context: ProxyRequestContext,
+        selected: SelectedAttempt,
+        err: CapabilityError,
+    ) -> None:
+        """Clean up selected-attempt state after a post-selection ``CapabilityError``.
+
+        Provider-specific thinking-budget rejection (and any future
+        post-selection client-validation failures) happens after the
+        attempt row, reservation, active request count, and health slot
+        have already been acquired in :meth:`_select_and_persist_attempt`.
+        Without this helper, those side effects would leak until the
+        periodic stale-request sweep reclaimed them.
+
+        The cleanup runs inside a shielded finalizer call so ASGI
+        task cancellation cannot strand the durable state in an
+        intermediate form. The release reason ``capability_rejected``
+        distinguishes this path from upstream-attempt failures
+        (``attempt_failed`` / ``attempt_retryable`` /
+        ``post_commit_interrupted``) so audit reports can attribute the
+        outcome correctly.
+
+        No upstream health penalty is applied — a capability rejection
+        is a client-validation failure, not an account health signal.
+        """
+        elapsed_ms = self._elapsed_ms(context)
+        finalize_result = await asyncio.shield(
+            self._attempt_finalizer.finalize_failed_attempt(
+                attempt_id=selected.attempt_id,
+                reservation_id=selected.reservation_id,
+                data=AttemptFinalizationData(
+                    status_code=400,
+                    error_class=type(err).__name__,
+                    release_reason="capability_rejected",
+                    retry_category=RetryCategory.NEVER.value,
+                    bytes_received=len(context.original_body),
+                    latency_ms=elapsed_ms,
+                    is_retry_outcome=False,
+                ),
+            )
+        )
+        if finalize_result.reservation_released:
+            if self._quota_estimator is not None:
+                await self._quota_estimator.remove_reservation(
+                    selected.account_name,
+                    selected.estimated_microdollars,
+                )
+            await self._router.decrement_active_request_count(
+                selected.account_name,
+            )
+        if self._health_manager is not None:
+            self._health_manager.release_request(selected.account_name)
+        rejection_reason = getattr(err, "reason", None) or "capability_rejected"
+        if context.thinking_trace is not None:
+            context.thinking_trace["decision"] = "rejected"
+            context.thinking_trace["capability_status"] = rejection_reason
+            context.thinking_trace["provider_id"] = selected.provider_id
+        try:
+            counter = get_counter()
+            await counter.increment_rejected(
+                client_protocol=context.protocol,
+                capability_status=rejection_reason,
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug(
+                "thinking metrics counter unavailable for capability_rejected",
+                exc_info=True,
+            )
+        try:
+            await self._finalizer.finalize(
+                selected,
+                FinalizationData(
+                    outcome=FinalizationOutcome.CLIENT_ERROR,
+                    status_code=400,
+                    error_class=type(err).__name__,
+                    error_detail=str(err),
+                    upstream_latency_ms=elapsed_ms,
+                    bytes_received=len(context.original_body),
+                    upstream_protocol=context.upstream_protocol,
+                    thinking_trace_json=_serialize_thinking_trace(
+                        context.thinking_trace,
+                    ),
+                ),
+            )
+        except DatabaseError as finalize_err:
+            logger.warning(
+                "capability rejection finalize failed request_id=%s attempt_id=%s: %s",
+                context.request_id,
+                selected.attempt_id,
+                finalize_err,
+            )
 
     def _build_upstream_headers(
         self,
