@@ -26,12 +26,18 @@ async def resolve_openrouter_record(
     Identity resolution rules (exact / curated only, no fuzzy matching):
 
     1. Exact ``model_info_aliases`` row with ``source=openrouter`` wins.
-    2. Exact ``source_model_id == model_id`` match (no contradictory
+    2. Exact ``model_info_aliases`` row with ``source=provider_catalog``
+       (or any other source) whose value matches an indexed OpenRouter
+       record. This handles the common case where the operator has not
+       hand-curated an OpenRouter alias but the provider-catalog
+       observation has emitted a ``<provider_id>/<model_id>`` alias
+       that happens to match OpenRouter's vendor-prefix naming.
+    3. Exact ``source_model_id == model_id`` match (no contradictory
        provider/source context).
-    3. Existing pricing aliases may be reused only if they are exact and
+    4. Existing pricing aliases may be reused only if they are exact and
        the alias source matches ``openrouter``.
-    4. Ambiguous matches (multiple alias candidates) return no match.
-    5. No substring or edit-distance matching.
+    5. Ambiguous matches (multiple alias candidates) return no match.
+    6. No substring or edit-distance matching.
     """
     if not openrouter_indexed:
         return None
@@ -52,12 +58,44 @@ async def resolve_openrouter_record(
         )
         return None
 
-    # Rule 2: Exact source_model_id == model_id
+    # Rule 2: Try aliases from any other source (provider_catalog,
+    # huggingface, artificial_analysis).  The provider-catalog source
+    # emits a ``<provider_id>/<model_id>`` alias whenever the local
+    # provider_id matches OpenRouter's vendor naming (openai, anthropic,
+    # google, ...), and the operator's 33-model test fixtures all rely
+    # on this path because they do not ship a hand-curated
+    # ``[model_info.aliases]`` block.  We still require an exact match
+    # against the OpenRouter catalog — no fuzzy matching.
+    fallback_aliases = await repo.get_aliases_for_model(
+        model_id, source="provider_catalog"
+    )
+    if len(fallback_aliases) == 1:
+        record = openrouter_indexed.get(fallback_aliases[0])
+        if record is not None:
+            return record
+    elif len(fallback_aliases) > 1:
+        # Multiple provider-catalog aliases exist (e.g. when the same
+        # base model_id appears under two distinct provider_ids).  Only
+        # resolve when exactly one of them matches an indexed OpenRouter
+        # record; otherwise the match is ambiguous and we skip.
+        candidate_records = [
+            openrouter_indexed[a] for a in fallback_aliases if a in openrouter_indexed
+        ]
+        if len(candidate_records) == 1:
+            return candidate_records[0]
+        if len(candidate_records) > 1:
+            logger.debug(
+                "Ambiguous provider_catalog aliases for %s: %s — skipping",
+                model_id,
+                fallback_aliases,
+            )
+
+    # Rule 3: Exact source_model_id == model_id
     direct = openrouter_indexed.get(model_id)
     if direct is not None:
         return direct
 
-    # Rule 3: Check pricing aliases (exact match only, source must be openrouter)
+    # Rule 4: Check pricing aliases (exact match only, source must be openrouter)
     pricing_aliases = await repo.get_aliases_for_model(model_id, source="pricing")
     for alias_str in pricing_aliases:
         record = openrouter_indexed.get(alias_str)

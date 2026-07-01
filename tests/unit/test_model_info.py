@@ -435,6 +435,13 @@ async def test_provider_catalog_source_emits_observations_from_cache() -> None:
     assert record.supports_tools is True
     assert record.sparse is True
     assert record.confidence == 1.0
+    # Regression: provider-catalog observations must emit the canonical
+    # ``<provider_id>/<model_id>`` alias so identity resolvers like
+    # OpenRouter (whose source ids are always vendor-prefixed) can find
+    # the catalog row without operator-curated aliases.
+    assert "openai-provider/gpt-4o" in record.aliases
+    assert "GPT-4o" in record.aliases
+    assert "gpt-4o" in record.aliases
 
 
 @pytest.mark.asyncio()

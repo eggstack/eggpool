@@ -79,9 +79,25 @@ class ProviderCatalogSource:
         else:
             display_name_str = None
 
-        aliases: tuple[str, ...] = ()
+        # Build the alias set in deterministic order. Identity resolution
+        # rules require exact alias matches — no fuzzy or substring
+        # matching. External model-info sources (OpenRouter, Artificial
+        # Analysis, Hugging Face) all use a ``<vendor>/<model>`` source
+        # ID format where ``<vendor>`` is the Eggpool ``provider_id``;
+        # seeding that canonical alias here makes the OpenRouter resolver
+        # match every catalog row that has a configured provider, with
+        # zero operator configuration.
+        alias_set: set[str] = set()
+        if provider_id and provider_id != model_id:
+            prefixed = f"{provider_id}/{model_id}"
+            alias_set.add(prefixed)
         if display_name_str is not None and display_name_str != model_id:
-            aliases = (model_id, display_name_str)
+            alias_set.add(display_name_str)
+        # Always keep the bare model id as a self-alias so future sources
+        # that happen to use the same identifier resolve without
+        # requiring the caller to set it explicitly.
+        alias_set.add(model_id)
+        aliases: tuple[str, ...] = tuple(sorted(alias_set))
 
         return SourceModelRecord(
             source="provider_catalog",
