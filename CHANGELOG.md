@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.5.0] - 2026-07-01
+
+### Changed
+
+- **Mobile dashboard topbar lays burger, brand, and refresh on one row.** Hoisted the burger button out of `<nav class="topnav">` and rendered it as a sibling before the `<h1>` so the mobile flex layout puts [burger][EggPool][↻] inline instead of stacking the brand title on its own row beneath the icons. The `<nav>` keeps `margin-left: auto` on wide viewports (so the menu and refresh stay right-aligned) but drops to inline `width: auto` on mobile so the three icons stay grouped on one row. The brand title shrinks to `flex: 0 0 auto` (was `flex: 1 1 100%` with centered text) to match its intrinsic content width.
+- **Burger button no longer carries a tooltip.** The hamburger glyph is self-explanatory on a phone, so `data-tooltip="Open page menu"` and the companion `data-tooltip-open-label="Close page menu"` swap attributes were retired. The `aria-label` still swaps between the open and close copy so assistive tech announces the state. The expanded-state tooltip suppression CSS rule and the JS swap path were dropped with it.
+
 ## [0.4.8] - 2026-07-01
 
 ### Changed
