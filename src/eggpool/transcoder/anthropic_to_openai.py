@@ -10,6 +10,10 @@ from eggpool.transcoder.cache_stability import (
     extract_cache_boundaries,
     extract_cache_control_type,
 )
+from eggpool.transcoder.errors import (
+    CACHE_CONTROL_LOSS_KINDS,
+    TranscodeLossError,
+)
 from eggpool.transcoder.json_helpers import (
     as_object,
     decode_base64_payload,
@@ -248,6 +252,7 @@ class AnthropicToOpenAI:
         thinking_capability: ThinkingCapability | None = None,
         budget_defaults: dict[str, int] | None = None,
         budget_resolution_policy: str = "lenient",
+        loss_policy: str = "warn",
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         warnings: list[dict[str, Any]] = []
         out: dict[str, Any] = {}
@@ -632,6 +637,27 @@ class AnthropicToOpenAI:
                     cache_control_type=cache_type,
                 )
             )
+
+        # Phase 3 loss-policy enforcement. When the operator has
+        # configured ``loss_policy="reject"``, any cache-control
+        # loss warning recorded above causes the request to be
+        # rejected with HTTP 400 before upstream dispatch. The
+        # ``warn`` default preserves the v1 behaviour where the
+        # request proceeds and the loss is reported in the
+        # ``loss_warnings`` audit log.
+        if loss_policy == "reject":
+            protected = [
+                w
+                for w in warnings
+                if isinstance(w.get("kind"), str)
+                and w["kind"] in CACHE_CONTROL_LOSS_KINDS
+            ]
+            if protected:
+                raise TranscodeLossError(
+                    "Request rejected by loss_policy=reject: "
+                    "cache_control boundary would be lost",
+                    protected,
+                )
 
         return out, warnings
 

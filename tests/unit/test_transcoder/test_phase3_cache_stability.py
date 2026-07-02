@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from eggpool.transcoder.anthropic_to_openai import AnthropicToOpenAI
 from eggpool.transcoder.cache_stability import (
     CACHE_BOUNDARY_ANNOTATION_CAP,
@@ -9,6 +13,7 @@ from eggpool.transcoder.cache_stability import (
     CacheBoundaryTracker,
 )
 from eggpool.transcoder.context import TranscodeContext
+from eggpool.transcoder.errors import TranscodeLossError
 from eggpool.transcoder.openai_to_anthropic import OpenAIToAnthropic
 
 
@@ -191,3 +196,251 @@ class TestTranscodeContextDefault:
         )
         assert context.cache_boundary_tracker.annotations == []
         assert context.cache_boundary_tracker.dropped_count == 0
+
+
+class TestLossPolicyReject:
+    """Verify ``loss_policy="reject"`` enforces cache-control loss rejection.
+
+    The plan specifies that when the operator has configured
+    ``loss_policy = "reject"`` on the transcoder, any protected cache
+    boundary that would be lost during translation must cause the
+    request to be rejected with HTTP 400. The ``warn`` default
+    preserves the v1 behaviour where the request proceeds and the
+    loss is recorded in ``loss_warnings`` for audit.
+    """
+
+    def test_anthropic_to_openai_rejects_top_level_cache_control(self) -> None:
+        transcoder = AnthropicToOpenAI()
+        context = _context("anthropic", "openai")
+        payload = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "cache_control": {"type": "ephemeral"},
+        }
+        with pytest.raises(TranscodeLossError) as exc_info:
+            transcoder.encode_request(payload, context, loss_policy="reject")
+        assert "cache_control" in str(exc_info.value)
+        assert any(
+            w.get("kind") == "cache_control_feature_disabled"
+            for w in exc_info.value.loss_warnings
+        )
+
+    def test_anthropic_to_openai_rejects_tool_cache_control(self) -> None:
+        transcoder = AnthropicToOpenAI()
+        context = _context("anthropic", "openai")
+        payload = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "tools": [
+                {"name": "search", "cache_control": {"type": "ephemeral"}},
+            ],
+        }
+        with pytest.raises(TranscodeLossError) as exc_info:
+            transcoder.encode_request(payload, context, loss_policy="reject")
+        assert any(
+            w.get("kind") == "cache_control_unsupported_by_target_protocol"
+            for w in exc_info.value.loss_warnings
+        )
+
+    def test_anthropic_to_openai_rejects_message_block_cache_control(
+        self,
+    ) -> None:
+        transcoder = AnthropicToOpenAI()
+        context = _context("anthropic", "openai")
+        payload = {
+            "model": "gpt-4",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Long prompt",
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                }
+            ],
+        }
+        with pytest.raises(TranscodeLossError):
+            transcoder.encode_request(payload, context, loss_policy="reject")
+
+    def test_anthropic_to_openai_warn_mode_does_not_raise(self) -> None:
+        transcoder = AnthropicToOpenAI()
+        context = _context("anthropic", "openai")
+        payload = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "cache_control": {"type": "ephemeral"},
+        }
+        out, warnings = transcoder.encode_request(payload, context, loss_policy="warn")
+        assert "cache_control" not in out
+        assert any(w.get("kind") == "cache_control_feature_disabled" for w in warnings)
+
+    def test_anthropic_to_openai_clean_payload_does_not_raise(self) -> None:
+        transcoder = AnthropicToOpenAI()
+        context = _context("anthropic", "openai")
+        payload = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hi"}],
+        }
+        out, warnings = transcoder.encode_request(
+            payload, context, loss_policy="reject"
+        )
+        assert "messages" in out
+        # No cache-control loss warnings in a clean payload
+        cache_kinds = {
+            "cache_control_unsupported_by_target_protocol",
+            "cache_control_feature_disabled",
+            "cache_control_invalid_shape",
+            "provider_extension_not_preserved",
+            "stable_prefix_reordered_canonically",
+        }
+        assert not any(
+            isinstance(w.get("kind"), str) and w["kind"] in cache_kinds
+            for w in warnings
+        )
+
+    def test_openai_to_anthropic_rejects_invalid_cache_control_shape(
+        self,
+    ) -> None:
+        transcoder = OpenAIToAnthropic()
+        context = _context("openai", "anthropic")
+        payload = {
+            "model": "claude-3",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "search"},
+                    "cache_control": {"oops": True},
+                }
+            ],
+        }
+        with pytest.raises(TranscodeLossError) as exc_info:
+            transcoder.encode_request(payload, context, loss_policy="reject")
+        assert any(
+            w.get("kind") == "cache_control_invalid_shape"
+            for w in exc_info.value.loss_warnings
+        )
+
+    def test_openai_to_anthropic_warn_mode_does_not_raise(self) -> None:
+        transcoder = OpenAIToAnthropic()
+        context = _context("openai", "anthropic")
+        payload = {
+            "model": "claude-3",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "search"},
+                    "cache_control": {"oops": True},
+                }
+            ],
+        }
+        out, warnings = transcoder.encode_request(payload, context, loss_policy="warn")
+        assert "tools" in out
+        assert any(w.get("kind") == "cache_control_invalid_shape" for w in warnings)
+
+    def test_openai_to_anthropic_clean_payload_does_not_raise(self) -> None:
+        transcoder = OpenAIToAnthropic()
+        context = _context("openai", "anthropic")
+        payload = {
+            "model": "claude-3",
+            "messages": [{"role": "user", "content": "Hi"}],
+        }
+        out, warnings = transcoder.encode_request(
+            payload, context, loss_policy="reject"
+        )
+        assert "messages" in out
+        # No cache-control loss warnings in a clean payload
+        cache_kinds = {
+            "cache_control_unsupported_by_target_protocol",
+            "cache_control_feature_disabled",
+            "cache_control_invalid_shape",
+            "provider_extension_not_preserved",
+            "stable_prefix_reordered_canonically",
+        }
+        assert not any(
+            isinstance(w.get("kind"), str) and w["kind"] in cache_kinds
+            for w in warnings
+        )
+
+
+class TestWarningsNotInModelVisibleContent:
+    """Regression guard: transcoder loss warnings must never appear in
+    the translated request body. Warnings live on
+    ``TranscodeContext.loss_warnings``; the body is model-visible
+    content. Operators can rely on the body to be the provider-cache
+    boundary without contamination from transcoder diagnostics.
+    """
+
+    def test_anthropic_to_openai_warnings_not_in_body(self) -> None:
+        transcoder = AnthropicToOpenAI()
+        context = _context("anthropic", "openai")
+        payload = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "cache_control": {"type": "ephemeral"},
+            "tools": [
+                {"name": "search", "cache_control": {"type": "ephemeral"}},
+            ],
+        }
+        out, warnings = transcoder.encode_request(payload, context)
+        # Every loss warning kind must be absent from the body
+        for warning in warnings:
+            kind = warning.get("kind", "")
+            for value in out.values():
+                if isinstance(value, str):
+                    assert kind not in value, (
+                        f"loss warning kind {kind!r} leaked into body value"
+                    )
+            # Recursive check: no string value in the body contains
+            # any warning kind substring
+            body_json = json.dumps(out)
+            assert kind not in body_json, (
+                f"loss warning kind {kind!r} found in serialised body"
+            )
+
+    def test_openai_to_anthropic_warnings_not_in_body(self) -> None:
+        transcoder = OpenAIToAnthropic()
+        context = _context("openai", "anthropic")
+        payload = {
+            "model": "claude-3",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "search"},
+                    "cache_control": {"oops": True},
+                }
+            ],
+        }
+        out, warnings = transcoder.encode_request(payload, context)
+        body_json = json.dumps(out)
+        for warning in warnings:
+            kind = warning.get("kind", "")
+            assert kind not in body_json, (
+                f"loss warning kind {kind!r} found in serialised body"
+            )
+
+    def test_anthropic_to_openai_provider_extension_not_in_body(self) -> None:
+        transcoder = AnthropicToOpenAI()
+        context = _context("anthropic", "openai")
+        payload = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "tools": [
+                {
+                    "name": "search",
+                    "defer_loading": True,
+                }
+            ],
+        }
+        out, warnings = transcoder.encode_request(payload, context)
+        assert any(
+            w.get("kind") == "provider_extension_not_preserved" for w in warnings
+        )
+        # The provider extension must be stripped from the body
+        body_json = json.dumps(out)
+        assert "defer_loading" not in body_json

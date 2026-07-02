@@ -594,6 +594,7 @@ class RequestCoordinator:
                     _thinking_cap: ThinkingCapability | None = None
                     _budget_defaults: dict[str, int] | None = None
                     _budget_policy = "lenient"
+                    _loss_policy = "warn"
                     if self._transcoder_policy is not None:
                         _budget_defaults = (
                             self._transcoder_policy.thinking_budget_defaults.as_dict()
@@ -601,6 +602,7 @@ class RequestCoordinator:
                         _budget_policy = (
                             self._transcoder_policy.budget_resolution_policy
                         )
+                        _loss_policy = self._transcoder_policy.loss_policy
                     # Look up thinking capability from catalog cache for
                     # budget resolution (best-effort; None is safe).
                     try:
@@ -627,6 +629,7 @@ class RequestCoordinator:
                         thinking_capability=_thinking_cap,
                         budget_defaults=_budget_defaults,
                         budget_resolution_policy=_budget_policy,
+                        loss_policy=_loss_policy,
                     )
                     context.upstream_body = encode_json_body(translated)
                     context.transcode_context.loss_warnings.extend(warnings)

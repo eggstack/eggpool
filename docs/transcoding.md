@@ -561,6 +561,20 @@ Cache-boundary annotation kinds emitted by the tracker:
 
 Operators can read the boundary tracker through the structured loss warnings (`stable_prefix_preserved`, `stable_prefix_reordered_canonically`, `cache_control_*`) — every entry carries a path so dashboards can attribute cache hit-rate loss to specific fields. Routing (`QuotaFairScorer`) does **not** consume these annotations; cache observability is reporting-only and asserted by `tests/unit/test_routing.py::test_scorer_does_not_consume_cache_counter_status`.
 
+### Loss-policy enforcement
+
+When the operator has set `loss_policy = "reject"` on `[transcoder]`, the body transcoder raises `eggpool.transcoder.errors.TranscodeLossError` (rendered as HTTP 400 with `invalid_request_error`) before upstream dispatch whenever any of the protected cache-control loss kinds is recorded:
+
+| Kind | When fired |
+|---|---|
+| `cache_control_unsupported_by_target_protocol` | The target protocol has no `cache_control` primitive and the annotation could not be carried across. |
+| `cache_control_feature_disabled` | The operator disabled `cache_control` preservation (the top-level `cache_control` feature gate). |
+| `cache_control_invalid_shape` | The annotation lacked a string `type` field and was rejected by shape validation. |
+| `provider_extension_not_preserved` | A non-portable vendor field (e.g. `defer_loading`) on an Anthropic tool could not be carried into the OpenAI wire. |
+| `stable_prefix_reordered_canonically` | Source and target cache boundary lists diverge — the prefix was canonically reordered. |
+
+The `warn` default preserves the v1 behaviour: the request proceeds and the loss is recorded in `TranscodeContext.loss_warnings` for audit. The transcoder never injects warning text into the translated body — regression-guarded by `tests/unit/test_transcoder/test_phase3_cache_stability.py::TestWarningsNotInModelVisibleContent`.
+
 ## Pricing Catalog Cache
 
 The transcoder depends on the upstream pricing catalogs (OpenRouter, OpenCode Zen, ...) that the resolver pipeline caches per catalog. Each `TTLCache` is bounded by a configurable `max_entries` knob (default `4096`, LRU eviction on store). Unparsed `raw` payloads are stripped after the catalog is parsed so the cache footprint stays small even with hundreds of models in the upstream catalog.

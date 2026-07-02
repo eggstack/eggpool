@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from eggpool.errors import AggregatorError
+
 
 @dataclass(frozen=True, slots=True)
 class UpstreamErrorEnvelope:
@@ -20,6 +22,46 @@ class UpstreamErrorEnvelope:
     message: str
     upstream_request_id: str | None = None
     raw: dict[str, Any] | None = None
+
+
+# Cache-control loss kinds that the transcoder recognises as
+# ``protected`` boundaries. When ``loss_policy="reject"`` is active and
+# any of these fire, the transcoder raises :class:`TranscodeLossError`
+# instead of dispatching the request upstream.
+CACHE_CONTROL_LOSS_KINDS: frozenset[str] = frozenset(
+    {
+        "cache_control_unsupported_by_target_protocol",
+        "cache_control_feature_disabled",
+        "cache_control_invalid_shape",
+        "provider_extension_not_preserved",
+        "stable_prefix_reordered_canonically",
+    }
+)
+
+
+class TranscodeLossError(AggregatorError):
+    """Raised when ``loss_policy="reject"`` and a protected cache field was lost.
+
+    The transcoder records every loss-of-information event as a
+    structured warning on :class:`TranscodeContext`. When the operator
+    has configured ``loss_policy = "reject"`` on the
+    :class:`TranscoderPolicy`, the transcoder raises this exception
+    whenever one of the protected cache-control kinds is recorded.
+    The proxy layer renders it as HTTP 400 with an
+    ``invalid_request_error`` body.
+
+    The ``loss_warnings`` field carries the full list of loss warnings
+    that triggered the rejection so operators can diagnose which
+    fields were lost during translation.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        loss_warnings: list[dict[str, Any]],
+    ) -> None:
+        self.loss_warnings: list[dict[str, Any]] = list(loss_warnings)
+        super().__init__(message)
 
 
 def parse_upstream_error(

@@ -42,6 +42,7 @@ from eggpool.request.limits import (
 )
 from eggpool.routing.provider import parse_model_provider
 from eggpool.transcoder.context import TranscodeContext
+from eggpool.transcoder.errors import TranscodeLossError
 
 if TYPE_CHECKING:
     from fastapi import Request
@@ -213,8 +214,15 @@ def _prepare_transcode_preflight(
         upstream_protocol=upstream_protocol,
     )
     _features = getattr(transcoder_policy, "features", None)
+    # The preflight always runs the transcoder in ``warn`` mode so it
+    # can collect the full warning list. The proxy layer below is
+    # responsible for enforcing the operator's ``loss_policy`` after
+    # translation completes.
     translated, warnings = transcoder.encode_request(
-        payload, transcode_context, features=_features
+        payload,
+        transcode_context,
+        features=_features,
+        loss_policy="warn",
     )
     return TranscodePreflightResult(
         upstream_protocol=cast("ProtocolName", upstream_protocol),
@@ -464,6 +472,12 @@ async def handle_proxy_request(
             capability=exc.capability,
             requested_fields=exc.requested_fields,
             model=exc.model_id,
+        )
+    except TranscodeLossError as exc:
+        return endpoint.error_response(
+            status_code=400,
+            message=str(exc),
+            error_type="invalid_request_error",
         )
     except (
         NoEligibleAccountError,

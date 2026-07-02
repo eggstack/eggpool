@@ -27,6 +27,7 @@ class BodyTranscoder(Protocol):
         thinking_capability: ThinkingCapability | None = None,
         budget_defaults: dict[str, int] | None = None,
         budget_resolution_policy: str = "lenient",
+        loss_policy: str = "warn",
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]: ...
 
     def decode_response(

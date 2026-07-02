@@ -447,6 +447,33 @@ Both transcoders also record `provider_extension_not_preserved` for
 non-portable vendor fields on Anthropic tools (e.g. `defer_loading`,
 `input_examples`) so operators can see which extensions are dropped.
 
+### Loss-Policy Enforcement
+
+When the operator has configured `loss_policy = "reject"` on
+`[transcoder]`, each body transcoder scans its own emitted warnings
+after translation completes. If any of the five protected
+cache-control loss kinds (`cache_control_unsupported_by_target_protocol`,
+`cache_control_feature_disabled`, `cache_control_invalid_shape`,
+`provider_extension_not_preserved`,
+`stable_prefix_reordered_canonically`) appears, the transcoder raises
+`eggpool.transcoder.errors.TranscodeLossError`. The proxy layer
+catches it in `proxy_request.py::handle_proxy_request` and renders it
+as HTTP 400 with `invalid_request_error`. The `warn` default
+preserves the v1 behaviour: the request proceeds and the loss is
+recorded on `TranscodeContext.loss_warnings` for audit.
+
+The preflight path in `proxy_request.py::_prepare_transcode_preflight`
+runs the transcoder in `warn` mode regardless of operator policy so it
+can collect the full warning list before the proxy-level check fires
+on any non-empty warning set. The proxy-level check is the broader
+gate (any warning → reject); the transcoder-level check is the
+narrower gate (only protected cache-control kinds → reject). Both
+must be satisfied for a request to be dispatched in reject mode.
+
+The transcoder never injects warning text into the translated body.
+Regression-guarded by
+`tests/unit/test_transcoder/test_phase3_cache_stability.py::TestWarningsNotInModelVisibleContent`.
+
 ### Invariants
 
 - The cache-stability layer is observational: it does not affect
