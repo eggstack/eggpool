@@ -575,6 +575,14 @@ async def handle_compression_observability(
       ``warning_count``, ``observed_requests``
     - ``top_reason_codes``                    : ``[(code, count), ...]``
       aggregated across the window
+    - ``by_policy``                          : Phase 6 resolved-policy
+      rollup (see :func:`fetch_compression_observability` for the
+      full shape).  ``"<global>"`` is the sentinel for requests
+      that did not match any ``[[compression.policies]]`` entry.
+    - ``by_policy_source``                   : ``{"global",
+      "policy:<name>", ...} -> request_count`` stable audit strings.
+    - ``policy_warning_count_total``         : sum of compression
+      warning counts across resolved-policy rows in window.
     """
     from eggpool.stats import resolve_time_range
 

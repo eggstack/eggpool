@@ -2343,6 +2343,21 @@ async def fetch_compression_observability(
       aggregated across the window, returned as ``[(code,
       count), ...]`` so the dashboard can render them without
       re-parsing the JSON.
+    - ``by_policy``                         : Phase 6 resolved-policy
+      rollup.  ``policy_name -> {source, total_requests, by_status,
+      candidate_count, eligible_count, applied_count,
+      transform_count, warning_count}``.  ``"<global>"`` is the
+      sentinel for requests that did not match any
+      ``[[compression.policies]]`` entry; operator-chosen names are
+      the value of the entry's ``name`` field.
+    - ``by_policy_source``                  : ``{"global",
+      "policy:<name>", ...} -> request_count``.  Stable audit
+      strings suitable for time-series grouping.
+    - ``policy_warning_count_total``       : sum of
+      ``compression_warning_count`` across all resolved-policy
+      rows in window.  Does not include Phase 5 compression
+      applier warnings (those are persisted separately in
+      ``compression_warnings_json``).
 
     All numeric fields default to 0; ratios default to ``None``
     when the denominator is zero.  This query is reading-only: it
@@ -2791,6 +2806,83 @@ async def fetch_compression_observability(
         bucket["transform_count"] += int(d["total_transform_count"] or 0)
         bucket["savings_tokens"] += int(d["total_savings_tokens"] or 0)
 
+    # --- Phase 6: per-policy rollup ---
+    #
+    # Each resolved-policy audit row carries
+    # ``compression_policy_name`` and ``compression_policy_source``
+    # (added by migration 0044).  We aggregate per resolved name and
+    # per source so dashboards can answer "how many requests resolved
+    # under policy X?" without scanning the JSON summary column.  The
+    # candidate counts and applied counts reuse the Phase 4 / Phase 5
+    # columns; the breakdown stays forward-compatible because the
+    # query aliases the ``NULL`` name to ``"<global>"`` (the resolver
+    # sentinel) and adds new source values to the dict on first sight.
+    policy_status_sql = """
+    SELECT
+        COALESCE(compression_policy_name, '<global>') as policy_name,
+        COALESCE(compression_policy_source, 'global') as policy_source,
+        COALESCE(compression_status, 'disabled') as compression_status,
+        COUNT(*) as request_count,
+        COALESCE(SUM(CASE WHEN compression_candidate_count IS NOT NULL
+            THEN compression_candidate_count ELSE 0 END), 0)
+            as total_candidate_count,
+        COALESCE(SUM(CASE WHEN compression_eligible_candidate_count IS NOT NULL
+            THEN compression_eligible_candidate_count ELSE 0 END), 0)
+            as total_eligible_count,
+        COALESCE(SUM(CASE WHEN compression_warning_count IS NOT NULL
+            THEN compression_warning_count ELSE 0 END), 0)
+            as total_warning_count,
+        COALESCE(SUM(CASE WHEN compression_applied IS NOT NULL
+            THEN compression_applied ELSE 0 END), 0)
+            as total_applied_count,
+        COALESCE(SUM(CASE WHEN compression_transform_count IS NOT NULL
+            THEN compression_transform_count ELSE 0 END), 0)
+            as total_transform_count
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+    GROUP BY compression_policy_name, compression_policy_source, compression_status
+    """
+    policy_rows = await db.fetch_all(policy_status_sql, (start_dt, end_dt))
+    by_policy: dict[str, dict[str, Any]] = {}
+    by_policy_source: dict[str, int] = {}
+    policy_warning_total = 0
+    for row in policy_rows:
+        d = dict(row)
+        name = d["policy_name"]
+        source = d["policy_source"]
+        status = d["compression_status"]
+        bucket = by_policy.setdefault(
+            name,
+            {
+                "source": source,
+                "total_requests": 0,
+                "by_status": {
+                    "disabled": 0,
+                    "observed": 0,
+                },
+                "candidate_count": 0,
+                "eligible_count": 0,
+                "applied_count": 0,
+                "transform_count": 0,
+                "warning_count": 0,
+            },
+        )
+        bucket["total_requests"] += int(d["request_count"])
+        bucket_status = bucket["by_status"]
+        if status not in bucket_status:
+            bucket_status[status] = 0
+        bucket_status[status] += int(d["request_count"])
+        bucket["candidate_count"] += int(d["total_candidate_count"] or 0)
+        bucket["eligible_count"] += int(d["total_eligible_count"] or 0)
+        bucket["applied_count"] += int(d["total_applied_count"] or 0)
+        bucket["transform_count"] += int(d["total_transform_count"] or 0)
+        bucket["warning_count"] += int(d["total_warning_count"] or 0)
+        by_policy_source[source] = by_policy_source.get(source, 0) + int(
+            d["request_count"]
+        )
+        policy_warning_total += int(d["total_warning_count"] or 0)
+
     return {
         "total_requests": total,
         "by_status": by_status,
@@ -2834,4 +2926,13 @@ async def fetch_compression_observability(
         "applied_per_mode": applied_per_mode,
         "applied_per_provider_status": applied_per_provider_status,
         "applied_per_model_status": applied_per_model_status,
+        # Phase 6: resolved-policy rollup (migration 0044).  These
+        # three keys are advisory / audit; they do not influence
+        # routing, scoring, or compression decisioning.  Names use
+        # the resolver's ``<global>`` sentinel for the no-override
+        # path so dashboards can render the rollup without
+        # special-casing ``NULL``.
+        "by_policy": by_policy,
+        "by_policy_source": by_policy_source,
+        "policy_warning_count_total": policy_warning_total,
     }

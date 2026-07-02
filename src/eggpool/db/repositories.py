@@ -421,6 +421,9 @@ class RequestRepository:
         compression_latency_ms: float = 0.0,
         compression_failed_fallback: int = 0,
         compression_applied_summary_json: str | None = None,
+        compression_policy_name: str | None = None,
+        compression_policy_source: str | None = None,
+        compression_policy_warnings_json: str | None = None,
     ) -> bool:
         """Finalize a request only if it is still pending.
 
@@ -491,7 +494,10 @@ class RequestRepository:
             "compression_warnings_json = ?, "
             "compression_latency_ms = ?, "
             "compression_failed_fallback = ?, "
-            "compression_applied_summary_json = ? "
+            "compression_applied_summary_json = ?, "
+            "compression_policy_name = ?, "
+            "compression_policy_source = ?, "
+            "compression_policy_warnings_json = ? "
             "WHERE id = ? AND status = 'pending'",
             (
                 status,
@@ -567,6 +573,9 @@ class RequestRepository:
                 compression_latency_ms,
                 compression_failed_fallback,
                 compression_applied_summary_json,
+                compression_policy_name,
+                compression_policy_source,
+                compression_policy_warnings_json,
                 request_id,
             ),
         )

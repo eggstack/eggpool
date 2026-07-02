@@ -15,6 +15,15 @@ cache-protected blocks, recomputes ``stable_prefix_hash`` after
 compression, and fails closed (returns the uncompressed body with a
 warning) on unexpected prefix hash change.
 
+Phase 6 adds operator-controllable policy overrides.  The global
+``[compression]`` table remains the safe default.  Operators can add
+``[[compression.policies]]`` rows that overlay a subset of knobs
+when a request matches specific client, protocol, provider, or model
+fields.  Resolution is deterministic (file order, last-match-wins on
+scalar fields, merge-on-boolean for transforms), never inspects
+request content, and fails closed (returns the global config plus a
+warning) on any malformed override.
+
 This module owns the typed config surface.  Validation rules:
 
 - ``enabled = false`` is the safe default; no analyzer work runs
@@ -32,6 +41,11 @@ This module owns the typed config surface.  Validation rules:
 - Transform toggles default to ``True`` only when compression is
   enabled.  The transforms are advisory; no analyzer runs when
   ``enabled = false``.
+- ``[[compression.policies]]`` entries are validated for non-empty
+  unique names; all override fields are optional so absent keys do
+  not reset the global default.  ``compress_static_prefix=true`` in
+  an override requires the same ``allow_static_prefix_override=true``
+  safety guard as the global config.
 
 The ``compress_static_prefix`` flag exists for forward-compatibility
 with later phases.  In Phase 4 it is documentation-only: the
@@ -48,6 +62,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 CompressionMode = Literal["observe", "safe"]
 CompressionPlacement = Literal["suffix_only", "after_cache_boundary", "anywhere"]
+CompressionProtocolMatch = Literal["openai", "anthropic"]
 
 
 class CompressionTransforms(BaseModel):
@@ -225,6 +240,19 @@ class CompressionConfig(BaseModel):
             "of compression for cache-equivalent flows."
         ),
     )
+    policies: list["CompressionPolicyOverride"] = Field(  # noqa: UP037
+        default_factory=list["CompressionPolicyOverride"],
+        description=(
+            "Phase 6 operator-controllable policy overrides.  Each "
+            "entry overlays a subset of the global compression knobs "
+            "when a request matches the entry's match fields.  "
+            "Resolution is deterministic (file order, last-match-wins "
+            "on scalars, merge-on-boolean for transforms), never "
+            "inspects request content, and fails closed (returns the "
+            "global config plus a warning) on any malformed override.  "
+            "When the list is empty, behavior is unchanged from Phase 5."
+        ),
+    )
 
     @model_validator(mode="after")
     def _validate_compress_static_prefix(self) -> CompressionConfig:
@@ -254,10 +282,248 @@ class CompressionConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_policies(self) -> CompressionConfig:
+        """Phase 6 policy-table consistency.
+
+        Names must be non-empty and unique across all entries; the
+        ``compression_policy_name`` column is the audit key, so
+        collisions would silently merge dashboards.  An entry with
+        no match fields is allowed only when explicitly named
+        ``default`` to avoid accidentally turning the override into
+        a global flip.
+        """
+        seen: set[str] = set()
+        for idx, override in enumerate(self.policies):
+            if override.name in seen:
+                raise ValueError(
+                    f"compression.policies[{idx}]: duplicate name "
+                    f"{override.name!r}; policy names must be unique.",
+                )
+            seen.add(override.name)
+            if not override.has_any_match_field() and override.name != "default":
+                raise ValueError(
+                    f"compression.policies[{idx}] ({override.name!r}): "
+                    "at least one match_* field must be set unless the "
+                    "policy is explicitly named 'default'.",
+                )
+        return self
+
+
+class CompressionPolicyOverride(BaseModel):
+    """A single Phase 6 policy override.
+
+    Every override field is optional so an absent key does not reset
+    the global default.  ``name`` is the only required field and must
+    be non-empty.  Match fields are unioned (``OR`` semantics): the
+    override applies if **any** match field fires.  An override with
+    no match fields applies to every request that does not match a
+    later, more-specific override (file-order last-match-wins).
+
+    ``compress_static_prefix = true`` in an override requires the
+    same ``allow_static_prefix_override = true`` safety guard as the
+    global config; the validator enforces it.
+
+    Match fields support simple ``*`` prefix and suffix globbing
+    (case-sensitive).  Exact strings are also accepted.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Stable, operator-chosen identifier for this override.  "
+            "Persisted verbatim in the ``compression_policy_name`` "
+            "column for dashboard filtering and audit."
+        ),
+    )
+    match_clients: list[str] | None = Field(
+        default=None,
+        description=(
+            "Authenticated client names, auth labels, or stable client "
+            "IDs to match against ``CompressionPolicyContext.client_id`` "
+            "and ``client_name``.  Simple ``*`` prefix/suffix globbing."
+        ),
+    )
+    match_provider_ids: list[str] | None = Field(
+        default=None,
+        description=(
+            "Exact provider/account IDs to match.  Only meaningful "
+            "post-route; pre-route resolvers leave this as a no-op."
+        ),
+    )
+    match_provider_kinds: list[str] | None = Field(
+        default=None,
+        description=(
+            "Provider implementation names/kinds to match.  Only "
+            "meaningful post-route; pre-route resolvers leave this "
+            "as a no-op."
+        ),
+    )
+    match_models: list[str] | None = Field(
+        default=None,
+        description=(
+            "Resolved model IDs (after model rewrite, if any) to "
+            "match.  Simple ``*`` prefix/suffix globbing."
+        ),
+    )
+    match_requested_models: list[str] | None = Field(
+        default=None,
+        description=(
+            "Client-supplied model IDs (before model rewrite) to "
+            "match.  Simple ``*`` prefix/suffix globbing."
+        ),
+    )
+    match_protocols: list[CompressionProtocolMatch] | None = Field(
+        default=None,
+        description=(
+            "Source protocols to match against "
+            "``CompressionPolicyContext.source_protocol``.  Use the "
+            "client-side protocol before any transcoding."
+        ),
+    )
+    match_transcoded: bool | None = Field(
+        default=None,
+        description=(
+            "When set, only match requests where "
+            "``CompressionPolicyContext.transcoded`` equals this value."
+        ),
+    )
+    enabled: bool | None = Field(
+        default=None,
+        description=(
+            "Override the resolved ``enabled`` flag.  ``False`` "
+            "hard-disables compression for matching requests even "
+            "when the global config is enabled."
+        ),
+    )
+    mode: CompressionMode | None = Field(
+        default=None,
+        description=(
+            "Override the resolved ``mode`` flag.  ``None`` keeps the global value."
+        ),
+    )
+    placement: CompressionPlacement | None = Field(
+        default=None,
+        description=(
+            "Override the resolved ``placement`` flag.  ``None`` "
+            "keeps the global value."
+        ),
+    )
+    respect_cache_boundaries: bool | None = Field(
+        default=None,
+        description=("Override the resolved ``respect_cache_boundaries`` flag."),
+    )
+    compress_static_prefix: bool | None = Field(
+        default=None,
+        description=(
+            "Override the resolved ``compress_static_prefix`` flag.  "
+            "Honoured only when the resolved mode is ``safe`` AND "
+            "``allow_static_prefix_override`` is ``True``; otherwise "
+            "the same validation as the global config applies."
+        ),
+    )
+    min_candidate_tokens: int | None = Field(
+        default=None,
+        ge=0,
+        description="Override the resolved ``min_candidate_tokens``.",
+    )
+    min_savings_tokens: int | None = Field(
+        default=None,
+        ge=0,
+        description="Override the resolved ``min_savings_tokens``.",
+    )
+    max_compression_latency_ms: float | None = Field(
+        default=None,
+        ge=0.0,
+        description="Override the resolved ``max_compression_latency_ms``.",
+    )
+    transforms: CompressionTransforms | None = Field(
+        default=None,
+        description=(
+            "Per-transform overrides.  ``None`` keeps the global "
+            "values; a non-``None`` value is merged field-by-field "
+            "(``None`` inside the override keeps the global value)."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _validate_name_unique(self) -> CompressionPolicyOverride:
+        """Names are surfaced by name only; an empty name has no audit value."""
+        if not self.name.strip():
+            raise ValueError(
+                "compression.policies[].name must be a non-empty string.",
+            )
+        return self
+
+    def _has_any_match_field(self) -> bool:
+        """Whether the override declares at least one match_* field.
+
+        Used by the parent ``CompressionConfig`` validator to detect
+        accidental catch-all overrides that would silently flip
+        every request.  Operators who genuinely want a catch-all must
+        name the entry ``default``.
+        """
+        return any(
+            getattr(self, field) is not None
+            for field in (
+                "match_clients",
+                "match_provider_ids",
+                "match_provider_kinds",
+                "match_models",
+                "match_requested_models",
+                "match_protocols",
+                "match_transcoded",
+            )
+        )
+
+    def has_any_match_field(self) -> bool:
+        """Public alias for :meth:`_has_any_match_field`.
+
+        The leading-underscore form is used by the validator
+        closure; this public alias keeps the cross-class call from
+        tripping the private-usage rule.
+        """
+        return self._has_any_match_field()
+
+    @model_validator(mode="after")
+    def _validate_compress_static_prefix_override(self) -> CompressionPolicyOverride:
+        """Static-prefix compression must never be silently enabled.
+
+        The override is honoured only when paired with the global
+        ``allow_static_prefix_override`` knob.  Operators who want
+        this safety rail must explicitly opt in via the global
+        config; per-policy opt-in alone is rejected so a single
+        operator cannot accidentally enable prefix compression by
+        editing one row.
+        """
+        if self.compress_static_prefix is True and self.mode == "observe":
+            raise ValueError(
+                "compress_static_prefix=true in a policy override is "
+                "not supported when mode='observe'.",
+            )
+        if self.compress_static_prefix is True and self.mode == "safe":
+            raise ValueError(
+                "compress_static_prefix=true in a policy override "
+                "requires the global allow_static_prefix_override=true; "
+                "set [compression] allow_static_prefix_override=true "
+                "and re-apply the override.",
+            )
+        return self
+
 
 __all__ = [
     "CompressionConfig",
     "CompressionMode",
     "CompressionPlacement",
+    "CompressionPolicyOverride",
+    "CompressionProtocolMatch",
     "CompressionTransforms",
 ]
+
+
+# Resolve the forward reference in ``CompressionConfig.policies``
+# now that ``CompressionPolicyOverride`` is fully defined.
+CompressionConfig.model_rebuild()

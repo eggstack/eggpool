@@ -1,12 +1,17 @@
-"""Compression subpackage (Phase 4 + Phase 5).
+"""Compression subpackage (Phase 4 + Phase 5 + Phase 6).
 
-This subpackage implements Phase 4 (observe-mode accounting) and
-Phase 5 (safe-mode deterministic compression) of the
-cache-preserving deterministic compression roadmap.
+This subpackage implements Phase 4 (observe-mode accounting), Phase 5
+(safe-mode deterministic compression), and Phase 6 (operator-controllable
+policy overrides) of the cache-preserving deterministic compression
+roadmap.
 
 Public surface:
 
 - :class:`CompressionConfig` (typed config in ``policy.py``)
+- :class:`CompressionPolicyOverride` (Phase 6 typed override row in ``policy.py``)
+- :func:`resolve_compression_policy` and :class:`ResolvedCompressionPolicy`
+  (Phase 6 deterministic resolver in ``policy_resolver.py``)
+- :class:`CompressionPolicyContext` (Phase 6 input context)
 - :func:`analyze_compression` and :class:`CompressionObservation`
   (analyzer in ``analyzer.py``)
 - :func:`apply_safe_compression` and :class:`CompressionResult`
@@ -19,7 +24,11 @@ would compress but never mutates the request body, never
 changes routing, and never synthesises provider cache controls.
 The safe-mode applier mutates only eligible volatile_suffix
 segments on a deep-copied payload and never touches stable
-prefixes or cache-protected blocks.
+prefixes or cache-protected blocks.  The Phase 6 resolver is
+content-private: it never inspects prompt bodies, model output,
+or any other request payload fields; it only matches on the
+client identity, source/target protocol, requested/resolved
+model, provider id/kind, and the transcoded flag.
 """
 
 from __future__ import annotations
@@ -60,7 +69,14 @@ from eggpool.transcoder.compression.policy import (
     CompressionConfig,
     CompressionMode,
     CompressionPlacement,
+    CompressionPolicyOverride,
+    CompressionProtocolMatch,
     CompressionTransforms,
+)
+from eggpool.transcoder.compression.policy_resolver import (
+    CompressionPolicyContext,
+    ResolvedCompressionPolicy,
+    resolve_compression_policy,
 )
 
 __all__ = [
@@ -69,6 +85,9 @@ __all__ = [
     "CompressionMode",
     "CompressionObservation",
     "CompressionPlacement",
+    "CompressionPolicyContext",
+    "CompressionPolicyOverride",
+    "CompressionProtocolMatch",
     "CompressionResult",
     "CompressionTransforms",
     "MarkerLine",
@@ -87,11 +106,13 @@ __all__ = [
     "REASON_STACK_TRACE_COMPACTION",
     "REASON_STATIC_PREFIX",
     "REASON_TRANSFORM_DISABLED",
+    "ResolvedCompressionPolicy",
     "TransformLiteral",
     "analyze_compression",
     "apply_safe_compression",
     "build_marker",
     "is_marker_line",
     "parse_marker",
+    "resolve_compression_policy",
     "result_to_summary",
 ]

@@ -119,6 +119,18 @@ class FinalizationData:
     # hash comparison, warnings, and a compact JSON summary — is
     # persisted so the dashboard can show actual compression outcomes.
     compression_result: Any | None = None
+    # Phase 6 resolved compression policy.  Computed in
+    # :mod:`eggpool.api.proxy_request` by merging the global
+    # ``[compression]`` config with any matching
+    # ``[[compression.policies]]`` entries.  Carries the resolved
+    # :class:`CompressionConfig`, the audit name / source, the
+    # list of matched override names (file order), and any
+    # resolution warnings.  The finalizer extracts the name,
+    # source, and warnings into dedicated columns so dashboards
+    # can filter on resolved policy without re-running the
+    # resolver.  ``None`` when compression is disabled, when the
+    # resolver import / call failed, or on legacy / error paths.
+    resolved_compression_policy: Any | None = None
 
 
 class RequestFinalizer:
@@ -584,6 +596,39 @@ class RequestFinalizer:
                             to_json if isinstance(to_json, str) else None
                         )
 
+            # Phase 6 resolved compression policy.  The finalizer
+            # extracts audit fields from the duck-typed
+            # :class:`ResolvedCompressionPolicy` on
+            # ``data.resolved_compression_policy``.  The resolved
+            # config itself was used by the analyzer and the
+            # applier upstream; we only persist the audit metadata
+            # so dashboards can group requests by the resolved
+            # policy without re-running the resolver.  When the
+            # resolver did not run (compression disabled or legacy
+            # path), all three columns render as ``NULL`` /
+            # ``'[]'`` per the migration defaults.
+            resolved_policy_obj = data.resolved_compression_policy
+            compression_policy_name_value: str | None = None
+            compression_policy_source_value: str | None = None
+            compression_policy_warnings_json_value: str | None = None
+            if resolved_policy_obj is not None:
+                name_attr = getattr(resolved_policy_obj, "name", None)
+                if isinstance(name_attr, str) and name_attr:
+                    compression_policy_name_value = name_attr
+                source_attr = getattr(resolved_policy_obj, "source", None)
+                if isinstance(source_attr, str) and source_attr:
+                    compression_policy_source_value = source_attr
+                warnings_attr = getattr(resolved_policy_obj, "warnings", None)
+                if isinstance(warnings_attr, (list, tuple)):
+                    seq: list[str] = [str(w) for w in warnings_attr]  # type: ignore[arg-type]
+                    try:
+                        compression_policy_warnings_json_value = json.dumps(
+                            seq,
+                            ensure_ascii=False,
+                        )
+                    except (TypeError, ValueError):
+                        compression_policy_warnings_json_value = None
+
             transitioned = await self._request_repo.finalize_if_pending(
                 request_id=db_request_id,
                 status=status,
@@ -674,6 +719,18 @@ class RequestFinalizer:
                 compression_latency_ms=compression_latency_ms_value,
                 compression_failed_fallback=compression_failed_fallback_value,
                 compression_applied_summary_json=compression_applied_summary_json_value,
+                # Phase 6 resolved compression policy audit fields.
+                # Persisted as three nullable TEXT columns added by
+                # migration 0044 so dashboards can group requests by
+                # the resolved policy name without re-running the
+                # resolver.  ``name`` and ``source`` are short audit
+                # strings; ``warnings_json`` is a JSON array of
+                # resolution warnings (overlay validation failures,
+                # etc.) and is empty ``[]`` when the resolver ran
+                # cleanly.
+                compression_policy_name=compression_policy_name_value,
+                compression_policy_source=compression_policy_source_value,
+                compression_policy_warnings_json=compression_policy_warnings_json_value,
             )
 
             # 4. Finalize attempt only if request transitioned and attempt

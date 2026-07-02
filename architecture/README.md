@@ -853,6 +853,127 @@ at `/api/stats/compression-observability` returns the union.
   `compression_applied = 0`, `compression_stable_prefix_preserved = 1`,
   zero transforms, no warnings.
 
+## Compression Policy Overrides (Phase 6)
+
+Phase 6 lets operators target specific clients, protocols, models, or
+transcoding paths with `[[compression.policies]]` rows that overlay
+the global `[compression]` config without changing it for everyone
+else. The override layer is observational and reporting-only: the
+underlying compression behavior is unchanged for requests that do not
+match an override, and resolution never raises.
+
+### Resolver
+
+`resolve_compression_policy(base, ctx, *, overrides=None)` in
+`src/eggpool/transcoder/compression/policy_resolver.py` picks and
+merges the policy for one request. The algorithm:
+
+1. Walk the override list in file order.
+2. For each override whose match fields fire against the
+   `CompressionPolicyContext`, overlay non-`None` fields onto the
+   current config. Scalar fields use last-match-wins; `transforms`
+   merge field-by-field (`None` inside an override keeps the base
+   value, `True` / `False` wins).
+3. Re-validate the merged config against the same safety rules as
+   the global config (static-prefix guard, transform defaults).
+4. On validation error, fall back to the previous config and append
+   a structured warning. Resolution never raises.
+5. Return a frozen `ResolvedCompressionPolicy(name, source, config,
+   matched_policy_names, warnings)`. `name` is the matched override
+   name (`"<global>"` when none matched); `source` is `"global"` or
+   `"policy:<name>"`.
+
+### Match Surface
+
+The pre-route context carries `client_id`, `client_name`,
+`source_protocol`, `target_protocol`, `requested_model`,
+`resolved_model`, `provider_id`, `provider_kind`, and `transcoded`.
+Provider-specific fields (`provider_id`, `provider_kind`,
+`resolved_model`) are `None` pre-route; the corresponding
+`match_provider_ids`, `match_provider_kinds`, `match_models` matchers
+are silently skipped until post-route resolution exists. Effective
+pre-route matchers are `match_clients`, `match_requested_models`,
+`match_protocols`, and `match_transcoded`. Match fields union OR:
+the override fires when **any** field fires. Glob support is `*foo`,
+`foo*`, `*foo*`, and exact match (case-sensitive).
+
+### Configuration
+
+`CompressionPolicyOverride` accepts:
+
+- `name` (required, non-empty, must not shadow `"<global>"`)
+- `match_*` (any of the seven match fields, all optional)
+- `mode`, `enabled`, `placement`, `respect_cache_boundaries`,
+  `min_candidate_tokens`, `min_savings_tokens`,
+  `max_compression_latency_ms`, `compress_static_prefix` (overlay
+  knobs; `None` keeps the base value)
+- `transforms` (optional `CompressionTransforms` overlay; merged
+  field-by-field)
+
+The parent `CompressionConfig` validator rejects catch-all overrides
+(no match fields) unless the operator names the row `"default"`. It
+also rejects duplicate names and rejects `compress_static_prefix =
+true` in any non-default override unless global
+`allow_static_prefix_override = true` is set (the same safety rail
+as the global config).
+
+### Wiring
+
+`src/eggpool/api/proxy_request.py` constructs a
+`CompressionPolicyContext` from request headers (x-eggpool-client,
+User-Agent, source protocol) and the requested model, calls
+`resolve_compression_policy(base, ctx)`, and stores the result on
+`ProxyRequestContext.resolved_compression_policy`. The coordinator
+propagates the resolved policy into every `FinalizationData`. The
+finalizer extracts `name`, `source`, and `warnings` and persists
+them via migration 0044. Resolver failures (import error, call
+exception) fall back to a global sentinel policy and the request
+proceeds with the safe default — request path never crashes.
+
+### Persistence (Migration 0044)
+
+Three columns + one index are added to `requests`:
+
+- `compression_policy_name TEXT` — name of the matched override
+  (`"<global>"` for no match)
+- `compression_policy_source TEXT` — `"global"` or `"policy:<name>"`
+- `compression_policy_warnings_json TEXT` — JSON array of structured
+  warnings produced during resolution
+
+An index on `compression_policy_name` supports the stats roll-up.
+
+### Stats Surface
+
+`fetch_compression_observability` in
+`src/eggpool/stats/queries.py` extends the existing roll-up with:
+
+- `by_policy: dict[str, int]` — request count per policy name
+- `by_policy_source: dict[str, int]` — request count per source
+  (`"global"`, `"policy:..."`, etc.)
+- `policy_warning_count_total: int` — sum of warning counts across
+  finalized requests
+
+The endpoint `GET /api/stats/compression-observability` exposes the
+combined roll-up.
+
+### Invariants
+
+- The resolver never mutates `base`. Every overlay produces a new
+  `CompressionConfig`.
+- Resolution never raises. Malformed overrides are skipped with a
+  warning; the previous config is preserved.
+- The `QuotaFairScorer` does NOT consume policy fields. Phase 6
+  routing parity with Phases 1–5 is preserved.
+- Provider-specific matchers (`match_provider_ids`,
+  `match_provider_kinds`, `match_models`) are silently skipped
+  pre-route; post-route resolution is reserved for a future phase.
+- Migration 0044 is non-destructive: pre-Phase-6 rows render as
+  `compression_policy_name = "<global>"`,
+  `compression_policy_source = "global"`, empty warnings array.
+- The static-prefix safety rail applies to overrides: a non-default
+  override cannot enable `compress_static_prefix` unless global
+  `allow_static_prefix_override` is true.
+
 ## Database
 
 SQLite via aiosqlite with WAL mode. Single-connection serialization via a lock + ContextVar.

@@ -176,6 +176,45 @@ Six transforms are available:
 
 **Observability**: dashboard renders under "Runtime → Compression"; JSON API at `GET /api/stats/compression-observability`. Migration 0043 adds 13 columns + 2 indexes to `requests`.
 
+## Compression policy overrides
+
+Operators can target specific clients, protocols, models, or transcoding paths with `[[compression.policies]]` rows that overlay the global `[compression]` config without changing it for everyone else.
+
+```toml
+[compression]
+mode = "observe"
+enabled = true
+
+[[compression.policies]]
+name = "claude-code-safe"
+match_clients = ["*claude*"]
+enabled = true
+mode = "safe"
+
+[[compression.policies]]
+name = "anthropic-no-compress"
+match_protocols = ["anthropic"]
+enabled = false
+```
+
+**Match fields** (union OR across fields; a request matches if ANY field matches):
+
+- `match_clients` — list of glob patterns against `x-eggpool-client` header (`client_id`) or `User-Agent` (`client_name`). Supports `*foo`, `foo*`, `*foo*`, exact.
+- `match_protocols` — exact-match list against the inbound source protocol (`openai` or `anthropic`).
+- `match_requested_models` — list of glob patterns against the client-requested model id.
+- `match_provider_ids`, `match_provider_kinds`, `match_models` — exact-match against routed provider info. **Pre-route these are no-ops** (provider info not yet known); these fields are reserved for post-route resolution.
+- `match_transcoded` — `true` matches transcoded requests; `false` matches non-transcoded; `None` matches both.
+
+**Overlay semantics**: matched overrides are merged on top of the global config in file order. Scalar fields use last-match-wins; `transforms` merge field-by-field (`None` keeps the base value, `True`/`False` wins). The reserved name `"default"` produces a catch-all override (fires on every request when no match fields are set).
+
+**Static-prefix guard**: `compress_static_prefix = true` in any non-default override is rejected unless `allow_static_prefix_override = true` is set globally. This prevents an operator from accidentally enabling prefix mutation by editing one row.
+
+**Pre-route scope**: resolution happens before account routing, so `match_provider_ids`, `match_provider_kinds`, and `match_models` cannot match (those fields are `None`). Use `match_clients`, `match_protocols`, `match_requested_models`, or `match_transcoded` for pre-route targeting.
+
+**Fail-closed**: malformed overrides (extra fields, type errors, post-validation failures) are skipped with a structured warning and the previous config is preserved. Resolution never raises; the request is always served with a valid policy.
+
+**Observability**: each request records `compression_policy_name` and `compression_policy_source` (`"global"` or `"policy:<name>"`). The stats roll-up at `/api/stats/compression-observability` adds `by_policy`, `by_policy_source`, and `policy_warning_count_total`. Migration 0044 adds 3 columns + 1 index to `requests`.
+
 ## API Endpoints
 
 | Method | Path | Description |

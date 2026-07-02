@@ -397,6 +397,62 @@ async def handle_proxy_request(
         )
         segmentation_result = None
 
+    # Phase 6: resolve the compression policy for this request.
+    # Resolution merges the global ``[compression]`` config with any
+    # matching ``[[compression.policies]]`` entries.  The resolver is
+    # content-private (it never inspects the request body) and
+    # fail-closed: a malformed override logs a warning and falls
+    # back to the global config.  The resolved config is what the
+    # analyzer, the applier, and the finalizer all see, so observe
+    # mode and safe mode always agree on the per-request knobs.
+    #
+    # Resolution happens pre-route.  Provider id / kind / resolved
+    # model are not yet known, so provider-specific overrides are
+    # silently skipped pre-route; operators who need provider-
+    # specific policy must do a second post-route pass (or rely on
+    # the broader client / protocol / model match fields).
+    compression_policy = getattr(request.app.state, "compression_policy", None)
+    resolved_compression_policy: Any = None
+    if compression_policy is not None:
+        try:
+            from eggpool.transcoder.compression import (
+                CompressionPolicyContext,
+                resolve_compression_policy,
+            )
+
+            policy_ctx = CompressionPolicyContext(
+                client_id=request.headers.get("x-eggpool-client"),
+                client_name=request.headers.get("user-agent"),
+                source_protocol=endpoint.protocol,
+                target_protocol=endpoint.protocol,
+                requested_model=model_value,
+                resolved_model=None,
+                provider_id=None,
+                provider_kind=None,
+                transcoded=False,
+            )
+            resolved_compression_policy = resolve_compression_policy(
+                compression_policy,
+                policy_ctx,
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug(
+                "compression_policy_resolution_failed",
+                extra={"proxy_request_id": request_id},
+                exc_info=True,
+            )
+            resolved_compression_policy = None
+
+    # The analyzer and applier read the resolved config when
+    # available; fall back to the global config when resolution
+    # failed (the resolver itself is fail-closed, but the import or
+    # the call could still raise on malformed state).
+    effective_compression_policy: Any = (
+        resolved_compression_policy.config
+        if resolved_compression_policy is not None
+        else compression_policy
+    )
+
     # Phase 4: run the observe-mode compression analyzer.  The
     # analyzer is observational and never mutates the request
     # body.  It runs only when ``[compression] enabled = true``;
@@ -404,14 +460,15 @@ async def handle_proxy_request(
     # records no compression fields.  Failure here must never
     # block the request path.
     compression_observation: Any = None
-    compression_policy = getattr(request.app.state, "compression_policy", None)
-    if compression_policy is not None and getattr(compression_policy, "enabled", False):
+    if effective_compression_policy is not None and getattr(
+        effective_compression_policy, "enabled", False
+    ):
         try:
             from eggpool.transcoder.compression import analyze_compression
 
             compression_observation = analyze_compression(
                 segmentation_result,
-                policy=compression_policy,
+                policy=effective_compression_policy,
             )
         except Exception:  # noqa: BLE001
             logger.debug(
@@ -430,9 +487,9 @@ async def handle_proxy_request(
     # safe defaults.  Failure here must never block the request path.
     compression_result: Any = None
     if (
-        compression_policy is not None
-        and getattr(compression_policy, "enabled", False)
-        and getattr(compression_policy, "mode", None) == "safe"
+        effective_compression_policy is not None
+        and getattr(effective_compression_policy, "enabled", False)
+        and getattr(effective_compression_policy, "mode", None) == "safe"
         and segmentation_result is not None
     ):
         try:
@@ -441,7 +498,7 @@ async def handle_proxy_request(
             compression_result = apply_safe_compression(
                 payload=payload,
                 segmentation=segmentation_result,
-                policy=compression_policy,
+                policy=effective_compression_policy,
                 text_hints=None,  # production is content-private
             )
         except Exception:  # noqa: BLE001
@@ -478,6 +535,7 @@ async def handle_proxy_request(
         segmentation=segmentation_result,
         compression_observation=compression_observation,
         compression_result=compression_result,
+        resolved_compression_policy=resolved_compression_policy,
     )
 
     if segmentation_result is not None:

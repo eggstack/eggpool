@@ -375,6 +375,20 @@ class ProxyRequestContext:
     # summary.  ``None`` when compression is disabled or on error
     # paths.
     compression_result: Any | None = None
+    # Phase 6: resolved compression policy.  Computed in
+    # :mod:`eggpool.api.proxy_request` via
+    # :func:`eggpool.transcoder.compression.resolve_compression_policy`
+    # using the global ``[compression]`` config plus any matching
+    # ``[[compression.policies]]`` entries.  Carries the resolved
+    # :class:`CompressionConfig`, the audit name / source, the
+    # list of matched override names (file order), and any
+    # resolution warnings.  The finalizer reads it via
+    # ``FinalizationData.resolved_compression_policy`` to persist
+    # the ``compression_policy_name`` / ``compression_policy_source``
+    # / ``compression_policy_warnings_json`` columns.  ``None`` when
+    # compression is disabled, when the resolver import / call
+    # failed, or on legacy / error paths.
+    resolved_compression_policy: Any | None = None
 
     def __post_init__(self) -> None:
         if not self.upstream_protocol:
@@ -1528,6 +1542,7 @@ class RequestCoordinator:
                     segmentation=context.segmentation,
                     compression_observation=context.compression_observation,
                     compression_result=context.compression_result,
+                    resolved_compression_policy=context.resolved_compression_policy,
                 ),
             )
             raise
@@ -1749,6 +1764,7 @@ class RequestCoordinator:
                     segmentation=context.segmentation,
                     compression_observation=context.compression_observation,
                     compression_result=context.compression_result,
+                    resolved_compression_policy=context.resolved_compression_policy,
                 ),
             )
 
@@ -2134,6 +2150,7 @@ class RequestCoordinator:
                         segmentation=context.segmentation,
                         compression_observation=context.compression_observation,
                         compression_result=context.compression_result,
+                        resolved_compression_policy=context.resolved_compression_policy,
                         transcoded=context.transcode_context is not None,
                     ),
                 )
@@ -2231,6 +2248,7 @@ class RequestCoordinator:
                                         segmentation=context.segmentation,
                                         compression_observation=context.compression_observation,
                                         compression_result=context.compression_result,
+                                        resolved_compression_policy=context.resolved_compression_policy,
                                     ),
                                 )
                             ),
@@ -2301,6 +2319,7 @@ class RequestCoordinator:
                         segmentation=context.segmentation,
                         compression_observation=context.compression_observation,
                         compression_result=context.compression_result,
+                        resolved_compression_policy=context.resolved_compression_policy,
                     ),
                 )
                 raise
@@ -2743,6 +2762,7 @@ class RequestCoordinator:
                     segmentation=context.segmentation,
                     compression_observation=context.compression_observation,
                     compression_result=context.compression_result,
+                    resolved_compression_policy=context.resolved_compression_policy,
                 ),
             )
         except DatabaseError as finalize_err:
@@ -3066,6 +3086,7 @@ class RequestCoordinator:
                     segmentation=context.segmentation,
                     compression_observation=context.compression_observation,
                     compression_result=context.compression_result,
+                    resolved_compression_policy=context.resolved_compression_policy,
                 ),
             )
         elif context.client_metadata.get("db_request_id") is not None:
@@ -3111,6 +3132,7 @@ class RequestCoordinator:
                     segmentation=context.segmentation,
                     compression_observation=context.compression_observation,
                     compression_result=context.compression_result,
+                    resolved_compression_policy=context.resolved_compression_policy,
                 ),
             )
 
