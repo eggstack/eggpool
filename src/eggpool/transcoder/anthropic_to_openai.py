@@ -5,6 +5,11 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any, cast
 
+from eggpool.transcoder.cache_stability import (
+    CacheBoundaryAnnotation,
+    extract_cache_boundaries,
+    extract_cache_control_type,
+)
 from eggpool.transcoder.json_helpers import (
     as_object,
     decode_base64_payload,
@@ -41,7 +46,10 @@ DROPPED_FIELDS = ("thinking",)
 
 _ANTHROPIC_PRIMITIVE_WARNINGS: dict[str, dict[str, str]] = {
     "top_k": {"kind": "top_k_dropped", "field": "top_k"},
-    "cache_control": {"kind": "cache_control_dropped", "field": "cache_control"},
+    "cache_control": {
+        "kind": "cache_control_feature_disabled",
+        "field": "cache_control",
+    },
     "context_management": {
         "kind": "dropped_field",
         "field": "context_management",
@@ -492,13 +500,25 @@ class AnthropicToOpenAI:
         tools_raw = payload.get("tools")
         if isinstance(tools_raw, list):
             translated_tools: list[dict[str, Any]] = []
-            for tool in iter_objects(tools_raw):
+            for tool_index, tool in enumerate(iter_objects(tools_raw)):
                 if "cache_control" in tool:
+                    cache_control_raw = tool.get("cache_control")
+                    cache_type = extract_cache_control_type(cache_control_raw)
                     warnings.append(
                         {
-                            "kind": "cache_control_dropped",
-                            "field": "tools[].cache_control",
+                            "kind": "cache_control_unsupported_by_target_protocol",
+                            "field": f"tools[{tool_index}].cache_control",
                         }
+                    )
+                    context.cache_boundary_tracker.record(
+                        CacheBoundaryAnnotation(
+                            kind="dropped_unsupported_target",
+                            source_protocol="anthropic",
+                            target_protocol="openai",
+                            source_path=(f"tools[{tool_index}].cache_control"),
+                            target_path=None,
+                            cache_control_type=cache_type,
+                        )
                     )
                 function: dict[str, Any] = {}
                 if tool.get("name") is not None:
@@ -507,6 +527,26 @@ class AnthropicToOpenAI:
                     function["description"] = tool["description"]
                 if tool.get("input_schema") is not None:
                     function["parameters"] = tool["input_schema"]
+                # Phase 3: warn on unknown tool-level provider extensions
+                # so operators can see which non-portable fields are
+                # dropped during translation. Anthropic allows tool-level
+                # ``defer_loading``, ``input_examples``, and arbitrary
+                # vendor extensions; OpenAI has no equivalent.
+                known_tool_fields = {
+                    "name",
+                    "description",
+                    "input_schema",
+                    "cache_control",
+                }
+                for extra_field in tool:
+                    if extra_field in known_tool_fields:
+                        continue
+                    warnings.append(
+                        {
+                            "kind": "provider_extension_not_preserved",
+                            "field": (f"tools[{tool_index}].{extra_field}"),
+                        }
+                    )
                 translated_tools.append(
                     {
                         "type": "function",
@@ -555,6 +595,43 @@ class AnthropicToOpenAI:
         for field, warning in _ANTHROPIC_PRIMITIVE_WARNINGS.items():
             if field in payload:
                 warnings.append(dict(warning))
+
+        # Phase 3 cache-stability sweep. Walk the *source* payload
+        # for any ``cache_control`` annotation that the OpenAI wire
+        # cannot carry (system blocks, message content blocks, or
+        # tools not handled above). The translated output already
+        # lacks these fields, so the boundary is always a drop. Each
+        # annotation gets a structured loss warning and a boundary
+        # record so the finaliser can report cache hit-rate loss
+        # without re-parsing the upstream payload.
+        already_warned_paths = {
+            str(w.get("field"))
+            for w in warnings
+            if w.get("kind")
+            in (
+                "cache_control_unsupported_by_target_protocol",
+                "cache_control_feature_disabled",
+            )
+        }
+        for path, cache_type in extract_cache_boundaries(payload):
+            if path in already_warned_paths:
+                continue
+            warnings.append(
+                {
+                    "kind": "cache_control_unsupported_by_target_protocol",
+                    "field": path,
+                }
+            )
+            context.cache_boundary_tracker.record(
+                CacheBoundaryAnnotation(
+                    kind="dropped_unsupported_target",
+                    source_protocol="anthropic",
+                    target_protocol="openai",
+                    source_path=path,
+                    target_path=None,
+                    cache_control_type=cache_type,
+                )
+            )
 
         return out, warnings
 

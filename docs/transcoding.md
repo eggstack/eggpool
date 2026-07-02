@@ -110,14 +110,15 @@ When set, EggPool boots with a `WARNING` and reverts to the pre-default behaviou
 | `stop_sequences` | `stop` | Single → string, multi → list |
 | `metadata.user_id` | `user` | Mapped to OpenAI `user` field |
 | `top_k` | — | Dropped, warning `top_k_dropped` emitted |
-| `cache_control` | — | Dropped, warning `cache_control_dropped` emitted |
+| `cache_control` | — | Dropped, warning `cache_control_feature_disabled` emitted (Phase 3) |
 | `thinking` | — | Dropped, warning emitted (see Extended Thinking below) |
 | `context_management` | — | Dropped, warning emitted (experimental) |
 | `container` | — | Dropped, warning emitted (experimental) |
 | `mcp_servers` | — | Dropped, warning emitted (experimental) |
 | `tools` (Anthropic-shape) | `tools` (function-shape) | Translated field-by-field (see Tool-Use Transcoding below) |
 | `tool_choice` | `tool_choice` | Translated between object and string shapes |
-| `tools[].cache_control` | — | Dropped with `cache_control_dropped` warning |
+| `tools[].cache_control` | — | Dropped with `cache_control_unsupported_by_target_protocol` warning (Phase 3); boundary tracked on `TranscodeContext.cache_boundary_tracker` |
+| `messages[].content[].cache_control` | — | Dropped with `cache_control_unsupported_by_target_protocol` warning (Phase 3) |
 | `messages[assistant].content[thinking]` | `messages[assistant].reasoning_content` | Feature-gated: thinking text mapped; signature dropped with `thinking_signature_dropped` warning |
 | `messages[assistant].content[image]` | `messages[user].content[image_url]` | Feature-gated: base64 → data URI; URL → `image_url.url` |
 | `messages[user].content[document]` | `messages[user].content[file]` | Feature-gated: PDF base64 → `file` with data URI; URL dropped; non-PDF, invalid base64, and PDFs over 32 MB are dropped |
@@ -349,7 +350,12 @@ The following `kind` values may appear on `TranscodeContext.loss_warnings`:
 | `empty_tool_use_block` | Anthropic `stop_reason: tool_use` produced zero tool_use blocks | `field` |
 | `tool_result_image_dropped` | Image content inside a `tool_result` block was dropped | `field` |
 | `tool_result_error_passthrough` | Anthropic `tool_result.is_error` was forwarded as OpenAI `tool` content + warning (no `is_error` field in OpenAI shape) | `field` |
-| `cache_control_dropped` | Anthropic `tools[].cache_control` was dropped during Anthropic → OpenAI translation | `field` |
+| `cache_control_feature_disabled` | Top-level Anthropic `cache_control` was dropped because OpenAI has no equivalent field | `field` |
+| `cache_control_unsupported_by_target_protocol` | A nested `cache_control` annotation (system block, message block, tool definition) was dropped because the target protocol cannot carry it | `field` |
+| `cache_control_invalid_shape` | A `cache_control` annotation was malformed (missing or non-string `type`) and could not be carried across | `field` |
+| `provider_extension_not_preserved` | A non-portable vendor extension on an Anthropic tool (e.g. `defer_loading`) was dropped during translation | `field` |
+| `stable_prefix_preserved` | The provider-visible stable prefix round-trips without reordering; upstream cache hints should remain valid | `field` |
+| `stable_prefix_reordered_canonically` | The stable prefix was reordered to canonical key order before wire serialisation; the upstream will treat this as a new cache key but content is identical | `field` |
 | `pause_turn` | `stop_reason: pause_turn` was mapped to `finish_reason: tool_calls` plus a sentinel tool_call | `field`, `to` |
 | `non_text_content_dropped` | A non-text content part inside a translated message was dropped | `field` |
 | `image_unsupported_format` | An image URL had an unrecognised scheme (not `data:` or `https:`) | `field` |
@@ -470,7 +476,12 @@ Every loss warning is a structured dict with at minimum `kind` and `field`. The 
 | `empty_tool_use_block` | Anthropic `stop_reason: tool_use` produced zero tool_use blocks | `{"kind": "empty_tool_use_block", "field": "content[].tool_use"}` |
 | `tool_result_image_dropped` | Image content inside a `tool_result` block was dropped | `{"kind": "tool_result_image_dropped", "field": "messages[tool].content"}` |
 | `tool_result_error_passthrough` | Anthropic `tool_result.is_error` was forwarded as OpenAI `tool` content + warning | `{"kind": "tool_result_error_passthrough", "field": "tool_result.is_error"}` |
-| `cache_control_dropped` | Anthropic `tools[].cache_control` was dropped during Anthropic → OpenAI translation | `{"kind": "cache_control_dropped", "field": "tools[].cache_control"}` |
+| `cache_control_feature_disabled` | Top-level Anthropic `cache_control` was dropped during Anthropic → OpenAI translation | `{"kind": "cache_control_feature_disabled", "field": "cache_control"}` |
+| `cache_control_unsupported_by_target_protocol` | A nested `cache_control` annotation (system block, message block, tool definition) was dropped because OpenAI cannot carry it | `{"kind": "cache_control_unsupported_by_target_protocol", "field": "tools[0].cache_control"}` |
+| `cache_control_invalid_shape` | A `cache_control` annotation was malformed and could not be carried across | `{"kind": "cache_control_invalid_shape", "field": "tools[0].cache_control"}` |
+| `provider_extension_not_preserved` | A non-portable vendor extension on an Anthropic tool was dropped during translation | `{"kind": "provider_extension_not_preserved", "field": "tools[0].defer_loading"}` |
+| `stable_prefix_preserved` | The provider-visible stable prefix round-trips without reordering | `{"kind": "stable_prefix_preserved", "field": "cache_control"}` |
+| `stable_prefix_reordered_canonically` | The stable prefix was reordered to canonical key order before wire serialisation | `{"kind": "stable_prefix_reordered_canonically", "field": "cache_control"}` |
 | `pause_turn` | `stop_reason: pause_turn` was mapped to `finish_reason: tool_calls` plus a sentinel tool_call | `{"kind": "pause_turn", "field": "stop_reason", "to": "tool_calls"}` |
 | `non_text_content_dropped` | A non-text content part inside a translated message was dropped | `{"kind": "non_text_content_dropped", "field": "messages[assistant].content"}` |
 | `image_unsupported_format` | An image URL had an unrecognised scheme (not `data:` or `https:`) | `{"kind": "image_unsupported_format", "field": "messages[user].content[image_url]"}` |
@@ -505,7 +516,11 @@ The complete catalogue lives in `eggpool.transcoder.LOSS_WARNING_KINDS`.
 | `model_context_window_exceeded` → OpenAI `length` | `lossy_mapping` | Cause obscured |
 | `parallel_tool_calls: false` → Anthropic | `parallel_tool_calls_collapsed` | Anthropic has no parallel-disable knob |
 | `tools[].function.strict` → Anthropic | `dropped_field` | No Anthropic equivalent |
-| `tools[].cache_control` → OpenAI | `cache_control_dropped` | OpenAI auto-caches without explicit hints |
+| `tools[].cache_control` → OpenAI | `cache_control_unsupported_by_target_protocol` | OpenAI auto-caches without explicit hints; cache hit-rate will drop on translation |
+| Top-level `cache_control` → OpenAI | `cache_control_feature_disabled` | OpenAI has no equivalent field; loss is policy-driven |
+| `messages[].content[].cache_control` → OpenAI | `cache_control_unsupported_by_target_protocol` | Loss is intentional; cache hit-rate will drop on translation |
+| `tools[].cache_control` (OpenAI-side extension) → Anthropic | (preserved) | Boundary annotated `preserved` on `TranscodeContext.cache_boundary_tracker` |
+| Non-portable Anthropic tool fields (`defer_loading`, etc.) → OpenAI | `provider_extension_not_preserved` | Vendor extensions have no OpenAI equivalent |
 | `function_call` / `functions` (deprecated OpenAI API) | `dropped_field` | Deprecated; clients should migrate to `tools` |
 | Tool-call id rewritten (`call_…` ↔ `toolu_…`) | `tool_call_id_translated` | Map is per-request, never collides across requests |
 | `reasoning_effort` → Anthropic `thinking` budget_tokens | `lossy_mapping` | Heuristic mapping (low→1024, medium→4096, high→16384) |
@@ -523,6 +538,28 @@ The complete catalogue lives in `eggpool.transcoder.LOSS_WARNING_KINDS`.
 - **No additional network hops**: Transcoding happens inside the existing request path. There is no sidecar or proxy.
 
 The overhead is negligible compared to upstream latency (typically 200ms–30s). You will not measure a difference in p99 latency from transcoding alone.
+
+## Cache Stability (Phase 3)
+
+Provider-visible prompt caching (Anthropic's `cache_control` breakpoints) is **observational** in v1 — the transcoder preserves or annotates every `cache_control` event but never reorders key material, mutates prompt content, or synthesises cache hints that the caller did not provide. Two helpers make the cache surface explicit:
+
+- `eggpool.transcoder.cache_stability.CacheBoundaryTracker` — per-request, append-only, bounded (cap = 64 annotations) tracker carried on `TranscodeContext.cache_boundary_tracker`. Records every `cache_control` boundary event with `kind`, source/target protocol, dot path, and `cache_control_type`.
+- `eggpool.transcoder.cache_stability.extract_cache_boundaries(body)` — structural walker that returns every `cache_control` annotation in a body, in document order. Used by both transcoders to compute their boundary summary.
+- `eggpool.transcoder.cache_stability.extract_provider_visible_prefix(body)` — returns the body minus volatile fields (the last message, the `stream` flag), suitable for cache-key comparison.
+- `eggpool.transcoder.cache_stability.stable_dumps` / `stable_hash` — deterministic JSON serialisation and SHA-256 hashing for the cache prefix; key order is canonicalised so wire bytes match across processes.
+
+Cache-boundary annotation kinds emitted by the tracker:
+
+| Kind | Meaning |
+|---|---|
+| `preserved` | Cache annotation carried across at the same path with the same `cache_control_type`. |
+| `preserved_relocated` | Reserved for future phases that rewrite the annotation onto a different target path. |
+| `dropped_unsupported_target` | The target protocol cannot carry this annotation (e.g. OpenAI has no `cache_control`). |
+| `dropped_feature_disabled` | Operator-disabled preservation path; the annotation was discarded by policy. |
+| `dropped_invalid_shape` | The annotation failed shape validation (missing or non-string `type`). |
+| `synthesized` | Reserved for future phases that synthesise cache hints on behalf of the caller. |
+
+Operators can read the boundary tracker through the structured loss warnings (`stable_prefix_preserved`, `stable_prefix_reordered_canonically`, `cache_control_*`) — every entry carries a path so dashboards can attribute cache hit-rate loss to specific fields. Routing (`QuotaFairScorer`) does **not** consume these annotations; cache observability is reporting-only and asserted by `tests/unit/test_routing.py::test_scorer_does_not_consume_cache_counter_status`.
 
 ## Pricing Catalog Cache
 

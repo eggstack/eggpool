@@ -36,7 +36,7 @@ class TestAnthropicPrimitivesRoundTrip:
             "cache_control": {"type": "ephemeral"},
         }
         _, warnings = self.transcoder.encode_request(request, self.ctx)
-        assert any(w.get("kind") == "cache_control_dropped" for w in warnings)
+        assert any(w.get("kind") == "cache_control_feature_disabled" for w in warnings)
 
     def test_context_management_dropped(self) -> None:
         request = {
@@ -115,7 +115,7 @@ class TestAnthropicPrimitivesRoundTrip:
         _, warnings = self.transcoder.encode_request(request, self.ctx)
         warning_fields = {(w.get("kind"), w.get("field")) for w in warnings}
         assert ("top_k_dropped", "top_k") in warning_fields
-        assert ("cache_control_dropped", "cache_control") in warning_fields
+        assert ("cache_control_feature_disabled", "cache_control") in warning_fields
         assert ("dropped_field", "context_management") in warning_fields
         assert ("dropped_field", "container") in warning_fields
         assert ("dropped_field", "mcp_servers") in warning_fields

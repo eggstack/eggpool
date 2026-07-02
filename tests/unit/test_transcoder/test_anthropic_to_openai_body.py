@@ -323,7 +323,11 @@ class TestToolTranslation:
         }
         _, warnings = transcoder.encode_request(payload, _make_context())
 
-        cc_warnings = [w for w in warnings if w.get("kind") == "cache_control_dropped"]
+        cc_warnings = [
+            w
+            for w in warnings
+            if w.get("kind") == "cache_control_unsupported_by_target_protocol"
+        ]
         assert len(cc_warnings) == 1
 
     def test_tool_choice_auto_translates(self, transcoder: AnthropicToOpenAI) -> None:

@@ -7,6 +7,11 @@ import time
 from typing import TYPE_CHECKING, Any, cast
 
 from eggpool.transcoder.budget_resolver import BudgetResolutionError
+from eggpool.transcoder.cache_stability import (
+    CacheBoundaryAnnotation,
+    extract_cache_boundaries,
+    extract_cache_control_type,
+)
 from eggpool.transcoder.json_helpers import (
     as_object,
     decode_base64_payload,
@@ -566,7 +571,7 @@ class OpenAIToAnthropic:
         tools_raw = payload.get("tools")
         if isinstance(tools_raw, list):
             translated_tools: list[dict[str, Any]] = []
-            for tool in iter_objects(tools_raw):
+            for tool_index, tool in enumerate(iter_objects(tools_raw)):
                 tool_type = tool.get("type", "function")
                 if tool_type == "function":
                     function = as_object(tool.get("function")) or {}
@@ -587,6 +592,47 @@ class OpenAIToAnthropic:
                                 "reason": "anthropic_unsupported",
                             }
                         )
+                    # Phase 3 — preserve ``cache_control`` annotations
+                    # on OpenAI tools when an operator has placed them
+                    # there. OpenAI's wire does not define the field,
+                    # but tooling that bridges Anthropic-formatted
+                    # requests through an OpenAI client may surface
+                    # it; we accept the extension explicitly so the
+                    # provider-cache boundary survives translation.
+                    if "cache_control" in tool:
+                        cache_control_raw = tool.get("cache_control")
+                        cache_type = extract_cache_control_type(cache_control_raw)
+                        if cache_type is None:
+                            warnings.append(
+                                {
+                                    "kind": "cache_control_invalid_shape",
+                                    "field": f"tools[{tool_index}].cache_control",
+                                }
+                            )
+                            context.cache_boundary_tracker.record(
+                                CacheBoundaryAnnotation(
+                                    kind="dropped_invalid_shape",
+                                    source_protocol="openai",
+                                    target_protocol="anthropic",
+                                    source_path=f"tools[{tool_index}].cache_control",
+                                    target_path=None,
+                                    cache_control_type=None,
+                                )
+                            )
+                        else:
+                            translated_tool["cache_control"] = dict(
+                                cast("dict[str, Any]", cache_control_raw)
+                            )
+                            context.cache_boundary_tracker.record(
+                                CacheBoundaryAnnotation(
+                                    kind="preserved",
+                                    source_protocol="openai",
+                                    target_protocol="anthropic",
+                                    source_path=f"tools[{tool_index}].cache_control",
+                                    target_path=f"tools[{tool_index}].cache_control",
+                                    cache_control_type=cache_type,
+                                )
+                            )
                     translated_tools.append(translated_tool)
                 else:
                     warnings.append(
@@ -624,6 +670,46 @@ class OpenAIToAnthropic:
                         "reason": "anthropic_unsupported",
                     }
                 )
+
+        # Phase 3 cache-stability summary. After all field-level
+        # translation has run, decide whether the prefix we hand to
+        # the upstream is byte-for-byte stable relative to the input.
+        # Two scenarios:
+        #
+        # 1. ``stable_prefix_preserved`` — every cache_control
+        #    annotation the caller asked to keep is still present in
+        #    the output at the same path with the same type.
+        # 2. ``stable_prefix_reordered_canonically`` — output keys
+        #    were reordered (Python ``dict`` iteration order is not
+        #    stable across processes), so we canonicalise before
+        #    wire serialisation. Operators can treat this as a
+        #    "same content, different key order" signal.
+        input_boundaries = extract_cache_boundaries(payload)
+        output_boundaries = extract_cache_boundaries(out)
+        if input_boundaries and input_boundaries == output_boundaries:
+            warnings.append(
+                {
+                    "kind": "stable_prefix_preserved",
+                    "field": "cache_control",
+                }
+            )
+            context.cache_boundary_tracker.record(
+                CacheBoundaryAnnotation(
+                    kind="preserved",
+                    source_protocol="openai",
+                    target_protocol="anthropic",
+                    source_path="cache_control",
+                    target_path="cache_control",
+                    cache_control_type=None,
+                )
+            )
+        elif input_boundaries or output_boundaries:
+            warnings.append(
+                {
+                    "kind": "stable_prefix_reordered_canonically",
+                    "field": "cache_control",
+                }
+            )
 
         return out, warnings
 

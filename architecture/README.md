@@ -229,7 +229,7 @@ scope (phases 4–6).
 
 **Phase 5 — Operator controls and docs**: the default `[transcoder]` config block is documented in `config.example.toml`. `eggpool stats transcoding` reports transcoded request counts and loss-warning summaries. The dashboard `/runtime` page includes a "Transcoding" card showing real-time counters. Structured INFO logs are emitted for every transcoded request and a startup line announces transcoding state. See `docs/transcoding.md` for the full operator guide.
 
-**Phase 6.1 — Tool-use transcoding**: bidirectional tool calling translation in both directions for non-streaming and streaming requests. `OpenAIToAnthropic.encode_request` / `decode_response` and `AnthropicToOpenAI.encode_request` / `decode_response` translate `tools`, `tool_choice`, `parallel_tool_calls`, assistant `tool_calls` history, `role: "tool"` history, and `tool_use` / `tool_result` content blocks. A per-request `ToolCallIdMap` (on `TranscodeContext.id_map`) mints `call_<24 hex>` and `toolu_<24 hex>` ids so the two namespaces never collide. The streaming transcoders (`OpenAIToAnthropicStreaming`, `AnthropicToOpenAIStreaming`) extend their state machines to track `content_block_start` / `input_json_delta` / `content_block_stop` triples and emit OpenAI `tool_calls` deltas in insertion order; the reverse direction buffers OpenAI `tool_calls[*].function.arguments` chunks and flushes Anthropic `tool_use` blocks on `finish_reason: "tool_calls"`. Anthropic's `pause_turn` `stop_reason` maps to `finish_reason: "tool_calls"` plus a synthetic `__eggpool_pause_turn__` tool_call entry so OpenAI clients can detect pause-and-resume flows. `stream_options.include_usage` is lifted onto `TranscodeContext.request_include_usage` so the streaming transcoder can decide whether to forward upstream usage chunks. New loss-warning kinds (`tool_call_id_translated`, `tool_call_id_changed`, `parallel_tool_calls_collapsed`, `malformed_tool_arguments`, `invalid_tool_choice`, `unsupported_tool_type`, `empty_tool_use_block`, `tool_result_image_dropped`, `tool_result_error_passthrough`, `cache_control_dropped`, `pause_turn`, `non_text_content_dropped`, `tool_result_inferred`) are added to `LOSS_WARNING_KINDS`. See `docs/transcoding.md` § Tool-Use Transcoding and `plans/tooltranscoding.md` for the full design.
+**Phase 6.1 — Tool-use transcoding**: bidirectional tool calling translation in both directions for non-streaming and streaming requests. `OpenAIToAnthropic.encode_request` / `decode_response` and `AnthropicToOpenAI.encode_request` / `decode_response` translate `tools`, `tool_choice`, `parallel_tool_calls`, assistant `tool_calls` history, `role: "tool"` history, and `tool_use` / `tool_result` content blocks. A per-request `ToolCallIdMap` (on `TranscodeContext.id_map`) mints `call_<24 hex>` and `toolu_<24 hex>` ids so the two namespaces never collide. The streaming transcoders (`OpenAIToAnthropicStreaming`, `AnthropicToOpenAIStreaming`) extend their state machines to track `content_block_start` / `input_json_delta` / `content_block_stop` triples and emit OpenAI `tool_calls` deltas in insertion order; the reverse direction buffers OpenAI `tool_calls[*].function.arguments` chunks and flushes Anthropic `tool_use` blocks on `finish_reason: "tool_calls"`. Anthropic's `pause_turn` `stop_reason` maps to `finish_reason: "tool_calls"` plus a synthetic `__eggpool_pause_turn__` tool_call entry so OpenAI clients can detect pause-and-resume flows. `stream_options.include_usage` is lifted onto `TranscodeContext.request_include_usage` so the streaming transcoder can decide whether to forward upstream usage chunks. New loss-warning kinds (`tool_call_id_translated`, `tool_call_id_changed`, `parallel_tool_calls_collapsed`, `malformed_tool_arguments`, `invalid_tool_choice`, `unsupported_tool_type`, `empty_tool_use_block`, `tool_result_image_dropped`, `tool_result_error_passthrough`, `cache_control_feature_disabled`, `cache_control_unsupported_by_target_protocol`, `cache_control_invalid_shape`, `provider_extension_not_preserved`, `stable_prefix_preserved`, `stable_prefix_reordered_canonically`, `pause_turn`, `non_text_content_dropped`, `tool_result_inferred`) are added to `LOSS_WARNING_KINDS`. See `docs/transcoding.md` § Tool-Use Transcoding and `plans/tooltranscoding.md` for the full design.
 
 **Phase 7 — Budget resolution**: `resolve_thinking_budget()` in `src/eggpool/transcoder/budget_resolver.py` is the single source of truth for effort-to-budget translation. Resolution order: explicit `thinking.budget_tokens` (Anthropic style) → `reasoning_effort` (OpenAI style) via `ThinkingCapability.effort_to_budget_tokens` → `[transcoder.thinking_budget_defaults]` → hard-coded fallback (low=1024, medium=4096, high=16384). Budgets are clamped to `budget_tokens_min`/`budget_tokens_max` when known. `budget_resolution_policy = "strict"` rejects unknown efforts and clamped budgets before dispatch. New loss-warning kinds: `budget_clamped`, `unknown_effort`, `budget_rejected`, `budget_resolution_no_input`. The `BodyTranscoder.encode_request` protocol accepts optional `thinking_capability`, `budget_defaults`, and `budget_resolution_policy` kwargs.
 
@@ -366,6 +366,101 @@ returns the same data for tooling.
 - The finalizer is duck-typed against
   `FinalizationData.segmentation: Any | None`, so the transcoder
   module does not appear in the import path of unrelated callers.
+
+## Transcoder Cache Stability (Phase 3)
+
+Phase 3 is the cache-stability layer of the cache-preserving
+deterministic compression roadmap. It is observational only: it
+records what the transcoder did to `cache_control` annotations
+during protocol translation so operators can attribute cache hit-rate
+loss to specific fields and rebalance accordingly.
+
+The implementation lives in `src/eggpool/transcoder/cache_stability.py`
+and is consumed by both `OpenAIToAnthropic.encode_request` and
+`AnthropicToOpenAI.encode_request`. It is also a public surface
+exported from `eggpool.transcoder` for downstream test code.
+
+### Cache Boundary Tracker
+
+`CacheBoundaryTracker` is an append-only, bounded tracker (cap = 64
+annotations per request) carried on
+`TranscodeContext.cache_boundary_tracker`. Each entry is a frozen
+`CacheBoundaryAnnotation` with `kind`, `source_protocol`,
+`target_protocol`, `source_path`, `target_path`, and
+`cache_control_type`. The tracker records these kinds:
+
+| Kind | Meaning |
+|---|---|
+| `preserved` | Cache annotation carried across at the same path with the same `cache_control_type`. |
+| `preserved_relocated` | Reserved for future phases that relocate the annotation onto a different target path. |
+| `dropped_unsupported_target` | The target protocol cannot carry this annotation (e.g. OpenAI has no `cache_control`). |
+| `dropped_feature_disabled` | The annotation was discarded by policy. |
+| `dropped_invalid_shape` | The annotation failed shape validation (missing or non-string `type`). |
+| `synthesized` | Reserved for future phases that synthesise cache hints on behalf of the caller. |
+
+Over-cap events increment `dropped_count` so operators can detect
+truncation. The tracker is **never** consumed by routing — it lives
+alongside Phase 1 and Phase 2 cache observability as a reporting
+surface only.
+
+### Helper Surface
+
+- `extract_cache_control_type(cache_control)` — returns the `type`
+  field of a `cache_control` annotation, or `None` for any malformed
+  shape. Both transcoders use this to validate cache-control shapes
+  before propagation.
+- `extract_cache_boundaries(body)` — structural walker that returns
+  every `cache_control` annotation in document order as
+  `(dot_path, cache_control_type)` pairs. The walk is intentionally
+  structural: it inspects Anthropic-style system blocks, tool
+  definitions, and message content blocks; OpenAI-style inputs
+  (which never carry `cache_control` natively) yield an empty list
+  unless a tool definition is annotated via the bridging extension
+  that the Phase 3 contract recognises.
+- `extract_provider_visible_prefix(body)` — returns the body minus
+  the volatile suffix (last message, `stream` flag) so callers can
+  compute cache keys that ignore the user turn.
+- `stable_dumps(payload)` / `stable_hash(payload)` — deterministic
+  JSON serialisation and SHA-256 of the cache prefix; key order is
+  canonicalised so wire bytes match across processes.
+
+### Transcoder Wiring
+
+The two body transcoders emit a structured loss warning and a
+boundary annotation for every `cache_control` event during
+translation:
+
+- `OpenAIToAnthropic.encode_request` preserves `tools[].cache_control`
+  annotations (carried across as `preserved`), records
+  `dropped_invalid_shape` for malformed shapes, and emits a
+  `stable_prefix_preserved` / `stable_prefix_reordered_canonically`
+  summary at the end of the pass.
+- `AnthropicToOpenAI.encode_request` drops every `cache_control`
+  annotation (OpenAI has no equivalent field) and records
+  `dropped_unsupported_target` boundaries with
+  `cache_control_unsupported_by_target_protocol` warnings. Top-level
+  Anthropic `cache_control` is reported as
+  `cache_control_feature_disabled` to distinguish it from
+  protocol-level loss.
+
+Both transcoders also record `provider_extension_not_preserved` for
+non-portable vendor fields on Anthropic tools (e.g. `defer_loading`,
+`input_examples`) so operators can see which extensions are dropped.
+
+### Invariants
+
+- The cache-stability layer is observational: it does not affect
+  request bodies, route scoring, or eligibility. Asserted by
+  `tests/unit/test_transcoder/test_phase3_cache_stability.py` and
+  `tests/unit/test_routing.py::test_scorer_does_not_consume_cache_counter_status`.
+- `CacheBoundaryTracker.record` is append-only and never raises. The
+  cap is enforced silently with `dropped_count` incremented.
+- `extract_cache_boundaries` never raises on malformed input — it
+  returns an empty list for non-dict bodies, dicts that lack
+  recognisable containers, or unknown field shapes.
+- The boundary tracker is read by reporting surfaces only; routing
+  consumes request count + token count + cost (audit) + active count
+  + health feed, never cache fields.
 
 ## Database
 

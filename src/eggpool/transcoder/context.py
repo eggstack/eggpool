@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from eggpool.transcoder.cache_stability import CacheBoundaryTracker
 from eggpool.transcoder.ids import ToolCallIdMap
 
 
@@ -12,9 +13,10 @@ from eggpool.transcoder.ids import ToolCallIdMap
 class TranscodeContext:
     """Per-request transcoder state.
 
-    Carries loss-of-information warnings and per-request id maps. One
-    instance is constructed by handle_proxy_request and threaded through
-    the coordinator for the lifetime of the request.
+    Carries loss-of-information warnings, per-request id maps, and a
+    bounded tracker of cache-boundary events. One instance is
+    constructed by handle_proxy_request and threaded through the
+    coordinator for the lifetime of the request.
     """
 
     request_id: str
@@ -37,6 +39,13 @@ class TranscodeContext:
     # the originating request. The streaming transcoder reads this to
     # decide whether to forward upstream usage chunks.
     request_include_usage: bool = False
+
+    # Phase 3 cache-stability tracker. Records every cache_control
+    # boundary that was preserved, relocated, or dropped during
+    # translation. Append-only and bounded; never fatal.
+    cache_boundary_tracker: CacheBoundaryTracker = field(
+        default_factory=CacheBoundaryTracker
+    )
 
     def is_native(self) -> bool:
         """True if no transcoding is required for this request."""

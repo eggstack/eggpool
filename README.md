@@ -21,6 +21,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Thinking/reasoning capability-aware routing with configurable budget mapping
 - Provider-neutral cache observability — records whether upstreams report `cache_read` / `cache_creation` (Anthropic) or `prompt_tokens_details.cached_tokens` (OpenAI) and exposes a dashboard hit ratio that never silently mixes zero with missing
 - Canonical request segmentation — every finalized request is annotated into `stable_prefix` / `semi_stable_context` / `volatile_suffix` regions without mutating the payload, giving later compression phases a safe way to identify cache-continuity boundaries and compressible candidates
+- Transcoder cache stability — every cross-protocol request carries a bounded `cache_boundary_tracker` that records whether `cache_control` annotations were preserved, relocated, or dropped, plus deterministic SHA-256 of the provider-visible stable prefix so downstream phases can compare cache-equivalent bodies without re-parsing
 
 ## Quick Start
 

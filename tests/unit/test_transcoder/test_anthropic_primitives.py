@@ -36,7 +36,7 @@ class TestAnthropicPrimitives:
             "cache_control": {"type": "ephemeral"},
         }
         _, warnings = self.transcoder.encode_request(payload, _make_context())
-        cc = [w for w in warnings if w.get("kind") == "cache_control_dropped"]
+        cc = [w for w in warnings if w.get("kind") == "cache_control_feature_disabled"]
         assert len(cc) == 1
 
     def test_context_management_dropped(self) -> None:
