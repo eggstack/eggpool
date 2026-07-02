@@ -135,6 +135,58 @@ uv run pytest tests/unit/test_compression_stats_phase7.py tests/unit/test_dashbo
   assert negative space (`assert "<raw prompt marker>" not in html`)
   not just positive presence.
 
+### Phase 8 — Routing Guardrails & Non-Interference Tests
+
+Phase 8 codifies the invariant that cache/compression metrics NEVER
+enter account scoring, health removal, or route reselection. One
+focused test file is the regression surface:
+
+- `tests/unit/test_routing_guardrails.py` — 19 tests across 7 classes:
+  - `TestScorerIgnoresPhase5Fields` — `inspect.signature` audit on
+    `QuotaFairScorer.score_accounts` plus behavioural pin (identical
+    load with adversarial cost produces identical scores).
+  - `TestScorerAcceptsNoCacheOrCompressionParameter` — static substring
+    audit on both scorer parameters and `RoutingScore` fields.
+  - `TestSameProviderFairnessUnderAdversarialCacheAndCompression` —
+    5 scenarios run through `Router.select_account` 40 times each,
+    asserting fair rotation despite skewed cache hits / compression
+    savings / stable-prefix hashes.
+  - `TestCompressionFallbackDoesNotAffectHealth` — Phase 5 fail-closed
+    fallback never touches `HealthManager`.
+  - `TestPolicyResolverDoesNotAffectRouting` — Phase 6 resolver is
+    information-only, no accounts removed.
+  - `TestNoPostCompressionReroute` — `score_accounts` signature is
+    exactly 4 parameters; router uses scorer once per attempt.
+  - `TestRuntimeDiagnosticSurface` — pins the `guardrails` field shape
+    on `RuntimeMetricsService._snapshot_routing_runtime`.
+
+**Critical rules**:
+
+- Phase 8 scoring-input boundary is exactly 4 parameters:
+  `account_names`, `model_name`, `active_requests`, `request_estimates`.
+  Adding any cache/compression/policy/stable-prefix field to
+  `QuotaFairScorer.score_accounts` or to `RoutingScore` is a Phase 8
+  regression and MUST fail this test file.
+- Same-provider fairness must hold under adversarial cache/compression
+  metrics. If you add a new cache/compression column, add a fairness
+  scenario here.
+- Compression fallback (`apply_safe_compression`'s
+  `failed_fallback=True`) MUST NOT increment provider error counters
+  or write `account_backoffs` rows. Health remains upstream-observed.
+- `resolve_compression_policy` MUST NOT mutate the route. Provider-
+  specific match fields (`match_provider_ids`, `match_provider_kinds`,
+  `match_models`) are silently skipped pre-route; never reroute to
+  satisfy a policy override.
+- The `guardrails` field on `routing_runtime` is HARDCODED constants.
+  It must always read `"reporting_only"` / `false` / the canonical
+  scorer input list. Never derive it from request content.
+
+Acceptance:
+
+```bash
+uv run pytest tests/unit/test_routing_guardrails.py -v
+```
+
 ## Code Style
 
 - Python 3.11+ with `from __future__ import annotations` in all files

@@ -4902,6 +4902,89 @@ def render_runtime(
 </section>
 """
 
+    # Phase 8 routing-guardrails panel: hardcoded diagnostic from
+    # ``RuntimeMetricsService._snapshot_routing_runtime`` so operators
+    # can confirm the routing-input boundary is intact.  The fields
+    # are constant — never derived from request content.  Cache and
+    # compression metrics stay reporting-only.
+    guardrails = _as_dict(routing.get("guardrails"))
+    guardrails_mode = escape(
+        str(guardrails.get("routing_cache_compression_mode", "reporting_only"))
+    )
+    guardrails_inputs_list = guardrails.get("route_scorer_inputs") or [
+        "health",
+        "quota",
+        "active_requests",
+        "model_eligibility",
+    ]
+    guardrails_inputs_str = ", ".join(
+        escape(str(item)) for item in guardrails_inputs_list
+    )
+
+    def _guardrails_yes_no(value: Any) -> str:
+        if value is True:
+            return "yes"
+        if value is False:
+            return "no"
+        return escape(str(value))
+
+    uses_cache = _guardrails_yes_no(guardrails.get("routing_uses_cache_metrics"))
+    uses_compression = _guardrails_yes_no(
+        guardrails.get("routing_uses_compression_metrics")
+    )
+    uses_stable_prefix = _guardrails_yes_no(
+        guardrails.get("routing_uses_stable_prefix_hash")
+    )
+    uses_policy = _guardrails_yes_no(guardrails.get("routing_uses_compression_policy"))
+
+    routing_guardrails_panel = f"""
+<section class="panel">
+  <h3>Routing guardrails (Phase 8)</h3>
+  <p class="sub">
+    Cache and compression metrics are reporting-only.  The
+    <code>QuotaFairScorer</code> does NOT consume cache, compression,
+    stable-prefix-hash, or compression-policy fields.  Same-provider
+    account scoring stays load-based.  These flags are hardcoded —
+    they reflect how the router is built, not the current request
+    stream.
+  </p>
+  <section class="cards">
+    {
+        "".join(
+            [
+                _render_metric_card(
+                    title="Mode",
+                    metric=guardrails_mode,
+                    sub="cache/compression in routing",
+                ),
+                _render_metric_card(
+                    title="Cache metrics",
+                    metric=uses_cache,
+                    sub="in scorer inputs",
+                ),
+                _render_metric_card(
+                    title="Compression metrics",
+                    metric=uses_compression,
+                    sub="in scorer inputs",
+                ),
+                _render_metric_card(
+                    title="Stable-prefix hash",
+                    metric=uses_stable_prefix,
+                    sub="in scorer inputs",
+                ),
+                _render_metric_card(
+                    title="Compression policy",
+                    metric=uses_policy,
+                    sub="in scorer inputs",
+                ),
+            ]
+        )
+    }
+  </section>
+  <p class="sub">Scorer inputs (allowed): <code>{guardrails_inputs_str}</code></p>
+</section>
+"""
+
     # Static Phase 7 routing-separation notice.  Cache and compression
     # metrics are reporting-only; the QuotaFairScorer does not
     # consume them.
@@ -4954,6 +5037,8 @@ def render_runtime(
 {compression_policy_card}
 
 {cache_stability_card}
+
+{routing_guardrails_panel}
 
 {routing_separation_notice}
 

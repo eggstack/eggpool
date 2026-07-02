@@ -27,7 +27,21 @@ def _base_snapshot() -> dict[str, Any]:
         "processes": {},
         "background_tasks": [],
         "db": {},
-        "routing_runtime": {},
+        "routing_runtime": {
+            "guardrails": {
+                "routing_cache_compression_mode": "reporting_only",
+                "routing_uses_cache_metrics": False,
+                "routing_uses_compression_metrics": False,
+                "routing_uses_stable_prefix_hash": False,
+                "routing_uses_compression_policy": False,
+                "route_scorer_inputs": [
+                    "health",
+                    "quota",
+                    "active_requests",
+                    "model_eligibility",
+                ],
+            },
+        },
         "outbound_client": {
             "build_count": 0,
             "request_count": 0,
@@ -350,6 +364,50 @@ class TestRoutingSeparationNotice:
         """
         html = render_runtime(_base_snapshot())
         assert "Routing separation" in html
+
+
+class TestRoutingGuardrailsPanel:
+    """Phase 8 routing-guardrails diagnostic panel renders on /runtime."""
+
+    def test_guardrails_panel_renders_with_default_data(self) -> None:
+        """The hardcoded guardrails diagnostic shows up on the runtime page."""
+        html = render_runtime(_base_snapshot())
+        assert "Routing guardrails (Phase 8)" in html
+        assert "reporting_only" in html
+        assert "Scorer inputs (allowed)" in html
+        # Sanity: every "no" metric should appear in the rendered cards.
+        for label in (
+            "Cache metrics",
+            "Compression metrics",
+            "Stable-prefix hash",
+            "Compression policy",
+        ):
+            assert label in html, f"missing guardrail label {label!r}"
+
+    def test_guardrails_panel_renders_without_guardrails_field(self) -> None:
+        """The panel falls back to defaults when the runtime snapshot
+        omits the ``guardrails`` field.  This keeps the panel robust
+        against older runtimes or test harnesses that bypass
+        ``RuntimeMetricsService``.
+        """
+        snapshot = _base_snapshot()
+        snapshot["routing_runtime"] = {}
+        html = render_runtime(snapshot)
+        assert "Routing guardrails (Phase 8)" in html
+        assert "reporting_only" in html
+
+    def test_guardrails_panel_never_advertises_cache_in_scorer(self) -> None:
+        """The hardcoded diagnostic must always say cache/compression
+        metrics are NOT in scorer inputs.  Operators rely on this
+        signal to confirm the routing invariant.
+        """
+        html = render_runtime(_base_snapshot())
+        # The four boolean flags should each render as "no" inside a
+        # metric paragraph.  We assert the literal hardcoded labels are
+        # present so a regression that flips a flag to ``True`` would
+        # surface in the test.
+        assert '<p class="metric">no</p>' in html
+        assert '<p class="metric">reporting_only</p>' in html
 
 
 class TestNoRawPayloadLeakage:

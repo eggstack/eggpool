@@ -1045,6 +1045,144 @@ runtime page with this exact text:
 - Phase 7 never mutates a request, never changes routing, and never
   synthesizes provider cache-control.
 
+## Routing Guardrails and Non-Interference (Phase 8)
+
+Phases 1–7 add cache/compression observability and policy controls.
+Phase 8 codifies the invariant that those metrics NEVER enter account
+scoring, health removal, or route reselection.  This is what lets the
+fairness rotor keep multiple same-provider subscriptions balanced: a
+provider with high cache hit ratio or large compression savings does
+not gain any selection advantage over its peers.
+
+### Hardcoded runtime diagnostic
+
+`RuntimeMetricsService._snapshot_routing_runtime` returns a `guardrails`
+dict with constant flags:
+
+```json
+{
+  "routing_cache_compression_mode": "reporting_only",
+  "routing_uses_cache_metrics": false,
+  "routing_uses_compression_metrics": false,
+  "routing_uses_stable_prefix_hash": false,
+  "routing_uses_compression_policy": false,
+  "route_scorer_inputs": ["health", "quota", "active_requests", "model_eligibility"]
+}
+```
+
+The flags are derived from how the router is built, not from the
+current request stream.  They are exposed via `GET /api/stats/runtime`
+and rendered as a **Routing guardrails (Phase 8)** card on the runtime
+dashboard next to the routing-separation notice.
+
+### Routing input boundary
+
+The `QuotaFairScorer.score_accounts()` signature accepts only four
+inputs:
+
+- `account_names: list[str]`
+- `model_name: str | None`
+- `active_requests: dict[str, int] | None`
+- `request_estimates: dict[str, int] | None`
+
+`Router._score_eligible_accounts` is the only call site; it builds
+`active_requests` from `AccountRuntimeState.active_request_count` and
+forwards to the scorer.  No cache, compression, segmentation, or
+policy field ever crosses this boundary.
+
+`RoutingScore` itself carries no cache/compression fields.  The data
+class audit is pinned by `tests/unit/test_routing_guardrails.py`.
+
+### Compression health separation
+
+`apply_safe_compression` returns `CompressionResult(failed_fallback=True)`
+when the post-transform stable-prefix content hash doesn't match the
+pre-transform hash.  This is observational; the fallback path does not
+increment provider error counters, does not write an
+`account_backoffs` row, and does not call `HealthManager.mark_*`.
+Health remains driven solely by upstream-observed failures (429/402/5xx/
+auth), operator disablement, and catalog/protocol incompatibility.
+
+### Policy non-interference
+
+`resolve_compression_policy` returns a `ResolvedCompressionPolicy`
+value object.  It does not mutate the registry, the candidate set, or
+the routing decision.  Provider-specific match fields
+(`match_provider_ids`, `match_provider_kinds`, `match_models`) are
+silently skipped pre-route; the resolver never reroutes to satisfy a
+policy override.
+
+### No post-compression reroute
+
+The proxy request flow (`api/proxy_request.py`) runs compression
+**before** routing:
+
+1. parse + validate body
+2. segmentation (observational)
+3. policy resolution (observational)
+4. compression analyzer (observational)
+5. compression applier (mutates payload only)
+6. `coordinator.execute(context)` — calls `Router.select_accounts_for_failover` once per attempt
+
+The compression results travel on `ProxyRequestContext` for
+finalization only.  Compression fallbacks, transforms, savings
+estimates, and policy resolutions never re-enter the route selection
+loop.  The coordinator's retry loop reroutes on upstream transport /
+HTTP errors only.
+
+### Same-provider fairness regression
+
+Two same-provider accounts with identical load but wildly different
+cache/compression profiles still rotate fairly.  The regression suite
+in `tests/unit/test_routing_guardrails.py::TestSameProviderFairnessUnderAdversarialCacheAndCompression`
+covers five adversarial scenarios:
+
+- identical `cache_counter_status`
+- skewed `cached_input_tokens` (high vs zero)
+- skewed `cache_read_tokens` (cache-friendly provider)
+- skewed `compression_status` / `applied` / `savings`
+- skewed `stable_prefix_hash` (heavy cache hits vs none)
+
+Each scenario runs 40 selections and asserts both accounts get
+selected at least once.
+
+### Test pin surface
+
+`tests/unit/test_routing_guardrails.py` is the central regression
+file.  It contains:
+
+- signature audit (`inspect.signature` of `score_accounts` and
+  `dataclasses.fields(RoutingScore)`) — no cache/compression/policy
+  parameter or field is allowed
+- identical-load, adversarial-cache behavioural pin
+- same-provider fairness rotor pin across five adversarial scenarios
+- compression fallback isolation from `HealthManager`
+- policy resolver non-interference pin
+- runtime diagnostic shape pin
+
+If a future change adds a cache/compression field to the scorer's
+input set, the parameter-name audit fails.  If a future change
+restructures the `RoutingScore` to carry a cache field, the
+`dataclasses.fields` audit fails.  If a future change introduces a
+post-compression reroute, the compression-flow pin surfaces.
+
+### Future cache-aware routing mode
+
+A future opt-in **cache-aware routing** mode would require:
+
+- explicit `routing.cache_aware = true` config flag
+- same-provider fairness controls (preserve rotor behaviour)
+- per-provider support detection
+- cost model using cached-read / cached-write token prices
+- backtesting metrics on representative traffic
+- per-client opt-in
+- dashboard warnings that surface the mode change
+
+Phase 8 deliberately does not implement any of these.  The existence
+of this note prevents accidental partial implementation.  See
+`plans/cache_compression_phase_08_routing_guardrails.md` for the
+full design.
+
 ## Database
 
 SQLite via aiosqlite with WAL mode. Single-connection serialization via a lock + ContextVar.
@@ -1093,6 +1231,13 @@ unchanged against the accounts of the chosen tier, balancing across:
 
 The `weight` field continues to bias scoring inside a single tier. `weight`
 orders accounts within a tier; `routing_priority` orders tiers.
+
+**Cache/compression metrics NEVER enter routing.** See
+[Routing Guardrails and Non-Interference (Phase 8)](#routing-guardrails-and-non-interference-phase-8)
+for the runtime diagnostic, the four-input scorer contract, and the
+regression suite that pins the invariant.  Same-provider account
+fairness (e.g., multiple OpenAI subscriptions) is preserved because
+cache hit ratios and compression savings cannot influence selection.
 
 Accounts are excluded from routing when:
 - Upstream-observed failure (`quota_exhausted`, `rate_limited`, auth, 5xx) is still inside its bounded backoff window (recovers after cooldown)

@@ -237,6 +237,20 @@ Runtime dashboard additions:
 
 All Phase 7 outputs are reporting-only — the `QuotaFairScorer` does not consume any cache or compression column. Routing remains load-based (request count + token count + active count + health). No new migrations; Phase 7 is view-only over the columns added in 0040–0044. See `plans/cache_compression_phase_07_dashboard_runtime_views.md` for the full design.
 
+### Phase 8: Routing guardrails and non-interference guarantees
+
+Phases 1–7 add cache/compression observability and policy controls. Phase 8 formalises the **routing invariant** that those metrics NEVER enter account scoring, health removal, or route reselection.
+
+The guarantee rests on three pins:
+
+1. **Hardcoded runtime diagnostic** — `GET /api/stats/runtime` exposes `routing_runtime.guardrails` with constant flags (`routing_cache_compression_mode: "reporting_only"`, `routing_uses_cache_metrics: false`, `routing_uses_compression_metrics: false`, `routing_uses_stable_prefix_hash: false`, `routing_uses_compression_policy: false`, plus the allowed scorer input list). The runtime dashboard renders these flags as a **Routing guardrails (Phase 8)** card next to the routing-separation notice.
+2. **Static + behavioural test pin** — `tests/unit/test_routing_guardrails.py` (19 tests) asserts the `QuotaFairScorer.score_accounts` signature accepts no cache/compression parameter, that identical load with adversarial cache/compression metrics produces identical scores, that two same-provider accounts with skewed cache hits / compression savings / stable-prefix hashes still get fair rotation, that policy resolution does not mutate routing, and that compression fallbacks never affect provider health.
+3. **Documentation invariant** — every phase doc (1–7) states that `QuotaFairScorer` does NOT consume the phase's columns. Phase 8 is the focused boundary.
+
+Same-provider account fairness (e.g., multiple OpenAI subscriptions) is preserved because cache hit ratios or compression savings never enter the score. Compression failure (`failed_fallback=True`) is observational — it never marks an account unhealthy. Phase 6 policy overrides cannot reroute; they only adjust the analyzer / applier knobs for the already-selected route.
+
+A future **cache-aware routing mode** would require an explicit `routing.cache_aware = true` config flag plus per-provider support detection, a cost model using cached-token prices, backtesting metrics, per-client opt-in, and dashboard warnings. Phase 8 deliberately does NOT implement it. See `plans/cache_compression_phase_08_routing_guardrails.md` for the full design.
+
 ## API Endpoints
 
 | Method | Path | Description |

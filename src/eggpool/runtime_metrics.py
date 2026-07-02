@@ -532,6 +532,19 @@ class RuntimeMetricsService:
             "reserved_microdollars": reserved_microdollars,
             "health_states_by_account": health_states,
             "active_backoff_count": active_backoff_count,
+            "guardrails": {
+                "routing_cache_compression_mode": "reporting_only",
+                "routing_uses_cache_metrics": False,
+                "routing_uses_compression_metrics": False,
+                "routing_uses_stable_prefix_hash": False,
+                "routing_uses_compression_policy": False,
+                "route_scorer_inputs": [
+                    "health",
+                    "quota",
+                    "active_requests",
+                    "model_eligibility",
+                ],
+            },
         }
 
     def _snapshot_outbound_client(self, probe_errors: list[str]) -> dict[str, Any]:
