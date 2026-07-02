@@ -3493,6 +3493,10 @@ def render_runtime(
     transcoding_stats: dict[str, Any] | None = None,
     cache_observability: dict[str, Any] | None = None,
     canonical_request_segmentation: dict[str, Any] | None = None,
+    compression_observability: dict[str, Any] | None = None,
+    compression_runtime: dict[str, Any] | None = None,
+    compression_policy_stats: dict[str, Any] | None = None,
+    cache_stability: dict[str, Any] | None = None,
     period: str = "24h",
 ) -> str:
     """Render the runtime metrics page."""
@@ -4390,6 +4394,532 @@ def render_runtime(
 </section>
 """
 
+    # Phase 7 compression observability card.  Aggregates Phase 4 /
+    # Phase 5 / Phase 6 data into a single operator-facing summary.
+    # Mirrors the cache_card / segmentation_card layout: status counts
+    # in a metric strip, totals table, and optional sub-tables for
+    # policy rollups, transform breakdown, and warning rollup.
+    compression_card = ""
+    if compression_observability is not None:
+        co_by_status: Any = compression_observability.get("by_status", {}) or {}
+        co_total = int(compression_observability.get("total_requests", 0))
+        co_totals: Any = compression_observability.get("totals", {}) or {}
+        co_observed = int(co_totals.get("observed_requests", 0))
+        co_candidates = int(co_totals.get("candidate_count", 0))
+        co_eligible = int(co_totals.get("eligible_count", 0))
+        co_estimated_savings = int(co_totals.get("estimated_savings_tokens", 0))
+        co_observed_disabled = int(co_by_status.get("disabled", 0))
+        co_observed_active = int(co_by_status.get("observed", 0))
+        co_safe_active = int(co_by_status.get("safe", 0))
+
+        # Phase 5 applied-mode fields (only present when safe-mode ran).
+        co_applied = int(
+            compression_observability.get("requests_with_compression_applied", 0)
+        )
+        co_applied_savings = int(
+            compression_observability.get("applied_total_savings_tokens", 0)
+        )
+        co_applied_fallback = int(
+            compression_observability.get("applied_failed_fallback_count", 0)
+        )
+        co_applied_preserved = int(
+            compression_observability.get("applied_stable_prefix_preserved_count", 0)
+        )
+        co_applied_p95_savings = compression_observability.get(
+            "applied_p95_savings_tokens"
+        )
+        co_applied_p95_latency = compression_observability.get("applied_p95_latency_ms")
+
+        # Phase 4 latency stats.
+        co_analyzer_p95 = co_totals.get("analyzer_latency_ms_p95")
+        co_analyzer_median = co_totals.get("analyzer_latency_ms_median")
+
+        # Per-model compression breakdown (top-N by total_requests).
+        co_mdl: Any = compression_observability.get("per_model_status", {}) or {}
+        co_model_rows_html = ""
+        if co_mdl:
+            _co_mdl_cells: list[str] = []
+            for model_id, mdl_data in sorted(
+                co_mdl.items(),
+                key=lambda kv: (-kv[1].get("total_requests", 0), kv[0]),
+            )[:10]:
+                m_total = int(mdl_data.get("total_requests", 0))
+                m_candidates = int(mdl_data.get("candidate_count", 0))
+                m_eligible = int(mdl_data.get("eligible_count", 0))
+                m_savings = int(mdl_data.get("estimated_savings_tokens", 0))
+                _co_mdl_cells.append(
+                    f"""<tr>
+        <td>{escape(str(model_id))}</td>
+        <td class='num'>{format_int(m_total)}</td>
+        <td class='num'>{format_int(m_candidates)}</td>
+        <td class='num'>{format_int(m_eligible)}</td>
+        <td class='num'>{format_int(m_savings)}</td>
+      </tr>"""
+                )
+            co_model_rows_html = "\n".join(_co_mdl_cells)
+
+        co_model_section = ""
+        if co_model_rows_html:
+            co_model_section = f"""
+  <h4>By model</h4>
+  <table class="data compact">
+    <thead><tr>
+      {_th("Model")}
+      {_th("Total requests", priority=2)}
+      {_th("Candidates", priority=2)}
+      {_th("Eligible", priority=2)}
+      {_th("Estimated savings", priority=2)}
+    </tr></thead>
+    <tbody>
+      {co_model_rows_html}
+    </tbody>
+  </table>"""
+
+        def _fmt_ms(value: Any) -> str:
+            if value is None:
+                return "—"
+            try:
+                return f"{float(value):.2f} ms"
+            except (TypeError, ValueError):
+                return str(value)
+
+        def _fmt_tokens(value: Any) -> str:
+            if value is None:
+                return "—"
+            try:
+                return format_int(int(value))
+            except (TypeError, ValueError):
+                return str(value)
+
+        compression_card = f"""
+<section class="panel">
+  <h3>Compression observability ({escape(period)})</h3>
+  <p class="sub">
+    Phase 4 observe-mode accounting + Phase 5 safe-mode outcomes +
+    Phase 6 resolved-policy rollup.  All metrics are reporting-only
+    and are NOT consumed by the same-provider QuotaFairScorer.
+  </p>
+  <section class="cards">
+    {
+            _render_metric_card(
+                title="Observed requests",
+                metric=format_int(co_observed),
+                sub="observe-mode ran",
+            )
+        }
+    {
+            _render_metric_card(
+                title="Applied (safe mode)",
+                metric=format_int(co_applied),
+                sub="payload actually compressed",
+            )
+        }
+    {
+            _render_metric_card(
+                title="Fail-closed fallbacks",
+                metric=format_int(co_applied_fallback),
+                sub="stable-prefix hash mismatch",
+                warning=co_applied_fallback > 0,
+            )
+        }
+    {
+            _render_metric_card(
+                title="Candidates",
+                metric=format_int(co_candidates),
+                sub=f"{format_int(co_eligible)} eligible",
+            )
+        }
+    {
+            _render_metric_card(
+                title="Actual savings",
+                metric=_fmt_tokens(co_applied_savings),
+                sub="tokens saved in safe mode",
+            )
+        }
+  </section>
+  <table class="data compact">
+    <thead><tr>{_th("Metric")}{_th("Value", priority=2)}</tr></thead>
+    <tbody>
+      <tr>
+        <td>Total finalized requests</td>
+        <td class='num'>{format_int(co_total)}</td>
+      </tr>
+      <tr>
+        <td>Disabled</td>
+        <td class='num'>{format_int(co_observed_disabled)}</td>
+      </tr>
+      <tr>
+        <td>Observed (analyzer ran)</td>
+        <td class='num'>{format_int(co_observed_active)}</td>
+      </tr>
+      <tr>
+        <td>Safe mode</td>
+        <td class='num'>{format_int(co_safe_active)}</td>
+      </tr>
+      <tr>
+        <td>Estimated savings (observe)</td>
+        <td class='num'>{format_int(co_estimated_savings)}</td>
+      </tr>
+      <tr>
+        <td>Analyzer latency median</td>
+        <td class='num'>{_fmt_ms(co_analyzer_median)}</td>
+      </tr>
+      <tr>
+        <td>Analyzer latency p95</td>
+        <td class='num'>{_fmt_ms(co_analyzer_p95)}</td>
+      </tr>
+      <tr>
+        <td>Applied p95 savings</td>
+        <td class='num'>{_fmt_tokens(co_applied_p95_savings)}</td>
+      </tr>
+      <tr>
+        <td>Applied p95 latency</td>
+        <td class='num'>{_fmt_ms(co_applied_p95_latency)}</td>
+      </tr>
+      <tr>
+        <td>Stable prefix preserved</td>
+        <td class='num'>{format_int(co_applied_preserved)}</td>
+      </tr>
+    </tbody>
+  </table>
+  {co_model_section}
+</section>
+"""
+
+    # Phase 7 compression runtime card.  Surfaces mode counts,
+    # applied / fallback counts, latency stats, per-transform
+    # breakdown, warnings rollup, and cache-safety counters in one
+    # operator-facing summary.
+    compression_runtime_card = ""
+    if compression_runtime is not None:
+        cr_window: Any = compression_runtime.get("window", {}) or {}
+        cr_modes: Any = compression_runtime.get("mode_counts", {}) or {}
+        cr_transforms: Any = compression_runtime.get("transforms", {}) or {}
+        cr_warnings: Any = compression_runtime.get("warnings", {}) or {}
+        cr_cache_safety: Any = compression_runtime.get("cache_safety", {}) or {}
+        cr_latency: Any = compression_runtime.get("latency_ms", {}) or {}
+        cr_request_count = int(cr_window.get("request_count", 0))
+        cr_disabled = int(cr_modes.get("disabled", 0))
+        cr_observe = int(cr_modes.get("observe", 0))
+        cr_safe = int(cr_modes.get("safe", 0))
+        cr_applied = int(compression_runtime.get("applied_count", 0))
+        cr_fallback = int(compression_runtime.get("failed_fallback_count", 0))
+        cr_candidate_count = int(compression_runtime.get("candidate_count", 0))
+        cr_estimated_savings = int(
+            compression_runtime.get("estimated_savings_tokens", 0)
+        )
+        cr_actual_savings = int(compression_runtime.get("actual_savings_tokens", 0))
+        cr_preserved = int(cr_cache_safety.get("stable_prefix_preserved", 0))
+        cr_mismatch = int(cr_cache_safety.get("stable_prefix_mismatch", 0))
+
+        def _cr_fmt_ms(value: Any) -> str:
+            if value is None:
+                return "—"
+            try:
+                return f"{float(value):.2f} ms"
+            except (TypeError, ValueError):
+                return str(value)
+
+        # Top-N transforms by applied count.
+        cr_transform_rows_html = ""
+        if cr_transforms:
+            _cr_tx_cells: list[str] = []
+            sorted_transforms = sorted(
+                cr_transforms.items(),
+                key=lambda kv: (-kv[1].get("applied", 0), kv[0]),
+            )[:10]
+            for code, data in sorted_transforms:
+                applied = int(data.get("applied", 0))
+                saved = int(data.get("tokens_saved", 0))
+                _cr_tx_cells.append(
+                    f"""<tr>
+        <td>{escape(str(code))}</td>
+        <td class='num'>{format_int(applied)}</td>
+        <td class='num'>{format_int(saved)}</td>
+      </tr>"""
+                )
+            cr_transform_rows_html = "\n".join(_cr_tx_cells)
+
+        cr_transform_section = ""
+        if cr_transform_rows_html:
+            cr_transform_section = f"""
+  <h4>Transforms</h4>
+  <table class="data compact">
+    <thead><tr>
+      {_th("Reason code")}
+      {_th("Applied", priority=2)}
+      {_th("Tokens saved", priority=2)}
+    </tr></thead>
+    <tbody>
+      {cr_transform_rows_html}
+    </tbody>
+  </table>"""
+
+        # Top-N warnings by count.
+        cr_warnings_rows_html = ""
+        if cr_warnings:
+            _cr_w_cells: list[str] = []
+            for code, count in sorted(
+                cr_warnings.items(), key=lambda kv: (-kv[1], kv[0])
+            )[:10]:
+                _cr_w_cells.append(
+                    f"""<tr>
+        <td>{escape(str(code))}</td>
+        <td class='num'>{format_int(int(count))}</td>
+      </tr>"""
+                )
+            cr_warnings_rows_html = "\n".join(_cr_w_cells)
+
+        cr_warnings_section = ""
+        if cr_warnings_rows_html:
+            cr_warnings_section = f"""
+  <h4>Warnings rollup</h4>
+  <table class="data compact">
+    <thead><tr>
+      {_th("Warning")}
+      {_th("Count", priority=2)}
+    </tr></thead>
+    <tbody>
+      {cr_warnings_rows_html}
+    </tbody>
+  </table>"""
+
+        compression_runtime_card = f"""
+<section class="panel">
+  <h3>Compression runtime ({escape(period)})</h3>
+  <p class="sub">
+    Phase 7 runtime aggregates: mode counts, applied/fallback totals,
+    latency distribution, per-transform outcomes, warnings rollup,
+    and stable-prefix cache-safety counters.  Latency stays inside
+    the SBC-safe budget configured at ``[compression]
+    max_compression_latency_ms``.
+  </p>
+  <section class="cards">
+    {
+            _render_metric_card(
+                title="Mode: observe",
+                metric=format_int(cr_observe),
+                sub="analyzer ran, no mutation",
+            )
+        }
+    {
+            _render_metric_card(
+                title="Mode: safe",
+                metric=format_int(cr_safe),
+                sub="payload compressed",
+            )
+        }
+    {
+            _render_metric_card(
+                title="Mode: disabled",
+                metric=format_int(cr_disabled),
+                sub="policy disabled",
+            )
+        }
+    {
+            _render_metric_card(
+                title="Applied",
+                metric=format_int(cr_applied),
+                sub="actual transformations",
+            )
+        }
+    {
+            _render_metric_card(
+                title="Fallback",
+                metric=format_int(cr_fallback),
+                sub="fail-closed triggered",
+                warning=cr_fallback > 0,
+            )
+        }
+  </section>
+  <table class="data compact">
+    <thead><tr>{_th("Metric")}{_th("Value", priority=2)}</tr></thead>
+    <tbody>
+      <tr>
+        <td>Total finalized requests</td>
+        <td class='num'>{format_int(cr_request_count)}</td>
+      </tr>
+      <tr>
+        <td>Candidate segments</td>
+        <td class='num'>{format_int(cr_candidate_count)}</td>
+      </tr>
+      <tr>
+        <td>Estimated savings (observe)</td>
+        <td class='num'>{format_int(cr_estimated_savings)}</td>
+      </tr>
+      <tr>
+        <td>Actual savings (safe)</td>
+        <td class='num'>{format_int(cr_actual_savings)}</td>
+      </tr>
+      <tr>
+        <td>Analyzer latency avg</td>
+        <td class='num'>{_cr_fmt_ms(cr_latency.get("avg"))}</td>
+      </tr>
+      <tr>
+        <td>Analyzer latency p50</td>
+        <td class='num'>{_cr_fmt_ms(cr_latency.get("p50"))}</td>
+      </tr>
+      <tr>
+        <td>Analyzer latency p95</td>
+        <td class='num'>{_cr_fmt_ms(cr_latency.get("p95"))}</td>
+      </tr>
+      <tr>
+        <td>Analyzer latency max</td>
+        <td class='num'>{_cr_fmt_ms(cr_latency.get("max"))}</td>
+      </tr>
+      <tr>
+        <td>Stable prefix preserved</td>
+        <td class='num'>{format_int(cr_preserved)}</td>
+      </tr>
+      <tr>
+        <td>Stable prefix mismatch</td>
+        <td class='num'>{format_int(cr_mismatch)}</td>
+      </tr>
+    </tbody>
+  </table>
+  {cr_transform_section}
+  {cr_warnings_section}
+</section>
+"""
+
+    # Phase 7 compression policy rollup card.
+    compression_policy_card = ""
+    if compression_policy_stats is not None:
+        cps_total = int(compression_policy_stats.get("total_requests", 0))
+        cps_total_policies = int(compression_policy_stats.get("total_policies", 0))
+        cps_policies: list[Any] = list(
+            compression_policy_stats.get("policy_counts", []) or []
+        )
+
+        _cps_rows: list[str] = []
+        for policy in cps_policies:
+            policy_name = str(policy.get("policy_name", "—"))
+            policy_source = str(policy.get("policy_source", "—"))
+            policy_requests = int(policy.get("requests", 0))
+            policy_applied = int(policy.get("applied", 0))
+            policy_fallback = int(policy.get("failed_fallback", 0))
+            policy_candidates = int(policy.get("candidate_count", 0))
+            policy_warnings = int(policy.get("warning_count", 0))
+            modes: Any = policy.get("mode_counts", {}) or {}
+            mode_observe = int(modes.get("observe", 0))
+            mode_safe = int(modes.get("safe", 0))
+            mode_disabled = int(modes.get("disabled", 0))
+            _cps_rows.append(
+                f"""<tr>
+        <td>{escape(policy_name)}</td>
+        <td>{escape(policy_source)}</td>
+        <td class='num'>{format_int(policy_requests)}</td>
+        <td class='num'>{format_int(mode_observe)}</td>
+        <td class='num'>{format_int(mode_safe)}</td>
+        <td class='num'>{format_int(mode_disabled)}</td>
+        <td class='num'>{format_int(policy_applied)}</td>
+        <td class='num'>{format_int(policy_fallback)}</td>
+        <td class='num'>{format_int(policy_candidates)}</td>
+        <td class='num'>{format_int(policy_warnings)}</td>
+      </tr>"""
+            )
+        cps_rows_html = "\n".join(_cps_rows)
+
+        compression_policy_card = f"""
+<section class="panel">
+  <h3>Compression policy rollup ({escape(period)})</h3>
+  <p class="sub">
+    Phase 6 resolved-policy audit: one row per resolved policy.  The
+    ``&lt;global&gt;`` sentinel is the no-override path; operator-chosen
+    names come from ``[[compression.policies]]``.  Metrics are
+    reporting-only and are NOT consumed by the QuotaFairScorer.
+  </p>
+  <section class="cards">
+    {
+            _render_metric_card(
+                title="Tracked policies",
+                metric=format_int(cps_total_policies),
+                sub="distinct resolved names",
+            )
+        }
+    {
+            _render_metric_card(
+                title="Total requests",
+                metric=format_int(cps_total),
+                sub="across all policies",
+            )
+        }
+  </section>
+  <table class="data compact">
+    <thead><tr>
+      {_th("Policy name")}
+      {_th("Source")}
+      {_th("Requests", priority=2)}
+      {_th("Mode: observe", priority=2)}
+      {_th("Mode: safe", priority=2)}
+      {_th("Mode: disabled", priority=2)}
+      {_th("Applied", priority=2)}
+      {_th("Fallback", priority=2)}
+      {_th("Candidates", priority=2)}
+      {_th("Warnings", priority=2)}
+    </tr></thead>
+    <tbody>
+      {cps_rows_html}
+    </tbody>
+  </table>
+</section>
+"""
+
+    # Phase 7 cache-stability card.  Phase 3 boundary tracking is
+    # per-request and lives on TranscodeContext; the durable summary
+    # just confirms the tracker is wired.  This card stays small on
+    # purpose so operators know to drill into the request trace for
+    # per-boundary detail.
+    cache_stability_card = ""
+    if cache_stability is not None:
+        cs_transcoded = int(cache_stability.get("transcoded_request_count", 0))
+        cs_notes = str(
+            cache_stability.get(
+                "notes",
+                "Phase 3 cache stability is per-request and in-memory.",
+            )
+        )
+        cache_stability_card = f"""
+<section class="panel">
+  <h3>Cache stability ({escape(period)})</h3>
+  <p class="sub">
+    Phase 3 transcoder cache-stability is per-request and lives on
+    <code>TranscodeContext.cache_boundary_tracker</code>.  The
+    durable summary below confirms the tracker is wired and counts
+    transcoded requests in window; per-boundary detail is in the
+    request trace.
+  </p>
+  <section class="cards">
+    {
+            _render_metric_card(
+                title="Transcoded requests",
+                metric=format_int(cs_transcoded),
+                sub="boundary tracker active",
+            )
+        }
+  </section>
+  <p class="sub">{escape(cs_notes)}</p>
+</section>
+"""
+
+    # Static Phase 7 routing-separation notice.  Cache and compression
+    # metrics are reporting-only; the QuotaFairScorer does not
+    # consume them.
+    routing_separation_notice = """
+<section class="panel">
+  <h3>Routing separation</h3>
+  <p class="sub">
+    Cache and compression metrics are reporting-only.  The
+    <code>QuotaFairScorer</code> does NOT consume
+    <code>cache_counter_status</code>, segmentation columns,
+    <code>compression_*</code> columns, or
+    <code>compression_policy_*</code> columns.  Same-provider account
+    scoring stays load-based (request count + token count + active
+    count + health).
+  </p>
+</section>
+"""
+
     body = f"""
 <h2>Runtime</h2>
 <p class="sub">Process-level diagnostics for the running EggPool instance.</p>
@@ -4416,6 +4946,16 @@ def render_runtime(
 {cache_card}
 
 {segmentation_card}
+
+{compression_card}
+
+{compression_runtime_card}
+
+{compression_policy_card}
+
+{cache_stability_card}
+
+{routing_separation_notice}
 
 <section class="panel">
   <h3>Health states</h3>

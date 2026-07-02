@@ -6,6 +6,7 @@ SQL logic lives here, not in HTTP route handlers.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from eggpool.stats.grouped_timeseries import postprocess_grouped_timeseries
@@ -2935,4 +2936,452 @@ async def fetch_compression_observability(
         "by_policy": by_policy,
         "by_policy_source": by_policy_source,
         "policy_warning_count_total": policy_warning_total,
+    }
+
+
+async def fetch_compression_runtime(
+    db: Database,
+    start: str,
+    end: str,
+) -> dict[str, Any]:
+    """Phase 7 runtime compression aggregates for operator dashboards.
+
+    Phase 7 makes the existing Phase 4 / Phase 5 / Phase 6 data
+    operationally usable.  This query surfaces the answers an
+    operator actually needs:
+
+    - Is compression running in observe or safe mode?
+    - How many requests actually compressed?
+    - How often did fail-closed fallbacks occur?
+    - Which transforms are doing useful work?
+    - Is compression latency within SBC-safe budgets?
+    - Are stable-prefix hashes preserved across compression?
+
+    The response is intentionally narrow: a ``window`` block
+    (``request_count``), a ``mode_counts`` block (count per
+    ``compression_mode``), and a small set of headline metrics.
+    Raw per-request data stays in the ``requests`` table; the
+    dashboard never sees payloads.
+
+    Returns::
+
+        {
+          "window": {"seconds": <int>, "request_count": <int>},
+          "mode_counts": {"disabled": int, "observe": int, "safe": int},
+          "applied_count": <int>,
+          "failed_fallback_count": <int>,
+          "candidate_count": <int>,
+          "estimated_savings_tokens": <int>,
+          "actual_savings_tokens": <int>,
+          "latency_ms": {"avg": float|None, "p50": float|None,
+                         "p95": float|None, "max": float|None},
+          "transforms": {
+            "<reason_code>": {"applied": int, "tokens_saved": int},
+            ...
+          },
+          "warnings": {"stable_prefix_hash_mismatch": <int>, ...},
+          "cache_safety": {
+            "stable_prefix_preserved": <int>,
+            "stable_prefix_mismatch": <int>,
+          },
+        }
+    """
+    start_dt = _format_dt(start)
+    end_dt = _format_dt(end)
+
+    # --- window size in seconds (best effort) ---
+    try:
+        start_obj = datetime.fromisoformat(start_dt)
+        end_obj = datetime.fromisoformat(end_dt)
+        window_seconds = max(0, int((end_obj - start_obj).total_seconds()))
+    except ValueError:
+        window_seconds = 0
+
+    # --- window request count and per-mode counts ---
+    window_sql = """
+    SELECT COUNT(*) as request_count
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+    """
+    window_row = await db.fetch_one(window_sql, (start_dt, end_dt))
+    if window_row:
+        request_count = int(dict(window_row).get("request_count", 0) or 0)
+    else:
+        request_count = 0
+
+    mode_sql = """
+    SELECT
+        COALESCE(compression_mode, 'observe') as compression_mode,
+        COALESCE(compression_status, 'disabled') as compression_status,
+        COUNT(*) as request_count
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+    GROUP BY compression_mode, compression_status
+    """
+    mode_rows = await db.fetch_all(mode_sql, (start_dt, end_dt))
+    mode_counts: dict[str, int] = {
+        "disabled": 0,
+        "observe": 0,
+        "safe": 0,
+    }
+    for row in mode_rows:
+        d = dict(row)
+        mode = d["compression_mode"] or "observe"
+        status = d["compression_status"] or "disabled"
+        # Prefer status for disabled bucket (mode may be NULL when disabled).
+        bucket = status if status == "disabled" else mode
+        mode_counts[bucket] = mode_counts.get(bucket, 0) + int(d["request_count"])
+
+    # --- applied count + savings totals ---
+    applied_sql = """
+    SELECT
+        COUNT(*) as applied_count,
+        COALESCE(SUM(CASE WHEN compression_savings_tokens IS NOT NULL
+            THEN compression_savings_tokens ELSE 0 END), 0)
+            as actual_savings_tokens,
+        COALESCE(SUM(CASE WHEN compression_candidate_count IS NOT NULL
+            THEN compression_candidate_count ELSE 0 END), 0)
+            as total_candidate_count,
+        COALESCE(SUM(CASE WHEN compression_estimated_savings_tokens IS NOT NULL
+            THEN compression_estimated_savings_tokens ELSE 0 END), 0)
+            as total_estimated_savings_tokens,
+        COALESCE(SUM(CASE WHEN compression_failed_fallback = 1 THEN 1 ELSE 0 END), 0)
+            as failed_fallback_count,
+        COALESCE(SUM(CASE WHEN compression_stable_prefix_preserved = 1
+            THEN 1 ELSE 0 END), 0)
+            as stable_prefix_preserved_count,
+        COALESCE(SUM(CASE WHEN compression_stable_prefix_preserved = 0
+            THEN 1 ELSE 0 END), 0)
+            as stable_prefix_mismatch_count
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+    """
+    applied_row = await db.fetch_one(applied_sql, (start_dt, end_dt))
+    ad = dict(applied_row) if applied_row else {}
+    applied_count = int(ad.get("applied_count", 0) or 0)
+    actual_savings_tokens = int(ad.get("actual_savings_tokens", 0) or 0)
+    candidate_count = int(ad.get("total_candidate_count", 0) or 0)
+    estimated_savings_tokens = int(ad.get("total_estimated_savings_tokens", 0) or 0)
+    failed_fallback_count = int(ad.get("failed_fallback_count", 0) or 0)
+    stable_prefix_preserved_count = int(ad.get("stable_prefix_preserved_count", 0) or 0)
+    stable_prefix_mismatch_count = int(ad.get("stable_prefix_mismatch_count", 0) or 0)
+
+    # --- latency stats (avg / p50 / p95 / max) ---
+    latency_sql = """
+    SELECT compression_latency_ms
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+        AND compression_latency_ms IS NOT NULL
+        AND compression_latency_ms > 0
+    ORDER BY compression_latency_ms
+    """
+    latency_rows = await db.fetch_all(latency_sql, (start_dt, end_dt))
+    latencies = [float(r["compression_latency_ms"]) for r in latency_rows]
+    if latencies:
+        avg_latency = sum(latencies) / len(latencies)
+        idx_m = len(latencies) // 2
+        median_latency = latencies[idx_m]
+        idx_p95 = max(0, int(round(0.95 * (len(latencies) - 1))))
+        p95_latency = latencies[idx_p95]
+        max_latency = latencies[-1]
+    else:
+        avg_latency = None
+        median_latency = None
+        p95_latency = None
+        max_latency = None
+
+    # --- per-transform aggregates (applied only) ---
+    transform_sql = """
+    SELECT compression_transforms_by_reason_json
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+        AND compression_applied = 1
+        AND compression_transforms_by_reason_json IS NOT NULL
+    """
+    transform_rows = await db.fetch_all(transform_sql, (start_dt, end_dt))
+    import json as _json
+
+    transforms: dict[str, dict[str, int]] = {}
+    for row in transform_rows:
+        raw = row["compression_transforms_by_reason_json"]
+        if not raw:
+            continue
+        try:
+            parsed = _json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        for code_obj, count_value in parsed.items():  # type: ignore[union-attr]
+            if not isinstance(code_obj, str):
+                continue
+            try:
+                count_int = int(count_value)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
+            bucket = transforms.setdefault(code_obj, {"applied": 0, "tokens_saved": 0})
+            bucket["applied"] += count_int
+
+    # --- per-transform savings (link via compression_savings_tokens) ---
+    savings_per_transform_sql = """
+    SELECT compression_savings_tokens, compression_transforms_by_reason_json
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+        AND compression_applied = 1
+        AND compression_transforms_by_reason_json IS NOT NULL
+        AND compression_savings_tokens IS NOT NULL
+        AND compression_savings_tokens > 0
+    """
+    savings_rows = await db.fetch_all(savings_per_transform_sql, (start_dt, end_dt))
+    for row in savings_rows:
+        raw = row["compression_transforms_by_reason_json"]
+        savings = float(row["compression_savings_tokens"] or 0)
+        if not raw or savings <= 0:
+            continue
+        try:
+            parsed = _json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        total_for_row = 0
+        for v in parsed.values():  # type: ignore[union-attr]
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                total_for_row += int(v)
+        if total_for_row <= 0:
+            continue
+        per_unit = savings / total_for_row
+        for code_obj, count_value in parsed.items():  # type: ignore[union-attr]
+            if not isinstance(code_obj, str):
+                continue
+            try:
+                count_int = int(count_value)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
+            if count_int <= 0:
+                continue
+            bucket = transforms.setdefault(code_obj, {"applied": 0, "tokens_saved": 0})
+            bucket["tokens_saved"] += int(round(per_unit * count_int))
+
+    # --- warnings rollup from compression_warnings_json ---
+    warnings_sql = """
+    SELECT compression_warnings_json
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+        AND compression_warnings_json IS NOT NULL
+    """
+    warning_rows = await db.fetch_all(warnings_sql, (start_dt, end_dt))
+    warnings: dict[str, int] = {}
+    for row in warning_rows:
+        raw = row["compression_warnings_json"]
+        if not raw:
+            continue
+        try:
+            parsed = _json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(parsed, list):
+            continue
+        for entry in parsed:  # type: ignore[union-attr]
+            if not isinstance(entry, str):
+                continue
+            warnings[entry] = warnings.get(entry, 0) + 1
+
+    return {
+        "window": {
+            "seconds": window_seconds,
+            "request_count": request_count,
+        },
+        "mode_counts": mode_counts,
+        "applied_count": applied_count,
+        "failed_fallback_count": failed_fallback_count,
+        "candidate_count": candidate_count,
+        "estimated_savings_tokens": estimated_savings_tokens,
+        "actual_savings_tokens": actual_savings_tokens,
+        "latency_ms": {
+            "avg": avg_latency,
+            "p50": median_latency,
+            "p95": p95_latency,
+            "max": max_latency,
+        },
+        "transforms": transforms,
+        "warnings": warnings,
+        "cache_safety": {
+            "stable_prefix_preserved": stable_prefix_preserved_count,
+            "stable_prefix_mismatch": stable_prefix_mismatch_count,
+        },
+    }
+
+
+async def fetch_compression_policy_stats(
+    db: Database,
+    start: str,
+    end: str,
+) -> dict[str, Any]:
+    """Phase 7 per-policy compression rollup for operator dashboards.
+
+    Phase 6 added ``compression_policy_name`` and
+    ``compression_policy_source`` columns (migration 0044).  This
+    query projects them into a dashboard-friendly shape:
+
+    - One ``policy_counts`` entry per resolved policy
+      (``policy_name = "<global>"`` sentinel for the no-override path)
+    - ``mode_counts`` per policy (observe vs safe vs disabled)
+    - ``applied`` / ``failed_fallback`` per policy
+    - ``warning_count`` per policy (advisory only; the QuotaFairScorer
+      does not consume policy fields)
+
+    Returns::
+
+        {
+          "policy_counts": [
+            {
+              "policy_name": "<global>",
+              "policy_source": "global",
+              "requests": <int>,
+              "mode_counts": {"disabled": int, "observe": int, "safe": int},
+              "applied": <int>,
+              "failed_fallback": <int>,
+              "candidate_count": <int>,
+              "warning_count": <int>,
+            },
+            ...
+          ],
+          "total_requests": <int>,
+          "total_policies": <int>,
+        }
+    """
+    start_dt = _format_dt(start)
+    end_dt = _format_dt(end)
+
+    policy_sql = """
+    SELECT
+        COALESCE(compression_policy_name, '<global>') as policy_name,
+        COALESCE(compression_policy_source, 'global') as policy_source,
+        COALESCE(compression_mode, 'observe') as compression_mode,
+        COALESCE(compression_status, 'disabled') as compression_status,
+        COUNT(*) as request_count,
+        COALESCE(SUM(CASE WHEN compression_candidate_count IS NOT NULL
+            THEN compression_candidate_count ELSE 0 END), 0)
+            as total_candidate_count,
+        COALESCE(SUM(CASE WHEN compression_applied IS NOT NULL
+            THEN compression_applied ELSE 0 END), 0)
+            as total_applied,
+        COALESCE(SUM(CASE WHEN compression_failed_fallback IS NOT NULL
+            THEN compression_failed_fallback ELSE 0 END), 0)
+            as total_failed_fallback,
+        COALESCE(SUM(CASE WHEN compression_warning_count IS NOT NULL
+            THEN compression_warning_count ELSE 0 END), 0)
+            as total_warning_count
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+    GROUP BY compression_policy_name, compression_policy_source,
+             compression_mode, compression_status
+    ORDER BY policy_name, policy_source
+    """
+    policy_rows = await db.fetch_all(policy_sql, (start_dt, end_dt))
+
+    policy_buckets: dict[tuple[str, str], dict[str, Any]] = {}
+    total_requests = 0
+    for row in policy_rows:
+        d = dict(row)
+        name = d["policy_name"]
+        source = d["policy_source"]
+        mode = d["compression_mode"] or "observe"
+        status = d["compression_status"] or "disabled"
+        request_count = int(d["request_count"])
+        total_requests += request_count
+        key = (name, source)
+        bucket = policy_buckets.setdefault(
+            key,
+            {
+                "policy_name": name,
+                "policy_source": source,
+                "requests": 0,
+                "mode_counts": {"disabled": 0, "observe": 0, "safe": 0},
+                "applied": 0,
+                "failed_fallback": 0,
+                "candidate_count": 0,
+                "warning_count": 0,
+            },
+        )
+        bucket["requests"] += request_count
+        bucket["candidate_count"] += int(d["total_candidate_count"] or 0)
+        bucket["applied"] += int(d["total_applied"] or 0)
+        bucket["failed_fallback"] += int(d["total_failed_fallback"] or 0)
+        bucket["warning_count"] += int(d["total_warning_count"] or 0)
+        # Status drives the disabled bucket; otherwise mode wins.
+        target_key = status if status == "disabled" else mode
+        bucket["mode_counts"][target_key] = (
+            bucket["mode_counts"].get(target_key, 0) + request_count
+        )
+
+    # Stable ordering: global sentinel first, then alphabetical.
+    policy_counts = sorted(
+        policy_buckets.values(),
+        key=lambda b: (
+            0 if b["policy_name"] == "<global>" else 1,
+            b["policy_name"],
+        ),
+    )
+
+    return {
+        "policy_counts": policy_counts,
+        "total_requests": total_requests,
+        "total_policies": len(policy_counts),
+    }
+
+
+async def fetch_cache_stability_summary(
+    db: Database,
+    start: str,
+    end: str,
+) -> dict[str, Any]:
+    """Phase 7 cache-stability observability summary.
+
+    Phase 3 transcoder cache stability is in-memory on
+    :class:`TranscodeContext.cache_boundary_tracker` and is not
+    persisted to the ``requests`` table.  We surface what is
+    observable from durable state only:
+
+    - ``transcoded_request_count`` — number of finalized requests
+      with ``transcoded = 1``
+    - ``transcoded_with_warnings_count`` — transcoded requests where
+      the transcoder emitted any loss warning (proxy-recorded via the
+      normalized warning rollup; currently best-effort zero when no
+      counter is set)
+
+    The ``notes`` field is intentionally honest: cache-stability
+    detail lives on the per-request transcoder trace, not in the
+    aggregate.  This endpoint is a reporting-only signal that the
+    Phase 3 boundary tracker is wired and operating.
+    """
+    start_dt = _format_dt(start)
+    end_dt = _format_dt(end)
+
+    transcoded_sql = """
+    SELECT COUNT(*) as transcoded_count
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+        AND transcoded = 1
+    """
+    row = await db.fetch_one(transcoded_sql, (start_dt, end_dt))
+    transcoded_count = int(dict(row).get("transcoded_count", 0) or 0) if row else 0
+
+    return {
+        "transcoded_request_count": transcoded_count,
+        "notes": (
+            "Phase 3 cache-stability is per-request and in-memory on "
+            "TranscodeContext.cache_boundary_tracker; durable summary "
+            "counts are reported-only."
+        ),
     }

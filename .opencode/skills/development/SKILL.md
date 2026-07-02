@@ -96,6 +96,45 @@ Run with:
 uv run pytest tests/unit/test_routing_priority.py -v
 ```
 
+### Phase 7 — Cache/Compression Dashboard & Runtime Views Tests
+
+Phase 7 unifies the data from Phases 1–6 into dashboard cards and
+runtime API endpoints. Three focused unit test files cover the new
+surface:
+
+- `tests/unit/test_compression_stats_phase7.py` — query-layer tests
+  for `fetch_compression_runtime`, `fetch_compression_policy_stats`,
+  `fetch_cache_stability_summary` in `src/eggpool/stats/queries.py`.
+- `tests/unit/test_dashboard_phase7.py` — render-layer tests for the
+  four new runtime cards (`compression`, `compression_runtime`,
+  `compression_policy`, `cache_stability`) and the routing-separation
+  notice in `src/eggpool/dashboard/render.py`.
+- `tests/unit/test_api_phase7.py` — endpoint-layer tests for the six
+  `/api/stats/...` JSON endpoints and auth gating.
+
+All three together are the Phase 7 acceptance test set:
+
+```bash
+uv run pytest tests/unit/test_compression_stats_phase7.py tests/unit/test_dashboard_phase7.py tests/unit/test_api_phase7.py -v
+```
+
+**Critical rules**:
+
+- Phase 7 test fixtures must enable `dashboard.enabled = True`
+  (unlike runtime tests, which use the runtime-only route set and
+  leave the dashboard disabled).
+- Phase 7 must NEVER consume cache or compression fields in the
+  `QuotaFairScorer`. The pinned invariants are
+  `tests/unit/test_routing.py::test_scorer_does_not_consume_cache_counter_status`
+  (Phase 1), the same shape repeated for Phase 2/3/4/5/6/7. If you
+  add a new Phase X field, add a corresponding scorer-isolation test
+  in `test_routing.py` before wiring it into a dashboard card or
+  stats roll-up.
+- Phase 7 dashboard cards must never include raw prompts, tool
+  outputs, system messages, or request bodies. The render tests
+  assert negative space (`assert "<raw prompt marker>" not in html`)
+  not just positive presence.
+
 ## Code Style
 
 - Python 3.11+ with `from __future__ import annotations` in all files

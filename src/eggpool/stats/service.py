@@ -1427,6 +1427,61 @@ class StatsService:
             time_range.end_str(),
         )
 
+    async def get_compression_runtime(
+        self, period: str | None = None
+    ) -> dict[str, Any]:
+        """Phase 7 runtime compression aggregates for operator dashboards.
+
+        Surfaces mode counts, applied / fallback counts, latency stats,
+        per-transform aggregates, warnings rollup, and cache-safety
+        counters.  All values are computed from the durable
+        ``requests`` columns populated by the Phase 4 / Phase 5 / Phase 6
+        finalizers — never from in-memory caches or hot-path buffers.
+        """
+        time_range = resolve_time_range(period)
+        return await queries.fetch_compression_runtime(
+            self._db,
+            time_range.start_str(),
+            time_range.end_str(),
+        )
+
+    async def get_compression_policy_stats(
+        self, period: str | None = None
+    ) -> dict[str, Any]:
+        """Phase 7 per-policy compression rollup.
+
+        Aggregates the Phase 6 ``compression_policy_name`` /
+        ``compression_policy_source`` audit columns (migration 0044)
+        into one entry per resolved policy.  ``<global>`` is the
+        sentinel for the no-override path; operator-chosen names come
+        from the ``[[compression.policies]]`` entries.  All metrics are
+        advisory / audit; the :class:`QuotaFairScorer` does not
+        consume policy fields.
+        """
+        time_range = resolve_time_range(period)
+        return await queries.fetch_compression_policy_stats(
+            self._db,
+            time_range.start_str(),
+            time_range.end_str(),
+        )
+
+    async def get_cache_stability(self, period: str | None = None) -> dict[str, Any]:
+        """Phase 7 cache-stability summary.
+
+        Phase 3 transcoder cache stability is per-request and lives on
+        :attr:`TranscodeContext.cache_boundary_tracker`.  The durable
+        summary counts transcoded requests so operators can confirm
+        the tracker is wired.  Per-request loss warnings are persisted
+        via the transcoder trace and surfaced through the request
+        trace endpoint, not via this aggregate.
+        """
+        time_range = resolve_time_range(period)
+        return await queries.fetch_cache_stability_summary(
+            self._db,
+            time_range.start_str(),
+            time_range.end_str(),
+        )
+
 
 _BUCKET_SIZES: dict[str, int] = {
     "hour": 3600,

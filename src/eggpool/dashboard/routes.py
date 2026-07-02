@@ -1379,6 +1379,12 @@ async def handle_runtime(
     canonical_request_segmentation = (
         await stats_service.get_canonical_request_segmentation(period)
     )
+    compression_observability = await stats_service.get_compression_observability(
+        period
+    )
+    compression_runtime = await stats_service.get_compression_runtime(period)
+    compression_policy_stats = await stats_service.get_compression_policy_stats(period)
+    cache_stability = await stats_service.get_cache_stability(period)
     snapshot = await runtime_metrics.snapshot()
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
     return HTMLResponse(
@@ -1391,6 +1397,10 @@ async def handle_runtime(
             transcoding_stats=transcoding_stats,
             cache_observability=cache_observability,
             canonical_request_segmentation=canonical_request_segmentation,
+            compression_observability=compression_observability,
+            compression_runtime=compression_runtime,
+            compression_policy_stats=compression_policy_stats,
+            cache_stability=cache_stability,
             period=period or "24h",
         )
     )
@@ -1406,6 +1416,108 @@ async def handle_transcoding_stats_json(request: Request) -> Response:
     stats_service = StatsService(db)
     data = await stats_service.get_transcoding_stats(period)
     return JSONResponse(content=serialize_transcoding_stats(data))
+
+
+async def handle_cache_observability_json(request: Request) -> Response:
+    """Return Phase 1 cache-counter observability aggregates as JSON.
+
+    Phase 7 dashboard surface for ``cache_counter_status`` coverage,
+    cached-token totals, known-only cache hit ratio, and per-provider /
+    per-account / per-model breakdowns.  Empty data returns the
+    stable zero shape so dashboards never blow up on bad input.
+    """
+    _get_dashboard_config(request)
+    db = request.app.state.db
+    from eggpool.stats import StatsService
+
+    period = request.query_params.get("period", "24h")
+    stats_service = StatsService(db)
+    data = await stats_service.get_cache_observability(period)
+    return JSONResponse(content=data)
+
+
+async def handle_canonical_request_segmentation_json(request: Request) -> Response:
+    """Return Phase 2 canonical request segmentation aggregates as JSON."""
+    _get_dashboard_config(request)
+    db = request.app.state.db
+    from eggpool.stats import StatsService
+
+    period = request.query_params.get("period", "24h")
+    stats_service = StatsService(db)
+    data = await stats_service.get_canonical_request_segmentation(period)
+    return JSONResponse(content=data)
+
+
+async def handle_compression_observability_json(request: Request) -> Response:
+    """Return Phase 4/5/6 compression observability aggregates as JSON.
+
+    Includes observe-mode totals, applied-mode totals, per-policy
+    rollups, and Phase 6 policy source counts.
+    """
+    _get_dashboard_config(request)
+    db = request.app.state.db
+    from eggpool.stats import StatsService
+
+    period = request.query_params.get("period", "24h")
+    stats_service = StatsService(db)
+    data = await stats_service.get_compression_observability(period)
+    return JSONResponse(content=data)
+
+
+async def handle_compression_runtime_json(request: Request) -> Response:
+    """Return Phase 7 runtime compression aggregates as JSON.
+
+    Mode counts, applied / failed-fallback counts, latency stats,
+    per-transform breakdown, warnings rollup, and cache-safety
+    counters.  All numbers are computed from durable ``requests``
+    columns populated by the Phase 4 / Phase 5 / Phase 6
+    finalizers.
+    """
+    _get_dashboard_config(request)
+    db = request.app.state.db
+    from eggpool.stats import StatsService
+
+    period = request.query_params.get("period", "24h")
+    stats_service = StatsService(db)
+    data = await stats_service.get_compression_runtime(period)
+    return JSONResponse(content=data)
+
+
+async def handle_compression_policy_stats_json(request: Request) -> Response:
+    """Return Phase 7 per-policy compression rollup as JSON.
+
+    One entry per resolved policy (including the ``<global>`` sentinel
+    for the no-override path).  Includes mode counts, applied counts,
+    failed-fallback counts, and per-policy warning counts.  Advisory
+    only; the QuotaFairScorer does not consume policy fields.
+    """
+    _get_dashboard_config(request)
+    db = request.app.state.db
+    from eggpool.stats import StatsService
+
+    period = request.query_params.get("period", "24h")
+    stats_service = StatsService(db)
+    data = await stats_service.get_compression_policy_stats(period)
+    return JSONResponse(content=data)
+
+
+async def handle_cache_stability_json(request: Request) -> Response:
+    """Return Phase 7 cache-stability summary as JSON.
+
+    Phase 3 cache stability is per-request and lives on
+    :class:`TranscodeContext.cache_boundary_tracker`.  The durable
+    summary counts transcoded requests so operators can confirm the
+    tracker is wired; per-request loss warnings are surfaced through
+    the request trace endpoint, not via this aggregate.
+    """
+    _get_dashboard_config(request)
+    db = request.app.state.db
+    from eggpool.stats import StatsService
+
+    period = request.query_params.get("period", "24h")
+    stats_service = StatsService(db)
+    data = await stats_service.get_cache_stability(period)
+    return JSONResponse(content=data)
 
 
 def register_dashboard_routes(app: Any, require_auth: bool = False) -> None:
@@ -1437,6 +1549,32 @@ def register_dashboard_routes(app: Any, require_auth: bool = False) -> None:
         ("/api/timeseries", handle_timeseries_json, JSONResponse),
         ("/api/timeseries/grouped", handle_grouped_timeseries_json, JSONResponse),
         ("/api/stats/transcoding", handle_transcoding_stats_json, JSONResponse),
+        (
+            "/api/stats/cache-observability",
+            handle_cache_observability_json,
+            JSONResponse,
+        ),
+        (
+            "/api/stats/canonical-request-segmentation",
+            handle_canonical_request_segmentation_json,
+            JSONResponse,
+        ),
+        (
+            "/api/stats/compression-observability",
+            handle_compression_observability_json,
+            JSONResponse,
+        ),
+        (
+            "/api/stats/compression-runtime",
+            handle_compression_runtime_json,
+            JSONResponse,
+        ),
+        (
+            "/api/stats/compression-policies",
+            handle_compression_policy_stats_json,
+            JSONResponse,
+        ),
+        ("/api/stats/cache-stability", handle_cache_stability_json, JSONResponse),
     ):
         app.add_api_route(
             path=path,
@@ -1450,6 +1588,12 @@ def register_dashboard_routes(app: Any, require_auth: bool = False) -> None:
 __all__ = [
     "handle_accounts",
     "handle_bandwidth",
+    "handle_cache_observability_json",
+    "handle_cache_stability_json",
+    "handle_canonical_request_segmentation_json",
+    "handle_compression_observability_json",
+    "handle_compression_policy_stats_json",
+    "handle_compression_runtime_json",
     "handle_events",
     "handle_grouped_timeseries_json",
     "handle_latency",

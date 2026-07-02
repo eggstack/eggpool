@@ -215,6 +215,28 @@ enabled = false
 
 **Observability**: each request records `compression_policy_name` and `compression_policy_source` (`"global"` or `"policy:<name>"`). The stats roll-up at `/api/stats/compression-observability` adds `by_policy`, `by_policy_source`, and `policy_warning_count_total`. Migration 0044 adds 3 columns + 1 index to `requests`.
 
+### Phase 7: Dashboard, runtime views, and operator diagnostics
+
+Phases 1–6 produce data; Phase 7 makes it operationally usable in the dashboard and runtime API. Six focused JSON endpoints expose the per-phase roll-ups; four new runtime cards render the highlights; a static **routing-separation notice** always shows that cache/compression metrics are reporting-only and do not feed routing. No raw prompts, tool outputs, system messages, request bodies, or auth headers appear in any card or JSON response.
+
+| Endpoint | Phase | What it answers |
+|----------|-------|-----------------|
+| `GET /api/stats/cache-observability` | 1 | Are providers reporting cache counters? Coverage by `reported` / `not_reported` / `unknown_format`; known-only cache hit ratio; cached input tokens by provider/model. |
+| `GET /api/stats/canonical-request-segmentation` | 2 | Are requests segmenting correctly? Status counts; avg stable/semi/volatile token estimates; top request-shape hashes. |
+| `GET /api/stats/cache-stability` | 3 | Narrow summary only. Per-boundary preservation/drop detail lives on the in-memory `CacheBoundaryTracker` for live requests; this endpoint confirms the tracker is wired and reports durable counters where persisted. |
+| `GET /api/stats/compression-observability` | 4 + 6 | Observe-mode opportunity (candidates, estimated savings, suppress reasons). Plus Phase 6 `by_policy` / `by_policy_source` / `policy_warning_count_total` roll-ups. |
+| `GET /api/stats/compression-runtime` | 5 | What safe mode actually did: applied / failed_fallback counts, candidate counts, estimated + actual savings tokens, latency (avg/p50/p95/max), per-transform applied/tokens_saved, warnings rollup, cache_safety stable-prefix preserved/mismatch. |
+| `GET /api/stats/compression-policies` | 6 | Per-policy rollup table with `<global>` sentinel first: request count, mode distribution, applied, failed_fallback, candidates, warnings. |
+
+Runtime dashboard additions:
+
+- **Compression** — observe / apply / fallback / candidate counts; estimated vs actual savings; suppression reasons
+- **Compression runtime** — mode strip (disabled / observe / safe), latency, per-transform table, warnings, cache_safety stable-prefix preserved/mismatch
+- **Compression policy** — per-policy table with `<global>` sentinel row
+- **Cache stability** — transcoded request count and a note that per-boundary detail lives on the in-memory tracker
+
+All Phase 7 outputs are reporting-only — the `QuotaFairScorer` does not consume any cache or compression column. Routing remains load-based (request count + token count + active count + health). No new migrations; Phase 7 is view-only over the columns added in 0040–0044. See `plans/cache_compression_phase_07_dashboard_runtime_views.md` for the full design.
+
 ## API Endpoints
 
 | Method | Path | Description |

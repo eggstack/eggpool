@@ -974,6 +974,77 @@ combined roll-up.
   override cannot enable `compress_static_prefix` unless global
   `allow_static_prefix_override` is true.
 
+## Dashboard and Runtime Views (Phase 7)
+
+Phase 7 unifies the data produced by Phases 1–6 into operator-usable
+forms on the dashboard and runtime API. It is view-only: no new
+migrations, no new persisted columns, no changes to routing. The
+purpose is to let an operator answer questions like:
+
+- Are providers reporting cache counters, or are values unknown?
+- Are stable prefixes being preserved across transcoding and
+  compression?
+- How often does observe mode find compression opportunities? How
+  often does safe mode actually compress?
+- Which transforms are doing useful work?
+- Which policies are active? Are fallbacks occurring?
+- Is compression latency bounded and SBC-safe?
+- Are cache/compression metrics reporting-only and not influencing
+  routing?
+
+### API surface
+
+Six focused JSON endpoints live under `/api/stats/`:
+
+| Endpoint | Phase | Purpose |
+|----------|-------|---------|
+| `cache-observability` | 1 | Coverage of cache counters by status (`reported` / `not_reported` / `unknown_format`); known-only cache hit ratio; cached input tokens by provider/model. |
+| `canonical-request-segmentation` | 2 | Segmentation status counts; avg stable / semi-stable / volatile token estimates; top request-shape hashes. |
+| `cache-stability` | 3 | Narrow summary. Per-boundary preservation/drop detail lives on the in-memory `CacheBoundaryTracker`; this endpoint confirms the tracker is wired and reports durable counters. |
+| `compression-observability` | 4 + 6 | Observe-mode opportunities (candidates, estimated savings, suppress reasons). Plus Phase 6 `by_policy` / `by_policy_source` / `policy_warning_count_total`. |
+| `compression-runtime` | 5 | Safe-mode outcomes: applied / failed_fallback counts, candidate counts, estimated + actual savings tokens, latency (avg/p50/p95/max), per-transform applied/tokens_saved, warnings rollup, `cache_safety` stable-prefix preserved/mismatch. |
+| `compression-policies` | 6 | Per-policy rollup with `<global>` sentinel first: request count, mode distribution, applied, failed_fallback, candidates, warnings. |
+
+Endpoints are added to `register_dashboard_routes` in
+`src/eggpool/dashboard/routes.py` and grouped with the existing
+dashboard auth gate. Empty-DB responses are stable zero shapes; bad
+window parameters return HTTP 400, not 500.
+
+### Runtime cards
+
+`render_runtime` in `src/eggpool/dashboard/render.py` renders four
+new cards alongside the existing runtime content:
+
+1. **Compression** — observe / apply / fallback / candidate counts;
+   estimated vs actual savings; suppression reasons.
+2. **Compression runtime** — mode strip (disabled / observe /
+   safe); latency avg/p50/p95/max; per-transform applied /
+   `tokens_saved`; warnings rollup; `cache_safety` stable-prefix
+   preserved/mismatch.
+3. **Compression policy** — per-policy rollup table with `<global>`
+   sentinel first.
+4. **Cache stability** — transcoded count + a note that Phase 3
+   per-boundary detail lives on the in-memory tracker.
+
+A static **routing-separation notice** card always renders on the
+runtime page with this exact text:
+
+> Cache and compression metrics are reporting-only. The
+> `QuotaFairScorer` routes on request count, token count, active
+> count, and upstream health — it never consumes cache or compression
+> fields.
+
+### Safety guarantees
+
+- No raw prompts, tool outputs, system messages, request bodies, or
+  auth headers appear in any card or JSON response. Phase 4's
+  content-private analyzer is unchanged; Phase 7's rollups operate on
+  aggregated counters and JSON columns.
+- The `QuotaFairScorer` does not consume any Phase 7 field. The new
+  endpoints and cards are pure observers.
+- Phase 7 never mutates a request, never changes routing, and never
+  synthesizes provider cache-control.
+
 ## Database
 
 SQLite via aiosqlite with WAL mode. Single-connection serialization via a lock + ContextVar.
