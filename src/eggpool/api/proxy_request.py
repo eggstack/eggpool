@@ -366,6 +366,29 @@ async def handle_proxy_request(
         upstream_protocol=endpoint.protocol,
     )
 
+    # Phase 2: run the canonical request segmenter.  The result is
+    # attached to the ProxyRequestContext so the finalizer can persist
+    # the segmentation summary, the deterministic stable_prefix_hash /
+    # request_shape_hash, and the segment-kind token / byte
+    # estimates.  The segmenter is observational: it never mutates the
+    # payload, never raises on malformed input, and is cheap enough
+    # to run on every request without blocking the request path.
+    segmentation_result: Any = None
+    try:
+        from eggpool.transcoder.segmentation import segment_request
+
+        segmentation_result = segment_request(payload, protocol=endpoint.protocol)
+    except Exception:  # noqa: BLE001
+        # Segmentation is observational.  A failure here must never
+        # block the request path; the finalizer falls back to
+        # ``segmentation_status = 'empty_request'``.
+        logger.debug(
+            "segmentation_failed",
+            extra={"proxy_request_id": request_id},
+            exc_info=True,
+        )
+        segmentation_result = None
+
     context = ProxyRequestContext(
         request_id=request_id,
         protocol=endpoint.protocol,
@@ -380,7 +403,38 @@ async def handle_proxy_request(
         upstream_protocol=endpoint.protocol,
         transcode_required=False,
         transcode_context=transcode_ctx,
+        segmentation=segmentation_result,
     )
+
+    if segmentation_result is not None:
+        logger.debug(
+            "request_segmented",
+            extra={
+                "proxy_request_id": request_id,
+                "model": model_id,
+                "protocol": endpoint.protocol,
+                "segmentation_status": str(
+                    getattr(segmentation_result, "status", "empty_request")
+                ),
+                "stable_prefix_estimated_tokens": getattr(
+                    segmentation_result, "stable_prefix_estimated_tokens", None
+                ),
+                "semi_stable_estimated_tokens": getattr(
+                    segmentation_result, "semi_stable_estimated_tokens", None
+                ),
+                "volatile_estimated_tokens": getattr(
+                    segmentation_result, "volatile_estimated_tokens", None
+                ),
+                "stable_prefix_bytes": getattr(
+                    segmentation_result, "stable_prefix_bytes", None
+                ),
+                "volatile_bytes": getattr(segmentation_result, "volatile_bytes", None),
+                "compressible_candidate_count": (
+                    segmentation_result.compressible_candidate_count()
+                ),
+                "protected_count": segmentation_result.protected_count(),
+            },
+        )
 
     logger.info(
         "Proxying %s: model=%s proxy_request_id=%s streaming=%s",

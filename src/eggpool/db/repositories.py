@@ -386,6 +386,14 @@ class RequestRepository:
         total_tokens_reported: int | None = None,
         request_shape_hash: str | None = None,
         stable_prefix_hash: str | None = None,
+        segmentation_status: str = "empty_request",
+        stable_prefix_estimated_tokens: int | None = None,
+        semi_stable_estimated_tokens: int | None = None,
+        volatile_estimated_tokens: int | None = None,
+        stable_prefix_bytes: int | None = None,
+        semi_stable_bytes: int | None = None,
+        volatile_bytes: int | None = None,
+        segmentation_summary_json: str | None = None,
         transcoded: int = 0,
         raw_usage_json: str | None = None,
     ) -> bool:
@@ -396,11 +404,14 @@ class RequestRepository:
 
         The cache-observability fields added by migration 0040 carry
         the provider-neutral usage shape from
-        :class:`eggpool.proxy.normalized_usage.NormalizedUsage`.  They
-        are all nullable / default to ``None`` so legacy callers that
-        do not produce a normalized usage record continue to work and
-        the database renders ``cache_counter_status = 'not_reported'``
-        as the safe default.
+        :class:`eggpool.proxy.normalized_usage.NormalizedUsage`.  The
+        segmentation fields added by migration 0041 carry the Phase 2
+        canonical request segmentation summary.  Both are all nullable
+        / default to ``None`` so legacy callers that do not produce a
+        normalized usage record or a segmentation result continue to
+        work and the database renders ``cache_counter_status =
+        'not_reported'`` and ``segmentation_status = 'empty_request'``
+        as the safe defaults.
         """
         rowcount = await self._db.execute_write(
             "UPDATE requests SET "
@@ -423,6 +434,14 @@ class RequestRepository:
             "input_tokens_reported = ?, output_tokens_reported = ?, "
             "total_tokens_reported = ?, "
             "request_shape_hash = ?, stable_prefix_hash = ?, "
+            "segmentation_status = ?, "
+            "stable_prefix_estimated_tokens = ?, "
+            "semi_stable_estimated_tokens = ?, "
+            "volatile_estimated_tokens = ?, "
+            "stable_prefix_bytes = ?, "
+            "semi_stable_bytes = ?, "
+            "volatile_bytes = ?, "
+            "segmentation_summary_json = ?, "
             "transcoded = ?, raw_usage_json = ? "
             "WHERE id = ? AND status = 'pending'",
             (
@@ -464,6 +483,14 @@ class RequestRepository:
                 total_tokens_reported,
                 request_shape_hash,
                 stable_prefix_hash,
+                segmentation_status,
+                stable_prefix_estimated_tokens,
+                semi_stable_estimated_tokens,
+                volatile_estimated_tokens,
+                stable_prefix_bytes,
+                semi_stable_bytes,
+                volatile_bytes,
+                segmentation_summary_json,
                 transcoded,
                 raw_usage_json,
                 request_id,

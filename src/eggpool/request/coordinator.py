@@ -348,6 +348,14 @@ class ProxyRequestContext:
     transcode_required: bool = False
     transcode_context: TranscodeContext | None = None
     thinking_trace: dict[str, Any] | None = None
+    # Phase 2: canonical request segmentation summary.  Computed
+    # observationally in :mod:`eggpool.api.proxy_request` immediately
+    # after the body is parsed and read by
+    # :meth:`RequestFinalizer.finalize` so the finalizer can persist
+    # the hashes / token estimates / JSON summary to the requests
+    # table.  ``None`` for callers that did not run the segmenter
+    # (legacy / error paths).
+    segmentation: Any | None = None
 
     def __post_init__(self) -> None:
         if not self.upstream_protocol:
@@ -1495,6 +1503,7 @@ class RequestCoordinator:
                     thinking_trace_json=_serialize_thinking_trace(
                         context.thinking_trace
                     ),
+                    segmentation=context.segmentation,
                 ),
             )
             raise
@@ -1713,6 +1722,7 @@ class RequestCoordinator:
                     ),
                     normalized_usage=normalized_usage,
                     transcoded=context.transcode_context is not None,
+                    segmentation=context.segmentation,
                 ),
             )
 
@@ -2095,6 +2105,7 @@ class RequestCoordinator:
                             context.thinking_trace
                         ),
                         normalized_usage=normalized_usage,
+                        segmentation=context.segmentation,
                         transcoded=context.transcode_context is not None,
                     ),
                 )
@@ -2189,6 +2200,7 @@ class RequestCoordinator:
                                         transcoded=(
                                             context.transcode_context is not None
                                         ),
+                                        segmentation=context.segmentation,
                                     ),
                                 )
                             ),
@@ -2256,6 +2268,7 @@ class RequestCoordinator:
                             is_streaming=True,
                         ),
                         transcoded=context.transcode_context is not None,
+                        segmentation=context.segmentation,
                     ),
                 )
                 raise
@@ -2695,6 +2708,7 @@ class RequestCoordinator:
                     thinking_trace_json=_serialize_thinking_trace(
                         context.thinking_trace,
                     ),
+                    segmentation=context.segmentation,
                 ),
             )
         except DatabaseError as finalize_err:
@@ -2949,6 +2963,7 @@ class RequestCoordinator:
                 bytes_received=len(context.original_body),
                 upstream_protocol=context.upstream_protocol,
                 thinking_trace_json=_serialize_thinking_trace(context.thinking_trace),
+                segmentation=context.segmentation,
             ),
         )
 
@@ -3014,6 +3029,7 @@ class RequestCoordinator:
                     thinking_trace_json=_serialize_thinking_trace(
                         context.thinking_trace
                     ),
+                    segmentation=context.segmentation,
                 ),
             )
         elif context.client_metadata.get("db_request_id") is not None:
@@ -3056,6 +3072,7 @@ class RequestCoordinator:
                     thinking_trace_json=_serialize_thinking_trace(
                         context.thinking_trace
                     ),
+                    segmentation=context.segmentation,
                 ),
             )
 

@@ -94,6 +94,14 @@ class FinalizationData:
     # cache fields, or returned a shape EggPool could not parse.
     normalized_usage: Any | None = None
     transcoded: bool = False
+    # Phase 2 segmentation summary.  When ``None`` the database renders
+    # ``segmentation_status = 'empty_request'`` with all segment fields
+    # left as ``None`` (preserving historical behaviour).  When supplied,
+    # the stable-prefix hash, request-shape hash, segment-kind token and
+    # byte estimates, and a compact JSON summary are persisted so later
+    # phases can drive observe-mode compression accounting without
+    # reclassifying the request.
+    segmentation: Any | None = None
 
 
 class RequestFinalizer:
@@ -325,6 +333,60 @@ class RequestFinalizer:
             status = self._outcome_to_status(data.outcome)
             retry_count = max(0, selected.attempt_number - 1)
 
+            # Phase 2 segmentation summary.  The finalizer is the single
+            # source of truth for persistence of the segmentation
+            # fields; the coordinator attaches the SegmentationResult
+            # to ``data.segmentation`` (or leaves it ``None`` for
+            # callers that did not run the segmenter — historical
+            # behaviour).  Field names mirror migration 0041.
+            segmentation_obj = data.segmentation
+            segmentation_status_value = "empty_request"
+            stable_prefix_hash_value: str | None = None
+            request_shape_hash_value: str | None = None
+            stable_prefix_estimated_tokens_value: int | None = None
+            semi_stable_estimated_tokens_value: int | None = None
+            volatile_estimated_tokens_value: int | None = None
+            stable_prefix_bytes_value: int | None = None
+            semi_stable_bytes_value: int | None = None
+            volatile_bytes_value: int | None = None
+            segmentation_summary_json_value: str | None = None
+            if segmentation_obj is not None:
+                segmentation_status_value = str(
+                    getattr(segmentation_obj, "status", "empty_request")
+                )
+                stable_prefix_hash_value = getattr(
+                    segmentation_obj, "stable_prefix_hash", None
+                )
+                request_shape_hash_value = getattr(
+                    segmentation_obj, "request_shape_hash", None
+                )
+                stable_prefix_estimated_tokens_value = getattr(
+                    segmentation_obj, "stable_prefix_estimated_tokens", None
+                )
+                semi_stable_estimated_tokens_value = getattr(
+                    segmentation_obj, "semi_stable_estimated_tokens", None
+                )
+                volatile_estimated_tokens_value = getattr(
+                    segmentation_obj, "volatile_estimated_tokens", None
+                )
+                stable_prefix_bytes_value = getattr(
+                    segmentation_obj, "stable_prefix_bytes", None
+                )
+                semi_stable_bytes_value = getattr(
+                    segmentation_obj, "semi_stable_bytes", None
+                )
+                volatile_bytes_value = getattr(segmentation_obj, "volatile_bytes", None)
+                try:
+                    from eggpool.transcoder.segmentation import (
+                        segmentation_summary_json,
+                    )
+
+                    segmentation_summary_json_value = segmentation_summary_json(
+                        segmentation_obj
+                    )
+                except (TypeError, ValueError):
+                    segmentation_summary_json_value = None
+
             transitioned = await self._request_repo.finalize_if_pending(
                 request_id=db_request_id,
                 status=status,
@@ -365,6 +427,21 @@ class RequestFinalizer:
                 input_tokens_reported=input_tokens_reported_value,
                 output_tokens_reported=output_tokens_reported_value,
                 total_tokens_reported=total_tokens_reported_value,
+                # Phase 2 segmentation: ``request_shape_hash`` /
+                # ``stable_prefix_hash`` are also Phase 1 placeholders
+                # that the segmenter now populates.  ``transcoded`` and
+                # ``raw_usage_json`` close the existing positional
+                # argument list.
+                request_shape_hash=request_shape_hash_value,
+                stable_prefix_hash=stable_prefix_hash_value,
+                segmentation_status=segmentation_status_value,
+                stable_prefix_estimated_tokens=stable_prefix_estimated_tokens_value,
+                semi_stable_estimated_tokens=semi_stable_estimated_tokens_value,
+                volatile_estimated_tokens=volatile_estimated_tokens_value,
+                stable_prefix_bytes=stable_prefix_bytes_value,
+                semi_stable_bytes=semi_stable_bytes_value,
+                volatile_bytes=volatile_bytes_value,
+                segmentation_summary_json=segmentation_summary_json_value,
                 transcoded=1 if data.transcoded else 0,
                 raw_usage_json=raw_usage_json_value,
             )
