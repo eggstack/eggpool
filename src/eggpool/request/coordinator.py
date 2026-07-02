@@ -366,6 +366,15 @@ class ProxyRequestContext:
     # operator has not enabled compression, when the request was
     # not segmented, or on error paths.
     compression_observation: Any | None = None
+    # Phase 5: safe-suffix compression result.  Computed in
+    # :mod:`eggpool.api.proxy_request` when ``[compression] enabled
+    # = true`` and ``[compression] mode = 'safe'``; the finalizer
+    # reads it via ``FinalizationData.compression_result`` to persist
+    # the per-request applied flag, transform counts, token savings,
+    # stable-prefix hash comparison, warnings, and a compact JSON
+    # summary.  ``None`` when compression is disabled or on error
+    # paths.
+    compression_result: Any | None = None
 
     def __post_init__(self) -> None:
         if not self.upstream_protocol:
@@ -1518,6 +1527,7 @@ class RequestCoordinator:
                     ),
                     segmentation=context.segmentation,
                     compression_observation=context.compression_observation,
+                    compression_result=context.compression_result,
                 ),
             )
             raise
@@ -1738,6 +1748,7 @@ class RequestCoordinator:
                     transcoded=context.transcode_context is not None,
                     segmentation=context.segmentation,
                     compression_observation=context.compression_observation,
+                    compression_result=context.compression_result,
                 ),
             )
 
@@ -2122,6 +2133,7 @@ class RequestCoordinator:
                         normalized_usage=normalized_usage,
                         segmentation=context.segmentation,
                         compression_observation=context.compression_observation,
+                        compression_result=context.compression_result,
                         transcoded=context.transcode_context is not None,
                     ),
                 )
@@ -2218,6 +2230,7 @@ class RequestCoordinator:
                                         ),
                                         segmentation=context.segmentation,
                                         compression_observation=context.compression_observation,
+                                        compression_result=context.compression_result,
                                     ),
                                 )
                             ),
@@ -2287,6 +2300,7 @@ class RequestCoordinator:
                         transcoded=context.transcode_context is not None,
                         segmentation=context.segmentation,
                         compression_observation=context.compression_observation,
+                        compression_result=context.compression_result,
                     ),
                 )
                 raise
@@ -2728,6 +2742,7 @@ class RequestCoordinator:
                     ),
                     segmentation=context.segmentation,
                     compression_observation=context.compression_observation,
+                    compression_result=context.compression_result,
                 ),
             )
         except DatabaseError as finalize_err:
@@ -3050,6 +3065,7 @@ class RequestCoordinator:
                     ),
                     segmentation=context.segmentation,
                     compression_observation=context.compression_observation,
+                    compression_result=context.compression_result,
                 ),
             )
         elif context.client_metadata.get("db_request_id") is not None:
@@ -3094,6 +3110,7 @@ class RequestCoordinator:
                     ),
                     segmentation=context.segmentation,
                     compression_observation=context.compression_observation,
+                    compression_result=context.compression_result,
                 ),
             )
 

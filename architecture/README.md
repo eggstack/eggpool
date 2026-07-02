@@ -610,6 +610,162 @@ shape as the cache-observability endpoint.
   `compression_status = "disabled"` with zero counts and no
   warnings.
 
+## Safe-Mode Suffix Compression (Phase 5)
+
+Phase 5 is the first request-mutating layer of the cache-preserving
+deterministic compression roadmap. It applies deterministic
+transforms only to eligible `volatile_suffix` segments identified
+by Phase 2's segmenter, and re-verifies the Phase 2 `stable_prefix_hash`
+on the post-mutation payload. The applier is fail-closed: any
+unexpected change to the stable-prefix serialization falls back to
+the original payload and records a high-severity warning.
+
+### Configuration
+
+- `mode = "safe"` activates the applier. The default is `"observe"`
+  (Phase 4 — reporting only), so production behaviour is unchanged
+  unless an operator explicitly opts in.
+- `placement = "suffix_only"` (default) restricts candidates to
+  volatile-suffix regions; the other placement values remain
+  reserved for future phases.
+- `respect_cache_boundaries = true` (default) suppresses every
+  candidate that overlaps a protected stable-prefix segment.
+- `compress_static_prefix` is rejected in safe mode unless the
+  operator sets `allow_static_prefix_override = true` (default
+  false). Static-prefix mutation is opt-in and explicitly dangerous.
+- `min_candidate_tokens` (default 2048) and `min_savings_tokens`
+  (default 1024) gate eligibility.
+- `max_compression_latency_ms` (default 25) bounds the applier
+  budget; over-budget runs append `latency_budget_exceeded` warnings.
+- Per-request headers: `x-eggpool-compression: off|observe|safe`
+  (when `header_override = true`) and `x-eggpool-cache-policy:
+  preserve` to opt out for cache-equivalent flows.
+- Six transforms live on `CompressionTransforms`: `fold_repeated_lines`,
+  `compact_logs`, `compact_search_results`, `elide_base64_blobs`,
+  `minify_machine_json`, `compact_stack_traces`. Each can be
+  toggled individually.
+
+### Applier
+
+`apply_safe_compression(payload, segmentation, *, policy, text_hints=None)`
+in `src/eggpool/transcoder/compression/apply.py` is a total function.
+It returns a `CompressionResult` carrying:
+
+- `applied: bool` — True if mutation happened
+- `transform_count: int` — number of transforms that mutated
+- `transforms_by_reason: Mapping[str, int]` — reason-code → count
+  for the transforms APPLIED
+- `original_tokens` / `compressed_tokens` / `savings_tokens`
+- `pre_stable_prefix_hash` / `post_stable_prefix_hash` (SHA-256 hex)
+- `stable_prefix_preserved: bool`
+- `warnings`, `latency_ms`, `failed_fallback`, `summary_json`
+
+The applier:
+
+1. Guards: returns no-op when `policy.enabled` is False or
+   `policy.mode != "safe"` or segmentation is empty.
+2. Recomputes the pre-mutation `stable_prefix_hash` over the
+   stable-prefix segments.
+3. Deep-copies the payload and walks every volatile-suffix segment,
+   applying each enabled transform whose estimated savings clear
+   the eligibility thresholds.
+4. Inserts a deterministic marker `[EggPool compression: <transform>
+   | segment=<id> | lines=<n> | tokens=<n> | sha256=<digest>]`
+   so the original content can be reproduced from the digest.
+5. Recomputes the post-mutation `stable_prefix_hash`. If it
+   diverges from the pre-mutation hash and the policy does not
+   allow static-prefix mutation, the applier fails closed:
+   `applied=False`, `transformed_payload` is the ORIGINAL payload,
+   `failed_fallback=True`, `warnings` includes
+   `stable_prefix_hash_mismatch`, and `summary_json` records the
+   rollback.
+6. Never mutates the input payload or segmentation in place;
+   always deep-copies first.
+7. Never raises on malformed input; all exceptions are caught
+   and rendered as fail-closed results with `failed_fallback=True`.
+
+### Marker Format
+
+`src/eggpool/transcoder/compression/markers.py` exposes
+`build_marker`, `parse_marker`, and `is_marker_line`. The marker
+is a single line, deterministic (no timestamps), and round-trips
+through `parse_marker`. The digest is the lowercase hex SHA-256
+of the original (pre-transform) text bytes.
+
+### Wiring
+
+The applier runs in `src/eggpool/api/proxy_request.py` AFTER the
+Phase 4 analyzer and BEFORE model rewrite, so the transcoder and
+provider dispatch always see the post-mutation body. The
+`CompressionResult` is attached to `FinalizationData.compression_result`
+and extracted by `src/eggpool/request/finalizer.py` with the same
+duck-typed `getattr` pattern Phase 4 uses for the analyzer.
+
+### Persistence (Migration 0043)
+
+Thirteen new columns on `requests`:
+
+- `compression_applied` (bool), `compression_transform_count` (int),
+  `compression_transforms_by_reason_json` (text),
+  `compression_original_tokens` / `compression_compressed_tokens` /
+  `compression_savings_tokens` (ints),
+  `compression_pre_stable_prefix_hash` /
+  `compression_post_stable_prefix_hash` (text),
+  `compression_stable_prefix_preserved` (bool),
+  `compression_warnings_json` (text),
+  `compression_latency_ms` (real),
+  `compression_failed_fallback` (bool),
+  `compression_applied_summary_json` (text)
+
+Plus indexes `idx_requests_compression_applied` and
+`idx_requests_compression_savings_tokens`. `EXPECTED_SCHEMA_VERSION`
+in `scripts/check_database.py` is bumped to **43**.
+
+`RequestRepository.finalize_if_pending` accepts the new fields
+and persists them in the same transaction as the rest of the
+request finalization. The finalizer extracts them with safe
+`getattr` defaults; legacy callers that did not run the applier
+write `compression_applied = 0` and `stable_prefix_preserved = 1`.
+
+### Stats Surface
+
+`fetch_compression_observability(start, end)` in
+`src/eggpool/stats/queries.py` now also aggregates the applied-mode
+columns and returns:
+
+- `requests_with_compression_applied`,
+  `applied_transform_count_total`,
+  `applied_total_savings_tokens`,
+  `applied_median_savings_tokens`,
+  `applied_p95_savings_tokens`,
+  `applied_median_latency_ms`,
+  `applied_p95_latency_ms`,
+  `applied_stable_prefix_preserved_count`,
+  `applied_failed_fallback_count`,
+  `top_applied_reason_codes`,
+  `applied_per_provider_status`,
+  `applied_per_model_status`,
+  `applied_per_mode`
+
+The existing Phase 4 fields are preserved unchanged. The handler
+at `/api/stats/compression-observability` returns the union.
+
+### Invariants
+
+- The applier never mutates stable-prefix segments unless
+  `compress_static_prefix=True AND allow_static_prefix_override=True`.
+  Asserted by `tests/unit/test_compression_apply.py`.
+- Pre/post `stable_prefix_hash` MUST match whenever
+  `compress_static_prefix` is False. A mismatch triggers fail-closed.
+- `apply_safe_compression` is total: it never raises on malformed
+  input. Failures surface as `failed_fallback=True`.
+- The dashboard / API roll-up does not change routing; the
+  `QuotaFairScorer` still does not consume compression fields
+  (Phase 1–4 invariant preserved).
+- Migration 0043 is non-destructive: pre-Phase-5 rows render as
+  `compression_applied = 0`, `compression_stable_prefix_preserved = 1`,
+  zero transforms, no warnings.
+
 ## Database
 
 SQLite via aiosqlite with WAL mode. Single-connection serialization via a lock + ContextVar.

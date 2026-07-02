@@ -8,12 +8,19 @@ analyzer records *what* it would compress and *how many tokens* it
 would save, but never mutates the request body, never changes
 routing, and never synthesises provider cache controls.
 
+Phase 5 extends the config surface with ``mode = "safe"`` which
+applies deterministic transforms *only* to eligible ``volatile_suffix``
+segments.  ``safe`` mode never mutates stable prefixes, never mutates
+cache-protected blocks, recomputes ``stable_prefix_hash`` after
+compression, and fails closed (returns the uncompressed body with a
+warning) on unexpected prefix hash change.
+
 This module owns the typed config surface.  Validation rules:
 
 - ``enabled = false`` is the safe default; no analyzer work runs
-  when disabled.  ``enabled = true`` with ``mode = "observe"`` is
-  the only supported mode in Phase 4.  Unknown mode values fail
-  config validation.
+  when disabled.  ``enabled = true`` with ``mode = "observe"`` or
+  ``mode = "safe"`` are the supported modes.  Unknown mode values
+  fail config validation.
 - ``respect_cache_boundaries = true`` suppresses every candidate
   that overlaps a protected stable-prefix segment.
 - ``placement = "suffix_only"`` restricts candidates to volatile
@@ -29,9 +36,8 @@ This module owns the typed config surface.  Validation rules:
 The ``compress_static_prefix`` flag exists for forward-compatibility
 with later phases.  In Phase 4 it is documentation-only: the
 analyzer never touches stable-prefix segments, so the flag has no
-runtime effect.  We still validate it (rejecting ``True`` unless
-the operator has explicitly opted in via a non-default mode) so
-config drift is caught at startup rather than at the dashboard.
+runtime effect.  In ``mode = "safe"`` it is rejected unless the
+operator explicitly opts in via ``allow_static_prefix_override = true``.
 """
 
 from __future__ import annotations
@@ -40,7 +46,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-CompressionMode = Literal["observe"]
+CompressionMode = Literal["observe", "safe"]
 CompressionPlacement = Literal["suffix_only", "after_cache_boundary", "anywhere"]
 
 
@@ -107,12 +113,13 @@ class CompressionTransforms(BaseModel):
 
 
 class CompressionConfig(BaseModel):
-    """Configuration for observe-mode compression accounting.
+    """Configuration for observe-mode and safe-mode compression.
 
     Defaults are safe and non-mutating.  See module docstring for
-    semantics.  Phase 4 only ships ``mode = "observe"``; future
-    phases will add ``"safe"`` and ``"balanced"`` and may relax
-    ``respect_cache_boundaries`` / ``placement`` defaults.
+    semantics.  Phase 5 ships ``mode = "observe"`` (default) and
+    ``mode = "safe"``.  ``safe`` mode applies deterministic
+    transforms only to eligible ``volatile_suffix`` segments; it
+    never mutates stable prefixes or cache-protected blocks.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -129,9 +136,10 @@ class CompressionConfig(BaseModel):
     mode: CompressionMode = Field(
         default="observe",
         description=(
-            "Compression mode.  Phase 4 only ships 'observe' which "
-            "records opportunities without mutating the request.  "
-            "Future phases will add 'safe' and 'balanced'."
+            "Compression mode.  'observe' records opportunities "
+            "without mutating the request.  'safe' applies "
+            "deterministic transforms only to eligible "
+            "volatile_suffix segments."
         ),
     )
     placement: CompressionPlacement = Field(
@@ -155,9 +163,15 @@ class CompressionConfig(BaseModel):
             "Forward-compatibility flag for future phases.  Phase 4 "
             "never compresses stable prefixes regardless of this "
             "value.  Setting it to true with mode='observe' is "
-            "accepted but produces a warning at config time so "
-            "operators do not assume the analyzer is mutating the "
-            "prefix."
+            "rejected.  In mode='safe' it requires "
+            "allow_static_prefix_override=true."
+        ),
+    )
+    allow_static_prefix_override: bool = Field(
+        default=False,
+        description=(
+            "When true, allows compress_static_prefix=true in "
+            "mode='safe'.  Operators must explicitly opt in."
         ),
     )
     min_candidate_tokens: int = Field(
@@ -194,25 +208,49 @@ class CompressionConfig(BaseModel):
             "transforms to focus the analyzer."
         ),
     )
+    header_override: bool = Field(
+        default=False,
+        description=(
+            "When true, allow per-request "
+            "`x-eggpool-compression` header to override the "
+            "configured mode.  Headers must be one of 'off', "
+            "'observe', 'safe'."
+        ),
+    )
+    header_cache_policy: bool = Field(
+        default=True,
+        description=(
+            "When true, allow per-request "
+            "`x-eggpool-cache-policy: preserve` header to opt out "
+            "of compression for cache-equivalent flows."
+        ),
+    )
 
     @model_validator(mode="after")
     def _validate_compress_static_prefix(self) -> CompressionConfig:
         """Surface a clear error if the operator turns on a flag the
-        analyzer cannot honour in Phase 4.
+        analyzer cannot honour in the current mode.
 
-        ``compress_static_prefix = true`` requires a non-default
-        ``mode`` so we know the operator has opted in.  This is a
-        structural guard, not a runtime enforcement — the analyzer
-        itself still never touches stable-prefix regions.
+        ``compress_static_prefix = true`` is rejected in
+        ``mode = "observe"`` (Phase 4 invariant).  In ``mode = "safe"``
+        it requires ``allow_static_prefix_override = true``.
         """
         if self.compress_static_prefix and self.mode == "observe":
-            # Phase 4 never mutates stable prefixes.  Surface a
-            # descriptive error so operators do not assume the
-            # analyzer is honouring the flag in observe mode.
             raise ValueError(
                 "compress_static_prefix=true is not supported in mode='observe'. "
                 "Disable the flag for Phase 4 or wait for a future phase that "
                 "introduces a non-observe mode that honours it.",
+            )
+        if (
+            self.compress_static_prefix
+            and self.mode == "safe"
+            and not self.allow_static_prefix_override
+        ):
+            raise ValueError(
+                "compress_static_prefix=true requires "
+                "allow_static_prefix_override=true in mode='safe'. "
+                "Set allow_static_prefix_override=true to explicitly "
+                "opt in to static prefix compression.",
             )
         return self
 

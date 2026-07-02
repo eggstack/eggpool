@@ -42,13 +42,50 @@ def test_extra_forbid() -> None:
 
 def test_unknown_mode_fails() -> None:
     with pytest.raises(ValidationError):
-        CompressionConfig(enabled=True, mode="safe")  # type: ignore[arg-type]
+        CompressionConfig(enabled=True, mode="banana")  # type: ignore[arg-type]
+
+
+def test_safe_mode_accepted() -> None:
+    """mode='safe' is accepted in Phase 5."""
+    policy = CompressionConfig(enabled=True, mode="safe")
+    assert policy.mode == "safe"
+    assert policy.enabled is True
 
 
 def test_compress_static_prefix_blocked_in_observe() -> None:
     with pytest.raises(ValidationError) as excinfo:
         CompressionConfig(enabled=True, mode="observe", compress_static_prefix=True)
     assert "compress_static_prefix" in str(excinfo.value).lower()
+
+
+def test_compress_static_prefix_rejected_in_safe_mode_without_override() -> None:
+    """compress_static_prefix=true requires allow_static_prefix_override
+    in mode='safe'."""
+    with pytest.raises(ValidationError) as excinfo:
+        CompressionConfig(enabled=True, mode="safe", compress_static_prefix=True)
+    assert "compress_static_prefix" in str(excinfo.value).lower()
+    assert "allow_static_prefix_override" in str(excinfo.value).lower()
+
+
+def test_compress_static_prefix_accepted_in_safe_mode_with_override() -> None:
+    """compress_static_prefix=true is accepted when
+    allow_static_prefix_override=true."""
+    policy = CompressionConfig(
+        enabled=True,
+        mode="safe",
+        compress_static_prefix=True,
+        allow_static_prefix_override=True,
+    )
+    assert policy.compress_static_prefix is True
+    assert policy.allow_static_prefix_override is True
+
+
+def test_defaults_include_new_fields() -> None:
+    """New Phase 5 fields have correct defaults."""
+    policy = CompressionConfig()
+    assert policy.header_override is False
+    assert policy.header_cache_policy is True
+    assert policy.allow_static_prefix_override is False
 
 
 def test_non_negative_thresholds() -> None:

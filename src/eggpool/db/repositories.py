@@ -408,6 +408,19 @@ class RequestRepository:
         compression_warning_count: int = 0,
         compression_reason_code_counts_json: str | None = None,
         compression_summary_json: str | None = None,
+        compression_applied: int = 0,
+        compression_transform_count: int = 0,
+        compression_transforms_by_reason_json: str | None = None,
+        compression_original_tokens: int | None = None,
+        compression_compressed_tokens: int | None = None,
+        compression_savings_tokens: int | None = None,
+        compression_pre_stable_prefix_hash: str | None = None,
+        compression_post_stable_prefix_hash: str | None = None,
+        compression_stable_prefix_preserved: int = 1,
+        compression_warnings_json: str | None = None,
+        compression_latency_ms: float = 0.0,
+        compression_failed_fallback: int = 0,
+        compression_applied_summary_json: str | None = None,
     ) -> bool:
         """Finalize a request only if it is still pending.
 
@@ -465,7 +478,20 @@ class RequestRepository:
             "compression_analyzer_latency_ms = ?, "
             "compression_warning_count = ?, "
             "compression_reason_code_counts_json = ?, "
-            "compression_summary_json = ? "
+            "compression_summary_json = ?, "
+            "compression_applied = ?, "
+            "compression_transform_count = ?, "
+            "compression_transforms_by_reason_json = ?, "
+            "compression_original_tokens = ?, "
+            "compression_compressed_tokens = ?, "
+            "compression_savings_tokens = ?, "
+            "compression_pre_stable_prefix_hash = ?, "
+            "compression_post_stable_prefix_hash = ?, "
+            "compression_stable_prefix_preserved = ?, "
+            "compression_warnings_json = ?, "
+            "compression_latency_ms = ?, "
+            "compression_failed_fallback = ?, "
+            "compression_applied_summary_json = ? "
             "WHERE id = ? AND status = 'pending'",
             (
                 status,
@@ -528,6 +554,19 @@ class RequestRepository:
                 compression_warning_count,
                 compression_reason_code_counts_json,
                 compression_summary_json,
+                compression_applied,
+                compression_transform_count,
+                compression_transforms_by_reason_json,
+                compression_original_tokens,
+                compression_compressed_tokens,
+                compression_savings_tokens,
+                compression_pre_stable_prefix_hash,
+                compression_post_stable_prefix_hash,
+                compression_stable_prefix_preserved,
+                compression_warnings_json,
+                compression_latency_ms,
+                compression_failed_fallback,
+                compression_applied_summary_json,
                 request_id,
             ),
         )

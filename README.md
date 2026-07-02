@@ -22,6 +22,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Provider-neutral cache observability — records whether upstreams report `cache_read` / `cache_creation` (Anthropic) or `prompt_tokens_details.cached_tokens` (OpenAI) and exposes a dashboard hit ratio that never silently mixes zero with missing
 - Canonical request segmentation — every finalized request is annotated into `stable_prefix` / `semi_stable_context` / `volatile_suffix` regions without mutating the payload, giving later compression phases a safe way to identify cache-continuity boundaries and compressible candidates
 - Transcoder cache stability — every cross-protocol request carries a bounded `cache_boundary_tracker` that records whether `cache_control` annotations were preserved, relocated, or dropped, plus deterministic SHA-256 of the provider-visible stable prefix so downstream phases can compare cache-equivalent bodies without re-parsing
+- Safe suffix compression — when `[compression] mode = "safe"`, deterministic transforms fold repeated lines, compact logs/search/stack traces, elide base64 blobs, and minify machine JSON inside `volatile_suffix` regions, preserving every `stable_prefix` segment byte-for-byte (recomputed SHA-256 verified) and degrading to the original payload on any mismatch
 
 ## Quick Start
 
@@ -147,6 +148,29 @@ Every finalized request is annotated with a `segmentation_status` of `segmented`
 - **`volatile_suffix`** — tool results, command output, search results, and the latest user turn when it carries log / command / search markers. Marked `compressible_candidate=True` so later compression phases have a candidate set without re-parsing the request.
 
 Segmentation is observational: request bodies, route scoring, and eligibility are unchanged. The dashboard renders a coverage card under "Runtime → Segmentation" and the JSON API exposes the breakdown at `GET /api/stats/canonical-request-segmentation`.
+
+## Safe suffix compression
+
+When `[compression] mode = "safe"`, EggPool applies deterministic transforms to eligible `volatile_suffix` segments and re-verifies the `stable_prefix` hash on the mutated payload. The default mode is `observe` (Phase 4 — reporting only); set `mode = "safe"` to actually mutate.
+
+Six transforms are available:
+
+- **`fold_repeated_lines`** — replaces adjacent identical lines with a single representative plus a count marker
+- **`compact_logs`** — preserves command text, exit code, first/last N lines, and diagnostic patterns (error, failed, panic, etc.) from large tool/log output
+- **`compact_search_results`** — preserves file path, line number, and matched line for each retained match while collapsing duplicate matches and limiting excessive context
+- **`compact_stack_traces`** — folds repeated identical stack frames with count markers while preserving the first occurrence of each unique trace shape and the final active error path
+- **`elide_base64_blobs`** — replaces large opaque base64/data-URI blobs with a placeholder noting detected blob type and original size
+- **`minify_machine_json`** — strips insignificant whitespace from machine-generated JSON payloads in volatile-suffix segments
+
+**Eligibility**: only `volatile_suffix` segments; candidates must exceed `min_candidate_tokens` (default 2048) and `min_savings_tokens` (default 1024).
+
+**Cache safety**: protected `stable_prefix` segments are never touched. Pre/post `stable_prefix_hash` (SHA-256) is recomputed over the stable-prefix segments; on any mismatch the request is sent uncompressed with a `stable_prefix_hash_mismatch` warning.
+
+**Latency budget**: `max_compression_latency_ms` (default 25) bounds the applier budget; over-budget runs append `latency_budget_exceeded` warnings.
+
+**Per-request headers**: `x-eggpool-compression: off|observe|safe` (when `header_override = true`) and `x-eggpool-cache-policy: preserve` to opt out for cache-equivalent flows.
+
+**Observability**: dashboard renders under "Runtime → Compression"; JSON API at `GET /api/stats/compression-observability`. Migration 0043 adds 13 columns + 2 indexes to `requests`.
 
 ## API Endpoints
 

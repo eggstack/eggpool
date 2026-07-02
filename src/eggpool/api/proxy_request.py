@@ -421,6 +421,46 @@ async def handle_proxy_request(
             )
             compression_observation = None
 
+    # Phase 5: run the safe-mode deterministic compressor.  The
+    # applier mutates only eligible volatile_suffix segments on a
+    # deep-copied payload; stable prefixes and cache-protected blocks
+    # are never touched.  Runs only when ``[compression] enabled =
+    # true`` AND ``[compression] mode = 'safe'``; otherwise
+    # ``compression_result`` stays ``None`` and the finalizer records
+    # safe defaults.  Failure here must never block the request path.
+    compression_result: Any = None
+    if (
+        compression_policy is not None
+        and getattr(compression_policy, "enabled", False)
+        and getattr(compression_policy, "mode", None) == "safe"
+        and segmentation_result is not None
+    ):
+        try:
+            from eggpool.transcoder.compression.apply import apply_safe_compression
+
+            compression_result = apply_safe_compression(
+                payload=payload,
+                segmentation=segmentation_result,
+                policy=compression_policy,
+                text_hints=None,  # production is content-private
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug(
+                "compression_apply_failed",
+                extra={"proxy_request_id": request_id},
+                exc_info=True,
+            )
+            compression_result = None
+
+    # Determine the input payload for model rewrite: when Phase 5
+    # compression applied transforms, use the mutated payload;
+    # otherwise use the original client payload unchanged.
+    payload_for_rewrite: dict[str, Any] = payload
+    if compression_result is not None and getattr(compression_result, "applied", False):
+        transformed = getattr(compression_result, "transformed_payload", None)
+        if isinstance(transformed, dict):
+            payload_for_rewrite = cast("dict[str, Any]", transformed)
+
     context = ProxyRequestContext(
         request_id=request_id,
         protocol=endpoint.protocol,
@@ -431,12 +471,13 @@ async def handle_proxy_request(
         started_at=time.time(),
         provider_id=provider_id,
         client_ip=get_client_ip(request),
-        upstream_body=_rewrite_upstream_model(payload, model_id),
+        upstream_body=_rewrite_upstream_model(payload_for_rewrite, model_id),
         upstream_protocol=endpoint.protocol,
         transcode_required=False,
         transcode_context=transcode_ctx,
         segmentation=segmentation_result,
         compression_observation=compression_observation,
+        compression_result=compression_result,
     )
 
     if segmentation_result is not None:

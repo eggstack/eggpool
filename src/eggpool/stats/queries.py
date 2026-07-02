@@ -2596,6 +2596,201 @@ async def fetch_compression_observability(
         reason_totals.items(), key=lambda item: item[1], reverse=True
     )[:10]
 
+    # ===================================================================
+    # Phase 5: safe-mode applied breakdown
+    # ===================================================================
+
+    # --- applied-mode aggregate totals ---
+    applied_totals_sql = """
+    SELECT
+        COUNT(*) as applied_count,
+        COALESCE(SUM(compression_transform_count), 0)
+            as total_transform_count,
+        COALESCE(SUM(CASE WHEN compression_savings_tokens IS NOT NULL
+            THEN compression_savings_tokens ELSE 0 END), 0)
+            as total_savings_tokens,
+        COALESCE(SUM(CASE WHEN compression_stable_prefix_preserved = 1
+            THEN 1 ELSE 0 END), 0)
+            as stable_prefix_preserved_count,
+        COALESCE(SUM(CASE WHEN compression_failed_fallback = 1
+            THEN 1 ELSE 0 END), 0)
+            as failed_fallback_count
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+        AND compression_applied = 1
+    """
+    applied_totals_row = await db.fetch_one(applied_totals_sql, (start_dt, end_dt))
+    at = dict(applied_totals_row) if applied_totals_row else {}
+
+    requests_with_compression_applied = int(at.get("applied_count", 0) or 0)
+    applied_transform_count_total = int(at.get("total_transform_count", 0) or 0)
+    applied_total_savings_tokens = int(at.get("total_savings_tokens", 0) or 0)
+    applied_stable_prefix_preserved_count = int(
+        at.get("stable_prefix_preserved_count", 0) or 0
+    )
+    applied_failed_fallback_count = int(at.get("failed_fallback_count", 0) or 0)
+
+    # --- savings latency distribution (median / p95) over applied rows ---
+    applied_savings_sql = """
+    SELECT compression_savings_tokens
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+        AND compression_applied = 1
+        AND compression_savings_tokens IS NOT NULL
+    ORDER BY compression_savings_tokens
+    """
+    applied_savings_rows = await db.fetch_all(applied_savings_sql, (start_dt, end_dt))
+    applied_savings = [
+        float(r["compression_savings_tokens"]) for r in applied_savings_rows
+    ]
+    applied_median_savings: float | None = None
+    applied_p95_savings: float | None = None
+    if applied_savings:
+        idx_m = len(applied_savings) // 2
+        applied_median_savings = applied_savings[idx_m]
+        idx_p95 = max(0, int(round(0.95 * (len(applied_savings) - 1))))
+        applied_p95_savings = applied_savings[idx_p95]
+
+    # --- applied latency distribution (median / p95) ---
+    applied_latency_sql = """
+    SELECT compression_latency_ms
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+        AND compression_applied = 1
+        AND compression_latency_ms IS NOT NULL
+    ORDER BY compression_latency_ms
+    """
+    applied_latency_rows = await db.fetch_all(applied_latency_sql, (start_dt, end_dt))
+    applied_latencies = [
+        float(r["compression_latency_ms"]) for r in applied_latency_rows
+    ]
+    applied_median_latency: float | None = None
+    applied_p95_latency: float | None = None
+    if applied_latencies:
+        idx_m = len(applied_latencies) // 2
+        applied_median_latency = applied_latencies[idx_m]
+        idx_p95 = max(0, int(round(0.95 * (len(applied_latencies) - 1))))
+        applied_p95_latency = applied_latencies[idx_p95]
+
+    # --- top applied reason codes (top 10) from transforms_by_reason_json ---
+    applied_reason_rows = await db.fetch_all(
+        """
+        SELECT compression_transforms_by_reason_json
+        FROM requests
+        WHERE started_at >= ? AND started_at < ?
+            AND status != 'pending'
+            AND compression_applied = 1
+            AND compression_transforms_by_reason_json IS NOT NULL
+        """,
+        (start_dt, end_dt),
+    )
+    applied_reason_totals: dict[str, int] = {}
+    for row in applied_reason_rows:
+        raw = row["compression_transforms_by_reason_json"]
+        if not raw:
+            continue
+        try:
+            parsed = _json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        for raw_key, raw_value in parsed.items():  # type: ignore[union-attr]
+            if not isinstance(raw_key, str):
+                continue
+            try:
+                count_int = int(raw_value)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
+            applied_reason_totals[raw_key] = (
+                applied_reason_totals.get(raw_key, 0) + count_int
+            )
+    top_applied_reason_codes = sorted(
+        applied_reason_totals.items(), key=lambda item: item[1], reverse=True
+    )[:10]
+
+    # --- applied per-mode breakdown ---
+    applied_mode_sql = """
+    SELECT
+        COALESCE(compression_mode, 'observe') as compression_mode,
+        COUNT(*) as request_count
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+        AND compression_applied = 1
+    GROUP BY compression_mode
+    """
+    applied_mode_rows = await db.fetch_all(applied_mode_sql, (start_dt, end_dt))
+    applied_per_mode: dict[str, int] = {}
+    for row in applied_mode_rows:
+        d = dict(row)
+        mode = d["compression_mode"] or "observe"
+        applied_per_mode[mode] = int(d["request_count"])
+
+    # --- applied per (provider, upstream_protocol) breakdown ---
+    applied_protocol_sql = """
+    SELECT
+        COALESCE(provider_id, 'unknown') as provider_id,
+        COALESCE(upstream_protocol, 'unknown') as upstream_protocol,
+        COALESCE(compression_status, 'disabled') as compression_status,
+        COUNT(*) as request_count
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+        AND compression_applied = 1
+    GROUP BY provider_id, upstream_protocol, compression_status
+    """
+    applied_protocol_rows = await db.fetch_all(applied_protocol_sql, (start_dt, end_dt))
+    applied_per_provider_status: dict[tuple[str, str], dict[str, int]] = {}
+    for row in applied_protocol_rows:
+        d = dict(row)
+        key = (d["provider_id"], d["upstream_protocol"])
+        bucket = applied_per_provider_status.setdefault(key, {})
+        status = d["compression_status"]
+        bucket[status] = int(d["request_count"])
+
+    # --- applied per-model breakdown ---
+    applied_model_sql = """
+    SELECT
+        COALESCE(model_id, 'unknown') as model_id,
+        COALESCE(compression_status, 'disabled') as compression_status,
+        COUNT(*) as request_count,
+        COALESCE(SUM(CASE WHEN compression_transform_count IS NOT NULL
+            THEN compression_transform_count ELSE 0 END), 0)
+            as total_transform_count,
+        COALESCE(SUM(CASE WHEN compression_savings_tokens IS NOT NULL
+            THEN compression_savings_tokens ELSE 0 END), 0)
+            as total_savings_tokens
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+        AND compression_applied = 1
+    GROUP BY model_id, compression_status
+    """
+    applied_model_rows = await db.fetch_all(applied_model_sql, (start_dt, end_dt))
+    applied_per_model_status: dict[str, dict[str, Any]] = {}
+    for row in applied_model_rows:
+        d = dict(row)
+        mid = d["model_id"]
+        bucket = applied_per_model_status.setdefault(
+            mid,
+            {
+                "disabled": 0,
+                "observed": 0,
+                "total_requests": 0,
+                "transform_count": 0,
+                "savings_tokens": 0,
+            },
+        )
+        status = d["compression_status"]
+        bucket[status] = int(d["request_count"])
+        bucket["total_requests"] += int(d["request_count"])
+        bucket["transform_count"] += int(d["total_transform_count"] or 0)
+        bucket["savings_tokens"] += int(d["total_savings_tokens"] or 0)
+
     return {
         "total_requests": total,
         "by_status": by_status,
@@ -2625,4 +2820,18 @@ async def fetch_compression_observability(
             "observed_requests": observed_requests,
         },
         "top_reason_codes": top_reason_codes,
+        # Phase 5: safe-mode applied breakdown
+        "requests_with_compression_applied": requests_with_compression_applied,
+        "applied_transform_count_total": applied_transform_count_total,
+        "applied_total_savings_tokens": applied_total_savings_tokens,
+        "applied_median_savings_tokens": applied_median_savings,
+        "applied_p95_savings_tokens": applied_p95_savings,
+        "applied_median_latency_ms": applied_median_latency,
+        "applied_p95_latency_ms": applied_p95_latency,
+        "applied_stable_prefix_preserved_count": applied_stable_prefix_preserved_count,
+        "applied_failed_fallback_count": applied_failed_fallback_count,
+        "top_applied_reason_codes": top_applied_reason_codes,
+        "applied_per_mode": applied_per_mode,
+        "applied_per_provider_status": applied_per_provider_status,
+        "applied_per_model_status": applied_per_model_status,
     }

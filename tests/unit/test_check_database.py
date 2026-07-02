@@ -299,6 +299,39 @@ class TestFailClosed:
         captured = capsys.readouterr()
         assert "Database invariants OK" in captured.out
 
+    def test_migration_0043_columns_present(
+        self, fresh_db: Path, capsys: pytest.CaptureFixture[Any]
+    ) -> None:
+        """After all migrations run the 0043 safe-suffix-compression
+        columns must be present on the ``requests`` table."""
+        expected_columns = {
+            "compression_applied",
+            "compression_transform_count",
+            "compression_transforms_by_reason_json",
+            "compression_original_tokens",
+            "compression_compressed_tokens",
+            "compression_savings_tokens",
+            "compression_pre_stable_prefix_hash",
+            "compression_post_stable_prefix_hash",
+            "compression_stable_prefix_preserved",
+            "compression_warnings_json",
+            "compression_latency_ms",
+            "compression_failed_fallback",
+            "compression_applied_summary_json",
+        }
+        conn = sqlite3.connect(str(fresh_db))
+        try:
+            rows = conn.execute("PRAGMA table_info(requests)").fetchall()
+            columns = {row[1] for row in rows}
+        finally:
+            conn.close()
+
+        missing = expected_columns - columns
+        assert not missing, f"Missing 0043 columns: {sorted(missing)}"
+
+        code = _run_main_with_path(fresh_db)
+        assert code == 0
+
     def test_stale_pending_request_returns_1(
         self, fresh_db: Path, capsys: pytest.CaptureFixture[Any]
     ) -> None:

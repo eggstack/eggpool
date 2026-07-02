@@ -112,6 +112,13 @@ class FinalizationData:
     # is persisted so operators can see what a future phase would
     # compress without re-parsing the request.
     compression_observation: Any | None = None
+    # Phase 5 compression result.  When ``None`` the Phase 5
+    # compression columns stay at their safe defaults (all zeros /
+    # None).  When supplied, the applier's per-request roll-up —
+    # applied flag, transform counts, token savings, stable-prefix
+    # hash comparison, warnings, and a compact JSON summary — is
+    # persisted so the dashboard can show actual compression outcomes.
+    compression_result: Any | None = None
 
 
 class RequestFinalizer:
@@ -469,6 +476,114 @@ class RequestFinalizer:
                 except (TypeError, ValueError):
                     compression_summary_json_value = None
 
+            # Phase 5 safe-suffix compression result.  The finalizer
+            # reads a duck-typed :class:`CompressionResult` from
+            # ``data.compression_result`` (or ``None`` when the
+            # applier did not run).  Field names mirror migration 0043.
+            compression_result_obj = data.compression_result
+            compression_applied_value = 0
+            compression_transform_count_value = 0
+            compression_transforms_by_reason_json_value: str | None = None
+            compression_original_tokens_value: int | None = None
+            compression_compressed_tokens_value: int | None = None
+            compression_savings_tokens_value: int | None = None
+            compression_pre_stable_prefix_hash_value: str | None = None
+            compression_post_stable_prefix_hash_value: str | None = None
+            compression_stable_prefix_preserved_value = 1
+            compression_warnings_json_value: str | None = None
+            compression_latency_ms_value = 0.0
+            compression_failed_fallback_value = 0
+            compression_applied_summary_json_value: str | None = None
+            if compression_result_obj is not None:
+                compression_applied_value = (
+                    1 if getattr(compression_result_obj, "applied", False) else 0
+                )
+                compression_transform_count_value = int(
+                    getattr(compression_result_obj, "transform_count", 0) or 0
+                )
+                transforms_by_reason = getattr(
+                    compression_result_obj, "transforms_by_reason", None
+                )
+                if transforms_by_reason is not None:
+                    try:
+                        compression_transforms_by_reason_json_value = json.dumps(
+                            dict(transforms_by_reason),
+                            default=str,
+                            sort_keys=True,
+                            ensure_ascii=False,
+                        )
+                    except (TypeError, ValueError):
+                        compression_transforms_by_reason_json_value = None
+                compression_original_tokens_value = getattr(
+                    compression_result_obj, "original_tokens", None
+                )
+                if isinstance(compression_original_tokens_value, (int, float)):
+                    compression_original_tokens_value = int(
+                        compression_original_tokens_value
+                    )
+                else:
+                    compression_original_tokens_value = None
+                compression_compressed_tokens_value = getattr(
+                    compression_result_obj, "compressed_tokens", None
+                )
+                if isinstance(compression_compressed_tokens_value, (int, float)):
+                    compression_compressed_tokens_value = int(
+                        compression_compressed_tokens_value
+                    )
+                else:
+                    compression_compressed_tokens_value = None
+                compression_savings_tokens_value = getattr(
+                    compression_result_obj, "savings_tokens", None
+                )
+                if isinstance(compression_savings_tokens_value, (int, float)):
+                    compression_savings_tokens_value = int(
+                        compression_savings_tokens_value
+                    )
+                else:
+                    compression_savings_tokens_value = None
+                compression_pre_stable_prefix_hash_value = getattr(
+                    compression_result_obj, "pre_stable_prefix_hash", None
+                )
+                compression_post_stable_prefix_hash_value = getattr(
+                    compression_result_obj, "post_stable_prefix_hash", None
+                )
+                compression_stable_prefix_preserved_value = (
+                    1
+                    if getattr(
+                        compression_result_obj,
+                        "stable_prefix_preserved",
+                        True,
+                    )
+                    else 0
+                )
+                warnings_raw = getattr(compression_result_obj, "warnings", None)
+                if isinstance(warnings_raw, (list, tuple)):
+                    try:
+                        warnings_seq: list[object] = list(
+                            warnings_raw,  # type: ignore[arg-type]
+                        )
+                        compression_warnings_json_value = json.dumps(
+                            warnings_seq,
+                            default=str,
+                            ensure_ascii=False,
+                        )
+                    except (TypeError, ValueError):
+                        compression_warnings_json_value = None
+                latency_val = getattr(compression_result_obj, "latency_ms", 0.0)
+                if isinstance(latency_val, (int, float)):
+                    compression_latency_ms_value = float(latency_val)
+                compression_failed_fallback_value = (
+                    1
+                    if getattr(compression_result_obj, "failed_fallback", False)
+                    else 0
+                )
+                if compression_applied_value:
+                    to_json = getattr(compression_result_obj, "summary_json", None)
+                    if to_json is not None:
+                        compression_applied_summary_json_value = (
+                            to_json if isinstance(to_json, str) else None
+                        )
+
             transitioned = await self._request_repo.finalize_if_pending(
                 request_id=db_request_id,
                 status=status,
@@ -542,6 +657,23 @@ class RequestFinalizer:
                 compression_warning_count=compression_warning_count_value,
                 compression_reason_code_counts_json=compression_reason_code_counts_json_value,
                 compression_summary_json=compression_summary_json_value,
+                # Phase 5 safe-suffix compression.  The applier is
+                # the first mutating phase: these columns record
+                # whether the request body was actually compressed
+                # and the resulting token savings.
+                compression_applied=compression_applied_value,
+                compression_transform_count=compression_transform_count_value,
+                compression_transforms_by_reason_json=compression_transforms_by_reason_json_value,
+                compression_original_tokens=compression_original_tokens_value,
+                compression_compressed_tokens=compression_compressed_tokens_value,
+                compression_savings_tokens=compression_savings_tokens_value,
+                compression_pre_stable_prefix_hash=compression_pre_stable_prefix_hash_value,
+                compression_post_stable_prefix_hash=compression_post_stable_prefix_hash_value,
+                compression_stable_prefix_preserved=compression_stable_prefix_preserved_value,
+                compression_warnings_json=compression_warnings_json_value,
+                compression_latency_ms=compression_latency_ms_value,
+                compression_failed_fallback=compression_failed_fallback_value,
+                compression_applied_summary_json=compression_applied_summary_json_value,
             )
 
             # 4. Finalize attempt only if request transitioned and attempt
