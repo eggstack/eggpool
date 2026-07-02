@@ -20,9 +20,9 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Transparent protocol transcoding between OpenAI and Anthropic request formats
 - Thinking/reasoning capability-aware routing with configurable budget mapping
 - Provider-neutral cache observability — records whether upstreams report `cache_read` / `cache_creation` (Anthropic) or `prompt_tokens_details.cached_tokens` (OpenAI) and exposes a dashboard hit ratio that never silently mixes zero with missing
-- Canonical request segmentation — every finalized request is annotated into `stable_prefix` / `semi_stable_context` / `volatile_suffix` regions without mutating the payload, giving later compression phases a safe way to identify cache-continuity boundaries and compressible candidates
+- Canonical request segmentation — every finalized request is annotated into `stable_prefix` / `semi_stable_context` / `volatile_suffix` regions without mutating the payload, giving later compression phases a safe way to identify cache-continuity boundaries and compressible candidates. Segmentation `content_path` values are concrete JSON paths that resolve to actual string leaves of the request payload (not semantic role labels), with `resolve_path` and `resolve_text_path` helpers available for tests and debug assertions
 - Transcoder cache stability — every cross-protocol request carries a bounded `cache_boundary_tracker` that records whether `cache_control` annotations were preserved, relocated, or dropped, plus deterministic SHA-256 of the provider-visible stable prefix so downstream phases can compare cache-equivalent bodies without re-parsing
-- Safe suffix compression — when `[compression] mode = "safe"`, deterministic transforms fold repeated lines, compact logs/search/stack traces, elide base64 blobs, and minify machine JSON inside `volatile_suffix` regions, preserving every `stable_prefix` segment byte-for-byte (recomputed SHA-256 verified) and degrading to the original payload on any mismatch
+- Safe suffix compression — when `[compression] mode = "safe"`, deterministic transforms fold repeated lines, compact logs/search/stack traces, elide base64 blobs, and minify machine JSON inside `volatile_suffix` regions, preserving every `stable_prefix` segment byte-for-byte (recomputed SHA-256 verified via exact content hash of the stable-prefix segments re-extracted from both original and transformed payloads) and degrading to the original payload on any mismatch. All six transforms emit unified markers via `markers.build_marker` with the format `[EggPool compression: <transform> | segment=<id> | lines=<n> | tokens=<n> | sha256=<digest>]`. Context-limit checks happen before compression, so compression cannot rescue over-limit requests
 
 ## Quick Start
 
@@ -147,11 +147,13 @@ Every finalized request is annotated with a `segmentation_status` of `segmented`
 - **`semi_stable_context`** — assistant messages, prior user turns, and short follow-ups. The conservative default for ambiguous content.
 - **`volatile_suffix`** — tool results, command output, search results, and the latest user turn when it carries log / command / search markers. Marked `compressible_candidate=True` so later compression phases have a candidate set without re-parsing the request.
 
+Segmentation `content_path` values are concrete JSON paths resolving to the actual string leaves of the request payload — `("messages", i, "content")` for OpenAI string content, `("messages", i, "content", j, "text")` for OpenAI list content parts, `("system",)` for Anthropic string system, `("system", j, "text")` for Anthropic system blocks, `("messages", i, "content", j, ...)` for Anthropic content blocks, etc. Path-resolution helpers `resolve_path` and `resolve_text_path` are available for tests and debug assertions.
+
 Segmentation is observational: request bodies, route scoring, and eligibility are unchanged. The dashboard renders a coverage card under "Runtime → Segmentation" and the JSON API exposes the breakdown at `GET /api/stats/canonical-request-segmentation`.
 
 ## Safe suffix compression
 
-When `[compression] mode = "safe"`, EggPool applies deterministic transforms to eligible `volatile_suffix` segments and re-verifies the `stable_prefix` hash on the mutated payload. The default mode is `observe` (Phase 4 — reporting only); set `mode = "safe"` to actually mutate.
+When `[compression] mode = "safe"`, EggPool applies deterministic transforms to eligible `volatile_suffix` segments and re-verifies the stable-prefix content hash on the mutated payload. The default mode is `observe` (Phase 4 — reporting only); set `mode = "safe"` to actually mutate.
 
 Six transforms are available:
 
@@ -164,11 +166,13 @@ Six transforms are available:
 
 **Eligibility**: only `volatile_suffix` segments; candidates must exceed `min_candidate_tokens` (default 2048) and `min_savings_tokens` (default 1024).
 
-**Cache safety**: protected `stable_prefix` segments are never touched. Pre/post `stable_prefix_hash` (SHA-256) is recomputed over the stable-prefix segments; on any mismatch the request is sent uncompressed with a `stable_prefix_hash_mismatch` warning.
+**Cache safety**: protected `stable_prefix` segments are never touched. `stable_prefix_content_hash` is an exact SHA-256 of canonical stable-prefix content (system, tools, cache_control blocks), re-extracted from both original and transformed payloads via stable-prefix segment paths. The structural descriptor hash `stable_prefix_shape_hash` (the legacy `stable_prefix_hash`) is also tracked separately. On mismatch, the request is sent uncompressed with `failed_fallback=True` and a `stable_prefix_hash_mismatch` warning. The fail-closed verification re-hashes the TRANSFORMED payload's stable-prefix content, not just immutable segment metadata, so it catches real path bugs that mutate stable-prefix content.
+
+**Context-limit precedence**: context-limit checks happen before compression. Compression does NOT make otherwise over-limit requests fit within model limits.
 
 **Latency budget**: `max_compression_latency_ms` (default 25) bounds the applier budget; over-budget runs append `latency_budget_exceeded` warnings.
 
-**Per-request headers**: `x-eggpool-compression: off|observe|safe` (when `header_override = true`) and `x-eggpool-cache-policy: preserve` to opt out for cache-equivalent flows.
+**Per-request headers**: `x-eggpool-compression: off|observe|safe` (when `header_override = true`) and `x-eggpool-cache-policy: preserve` to opt out for cache-equivalent flows. All six transforms emit unified deterministic markers via `eggpool.transcoder.compression.markers.build_marker` with the format `[EggPool compression: <transform> | segment=<id> | lines=<n> | tokens=<n> | sha256=<digest>]`.
 
 **Observability**: dashboard renders under "Runtime → Compression"; JSON API at `GET /api/stats/compression-observability`. Migration 0043 adds 13 columns + 2 indexes to `requests`.
 

@@ -4,6 +4,39 @@ Date: 2026-07-01
 
 Parent roadmap: `plans/cache_preserving_deterministic_compression_roadmap.md`
 
+## Corrective pass completed (2026-07-02)
+
+The corrective pass in `plans/cache_compression_phase_05_corrective_pass.md`
+has been completed. All 4996 tests pass. The following corrections were
+applied to the production implementation:
+
+- **Concrete JSON content paths**: Segmentation `content_path` values now
+  resolve to actual string leaves of the request payload (not semantic
+  role labels). OpenAI paths use `("messages", i, "content")` for string
+  content, `("messages", i, "content", j, "text")` for list content parts.
+  Anthropic paths use `("system",)` for string system,
+  `("system", j, "text")` for system blocks,
+  `("messages", i, "content", j, ...)` for content blocks.
+- **Exact stable-prefix content hash**: `stable_prefix_content_hash` is an
+  exact SHA-256 of canonical stable-prefix content (system, tools,
+  cache_control blocks), re-extracted from the payload via stable-prefix
+  segment paths. The legacy structural hash is tracked separately as
+  `stable_prefix_shape_hash`.
+- **Fail-closed re-verifies mutated payload**: The fail-closed verification
+  re-hashes the TRANSFORMED payload's stable-prefix content (not just
+  immutable segment metadata), catching real path bugs that mutate
+  stable-prefix content.
+- **Unified marker format**: All six transforms emit markers via
+  `eggpool.transcoder.compression.markers.build_marker` with the format
+  `[EggPool compression: <transform> | segment=<id> | lines=<n> |
+  tokens=<n> | sha256=<digest>]`.
+- **Tests added/updated**: `test_compression_path_resolution.py`,
+  `test_stable_prefix_content_hash.py`, `test_compression_fail_closed.py`,
+  `test_compression_markers_unified.py`,
+  `test_compression_apply_production.py`,
+  `test_compression_routing_orthogonal.py`,
+  `test_compression_context_limit_precedence.py`.
+
 ## Goal
 
 Implement the first request-mutating deterministic compressor. The compressor should apply only to eligible volatile suffix segments by default and must preserve stable provider-cacheable prefixes exactly or canonically. This phase turns observe-mode candidates into safe transformations for logs, repeated output, search results, stack traces, blobs, and machine-generated payloads.

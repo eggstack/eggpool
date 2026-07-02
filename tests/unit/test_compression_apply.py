@@ -21,6 +21,7 @@ from eggpool.transcoder.compression.analyzer import (
 from eggpool.transcoder.compression.apply import (
     REASON_PREFIX_HASH_MISMATCH,
 )
+from eggpool.transcoder.compression.policy import CompressionTransforms
 from eggpool.transcoder.segmentation import (
     RequestSegment,
     SegmentationResult,
@@ -221,7 +222,7 @@ def test_none_segmentation_returns_noop() -> None:
 
 def test_applies_fold_repeated_lines() -> None:
     """A volatile_suffix segment with >= 5 repeated lines is compressed."""
-    repeated = "ERR\n" * 10
+    repeated = "ERR\n" * 200
     text = repeated + "OK\n"
     payload = {"messages": [{"role": "tool", "content": text}]}
     seg = _vol_seg(byte_length=len(text), estimated_tokens=len(text) // 4)
@@ -236,7 +237,7 @@ def test_applies_fold_repeated_lines() -> None:
 
 def test_fold_repeated_lines_marker_appended() -> None:
     """Fold transform collapses repeated lines; verify result is valid."""
-    repeated = "ERR\n" * 10
+    repeated = "ERR\n" * 200
     text = repeated + "OK\n"
     payload = {"messages": [{"role": "tool", "content": text}]}
     seg = _vol_seg(byte_length=len(text), estimated_tokens=len(text) // 4)
@@ -249,13 +250,13 @@ def test_fold_repeated_lines_marker_appended() -> None:
     # The fold transform keeps one copy of the repeated run
     assert "ERR" in transformed_text
     assert "OK" in transformed_text
-    # The transform collapses 10 ERR lines to 1
+    # The transform collapses 200 ERR lines to 1
     assert transformed_text.count("ERR") == 1
 
 
 def test_fold_repeated_lines_digest_is_64_hex() -> None:
     """The fold transform preserves content; verify savings are reported."""
-    repeated = "ERR\n" * 10
+    repeated = "ERR\n" * 200
     text = repeated + "OK\n"
     payload = {"messages": [{"role": "tool", "content": text}]}
     seg = _vol_seg(byte_length=len(text), estimated_tokens=len(text) // 4)
@@ -264,7 +265,7 @@ def test_fold_repeated_lines_digest_is_64_hex() -> None:
         payload, segmentation, policy=_enabled_safe_policy()
     )
     assert result.applied is True
-    # Savings should be positive since 10 ERR lines collapsed to 1
+    # Savings should be positive since 200 ERR lines collapsed to 1
     assert result.savings_tokens > 0
     assert result.original_tokens > result.compressed_tokens
 
@@ -276,7 +277,7 @@ def test_fold_repeated_lines_digest_is_64_hex() -> None:
 
 def test_stable_prefix_preserved() -> None:
     """When no static prefix is mutated, stable_prefix_preserved is True."""
-    repeated = "ERR\n" * 10
+    repeated = "ERR\n" * 200
     text = repeated + "OK\n"
     sys_text = "You are helpful."
     payload = {
@@ -335,11 +336,20 @@ def test_protected_stable_prefix_never_mutated() -> None:
 def test_applies_minify_machine_json() -> None:
     """A JSON string in a volatile_suffix segment is minified.
 
-    Uses a smaller JSON (well under 32 lines) so compact_logs
-    doesn't fire on it first.
+    Uses a large JSON so the minification savings outweigh the
+    marker overhead.  Disables compact_logs to isolate the
+    minify transform.
     """
-    inner = {f"key_{i}": i for i in range(8)}
-    json_text = json.dumps({"data": inner}, indent=2)
+    items = [
+        {
+            "id": f"usr_{i:04d}",
+            "name": f"User {i}",
+            "email": f"user{i}@example.com",
+            "role": "admin" if i % 5 == 0 else "member",
+        }
+        for i in range(150)
+    ]
+    json_text = json.dumps(items, indent=2)
     payload = {"messages": [{"role": "tool", "content": json_text}]}
     seg = _vol_seg(
         source=SegmentSource.BLOB,
@@ -347,14 +357,32 @@ def test_applies_minify_machine_json() -> None:
         estimated_tokens=len(json_text) // 4,
     )
     segmentation = _segmentation([seg])
-    result = apply_safe_compression(
-        payload, segmentation, policy=_enabled_safe_policy()
+    policy = CompressionConfig(
+        enabled=True,
+        mode="safe",
+        placement="suffix_only",
+        respect_cache_boundaries=True,
+        compress_static_prefix=False,
+        min_candidate_tokens=0,
+        min_savings_tokens=0,
+        max_compression_latency_ms=100.0,
+        transforms=CompressionTransforms(
+            fold_repeated_lines=False,
+            compact_logs=False,
+            compact_search_results=False,
+            elide_base64_blobs=False,
+            minify_machine_json=True,
+            compact_stack_traces=False,
+        ),
     )
+    result = apply_safe_compression(payload, segmentation, policy=policy)
     assert result.applied is True
     transformed = result.transformed_payload["messages"][0]["content"]
     assert len(transformed) < len(json_text)
-    parsed_back = json.loads(transformed)
-    assert parsed_back == {"data": inner}
+    # Strip the trailing marker line before JSON-parsing
+    json_part = transformed.rsplit("\n[EggPool compression:", 1)[0]
+    parsed_back = json.loads(json_part)
+    assert parsed_back == items
 
 
 # ---------------------------------------------------------------------------
@@ -377,7 +405,7 @@ def test_applies_elide_base64_blobs() -> None:
     )
     assert result.applied is True
     transformed = result.transformed_payload["messages"][0]["content"]
-    assert transformed.startswith("[EggPool blob elided: sha256=")
+    assert transformed.startswith("[EggPool compression: elide_base64_blobs")
     assert transformed.endswith("]")
     assert len(transformed) < len(blob_line)
 
@@ -478,7 +506,7 @@ def test_applies_compact_search_results() -> None:
 
 def test_below_min_candidate_tokens_suppresses() -> None:
     """Candidates below min_candidate_tokens are not transformed."""
-    repeated = "ERR\n" * 10
+    repeated = "ERR\n" * 200
     text = repeated + "OK\n"
     payload = {"messages": [{"role": "tool", "content": text}]}
     seg = _vol_seg(byte_length=len(text), estimated_tokens=len(text) // 4)
@@ -493,7 +521,7 @@ def test_below_min_candidate_tokens_suppresses() -> None:
 
 def test_below_min_savings_tokens_suppresses() -> None:
     """Candidates whose savings are below min_savings_tokens are not transformed."""
-    repeated = "ERR\n" * 10
+    repeated = "ERR\n" * 200
     text = repeated + "OK\n"
     payload = {"messages": [{"role": "tool", "content": text}]}
     seg = _vol_seg(byte_length=len(text), estimated_tokens=len(text) // 4)
@@ -513,8 +541,8 @@ def test_below_min_savings_tokens_suppresses() -> None:
 
 def test_disabled_transform_not_applied() -> None:
     """A disabled transform is not applied; other transforms still run."""
-    repeated = "ERR\n" * 10
-    text = repeated + "OK\n"
+    repeated = "line-_.~\n"
+    text = repeated * 20 + "end\n"
     payload = {"messages": [{"role": "tool", "content": text}]}
     seg = _vol_seg(byte_length=len(text), estimated_tokens=len(text) // 4)
     segmentation = _segmentation([seg])
@@ -572,14 +600,20 @@ def test_failed_fallback_on_prefix_hash_mismatch() -> None:
     payload = {"messages": [{"role": "tool", "content": "hello"}]}
     call_count = 0
 
-    def _fake_hash(value: object) -> str:
+    def _fake_content_hash(
+        value: object,
+        segmentation: object,  # noqa: ARG001
+    ) -> str:
         nonlocal call_count
         call_count += 1
         if call_count <= 1:
             return "pre_hash"
         return "post_hash"
 
-    with patch("eggpool.transcoder.compression.apply._hash_payload", _fake_hash):
+    with patch(
+        "eggpool.transcoder.compression.apply.stable_prefix_content_hash",
+        _fake_content_hash,
+    ):
         result = apply_safe_compression(
             payload,
             _segmentation([_vol_seg(byte_length=5, estimated_tokens=2)]),
@@ -657,8 +691,8 @@ def test_multiple_transforms_in_one_segment() -> None:
 
 def test_multiple_volatile_segments() -> None:
     """Two volatile_suffix segments both get compressed; counts aggregate."""
-    text1 = "ERR\n" * 10 + "OK\n"
-    text2 = "X\n" * 10 + "Y\n"
+    text1 = "ERR\n" * 200 + "OK\n"
+    text2 = "X\n" * 200 + "Y\n"
     payload = {
         "messages": [
             {"role": "tool", "content": text1},

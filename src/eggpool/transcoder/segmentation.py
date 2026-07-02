@@ -416,6 +416,83 @@ def _hash_payload(value: Any) -> str:
     return hashlib.sha256(_serialize_for_hash(value).encode("utf-8")).hexdigest()
 
 
+# ---------------------------------------------------------------------------
+# Path-resolution helpers
+# ---------------------------------------------------------------------------
+
+
+def resolve_path(payload: Any, path: tuple[Any, ...]) -> Any | None:
+    """Walk into payload using a content_path tuple; return the leaf or None.
+
+    Returns None if any segment is not indexable. Used by tests, debug
+    assertions, and the exact content hash function.
+    """
+    try:
+        current: Any = payload
+        for key in path:
+            if isinstance(current, (Mapping, list)):
+                current = current[key]  # type: ignore[reportUnknownVariableType]
+            else:
+                return None
+        return current  # type: ignore[reportUnknownVariableType]
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def resolve_text_path(payload: Any, path: tuple[Any, ...]) -> str | None:
+    """Walk into payload; return the leaf string or None.
+
+    Returns the string at the given path, or None if the path does not
+    resolve to a string.  Used by the compression applier and tests.
+    """
+    leaf = resolve_path(payload, path)
+    if isinstance(leaf, str):
+        return leaf
+    return None
+
+
+def stable_prefix_content_hash(
+    payload: Mapping[str, Any],
+    segmentation: SegmentationResult,
+) -> str:
+    """Compute a SHA-256 hash of the canonical stable-prefix content.
+
+    Re-extracts stable-prefix values from ``payload`` using the
+    segmentation's stable-prefix segment paths, then hashes a
+    canonical representation. This is an EXACT content hash (not the
+    coarse structural descriptor). It is content-private -- it does
+    not include raw text in any persisted artifact, but two requests
+    with identical stable-prefix content produce identical hashes.
+
+    Canonicalization:
+    - sort_keys=True for objects
+    - preserve list order
+    - include path plus value to avoid accidental equality from
+      values moving between prefix fields
+    - exclude volatile suffix and semi-stable context
+
+    Returns "" if segmentation has no stable-prefix segments.
+    """
+    stable_segments = segmentation.stable_prefix_segments
+    if not stable_segments:
+        return ""
+    canonical_entries: list[dict[str, Any]] = []
+    for segment in stable_segments:
+        leaf = resolve_path(payload, segment.content_path)
+        # Skip cache_control metadata segments (no leaf text to hash)
+        if leaf is None:
+            continue
+        canonical_entries.append(
+            {
+                "path": [str(p) for p in segment.content_path],
+                "value": leaf,
+            }
+        )
+    if not canonical_entries:
+        return ""
+    return _hash_payload(canonical_entries)
+
+
 def _segment_openai_tools(tools: Any) -> list[RequestSegment]:
     """Classify the ``tools`` array of an OpenAI Chat Completions request.
 
@@ -452,20 +529,24 @@ def _segment_openai_message(
     *,
     message_index: int,
     is_last: bool,
-) -> RequestSegment:
+) -> list[RequestSegment]:
     """Classify a single OpenAI ``messages`` entry.
 
-    Rules (conservative — when uncertain we keep content as
+    Returns one or more segments.  When ``content`` is a list, one
+    segment is emitted per content part so that each segment's
+    ``content_path`` resolves to a concrete leaf in the payload.
+
+    Rules (conservative -- when uncertain we keep content as
     ``semi_stable_context``):
 
-    * ``role == "system"`` or ``role == "developer"`` → stable_prefix
+    * ``role == "system"`` or ``role == "developer"`` -> stable_prefix
       and protected (the system prompt is provider-cacheable).
-    * ``role == "tool"`` → volatile_suffix, source ``tool_result``.
+    * ``role == "tool"`` -> volatile_suffix, source ``tool_result``.
       Tool outputs are exactly what later compression phases target.
-    * ``role == "user"`` and ``is_last`` → volatile_suffix unless the
+    * ``role == "user"`` and ``is_last`` -> volatile_suffix unless the
       content is short and free of log/command/search markers.
     * All other roles (assistant, prior user turns, prior tool
-      messages) → semi_stable_context.
+      messages) -> semi_stable_context.
     """
     text = _extract_text(content)
     byte_length = len(_serialize_for_hash(content))
@@ -474,95 +555,362 @@ def _segment_openai_message(
     )
 
     if role in {"system", "developer"}:
-        return RequestSegment(
-            kind=SegmentKind.STABLE_PREFIX,
-            source=(
-                SegmentSource.SYSTEM if role == "system" else SegmentSource.DEVELOPER
-            ),
-            message_index=message_index,
-            content_path=(role,),
-            byte_length=byte_length,
-            estimated_tokens=estimated,
-            protected=True,
-            compressible_candidate=False,
-            reason=f"role={role}",
-        )
+        if isinstance(content, str):
+            return [
+                RequestSegment(
+                    kind=SegmentKind.STABLE_PREFIX,
+                    source=(
+                        SegmentSource.SYSTEM
+                        if role == "system"
+                        else SegmentSource.DEVELOPER
+                    ),
+                    message_index=message_index,
+                    content_path=("messages", message_index, "content"),
+                    byte_length=byte_length,
+                    estimated_tokens=estimated,
+                    protected=True,
+                    compressible_candidate=False,
+                    reason=f"role={role}",
+                )
+            ]
+        # list content: one segment per text part
+        if isinstance(content, list):
+            segments: list[RequestSegment] = []
+            items = cast("list[Any]", content)
+            for j, part in enumerate(items):
+                if not isinstance(part, Mapping):
+                    continue
+                part_map = cast("Mapping[str, Any]", part)
+                part_type = part_map.get("type")
+                if part_type in {"text", "input_text"}:
+                    part_text = part_map.get("text", "")
+                    segments.append(
+                        RequestSegment(
+                            kind=SegmentKind.STABLE_PREFIX,
+                            source=(
+                                SegmentSource.SYSTEM
+                                if role == "system"
+                                else SegmentSource.DEVELOPER
+                            ),
+                            message_index=message_index,
+                            content_path=(
+                                "messages",
+                                message_index,
+                                "content",
+                                j,
+                                "text",
+                            ),
+                            byte_length=len(_serialize_for_hash(part)),
+                            estimated_tokens=_estimate_string_tokens(
+                                part_text if isinstance(part_text, str) else ""
+                            ),
+                            protected=True,
+                            compressible_candidate=False,
+                            reason=f"role={role}",
+                        )
+                    )
+            return segments
+        # fallback: treat as single segment at content path
+        return [
+            RequestSegment(
+                kind=SegmentKind.STABLE_PREFIX,
+                source=(
+                    SegmentSource.SYSTEM
+                    if role == "system"
+                    else SegmentSource.DEVELOPER
+                ),
+                message_index=message_index,
+                content_path=("messages", message_index, "content"),
+                byte_length=byte_length,
+                estimated_tokens=estimated,
+                protected=True,
+                compressible_candidate=False,
+                reason=f"role={role}",
+            )
+        ]
 
     if role == "tool":
         source = _classify_volatile_source(text)
         if source is SegmentSource.UNKNOWN:
             source = SegmentSource.TOOL_RESULT
-        return RequestSegment(
-            kind=SegmentKind.VOLATILE_SUFFIX,
-            source=source,
-            message_index=message_index,
-            content_path=("messages", message_index, "tool"),
-            byte_length=byte_length,
-            estimated_tokens=estimated,
-            protected=False,
-            compressible_candidate=True,
-            reason="tool_result",
-        )
+        if isinstance(content, str):
+            return [
+                RequestSegment(
+                    kind=SegmentKind.VOLATILE_SUFFIX,
+                    source=source,
+                    message_index=message_index,
+                    content_path=("messages", message_index, "content"),
+                    byte_length=byte_length,
+                    estimated_tokens=estimated,
+                    protected=False,
+                    compressible_candidate=True,
+                    reason="tool_result",
+                )
+            ]
+        if isinstance(content, list):
+            segs: list[RequestSegment] = []
+            items = cast("list[Any]", content)
+            for j, part in enumerate(items):
+                if not isinstance(part, Mapping):
+                    continue
+                part_map = cast("Mapping[str, Any]", part)
+                # tool-result content blocks carry text under "content"
+                inner = part_map.get("content")
+                if isinstance(inner, str):
+                    segs.append(
+                        RequestSegment(
+                            kind=SegmentKind.VOLATILE_SUFFIX,
+                            source=source,
+                            message_index=message_index,
+                            content_path=(
+                                "messages",
+                                message_index,
+                                "content",
+                                j,
+                                "content",
+                            ),
+                            byte_length=len(_serialize_for_hash(part)),
+                            estimated_tokens=_estimate_string_tokens(inner),
+                            protected=False,
+                            compressible_candidate=True,
+                            reason="tool_result",
+                        )
+                    )
+                else:
+                    # fallback: try "text" field
+                    text_val = part_map.get("text")
+                    if isinstance(text_val, str):
+                        segs.append(
+                            RequestSegment(
+                                kind=SegmentKind.VOLATILE_SUFFIX,
+                                source=source,
+                                message_index=message_index,
+                                content_path=(
+                                    "messages",
+                                    message_index,
+                                    "content",
+                                    j,
+                                    "text",
+                                ),
+                                byte_length=len(_serialize_for_hash(part)),
+                                estimated_tokens=_estimate_string_tokens(text_val),
+                                protected=False,
+                                compressible_candidate=True,
+                                reason="tool_result",
+                            )
+                        )
+            return segs
+        return [
+            RequestSegment(
+                kind=SegmentKind.VOLATILE_SUFFIX,
+                source=source,
+                message_index=message_index,
+                content_path=("messages", message_index, "content"),
+                byte_length=byte_length,
+                estimated_tokens=estimated,
+                protected=False,
+                compressible_candidate=True,
+                reason="tool_result",
+            )
+        ]
 
     if role == "user" and is_last:
         # Latest user turn is volatile by default unless it is very
-        # short and shows no log/command/search markers — the latter
+        # short and shows no log/command/search markers -- the latter
         # is the canonical "user typed a quick follow-up" case.
-        if (
+        is_short = (
             text
             and len(text) <= 256
             and not _looks_like_log_output(text)
             and not _looks_like_command_output(text)
             and not _looks_like_search_result(text)
-        ):
-            return RequestSegment(
-                kind=SegmentKind.SEMI_STABLE_CONTEXT,
-                source=SegmentSource.LATEST_USER_MESSAGE,
+        )
+        if isinstance(content, str):
+            if is_short:
+                return [
+                    RequestSegment(
+                        kind=SegmentKind.SEMI_STABLE_CONTEXT,
+                        source=SegmentSource.LATEST_USER_MESSAGE,
+                        message_index=message_index,
+                        content_path=("messages", message_index, "content"),
+                        byte_length=byte_length,
+                        estimated_tokens=estimated,
+                        protected=False,
+                        compressible_candidate=False,
+                        reason="latest_user_short_instruction",
+                    )
+                ]
+            v_source = _classify_volatile_source(text)
+            return [
+                RequestSegment(
+                    kind=SegmentKind.VOLATILE_SUFFIX,
+                    source=v_source,
+                    message_index=message_index,
+                    content_path=("messages", message_index, "content"),
+                    byte_length=byte_length,
+                    estimated_tokens=estimated,
+                    protected=False,
+                    compressible_candidate=True,
+                    reason="latest_user_message",
+                )
+            ]
+        if isinstance(content, list):
+            user_segs: list[RequestSegment] = []
+            items = cast("list[Any]", content)
+            for j, part in enumerate(items):
+                if not isinstance(part, Mapping):
+                    continue
+                part_map = cast("Mapping[str, Any]", part)
+                part_type = part_map.get("type")
+                if part_type in {"text", "input_text"}:
+                    part_text = part_map.get("text", "")
+                    p_text = part_text if isinstance(part_text, str) else ""
+                    if is_short:
+                        user_segs.append(
+                            RequestSegment(
+                                kind=SegmentKind.SEMI_STABLE_CONTEXT,
+                                source=SegmentSource.LATEST_USER_MESSAGE,
+                                message_index=message_index,
+                                content_path=(
+                                    "messages",
+                                    message_index,
+                                    "content",
+                                    j,
+                                    "text",
+                                ),
+                                byte_length=len(_serialize_for_hash(part)),
+                                estimated_tokens=_estimate_string_tokens(p_text),
+                                protected=False,
+                                compressible_candidate=False,
+                                reason="latest_user_short_instruction",
+                            )
+                        )
+                    else:
+                        v_src = _classify_volatile_source(p_text)
+                        user_segs.append(
+                            RequestSegment(
+                                kind=SegmentKind.VOLATILE_SUFFIX,
+                                source=v_src,
+                                message_index=message_index,
+                                content_path=(
+                                    "messages",
+                                    message_index,
+                                    "content",
+                                    j,
+                                    "text",
+                                ),
+                                byte_length=len(_serialize_for_hash(part)),
+                                estimated_tokens=_estimate_string_tokens(p_text),
+                                protected=False,
+                                compressible_candidate=True,
+                                reason="latest_user_message",
+                            )
+                        )
+            return user_segs
+        # fallback
+        return [
+            RequestSegment(
+                kind=SegmentKind.VOLATILE_SUFFIX,
+                source=_classify_volatile_source(text),
                 message_index=message_index,
-                content_path=("messages", message_index, "user"),
+                content_path=("messages", message_index, "content"),
+                byte_length=byte_length,
+                estimated_tokens=estimated,
+                protected=False,
+                compressible_candidate=True,
+                reason="latest_user_message",
+            )
+        ]
+
+    if role == "assistant":
+        if isinstance(content, str):
+            return [
+                RequestSegment(
+                    kind=SegmentKind.SEMI_STABLE_CONTEXT,
+                    source=SegmentSource.PRIOR_MESSAGE,
+                    message_index=message_index,
+                    content_path=("messages", message_index, "content"),
+                    byte_length=byte_length,
+                    estimated_tokens=estimated,
+                    protected=False,
+                    compressible_candidate=False,
+                    reason="assistant_message",
+                )
+            ]
+        if isinstance(content, list):
+            asst_segs: list[RequestSegment] = []
+            items = cast("list[Any]", content)
+            for j, part in enumerate(items):
+                if not isinstance(part, Mapping):
+                    continue
+                part_map = cast("Mapping[str, Any]", part)
+                part_type = part_map.get("type")
+                if part_type in {"text", "input_text"}:
+                    part_text = part_map.get("text", "")
+                    asst_segs.append(
+                        RequestSegment(
+                            kind=SegmentKind.SEMI_STABLE_CONTEXT,
+                            source=SegmentSource.PRIOR_MESSAGE,
+                            message_index=message_index,
+                            content_path=(
+                                "messages",
+                                message_index,
+                                "content",
+                                j,
+                                "text",
+                            ),
+                            byte_length=len(_serialize_for_hash(part)),
+                            estimated_tokens=_estimate_string_tokens(
+                                part_text if isinstance(part_text, str) else ""
+                            ),
+                            protected=False,
+                            compressible_candidate=False,
+                            reason="assistant_message",
+                        )
+                    )
+            return asst_segs
+        return [
+            RequestSegment(
+                kind=SegmentKind.SEMI_STABLE_CONTEXT,
+                source=SegmentSource.PRIOR_MESSAGE,
+                message_index=message_index,
+                content_path=("messages", message_index, "content"),
                 byte_length=byte_length,
                 estimated_tokens=estimated,
                 protected=False,
                 compressible_candidate=False,
-                reason="latest_user_short_instruction",
+                reason="assistant_message",
             )
-        source = _classify_volatile_source(text)
-        return RequestSegment(
-            kind=SegmentKind.VOLATILE_SUFFIX,
-            source=source,
-            message_index=message_index,
-            content_path=("messages", message_index, "user"),
-            byte_length=byte_length,
-            estimated_tokens=estimated,
-            protected=False,
-            compressible_candidate=True,
-            reason="latest_user_message",
-        )
+        ]
 
-    if role == "assistant":
-        return RequestSegment(
+    # unknown role fallback
+    if isinstance(content, str):
+        return [
+            RequestSegment(
+                kind=SegmentKind.SEMI_STABLE_CONTEXT,
+                source=SegmentSource.PRIOR_MESSAGE,
+                message_index=message_index,
+                content_path=("messages", message_index, "content"),
+                byte_length=byte_length,
+                estimated_tokens=estimated,
+                protected=False,
+                compressible_candidate=False,
+                reason=f"ambiguous_role={role or 'unknown'}",
+            )
+        ]
+    return [
+        RequestSegment(
             kind=SegmentKind.SEMI_STABLE_CONTEXT,
             source=SegmentSource.PRIOR_MESSAGE,
             message_index=message_index,
-            content_path=("messages", message_index, "assistant"),
+            content_path=("messages", message_index, "content"),
             byte_length=byte_length,
             estimated_tokens=estimated,
             protected=False,
             compressible_candidate=False,
-            reason="assistant_message",
+            reason=f"ambiguous_role={role or 'unknown'}",
         )
-
-    return RequestSegment(
-        kind=SegmentKind.SEMI_STABLE_CONTEXT,
-        source=SegmentSource.PRIOR_MESSAGE,
-        message_index=message_index,
-        content_path=("messages", message_index, role or "unknown"),
-        byte_length=byte_length,
-        estimated_tokens=estimated,
-        protected=False,
-        compressible_candidate=False,
-        reason=f"ambiguous_role={role or 'unknown'}",
-    )
+    ]
 
 
 def _segment_openai(payload: Mapping[str, Any]) -> list[RequestSegment]:
@@ -589,7 +937,7 @@ def _segment_openai(payload: Mapping[str, Any]) -> list[RequestSegment]:
         role_value = message_map.get("role")
         role = role_value if isinstance(role_value, str) else ""
         content = message_map.get("content")
-        segments.append(
+        segments.extend(
             _segment_openai_message(
                 role,
                 content,
@@ -653,12 +1001,14 @@ def _segment_anthropic_system(payload: Mapping[str, Any]) -> list[RequestSegment
     stable-prefix region.  ``cache_control`` annotations on system
     blocks are flagged separately as protected metadata so the
     stable-prefix hash reflects cache-boundary decisions.
+
+    When ``system`` is a string, emits a single segment at ``("system",)``.
+    When ``system`` is a list, emits one segment per text block at
+    ``("system", j, "text")`` plus a cache_control marker if present.
     """
     system = payload.get("system")
     if system is None:
         return []
-    byte_length = len(_serialize_for_hash(system))
-    estimated = _estimate_value_tokens(system)
     has_cache_control = False
     if isinstance(system, list):
         for block in cast("list[Any]", system):
@@ -667,7 +1017,78 @@ def _segment_anthropic_system(payload: Mapping[str, Any]) -> list[RequestSegment
             ):
                 has_cache_control = True
                 break
-    segments: list[RequestSegment] = [
+    if isinstance(system, str):
+        byte_length = len(_serialize_for_hash(system))
+        estimated = _estimate_value_tokens(system)
+        segments: list[RequestSegment] = [
+            RequestSegment(
+                kind=SegmentKind.STABLE_PREFIX,
+                source=SegmentSource.SYSTEM,
+                message_index=None,
+                content_path=("system",),
+                byte_length=byte_length,
+                estimated_tokens=estimated,
+                protected=True,
+                compressible_candidate=False,
+                reason="top_level_system",
+            )
+        ]
+        if has_cache_control:
+            segments.append(
+                RequestSegment(
+                    kind=SegmentKind.STABLE_PREFIX,
+                    source=SegmentSource.CACHE_CONTROL,
+                    message_index=None,
+                    content_path=("system", "cache_control"),
+                    byte_length=0,
+                    estimated_tokens=0,
+                    protected=True,
+                    compressible_candidate=False,
+                    reason="cache_control_present",
+                )
+            )
+        return segments
+    if isinstance(system, list):
+        list_segments: list[RequestSegment] = []
+        items = cast("list[Any]", system)
+        for j, block in enumerate(items):
+            if not isinstance(block, Mapping):
+                continue
+            block_map = cast("Mapping[str, Any]", block)
+            block_text = block_map.get("text", "")
+            if isinstance(block_text, str):
+                list_segments.append(
+                    RequestSegment(
+                        kind=SegmentKind.STABLE_PREFIX,
+                        source=SegmentSource.SYSTEM,
+                        message_index=None,
+                        content_path=("system", j, "text"),
+                        byte_length=len(_serialize_for_hash(block)),
+                        estimated_tokens=_estimate_string_tokens(block_text),
+                        protected=True,
+                        compressible_candidate=False,
+                        reason="top_level_system",
+                    )
+                )
+        if has_cache_control:
+            list_segments.append(
+                RequestSegment(
+                    kind=SegmentKind.STABLE_PREFIX,
+                    source=SegmentSource.CACHE_CONTROL,
+                    message_index=None,
+                    content_path=("system", "cache_control"),
+                    byte_length=0,
+                    estimated_tokens=0,
+                    protected=True,
+                    compressible_candidate=False,
+                    reason="cache_control_present",
+                )
+            )
+        return list_segments
+    # fallback: treat entire system as one opaque segment
+    byte_length = len(_serialize_for_hash(system))
+    estimated = _estimate_value_tokens(system)
+    return [
         RequestSegment(
             kind=SegmentKind.STABLE_PREFIX,
             source=SegmentSource.SYSTEM,
@@ -680,21 +1101,6 @@ def _segment_anthropic_system(payload: Mapping[str, Any]) -> list[RequestSegment
             reason="top_level_system",
         )
     ]
-    if has_cache_control:
-        segments.append(
-            RequestSegment(
-                kind=SegmentKind.STABLE_PREFIX,
-                source=SegmentSource.CACHE_CONTROL,
-                message_index=None,
-                content_path=("system", "cache_control"),
-                byte_length=0,
-                estimated_tokens=0,
-                protected=True,
-                compressible_candidate=False,
-                reason="cache_control_present",
-            )
-        )
-    return segments
 
 
 def _segment_anthropic_tools(tools: Any) -> list[RequestSegment]:
@@ -751,7 +1157,13 @@ def _segment_anthropic_message_block(
             kind=SegmentKind.SEMI_STABLE_CONTEXT,
             source=SegmentSource.PRIOR_MESSAGE,
             message_index=message_index,
-            content_path=("messages", message_index, block_index, "unknown"),
+            content_path=(
+                "messages",
+                message_index,
+                "content",
+                block_index,
+                "unknown",
+            ),
             byte_length=len(_serialize_for_hash(block)),
             estimated_tokens=_estimate_value_tokens(block),
             protected=False,
@@ -769,7 +1181,13 @@ def _segment_anthropic_message_block(
             kind=SegmentKind.STABLE_PREFIX,
             source=SegmentSource.CACHE_CONTROL,
             message_index=message_index,
-            content_path=("messages", message_index, block_index, "text"),
+            content_path=(
+                "messages",
+                message_index,
+                "content",
+                block_index,
+                "text",
+            ),
             byte_length=byte_length,
             estimated_tokens=estimated,
             protected=True,
@@ -781,7 +1199,13 @@ def _segment_anthropic_message_block(
             kind=SegmentKind.STABLE_PREFIX,
             source=SegmentSource.CACHE_CONTROL,
             message_index=message_index,
-            content_path=("messages", message_index, block_index, "thinking"),
+            content_path=(
+                "messages",
+                message_index,
+                "content",
+                block_index,
+                "thinking",
+            ),
             byte_length=byte_length,
             estimated_tokens=estimated,
             protected=True,
@@ -793,7 +1217,13 @@ def _segment_anthropic_message_block(
             kind=SegmentKind.SEMI_STABLE_CONTEXT,
             source=SegmentSource.PRIOR_MESSAGE,
             message_index=message_index,
-            content_path=("messages", message_index, block_index, "tool_use"),
+            content_path=(
+                "messages",
+                message_index,
+                "content",
+                block_index,
+                "tool_use",
+            ),
             byte_length=byte_length,
             estimated_tokens=estimated,
             protected=False,
@@ -808,7 +1238,13 @@ def _segment_anthropic_message_block(
             kind=SegmentKind.VOLATILE_SUFFIX,
             source=source,
             message_index=message_index,
-            content_path=("messages", message_index, block_index, "tool_result"),
+            content_path=(
+                "messages",
+                message_index,
+                "content",
+                block_index,
+                "tool_result",
+            ),
             byte_length=byte_length,
             estimated_tokens=estimated,
             protected=False,
@@ -820,7 +1256,13 @@ def _segment_anthropic_message_block(
             kind=SegmentKind.SEMI_STABLE_CONTEXT,
             source=SegmentSource.PRIOR_MESSAGE,
             message_index=message_index,
-            content_path=("messages", message_index, block_index, "text"),
+            content_path=(
+                "messages",
+                message_index,
+                "content",
+                block_index,
+                "text",
+            ),
             byte_length=byte_length,
             estimated_tokens=estimated,
             protected=False,
@@ -832,7 +1274,13 @@ def _segment_anthropic_message_block(
             kind=SegmentKind.SEMI_STABLE_CONTEXT,
             source=SegmentSource.PRIOR_MESSAGE,
             message_index=message_index,
-            content_path=("messages", message_index, block_index, str(block_type)),
+            content_path=(
+                "messages",
+                message_index,
+                "content",
+                block_index,
+                str(block_type),
+            ),
             byte_length=byte_length,
             estimated_tokens=estimated,
             protected=False,
@@ -843,7 +1291,13 @@ def _segment_anthropic_message_block(
         kind=SegmentKind.SEMI_STABLE_CONTEXT,
         source=SegmentSource.PRIOR_MESSAGE,
         message_index=message_index,
-        content_path=("messages", message_index, block_index, "unknown"),
+        content_path=(
+            "messages",
+            message_index,
+            "content",
+            block_index,
+            "unknown",
+        ),
         byte_length=byte_length,
         estimated_tokens=estimated,
         protected=False,
@@ -887,7 +1341,7 @@ def _segment_anthropic_message(
                         kind=SegmentKind.SEMI_STABLE_CONTEXT,
                         source=SegmentSource.LATEST_USER_MESSAGE,
                         message_index=message_index,
-                        content_path=("messages", message_index, "user"),
+                        content_path=("messages", message_index, "content"),
                         byte_length=len(_serialize_for_hash(content)),
                         estimated_tokens=_estimate_string_tokens(text),
                         protected=False,
@@ -901,7 +1355,7 @@ def _segment_anthropic_message(
                     kind=SegmentKind.VOLATILE_SUFFIX,
                     source=source,
                     message_index=message_index,
-                    content_path=("messages", message_index, "user"),
+                    content_path=("messages", message_index, "content"),
                     byte_length=len(_serialize_for_hash(content)),
                     estimated_tokens=_estimate_string_tokens(text),
                     protected=False,
@@ -909,13 +1363,13 @@ def _segment_anthropic_message(
                     reason="latest_user_message",
                 )
             ]
-        # Assistant text or non-final user text → semi-stable.
+        # Assistant text or non-final user text -> semi-stable.
         return [
             RequestSegment(
                 kind=SegmentKind.SEMI_STABLE_CONTEXT,
                 source=SegmentSource.PRIOR_MESSAGE,
                 message_index=message_index,
-                content_path=("messages", message_index, role or "user"),
+                content_path=("messages", message_index, "content"),
                 byte_length=len(_serialize_for_hash(content)),
                 estimated_tokens=_estimate_string_tokens(content),
                 protected=False,
@@ -1304,6 +1758,9 @@ __all__ = [
     "SegmentSource",
     "SegmentationResult",
     "SegmentationStatus",
+    "resolve_path",
+    "resolve_text_path",
     "segment_request",
     "segmentation_summary_json",
+    "stable_prefix_content_hash",
 ]

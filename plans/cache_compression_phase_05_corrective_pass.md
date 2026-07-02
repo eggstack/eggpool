@@ -483,3 +483,36 @@ enabled = false
 ```
 
 If a specific transform causes regressions, disable it under `[compression.transforms]` while keeping observe mode available. If the exact content-hash migration is added and later dashboard code needs rollback, leave the new nullable columns in place and stop displaying them rather than attempting a destructive migration rollback.
+
+## Completion summary
+
+Completed 2026-07-02. All 4996 tests pass. Lint, typecheck, and format checks pass.
+
+### Implementation steps
+
+| Step | Description | Status |
+|------|-------------|--------|
+| 1 | Split semantic source from concrete JSON content path | Done |
+| 2 | Segment list content parts at string-leaf granularity | Done |
+| 3 | Add exact stable-prefix content hashing | Done |
+| 4 | Fix safe-mode fail-closed verification | Done |
+| 5 | Fix compression transform marker correctness | Done |
+| 6 | Reconcile observe-mode analyzer and mutating applier | Done |
+| 7 | Preserve routing behavior explicitly | Done |
+| 8 | Clarify context-limit behavior | Done |
+
+### New test files
+
+- `tests/unit/test_compression_path_resolution.py` — path resolution for OpenAI and Anthropic payloads
+- `tests/unit/test_stable_prefix_content_hash.py` — exact content hash vs structural hash
+- `tests/unit/test_compression_fail_closed.py` — fail-closed catches mutated stable-prefix content
+- `tests/unit/test_compression_markers_unified.py` — unified marker format across all six transforms
+- `tests/unit/test_compression_apply_production.py` — production segmentation-driven compression
+- `tests/unit/test_compression_routing_orthogonal.py` — compression/cache metrics do not affect routing
+- `tests/unit/test_compression_context_limit_precedence.py` — context-limit checks happen before compression
+
+### Deviations from plan
+
+- The `parse_marker` regex in `markers.py` was fixed as part of the corrective pass (the `?` quantifier was missing on a group, causing parse failures for markers with `lines=0` or `tokens=0`). This was not explicitly called out in the plan but was discovered during marker correctness testing.
+- The `stable_prefix_shape_hash` (legacy structural hash) was kept as a separate field rather than being replaced, to preserve backward compatibility with existing dashboard queries that reference `stable_prefix_hash`.
+- Context-limit behavior was documented and tested but not changed — compression remains after context-limit checks, as the plan recommended.

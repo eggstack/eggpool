@@ -615,9 +615,9 @@ shape as the cache-observability endpoint.
 Phase 5 is the first request-mutating layer of the cache-preserving
 deterministic compression roadmap. It applies deterministic
 transforms only to eligible `volatile_suffix` segments identified
-by Phase 2's segmenter, and re-verifies the Phase 2 `stable_prefix_hash`
-on the post-mutation payload. The applier is fail-closed: any
-unexpected change to the stable-prefix serialization falls back to
+by Phase 2's segmenter, and re-verifies the exact stable-prefix
+content hash on the post-mutation payload. The applier is fail-closed: any
+unexpected change to the stable-prefix content falls back to
 the original payload and records a high-severity warning.
 
 ### Configuration
@@ -664,25 +664,47 @@ The applier:
 
 1. Guards: returns no-op when `policy.enabled` is False or
    `policy.mode != "safe"` or segmentation is empty.
-2. Recomputes the pre-mutation `stable_prefix_hash` over the
-   stable-prefix segments.
+2. Recomputes the pre-mutation `stable_prefix_content_hash` by
+   re-extracting canonical stable-prefix content from the original
+   payload via stable-prefix segment paths and hashing it.
 3. Deep-copies the payload and walks every volatile-suffix segment,
    applying each enabled transform whose estimated savings clear
-   the eligibility thresholds.
+   the eligibility thresholds. Each segment's `content_path` is a
+   concrete JSON path resolving to an actual string leaf of the
+   request payload (e.g. `("messages", i, "content")` for OpenAI
+   string content, `("messages", i, "content", j, "text")` for
+   OpenAI list content parts, `("system",)` for Anthropic string
+   system, `("system", j, "text")` for Anthropic system blocks,
+   `("messages", i, "content", j, ...)` for Anthropic content
+   blocks). Path-resolution helpers `resolve_path` and
+   `resolve_text_path` are available for tests and debug assertions.
 4. Inserts a deterministic marker `[EggPool compression: <transform>
    | segment=<id> | lines=<n> | tokens=<n> | sha256=<digest>]`
-   so the original content can be reproduced from the digest.
-5. Recomputes the post-mutation `stable_prefix_hash`. If it
-   diverges from the pre-mutation hash and the policy does not
-   allow static-prefix mutation, the applier fails closed:
+   via `eggpool.transcoder.compression.markers.build_marker`. The
+   marker format is unified across all six transforms.
+5. Recomputes the post-mutation `stable_prefix_content_hash` by
+   re-extracting canonical stable-prefix content from the
+   TRANSFORMED payload via the same stable-prefix segment paths.
+   If it diverges from the pre-mutation hash and the policy does
+   not allow static-prefix mutation, the applier fails closed:
    `applied=False`, `transformed_payload` is the ORIGINAL payload,
    `failed_fallback=True`, `warnings` includes
    `stable_prefix_hash_mismatch`, and `summary_json` records the
-   rollback.
+   rollback. The fail-closed verification re-hashes the mutated
+   payload content, not just immutable segment metadata, so it
+   catches real path bugs that mutate stable-prefix content.
 6. Never mutates the input payload or segmentation in place;
    always deep-copies first.
 7. Never raises on malformed input; all exceptions are caught
    and rendered as fail-closed results with `failed_fallback=True`.
+
+### Context-Limit Precedence
+
+Context-limit checks happen before compression. Compression does NOT
+make otherwise over-limit requests fit within model limits. This is
+by design — compression is a token-saving optimization, not a
+context-fit rescue mechanism. A follow-up "context-pressure
+compression preflight" phase is planned for the future if needed.
 
 ### Marker Format
 
@@ -690,7 +712,12 @@ The applier:
 `build_marker`, `parse_marker`, and `is_marker_line`. The marker
 is a single line, deterministic (no timestamps), and round-trips
 through `parse_marker`. The digest is the lowercase hex SHA-256
-of the original (pre-transform) text bytes.
+of the original (pre-transform) text bytes. The format is unified
+across all six transforms:
+
+```text
+[EggPool compression: <transform> | segment=<id> | lines=<n> | tokens=<n> | sha256=<digest>]
+```
 
 ### Wiring
 
@@ -755,13 +782,19 @@ at `/api/stats/compression-observability` returns the union.
 - The applier never mutates stable-prefix segments unless
   `compress_static_prefix=True AND allow_static_prefix_override=True`.
   Asserted by `tests/unit/test_compression_apply.py`.
-- Pre/post `stable_prefix_hash` MUST match whenever
+- Pre/post `stable_prefix_content_hash` MUST match whenever
   `compress_static_prefix` is False. A mismatch triggers fail-closed.
+  The content hash is computed by re-extracting canonical
+  stable-prefix content from the payload via segment paths.
 - `apply_safe_compression` is total: it never raises on malformed
   input. Failures surface as `failed_fallback=True`.
 - The dashboard / API roll-up does not change routing; the
   `QuotaFairScorer` still does not consume compression fields
   (Phase 1–4 invariant preserved).
+- Compression/cache metrics do NOT affect same-provider account
+  routing.
+- Context-limit checks happen before compression; compression
+  cannot rescue over-limit requests.
 - Migration 0043 is non-destructive: pre-Phase-5 rows render as
   `compression_applied = 0`, `compression_stable_prefix_preserved = 1`,
   zero transforms, no warnings.

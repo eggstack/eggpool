@@ -978,8 +978,10 @@ def test_fixture_large_json_response_minified() -> None:
     # JSON minify transform fires
     assert "json_minify" in result.transforms_by_reason
     # Semantic preservation: transformed payload parses back to same data
+    # Strip the trailing marker line before JSON-parsing
+    json_part = transformed.rsplit("\n[EggPool compression:", 1)[0]
     original = json.loads(LARGE_JSON_OUTPUT)
-    parsed = json.loads(transformed)
+    parsed = json.loads(json_part)
     assert parsed == original
     # Key order preserved: the first item's keys are the same as input
     assert list(parsed["items"][0].keys()) == list(original["items"][0].keys())

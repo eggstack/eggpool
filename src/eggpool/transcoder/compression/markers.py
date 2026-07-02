@@ -46,9 +46,10 @@ _VALID_TRANSFORMS: frozenset[str] = frozenset(
     }
 )
 
-# Regex for parsing marker lines.
+# Regex for parsing marker lines. Transform names allow digits so that
+# ``elide_base64_blobs`` and similar round-trip through :func:`parse_marker`.
 _MARKER_RE: re.Pattern[str] = re.compile(
-    r"^\[EggPool compression:\s*(?P<transform>[a-zA-Z_]+)"
+    r"^\[EggPool compression:\s*(?P<transform>[a-zA-Z][a-zA-Z0-9_]*)"
     r"\s*\|\s*segment=(?P<segment>[^\s|]+)"
     r"\s*\|\s*lines=(?P<lines>\d+)"
     r"\s*\|\s*tokens=(?P<tokens>\d+)"

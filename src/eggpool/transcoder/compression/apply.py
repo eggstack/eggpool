@@ -40,11 +40,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
+from eggpool.transcoder.compression.markers import build_marker
 from eggpool.transcoder.segmentation import (
     RequestSegment,
     SegmentationResult,
     SegmentKind,
-    _hash_payload,  # type: ignore[reportPrivateUsage]
+    stable_prefix_content_hash,
 )
 
 if TYPE_CHECKING:
@@ -83,6 +84,8 @@ class CompressionResult:
     pre_stable_prefix_hash: str
     post_stable_prefix_hash: str
     stable_prefix_preserved: bool
+    stable_prefix_shape_hash: str
+    stable_prefix_content_hash: str
     warnings: tuple[str, ...]
     latency_ms: float
     reason_code_counts: Mapping[str, int]
@@ -102,6 +105,8 @@ class CompressionResult:
             "pre_stable_prefix_hash": self.pre_stable_prefix_hash,
             "post_stable_prefix_hash": self.post_stable_prefix_hash,
             "stable_prefix_preserved": self.stable_prefix_preserved,
+            "stable_prefix_shape_hash": self.stable_prefix_shape_hash,
+            "stable_prefix_content_hash": self.stable_prefix_content_hash,
             "warnings": list(self.warnings),
             "latency_ms": self.latency_ms,
             "reason_code_counts": dict(self.reason_code_counts),
@@ -132,6 +137,8 @@ _NO_OP_RESULT: CompressionResult = CompressionResult(
     pre_stable_prefix_hash="",
     post_stable_prefix_hash="",
     stable_prefix_preserved=True,
+    stable_prefix_shape_hash="",
+    stable_prefix_content_hash="",
     warnings=(),
     latency_ms=0.0,
     reason_code_counts={},
@@ -153,6 +160,8 @@ def _noop_result(payload: Any) -> CompressionResult:
         pre_stable_prefix_hash="",
         post_stable_prefix_hash="",
         stable_prefix_preserved=True,
+        stable_prefix_shape_hash="",
+        stable_prefix_content_hash="",
         warnings=(),
         latency_ms=0.0,
         reason_code_counts={},
@@ -259,6 +268,11 @@ def _within_budget(deadline: float | None) -> bool:
     return time.perf_counter() < deadline
 
 
+def _digest(text: str) -> str:
+    """SHA-256 hex digest of UTF-8 text."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 # ---------------------------------------------------------------------------
 # Transform implementations
 # ---------------------------------------------------------------------------
@@ -280,7 +294,6 @@ def _transform_fold_repeated_lines(
         return None
     result: list[str] = []
     run_start = 0
-    savings_tokens = 0
     while run_start < len(lines):
         run_end = run_start + 1
         while run_end < len(lines) and lines[run_end] == lines[run_start]:
@@ -288,19 +301,26 @@ def _transform_fold_repeated_lines(
         run_length = run_end - run_start
         if run_length >= _REPEATED_LINE_MIN_RUN and lines[run_start]:
             result.append(lines[run_start])
-            dropped = run_length - 1
-            savings_tokens += _cheap_tokens(lines[run_start]) * dropped
-            if dropped > 0:
-                savings_tokens -= 1  # marker cost
         else:
             for line in lines[run_start:run_end]:
                 result.append(line)
         run_start = run_end
-    new_text = "\n".join(result)
-    if new_text == text:
+    folded_text = "\n".join(result)
+    if folded_text == text:
         return None
     orig_tokens = _cheap_tokens(text)
+    orig_lines = text.count("\n") + 1
+    marker = build_marker(
+        "fold_repeated_lines",
+        segment_id,
+        orig_lines,
+        orig_tokens,
+        _digest(text),
+    )
+    new_text = folded_text + "\n" + marker
     comp_tokens = _cheap_tokens(new_text)
+    if comp_tokens >= orig_tokens:
+        return None
     return new_text, orig_tokens, comp_tokens
 
 
@@ -342,17 +362,19 @@ def _transform_compact_logs(
         return None
     # Build marker with digest of removed content
     removed_text = "\n".join(middle)
-    digest = hashlib.sha256(removed_text.encode("utf-8")).hexdigest()
-    marker = (
-        f"[EggPool logs compacted: kept head={keep_head}"
-        f" + errors + tail={keep_tail}"
-        f" | sha256={digest}]"
+    digest = _digest(removed_text)
+    orig_tokens = _cheap_tokens(text)
+    marker = build_marker(
+        "compact_logs",
+        segment_id,
+        len(lines),
+        orig_tokens,
+        digest,
     )
     new_lines = head + preserved_middle + [marker] + tail
     new_text = "\n".join(new_lines)
     if new_text == text:
         return None
-    orig_tokens = _cheap_tokens(text)
     comp_tokens = _cheap_tokens(new_text)
     return new_text, orig_tokens, comp_tokens, removed_count
 
@@ -368,6 +390,15 @@ def _transform_compact_search_results(
     """
     lines = text.split("\n")
     if len(lines) < 16:
+        return None
+    # Require at least some structural markers (diff, @@, file paths)
+    # to avoid firing on plain text.
+    has_structural = any(
+        line.startswith(("diff ", "@@ ", "---", "+++", "Binary "))
+        or (":" in line and (line.startswith("/") or line.startswith("./")))
+        for line in lines
+    )
+    if not has_structural:
         return None
     # Mark lines to keep
     keep_flags = [False] * len(lines)
@@ -389,6 +420,8 @@ def _transform_compact_search_results(
     # Rebuild: keep non-marked lines
     new_lines: list[str] = []
     drop_count = 0
+    orig_tokens = _cheap_tokens(text)
+    digest = _digest(text)
     for i, line in enumerate(lines):
         if (
             start <= i < end
@@ -400,9 +433,12 @@ def _transform_compact_search_results(
         ):
             drop_count += 1
             if drop_count == 1:
-                marker = (
-                    f"[EggPool search compacted: dropped {dropped}"
-                    " redundant match lines]"
+                marker = build_marker(
+                    "compact_search_results",
+                    segment_id,
+                    len(lines),
+                    orig_tokens,
+                    digest,
                 )
                 new_lines.append(marker)
             continue
@@ -410,7 +446,6 @@ def _transform_compact_search_results(
     new_text = "\n".join(new_lines)
     if new_text == text:
         return None
-    orig_tokens = _cheap_tokens(text)
     comp_tokens = _cheap_tokens(new_text)
     return new_text, orig_tokens, comp_tokens, dropped
 
@@ -433,9 +468,16 @@ def _transform_elide_base64_blobs(
     )
     if not is_blob:
         return None
-    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-    new_text = f"[EggPool blob elided: sha256={digest}]"
+    digest = _digest(text)
     orig_tokens = _cheap_tokens(text)
+    original_lines = text.count("\n") + 1
+    new_text = build_marker(
+        "elide_base64_blobs",
+        segment_id,
+        original_lines,
+        orig_tokens,
+        digest,
+    )
     comp_tokens = _cheap_tokens(new_text)
     return new_text, orig_tokens, comp_tokens
 
@@ -463,8 +505,19 @@ def _transform_minify_machine_json(
     if len(compact) >= len(text):
         return None
     orig_tokens = _cheap_tokens(text)
-    comp_tokens = _cheap_tokens(compact)
-    return compact, orig_tokens, comp_tokens
+    original_lines = text.count("\n") + 1
+    marker = build_marker(
+        "minify_machine_json",
+        segment_id,
+        original_lines,
+        orig_tokens,
+        _digest(text),
+    )
+    new_text = compact + "\n" + marker
+    comp_tokens = _cheap_tokens(new_text)
+    if comp_tokens >= orig_tokens:
+        return None
+    return new_text, orig_tokens, comp_tokens
 
 
 def _transform_compact_stack_traces(
@@ -498,11 +551,17 @@ def _transform_compact_stack_traces(
         return None
     new_lines: list[str] = []
     marker_added = False
+    orig_tokens = _cheap_tokens(text)
+    digest = _digest(text)
     for i, line in enumerate(lines):
         if not keep_flags[i]:
             if not marker_added:
-                marker = (
-                    f"[EggPool stack compacted: dropped {drop_count} repeated frames]"
+                marker = build_marker(
+                    "compact_stack_traces",
+                    segment_id,
+                    len(lines),
+                    orig_tokens,
+                    digest,
                 )
                 new_lines.append(marker)
                 marker_added = True
@@ -511,7 +570,6 @@ def _transform_compact_stack_traces(
     new_text = "\n".join(new_lines)
     if new_text == text:
         return None
-    orig_tokens = _cheap_tokens(text)
     comp_tokens = _cheap_tokens(new_text)
     return new_text, orig_tokens, comp_tokens, drop_count
 
@@ -677,6 +735,8 @@ def apply_safe_compression(
             pre_stable_prefix_hash="",
             post_stable_prefix_hash="",
             stable_prefix_preserved=True,
+            stable_prefix_shape_hash="",
+            stable_prefix_content_hash="",
             warnings=("apply_exception",),
             latency_ms=elapsed_ms,
             reason_code_counts={},
@@ -701,11 +761,12 @@ def _apply_safe_compression_impl(
         REASON_LATENCY_BUDGET,
     )
 
-    # Pre-hash stable prefix
-    stable_segments = tuple(
-        s for s in segmentation.all_segments() if s.kind is SegmentKind.STABLE_PREFIX
+    # Pre-hash stable prefix content from ORIGINAL payload
+    pre_content_hash = stable_prefix_content_hash(
+        cast("Mapping[str, Any]", payload),
+        segmentation,
     )
-    pre_stable_prefix_hash = _hash_payload(stable_segments)
+    pre_shape_hash = segmentation.stable_prefix_hash
 
     mutated = copy.deepcopy(payload)
 
@@ -800,16 +861,19 @@ def _apply_safe_compression_impl(
 
     elapsed_ms = (time.perf_counter() - start) * 1000.0
 
-    # Post-hash stable prefix
-    post_stable_prefix_hash = _hash_payload(stable_segments)
-    stable_prefix_preserved = post_stable_prefix_hash == pre_stable_prefix_hash
+    # Post-hash stable prefix content from the MUTATED payload
+    post_content_hash = stable_prefix_content_hash(
+        cast("Mapping[str, Any]", mutated),
+        segmentation,
+    )
+    stable_prefix_content_preserved = post_content_hash == pre_content_hash
 
     # Fail-closed: prefix hash mismatch when static prefix is not allowed
-    if not stable_prefix_preserved and not policy.compress_static_prefix:
+    if not stable_prefix_content_preserved and not policy.compress_static_prefix:
         warnings.append(REASON_PREFIX_HASH_MISMATCH)
         _bump(REASON_PREFIX_HASH_MISMATCH)
         logger.warning(
-            "stable_prefix_hash changed after safe compression, "
+            "stable_prefix_content_hash changed after safe compression, "
             "returning original payload (fail-closed)"
         )
         return CompressionResult(
@@ -821,9 +885,11 @@ def _apply_safe_compression_impl(
             original_tokens=0,
             compressed_tokens=0,
             savings_tokens=0,
-            pre_stable_prefix_hash=pre_stable_prefix_hash,
-            post_stable_prefix_hash=post_stable_prefix_hash,
+            pre_stable_prefix_hash=pre_content_hash,
+            post_stable_prefix_hash=post_content_hash,
             stable_prefix_preserved=False,
+            stable_prefix_shape_hash=pre_shape_hash,
+            stable_prefix_content_hash=post_content_hash,
             warnings=tuple(warnings),
             latency_ms=elapsed_ms,
             reason_code_counts=dict(all_reason_counts),
@@ -839,9 +905,11 @@ def _apply_safe_compression_impl(
         original_tokens=total_original_tokens,
         compressed_tokens=total_compressed_tokens,
         savings_tokens=total_savings_tokens,
-        pre_stable_prefix_hash=pre_stable_prefix_hash,
-        post_stable_prefix_hash=post_stable_prefix_hash,
-        stable_prefix_preserved=stable_prefix_preserved,
+        pre_stable_prefix_hash=pre_content_hash,
+        post_stable_prefix_hash=post_content_hash,
+        stable_prefix_preserved=stable_prefix_content_preserved,
+        stable_prefix_shape_hash=pre_shape_hash,
+        stable_prefix_content_hash=post_content_hash,
         warnings=tuple(warnings),
         latency_ms=elapsed_ms,
         reason_code_counts=dict(all_reason_counts),
