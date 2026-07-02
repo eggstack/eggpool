@@ -389,6 +389,21 @@ class ProxyRequestContext:
     # compression is disabled, when the resolver import / call
     # failed, or on legacy / error paths.
     resolved_compression_policy: Any | None = None
+    # Phase 9: synthetic provider cache-controls result.  Computed
+    # in :mod:`eggpool.api.proxy_request` via
+    # :func:`eggpool.transcoder.cache_synthesis.run_synthetic_cache_synthesis`
+    # after segmentation and compression policy resolution but
+    # before upstream dispatch.  Carries the selector plan (status,
+    # dry_run, candidate/applied/warning counts, audit policy
+    # name/source), the mutated payload when apply mode ran, and
+    # the synthetic boundary annotations recorded against the
+    # :class:`CacheBoundaryTracker`.  The finalizer reads it via
+    # ``FinalizationData.synthetic_cache_result`` to persist the
+    # ``synthetic_cache_*`` columns.  ``None`` when synthetic cache
+    # controls are disabled, when the resolver import / call
+    # failed, or on legacy / error paths.  Observational only:
+    # never feeds into the :class:`QuotaFairScorer`.
+    synthetic_cache_result: Any | None = None
 
     def __post_init__(self) -> None:
         if not self.upstream_protocol:
@@ -1543,6 +1558,7 @@ class RequestCoordinator:
                     compression_observation=context.compression_observation,
                     compression_result=context.compression_result,
                     resolved_compression_policy=context.resolved_compression_policy,
+                    synthetic_cache_result=context.synthetic_cache_result,
                 ),
             )
             raise
@@ -1765,6 +1781,7 @@ class RequestCoordinator:
                     compression_observation=context.compression_observation,
                     compression_result=context.compression_result,
                     resolved_compression_policy=context.resolved_compression_policy,
+                    synthetic_cache_result=context.synthetic_cache_result,
                 ),
             )
 
@@ -2151,6 +2168,7 @@ class RequestCoordinator:
                         compression_observation=context.compression_observation,
                         compression_result=context.compression_result,
                         resolved_compression_policy=context.resolved_compression_policy,
+                        synthetic_cache_result=context.synthetic_cache_result,
                         transcoded=context.transcode_context is not None,
                     ),
                 )
@@ -2249,6 +2267,7 @@ class RequestCoordinator:
                                         compression_observation=context.compression_observation,
                                         compression_result=context.compression_result,
                                         resolved_compression_policy=context.resolved_compression_policy,
+                                        synthetic_cache_result=context.synthetic_cache_result,
                                     ),
                                 )
                             ),
@@ -2320,6 +2339,7 @@ class RequestCoordinator:
                         compression_observation=context.compression_observation,
                         compression_result=context.compression_result,
                         resolved_compression_policy=context.resolved_compression_policy,
+                        synthetic_cache_result=context.synthetic_cache_result,
                     ),
                 )
                 raise
@@ -2763,6 +2783,7 @@ class RequestCoordinator:
                     compression_observation=context.compression_observation,
                     compression_result=context.compression_result,
                     resolved_compression_policy=context.resolved_compression_policy,
+                    synthetic_cache_result=context.synthetic_cache_result,
                 ),
             )
         except DatabaseError as finalize_err:
@@ -3087,6 +3108,7 @@ class RequestCoordinator:
                     compression_observation=context.compression_observation,
                     compression_result=context.compression_result,
                     resolved_compression_policy=context.resolved_compression_policy,
+                    synthetic_cache_result=context.synthetic_cache_result,
                 ),
             )
         elif context.client_metadata.get("db_request_id") is not None:
@@ -3133,6 +3155,7 @@ class RequestCoordinator:
                     compression_observation=context.compression_observation,
                     compression_result=context.compression_result,
                     resolved_compression_policy=context.resolved_compression_policy,
+                    synthetic_cache_result=context.synthetic_cache_result,
                 ),
             )
 

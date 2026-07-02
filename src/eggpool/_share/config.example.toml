@@ -641,3 +641,27 @@ protocol = "anthropic"
 
 [model_overrides."claude-sonnet-4"]
 protocol = "anthropic"
+
+# [cache]
+# Synthetic provider cache controls (Phase 9). Disabled by default;
+# dry-run is the default when enabled.
+# [cache.synthetic_cache_controls]
+# enabled = false
+# dry_run = true
+# provider_kinds = ["anthropic"]
+# ttl = "ephemeral"
+# min_stable_tokens = 1024
+# max_breakpoints = 4
+# require_policy = true
+# placements = ["system", "tools"]
+#
+# Per-policy overrides ride on the Phase 6 resolver. Example:
+#
+#   [[compression.policies]]
+#   name = "anthropic-cache"
+#   match_protocols = ["anthropic"]
+#   match_provider_kinds = ["anthropic"]
+#   synthetic_cache_controls = true
+#   synthetic_cache_dry_run = true
+#   synthetic_cache_min_stable_tokens = 0
+#   synthetic_cache_max_breakpoints = 4

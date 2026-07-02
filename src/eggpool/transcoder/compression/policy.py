@@ -448,6 +448,37 @@ class CompressionPolicyOverride(BaseModel):
             "(``None`` inside the override keeps the global value)."
         ),
     )
+    synthetic_cache_controls: bool | None = Field(
+        default=None,
+        description=(
+            "Phase 9 override for ``[cache] synthetic_cache_controls "
+            ".enabled``.  ``None`` keeps the global value."
+        ),
+    )
+    synthetic_cache_dry_run: bool | None = Field(
+        default=None,
+        description=(
+            "Phase 9 override for ``[cache] synthetic_cache_controls "
+            ".dry_run``.  ``None`` keeps the global value."
+        ),
+    )
+    synthetic_cache_min_stable_tokens: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Phase 9 override for ``[cache] synthetic_cache_controls "
+            ".min_stable_tokens``.  ``None`` keeps the global value."
+        ),
+    )
+    synthetic_cache_max_breakpoints: int | None = Field(
+        default=None,
+        ge=1,
+        le=64,
+        description=(
+            "Phase 9 override for ``[cache] synthetic_cache_controls "
+            ".max_breakpoints``.  ``None`` keeps the global value."
+        ),
+    )
 
     @model_validator(mode="after")
     def _validate_name_unique(self) -> CompressionPolicyOverride:

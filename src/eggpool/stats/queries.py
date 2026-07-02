@@ -3385,3 +3385,166 @@ async def fetch_cache_stability_summary(
             "counts are reported-only."
         ),
     }
+
+
+async def fetch_synthetic_cache_summary(
+    db: Database,
+    start: str,
+    end: str,
+) -> dict[str, Any]:
+    """Phase 9 synthetic cache controls observability aggregates.
+
+    Reads the ``synthetic_cache_*`` columns populated by
+    :func:`eggpool.transcoder.cache_synthesis.run_synthetic_cache_synthesis`
+    and persisted by :meth:`RequestRepository.finalize_if_pending`.
+    The selector is disabled by default and dry-run by default when
+    enabled.  This query surfaces:
+
+    - ``total_requests``                     : finalized rows in window.
+    - ``status_counts``                      : ``{"disabled",
+      "dry_run", "applied", "no_candidates",
+      "policy_required", "provider_unsupported"} -> request_count``.
+    - ``dry_run_count``                      : requests where
+      ``synthetic_cache_dry_run = 1``.
+    - ``applied_count``                      : requests where
+      ``synthetic_cache_status = 'applied'``.
+    - ``candidate_count_total``              : sum of
+      ``synthetic_cache_candidate_count``.
+    - ``applied_count_total``                : sum of
+      ``synthetic_cache_applied_count``.
+    - ``warning_count_total``                : sum of
+      ``synthetic_cache_warning_count``.
+    - ``warning_counts``                     : ``{warning_code: count}``
+      aggregated from ``synthetic_cache_warnings_json``.
+    - ``by_policy``                          : per resolved-policy
+      rollup with ``policy_name``, ``policy_source``,
+      ``request_count``, ``applied_count``, ``candidate_count``.
+      ``<global>`` sentinel for requests without a policy override.
+    - ``by_status_timeseries``               : ``None`` (bucketing
+      not yet wired; callers can extend).
+
+    All numeric fields default to 0.  This query is reading-only: it
+    never mutates the database and never depends on request lifecycle
+    state.
+    """
+    start_dt = _format_dt(start)
+    end_dt = _format_dt(end)
+
+    # --- per-status breakdown ---
+    status_sql = """
+    SELECT
+        COALESCE(synthetic_cache_status, 'disabled') as synthetic_cache_status,
+        COUNT(*) as request_count
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+    GROUP BY synthetic_cache_status
+    """
+    rows = await db.fetch_all(status_sql, (start_dt, end_dt))
+    status_counts: dict[str, int] = {
+        "disabled": 0,
+        "dry_run": 0,
+        "applied": 0,
+        "no_candidates": 0,
+        "policy_required": 0,
+        "provider_unsupported": 0,
+    }
+    for row in rows:
+        d = dict(row)
+        status = d["synthetic_cache_status"]
+        if status not in status_counts:
+            status_counts[status] = 0
+        status_counts[status] = int(d["request_count"])
+
+    total_requests = sum(status_counts.values())
+
+    # --- dry_run / applied / candidate / applied_count / warning totals ---
+    totals_sql = """
+    SELECT
+        COALESCE(SUM(synthetic_cache_dry_run), 0) as dry_run_count,
+        COALESCE(SUM(CASE WHEN synthetic_cache_status = 'applied'
+            THEN 1 ELSE 0 END), 0) as applied_count,
+        COALESCE(SUM(COALESCE(synthetic_cache_candidate_count, 0)), 0)
+            as candidate_count_total,
+        COALESCE(SUM(COALESCE(synthetic_cache_applied_count, 0)), 0)
+            as applied_count_total,
+        COALESCE(SUM(COALESCE(synthetic_cache_warning_count, 0)), 0)
+            as warning_count_total
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+    """
+    totals_row = await db.fetch_one(totals_sql, (start_dt, end_dt))
+    totals = dict(totals_row) if totals_row else {}
+
+    # --- warning codes aggregation ---
+    warning_rows = await db.fetch_all(
+        """
+        SELECT synthetic_cache_warnings_json
+        FROM requests
+        WHERE started_at >= ? AND started_at < ?
+            AND status != 'pending'
+            AND synthetic_cache_warnings_json IS NOT NULL
+            AND synthetic_cache_warnings_json != '[]'
+        """,
+        (start_dt, end_dt),
+    )
+    warning_totals: dict[str, int] = {}
+    import json as _json
+
+    for row in warning_rows:
+        raw = row["synthetic_cache_warnings_json"]
+        if not raw:
+            continue
+        try:
+            parsed = _json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(parsed, list):
+            continue
+        for item in parsed:  # type: ignore[reportUnknownVariableType]
+            if isinstance(item, str):
+                warning_totals[item] = warning_totals.get(item, 0) + 1
+
+    # --- by-policy rollup ---
+    policy_sql = """
+    SELECT
+        COALESCE(synthetic_cache_policy_name, '<global>') as policy_name,
+        COALESCE(synthetic_cache_policy_source, 'global') as policy_source,
+        COUNT(*) as request_count,
+        COALESCE(SUM(CASE WHEN synthetic_cache_status = 'applied'
+            THEN 1 ELSE 0 END), 0) as applied_count,
+        COALESCE(SUM(COALESCE(synthetic_cache_candidate_count, 0)), 0)
+            as candidate_count
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+    GROUP BY synthetic_cache_policy_name, synthetic_cache_policy_source
+    ORDER BY request_count DESC
+    """
+    policy_rows = await db.fetch_all(policy_sql, (start_dt, end_dt))
+    by_policy: list[dict[str, Any]] = []
+    for row in policy_rows:
+        d = dict(row)
+        by_policy.append(
+            {
+                "policy_name": str(d["policy_name"]),
+                "policy_source": str(d["policy_source"]),
+                "request_count": int(d["request_count"]),
+                "applied_count": int(d["applied_count"] or 0),
+                "candidate_count": int(d["candidate_count"] or 0),
+            }
+        )
+
+    return {
+        "total_requests": total_requests,
+        "status_counts": status_counts,
+        "dry_run_count": int(totals.get("dry_run_count", 0) or 0),
+        "applied_count": int(totals.get("applied_count", 0) or 0),
+        "candidate_count_total": int(totals.get("candidate_count_total", 0) or 0),
+        "applied_count_total": int(totals.get("applied_count_total", 0) or 0),
+        "warning_count_total": int(totals.get("warning_count_total", 0) or 0),
+        "warning_counts": warning_totals,
+        "by_policy": by_policy,
+        "by_status_timeseries": None,
+    }

@@ -7,7 +7,7 @@ import json
 import logging
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from eggpool.constants import (
     MAX_REQUEST_COST_MICRODOLLARS,
@@ -131,6 +131,18 @@ class FinalizationData:
     # resolver.  ``None`` when compression is disabled, when the
     # resolver import / call failed, or on legacy / error paths.
     resolved_compression_policy: Any | None = None
+    # Phase 9 synthetic cache-controls result.  Produced by
+    # :func:`eggpool.transcoder.cache_synthesis.run_synthetic_cache_synthesis`
+    # in :mod:`eggpool.api.proxy_request`.  Carries the selector plan
+    # (status, dry_run, candidate/applied/warning counts, audit policy
+    # name/source), the mutated payload when apply mode ran, and the
+    # synthetic boundary annotations recorded against the
+    # ``CacheBoundaryTracker``.  ``None`` when synthetic cache
+    # controls are disabled, when the call failed, or on legacy
+    # paths; the finalizer falls back to safe defaults
+    # (``synthetic_cache_status = NULL``,
+    # ``synthetic_cache_dry_run = 1``) for backwards compatibility.
+    synthetic_cache_result: Any | None = None
 
 
 class RequestFinalizer:
@@ -629,6 +641,65 @@ class RequestFinalizer:
                     except (TypeError, ValueError):
                         compression_policy_warnings_json_value = None
 
+            # Phase 9: extract synthetic cache-controls audit metadata
+            # from the duck-typed ``SyntheticCacheResult`` attached to
+            # the finalization data.  The result is informational only;
+            # the mutated payload was already applied upstream (in
+            # ``handle_proxy_request``) so the request body the
+            # upstream actually saw carries the synthetic hints.
+            synthetic_cache_obj = getattr(data, "synthetic_cache_result", None)
+            synthetic_cache_status_value: str | None = None
+            synthetic_cache_dry_run_value: int = 1
+            synthetic_cache_candidate_count_value: int = 0
+            synthetic_cache_applied_count_value: int = 0
+            synthetic_cache_warning_count_value: int = 0
+            synthetic_cache_warnings_json_value: str | None = None
+            synthetic_cache_policy_name_value: str | None = None
+            synthetic_cache_policy_source_value: str | None = None
+            synthetic_cache_summary_json_value: str | None = None
+            if synthetic_cache_obj is not None:
+                status_attr = getattr(synthetic_cache_obj, "status", None)
+                if isinstance(status_attr, str) and status_attr:
+                    synthetic_cache_status_value = status_attr
+                dry_run_attr = getattr(synthetic_cache_obj, "dry_run", None)
+                if isinstance(dry_run_attr, bool):
+                    synthetic_cache_dry_run_value = 1 if dry_run_attr else 0
+                candidate_count_attr = getattr(
+                    synthetic_cache_obj, "candidate_count", 0
+                )
+                if isinstance(candidate_count_attr, int):
+                    synthetic_cache_candidate_count_value = candidate_count_attr
+                applied_count_attr = getattr(synthetic_cache_obj, "applied_count", 0)
+                if isinstance(applied_count_attr, int):
+                    synthetic_cache_applied_count_value = applied_count_attr
+                warning_count_attr = getattr(synthetic_cache_obj, "warning_count", 0)
+                if isinstance(warning_count_attr, int):
+                    synthetic_cache_warning_count_value = warning_count_attr
+                warnings_attr = getattr(synthetic_cache_obj, "warnings", None)
+                if isinstance(warnings_attr, (list, tuple)):
+                    seq_warnings: list[str] = [
+                        str(w)
+                        for w in cast("list[Any] | tuple[Any, ...]", warnings_attr)
+                    ]
+                    try:
+                        synthetic_cache_warnings_json_value = json.dumps(
+                            seq_warnings,
+                            ensure_ascii=False,
+                        )
+                    except (TypeError, ValueError):
+                        synthetic_cache_warnings_json_value = None
+                plan_attr = getattr(synthetic_cache_obj, "plan", None)
+                if plan_attr is not None:
+                    pname_attr = getattr(plan_attr, "policy_name", None)
+                    if isinstance(pname_attr, str) and pname_attr:
+                        synthetic_cache_policy_name_value = pname_attr
+                    psource_attr = getattr(plan_attr, "policy_source", None)
+                    if isinstance(psource_attr, str) and psource_attr:
+                        synthetic_cache_policy_source_value = psource_attr
+                summary_attr = getattr(synthetic_cache_obj, "summary_json", None)
+                if isinstance(summary_attr, str):
+                    synthetic_cache_summary_json_value = summary_attr
+
             transitioned = await self._request_repo.finalize_if_pending(
                 request_id=db_request_id,
                 status=status,
@@ -731,6 +802,15 @@ class RequestFinalizer:
                 compression_policy_name=compression_policy_name_value,
                 compression_policy_source=compression_policy_source_value,
                 compression_policy_warnings_json=compression_policy_warnings_json_value,
+                synthetic_cache_status=synthetic_cache_status_value,
+                synthetic_cache_dry_run=synthetic_cache_dry_run_value,
+                synthetic_cache_candidate_count=synthetic_cache_candidate_count_value,
+                synthetic_cache_applied_count=synthetic_cache_applied_count_value,
+                synthetic_cache_warning_count=synthetic_cache_warning_count_value,
+                synthetic_cache_warnings_json=synthetic_cache_warnings_json_value,
+                synthetic_cache_policy_name=synthetic_cache_policy_name_value,
+                synthetic_cache_policy_source=synthetic_cache_policy_source_value,
+                synthetic_cache_summary_json=synthetic_cache_summary_json_value,
             )
 
             # 4. Finalize attempt only if request transitioned and attempt

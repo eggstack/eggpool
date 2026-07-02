@@ -518,6 +518,55 @@ async def handle_proxy_request(
         if isinstance(transformed, dict):
             payload_for_rewrite = cast("dict[str, Any]", transformed)
 
+    # Phase 9: run the synthetic cache-controls selector + mutator.
+    # The selector is informational and dry-run-first; the mutator
+    # only runs when ``[cache] synthetic_cache_controls.enabled =
+    # true`` AND ``dry_run = false`` AND a matching policy override
+    # exists (or ``require_policy = false``).  When the mutator
+    # applies, the mutated body replaces ``payload_for_rewrite`` so
+    # the upstream sees the synthetic cache_control annotations.
+    # The selector is observational; failures here must never block
+    # the request path.
+    synthetic_cache_result: Any = None
+    cache_config_obj = getattr(request.app.state, "cache_config", None)
+    if cache_config_obj is not None:
+        try:
+            from eggpool.transcoder.cache_synthesis import (
+                run_synthetic_cache_synthesis,
+            )
+
+            target_protocol = endpoint.protocol
+            target_provider_kind: str | None = None
+            if catalog is not None:
+                target_provider_kind = _resolve_target_provider_kind(
+                    catalog=catalog,
+                    provider_id=provider_id,
+                )
+            synthetic_cache_result = run_synthetic_cache_synthesis(
+                payload_for_rewrite,
+                segmentation=segmentation_result,
+                cache_config=cache_config_obj,
+                target_protocol=target_protocol,
+                target_provider_kind=target_provider_kind,
+                resolved_policy=resolved_compression_policy,
+                transcode_context=transcode_ctx,
+            )
+            if (
+                synthetic_cache_result is not None
+                and synthetic_cache_result.transformed_payload is not None
+            ):
+                payload_for_rewrite = cast(
+                    "dict[str, Any]",
+                    synthetic_cache_result.transformed_payload,
+                )
+        except Exception:  # noqa: BLE001
+            logger.debug(
+                "synthetic_cache_synthesis_failed",
+                extra={"proxy_request_id": request_id},
+                exc_info=True,
+            )
+            synthetic_cache_result = None
+
     context = ProxyRequestContext(
         request_id=request_id,
         protocol=endpoint.protocol,
@@ -536,6 +585,7 @@ async def handle_proxy_request(
         compression_observation=compression_observation,
         compression_result=compression_result,
         resolved_compression_policy=resolved_compression_policy,
+        synthetic_cache_result=synthetic_cache_result,
     )
 
     if segmentation_result is not None:
@@ -642,3 +692,33 @@ def _rewrite_upstream_model(
     upstream_payload = dict(payload)
     upstream_payload["model"] = model_id
     return encode_json_body(upstream_payload)
+
+
+def _resolve_target_provider_kind(
+    *,
+    catalog: Any,
+    provider_id: str | None,
+) -> str | None:
+    """Best-effort lookup of a provider's ``kind`` for Phase 9.
+
+    Phase 9 uses the provider kind as the synthetic-cache gating
+    key.  The ``CatalogService`` exposes a ``provider_kind`` field
+    on each provider config; we read it defensively so missing
+    fields never raise.
+    """
+    if provider_id is None:
+        return None
+    try:
+        providers_obj: Any = getattr(catalog, "providers", None)
+        if not isinstance(providers_obj, dict):
+            return None
+        providers_dict = cast("dict[Any, Any]", providers_obj)
+        provider_config: Any = providers_dict.get(provider_id)
+        if provider_config is None:
+            return None
+        kind_attr: Any = getattr(provider_config, "kind", None)
+        if isinstance(kind_attr, str) and kind_attr:
+            return kind_attr
+    except Exception:  # noqa: BLE001
+        return None
+    return None

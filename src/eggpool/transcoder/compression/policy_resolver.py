@@ -80,6 +80,15 @@ class ResolvedCompressionPolicy:
     ``compression_policy_source`` columns.  ``matched_policy_names``
     records every override that fired (file order).  ``warnings``
     are bounded structured strings suitable for structured logs.
+
+    The ``synthetic_cache_overrides`` field carries the merged
+    Phase 9 synthetic cache-control knobs (``enabled``, ``dry_run``,
+    ``min_stable_tokens``, ``max_breakpoints``) when any policy
+    override provided them; ``None`` when the global
+    ``[cache] synthetic_cache_controls`` config should be honoured
+    unchanged.  This field is informational only — the cache-
+    synthesis module merges it with the global ``CacheConfig``
+    before running the candidate selector.
     """
 
     name: str
@@ -87,6 +96,7 @@ class ResolvedCompressionPolicy:
     config: CompressionConfig
     matched_policy_names: tuple[str, ...] = ()
     warnings: tuple[str, ...] = field(default_factory=tuple)
+    synthetic_cache_overrides: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """Compact dict for the persistence layer.
@@ -211,6 +221,21 @@ _OVERRIDE_ONLY_FIELDS = frozenset(
     },
 )
 
+# Phase 9: synthetic cache-control override fields. They ride on
+# CompressionPolicyOverride so we reuse the same match-and-merge
+# machinery, but they are overlay-only fields that live on a
+# different Pydantic model (SyntheticCacheControlsConfig).  The
+# resolver surfaces them via ``ResolvedCompressionPolicy.cache`` so
+# the cache-synthesis module can read the merged values.
+_SYNTHETIC_CACHE_OVERLAY_FIELDS = frozenset(
+    {
+        "synthetic_cache_controls",
+        "synthetic_cache_dry_run",
+        "synthetic_cache_min_stable_tokens",
+        "synthetic_cache_max_breakpoints",
+    },
+)
+
 
 def _overlay_config(
     base: CompressionConfig,
@@ -287,11 +312,18 @@ def resolve_compression_policy(
     ``overrides`` defaults to ``base.policies`` so the typical call
     site is ``resolve_compression_policy(base, ctx)``.  Tests can
     pass a curated list to exercise the merge order.
+
+    The Phase 9 synthetic cache overrides are extracted as a side
+    effect of the same pass and returned in the
+    ``synthetic_cache_overrides`` field so callers (the cache-
+    synthesis module) can read the merged values without
+    re-walking the override list.
     """
     candidates = overrides if overrides is not None else list(base.policies)
     warnings: list[str] = []
     matched_names: list[str] = []
     merged = base
+    synthetic_cache_overrides: dict[str, Any] = {}
     for override in candidates:
         if not _override_matches(override, ctx):
             continue
@@ -303,6 +335,18 @@ def resolve_compression_policy(
                 f"policy:{override.name}: overlay validation failed: {exc}; "
                 "ignored override and continued with the previous config",
             )
+        override_dict: Any = override.model_dump()
+        if not isinstance(override_dict, dict):
+            continue
+        override_dict_cast: dict[str, Any] = cast("dict[str, Any]", override_dict)
+        for key in _SYNTHETIC_CACHE_OVERLAY_FIELDS:
+            value = override_dict_cast.get(key)
+            if value is None:
+                continue
+            synthetic_cache_overrides[key] = value
+    synthetic_cache_overrides_out: dict[str, Any] | None = (
+        synthetic_cache_overrides or None
+    )
     if not matched_names:
         return ResolvedCompressionPolicy(
             name=GLOBAL_POLICY_NAME,
@@ -310,6 +354,7 @@ def resolve_compression_policy(
             config=merged,
             matched_policy_names=(),
             warnings=tuple(warnings),
+            synthetic_cache_overrides=synthetic_cache_overrides_out,
         )
     last = matched_names[-1]
     source = f"policy:{last}"
@@ -319,6 +364,7 @@ def resolve_compression_policy(
         config=merged,
         matched_policy_names=tuple(matched_names),
         warnings=tuple(warnings),
+        synthetic_cache_overrides=synthetic_cache_overrides_out,
     )
 
 

@@ -1385,6 +1385,7 @@ async def handle_runtime(
     compression_runtime = await stats_service.get_compression_runtime(period)
     compression_policy_stats = await stats_service.get_compression_policy_stats(period)
     cache_stability = await stats_service.get_cache_stability(period)
+    synthetic_cache_summary = await stats_service.get_synthetic_cache_summary(period)
     snapshot = await runtime_metrics.snapshot()
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
     return HTMLResponse(
@@ -1401,6 +1402,7 @@ async def handle_runtime(
             compression_runtime=compression_runtime,
             compression_policy_stats=compression_policy_stats,
             cache_stability=cache_stability,
+            synthetic_cache_summary=synthetic_cache_summary,
             period=period or "24h",
         )
     )
@@ -1462,6 +1464,31 @@ async def handle_compression_observability_json(request: Request) -> Response:
     stats_service = StatsService(db)
     data = await stats_service.get_compression_observability(period)
     return JSONResponse(content=data)
+
+
+async def handle_synthetic_cache_observability_json(request: Request) -> Response:
+    """Return Phase 9 synthetic cache controls aggregates as JSON.
+
+    Includes status counts, dry-run vs applied totals, candidate /
+    applied / warning counts, per-policy rollup, and a static
+    routing-separation notice.
+    """
+    _get_dashboard_config(request)
+    db = request.app.state.db
+    from eggpool.stats import StatsService
+
+    period = request.query_params.get("period", "24h")
+    stats_service = StatsService(db)
+    data = await stats_service.get_synthetic_cache_summary(period)
+    return JSONResponse(
+        content={
+            "routing_separation_notice": (
+                "Phase 9 synthetic cache controls. Reporting only -- "
+                "not consumed by QuotaFairScorer."
+            ),
+            **data,
+        }
+    )
 
 
 async def handle_compression_runtime_json(request: Request) -> Response:
@@ -1575,6 +1602,11 @@ def register_dashboard_routes(app: Any, require_auth: bool = False) -> None:
             JSONResponse,
         ),
         ("/api/stats/cache-stability", handle_cache_stability_json, JSONResponse),
+        (
+            "/api/stats/synthetic-cache-observability",
+            handle_synthetic_cache_observability_json,
+            JSONResponse,
+        ),
     ):
         app.add_api_route(
             path=path,
@@ -1604,6 +1636,7 @@ __all__ = [
     "handle_reliability",
     "handle_routing",
     "handle_runtime",
+    "handle_synthetic_cache_observability_json",
     "handle_timeseries",
     "handle_timeseries_json",
     "handle_transcoding_stats_json",

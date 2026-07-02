@@ -671,6 +671,10 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # handler reads this from app.state and short-circuits the
     # analyzer when ``enabled = false``.
     app.state.compression_policy = config.compression
+    # 8d. Phase 9 synthetic cache-controls config.  Disabled by
+    # default; the proxy_request handler reads this from app.state
+    # and short-circuits the selector when ``enabled = false``.
+    app.state.cache_config = config.cache
 
     # 9. Health manager
     health_manager = HealthManager()

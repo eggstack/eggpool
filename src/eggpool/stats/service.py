@@ -1482,6 +1482,31 @@ class StatsService:
             time_range.end_str(),
         )
 
+    async def get_synthetic_cache_summary(
+        self, period: str | None = None
+    ) -> dict[str, Any]:
+        """Phase 9 synthetic cache controls observability.
+
+        Reads the ``synthetic_cache_*`` columns populated by
+        :mod:`eggpool.transcoder.cache_synthesis` and persisted
+        by :meth:`RequestRepository.finalize_if_pending`.  Returns
+        the same shape as
+        :func:`eggpool.stats.queries.fetch_synthetic_cache_summary`:
+
+        - ``total_requests`` / ``status_counts`` / ``dry_run_count``
+          / ``applied_count``
+        - ``candidate_count_total`` / ``applied_count_total``
+          / ``warning_count_total``
+        - ``warning_counts`` (top warning codes)
+        - ``by_policy`` (per resolved-policy rollup)
+        """
+        time_range = resolve_time_range(period)
+        return await queries.fetch_synthetic_cache_summary(
+            self._db,
+            time_range.start_str(),
+            time_range.end_str(),
+        )
+
 
 _BUCKET_SIZES: dict[str, int] = {
     "hour": 3600,

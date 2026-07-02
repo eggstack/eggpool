@@ -461,3 +461,179 @@ class TestNoRawPayloadLeakage:
             assert needle not in html, (
                 f"Forbidden substring {needle!r} leaked into runtime HTML"
             )
+
+
+class TestSyntheticCacheCard:
+    """Synthetic cache controls card renders with empty + populated data."""
+
+    def test_empty_data_not_rendered(self) -> None:
+        """When total_requests is 0 the card is suppressed."""
+        html = render_runtime(
+            _base_snapshot(),
+            synthetic_cache_summary={
+                "total_requests": 0,
+                "status_counts": {},
+                "dry_run_count": 0,
+                "applied_count": 0,
+                "candidate_count_total": 0,
+                "applied_count_total": 0,
+                "warning_count_total": 0,
+                "warning_counts": {},
+                "by_policy": [],
+            },
+        )
+        assert "Synthetic cache controls" not in html
+
+    def test_none_data_not_rendered(self) -> None:
+        """When synthetic_cache_summary is None the card is suppressed."""
+        html = render_runtime(_base_snapshot())
+        assert "Synthetic cache controls" not in html
+
+    def test_populated_data_renders_card(self) -> None:
+        """Populated data renders the card with status counts and policy table."""
+        html = render_runtime(
+            _base_snapshot(),
+            synthetic_cache_summary={
+                "total_requests": 25,
+                "status_counts": {
+                    "disabled": 10,
+                    "dry_run": 8,
+                    "applied": 5,
+                    "no_candidates": 2,
+                    "policy_required": 0,
+                    "provider_unsupported": 0,
+                },
+                "dry_run_count": 8,
+                "applied_count": 5,
+                "candidate_count_total": 30,
+                "applied_count_total": 12,
+                "warning_count_total": 3,
+                "warning_counts": {
+                    "synthetic_cache_control_synthesized": 5,
+                    "synthetic_cache_control_dry_run": 8,
+                },
+                "by_policy": [
+                    {
+                        "policy_name": "<global>",
+                        "policy_source": "global",
+                        "request_count": 10,
+                        "applied_count": 0,
+                        "candidate_count": 0,
+                    },
+                    {
+                        "policy_name": "anthropic-cache",
+                        "policy_source": "policy:anthropic-cache",
+                        "request_count": 15,
+                        "applied_count": 5,
+                        "candidate_count": 30,
+                    },
+                ],
+            },
+        )
+        assert "Synthetic cache controls" in html
+        assert "25" in html  # total requests
+        assert "disabled" in html
+        assert "dry_run" in html
+        assert "applied" in html
+        assert "synthetic_cache_control_synthesized" in html
+        assert "synthetic_cache_control_dry_run" in html
+        assert "&lt;global&gt;" in html
+        assert "anthropic-cache" in html
+        # Phase 9 reminder text
+        assert "Phase 9" in html
+        assert "reporting only" in html.lower() or "Reporting only" in html
+        assert "QuotaFairScorer" in html
+
+    def test_phase9_reminder_text_present(self) -> None:
+        """The static Phase 9 reminder text appears in the card."""
+        html = render_runtime(
+            _base_snapshot(),
+            synthetic_cache_summary={
+                "total_requests": 1,
+                "status_counts": {"disabled": 1},
+                "dry_run_count": 0,
+                "applied_count": 0,
+                "candidate_count_total": 0,
+                "applied_count_total": 0,
+                "warning_count_total": 0,
+                "warning_counts": {},
+                "by_policy": [],
+            },
+        )
+        assert "Phase 9: synthetic cache controls" in html
+        assert "not consumed by QuotaFairScorer" in html
+
+    def test_global_sentinel_appears_before_overrides(self) -> None:
+        """The <global> sentinel renders before override policies."""
+        html = render_runtime(
+            _base_snapshot(),
+            synthetic_cache_summary={
+                "total_requests": 20,
+                "status_counts": {"disabled": 20},
+                "dry_run_count": 0,
+                "applied_count": 0,
+                "candidate_count_total": 0,
+                "applied_count_total": 0,
+                "warning_count_total": 0,
+                "warning_counts": {},
+                "by_policy": [
+                    {
+                        "policy_name": "<global>",
+                        "policy_source": "global",
+                        "request_count": 20,
+                        "applied_count": 0,
+                        "candidate_count": 0,
+                    },
+                    {
+                        "policy_name": "custom",
+                        "policy_source": "policy:custom",
+                        "request_count": 0,
+                        "applied_count": 0,
+                        "candidate_count": 0,
+                    },
+                ],
+            },
+        )
+        global_idx = html.index("&lt;global&gt;")
+        custom_idx = html.index("custom")
+        assert global_idx < custom_idx
+
+
+class TestNoRawPayloadLeakageSyntheticCache:
+    """Synthetic cache card never leaks raw upstream content."""
+
+    def test_no_prompt_substrings_in_synthetic_cache_card(self) -> None:
+        """Common prompt substrings never appear in the synthetic cache card."""
+        html = render_runtime(
+            _base_snapshot(),
+            synthetic_cache_summary={
+                "total_requests": 5,
+                "status_counts": {"applied": 5},
+                "dry_run_count": 0,
+                "applied_count": 5,
+                "candidate_count_total": 10,
+                "applied_count_total": 5,
+                "warning_count_total": 0,
+                "warning_counts": {},
+                "by_policy": [
+                    {
+                        "policy_name": "<global>",
+                        "policy_source": "global",
+                        "request_count": 5,
+                        "applied_count": 5,
+                        "candidate_count": 10,
+                    }
+                ],
+            },
+        )
+        forbidden = [
+            "sk-",
+            "Bearer ",
+            "system prompt",
+            "<tool_use",
+            "<tool_result",
+        ]
+        for needle in forbidden:
+            assert needle not in html, (
+                f"Forbidden substring {needle!r} leaked into runtime HTML"
+            )

@@ -1183,6 +1183,37 @@ of this note prevents accidental partial implementation.  See
 `plans/cache_compression_phase_08_routing_guardrails.md` for the
 full design.
 
+## Synthetic Cache Controls (Phase 9)
+
+Phase 9 adds opt-in synthetic cache controls for providers that
+support explicit cache boundary hints, primarily Anthropic-style
+`cache_control` annotations.  When enabled, the selector identifies
+eligible `stable_prefix` segments and produces a plan; the mutator
+applies `cache_control` annotations to the provider-bound body.
+The feature is disabled by default and dry-run by default when
+enabled, so operators can observe the plan without changing request
+bodies.  Only protected `stable_prefix` segments are eligible;
+volatile suffix and compressed content are never annotated.  Native
+`cache_control` is never duplicated.
+
+### Routing non-interference
+
+The `QuotaFairScorer` does NOT consume synthetic cache fields.
+Routing stays load-based: request count + token count + active
+count + health.  The synthetic cache selector is content-private --
+it never reads prompt text, tool outputs, or system messages.
+Per-policy overrides ride on the Phase 6 `[[compression.policies]]`
+via `synthetic_cache_*` overlay fields resolved by
+`resolve_compression_policy`.
+
+### Code references
+
+- `src/eggpool/transcoder/cache_synthesis.py:679` -- `run_synthetic_cache_synthesis`
+- `src/eggpool/transcoder/cache_synthesis_policy.py:43` -- `CacheConfig`
+- `src/eggpool/transcoder/compression/policy_resolver.py:99` -- `synthetic_cache_overrides`
+- `src/eggpool/db/schema/0045_synthetic_cache_controls.sql` -- migration
+- `src/eggpool/api/proxy_request.py:_resolve_target_provider_kind`
+
 ## Database
 
 SQLite via aiosqlite with WAL mode. Single-connection serialization via a lock + ContextVar.

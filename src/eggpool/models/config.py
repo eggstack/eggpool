@@ -27,6 +27,7 @@ from eggpool.constants import (
 )
 from eggpool.errors import ConfigError
 from eggpool.providers.auth import has_auth_scheme_prefix
+from eggpool.transcoder.cache_synthesis_policy import CacheConfig
 from eggpool.transcoder.compression.policy import CompressionConfig
 from eggpool.transcoder.policy import TranscoderPolicy
 
@@ -976,6 +977,7 @@ class AppConfig(BaseModel):
     )
     transcoder: TranscoderPolicy = Field(default_factory=TranscoderPolicy)
     compression: CompressionConfig = Field(default_factory=CompressionConfig)
+    cache: CacheConfig = Field(default_factory=CacheConfig)
     model_info: ModelInfoConfig = Field(default_factory=ModelInfoConfig)
 
     @model_validator(mode="after")

@@ -3497,6 +3497,7 @@ def render_runtime(
     compression_runtime: dict[str, Any] | None = None,
     compression_policy_stats: dict[str, Any] | None = None,
     cache_stability: dict[str, Any] | None = None,
+    synthetic_cache_summary: dict[str, Any] | None = None,
     period: str = "24h",
 ) -> str:
     """Render the runtime metrics page."""
@@ -4902,6 +4903,191 @@ def render_runtime(
 </section>
 """
 
+    # Phase 9 synthetic cache controls card.  Surfaces status counts,
+    # dry-run vs applied totals, warning codes, and per-policy
+    # rollup in one operator-facing summary.  The card is hidden when
+    # there is no data (total_requests == 0).
+    synthetic_cache_card = ""
+    if synthetic_cache_summary is not None:
+        sc_total = int(synthetic_cache_summary.get("total_requests", 0))
+        sc_status_counts: Any = synthetic_cache_summary.get("status_counts", {}) or {}
+        sc_dry_run = int(synthetic_cache_summary.get("dry_run_count", 0))
+        sc_applied = int(synthetic_cache_summary.get("applied_count", 0))
+        sc_candidate_total = int(
+            synthetic_cache_summary.get("candidate_count_total", 0)
+        )
+        sc_warning_total = int(synthetic_cache_summary.get("warning_count_total", 0))
+        sc_warning_counts: Any = synthetic_cache_summary.get("warning_counts", {}) or {}
+        sc_by_policy: list[Any] = list(
+            synthetic_cache_summary.get("by_policy", []) or []
+        )
+
+        if sc_total > 0:
+            # Status table rows.
+            sc_status_rows_html = ""
+            _sc_s_cells: list[str] = []
+            for s_name in (
+                "disabled",
+                "dry_run",
+                "applied",
+                "no_candidates",
+                "policy_required",
+                "provider_unsupported",
+            ):
+                s_count = int(sc_status_counts.get(s_name, 0))
+                if s_count > 0:
+                    _sc_s_cells.append(
+                        f"""<tr>
+        <td>{escape(s_name)}</td>
+        <td class='num'>{format_int(s_count)}</td>
+      </tr>"""
+                    )
+            sc_status_rows_html = "\n".join(_sc_s_cells)
+
+            sc_status_section = ""
+            if sc_status_rows_html:
+                sc_status_section = f"""
+  <h4>Status breakdown</h4>
+  <table class="data compact">
+    <thead><tr>
+      {_th("Status")}
+      {_th("Count", priority=2)}
+    </tr></thead>
+    <tbody>
+      {sc_status_rows_html}
+    </tbody>
+  </table>"""
+
+            # Warning codes top-N table.
+            sc_warnings_rows_html = ""
+            if sc_warning_counts:
+                _sc_w_cells: list[str] = []
+                for code, count in sorted(
+                    sc_warning_counts.items(), key=lambda kv: (-kv[1], kv[0])
+                )[:10]:
+                    _sc_w_cells.append(
+                        f"""<tr>
+        <td>{escape(str(code))}</td>
+        <td class='num'>{format_int(int(count))}</td>
+      </tr>"""
+                    )
+                sc_warnings_rows_html = "\n".join(_sc_w_cells)
+
+            sc_warnings_section = ""
+            if sc_warnings_rows_html:
+                sc_warnings_section = f"""
+  <h4>Warnings (top 10)</h4>
+  <table class="data compact">
+    <thead><tr>
+      {_th("Warning code")}
+      {_th("Count", priority=2)}
+    </tr></thead>
+    <tbody>
+      {sc_warnings_rows_html}
+    </tbody>
+  </table>"""
+
+            # By-policy table (top 5, <global> sentinel first).
+            sc_policy_rows_html = ""
+            if sc_by_policy:
+                _sc_p_cells: list[str] = []
+                sorted_policies = sorted(
+                    sc_by_policy,
+                    key=lambda p: (
+                        0 if p.get("policy_name") == "<global>" else 1,
+                        -int(p.get("request_count", 0)),
+                    ),
+                )[:5]
+                for pol in sorted_policies:
+                    pol_name = str(pol.get("policy_name", "—"))
+                    pol_source = str(pol.get("policy_source", "—"))
+                    pol_requests = int(pol.get("request_count", 0))
+                    pol_applied = int(pol.get("applied_count", 0))
+                    pol_candidates = int(pol.get("candidate_count", 0))
+                    _sc_p_cells.append(
+                        f"""<tr>
+        <td>{escape(pol_name)}</td>
+        <td>{escape(pol_source)}</td>
+        <td class='num'>{format_int(pol_requests)}</td>
+        <td class='num'>{format_int(pol_applied)}</td>
+        <td class='num'>{format_int(pol_candidates)}</td>
+      </tr>"""
+                    )
+                sc_policy_rows_html = "\n".join(_sc_p_cells)
+
+            sc_policy_section = ""
+            if sc_policy_rows_html:
+                sc_policy_section = f"""
+  <h4>By policy (top 5)</h4>
+  <table class="data compact">
+    <thead><tr>
+      {_th("Policy name")}
+      {_th("Source")}
+      {_th("Requests", priority=2)}
+      {_th("Applied", priority=2)}
+      {_th("Candidates", priority=2)}
+    </tr></thead>
+    <tbody>
+      {sc_policy_rows_html}
+    </tbody>
+  </table>"""
+
+            synthetic_cache_card = f"""
+<section class="panel">
+  <h3>Synthetic cache controls ({escape(period)})</h3>
+  <p class="sub">
+    Phase 9 synthetic cache controls: opt-in Anthropic-style
+    cache_control annotations on protected stable_prefix segments.
+    Selector is disabled by default and dry-run by default.
+  </p>
+  <section class="cards">
+    {
+                _render_metric_card(
+                    title="Total requests",
+                    metric=format_int(sc_total),
+                    sub="in window",
+                )
+            }
+    {
+                _render_metric_card(
+                    title="Dry run",
+                    metric=format_int(sc_dry_run),
+                    sub="synthesis planned, not applied",
+                )
+            }
+    {
+                _render_metric_card(
+                    title="Applied",
+                    metric=format_int(sc_applied),
+                    sub="payload mutated",
+                )
+            }
+    {
+                _render_metric_card(
+                    title="Candidates",
+                    metric=format_int(sc_candidate_total),
+                    sub="eligible segments",
+                )
+            }
+    {
+                _render_metric_card(
+                    title="Warnings",
+                    metric=format_int(sc_warning_total),
+                    sub="total warning events",
+                    warning=sc_warning_total > 0,
+                )
+            }
+  </section>
+  {sc_status_section}
+  {sc_warnings_section}
+  {sc_policy_section}
+  <p class="sub">
+    Phase 9: synthetic cache controls.  Reporting only &mdash;
+    not consumed by QuotaFairScorer.
+  </p>
+</section>
+"""
+
     # Phase 8 routing-guardrails panel: hardcoded diagnostic from
     # ``RuntimeMetricsService._snapshot_routing_runtime`` so operators
     # can confirm the routing-input boundary is intact.  The fields
@@ -5037,6 +5223,8 @@ def render_runtime(
 {compression_policy_card}
 
 {cache_stability_card}
+
+{synthetic_cache_card}
 
 {routing_guardrails_panel}
 
