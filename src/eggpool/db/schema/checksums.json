@@ -40,6 +40,7 @@
         "0038_model_info_phase5.sql": "cbb9ce933596e4f4c5753a6526c354df242b2f943eba8bbf2de7d00a29247a85",
         "0039_thinking_observability.sql": "e44b8b1463684f116ec63450878456fb9548ea419afa22950cd750f730bb4d19",
         "0040_cache_token_observability.sql": "f87581ed3d99a7ebfc6e046017aa5b6b857aefd80e4f19f110712f3d64f20e8d",
-        "0041_canonical_request_segmentation.sql": "0de2b41b5ac2abb174f2aa2d13ce407139fb8e188b718fd21e08cd79e800cd35"
+        "0041_canonical_request_segmentation.sql": "0de2b41b5ac2abb174f2aa2d13ce407139fb8e188b718fd21e08cd79e800cd35",
+        "0042_observe_mode_compression_accounting.sql": "3564910b5b285af73c1580f886039216e59a79f0d51339754c441ea4dffe1af5"
     }
 }

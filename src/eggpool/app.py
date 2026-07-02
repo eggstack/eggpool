@@ -666,6 +666,11 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
 
     # 8b. Transcoder policy (protocol transcoding configuration)
     app.state.transcoder_policy = config.transcoder
+    # 8c. Compression policy (Phase 4 observe-mode compression
+    # accounting).  Disabled by default; the proxy_request
+    # handler reads this from app.state and short-circuits the
+    # analyzer when ``enabled = false``.
+    app.state.compression_policy = config.compression
 
     # 9. Health manager
     health_manager = HealthManager()

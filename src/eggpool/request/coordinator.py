@@ -356,6 +356,16 @@ class ProxyRequestContext:
     # table.  ``None`` for callers that did not run the segmenter
     # (legacy / error paths).
     segmentation: Any | None = None
+    # Phase 4: observe-mode compression observation.  Computed
+    # observationally in :mod:`eggpool.api.proxy_request` when
+    # ``[compression] enabled = true``; the finalizer reads it
+    # via ``FinalizationData.compression_observation`` to persist
+    # the per-request candidate counts, eligible vs suppressed
+    # token totals, analyzer latency, warning list, reason-code
+    # tallies, and a compact JSON summary.  ``None`` when the
+    # operator has not enabled compression, when the request was
+    # not segmented, or on error paths.
+    compression_observation: Any | None = None
 
     def __post_init__(self) -> None:
         if not self.upstream_protocol:
@@ -1507,6 +1517,7 @@ class RequestCoordinator:
                         context.thinking_trace
                     ),
                     segmentation=context.segmentation,
+                    compression_observation=context.compression_observation,
                 ),
             )
             raise
@@ -1726,6 +1737,7 @@ class RequestCoordinator:
                     normalized_usage=normalized_usage,
                     transcoded=context.transcode_context is not None,
                     segmentation=context.segmentation,
+                    compression_observation=context.compression_observation,
                 ),
             )
 
@@ -2109,6 +2121,7 @@ class RequestCoordinator:
                         ),
                         normalized_usage=normalized_usage,
                         segmentation=context.segmentation,
+                        compression_observation=context.compression_observation,
                         transcoded=context.transcode_context is not None,
                     ),
                 )
@@ -2204,6 +2217,7 @@ class RequestCoordinator:
                                             context.transcode_context is not None
                                         ),
                                         segmentation=context.segmentation,
+                                        compression_observation=context.compression_observation,
                                     ),
                                 )
                             ),
@@ -2272,6 +2286,7 @@ class RequestCoordinator:
                         ),
                         transcoded=context.transcode_context is not None,
                         segmentation=context.segmentation,
+                        compression_observation=context.compression_observation,
                     ),
                 )
                 raise
@@ -2712,6 +2727,7 @@ class RequestCoordinator:
                         context.thinking_trace,
                     ),
                     segmentation=context.segmentation,
+                    compression_observation=context.compression_observation,
                 ),
             )
         except DatabaseError as finalize_err:
@@ -3033,6 +3049,7 @@ class RequestCoordinator:
                         context.thinking_trace
                     ),
                     segmentation=context.segmentation,
+                    compression_observation=context.compression_observation,
                 ),
             )
         elif context.client_metadata.get("db_request_id") is not None:
@@ -3076,6 +3093,7 @@ class RequestCoordinator:
                         context.thinking_trace
                     ),
                     segmentation=context.segmentation,
+                    compression_observation=context.compression_observation,
                 ),
             )
 

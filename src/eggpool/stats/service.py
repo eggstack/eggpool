@@ -1402,6 +1402,30 @@ class StatsService:
             time_range.end_str(),
         )
 
+    async def get_compression_observability(
+        self, period: str | None = None
+    ) -> dict[str, Any]:
+        """Phase 4 observe-mode compression accounting aggregates.
+
+        Reads the compression columns populated by
+        :mod:`eggpool.transcoder.compression.analyzer` and persisted
+        by :meth:`RequestRepository.finalize_if_pending`.  Returns
+        the same shape as
+        :func:`eggpool.stats.queries.fetch_compression_observability`:
+
+        - ``total_requests`` / ``by_status`` / ``by_mode``
+        - ``per_provider_status`` / ``per_model_status``
+        - ``totals`` (aggregate candidate / token / latency
+          counts, plus observed_requests and warning count)
+        - ``top_reason_codes`` (top 10 reason codes)
+        """
+        time_range = resolve_time_range(period)
+        return await queries.fetch_compression_observability(
+            self._db,
+            time_range.start_str(),
+            time_range.end_str(),
+        )
+
 
 _BUCKET_SIZES: dict[str, int] = {
     "hour": 3600,

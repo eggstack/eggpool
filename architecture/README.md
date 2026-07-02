@@ -489,6 +489,127 @@ Regression-guarded by
   consumes request count + token count + cost (audit) + active count
   + health feed, never cache fields.
 
+## Observe-Mode Compression Accounting (Phase 4)
+
+Phase 4 is the observe-mode layer of the cache-preserving deterministic
+compression roadmap. It runs the compression analyzer over every
+request's Phase 2 segmentation and records a per-request roll-up of
+candidate counts, savings estimates, latency, and reason codes — but
+**never mutates the request body, never changes routing, and never
+synthesises provider cache controls**.
+
+The implementation lives in
+`src/eggpool/transcoder/compression/` and is consumed by
+`proxy_request.py` after the segmenter runs. The public surface is
+`eggpool.transcoder.compression.analyze_compression`, which returns a
+`CompressionObservation` or `None` when disabled. The default config
+has `enabled = false` and `mode = "observe"`, so production behaviour
+is unchanged unless an operator opts in.
+
+### Configuration
+
+`CompressionConfig` lives on `AppConfig.compression` and is wired
+through `app.state.compression_policy`. Operators can set:
+
+- `enabled` (default `false`) — master switch.
+- `mode` (default `"observe"`) — only `"observe"` is implemented.
+- `placement` (default `"suffix_only"`) — which segment kinds are
+  eligible.
+- `respect_cache_boundaries` (default `true`) — never compress
+  protected segments.
+- `compress_static_prefix` (default `false`) — rejected at config
+  validation in observe mode.
+- `min_candidate_tokens` / `min_savings_tokens` — eligibility
+  thresholds; candidates below either are recorded as suppressed.
+- `max_compression_latency_ms` — analyzer budget; over-budget runs
+  record `latency_budget` warnings and stop cleanly.
+- `transforms.{fold_repeated_lines,compact_logs,compact_search_results,elide_base64_blobs,minify_machine_json,compact_stack_traces}`
+  — per-transform toggles, all `true` by default.
+
+### Analyzer
+
+`analyze_compression(segmentation, policy, text_hints=None)` is a total
+function: it never mutates the segmentation, never raises on malformed
+input, and is content-private (production never sets `text_hints`; only
+test fixtures do, so the regex/JSON detection paths are exercised
+without exposing raw prompts). The analyzer:
+
+1. Walks every `RequestSegment` in document order.
+2. For each segment, runs the enabled transforms (`fold_repeated_lines`,
+   `compact_logs`, `compact_search_results`, `elide_base64_blobs`,
+   `minify_machine_json`, `compact_stack_traces`).
+3. Each transform produces a `CompressionCandidate` with deterministic
+   savings estimates derived from segment metadata (`kind`, `source`,
+   `byte_length`, `estimated_tokens`, `protected`) plus the optional
+   `text_hints` preview.
+4. Policy filtering bumps the relevant reason code for every
+   suppression: `protected_cache_boundary`, `static_prefix`,
+   `placement`, `below_min_candidate_tokens`,
+   `below_min_savings_tokens`, `transform_disabled`, `empty_segment`.
+5. Latency budget check before each segment; over-budget runs append
+   `latency_budget` warnings and stop.
+
+The result is a `CompressionObservation` carrying
+`candidate_count`, `eligible_candidate_count`,
+`suppressed_candidate_count`, `estimated_original_tokens`,
+`estimated_compressed_tokens`, `estimated_savings_tokens`,
+`analyzer_latency_ms`, `warnings`, `reason_code_counts`, per-candidate
+records, and `transform_counts`. A `to_summary_json` helper produces a
+compact JSON snapshot for persistence.
+
+### Persistence (Migration 0042)
+
+`compression_status`, `compression_mode`,
+`compression_candidate_count`, `compression_eligible_candidate_count`,
+`compression_suppressed_candidate_count`,
+`compression_estimated_original_tokens`,
+`compression_estimated_compressed_tokens`,
+`compression_estimated_savings_tokens`,
+`compression_analyzer_latency_ms`, `compression_warning_count`,
+`compression_reason_code_counts_json`, `compression_summary_json` are
+added to the `requests` table. `EXPECTED_SCHEMA_VERSION` in
+`scripts/check_database.py` is bumped to **42**; the migration's
+checksum is recorded in `src/eggpool/db/schema/checksums.json`.
+
+`RequestRepository.finalize_if_pending` accepts the new fields and
+persists them in the same transaction as the rest of the request
+finalization. The finalizer (`src/eggpool/request/finalizer.py`) reads
+the duck-typed `compression_observation` from `FinalizationData` and
+extracts each field with safe `getattr` defaults. Legacy callers that
+do not run the analyzer write `compression_status = "disabled"`.
+
+### Stats Surface
+
+`fetch_compression_observability(start, end)` in
+`src/eggpool/stats/queries.py` aggregates the persisted fields over a
+time window. It returns:
+
+- `total_requests`, `requests_with_compression_observed`
+- `candidate_count`, `eligible_candidate_count`, `suppressed_candidate_count`
+- `total_estimated_savings_tokens`, `median_savings_tokens`,
+  `p95_savings_tokens`
+- `median_analyzer_latency_ms`, `p95_analyzer_latency_ms`
+- `top_reason_codes` (top-10 by count)
+- `per_provider_status`, `per_model_status`, `per_mode_status`
+
+The handler is mounted at `/api/stats/compression-observability` in
+`src/eggpool/api/stats.py` and surfaces the roll-up in the same
+shape as the cache-observability endpoint.
+
+### Invariants
+
+- The analyzer is observational: it never affects request bodies,
+  route scoring, or eligibility. Asserted by
+  `tests/unit/test_compression_analyzer.py::test_analyzer_never_mutates_segmentation`
+  and the Phase 2/3 regression suite.
+- `analyze_compression` is total: it returns `None` for disabled
+  policies and never raises on malformed input.
+- The dashboard / API roll-up does not change routing; the
+  `QuotaFairScorer` still does not consume compression fields.
+- Migration 0042 is non-destructive: pre-Phase-4 rows render as
+  `compression_status = "disabled"` with zero counts and no
+  warnings.
+
 ## Database
 
 SQLite via aiosqlite with WAL mode. Single-connection serialization via a lock + ContextVar.

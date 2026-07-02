@@ -396,6 +396,18 @@ class RequestRepository:
         segmentation_summary_json: str | None = None,
         transcoded: int = 0,
         raw_usage_json: str | None = None,
+        compression_status: str = "disabled",
+        compression_mode: str | None = None,
+        compression_candidate_count: int = 0,
+        compression_eligible_candidate_count: int = 0,
+        compression_suppressed_candidate_count: int = 0,
+        compression_estimated_original_tokens: int | None = None,
+        compression_estimated_compressed_tokens: int | None = None,
+        compression_estimated_savings_tokens: int | None = None,
+        compression_analyzer_latency_ms: float | None = None,
+        compression_warning_count: int = 0,
+        compression_reason_code_counts_json: str | None = None,
+        compression_summary_json: str | None = None,
     ) -> bool:
         """Finalize a request only if it is still pending.
 
@@ -442,7 +454,18 @@ class RequestRepository:
             "semi_stable_bytes = ?, "
             "volatile_bytes = ?, "
             "segmentation_summary_json = ?, "
-            "transcoded = ?, raw_usage_json = ? "
+            "transcoded = ?, raw_usage_json = ?, "
+            "compression_status = ?, compression_mode = ?, "
+            "compression_candidate_count = ?, "
+            "compression_eligible_candidate_count = ?, "
+            "compression_suppressed_candidate_count = ?, "
+            "compression_estimated_original_tokens = ?, "
+            "compression_estimated_compressed_tokens = ?, "
+            "compression_estimated_savings_tokens = ?, "
+            "compression_analyzer_latency_ms = ?, "
+            "compression_warning_count = ?, "
+            "compression_reason_code_counts_json = ?, "
+            "compression_summary_json = ? "
             "WHERE id = ? AND status = 'pending'",
             (
                 status,
@@ -493,6 +516,18 @@ class RequestRepository:
                 segmentation_summary_json,
                 transcoded,
                 raw_usage_json,
+                compression_status,
+                compression_mode,
+                compression_candidate_count,
+                compression_eligible_candidate_count,
+                compression_suppressed_candidate_count,
+                compression_estimated_original_tokens,
+                compression_estimated_compressed_tokens,
+                compression_estimated_savings_tokens,
+                compression_analyzer_latency_ms,
+                compression_warning_count,
+                compression_reason_code_counts_json,
+                compression_summary_json,
                 request_id,
             ),
         )

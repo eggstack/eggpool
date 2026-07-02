@@ -2302,3 +2302,278 @@ async def fetch_canonical_request_segmentation(
         ),
         "protected_requests": int(totals.get("protected_requests", 0) or 0),
     }
+
+
+async def fetch_compression_observability(
+    db: Database,
+    start: str,
+    end: str,
+) -> dict[str, Any]:
+    """Phase 4 observe-mode compression accounting aggregates.
+
+    Reads only the compression columns populated by
+    :func:`eggpool.transcoder.compression.analyze_compression` and
+    persisted by
+    :meth:`RequestRepository.finalize_if_pending`.  The analyzer is
+    observational: it never mutates the payload and never changes
+    routing.  This query surfaces:
+
+    - ``total_requests``                     : finalized rows in window.
+    - ``by_status``                          : ``{"disabled",
+      "observed", "safe", "balanced"} -> request_count``.  Phase 4
+      only ever emits ``"disabled"`` or ``"observed"``.
+    - ``by_mode``                            : ``{"observe", ...} ->
+      request_count``.  Always ``"observe"`` in Phase 4.
+    - ``per_provider_status``                : ``(provider_id,
+      upstream_protocol) -> {"disabled", "observed", ...}``.
+    - ``per_model_status``                   : ``model_id -> {per-
+      status, total_requests, candidate_count, eligible_count,
+      estimated_savings_tokens}``.
+    - ``totals``                             : aggregate
+      ``candidate_count``, ``eligible_count``,
+      ``suppressed_count``, ``estimated_original_tokens``,
+      ``estimated_compressed_tokens``,
+      ``estimated_savings_tokens``,
+      ``analyzer_latency_ms`` (sum + median + p95),
+      ``warning_count``, plus ``observed_requests``.
+    - ``top_reason_codes``                   : top-N reason codes
+      aggregated across the window, returned as ``[(code,
+      count), ...]`` so the dashboard can render them without
+      re-parsing the JSON.
+
+    All numeric fields default to 0; ratios default to ``None``
+    when the denominator is zero.  This query is reading-only: it
+    never mutates the database and never depends on request
+    lifecycle state.
+    """
+    start_dt = _format_dt(start)
+    end_dt = _format_dt(end)
+
+    # --- per-status breakdown ---
+    status_sql = """
+    SELECT
+        COALESCE(compression_status, 'disabled') as compression_status,
+        COUNT(*) as request_count
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+    GROUP BY compression_status
+    """
+    rows = await db.fetch_all(status_sql, (start_dt, end_dt))
+    by_status: dict[str, int] = {
+        "disabled": 0,
+        "observed": 0,
+    }
+    for row in rows:
+        d = dict(row)
+        status = d["compression_status"]
+        if status not in by_status:
+            # forward-compat: future phases may add 'safe' / 'balanced'
+            by_status[status] = 0
+        by_status[status] = int(d["request_count"])
+
+    # --- by-mode breakdown ---
+    mode_sql = """
+    SELECT
+        COALESCE(compression_mode, 'observe') as compression_mode,
+        COUNT(*) as request_count
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+        AND compression_status = 'observed'
+    GROUP BY compression_mode
+    """
+    mode_rows = await db.fetch_all(mode_sql, (start_dt, end_dt))
+    by_mode: dict[str, int] = {}
+    for row in mode_rows:
+        d = dict(row)
+        mode = d["compression_mode"] or "observe"
+        by_mode[mode] = int(d["request_count"])
+
+    # --- per (provider, upstream_protocol) breakdown ---
+    protocol_status_sql = """
+    SELECT
+        COALESCE(provider_id, 'unknown') as provider_id,
+        COALESCE(upstream_protocol, 'unknown') as upstream_protocol,
+        COALESCE(compression_status, 'disabled') as compression_status,
+        COUNT(*) as request_count
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+    GROUP BY provider_id, upstream_protocol, compression_status
+    """
+    protocol_rows = await db.fetch_all(protocol_status_sql, (start_dt, end_dt))
+    per_provider_status: dict[tuple[str, str], dict[str, int]] = {}
+    for row in protocol_rows:
+        d = dict(row)
+        key = (d["provider_id"], d["upstream_protocol"])
+        bucket = per_provider_status.setdefault(key, {})
+        status = d["compression_status"]
+        bucket[status] = int(d["request_count"])
+
+    # --- per-model breakdown ---
+    model_status_sql = """
+    SELECT
+        COALESCE(model_id, 'unknown') as model_id,
+        COALESCE(compression_status, 'disabled') as compression_status,
+        COUNT(*) as request_count,
+        COALESCE(SUM(CASE WHEN compression_candidate_count IS NOT NULL
+            THEN compression_candidate_count ELSE 0 END), 0)
+            as total_candidate_count,
+        COALESCE(SUM(CASE WHEN compression_eligible_candidate_count IS NOT NULL
+            THEN compression_eligible_candidate_count ELSE 0 END), 0)
+            as total_eligible_count,
+        COALESCE(SUM(CASE WHEN compression_estimated_savings_tokens IS NOT NULL
+            THEN compression_estimated_savings_tokens ELSE 0 END), 0)
+            as total_estimated_savings_tokens
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+    GROUP BY model_id, compression_status
+    """
+    model_rows = await db.fetch_all(model_status_sql, (start_dt, end_dt))
+    per_model_status: dict[str, dict[str, Any]] = {}
+    for row in model_rows:
+        d = dict(row)
+        mid = d["model_id"]
+        bucket = per_model_status.setdefault(
+            mid,
+            {
+                "disabled": 0,
+                "observed": 0,
+                "total_requests": 0,
+                "candidate_count": 0,
+                "eligible_count": 0,
+                "estimated_savings_tokens": 0,
+            },
+        )
+        status = d["compression_status"]
+        bucket[status] = int(d["request_count"])
+        bucket["total_requests"] += int(d["request_count"])
+        bucket["candidate_count"] += int(d["total_candidate_count"] or 0)
+        bucket["eligible_count"] += int(d["total_eligible_count"] or 0)
+        bucket["estimated_savings_tokens"] += int(
+            d["total_estimated_savings_tokens"] or 0
+        )
+
+    # --- global totals ---
+    totals_sql = """
+    SELECT
+        COALESCE(SUM(compression_candidate_count), 0) as total_candidate_count,
+        COALESCE(SUM(compression_eligible_candidate_count), 0)
+            as total_eligible_count,
+        COALESCE(SUM(compression_suppressed_candidate_count), 0)
+            as total_suppressed_count,
+        COALESCE(SUM(CASE WHEN compression_estimated_original_tokens IS NOT NULL
+            THEN compression_estimated_original_tokens ELSE 0 END), 0)
+            as total_estimated_original_tokens,
+        COALESCE(SUM(CASE WHEN compression_estimated_compressed_tokens IS NOT NULL
+            THEN compression_estimated_compressed_tokens ELSE 0 END), 0)
+            as total_estimated_compressed_tokens,
+        COALESCE(SUM(CASE WHEN compression_estimated_savings_tokens IS NOT NULL
+            THEN compression_estimated_savings_tokens ELSE 0 END), 0)
+            as total_estimated_savings_tokens,
+        COALESCE(SUM(compression_analyzer_latency_ms), 0)
+            as total_analyzer_latency_ms,
+        COALESCE(SUM(compression_warning_count), 0) as total_warning_count,
+        COALESCE(SUM(CASE WHEN compression_status = 'observed' THEN 1 ELSE 0 END), 0)
+            as observed_requests
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+    """
+    totals_row = await db.fetch_one(totals_sql, (start_dt, end_dt))
+    totals = dict(totals_row) if totals_row else {}
+
+    total = sum(by_status.values())
+    observed_requests = int(totals.get("observed_requests", 0) or 0)
+
+    # --- latency distribution (median / p95) over observed rows ---
+    latency_sql = """
+    SELECT compression_analyzer_latency_ms
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+        AND compression_status = 'observed'
+        AND compression_analyzer_latency_ms IS NOT NULL
+    ORDER BY compression_analyzer_latency_ms
+    """
+    latency_rows = await db.fetch_all(latency_sql, (start_dt, end_dt))
+    latencies = [float(r["compression_analyzer_latency_ms"]) for r in latency_rows]
+    median_latency: float | None = None
+    p95_latency: float | None = None
+    if latencies:
+        median_index = len(latencies) // 2
+        median_latency = latencies[median_index]
+        p95_index = max(0, int(round(0.95 * (len(latencies) - 1))))
+        p95_latency = latencies[p95_index]
+
+    # --- top reason codes (top 10) ---
+    reason_rows = await db.fetch_all(
+        """
+        SELECT compression_reason_code_counts_json
+        FROM requests
+        WHERE started_at >= ? AND started_at < ?
+            AND status != 'pending'
+            AND compression_status = 'observed'
+            AND compression_reason_code_counts_json IS NOT NULL
+        """,
+        (start_dt, end_dt),
+    )
+    reason_totals: dict[str, int] = {}
+    import json as _json
+
+    for row in reason_rows:
+        raw = row["compression_reason_code_counts_json"]
+        if not raw:
+            continue
+        try:
+            parsed = _json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        parsed_dict: dict[str, int] = {}
+        for raw_key, raw_value in parsed.items():  # type: ignore[union-attr]
+            if not isinstance(raw_key, str):
+                continue
+            try:
+                count_int = int(raw_value)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
+            parsed_dict[raw_key] = count_int
+        for code_obj, count_int in parsed_dict.items():
+            reason_totals[code_obj] = reason_totals.get(code_obj, 0) + count_int
+    top_reason_codes = sorted(
+        reason_totals.items(), key=lambda item: item[1], reverse=True
+    )[:10]
+
+    return {
+        "total_requests": total,
+        "by_status": by_status,
+        "by_mode": by_mode,
+        "per_provider_status": per_provider_status,
+        "per_model_status": per_model_status,
+        "totals": {
+            "candidate_count": int(totals.get("total_candidate_count", 0) or 0),
+            "eligible_count": int(totals.get("total_eligible_count", 0) or 0),
+            "suppressed_count": int(totals.get("total_suppressed_count", 0) or 0),
+            "estimated_original_tokens": int(
+                totals.get("total_estimated_original_tokens", 0) or 0
+            ),
+            "estimated_compressed_tokens": int(
+                totals.get("total_estimated_compressed_tokens", 0) or 0
+            ),
+            "estimated_savings_tokens": int(
+                totals.get("total_estimated_savings_tokens", 0) or 0
+            ),
+            "analyzer_latency_ms_total": float(
+                totals.get("total_analyzer_latency_ms", 0) or 0
+            ),
+            "analyzer_latency_ms_median": median_latency,
+            "analyzer_latency_ms_p95": p95_latency,
+            "warning_count": int(totals.get("total_warning_count", 0) or 0),
+            "observed_requests": observed_requests,
+        },
+        "top_reason_codes": top_reason_codes,
+    }

@@ -102,6 +102,16 @@ class FinalizationData:
     # phases can drive observe-mode compression accounting without
     # reclassifying the request.
     segmentation: Any | None = None
+    # Phase 4 compression observation.  When ``None`` the database
+    # renders ``compression_status = 'disabled'`` with all compression
+    # columns left as ``None`` (preserving historical behaviour and
+    # respecting the default ``enabled = false`` policy).  When
+    # supplied, the analyzer's per-request roll-up — candidate
+    # counts, eligible vs suppressed token totals, analyzer latency,
+    # warning list, reason-code tallies, and a compact JSON summary —
+    # is persisted so operators can see what a future phase would
+    # compress without re-parsing the request.
+    compression_observation: Any | None = None
 
 
 class RequestFinalizer:
@@ -387,6 +397,78 @@ class RequestFinalizer:
                 except (TypeError, ValueError):
                     segmentation_summary_json_value = None
 
+            # Phase 4 compression observation.  The finalizer is the
+            # single source of truth for persistence of the
+            # compression fields; the coordinator attaches the
+            # :class:`CompressionObservation` to
+            # ``data.compression_observation`` (or leaves it
+            # ``None`` for callers that did not run the analyzer —
+            # historical behaviour, or when ``[compression] enabled =
+            # false``).  Field names mirror migration 0042.
+            compression_obj = data.compression_observation
+            compression_status_value = "disabled"
+            compression_mode_value: str | None = None
+            compression_candidate_count_value = 0
+            compression_eligible_candidate_count_value = 0
+            compression_suppressed_candidate_count_value = 0
+            compression_estimated_original_tokens_value: int | None = None
+            compression_estimated_compressed_tokens_value: int | None = None
+            compression_estimated_savings_tokens_value: int | None = None
+            compression_analyzer_latency_ms_value: float | None = None
+            compression_warning_count_value = 0
+            compression_reason_code_counts_json_value: str | None = None
+            compression_summary_json_value: str | None = None
+            if compression_obj is not None:
+                compression_status_value = "observed"
+                compression_mode_value = str(
+                    getattr(compression_obj, "mode", "observe")
+                )
+                compression_candidate_count_value = int(
+                    getattr(compression_obj, "candidate_count", 0) or 0
+                )
+                compression_eligible_candidate_count_value = int(
+                    getattr(compression_obj, "eligible_candidate_count", 0) or 0
+                )
+                compression_suppressed_candidate_count_value = int(
+                    getattr(compression_obj, "suppressed_candidate_count", 0) or 0
+                )
+                compression_estimated_original_tokens_value = getattr(
+                    compression_obj, "estimated_original_tokens", None
+                )
+                compression_estimated_compressed_tokens_value = getattr(
+                    compression_obj, "estimated_compressed_tokens", None
+                )
+                compression_estimated_savings_tokens_value = getattr(
+                    compression_obj, "estimated_savings_tokens", None
+                )
+                latency_value = getattr(compression_obj, "analyzer_latency_ms", None)
+                if isinstance(latency_value, (int, float)):
+                    compression_analyzer_latency_ms_value = float(latency_value)
+                warnings_value = getattr(compression_obj, "warnings", None)
+                if isinstance(warnings_value, (list, tuple)):
+                    warnings_seq: list[object] = list(
+                        warnings_value  # type: ignore[arg-type]
+                    )
+                    compression_warning_count_value = len(warnings_seq)
+                try:
+                    reason_counts = getattr(compression_obj, "reason_code_counts", None)
+                    if reason_counts is not None:
+                        compression_reason_code_counts_json_value = json.dumps(
+                            dict(reason_counts),
+                            default=str,
+                            sort_keys=True,
+                        )
+                except (TypeError, ValueError):
+                    compression_reason_code_counts_json_value = None
+                try:
+                    to_json = getattr(compression_obj, "to_summary_json", None)
+                    if callable(to_json):
+                        summary_value = to_json()
+                        if isinstance(summary_value, str):
+                            compression_summary_json_value = summary_value
+                except (TypeError, ValueError):
+                    compression_summary_json_value = None
+
             transitioned = await self._request_repo.finalize_if_pending(
                 request_id=db_request_id,
                 status=status,
@@ -444,6 +526,22 @@ class RequestFinalizer:
                 segmentation_summary_json=segmentation_summary_json_value,
                 transcoded=1 if data.transcoded else 0,
                 raw_usage_json=raw_usage_json_value,
+                # Phase 4 observe-mode compression accounting.  The
+                # analyzer is observational: these columns record
+                # what a future phase would compress but never
+                # mutate the request body or change routing.
+                compression_status=compression_status_value,
+                compression_mode=compression_mode_value,
+                compression_candidate_count=compression_candidate_count_value,
+                compression_eligible_candidate_count=compression_eligible_candidate_count_value,
+                compression_suppressed_candidate_count=compression_suppressed_candidate_count_value,
+                compression_estimated_original_tokens=compression_estimated_original_tokens_value,
+                compression_estimated_compressed_tokens=compression_estimated_compressed_tokens_value,
+                compression_estimated_savings_tokens=compression_estimated_savings_tokens_value,
+                compression_analyzer_latency_ms=compression_analyzer_latency_ms_value,
+                compression_warning_count=compression_warning_count_value,
+                compression_reason_code_counts_json=compression_reason_code_counts_json_value,
+                compression_summary_json=compression_summary_json_value,
             )
 
             # 4. Finalize attempt only if request transitioned and attempt

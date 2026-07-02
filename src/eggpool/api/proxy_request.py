@@ -397,6 +397,30 @@ async def handle_proxy_request(
         )
         segmentation_result = None
 
+    # Phase 4: run the observe-mode compression analyzer.  The
+    # analyzer is observational and never mutates the request
+    # body.  It runs only when ``[compression] enabled = true``;
+    # otherwise it short-circuits to ``None`` and the finalizer
+    # records no compression fields.  Failure here must never
+    # block the request path.
+    compression_observation: Any = None
+    compression_policy = getattr(request.app.state, "compression_policy", None)
+    if compression_policy is not None and getattr(compression_policy, "enabled", False):
+        try:
+            from eggpool.transcoder.compression import analyze_compression
+
+            compression_observation = analyze_compression(
+                segmentation_result,
+                policy=compression_policy,
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug(
+                "compression_analysis_failed",
+                extra={"proxy_request_id": request_id},
+                exc_info=True,
+            )
+            compression_observation = None
+
     context = ProxyRequestContext(
         request_id=request_id,
         protocol=endpoint.protocol,
@@ -412,6 +436,7 @@ async def handle_proxy_request(
         transcode_required=False,
         transcode_context=transcode_ctx,
         segmentation=segmentation_result,
+        compression_observation=compression_observation,
     )
 
     if segmentation_result is not None:
