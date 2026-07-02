@@ -1414,7 +1414,8 @@ class StatsService:
         :func:`eggpool.stats.queries.fetch_compression_observability`:
 
         - ``total_requests`` / ``by_status`` / ``by_mode``
-        - ``per_provider_status`` / ``per_model_status``
+        - ``per_provider_status`` / ``per_account_status``
+          / ``per_model_status``
         - ``totals`` (aggregate candidate / token / latency
           counts, plus observed_requests and warning count)
         - ``top_reason_codes`` (top 10 reason codes)

@@ -2412,3 +2412,66 @@ class TestStatsServiceGroupedTimeseries:
         assert result["buckets"] == []
         assert result["bucket_totals"] == []
         assert result["points"] == []
+
+
+class TestFetchCompressionObservability:
+    """Tests for fetch_compression_observability."""
+
+    @pytest.mark.asyncio()
+    async def test_null_token_estimates_return_zero(self, db: Database) -> None:
+        """Rows with NULL compression_estimated_* tokens aggregate as 0, not None."""
+        async with db.transaction():
+            await db.execute_write(
+                "INSERT INTO accounts (name, api_key_env, enabled) VALUES (?, ?, ?)",
+                ("acct_null", "ENV_NULL", 1),
+            )
+            await db.execute_write(
+                "INSERT INTO models (model_id, protocol) VALUES (?, ?)",
+                ("model_null", "openai"),
+            )
+            # Insert a request with compression_status = 'disabled' (default),
+            # which means all compression_estimated_* columns are NULL.
+            await db.execute_write(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, provider_id, upstream_protocol,
+                    started_at, completed_at, status,
+                    compression_status
+                ) VALUES (
+                    (SELECT id FROM accounts WHERE name = ?),
+                    (SELECT model_id FROM models WHERE model_id = ?),
+                    'test_provider', 'openai',
+                    datetime('now', '-1 hour'),
+                    datetime('now', '-1 hour'),
+                    'completed',
+                    'disabled'
+                )
+                """,
+                ("acct_null", "model_null"),
+            )
+
+        result = await queries.fetch_compression_observability(
+            db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+
+        # All aggregate token fields must be 0, not None.
+        totals = result["totals"]
+        assert totals["candidate_count"] == 0
+        assert totals["eligible_count"] == 0
+        assert totals["suppressed_count"] == 0
+        assert totals["estimated_original_tokens"] == 0
+        assert totals["estimated_compressed_tokens"] == 0
+        assert totals["estimated_savings_tokens"] == 0
+        assert totals["warning_count"] == 0
+        assert totals["observed_requests"] == 0
+
+        # Per-model and per-account breakdowns should also have zero aggregates.
+        model_bucket = result["per_model_status"].get("model_null", {})
+        assert model_bucket.get("candidate_count", 0) == 0
+        assert model_bucket.get("eligible_count", 0) == 0
+        assert model_bucket.get("estimated_savings_tokens", 0) == 0
+
+        acct_bucket = result["per_account_status"].get("acct_null", {})
+        assert acct_bucket.get("candidate_count", 0) == 0
+        assert acct_bucket.get("eligible_count", 0) == 0
+        assert acct_bucket.get("estimated_savings_tokens", 0) == 0

@@ -2326,6 +2326,9 @@ async def fetch_compression_observability(
       request_count``.  Always ``"observe"`` in Phase 4.
     - ``per_provider_status``                : ``(provider_id,
       upstream_protocol) -> {"disabled", "observed", ...}``.
+    - ``per_account_status``                 : ``account_id -> {per-
+      status, total_requests, candidate_count, eligible_count,
+      estimated_savings_tokens}``.
     - ``per_model_status``                   : ``model_id -> {per-
       status, total_requests, candidate_count, eligible_count,
       estimated_savings_tokens}``.
@@ -2410,6 +2413,51 @@ async def fetch_compression_observability(
         bucket = per_provider_status.setdefault(key, {})
         status = d["compression_status"]
         bucket[status] = int(d["request_count"])
+
+    # --- per-account breakdown ---
+    account_status_sql = """
+    SELECT
+        COALESCE(account_id, 'unknown') as account_id,
+        COALESCE(compression_status, 'disabled') as compression_status,
+        COUNT(*) as request_count,
+        COALESCE(SUM(CASE WHEN compression_candidate_count IS NOT NULL
+            THEN compression_candidate_count ELSE 0 END), 0)
+            as total_candidate_count,
+        COALESCE(SUM(CASE WHEN compression_eligible_candidate_count IS NOT NULL
+            THEN compression_eligible_candidate_count ELSE 0 END), 0)
+            as total_eligible_count,
+        COALESCE(SUM(CASE WHEN compression_estimated_savings_tokens IS NOT NULL
+            THEN compression_estimated_savings_tokens ELSE 0 END), 0)
+            as total_estimated_savings_tokens
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+    GROUP BY account_id, compression_status
+    """
+    account_rows = await db.fetch_all(account_status_sql, (start_dt, end_dt))
+    per_account_status: dict[str, dict[str, Any]] = {}
+    for row in account_rows:
+        d = dict(row)
+        aid = d["account_id"]
+        bucket = per_account_status.setdefault(
+            aid,
+            {
+                "disabled": 0,
+                "observed": 0,
+                "total_requests": 0,
+                "candidate_count": 0,
+                "eligible_count": 0,
+                "estimated_savings_tokens": 0,
+            },
+        )
+        status = d["compression_status"]
+        bucket[status] = int(d["request_count"])
+        bucket["total_requests"] += int(d["request_count"])
+        bucket["candidate_count"] += int(d["total_candidate_count"] or 0)
+        bucket["eligible_count"] += int(d["total_eligible_count"] or 0)
+        bucket["estimated_savings_tokens"] += int(
+            d["total_estimated_savings_tokens"] or 0
+        )
 
     # --- per-model breakdown ---
     model_status_sql = """
@@ -2553,6 +2601,7 @@ async def fetch_compression_observability(
         "by_status": by_status,
         "by_mode": by_mode,
         "per_provider_status": per_provider_status,
+        "per_account_status": per_account_status,
         "per_model_status": per_model_status,
         "totals": {
             "candidate_count": int(totals.get("total_candidate_count", 0) or 0),
