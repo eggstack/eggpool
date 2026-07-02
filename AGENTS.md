@@ -92,6 +92,8 @@ CI sets `PYTHONHASHSEED=0` and `TZ=UTC`; reproduce locally for deterministic res
 - `CapabilityError` (HTTP 400) is distinct from `ModelNotFoundError` (404) and `ModelUnavailableError` (503). `BudgetResolutionError` is a subclass of `CapabilityError`.
 - When constructing a `RequestCoordinator` in tests, pass an explicit `transcoder_policy` or assert the desired default; never rely on implicit `None`.
 - DB migrations are numbered SQL files in `src/eggpool/db/schema/`. The `model_info_*` sidecar tables carry FKs to `models.model_id`; catalog entries may reach model-info paths before `_persist_catalog` writes them to `models`, so repository writes seed a placeholder `models` row in the same transaction.
+- **Phase 1 cache observability is reporting-only**: every finalized request is tagged with `cache_counter_status` ∈ {`reported`, `not_reported`, `unknown_format`} and supporting cache-token columns. The `QuotaFairScorer` does NOT consume cache fields (asserted by `tests/unit/test_routing.py::test_scorer_does_not_consume_cache_counter_status`); only request count + token count + cost (audit) + active count + health feed routing. See `plans/cache_compression_phase_01_cache_token_observability.md`.
+- When adding new Phase 1+ work that consumes cache columns, prefer reading the persisted DB columns over re-parsing the upstream payload — `normalize_usage` is only safe at request finalization time.
 
 ## Error Handling
 

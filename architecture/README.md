@@ -239,6 +239,39 @@ Token counts are mapped between protocol-specific fields (e.g.,
 `input_tokens` → `prompt_tokens`, `cache_creation_input_tokens` →
 separate cache counters). Controlled by `[transcoder]` config.
 
+## Cache Token Observability (Phase 1)
+
+Every finalized request is annotated with a `cache_counter_status` enum
+(reported / not_reported / unknown_format) plus the parsed cache-token
+counts the upstream actually surfaced. The observer layer in
+`src/eggpool/proxy/normalized_usage.py` is provider-neutral:
+
+- `normalize_usage(decoded_payload, protocol=...)` extracts `usage`
+  blocks from decoded JSON and classifies whether the upstream reported
+  cache counters. OpenAI providers are classified by the presence of
+  `prompt_tokens_details.cached_tokens`; Anthropic providers by the
+  presence of `cache_read_input_tokens` / `cache_creation_input_tokens`.
+- `normalize_from_stream_result(result, protocol=...)` adapts a
+  `StreamUsageResult` so the same enum applies to streaming responses.
+- The finalizer (`src/eggpool/request/finalizer.py`) persists the
+  parsed usage object, the cache-write alias, and the JSON-serialised
+  raw payload alongside the legacy counters.
+
+Status semantics:
+
+- **`reported`** — at least one recognized cache field was present and
+  parsed; counts are recorded.
+- **`not_reported`** — usage block parsed cleanly but no cache fields
+  were present (canonical OpenAI shape, or providers that omit the
+  breakdown).
+- **`unknown_format`** — payload could not be parsed, or returned a
+  shape EggPool does not recognize. The cache state is ambiguous.
+
+`QuotaFairScorer` does NOT consume cache fields; it is asserted by
+`tests/unit/test_routing.py::test_scorer_does_not_consume_cache_counter_status`.
+Dashboard coverage is rendered under Runtime → Cache observability and
+the JSON API exposes the breakdown at `GET /api/stats/cache-observability`.
+
 ## Database
 
 SQLite via aiosqlite with WAL mode. Single-connection serialization via a lock + ContextVar.

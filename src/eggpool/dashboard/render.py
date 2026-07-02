@@ -3491,6 +3491,7 @@ def render_runtime(
     current_theme: str = "",
     update_info: Any | None = None,
     transcoding_stats: dict[str, Any] | None = None,
+    cache_observability: dict[str, Any] | None = None,
     period: str = "24h",
 ) -> str:
     """Render the runtime metrics page."""
@@ -4043,6 +4044,82 @@ def render_runtime(
 </section>
 """
 
+    # Cache observability card (Phase 1)
+    cache_card = ""
+    if cache_observability is not None:
+        co_by_status: Any = cache_observability.get("by_status", {}) or {}
+        co_reported = int(co_by_status.get("reported", 0))
+        co_not_reported = int(co_by_status.get("not_reported", 0))
+        co_unknown = int(co_by_status.get("unknown_format", 0))
+        co_total_cached = int(cache_observability.get("total_cached_input_tokens", 0))
+        co_total_read = int(cache_observability.get("total_cache_read_input_tokens", 0))
+        co_total_creation = int(
+            cache_observability.get("total_cache_creation_input_tokens", 0)
+        )
+        co_ratio = cache_observability.get("cache_hit_ratio_known_only")
+        co_ratio_str = f"{float(co_ratio):.1%}" if co_ratio is not None else "—"
+        co_total = int(cache_observability.get("total_requests", 0))
+        cache_card = f"""
+<section class="panel">
+  <h3>Cache observability ({escape(period)})</h3>
+  <p class="sub">
+    Provider-reported cache counters; the hit ratio only divides rows
+    whose upstream payload actually surfaced cache fields.
+  </p>
+  <section class="cards">
+    {
+            _render_metric_card(
+                title="Reported",
+                metric=format_int(co_reported),
+                sub="upstream returned cache fields",
+            )
+        }
+    {
+            _render_metric_card(
+                title="Not reported",
+                metric=format_int(co_not_reported),
+                sub="payload clean, no cache keys",
+            )
+        }
+    {
+            _render_metric_card(
+                title="Unknown shape",
+                metric=format_int(co_unknown),
+                sub="parse failure or unrecognized",
+            )
+        }
+    {
+            _render_metric_card(
+                title="Cache hit ratio",
+                metric=co_ratio_str,
+                sub="cached / input, REPORTED only",
+            )
+        }
+  </section>
+  <table class="data compact">
+    <thead><tr>{_th("Metric")}{_th("Value", priority=2)}</tr></thead>
+    <tbody>
+      <tr>
+        <td>Total finalized requests</td>
+        <td class='num'>{format_int(co_total)}</td>
+      </tr>
+      <tr>
+        <td>Cached input tokens (REPORTED)</td>
+        <td class='num'>{format_int(co_total_cached)}</td>
+      </tr>
+      <tr>
+        <td>Anthropic cache read</td>
+        <td class='num'>{format_int(co_total_read)}</td>
+      </tr>
+      <tr>
+        <td>Anthropic cache creation</td>
+        <td class='num'>{format_int(co_total_creation)}</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+"""
+
     body = f"""
 <h2>Runtime</h2>
 <p class="sub">Process-level diagnostics for the running EggPool instance.</p>
@@ -4065,6 +4142,8 @@ def render_runtime(
 {network_cards}
 
 {tc_card}
+
+{cache_card}
 
 <section class="panel">
   <h3>Health states</h3>

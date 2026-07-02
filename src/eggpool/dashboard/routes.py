@@ -1375,6 +1375,7 @@ async def handle_runtime(
 
     stats_service = StatsService(db)
     transcoding_stats = await stats_service.get_transcoding_stats(period)
+    cache_observability = await stats_service.get_cache_observability(period)
     snapshot = await runtime_metrics.snapshot()
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
     return HTMLResponse(
@@ -1385,6 +1386,7 @@ async def handle_runtime(
             current_theme=current_theme,
             update_info=_get_update_info(request),
             transcoding_stats=transcoding_stats,
+            cache_observability=cache_observability,
             period=period or "24h",
         )
     )

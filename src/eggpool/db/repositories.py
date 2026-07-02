@@ -375,11 +375,32 @@ class RequestRepository:
         local_cost_exactness: str | None = None,
         upstream_protocol: str | None = None,
         thinking_trace_json: str | None = None,
+        cache_counter_status: str = "not_reported",
+        cached_input_tokens: int | None = None,
+        cache_read_input_tokens: int | None = None,
+        cache_creation_input_tokens: int | None = None,
+        cache_write_input_tokens: int | None = None,
+        cache_write_input_reported: int | None = None,
+        input_tokens_reported: int | None = None,
+        output_tokens_reported: int | None = None,
+        total_tokens_reported: int | None = None,
+        request_shape_hash: str | None = None,
+        stable_prefix_hash: str | None = None,
+        transcoded: int = 0,
+        raw_usage_json: str | None = None,
     ) -> bool:
         """Finalize a request only if it is still pending.
 
         Returns True if the row was updated (transition performed),
         False if the request was already terminal (idempotent).
+
+        The cache-observability fields added by migration 0040 carry
+        the provider-neutral usage shape from
+        :class:`eggpool.proxy.normalized_usage.NormalizedUsage`.  They
+        are all nullable / default to ``None`` so legacy callers that
+        do not produce a normalized usage record continue to work and
+        the database renders ``cache_counter_status = 'not_reported'``
+        as the safe default.
         """
         rowcount = await self._db.execute_write(
             "UPDATE requests SET "
@@ -395,7 +416,14 @@ class RequestRepository:
             "coordinator_overhead_ms = ?, "
             "provider_cost_microdollars = ?, provider_cost_source = ?, "
             "local_cost_microdollars = ?, local_cost_exactness = ?, "
-            "upstream_protocol = ?, thinking_trace_json = ? "
+            "upstream_protocol = ?, thinking_trace_json = ?, "
+            "cache_counter_status = ?, cached_input_tokens = ?, "
+            "cache_read_input_tokens = ?, cache_creation_input_tokens = ?, "
+            "cache_write_input_tokens = ?, cache_write_input_reported = ?, "
+            "input_tokens_reported = ?, output_tokens_reported = ?, "
+            "total_tokens_reported = ?, "
+            "request_shape_hash = ?, stable_prefix_hash = ?, "
+            "transcoded = ?, raw_usage_json = ? "
             "WHERE id = ? AND status = 'pending'",
             (
                 status,
@@ -425,6 +453,19 @@ class RequestRepository:
                 local_cost_exactness,
                 upstream_protocol,
                 thinking_trace_json,
+                cache_counter_status,
+                cached_input_tokens,
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
+                cache_write_input_tokens,
+                cache_write_input_reported,
+                input_tokens_reported,
+                output_tokens_reported,
+                total_tokens_reported,
+                request_shape_hash,
+                stable_prefix_hash,
+                transcoded,
+                raw_usage_json,
                 request_id,
             ),
         )

@@ -61,7 +61,7 @@ class InvariantQueryError(CheckerError):
 #: Highest migration number this checker knows how to inspect.
 #: If the database is older or newer than this, the checker
 #: returns exit code 2 with a clear message.
-EXPECTED_SCHEMA_VERSION = 39
+EXPECTED_SCHEMA_VERSION = 40
 
 #: Required tables for the production EggPool schema.
 REQUIRED_TABLES: frozenset[str] = frozenset(
@@ -112,6 +112,19 @@ REQUIRED_COLUMNS: dict[str, frozenset[str]] = {
             "reasoning_tokens",
             "provider_id",
             "original_model_id",
+            "cache_counter_status",
+            "cached_input_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+            "cache_write_input_tokens",
+            "cache_write_input_reported",
+            "input_tokens_reported",
+            "output_tokens_reported",
+            "total_tokens_reported",
+            "transcoded",
+            "request_shape_hash",
+            "stable_prefix_hash",
+            "raw_usage_json",
         }
     ),
     "request_attempts": frozenset({"id", "request_id", "completed_at"}),

@@ -83,6 +83,17 @@ class FinalizationData:
     provider_cost_source: str | None = None
     upstream_protocol: str | None = None
     thinking_trace_json: str | None = None
+    # Provider-neutral usage from
+    # :class:`eggpool.proxy.normalized_usage.NormalizedUsage`.  When
+    # ``None`` the legacy zero-vs-``None`` distinction is unavailable
+    # and the database renders ``cache_counter_status =
+    # 'not_reported'`` with cache counters stored as zero (matching the
+    # historical behaviour).  When supplied, every cache counter is
+    # stored verbatim and ``cache_counter_status`` records whether the
+    # upstream actually surfaced cache fields, parsed cleanly with no
+    # cache fields, or returned a shape EggPool could not parse.
+    normalized_usage: Any | None = None
+    transcoded: bool = False
 
 
 class RequestFinalizer:
@@ -256,6 +267,58 @@ class RequestFinalizer:
         else:
             error_detail = None
 
+        # Cache-observability fields sourced from the normalized usage
+        # record.  When the coordinator produced a
+        # :class:`NormalizedUsage` we persist every counter verbatim
+        # plus the cache_counter_status enum so the dashboard can
+        # distinguish reported counters from a null parse.  When the
+        # coordinator only had a legacy ``StreamUsageResult`` (older
+        # tests, error paths), the database renders
+        # ``cache_counter_status = 'not_reported'`` and falls back to
+        # the historical zero-token columns — preserving full backward
+        # compatibility.
+        normalized = data.normalized_usage
+        cache_counter_status_value = "not_reported"
+        cached_input_tokens_value: int | None = None
+        cache_read_input_tokens_value: int | None = None
+        cache_creation_input_tokens_value: int | None = None
+        cache_write_input_tokens_value: int | None = None
+        cache_write_input_reported_value: int | None = None
+        input_tokens_reported_value: int | None = None
+        output_tokens_reported_value: int | None = None
+        total_tokens_reported_value: int | None = None
+        raw_usage_json_value: str | None = None
+        if normalized is not None:
+            cache_counter_status_value = str(
+                getattr(normalized, "cache_counter_status", "not_reported")
+            )
+            cached_input_tokens_value = getattr(normalized, "cached_input_tokens", None)
+            cache_read_input_tokens_value = getattr(
+                normalized, "cache_read_input_tokens", None
+            )
+            cache_creation_input_tokens_value = getattr(
+                normalized, "cache_creation_input_tokens", None
+            )
+            cache_write_input_tokens_value = getattr(
+                normalized, "cache_write_input_tokens", None
+            )
+            # ``cache_write_input_reported`` mirrors
+            # ``cache_creation_input_tokens`` for Anthropic and stays
+            # ``None`` for OpenAI.  It exists so the stats layer can
+            # render a single "writes reported" column without
+            # branching on protocol.
+            if cache_creation_input_tokens_value is not None:
+                cache_write_input_reported_value = cache_creation_input_tokens_value
+            input_tokens_reported_value = getattr(normalized, "input_tokens", None)
+            output_tokens_reported_value = getattr(normalized, "output_tokens", None)
+            total_tokens_reported_value = getattr(normalized, "total_tokens", None)
+            raw_usage = getattr(normalized, "raw_usage", None)
+            if raw_usage is not None:
+                try:
+                    raw_usage_json_value = json.dumps(raw_usage, default=str)
+                except (TypeError, ValueError):
+                    raw_usage_json_value = None
+
         async with self._db.transaction():
             # 3. Finalize request only if pending (idempotent)
             db_request_id = selected.db_request_id
@@ -293,6 +356,17 @@ class RequestFinalizer:
                 local_cost_exactness=local_cost_exactness,
                 upstream_protocol=data.upstream_protocol,
                 thinking_trace_json=data.thinking_trace_json,
+                cache_counter_status=cache_counter_status_value,
+                cached_input_tokens=cached_input_tokens_value,
+                cache_read_input_tokens=cache_read_input_tokens_value,
+                cache_creation_input_tokens=cache_creation_input_tokens_value,
+                cache_write_input_tokens=cache_write_input_tokens_value,
+                cache_write_input_reported=cache_write_input_reported_value,
+                input_tokens_reported=input_tokens_reported_value,
+                output_tokens_reported=output_tokens_reported_value,
+                total_tokens_reported=total_tokens_reported_value,
+                transcoded=1 if data.transcoded else 0,
+                raw_usage_json=raw_usage_json_value,
             )
 
             # 4. Finalize attempt only if request transitioned and attempt

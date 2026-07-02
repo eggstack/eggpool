@@ -463,6 +463,39 @@ async def handle_thinking_stats(request: Request) -> Response:
     return JSONResponse(content=snapshot)
 
 
+async def handle_cache_observability(
+    request: Request, period: str | None = "24h"
+) -> Response:
+    """GET /api/stats/cache-observability.
+
+    Phase 1 cache-counter observability.  Reports a ``cache_counter_status``
+    breakdown (reported / not_reported / unknown_format) plus a
+    ``cache_hit_ratio_known_only`` whose denominator is restricted to
+    rows with ``cache_counter_status='reported'`` so dashboards never
+    silently mix zero with missing.
+
+    Output shape:
+
+    - ``period``                              : resolved time-range label
+    - ``total_requests``                      : finalized rows in window
+    - ``by_status``                           : per-status request counts
+    - ``per_protocol_status``                 : (provider_id,
+      upstream_protocol) -> per-status dict
+    - ``total_cached_input_tokens``           : sum across REPORTED rows
+    - ``total_cache_read_input_tokens``       : Anthropic-specific read
+    - ``total_cache_creation_input_tokens``   : Anthropic-specific write
+    - ``total_cache_write_input_tokens``      : alias of write
+    - ``cache_hit_ratio_known_only``          : cached/input, REPORTED only
+    - ``transcoded_requests``                 : rows with transcoded=1
+    """
+    from eggpool.stats import resolve_time_range
+
+    time_range = resolve_time_range(period)
+    stats = request.app.state.stats
+    payload = await stats.get_cache_observability(time_range)
+    return JSONResponse(content={"period": time_range.label, **payload})
+
+
 async def handle_recent_requests(
     request: Request,
     limit: int = 50,
@@ -654,6 +687,12 @@ def register_stats_routes(app: Any, require_auth: bool = False) -> None:
         methods=["GET"],
         dependencies=dependencies,
     )
+    app.add_api_route(
+        path="/api/stats/cache-observability",
+        endpoint=handle_cache_observability,
+        methods=["GET"],
+        dependencies=dependencies,
+    )
 
     # Per-request trace endpoint.  Per-request traces expose the
     # selected model, prompt volume, and error detail that operators
@@ -682,6 +721,7 @@ __all__ = [
     "handle_account_stats",
     "handle_attempt_stats",
     "handle_bandwidth",
+    "handle_cache_observability",
     "handle_errors",
     "handle_events",
     "handle_ip_stats",

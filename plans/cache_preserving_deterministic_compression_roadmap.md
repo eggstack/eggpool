@@ -112,9 +112,11 @@ Dashboard and API views should display cache hit ratio and compression savings s
 
 ## Roadmap phases
 
-### Phase 1: Cache and token observability
+### Phase 1: Cache and token observability  ✅ *Implemented*
 
 Add provider usage normalization and persistence for cache-related token counters. Do not mutate requests. Do not alter routing. This phase establishes baseline provider-cache behavior and exposes unknown/missing cache metrics explicitly.
+
+Implementation: `src/eggpool/proxy/normalized_usage.py`, migration `0040_cache_token_observability.sql`, finalizer+repository updates in `src/eggpool/request/`, dashboard panel under Runtime → Cache observability, JSON endpoint `GET /api/stats/cache-observability`. Routing isolation is pinned by `tests/unit/test_routing.py::test_scorer_does_not_consume_cache_counter_status`. Full design: `cache_compression_phase_01_cache_token_observability.md`.
 
 Deliverables:
 

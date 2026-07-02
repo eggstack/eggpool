@@ -54,6 +54,13 @@ from eggpool.providers.contract import (
     compose_provider_url,
 )
 from eggpool.proxy.client import filter_response_headers
+from eggpool.proxy.normalized_usage import (
+    CacheCounterStatus,
+    NormalizedUsage,
+    emit_parse_failure_log,
+    normalize_from_stream_result,
+    normalize_usage,
+)
 from eggpool.proxy.sse_observer import IncrementalSSEObserver
 from eggpool.proxy.usage import (
     StreamUsageResult,
@@ -193,6 +200,87 @@ def _safe_ratio(numerator: int, denominator: int) -> float | None:
     if denominator <= 0:
         return None
     return float(numerator) / float(denominator)
+
+
+def _build_normalized_usage(
+    *,
+    usage: StreamUsageResult | None,
+    raw_payload: Any | None,
+    protocol: str,
+    provider_id: str | None,
+    model_id: str | None,
+    is_streaming: bool,
+) -> NormalizedUsage | None:
+    """Build a :class:`NormalizedUsage` for a completed request.
+
+    The non-streaming path passes the full upstream JSON body so the
+    helper can re-extract cache fields with the same key-presence
+    semantics as :func:`normalize_usage`.  The streaming path passes
+    only the merged :class:`StreamUsageResult` because the raw
+    payload is not preserved across SSE frames; in that case the
+    helper calls :func:`normalize_from_stream_result` so the
+    zero-vs-``None`` distinction is preserved from the per-event
+    counters.
+
+    Returns ``None`` when both inputs are unavailable so the
+    finalizer can fall back to the legacy zero-token columns.
+    """
+    if raw_payload is not None:
+        return normalize_usage(raw_payload, protocol=protocol)
+
+    if usage is not None:
+        normalized = normalize_from_stream_result(
+            usage,
+            protocol=protocol,
+            raw_usage=None,
+        )
+        if (
+            is_streaming
+            and normalized.cache_counter_status != CacheCounterStatus.REPORTED
+            and not getattr(usage, "is_complete", False)
+        ):
+            # Streaming ended before the final usage-bearing event
+            # arrived.  Log a structured diagnostic so operators can
+            # answer "which providers are dropping the final usage
+            # event?" without grepping stdout.
+            emit_parse_failure_log(
+                _diag_for(
+                    provider_id=provider_id,
+                    model_id=model_id,
+                    protocol=protocol,
+                    reason="missing_final_stream_event",
+                )
+            )
+        return normalized
+
+    emit_parse_failure_log(
+        _diag_for(
+            provider_id=provider_id,
+            model_id=model_id,
+            protocol=protocol,
+            reason="missing_usage_block",
+        )
+    )
+    return NormalizedUsage(cache_counter_status=CacheCounterStatus.UNKNOWN_FORMAT)
+
+
+def _diag_for(
+    *,
+    provider_id: str | None,
+    model_id: str | None,
+    protocol: str,
+    reason: str,
+) -> Any:
+    """Construct a :class:`UsageParseDiag` for a failure-mode log line."""
+    from eggpool.proxy.normalized_usage import UsageParseDiag
+
+    return UsageParseDiag(
+        provider_id=provider_id,
+        model_id=model_id,
+        protocol=protocol,
+        reason=reason,
+        raw_keys=[],
+    )
 
 
 @dataclass(slots=True)
@@ -1521,6 +1609,27 @@ class RequestCoordinator:
             usage = self._extract_non_stream_usage(
                 context.upstream_protocol, body, provider_id=selected.provider_id
             )
+            # Re-decode the body for the normalized usage layer.  The
+            # extractor above already produces a StreamUsageResult
+            # with zero-vs-coerced semantics; the normalized layer
+            # needs the raw ``usage`` object so it can distinguish
+            # missing fields from explicit zeros.  Decode failures
+            # fall back to the per-counter stream result.
+            raw_response_payload: dict[str, Any] | None
+            try:
+                raw_response_payload = json.loads(body)
+            except (json.JSONDecodeError, ValueError):
+                raw_response_payload = None
+            normalized_usage = _build_normalized_usage(
+                usage=usage,
+                raw_payload=raw_response_payload
+                if isinstance(raw_response_payload, dict)
+                else None,
+                protocol=context.upstream_protocol,
+                provider_id=selected.provider_id,
+                model_id=selected.model_id,
+                is_streaming=False,
+            )
             upstream_req_id = self._get_header_value(
                 resp_headers, _UPSTREAM_REQUEST_ID_HEADERS
             )
@@ -1561,6 +1670,8 @@ class RequestCoordinator:
                     thinking_trace_json=_serialize_thinking_trace(
                         context.thinking_trace
                     ),
+                    normalized_usage=normalized_usage,
+                    transcoded=context.transcode_context is not None,
                 ),
             )
 
@@ -1905,6 +2016,15 @@ class RequestCoordinator:
                     read_ms=upstream_read_ms_value,
                 )
 
+                normalized_usage = _build_normalized_usage(
+                    usage=usage_result,
+                    raw_payload=None,
+                    protocol=context.upstream_protocol,
+                    provider_id=selected.provider_id,
+                    model_id=selected.model_id,
+                    is_streaming=True,
+                )
+
                 # Finalize via RequestFinalizer
                 await finalizer.finalize(
                     selected,
@@ -1933,6 +2053,8 @@ class RequestCoordinator:
                         thinking_trace_json=_serialize_thinking_trace(
                             context.thinking_trace
                         ),
+                        normalized_usage=normalized_usage,
+                        transcoded=context.transcode_context is not None,
                     ),
                 )
 
@@ -2015,6 +2137,17 @@ class RequestCoordinator:
                                         thinking_trace_json=_serialize_thinking_trace(
                                             context.thinking_trace
                                         ),
+                                        normalized_usage=_build_normalized_usage(
+                                            usage=usage_result,
+                                            raw_payload=None,
+                                            protocol=context.upstream_protocol,
+                                            provider_id=selected.provider_id,
+                                            model_id=selected.model_id,
+                                            is_streaming=True,
+                                        ),
+                                        transcoded=(
+                                            context.transcode_context is not None
+                                        ),
                                     ),
                                 )
                             ),
@@ -2073,6 +2206,15 @@ class RequestCoordinator:
                         thinking_trace_json=_serialize_thinking_trace(
                             context.thinking_trace
                         ),
+                        normalized_usage=_build_normalized_usage(
+                            usage=usage_result,
+                            raw_payload=None,
+                            protocol=context.upstream_protocol,
+                            provider_id=selected.provider_id,
+                            model_id=selected.model_id,
+                            is_streaming=True,
+                        ),
+                        transcoded=context.transcode_context is not None,
                     ),
                 )
                 raise

@@ -1876,3 +1876,137 @@ async def fetch_transcoding_stats(
         "per_direction": per_direction,
         "top_loss_warnings": top_loss_warnings,
     }
+
+
+async def fetch_cache_observability(
+    db: Database,
+    start: str,
+    end: str,
+) -> dict[str, Any]:
+    """Phase 1 cache-counter observability aggregates.
+
+    Reads only the new ``cache_counter_status`` and supporting
+    cache-token columns populated by
+    :func:`eggpool.proxy.normalized_usage.normalize_usage`.  Returns a
+    dict with:
+
+    - ``total_requests``             : total finalized rows in the window.
+    - ``by_status``                  : ``{"reported", "not_reported",
+      "unknown_format"} -> request_count`` so dashboards can render
+      coverage by provider/protocol.
+    - ``per_protocol_status``        : ``(provider_id, upstream_protocol)
+      -> {"reported", "not_reported", "unknown_format"}``.
+    - ``total_cached_input_tokens``  : sum of ``cached_input_tokens``
+      across rows with status="reported".
+    - ``total_cache_read_input_tokens`` : Anthropic-specific cache read.
+    - ``total_cache_creation_input_tokens`` : Anthropic-specific cache write.
+    - ``cache_hit_ratio_known_only`` : ``cached_input_tokens / input_tokens``
+      restricted to rows where status="reported" so the ratio never
+      silently mixes zero with missing.
+    - ``transcoded_requests``        : rows where the request required
+      protocol transcoding (mirrors :func:`fetch_transcoding_stats`).
+
+    All numeric fields default to 0; ratios default to ``None`` when
+    the denominator is zero.
+    """
+    start_dt = _format_dt(start)
+    end_dt = _format_dt(end)
+
+    status_sql = """
+    SELECT
+        COALESCE(cache_counter_status, 'not_reported') as cache_counter_status,
+        COUNT(*) as request_count
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+    GROUP BY cache_counter_status
+    """
+    rows = await db.fetch_all(status_sql, (start_dt, end_dt))
+    by_status = {
+        "reported": 0,
+        "not_reported": 0,
+        "unknown_format": 0,
+    }
+    for row in rows:
+        d = dict(row)
+        status = d["cache_counter_status"]
+        if status not in by_status:
+            # Forward-compatible: unknown statuses are surfaced under
+            # ``unknown_format`` so dashboards never silently drop rows.
+            status = "unknown_format"
+        by_status[status] = int(d["request_count"])
+
+    protocol_status_sql = """
+    SELECT
+        COALESCE(provider_id, 'unknown') as provider_id,
+        COALESCE(upstream_protocol, 'unknown') as upstream_protocol,
+        COALESCE(cache_counter_status, 'not_reported') as cache_counter_status,
+        COUNT(*) as request_count
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+    GROUP BY provider_id, upstream_protocol, cache_counter_status
+    """
+    protocol_rows = await db.fetch_all(protocol_status_sql, (start_dt, end_dt))
+    per_protocol_status: dict[tuple[str, str], dict[str, int]] = {}
+    for row in protocol_rows:
+        d = dict(row)
+        key = (d["provider_id"], d["upstream_protocol"])
+        bucket = per_protocol_status.setdefault(
+            key,
+            {"reported": 0, "not_reported": 0, "unknown_format": 0},
+        )
+        status = d["cache_counter_status"]
+        if status not in bucket:
+            status = "unknown_format"
+        bucket[status] += int(d["request_count"])
+
+    totals_sql = """
+    SELECT
+        COALESCE(SUM(CASE WHEN cache_counter_status = 'reported'
+            THEN cached_input_tokens ELSE 0 END), 0) as total_cached_input_tokens,
+        COALESCE(SUM(CASE WHEN cache_counter_status = 'reported'
+            THEN cache_read_input_tokens ELSE 0 END), 0)
+            as total_cache_read_input_tokens,
+        COALESCE(SUM(CASE WHEN cache_counter_status = 'reported'
+            THEN cache_creation_input_tokens ELSE 0 END), 0)
+            as total_cache_creation_input_tokens,
+        COALESCE(SUM(CASE WHEN cache_counter_status = 'reported'
+            THEN cache_write_input_tokens ELSE 0 END), 0)
+            as total_cache_write_input_tokens,
+        COALESCE(SUM(CASE WHEN cache_counter_status = 'reported'
+            THEN input_tokens ELSE 0 END), 0) as total_input_tokens_reported,
+        COALESCE(SUM(CASE WHEN transcoded = 1 THEN 1 ELSE 0 END), 0)
+            as transcoded_requests
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+    """
+    totals_row = await db.fetch_one(totals_sql, (start_dt, end_dt))
+    totals = dict(totals_row) if totals_row else {}
+
+    total_cached = int(totals.get("total_cached_input_tokens", 0) or 0)
+    total_input_reported = int(totals.get("total_input_tokens_reported", 0) or 0)
+    cache_hit_ratio_known_only = (
+        total_cached / total_input_reported if total_input_reported > 0 else None
+    )
+
+    total = sum(by_status.values())
+
+    return {
+        "total_requests": total,
+        "by_status": by_status,
+        "per_protocol_status": per_protocol_status,
+        "total_cached_input_tokens": total_cached,
+        "total_cache_read_input_tokens": int(
+            totals.get("total_cache_read_input_tokens", 0) or 0
+        ),
+        "total_cache_creation_input_tokens": int(
+            totals.get("total_cache_creation_input_tokens", 0) or 0
+        ),
+        "total_cache_write_input_tokens": int(
+            totals.get("total_cache_write_input_tokens", 0) or 0
+        ),
+        "cache_hit_ratio_known_only": cache_hit_ratio_known_only,
+        "transcoded_requests": int(totals.get("transcoded_requests", 0) or 0),
+    }

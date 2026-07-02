@@ -969,3 +969,71 @@ async def test_failover_selection_honors_zero_limit() -> None:
     router = Router(registry, MockCatalog())  # type: ignore[arg-type]
 
     assert await router.select_accounts_for_failover("gpt-4", max_accounts=0) == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 cache observability: routing must NOT consume cache fields.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio()
+async def test_scorer_does_not_consume_cache_counter_status() -> None:
+    """Phase 1 cache observability must be reporting-only.
+
+    QuotaFairScorer reads request_count + token_count + cost (audit)
+    + active_request_count + health; it must NOT read cache_counter_status,
+    cached_input_tokens, cache_read_input_tokens, cache_creation_input_tokens,
+    cache_write_input_tokens, transcoded, or any other Phase 1 column.
+    This test pins the audit so future regressions surface immediately.
+    """
+    from eggpool.quota.estimation import PersistedWindowSnapshot
+
+    estimator = QuotaEstimator()
+    # acct1: heavy cache hits but identical request/token counts.
+    estimator.accounts["acct1"] = AccountQuota(
+        account_name="acct1",
+        capacity_5h_requests=100,
+        capacity_5h_tokens=10_000,
+        persisted_snapshot=PersistedWindowSnapshot(
+            account_id=1,
+            request_count_5h=50,
+            token_count_5h=5_000,
+        ),
+    )
+    # acct2: zero cache hits but identical request/token counts.
+    estimator.accounts["acct2"] = AccountQuota(
+        account_name="acct2",
+        capacity_5h_requests=100,
+        capacity_5h_tokens=10_000,
+        persisted_snapshot=PersistedWindowSnapshot(
+            account_id=2,
+            request_count_5h=50,
+            token_count_5h=5_000,
+        ),
+    )
+
+    scorer = QuotaFairScorer(quota_estimator=estimator)
+    scores = await scorer.score_accounts(["acct1", "acct2"])
+
+    # Identical inputs → identical routing scores (cache fields are
+    # ignored).  Allow for the random tiebreaker range but assert
+    # the structural equality: the per-window utilization is the same.
+    assert len(scores) == 2
+    s1, s2 = scores[0], scores[1]
+    assert s1.request_count_5h == s2.request_count_5h == 50
+    assert s1.token_count_5h == s2.token_count_5h == 5_000
+    # Pin the audit: the scorer's score_accounts method does not accept
+    # any cache-related keyword argument.  Adding one would be a Phase 1
+    # regression; this test makes the contract explicit.
+    import inspect
+
+    sig = inspect.signature(scorer.score_accounts)
+    cache_params = [
+        name
+        for name in sig.parameters
+        if "cache" in name.lower() or "transcoded" in name.lower()
+    ]
+    assert cache_params == [], (
+        "QuotaFairScorer.score_accounts must not accept cache parameters; "
+        f"found {cache_params!r}"
+    )

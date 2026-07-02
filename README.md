@@ -19,6 +19,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Designed for lightweight deployments (Raspberry Pi, SBCs)
 - Transparent protocol transcoding between OpenAI and Anthropic request formats
 - Thinking/reasoning capability-aware routing with configurable budget mapping
+- Provider-neutral cache observability — records whether upstreams report `cache_read` / `cache_creation` (Anthropic) or `prompt_tokens_details.cached_tokens` (OpenAI) and exposes a dashboard hit ratio that never silently mixes zero with missing
 
 ## Quick Start
 
@@ -124,6 +125,16 @@ Phase 6 feature flags (`[transcoder.features]`) — all **off** by default:
 - `anthropic_primitives` — `top_k`, `cache_control`, `context_management`, `container`, `mcp_servers`
 
 See [docs/transcoding.md](docs/transcoding.md) for the full translation table and known limitations.
+
+## Cache observability
+
+Every finalized request is annotated with a `cache_counter_status` of `reported`, `not_reported`, or `unknown_format`, plus the parsed cache-token counts the upstream actually surfaced. The status lets you tell apart three cases:
+
+- **`reported`** — upstream payload included cache fields (Anthropic `cache_read_input_tokens` / `cache_creation_input_tokens`, OpenAI `prompt_tokens_details.cached_tokens`); counts are recorded.
+- **`not_reported`** — payload parsed cleanly but no cache fields were present (the canonical OpenAI shape, or providers that omit the breakdown).
+- **`unknown_format`** — payload could not be parsed, or returned a shape EggPool does not recognize. The cache state is ambiguous and must not be assumed to be zero.
+
+Observability is reporting-only: `QuotaFairScorer` still routes on request count + token count + cost (audit) + active count + health, never on cache fields. The dashboard renders a coverage card under "Runtime → Cache observability" and the JSON API exposes the breakdown at `GET /api/stats/cache-observability`.
 
 ## API Endpoints
 

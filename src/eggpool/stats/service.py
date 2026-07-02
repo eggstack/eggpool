@@ -1353,6 +1353,24 @@ class StatsService:
             time_range.end_str(),
         )
 
+    async def get_cache_observability(
+        self, period: str | None = None
+    ) -> dict[str, Any]:
+        """Phase 1 cache-counter observability aggregates.
+
+        Reads ``cache_counter_status`` + supporting cache-token columns
+        populated by :mod:`eggpool.proxy.normalized_usage`.  Reports a
+        per-status breakdown plus ``cache_hit_ratio_known_only`` whose
+        denominator is restricted to rows with status="reported" so
+        dashboards never silently mix zero with missing.
+        """
+        time_range = resolve_time_range(period)
+        return await queries.fetch_cache_observability(
+            self._db,
+            time_range.start_str(),
+            time_range.end_str(),
+        )
+
 
 _BUCKET_SIZES: dict[str, int] = {
     "hour": 3600,
