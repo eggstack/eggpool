@@ -4059,6 +4059,121 @@ def render_runtime(
         co_ratio = cache_observability.get("cache_hit_ratio_known_only")
         co_ratio_str = f"{float(co_ratio):.1%}" if co_ratio is not None else "—"
         co_total = int(cache_observability.get("total_requests", 0))
+        co_input_total = int(cache_observability.get("input_tokens_total", 0))
+        co_output_total = int(cache_observability.get("output_tokens_total", 0))
+
+        # Per-provider × protocol breakdown rows.
+        co_protocol: Any = cache_observability.get("per_protocol_status", {}) or {}
+        protocol_rows_html = ""
+        if co_protocol:
+            _protocol_cells: list[str] = []
+            for (pid, proto), counts in sorted(
+                co_protocol.items(), key=lambda kv: (-kv[1].get("reported", 0), kv[0])
+            ):
+                reported = int(counts.get("reported", 0))
+                not_reported = int(counts.get("not_reported", 0))
+                unknown = int(counts.get("unknown_format", 0))
+                total_p = reported + not_reported + unknown
+                _protocol_cells.append(
+                    f"""<tr>
+        <td>{escape(str(pid))}</td>
+        <td>{escape(str(proto))}</td>
+        <td class='num'>{format_int(total_p)}</td>
+        <td class='num'>{format_int(reported)}</td>
+        <td class='num'>{format_int(not_reported)}</td>
+        <td class='num'>{format_int(unknown)}</td>
+      </tr>"""
+                )
+            protocol_rows_html = "\n".join(_protocol_cells)
+
+        # Per-account breakdown rows.
+        co_acct: Any = cache_observability.get("per_account_status", {}) or {}
+        account_rows_html = ""
+        if co_acct:
+            _acct_cells: list[str] = []
+            for acct_id, acct_data in sorted(
+                co_acct.items(), key=lambda kv: (-kv[1].get("total_requests", 0), kv[0])
+            ):
+                acct_total = int(acct_data.get("total_requests", 0))
+                acct_cached = int(acct_data.get("total_cached_input_tokens", 0))
+                _acct_cells.append(
+                    f"""<tr>
+        <td>{escape(str(acct_id))}</td>
+        <td class='num'>{format_int(acct_total)}</td>
+        <td class='num'>{format_int(acct_cached)}</td>
+      </tr>"""
+                )
+            account_rows_html = "\n".join(_acct_cells)
+
+        # Per-model breakdown rows.
+        co_mdl: Any = cache_observability.get("per_model_status", {}) or {}
+        model_rows_html = ""
+        if co_mdl:
+            _mdl_cells: list[str] = []
+            for model_id, mdl_data in sorted(
+                co_mdl.items(),
+                key=lambda kv: (-kv[1].get("total_requests", 0), kv[0]),
+            ):
+                mdl_total = int(mdl_data.get("total_requests", 0))
+                mdl_cached = int(mdl_data.get("total_cached_input_tokens", 0))
+                _mdl_cells.append(
+                    f"""<tr>
+        <td>{escape(str(model_id))}</td>
+        <td class='num'>{format_int(mdl_total)}</td>
+        <td class='num'>{format_int(mdl_cached)}</td>
+      </tr>"""
+                )
+            model_rows_html = "\n".join(_mdl_cells)
+
+        # Build the optional sub-tables only when data exists.
+        protocol_section = ""
+        if protocol_rows_html:
+            protocol_section = f"""
+  <h4>By provider &amp; protocol</h4>
+  <table class="data compact">
+    <thead><tr>
+      {_th("Provider")}
+      {_th("Protocol")}
+      {_th("Total", priority=2)}
+      {_th("Reported", priority=2)}
+      {_th("Not reported", priority=2)}
+      {_th("Unknown", priority=2)}
+    </tr></thead>
+    <tbody>
+      {protocol_rows_html}
+    </tbody>
+  </table>"""
+
+        account_section = ""
+        if account_rows_html:
+            account_section = f"""
+  <h4>By account</h4>
+  <table class="data compact">
+    <thead><tr>
+      {_th("Account ID")}
+      {_th("Total requests", priority=2)}
+      {_th("Cached tokens (REPORTED)", priority=2)}
+    </tr></thead>
+    <tbody>
+      {account_rows_html}
+    </tbody>
+  </table>"""
+
+        model_section = ""
+        if model_rows_html:
+            model_section = f"""
+  <h4>By model</h4>
+  <table class="data compact">
+    <thead><tr>
+      {_th("Model")}
+      {_th("Total requests", priority=2)}
+      {_th("Cached tokens (REPORTED)", priority=2)}
+    </tr></thead>
+    <tbody>
+      {model_rows_html}
+    </tbody>
+  </table>"""
+
         cache_card = f"""
 <section class="panel">
   <h3>Cache observability ({escape(period)})</h3>
@@ -4104,6 +4219,14 @@ def render_runtime(
         <td class='num'>{format_int(co_total)}</td>
       </tr>
       <tr>
+        <td>Input tokens (all requests)</td>
+        <td class='num'>{format_int(co_input_total)}</td>
+      </tr>
+      <tr>
+        <td>Output tokens (all requests)</td>
+        <td class='num'>{format_int(co_output_total)}</td>
+      </tr>
+      <tr>
         <td>Cached input tokens (REPORTED)</td>
         <td class='num'>{format_int(co_total_cached)}</td>
       </tr>
@@ -4117,6 +4240,9 @@ def render_runtime(
       </tr>
     </tbody>
   </table>
+  {protocol_section}
+  {account_section}
+  {model_section}
 </section>
 """
 

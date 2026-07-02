@@ -442,6 +442,8 @@ def emit_parse_failure_log(diag: UsageParseDiag) -> None:
         logger.debug("cache_usage_unknown_shape", extra=log_payload)
     elif diag.reason == "missing_final_stream_event":
         logger.debug("usage_parse_missing_final_stream_event", extra=log_payload)
+    elif diag.reason == "preserved_raw_only":
+        logger.debug("usage_parse_preserved_raw_only", extra=log_payload)
     else:
         logger.debug("usage_parse_preserved_raw_only", extra=log_payload)
 

@@ -1890,21 +1890,38 @@ async def fetch_cache_observability(
     :func:`eggpool.proxy.normalized_usage.normalize_usage`.  Returns a
     dict with:
 
-    - ``total_requests``             : total finalized rows in the window.
-    - ``by_status``                  : ``{"reported", "not_reported",
-      "unknown_format"} -> request_count`` so dashboards can render
-      coverage by provider/protocol.
-    - ``per_protocol_status``        : ``(provider_id, upstream_protocol)
-      -> {"reported", "not_reported", "unknown_format"}``.
-    - ``total_cached_input_tokens``  : sum of ``cached_input_tokens``
-      across rows with status="reported".
-    - ``total_cache_read_input_tokens`` : Anthropic-specific cache read.
-    - ``total_cache_creation_input_tokens`` : Anthropic-specific cache write.
-    - ``cache_hit_ratio_known_only`` : ``cached_input_tokens / input_tokens``
-      restricted to rows where status="reported" so the ratio never
-      silently mixes zero with missing.
-    - ``transcoded_requests``        : rows where the request required
-      protocol transcoding (mirrors :func:`fetch_transcoding_stats`).
+    - ``total_requests``                  : total finalized rows in the
+      window.  Also exposed as ``requests_total`` at top level.
+    - ``by_status``                       : ``{"reported", "not_reported",
+      "unknown_format"} -> request_count``.  The plan's literal field
+      names ``cache_counter_reported_requests`` and
+      ``cache_counter_unknown_requests`` are also surfaced as
+      top-level keys for backward compatibility with the plan shape.
+    - ``per_protocol_status``             : ``(provider_id,
+      upstream_protocol) -> {"reported", "not_reported",
+      "unknown_format"}``.
+    - ``per_account_status``              : ``account_id -> {"reported",
+      "not_reported", "unknown_format", "total_requests",
+      "total_cached_input_tokens"}``.
+    - ``per_model_status``                : ``model_id -> {"reported",
+      "not_reported", "unknown_format", "total_requests",
+      "total_cached_input_tokens"}``.
+    - ``input_tokens_total``              : sum of ``input_tokens``
+      across all rows (used by dashboards as a global denominator).
+    - ``output_tokens_total``             : sum of ``output_tokens``
+      across all rows.
+    - ``total_cached_input_tokens``       : sum of
+      ``cached_input_tokens`` across rows with
+      status="reported".
+    - ``total_cache_read_input_tokens``   : Anthropic-specific cache
+      read.
+    - ``total_cache_creation_input_tokens``: Anthropic-specific cache
+      write.
+    - ``cache_hit_ratio_known_only``      : ``cached_input_tokens /
+      input_tokens`` restricted to rows where status="reported" so
+      the ratio never silently mixes zero with missing.
+    - ``transcoded_requests``             : rows where the request
+      required protocol transcoding.
 
     All numeric fields default to 0; ratios default to ``None`` when
     the denominator is zero.
@@ -1912,6 +1929,7 @@ async def fetch_cache_observability(
     start_dt = _format_dt(start)
     end_dt = _format_dt(end)
 
+    # --- per-status breakdown ---
     status_sql = """
     SELECT
         COALESCE(cache_counter_status, 'not_reported') as cache_counter_status,
@@ -1936,6 +1954,7 @@ async def fetch_cache_observability(
             status = "unknown_format"
         by_status[status] = int(d["request_count"])
 
+    # --- per (provider, upstream_protocol) breakdown ---
     protocol_status_sql = """
     SELECT
         COALESCE(provider_id, 'unknown') as provider_id,
@@ -1961,6 +1980,78 @@ async def fetch_cache_observability(
             status = "unknown_format"
         bucket[status] += int(d["request_count"])
 
+    # --- per-account breakdown ---
+    account_status_sql = """
+    SELECT
+        COALESCE(account_id, 0) as account_id,
+        COALESCE(cache_counter_status, 'not_reported') as cache_counter_status,
+        COUNT(*) as request_count,
+        COALESCE(SUM(CASE WHEN cache_counter_status = 'reported'
+            THEN cached_input_tokens ELSE 0 END), 0) as total_cached_input_tokens
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+    GROUP BY account_id, cache_counter_status
+    """
+    account_rows = await db.fetch_all(account_status_sql, (start_dt, end_dt))
+    _status_bucket: dict[str, int]  # type: ignore[annotation-unchecked]
+    per_account_status: dict[int, dict[str, Any]] = {}
+    for row in account_rows:
+        d = dict(row)
+        acct_id = int(d["account_id"])
+        bucket = per_account_status.setdefault(
+            acct_id,
+            {
+                "reported": 0,
+                "not_reported": 0,
+                "unknown_format": 0,
+                "total_requests": 0,
+                "total_cached_input_tokens": 0,
+            },
+        )
+        status = d["cache_counter_status"]
+        if status not in ("reported", "not_reported", "unknown_format"):
+            status = "unknown_format"
+        bucket[status] += int(d["request_count"])
+        bucket["total_requests"] += int(d["request_count"])
+        bucket["total_cached_input_tokens"] += int(d["total_cached_input_tokens"])
+
+    # --- per-model breakdown ---
+    model_status_sql = """
+    SELECT
+        COALESCE(model_id, 'unknown') as model_id,
+        COALESCE(cache_counter_status, 'not_reported') as cache_counter_status,
+        COUNT(*) as request_count,
+        COALESCE(SUM(CASE WHEN cache_counter_status = 'reported'
+            THEN cached_input_tokens ELSE 0 END), 0) as total_cached_input_tokens
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+    GROUP BY model_id, cache_counter_status
+    """
+    model_rows = await db.fetch_all(model_status_sql, (start_dt, end_dt))
+    per_model_status: dict[str, dict[str, Any]] = {}
+    for row in model_rows:
+        d = dict(row)
+        mid = d["model_id"]
+        bucket = per_model_status.setdefault(
+            mid,
+            {
+                "reported": 0,
+                "not_reported": 0,
+                "unknown_format": 0,
+                "total_requests": 0,
+                "total_cached_input_tokens": 0,
+            },
+        )
+        status = d["cache_counter_status"]
+        if status not in ("reported", "not_reported", "unknown_format"):
+            status = "unknown_format"
+        bucket[status] += int(d["request_count"])
+        bucket["total_requests"] += int(d["request_count"])
+        bucket["total_cached_input_tokens"] += int(d["total_cached_input_tokens"])
+
+    # --- global totals ---
     totals_sql = """
     SELECT
         COALESCE(SUM(CASE WHEN cache_counter_status = 'reported'
@@ -1974,6 +2065,8 @@ async def fetch_cache_observability(
         COALESCE(SUM(CASE WHEN cache_counter_status = 'reported'
             THEN cache_write_input_tokens ELSE 0 END), 0)
             as total_cache_write_input_tokens,
+        COALESCE(SUM(input_tokens), 0) as total_input_tokens,
+        COALESCE(SUM(output_tokens), 0) as total_output_tokens,
         COALESCE(SUM(CASE WHEN cache_counter_status = 'reported'
             THEN input_tokens ELSE 0 END), 0) as total_input_tokens_reported,
         COALESCE(SUM(CASE WHEN transcoded = 1 THEN 1 ELSE 0 END), 0)
@@ -1994,9 +2087,18 @@ async def fetch_cache_observability(
     total = sum(by_status.values())
 
     return {
+        # Top-level aliases matching the plan's literal field names.
+        "requests_total": total,
+        "input_tokens_total": int(totals.get("total_input_tokens", 0) or 0),
+        "output_tokens_total": int(totals.get("total_output_tokens", 0) or 0),
+        "cache_counter_reported_requests": by_status["reported"],
+        "cache_counter_unknown_requests": by_status["unknown_format"],
+        # Backward-compatible nested dicts kept for the dashboard.
         "total_requests": total,
         "by_status": by_status,
         "per_protocol_status": per_protocol_status,
+        "per_account_status": per_account_status,
+        "per_model_status": per_model_status,
         "total_cached_input_tokens": total_cached,
         "total_cache_read_input_tokens": int(
             totals.get("total_cache_read_input_tokens", 0) or 0

@@ -1359,10 +1359,18 @@ class StatsService:
         """Phase 1 cache-counter observability aggregates.
 
         Reads ``cache_counter_status`` + supporting cache-token columns
-        populated by :mod:`eggpool.proxy.normalized_usage`.  Reports a
-        per-status breakdown plus ``cache_hit_ratio_known_only`` whose
-        denominator is restricted to rows with status="reported" so
-        dashboards never silently mix zero with missing.
+        populated by :mod:`eggpool.proxy.normalized_usage`.  Returns:
+
+        - ``requests_total`` / ``total_requests``
+        - ``cache_counter_reported_requests`` / ``cache_counter_unknown_requests``
+        - ``input_tokens_total`` / ``output_tokens_total``
+        - ``total_cached_input_tokens`` / ``cache_hit_ratio_known_only``
+        - ``by_status`` / ``per_protocol_status``
+        - ``per_account_status`` / ``per_model_status``
+
+        The ``cache_hit_ratio_known_only`` denominator is restricted to
+        rows with ``cache_counter_status='reported'`` so dashboards never
+        silently mix zero with missing.
         """
         time_range = resolve_time_range(period)
         return await queries.fetch_cache_observability(

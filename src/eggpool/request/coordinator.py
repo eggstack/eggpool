@@ -224,9 +224,50 @@ def _build_normalized_usage(
 
     Returns ``None`` when both inputs are unavailable so the
     finalizer can fall back to the legacy zero-token columns.
+
+    Emits structured diagnostic logs via
+    :func:`eggpool.proxy.normalized_usage.emit_parse_failure_log`
+    for every parse-failure path:
+
+    * ``unknown_shape`` — ``raw_payload`` present but
+      ``normalize_usage`` returned ``UNKNOWN_FORMAT`` with a
+      parseable ``raw_usage`` block (shape unrecognized).
+    * ``preserved_raw_only`` — ``raw_payload`` present but
+      ``normalize_usage`` returned ``UNKNOWN_FORMAT`` with no
+      ``raw_usage`` block (payload not parseable).
+    * ``missing_final_stream_event`` — streaming ended before the
+      final usage-bearing SSE event arrived.
+    * ``missing_usage_block`` — both ``raw_payload`` and ``usage``
+      are ``None``.
     """
     if raw_payload is not None:
-        return normalize_usage(raw_payload, protocol=protocol)
+        normalized = normalize_usage(raw_payload, protocol=protocol)
+        if normalized.cache_counter_status == CacheCounterStatus.UNKNOWN_FORMAT:
+            # The upstream payload was present but EggPool could not
+            # classify the usage shape.  Emit the appropriate diagnostic:
+            # ``cache_usage_unknown_shape`` when a usage block existed
+            # but its shape was unrecognized (raw_usage is populated);
+            # ``usage_parse_preserved_raw_only`` when the payload could
+            # not be parsed at all (no usable usage block found).
+            if normalized.raw_usage is not None:
+                emit_parse_failure_log(
+                    _diag_for(
+                        provider_id=provider_id,
+                        model_id=model_id,
+                        protocol=protocol,
+                        reason="unknown_shape",
+                    )
+                )
+            else:
+                emit_parse_failure_log(
+                    _diag_for(
+                        provider_id=provider_id,
+                        model_id=model_id,
+                        protocol=protocol,
+                        reason="preserved_raw_only",
+                    )
+                )
+        return normalized
 
     if usage is not None:
         normalized = normalize_from_stream_result(

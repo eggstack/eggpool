@@ -477,16 +477,26 @@ async def handle_cache_observability(
     Output shape:
 
     - ``period``                              : resolved time-range label
-    - ``total_requests``                      : finalized rows in window
-    - ``by_status``                           : per-status request counts
-    - ``per_protocol_status``                 : (provider_id,
-      upstream_protocol) -> per-status dict
-    - ``total_cached_input_tokens``           : sum across REPORTED rows
+    - ``requests_total``                      : finalized rows in window
+    - ``cache_counter_reported_requests``      : rows where upstream
+      surfaced cache fields
+    - ``cache_counter_unknown_requests``       : rows with parse
+      failure or unrecognized shape
+    - ``input_tokens_total``                  : sum of input tokens
+    - ``output_tokens_total``                 : sum of output tokens
+    - ``total_cached_input_tokens``           : cached input (REPORTED)
     - ``total_cache_read_input_tokens``       : Anthropic-specific read
     - ``total_cache_creation_input_tokens``   : Anthropic-specific write
     - ``total_cache_write_input_tokens``      : alias of write
     - ``cache_hit_ratio_known_only``          : cached/input, REPORTED only
     - ``transcoded_requests``                 : rows with transcoded=1
+    - ``by_status``                           : per-status request counts
+    - ``per_protocol_status``                 : (provider_id,
+      upstream_protocol) -> per-status dict
+    - ``per_account_status``                  : account_id ->
+      per-status + totals dict
+    - ``per_model_status``                    : model_id ->
+      per-status + totals dict
     """
     from eggpool.stats import resolve_time_range
 
