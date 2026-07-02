@@ -3492,6 +3492,7 @@ def render_runtime(
     update_info: Any | None = None,
     transcoding_stats: dict[str, Any] | None = None,
     cache_observability: dict[str, Any] | None = None,
+    canonical_request_segmentation: dict[str, Any] | None = None,
     period: str = "24h",
 ) -> str:
     """Render the runtime metrics page."""
@@ -4246,6 +4247,149 @@ def render_runtime(
 </section>
 """
 
+    # Phase 2 canonical request segmentation card.  Mirrors the
+    # cache-observability card layout: status counts in a metric
+    # strip, totals table, and per-model breakdown table.
+    segmentation_card = ""
+    if canonical_request_segmentation is not None:
+        seg_by_status: Any = canonical_request_segmentation.get("by_status", {}) or {}
+        seg_segmented = int(seg_by_status.get("segmented", 0))
+        seg_empty = int(seg_by_status.get("empty_request", 0))
+        seg_parse_fail = int(seg_by_status.get("parse_failure", 0))
+        seg_total = int(canonical_request_segmentation.get("total_requests", 0))
+        seg_token_totals: Any = (
+            canonical_request_segmentation.get("token_totals", {}) or {}
+        )
+        seg_byte_totals: Any = (
+            canonical_request_segmentation.get("byte_totals", {}) or {}
+        )
+        seg_compressible = int(
+            canonical_request_segmentation.get("compressible_candidate_requests", 0)
+        )
+        seg_protected = int(canonical_request_segmentation.get("protected_requests", 0))
+
+        # Per-model breakdown.
+        seg_mdl: Any = canonical_request_segmentation.get("per_model_status", {}) or {}
+        seg_model_rows_html = ""
+        if seg_mdl:
+            _mdl_cells: list[str] = []
+            for model_id, mdl_data in sorted(
+                seg_mdl.items(),
+                key=lambda kv: (-kv[1].get("total_requests", 0), kv[0]),
+            ):
+                mdl_total = int(mdl_data.get("total_requests", 0))
+                mdl_stable = int(mdl_data.get("stable_prefix_estimated_tokens", 0))
+                mdl_volatile = int(mdl_data.get("volatile_estimated_tokens", 0))
+                _mdl_cells.append(
+                    f"""<tr>
+        <td>{escape(str(model_id))}</td>
+        <td class='num'>{format_int(mdl_total)}</td>
+        <td class='num'>{format_int(mdl_stable)}</td>
+        <td class='num'>{format_int(mdl_volatile)}</td>
+      </tr>"""
+                )
+            seg_model_rows_html = "\n".join(_mdl_cells)
+
+        seg_model_section = ""
+        if seg_model_rows_html:
+            seg_model_section = f"""
+  <h4>By model</h4>
+  <table class="data compact">
+    <thead><tr>
+      {_th("Model")}
+      {_th("Total requests", priority=2)}
+      {_th("Stable prefix tokens", priority=2)}
+      {_th("Volatile suffix tokens", priority=2)}
+    </tr></thead>
+    <tbody>
+      {seg_model_rows_html}
+    </tbody>
+  </table>"""
+
+        segmentation_card = f"""
+<section class="panel">
+  <h3>Canonical request segmentation ({escape(period)})</h3>
+  <p class="sub">
+    Phase 2 structural segmentation: each request body is annotated
+    into stable_prefix / semi_stable_context / volatile_suffix
+    regions without mutating the payload.  This view is reporting
+    only; later phases will read these aggregates to enable
+    cache-preserving compression.
+  </p>
+  <section class="cards">
+    {
+            _render_metric_card(
+                title="Segmented",
+                metric=format_int(seg_segmented),
+                sub="produced a normal result",
+            )
+        }
+    {
+            _render_metric_card(
+                title="Empty request",
+                metric=format_int(seg_empty),
+                sub="no segmentable content",
+            )
+        }
+    {
+            _render_metric_card(
+                title="Parse failure",
+                metric=format_int(seg_parse_fail),
+                sub="non-mapping payload or unknown",
+            )
+        }
+    {
+            _render_metric_card(
+                title="With protected prefix",
+                metric=format_int(seg_protected),
+                sub="stable_prefix_bytes > 0",
+            )
+        }
+    {
+            _render_metric_card(
+                title="With volatile suffix",
+                metric=format_int(seg_compressible),
+                sub="volatile_bytes > 0",
+            )
+        }
+  </section>
+  <table class="data compact">
+    <thead><tr>{_th("Metric")}{_th("Value", priority=2)}</tr></thead>
+    <tbody>
+      <tr>
+        <td>Total finalized requests</td>
+        <td class='num'>{format_int(seg_total)}</td>
+      </tr>
+      <tr>
+        <td>Stable prefix tokens</td>
+        <td class='num'>{format_int(seg_token_totals.get("stable_prefix", 0))}</td>
+      </tr>
+      <tr>
+        <td>Semi-stable tokens</td>
+        <td class='num'>{format_int(seg_token_totals.get("semi_stable", 0))}</td>
+      </tr>
+      <tr>
+        <td>Volatile suffix tokens</td>
+        <td class='num'>{format_int(seg_token_totals.get("volatile", 0))}</td>
+      </tr>
+      <tr>
+        <td>Stable prefix bytes</td>
+        <td class='num'>{format_int(seg_byte_totals.get("stable_prefix", 0))}</td>
+      </tr>
+      <tr>
+        <td>Semi-stable bytes</td>
+        <td class='num'>{format_int(seg_byte_totals.get("semi_stable", 0))}</td>
+      </tr>
+      <tr>
+        <td>Volatile suffix bytes</td>
+        <td class='num'>{format_int(seg_byte_totals.get("volatile", 0))}</td>
+      </tr>
+    </tbody>
+  </table>
+  {seg_model_section}
+</section>
+"""
+
     body = f"""
 <h2>Runtime</h2>
 <p class="sub">Process-level diagnostics for the running EggPool instance.</p>
@@ -4270,6 +4414,8 @@ def render_runtime(
 {tc_card}
 
 {cache_card}
+
+{segmentation_card}
 
 <section class="panel">
   <h3>Health states</h3>

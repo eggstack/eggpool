@@ -2112,3 +2112,193 @@ async def fetch_cache_observability(
         "cache_hit_ratio_known_only": cache_hit_ratio_known_only,
         "transcoded_requests": int(totals.get("transcoded_requests", 0) or 0),
     }
+
+
+async def fetch_canonical_request_segmentation(
+    db: Database,
+    start: str,
+    end: str,
+) -> dict[str, Any]:
+    """Phase 2 canonical request segmentation aggregates.
+
+    Reads only the segmentation columns populated by
+    :func:`eggpool.transcoder.segmentation.segment_request` and
+    persisted by :meth:`RequestRepository.finalize_if_pending`.  The
+    segmentation pass is observational: it never mutates the payload
+    and never changes routing.  This query surfaces:
+
+    - ``total_requests``              : total finalized rows in the window.
+    - ``by_status``                   : ``{"segmented", "empty_request",
+      "parse_failure"} -> request_count``.
+    - ``per_provider_status``         : ``(provider_id, upstream_protocol) ->
+      {"segmented", "empty_request", "parse_failure"}``.
+    - ``per_model_status``            : ``model_id -> {"segmented",
+      "empty_request", "parse_failure", "total_requests",
+      "stable_prefix_estimated_tokens", "volatile_estimated_tokens"}``.
+    - ``token_totals``                : ``{"stable_prefix",
+      "semi_stable", "volatile", "all"} -> total_estimated_tokens`` across
+      the window (None is treated as 0).
+    - ``byte_totals``                 : ``{"stable_prefix", "semi_stable",
+      "volatile", "all"} -> total_bytes`` across the window.
+    - ``compressible_candidate_requests`` : count of rows that produced
+      at least one ``compressible_candidate=True`` segment.
+    - ``protected_requests``          : count of rows with
+      ``stable_prefix_bytes > 0`` (i.e. a protected prefix exists).
+
+    All numeric fields default to 0; ratios default to ``None`` when
+    the denominator is zero.  This query is reading-only: it never
+    mutates the database and never depends on request lifecycle state.
+    """
+    start_dt = _format_dt(start)
+    end_dt = _format_dt(end)
+
+    # --- per-status breakdown ---
+    status_sql = """
+    SELECT
+        COALESCE(segmentation_status, 'empty_request') as segmentation_status,
+        COUNT(*) as request_count
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+    GROUP BY segmentation_status
+    """
+    rows = await db.fetch_all(status_sql, (start_dt, end_dt))
+    by_status = {
+        "segmented": 0,
+        "empty_request": 0,
+        "parse_failure": 0,
+    }
+    for row in rows:
+        d = dict(row)
+        status = d["segmentation_status"]
+        if status not in by_status:
+            status = "parse_failure"  # forward-compat
+        by_status[status] = int(d["request_count"])
+
+    # --- per (provider, upstream_protocol) breakdown ---
+    protocol_status_sql = """
+    SELECT
+        COALESCE(provider_id, 'unknown') as provider_id,
+        COALESCE(upstream_protocol, 'unknown') as upstream_protocol,
+        COALESCE(segmentation_status, 'empty_request') as segmentation_status,
+        COUNT(*) as request_count
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+    GROUP BY provider_id, upstream_protocol, segmentation_status
+    """
+    protocol_rows = await db.fetch_all(protocol_status_sql, (start_dt, end_dt))
+    per_provider_status: dict[tuple[str, str], dict[str, int]] = {}
+    for row in protocol_rows:
+        d = dict(row)
+        key = (d["provider_id"], d["upstream_protocol"])
+        bucket = per_provider_status.setdefault(
+            key,
+            {"segmented": 0, "empty_request": 0, "parse_failure": 0},
+        )
+        status = d["segmentation_status"]
+        if status not in bucket:
+            status = "parse_failure"
+        bucket[status] += int(d["request_count"])
+
+    # --- per-model breakdown ---
+    model_status_sql = """
+    SELECT
+        COALESCE(model_id, 'unknown') as model_id,
+        COALESCE(segmentation_status, 'empty_request') as segmentation_status,
+        COUNT(*) as request_count,
+        COALESCE(SUM(CASE WHEN stable_prefix_estimated_tokens IS NOT NULL
+            THEN stable_prefix_estimated_tokens ELSE 0 END), 0)
+            as total_stable_prefix_estimated_tokens,
+        COALESCE(SUM(CASE WHEN volatile_estimated_tokens IS NOT NULL
+            THEN volatile_estimated_tokens ELSE 0 END), 0)
+            as total_volatile_estimated_tokens
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+    GROUP BY model_id, segmentation_status
+    """
+    model_rows = await db.fetch_all(model_status_sql, (start_dt, end_dt))
+    per_model_status: dict[str, dict[str, Any]] = {}
+    for row in model_rows:
+        d = dict(row)
+        mid = d["model_id"]
+        bucket = per_model_status.setdefault(
+            mid,
+            {
+                "segmented": 0,
+                "empty_request": 0,
+                "parse_failure": 0,
+                "total_requests": 0,
+                "stable_prefix_estimated_tokens": 0,
+                "volatile_estimated_tokens": 0,
+            },
+        )
+        status = d["segmentation_status"]
+        if status not in ("segmented", "empty_request", "parse_failure"):
+            status = "parse_failure"
+        bucket[status] += int(d["request_count"])
+        bucket["total_requests"] += int(d["request_count"])
+        bucket["stable_prefix_estimated_tokens"] += int(
+            d["total_stable_prefix_estimated_tokens"] or 0
+        )
+        bucket["volatile_estimated_tokens"] += int(
+            d["total_volatile_estimated_tokens"] or 0
+        )
+
+    # --- global totals ---
+    totals_sql = """
+    SELECT
+        COALESCE(SUM(CASE WHEN stable_prefix_estimated_tokens IS NOT NULL
+            THEN stable_prefix_estimated_tokens ELSE 0 END), 0)
+            as total_stable_prefix_estimated_tokens,
+        COALESCE(SUM(CASE WHEN semi_stable_estimated_tokens IS NOT NULL
+            THEN semi_stable_estimated_tokens ELSE 0 END), 0)
+            as total_semi_stable_estimated_tokens,
+        COALESCE(SUM(CASE WHEN volatile_estimated_tokens IS NOT NULL
+            THEN volatile_estimated_tokens ELSE 0 END), 0)
+            as total_volatile_estimated_tokens,
+        COALESCE(SUM(stable_prefix_bytes), 0) as total_stable_prefix_bytes,
+        COALESCE(SUM(semi_stable_bytes), 0) as total_semi_stable_bytes,
+        COALESCE(SUM(volatile_bytes), 0) as total_volatile_bytes,
+        COALESCE(SUM(CASE WHEN volatile_bytes > 0 THEN 1 ELSE 0 END), 0)
+            as compressible_candidate_requests,
+        COALESCE(SUM(CASE WHEN stable_prefix_bytes > 0 THEN 1 ELSE 0 END), 0)
+            as protected_requests
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+    """
+    totals_row = await db.fetch_one(totals_sql, (start_dt, end_dt))
+    totals = dict(totals_row) if totals_row else {}
+
+    stable_tokens = int(totals.get("total_stable_prefix_estimated_tokens", 0) or 0)
+    semi_tokens = int(totals.get("total_semi_stable_estimated_tokens", 0) or 0)
+    volatile_tokens = int(totals.get("total_volatile_estimated_tokens", 0) or 0)
+    stable_bytes = int(totals.get("total_stable_prefix_bytes", 0) or 0)
+    semi_bytes = int(totals.get("total_semi_stable_bytes", 0) or 0)
+    volatile_bytes = int(totals.get("total_volatile_bytes", 0) or 0)
+
+    total = sum(by_status.values())
+    return {
+        "total_requests": total,
+        "by_status": by_status,
+        "per_provider_status": per_provider_status,
+        "per_model_status": per_model_status,
+        "token_totals": {
+            "stable_prefix": stable_tokens,
+            "semi_stable": semi_tokens,
+            "volatile": volatile_tokens,
+            "all": stable_tokens + semi_tokens + volatile_tokens,
+        },
+        "byte_totals": {
+            "stable_prefix": stable_bytes,
+            "semi_stable": semi_bytes,
+            "volatile": volatile_bytes,
+            "all": stable_bytes + semi_bytes + volatile_bytes,
+        },
+        "compressible_candidate_requests": int(
+            totals.get("compressible_candidate_requests", 0) or 0
+        ),
+        "protected_requests": int(totals.get("protected_requests", 0) or 0),
+    }

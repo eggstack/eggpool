@@ -20,6 +20,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Transparent protocol transcoding between OpenAI and Anthropic request formats
 - Thinking/reasoning capability-aware routing with configurable budget mapping
 - Provider-neutral cache observability — records whether upstreams report `cache_read` / `cache_creation` (Anthropic) or `prompt_tokens_details.cached_tokens` (OpenAI) and exposes a dashboard hit ratio that never silently mixes zero with missing
+- Canonical request segmentation — every finalized request is annotated into `stable_prefix` / `semi_stable_context` / `volatile_suffix` regions without mutating the payload, giving later compression phases a safe way to identify cache-continuity boundaries and compressible candidates
 
 ## Quick Start
 
@@ -135,6 +136,16 @@ Every finalized request is annotated with a `cache_counter_status` of `reported`
 - **`unknown_format`** — payload could not be parsed, or returned a shape EggPool does not recognize. The cache state is ambiguous and must not be assumed to be zero.
 
 Observability is reporting-only: `QuotaFairScorer` still routes on request count + token count + cost (audit) + active count + health, never on cache fields. The dashboard renders a coverage card under "Runtime → Cache observability" and the JSON API exposes the breakdown at `GET /api/stats/cache-observability`.
+
+## Canonical request segmentation
+
+Every finalized request is annotated with a `segmentation_status` of `segmented`, `empty_request`, or `parse_failure`, plus structural segments of three kinds:
+
+- **`stable_prefix`** — system / developer prompts, tool schemas, and provider-native `cache_control` blocks. Marked `protected=True` so later phases can identify cache-continuity boundaries.
+- **`semi_stable_context`** — assistant messages, prior user turns, and short follow-ups. The conservative default for ambiguous content.
+- **`volatile_suffix`** — tool results, command output, search results, and the latest user turn when it carries log / command / search markers. Marked `compressible_candidate=True` so later compression phases have a candidate set without re-parsing the request.
+
+Segmentation is observational: request bodies, route scoring, and eligibility are unchanged. The dashboard renders a coverage card under "Runtime → Segmentation" and the JSON API exposes the breakdown at `GET /api/stats/canonical-request-segmentation`.
 
 ## API Endpoints
 

@@ -272,6 +272,101 @@ Status semantics:
 Dashboard coverage is rendered under Runtime → Cache observability and
 the JSON API exposes the breakdown at `GET /api/stats/cache-observability`.
 
+## Canonical Request Segmentation (Phase 2)
+
+Phase 2 introduces a structural segmentation layer that annotates every
+finalized request into `stable_prefix` / `semi_stable_context` /
+`volatile_suffix` regions without mutating the request body. The
+segmentation pass is observational — it never changes routing, never
+rewrites payloads, and never raises on malformed input.
+
+The segmenter lives in `src/eggpool/transcoder/segmentation.py` and is
+invoked by `src/eggpool/api/proxy_request.py` after the body is
+decoded. The result is attached to `ProxyRequestContext.segmentation`
+and threaded through `RequestFinalizer` → `RequestRepository.finalize_if_pending`
+where it is persisted alongside the legacy `cache_counter_status` and
+usage columns.
+
+### Segment Kinds
+
+- **`stable_prefix`** — system / developer messages, top-level `tools`
+  schemas, and provider-native `cache_control` blocks. Marked
+  `protected=True`, `compressible_candidate=False`. Later compression
+  phases must not mutate these regions or provider cache continuity
+  breaks.
+- **`semi_stable_context`** — assistant messages, prior user turns,
+  short follow-up user messages, and anything the classifier is
+  uncertain about. Conservative default: when classification is
+  ambiguous, the segmenter defaults to this kind rather than
+  `volatile_suffix` so the request body is preserved.
+- **`volatile_suffix`** — tool results, command output, search
+  results, log output, and the latest user turn when it carries
+  log / command / search markers. Marked
+  `compressible_candidate=True` so later phases can identify
+  candidates without re-parsing the request.
+
+### Determinism and Content Privacy
+
+- `SegmentationResult.stable_prefix_hash` is a SHA-256 digest of the
+  stable prefix **structural descriptor** (sources, content paths,
+  message indices, byte totals, token totals) — never the raw prompt
+  text.
+- `SegmentationResult.request_shape_hash` is a SHA-256 digest of the
+  request shape (provider, protocol, role sequence, block-type
+  sequence, tool schema count, coarse token buckets). Same input →
+  same hash; whitespace-equivalent stable prefixes → same
+  `stable_prefix_hash` (modulo byte totals).
+- Both hashes are content-private. Neither exposes prompt text
+  directly, and both exclude request timestamp, request ID,
+  selected account, and other unstable metadata.
+
+### Schema and Storage
+
+Migration `0041_canonical_request_segmentation.sql` adds seven
+columns to the `requests` table and a `segmentation_status` index
+mirroring the Phase 1 `cache_counter_status` index:
+
+- `segmentation_status` (TEXT NOT NULL DEFAULT 'empty_request')
+- `stable_prefix_estimated_tokens` / `semi_stable_estimated_tokens`
+  / `volatile_estimated_tokens` (INTEGER, nullable)
+- `stable_prefix_bytes` / `semi_stable_bytes` / `volatile_bytes`
+  (INTEGER, default 0)
+- `segmentation_summary_json` (TEXT) — compact JSON serialisation
+  of the full `SegmentationResult` for audit and dashboard
+  drill-down; raw request content is never persisted.
+
+`EXPECTED_SCHEMA_VERSION` is bumped to 41 in `scripts/check_database.py`.
+The migration is non-destructive: legacy callers that do not run the
+segmenter continue to work, with default `segmentation_status =
+'empty_request'`.
+
+### Observability
+
+The stats layer exposes
+`fetch_canonical_request_segmentation(db, start, end)` and the
+service-layer method
+`StatsService.get_canonical_request_segmentation(period)`. The
+dashboard panel under Runtime → Segmentation renders per-status
+counts, per-segment-kind token and byte totals, and a per-model
+breakdown. The JSON endpoint `GET /api/stats/canonical-request-segmentation`
+returns the same data for tooling.
+
+### Invariants
+
+- Segmentation is observational: it does not affect request bodies,
+  route scoring, or eligibility. Asserted by
+  `tests/unit/test_canonical_request_segmentation.py`.
+- `segment_request` never raises on malformed input. Empty requests
+  yield `SegmentationStatus.EMPTY_REQUEST`; non-mapping payloads
+  yield `SegmentationStatus.PARSE_FAILURE`; well-formed requests
+  yield `SegmentationStatus.SEGMENTED`.
+- Token and byte estimates are cheap (no tokenizer dependency) and
+  never raise. Missing estimates remain `None` and never block
+  request handling.
+- The finalizer is duck-typed against
+  `FinalizationData.segmentation: Any | None`, so the transcoder
+  module does not appear in the import path of unrelated callers.
+
 ## Database
 
 SQLite via aiosqlite with WAL mode. Single-connection serialization via a lock + ContextVar.

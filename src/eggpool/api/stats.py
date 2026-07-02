@@ -506,6 +506,42 @@ async def handle_cache_observability(
     return JSONResponse(content={"period": time_range.label, **payload})
 
 
+async def handle_canonical_request_segmentation(
+    request: Request, period: str | None = "24h"
+) -> Response:
+    """GET /api/stats/canonical-request-segmentation.
+
+    Phase 2 canonical request segmentation observability.  Reports
+    counts of segmented / empty_request / parse_failure rows plus
+    per-segment-kind token and byte totals.  Used by the dashboard
+    panel under Runtime → Segmentation.
+
+    Output shape:
+
+    - ``period``                              : resolved time-range label
+    - ``total_requests``                      : finalized rows in window
+    - ``by_status``                           : per-status request counts
+    - ``per_provider_status``                 : (provider_id,
+      upstream_protocol) -> per-status dict
+    - ``per_model_status``                    : model_id -> per-status
+      + totals dict
+    - ``token_totals``                        : per-segment-kind sum of
+      ``*_estimated_tokens``
+    - ``byte_totals``                         : per-segment-kind sum of
+      ``*_bytes``
+    - ``compressible_candidate_requests``     : rows with at least one
+      ``volatile_bytes > 0`` segment
+    - ``protected_requests``                  : rows with
+      ``stable_prefix_bytes > 0`` segment
+    """
+    from eggpool.stats import resolve_time_range
+
+    time_range = resolve_time_range(period)
+    stats = request.app.state.stats
+    payload = await stats.get_canonical_request_segmentation(time_range)
+    return JSONResponse(content={"period": time_range.label, **payload})
+
+
 async def handle_recent_requests(
     request: Request,
     limit: int = 50,
@@ -703,6 +739,14 @@ def register_stats_routes(app: Any, require_auth: bool = False) -> None:
         methods=["GET"],
         dependencies=dependencies,
     )
+    # Phase 2: canonical request segmentation observability.  Same
+    # auth surface as the cache-observability endpoint.
+    app.add_api_route(
+        path="/api/stats/canonical-request-segmentation",
+        endpoint=handle_canonical_request_segmentation,
+        methods=["GET"],
+        dependencies=dependencies,
+    )
 
     # Per-request trace endpoint.  Per-request traces expose the
     # selected model, prompt volume, and error detail that operators
@@ -732,6 +776,7 @@ __all__ = [
     "handle_attempt_stats",
     "handle_bandwidth",
     "handle_cache_observability",
+    "handle_canonical_request_segmentation",
     "handle_errors",
     "handle_events",
     "handle_ip_stats",

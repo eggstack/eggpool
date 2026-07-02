@@ -78,6 +78,8 @@ CI sets `PYTHONHASHSEED=0` and `TZ=UTC`; reproduce locally for deterministic res
 - **Dashboard**: server-rendered HTML, Chart.js v4, grouped timeseries, CSS tooltips.
 - **Model capabilities**: protocol-neutral `ThinkingCapability` / `ModelCapabilities` with deterministic merge. Config overrides at `[model_capabilities."<id>".thinking]` and per-provider scoped.
 - **Catalog refresh**: non-destructive by default; destructive withdrawal gated on `authoritative=True AND allow_withdrawals=True`. `static_models` is the source of truth for provider-specific protocol.
+- **Cache observability (Phase 1)**: every finalized request carries a `cache_counter_status` of `reported` / `not_reported` / `unknown_format`. `QuotaFairScorer` does NOT consume cache fields (asserted by `tests/unit/test_routing.py::test_scorer_does_not_consume_cache_counter_status`).
+- **Canonical request segmentation (Phase 2)**: every finalized request is annotated into `stable_prefix` / `semi_stable_context` / `volatile_suffix` regions by `eggpool.transcoder.segmentation.segment_request`. The segmenter is observational — it never mutates payloads, never changes routing, and never raises on malformed input. Conservative default: when classification is uncertain the segment lands in `semi_stable_context`. Stable prefix hash and request shape hash are content-private (SHA-256 of structural descriptors, never raw prompt text). Migration `0041` adds seven columns to `requests` and a `segmentation_status` index; `EXPECTED_SCHEMA_VERSION` in `scripts/check_database.py` is 41.
 
 ## Gotchas
 
@@ -94,6 +96,7 @@ CI sets `PYTHONHASHSEED=0` and `TZ=UTC`; reproduce locally for deterministic res
 - DB migrations are numbered SQL files in `src/eggpool/db/schema/`. The `model_info_*` sidecar tables carry FKs to `models.model_id`; catalog entries may reach model-info paths before `_persist_catalog` writes them to `models`, so repository writes seed a placeholder `models` row in the same transaction.
 - **Phase 1 cache observability is reporting-only**: every finalized request is tagged with `cache_counter_status` ∈ {`reported`, `not_reported`, `unknown_format`} and supporting cache-token columns. The `QuotaFairScorer` does NOT consume cache fields (asserted by `tests/unit/test_routing.py::test_scorer_does_not_consume_cache_counter_status`); only request count + token count + cost (audit) + active count + health feed routing. See `plans/cache_compression_phase_01_cache_token_observability.md`.
 - When adding new Phase 1+ work that consumes cache columns, prefer reading the persisted DB columns over re-parsing the upstream payload — `normalize_usage` is only safe at request finalization time.
+- **Phase 2 segmentation is observational**: `eggpool.transcoder.segmentation` produces metadata only. It never mutates request bodies, never changes routing, and never raises on malformed input. Empty requests yield `SegmentationStatus.EMPTY_REQUEST`; non-mapping payloads yield `SegmentationStatus.PARSE_FAILURE`. The `FinalizationData.segmentation` field is duck-typed as `Any | None` so the finalizer does not import the segmenter directly. Migration `0041` is non-destructive — legacy callers without segmentation render as `segmentation_status='empty_request'`. See `plans/cache_compression_phase_02_canonical_request_segmentation.md`.
 
 ## Error Handling
 

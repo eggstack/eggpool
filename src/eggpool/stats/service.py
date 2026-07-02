@@ -1379,6 +1379,29 @@ class StatsService:
             time_range.end_str(),
         )
 
+    async def get_canonical_request_segmentation(
+        self, period: str | None = None
+    ) -> dict[str, Any]:
+        """Phase 2 canonical request segmentation aggregates.
+
+        Reads the segmentation columns populated by
+        :mod:`eggpool.transcoder.segmentation` and persisted by
+        :meth:`RequestRepository.finalize_if_pending`.  Returns the
+        same shape as
+        :func:`eggpool.stats.queries.fetch_canonical_request_segmentation`:
+
+        - ``total_requests`` / ``by_status``
+        - ``per_provider_status`` / ``per_model_status``
+        - ``token_totals`` / ``byte_totals`` (per-segment-kind aggregates)
+        - ``compressible_candidate_requests`` / ``protected_requests``
+        """
+        time_range = resolve_time_range(period)
+        return await queries.fetch_canonical_request_segmentation(
+            self._db,
+            time_range.start_str(),
+            time_range.end_str(),
+        )
+
 
 _BUCKET_SIZES: dict[str, int] = {
     "hour": 3600,
