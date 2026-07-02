@@ -692,10 +692,16 @@ def apply_safe_compression(
     Returns a :class:`CompressionResult` describing the mutation.
     When ``policy.mode != "safe"`` or ``policy.enabled is False``,
     returns a no-op result (applied=False, transformed_payload=payload,
-    all zeros).  When fail-closed triggers (stable_prefix_hash
-    mismatch after mutation, or any unexpected exception), returns
-    the ORIGINAL payload with applied=False, failed_fallback=True,
-    and a high-severity warning.
+    all zeros).  When fail-closed triggers — the
+    ``stable_prefix_content_hash`` differs between the original and
+    mutated payload (and ``compress_static_prefix`` is False), or any
+    unexpected exception is raised — returns the ORIGINAL payload with
+    applied=False, failed_fallback=True, and a high-severity warning.
+
+    The fail-closed check uses the exact content hash, not the
+    structural shape hash.  The shape hash is content-private and
+    useful for dashboard grouping, but it is not sufficient to detect
+    an accidental stable-prefix mutation; only the content hash can.
 
     Never mutates ``payload`` in place; always deep-copies.  Never
     mutates ``segmentation``.  Never raises.
@@ -761,11 +767,17 @@ def _apply_safe_compression_impl(
         REASON_LATENCY_BUDGET,
     )
 
-    # Pre-hash stable prefix content from ORIGINAL payload
+    # Pre-hash stable prefix content from the ORIGINAL payload.  This
+    # is the exact, canonical content hash that drives fail-closed
+    # verification: if the post-mutation hash differs from this one,
+    # we discard the mutated payload and return the original.
     pre_content_hash = stable_prefix_content_hash(
         cast("Mapping[str, Any]", payload),
         segmentation,
     )
+    # The shape hash is a coarse structural descriptor (segment counts,
+    # byte totals, sources).  It is surfaced on the result for
+    # dashboard grouping only; it is NOT used for fail-closed checks.
     pre_shape_hash = segmentation.stable_prefix_hash
 
     mutated = copy.deepcopy(payload)

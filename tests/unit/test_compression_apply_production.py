@@ -11,7 +11,11 @@ from eggpool.transcoder.compression import (
     apply_safe_compression,
 )
 from eggpool.transcoder.compression.policy import CompressionTransforms
-from eggpool.transcoder.segmentation import segment_request
+from eggpool.transcoder.segmentation import (
+    SegmentKind,
+    resolve_text_path,
+    segment_request,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -78,19 +82,15 @@ def test_openai_tool_message_with_large_repeated_log() -> None:
     result = apply_safe_compression(
         payload, segmentation, policy=_safe_policy(compact_logs=False)
     )
-    if result.applied:
-        # System message must be preserved
-        assert result.transformed_payload["messages"][0]["content"] == (
-            "You are a helpful assistant."
-        )
-        # Transformed content should be shorter
-        transformed_tool = result.transformed_payload["messages"][1]["content"]
-        assert len(transformed_tool) < len(repeated_content)
-    else:
-        # Even if not applied, prefix must be preserved
-        assert result.transformed_payload["messages"][0]["content"] == (
-            "You are a helpful assistant."
-        )
+    assert result.applied is True
+    assert result.failed_fallback is False
+    # System message must be preserved
+    assert result.transformed_payload["messages"][0]["content"] == (
+        "You are a helpful assistant."
+    )
+    # Transformed content should be shorter
+    transformed_tool = result.transformed_payload["messages"][1]["content"]
+    assert len(transformed_tool) < len(repeated_content)
 
 
 def test_openai_latest_user_message_with_log() -> None:
@@ -110,9 +110,8 @@ def test_openai_latest_user_message_with_log() -> None:
     }
     segmentation = segment_request(payload, protocol="openai")
     result = apply_safe_compression(payload, segmentation, policy=_safe_policy())
-    # Whether it fires depends on thresholds; just verify no crash
-    assert result.transformed_payload is not None
     assert result.failed_fallback is False
+    assert result.applied is True
 
 
 def test_openai_list_content_text_part() -> None:
@@ -165,10 +164,30 @@ def test_anthropic_tool_result_string() -> None:
         ],
     }
     segmentation = segment_request(payload, protocol="anthropic")
+    # Confirm the segmentation emits a concrete path to the string leaf
+    candidate_paths = [
+        s.content_path
+        for s in segmentation.segments
+        if s.compressible_candidate and s.kind is SegmentKind.VOLATILE_SUFFIX
+    ]
+    assert ("messages", 2, "content", 0, "content") in candidate_paths
+    for path in candidate_paths:
+        assert resolve_text_path(payload, path) is not None
+
     result = apply_safe_compression(payload, segmentation, policy=_safe_policy())
-    if result.applied:
-        # System must be preserved
-        assert result.transformed_payload["system"] == "You are helpful."
+    assert result.applied is True
+    assert result.failed_fallback is False
+    assert result.stable_prefix_preserved is True
+    # System must be preserved
+    assert result.transformed_payload["system"] == "You are helpful."
+    # tool_use_id must be preserved (block-level field, not the string leaf)
+    tool_block = result.transformed_payload["messages"][2]["content"][0]
+    assert tool_block["tool_use_id"] == "t1"
+    # The string leaf itself was compressed: shorter and contains the marker
+    transformed_content = tool_block["content"]
+    assert isinstance(transformed_content, str)
+    assert len(transformed_content) < len(tool_output)
+    assert "[EggPool compression:" in transformed_content
 
 
 def test_anthropic_tool_result_nested_list() -> None:
@@ -198,10 +217,89 @@ def test_anthropic_tool_result_nested_list() -> None:
         ],
     }
     segmentation = segment_request(payload, protocol="anthropic")
+    candidate_paths = [
+        s.content_path
+        for s in segmentation.segments
+        if s.compressible_candidate and s.kind is SegmentKind.VOLATILE_SUFFIX
+    ]
+    assert ("messages", 2, "content", 0, "content", 0, "text") in candidate_paths
+    for path in candidate_paths:
+        assert resolve_text_path(payload, path) is not None
+
     result = apply_safe_compression(payload, segmentation, policy=_safe_policy())
+    assert result.applied is True
     assert result.failed_fallback is False
-    if result.applied:
-        assert result.stable_prefix_preserved is True
+    assert result.stable_prefix_preserved is True
+    # The nested text field was compressed
+    tool_block = result.transformed_payload["messages"][2]["content"][0]
+    transformed_text = tool_block["content"][0]["text"]
+    assert isinstance(transformed_text, str)
+    assert len(transformed_text) < len(inner_text)
+    assert "[EggPool compression:" in transformed_text
+    # tool_use_id and tool type are preserved
+    assert tool_block["type"] == "tool_result"
+    assert tool_block["tool_use_id"] == "t1"
+
+
+def test_anthropic_tool_result_non_text_nested_blocks_not_marked_compressible() -> None:
+    """Nested blocks without string text are NOT marked compressible."""
+    payload = {
+        "model": "claude-sonnet-4",
+        "system": "Sys.",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t1",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {"type": "base64", "data": "x"},
+                            },
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+    segmentation = segment_request(payload, protocol="anthropic")
+    # No compressible segment should be emitted for the image nested block.
+    compressible_tool_result_paths = [
+        s.content_path
+        for s in segmentation.segments
+        if s.compressible_candidate and s.kind is SegmentKind.VOLATILE_SUFFIX
+    ]
+    assert compressible_tool_result_paths == []
+    # No path emitted for the non-text block either.
+    for path in compressible_tool_result_paths:
+        assert resolve_text_path(payload, path) is not None
+
+
+def test_anthropic_tool_result_no_content_falls_back_to_observational() -> None:
+    """A tool_result block with no ``content`` field falls back to a
+    non-compressible segment at the block level so observability is
+    preserved without a bogus compressible path."""
+    payload = {
+        "model": "claude-sonnet-4",
+        "system": "Sys.",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "t1"},
+                ],
+            }
+        ],
+    }
+    segmentation = segment_request(payload, protocol="anthropic")
+    compressible_paths = [
+        s.content_path
+        for s in segmentation.segments
+        if s.compressible_candidate and s.kind is SegmentKind.VOLATILE_SUFFIX
+    ]
+    assert compressible_paths == []
 
 
 def test_anthropic_system_with_cache_control_preserved() -> None:

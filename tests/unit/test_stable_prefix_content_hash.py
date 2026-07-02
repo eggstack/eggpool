@@ -411,3 +411,142 @@ def test_hash_changes_when_tool_added() -> None:
     assert stable_prefix_content_hash(base, base_result) != stable_prefix_content_hash(
         with_tool, with_tool_result
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 closure regression tests
+# ---------------------------------------------------------------------------
+
+
+def test_anthropic_tool_result_change_preserves_stable_prefix_hash() -> None:
+    """Changing only the Anthropic ``tool_result`` string content leaves
+    the stable-prefix content hash unchanged."""
+    payload_a = {
+        "model": "claude-sonnet-4",
+        "system": "You are helpful.",
+        "messages": [
+            {"role": "user", "content": "Run it."},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t1",
+                        "content": "ERR\n" * 200 + "OK\n",
+                    }
+                ],
+            },
+        ],
+    }
+    payload_b = {
+        "model": "claude-sonnet-4",
+        "system": "You are helpful.",
+        "messages": [
+            {"role": "user", "content": "Run it."},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t1",
+                        "content": "DIFFERENT\n" * 200 + "DONE\n",
+                    }
+                ],
+            },
+        ],
+    }
+    seg_a = segment_request(payload_a, protocol="anthropic")
+    seg_b = segment_request(payload_b, protocol="anthropic")
+    assert stable_prefix_content_hash(payload_a, seg_a) == stable_prefix_content_hash(
+        payload_b, seg_b
+    )
+
+
+def test_anthropic_tool_result_nested_text_change_preserves_stable_prefix_hash() -> (
+    None
+):
+    """Changing only the nested text inside an Anthropic tool_result
+    list leaves the stable-prefix content hash unchanged."""
+    payload_a = {
+        "model": "claude-sonnet-4",
+        "system": "Sys.",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t1",
+                        "content": [
+                            {"type": "text", "text": "A" * 1024},
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+    payload_b = {
+        "model": "claude-sonnet-4",
+        "system": "Sys.",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t1",
+                        "content": [
+                            {"type": "text", "text": "B" * 1024},
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+    seg_a = segment_request(payload_a, protocol="anthropic")
+    seg_b = segment_request(payload_b, protocol="anthropic")
+    assert stable_prefix_content_hash(payload_a, seg_a) == stable_prefix_content_hash(
+        payload_b, seg_b
+    )
+
+
+def test_anthropic_system_change_changes_stable_prefix_hash() -> None:
+    """Changing the Anthropic ``system`` text changes the stable-prefix
+    content hash."""
+    payload_a = {
+        "model": "claude-sonnet-4",
+        "system": "Original system instructions.",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t1",
+                        "content": "x",
+                    }
+                ],
+            }
+        ],
+    }
+    payload_b = {
+        "model": "claude-sonnet-4",
+        "system": "Different system instructions.",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t1",
+                        "content": "x",
+                    }
+                ],
+            }
+        ],
+    }
+    seg_a = segment_request(payload_a, protocol="anthropic")
+    seg_b = segment_request(payload_b, protocol="anthropic")
+    assert stable_prefix_content_hash(payload_a, seg_a) != stable_prefix_content_hash(
+        payload_b, seg_b
+    )

@@ -118,10 +118,18 @@ class RequestSegment:
     """A single annotated region of a request.
 
     ``message_index`` is the position in the request's message array
-    (or ``None`` for non-message regions like tool schemas).  The
-    ``content_path`` tuple identifies the sub-field for non-message
-    regions (``("tools", 3)`` means the fourth tool in the tools list);
-    for message regions it carries the role/content-block index.
+    (or ``None`` for non-message regions like tool schemas).
+
+    ``content_path`` is a **concrete JSON path** into the decoded
+    request payload, not a semantic role label.  For a string leaf it
+    walks dict keys and list indices until it resolves to the string
+    itself, e.g. ``("messages", 3, "content", 0, "content")`` for an
+    Anthropic ``tool_result`` block whose ``content`` is a plain
+    string.  For a protected/non-mutable region (tool schemas,
+    cache_control metadata) it resolves to the containing object so
+    that the compression applier can detect and skip it.  Helpers
+    :func:`resolve_path` and :func:`resolve_text_path` walk these
+    paths during apply and in tests.
 
     ``protected`` marks content that must never be marked as
     compressible: provider-cacheable prefixes, system/developer
@@ -163,6 +171,12 @@ class SegmentationResult:
     semi_stable_estimated_tokens: int | None
     volatile_estimated_tokens: int | None
     stable_prefix_hash: str
+    """SHA-256 of the *structural* stable-prefix descriptor
+    (segment counts, byte totals, sources, paths).  This is a
+    content-private shape hash suitable for grouping/dashboard
+    buckets, **not** a hash of the actual stable-prefix text.  For
+    fail-closed verification of exact cache equality, use
+    :func:`stable_prefix_content_hash`."""
     request_shape_hash: str
     cache_control_present: bool
 
@@ -1145,15 +1159,309 @@ def _segment_anthropic_tools(tools: Any) -> list[RequestSegment]:
     return segments
 
 
+def _segment_anthropic_tool_result_block(
+    block: Mapping[str, Any],
+    *,
+    message_index: int,
+    block_index: int,
+) -> list[RequestSegment]:
+    """Segment a single Anthropic ``tool_result`` content block.
+
+    Returns one or more :class:`RequestSegment` entries whose
+    ``content_path`` resolves to a concrete string leaf in the payload.
+    Tool-result blocks commonly carry their text in one of three
+    shapes:
+
+    * ``content`` is a plain string (``{"type": "tool_result",
+      "content": "..."}``) -> one segment at
+      ``("messages", i, "content", j, "content")``.
+    * ``content`` is a list of text blocks
+      (``{"content": [{"type": "text", "text": "..."}]}``) -> one
+      segment per string text leaf at
+      ``("messages", i, "content", j, "content", k, "text")``.
+    * ``content`` is a list of dicts with a string ``content`` field
+      (``{"content": [{"type": "text", "content": "..."}]}``) -> one
+      segment per such dict at
+      ``("messages", i, "content", j, "content", k, "content")``.
+
+    Non-text nested blocks (images, documents, unknown shapes) do not
+    emit a compressible segment. When ``content`` is absent, non-
+    string, and non-list the function falls back to a single semi-
+    stable / non-compressible segment so observability is preserved
+    without emitting a bogus compressible path.
+    """
+    inner = block.get("content")
+    text = _extract_anthropic_text([block])
+    source = _classify_volatile_source(text)
+    if source is SegmentSource.UNKNOWN:
+        source = SegmentSource.TOOL_RESULT
+
+    if isinstance(inner, str):
+        return [
+            RequestSegment(
+                kind=SegmentKind.VOLATILE_SUFFIX,
+                source=source,
+                message_index=message_index,
+                content_path=(
+                    "messages",
+                    message_index,
+                    "content",
+                    block_index,
+                    "content",
+                ),
+                byte_length=len(_serialize_for_hash(inner)),
+                estimated_tokens=_estimate_string_tokens(inner),
+                protected=False,
+                compressible_candidate=True,
+                reason="tool_result",
+            )
+        ]
+    if isinstance(inner, list):
+        segs: list[RequestSegment] = []
+        items = cast("list[Any]", inner)
+        for inner_index, item in enumerate(items):
+            if not isinstance(item, Mapping):
+                continue
+            item_map = cast("Mapping[str, Any]", item)
+            text_value = item_map.get("text")
+            if isinstance(text_value, str):
+                segs.append(
+                    RequestSegment(
+                        kind=SegmentKind.VOLATILE_SUFFIX,
+                        source=source,
+                        message_index=message_index,
+                        content_path=(
+                            "messages",
+                            message_index,
+                            "content",
+                            block_index,
+                            "content",
+                            inner_index,
+                            "text",
+                        ),
+                        byte_length=len(_serialize_for_hash(item)),
+                        estimated_tokens=_estimate_string_tokens(text_value),
+                        protected=False,
+                        compressible_candidate=True,
+                        reason="tool_result",
+                    )
+                )
+                continue
+            content_value = item_map.get("content")
+            if isinstance(content_value, str):
+                segs.append(
+                    RequestSegment(
+                        kind=SegmentKind.VOLATILE_SUFFIX,
+                        source=source,
+                        message_index=message_index,
+                        content_path=(
+                            "messages",
+                            message_index,
+                            "content",
+                            block_index,
+                            "content",
+                            inner_index,
+                            "content",
+                        ),
+                        byte_length=len(_serialize_for_hash(item)),
+                        estimated_tokens=_estimate_string_tokens(content_value),
+                        protected=False,
+                        compressible_candidate=True,
+                        reason="tool_result",
+                    )
+                )
+        return segs
+    if inner is None:
+        # tool_result blocks with no ``content`` key are uncommon but
+        # legal.  Do not invent a compressible path; record a single
+        # non-compressible segment so observability is preserved.
+        return [
+            RequestSegment(
+                kind=SegmentKind.SEMI_STABLE_CONTEXT,
+                source=source,
+                message_index=message_index,
+                content_path=(
+                    "messages",
+                    message_index,
+                    "content",
+                    block_index,
+                ),
+                byte_length=len(_serialize_for_hash(block)),
+                estimated_tokens=_estimate_value_tokens(block),
+                protected=False,
+                compressible_candidate=False,
+                reason="tool_result_no_content",
+            )
+        ]
+    # Other shapes (number, bool, mapping directly, etc.).  Emit a
+    # non-compressible segment at the block level for observability
+    # without claiming a bogus compressible path.
+    return [
+        RequestSegment(
+            kind=SegmentKind.SEMI_STABLE_CONTEXT,
+            source=source,
+            message_index=message_index,
+            content_path=(
+                "messages",
+                message_index,
+                "content",
+                block_index,
+            ),
+            byte_length=len(_serialize_for_hash(block)),
+            estimated_tokens=_estimate_value_tokens(block),
+            protected=False,
+            compressible_candidate=False,
+            reason="tool_result_unrecognised_content",
+        )
+    ]
+
+
 def _segment_anthropic_message_block(
     block: Any,
     *,
     message_index: int,
     block_index: int,
-) -> RequestSegment:
-    """Classify a single Anthropic content block within a message."""
+) -> list[RequestSegment]:
+    """Classify a single Anthropic content block within a message.
+
+    Returns one or more :class:`RequestSegment` entries. ``tool_result``
+    blocks may emit multiple segments when their nested ``content``
+    array carries several text leaves; every other block type emits at
+    most one segment.
+    """
     if not isinstance(block, Mapping):
-        return RequestSegment(
+        return [
+            RequestSegment(
+                kind=SegmentKind.SEMI_STABLE_CONTEXT,
+                source=SegmentSource.PRIOR_MESSAGE,
+                message_index=message_index,
+                content_path=(
+                    "messages",
+                    message_index,
+                    "content",
+                    block_index,
+                    "unknown",
+                ),
+                byte_length=len(_serialize_for_hash(block)),
+                estimated_tokens=_estimate_value_tokens(block),
+                protected=False,
+                compressible_candidate=False,
+                reason="unknown_block",
+            )
+        ]
+    block_map = cast("Mapping[str, Any]", block)
+    block_type = block_map.get("type")
+    byte_length = len(_serialize_for_hash(block))
+    estimated = _estimate_value_tokens(block)
+
+    if block_type == "text" and block_map.get("cache_control"):
+        return [
+            RequestSegment(
+                kind=SegmentKind.STABLE_PREFIX,
+                source=SegmentSource.CACHE_CONTROL,
+                message_index=message_index,
+                content_path=(
+                    "messages",
+                    message_index,
+                    "content",
+                    block_index,
+                    "text",
+                ),
+                byte_length=byte_length,
+                estimated_tokens=estimated,
+                protected=True,
+                compressible_candidate=False,
+                reason="cache_control_text",
+            )
+        ]
+    if block_type == "thinking":
+        return [
+            RequestSegment(
+                kind=SegmentKind.STABLE_PREFIX,
+                source=SegmentSource.CACHE_CONTROL,
+                message_index=message_index,
+                content_path=(
+                    "messages",
+                    message_index,
+                    "content",
+                    block_index,
+                    "thinking",
+                ),
+                byte_length=byte_length,
+                estimated_tokens=estimated,
+                protected=True,
+                compressible_candidate=False,
+                reason="thinking_block",
+            )
+        ]
+    if block_type == "tool_use":
+        return [
+            RequestSegment(
+                kind=SegmentKind.SEMI_STABLE_CONTEXT,
+                source=SegmentSource.PRIOR_MESSAGE,
+                message_index=message_index,
+                content_path=(
+                    "messages",
+                    message_index,
+                    "content",
+                    block_index,
+                    "tool_use",
+                ),
+                byte_length=byte_length,
+                estimated_tokens=estimated,
+                protected=False,
+                compressible_candidate=False,
+                reason="tool_use_history",
+            )
+        ]
+    if block_type == "tool_result":
+        return _segment_anthropic_tool_result_block(
+            block_map,
+            message_index=message_index,
+            block_index=block_index,
+        )
+    if block_type == "text":
+        return [
+            RequestSegment(
+                kind=SegmentKind.SEMI_STABLE_CONTEXT,
+                source=SegmentSource.PRIOR_MESSAGE,
+                message_index=message_index,
+                content_path=(
+                    "messages",
+                    message_index,
+                    "content",
+                    block_index,
+                    "text",
+                ),
+                byte_length=byte_length,
+                estimated_tokens=estimated,
+                protected=False,
+                compressible_candidate=False,
+                reason="text_block",
+            )
+        ]
+    if block_type in {"image", "document"}:
+        return [
+            RequestSegment(
+                kind=SegmentKind.SEMI_STABLE_CONTEXT,
+                source=SegmentSource.PRIOR_MESSAGE,
+                message_index=message_index,
+                content_path=(
+                    "messages",
+                    message_index,
+                    "content",
+                    block_index,
+                    str(block_type),
+                ),
+                byte_length=byte_length,
+                estimated_tokens=estimated,
+                protected=False,
+                compressible_candidate=False,
+                reason="binary_block",
+            )
+        ]
+    return [
+        RequestSegment(
             kind=SegmentKind.SEMI_STABLE_CONTEXT,
             source=SegmentSource.PRIOR_MESSAGE,
             message_index=message_index,
@@ -1164,146 +1472,13 @@ def _segment_anthropic_message_block(
                 block_index,
                 "unknown",
             ),
-            byte_length=len(_serialize_for_hash(block)),
-            estimated_tokens=_estimate_value_tokens(block),
-            protected=False,
-            compressible_candidate=False,
-            reason="unknown_block",
-        )
-    block_map = cast("Mapping[str, Any]", block)
-    block_type = block_map.get("type")
-    byte_length = len(_serialize_for_hash(block))
-    estimated = _estimate_value_tokens(block)
-    text = _extract_anthropic_text([block])
-
-    if block_type == "text" and block_map.get("cache_control"):
-        return RequestSegment(
-            kind=SegmentKind.STABLE_PREFIX,
-            source=SegmentSource.CACHE_CONTROL,
-            message_index=message_index,
-            content_path=(
-                "messages",
-                message_index,
-                "content",
-                block_index,
-                "text",
-            ),
-            byte_length=byte_length,
-            estimated_tokens=estimated,
-            protected=True,
-            compressible_candidate=False,
-            reason="cache_control_text",
-        )
-    if block_type == "thinking":
-        return RequestSegment(
-            kind=SegmentKind.STABLE_PREFIX,
-            source=SegmentSource.CACHE_CONTROL,
-            message_index=message_index,
-            content_path=(
-                "messages",
-                message_index,
-                "content",
-                block_index,
-                "thinking",
-            ),
-            byte_length=byte_length,
-            estimated_tokens=estimated,
-            protected=True,
-            compressible_candidate=False,
-            reason="thinking_block",
-        )
-    if block_type == "tool_use":
-        return RequestSegment(
-            kind=SegmentKind.SEMI_STABLE_CONTEXT,
-            source=SegmentSource.PRIOR_MESSAGE,
-            message_index=message_index,
-            content_path=(
-                "messages",
-                message_index,
-                "content",
-                block_index,
-                "tool_use",
-            ),
             byte_length=byte_length,
             estimated_tokens=estimated,
             protected=False,
             compressible_candidate=False,
-            reason="tool_use_history",
+            reason="unrecognised_block",
         )
-    if block_type == "tool_result":
-        source = _classify_volatile_source(text)
-        if source is SegmentSource.UNKNOWN:
-            source = SegmentSource.TOOL_RESULT
-        return RequestSegment(
-            kind=SegmentKind.VOLATILE_SUFFIX,
-            source=source,
-            message_index=message_index,
-            content_path=(
-                "messages",
-                message_index,
-                "content",
-                block_index,
-                "tool_result",
-            ),
-            byte_length=byte_length,
-            estimated_tokens=estimated,
-            protected=False,
-            compressible_candidate=True,
-            reason="tool_result",
-        )
-    if block_type == "text":
-        return RequestSegment(
-            kind=SegmentKind.SEMI_STABLE_CONTEXT,
-            source=SegmentSource.PRIOR_MESSAGE,
-            message_index=message_index,
-            content_path=(
-                "messages",
-                message_index,
-                "content",
-                block_index,
-                "text",
-            ),
-            byte_length=byte_length,
-            estimated_tokens=estimated,
-            protected=False,
-            compressible_candidate=False,
-            reason="text_block",
-        )
-    if block_type in {"image", "document"}:
-        return RequestSegment(
-            kind=SegmentKind.SEMI_STABLE_CONTEXT,
-            source=SegmentSource.PRIOR_MESSAGE,
-            message_index=message_index,
-            content_path=(
-                "messages",
-                message_index,
-                "content",
-                block_index,
-                str(block_type),
-            ),
-            byte_length=byte_length,
-            estimated_tokens=estimated,
-            protected=False,
-            compressible_candidate=False,
-            reason="binary_block",
-        )
-    return RequestSegment(
-        kind=SegmentKind.SEMI_STABLE_CONTEXT,
-        source=SegmentSource.PRIOR_MESSAGE,
-        message_index=message_index,
-        content_path=(
-            "messages",
-            message_index,
-            "content",
-            block_index,
-            "unknown",
-        ),
-        byte_length=byte_length,
-        estimated_tokens=estimated,
-        protected=False,
-        compressible_candidate=False,
-        reason="unrecognised_block",
-    )
+    ]
 
 
 def _segment_anthropic_message(
@@ -1380,14 +1555,16 @@ def _segment_anthropic_message(
     if not isinstance(content, list):
         return []
     block_list = cast("list[Any]", content)
-    return [
-        _segment_anthropic_message_block(
-            block,
-            message_index=message_index,
-            block_index=index,
+    segments: list[RequestSegment] = []
+    for index, block in enumerate(block_list):
+        segments.extend(
+            _segment_anthropic_message_block(
+                block,
+                message_index=message_index,
+                block_index=index,
+            )
         )
-        for index, block in enumerate(block_list)
-    ]
+    return segments
 
 
 def _segment_anthropic(payload: Mapping[str, Any]) -> list[RequestSegment]:
@@ -1594,6 +1771,12 @@ def _stable_prefix_descriptor(
     stable_prefix_hash is identical for structurally-equivalent
     stable prefixes — even when the actual prompt text differs in
     insignificant ways (whitespace, minor wording).
+
+    Note: this descriptor is **not sufficient** to decide whether the
+    provider-visible stable prefix is identical.  Two requests can
+    share this descriptor but differ in actual prompt text, so they
+    would still defeat provider cache locality.  For exact cache
+    equality verification use :func:`stable_prefix_content_hash`.
     """
     stable_segments = [s for s in segments if s.kind is SegmentKind.STABLE_PREFIX]
     return {

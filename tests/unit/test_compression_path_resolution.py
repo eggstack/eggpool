@@ -1,12 +1,20 @@
 """Tests for resolve_path and resolve_text_path (segmentation helpers).
 
 These helpers walk into real OpenAI and Anthropic payloads using
-content_path tuples and return the leaf value or None.
+content_path tuples and return the leaf value or None.  In addition to
+hand-built paths, the file also verifies that paths emitted by
+``segment_request()`` always resolve to a concrete string leaf for
+compressions-eligible segments.
 """
 
 from __future__ import annotations
 
-from eggpool.transcoder.segmentation import resolve_path, resolve_text_path
+from eggpool.transcoder.segmentation import (
+    SegmentKind,
+    resolve_path,
+    resolve_text_path,
+    segment_request,
+)
 
 # ---------------------------------------------------------------------------
 # OpenAI paths
@@ -125,6 +133,134 @@ def test_resolve_path_anthropic_tool_result_nested() -> None:
     }
     result = resolve_path(payload, ("messages", 0, "content", 0, "content", 0, "text"))
     assert result == "nested text"
+
+
+# ---------------------------------------------------------------------------
+# Path resolution for paths emitted by segment_request()
+# ---------------------------------------------------------------------------
+
+
+def test_segment_request_anthropic_tool_result_string_path_resolves() -> None:
+    """Anthropic string tool_result content path emitted by
+    segment_request() resolves to the string leaf."""
+    payload = {
+        "system": "You are helpful.",
+        "messages": [
+            {"role": "user", "content": "Run it."},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t1",
+                        "content": "tool output here",
+                    }
+                ],
+            },
+        ],
+    }
+    segmentation = segment_request(payload, protocol="anthropic")
+    candidate_paths = [
+        s.content_path
+        for s in segmentation.segments
+        if s.compressible_candidate and s.kind is SegmentKind.VOLATILE_SUFFIX
+    ]
+    assert ("messages", 1, "content", 0, "content") in candidate_paths
+    for path in candidate_paths:
+        assert resolve_text_path(payload, path) is not None
+
+
+def test_segment_request_anthropic_tool_result_nested_text_path_resolves() -> None:
+    """Anthropic nested tool_result text path emitted by segment_request()
+    resolves to the string leaf."""
+    payload = {
+        "system": "Sys.",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t1",
+                        "content": [
+                            {"type": "text", "text": "first text"},
+                            {"type": "text", "text": "second text"},
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+    segmentation = segment_request(payload, protocol="anthropic")
+    candidate_paths = [
+        s.content_path
+        for s in segmentation.segments
+        if s.compressible_candidate and s.kind is SegmentKind.VOLATILE_SUFFIX
+    ]
+    assert ("messages", 0, "content", 0, "content", 0, "text") in candidate_paths
+    assert ("messages", 0, "content", 0, "content", 1, "text") in candidate_paths
+    for path in candidate_paths:
+        assert resolve_text_path(payload, path) is not None
+
+
+def test_segment_request_anthropic_tool_result_defensive_content_field() -> None:
+    """Defensive support for nested ``content`` field on tool_result
+    nested blocks also resolves through segment_request()."""
+    payload = {
+        "system": "Sys.",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t1",
+                        "content": [
+                            {"type": "text", "content": "inline content field"},
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+    segmentation = segment_request(payload, protocol="anthropic")
+    candidate_paths = [
+        s.content_path
+        for s in segmentation.segments
+        if s.compressible_candidate and s.kind is SegmentKind.VOLATILE_SUFFIX
+    ]
+    assert (
+        "messages",
+        0,
+        "content",
+        0,
+        "content",
+        0,
+        "content",
+    ) in candidate_paths
+    for path in candidate_paths:
+        assert resolve_text_path(payload, path) is not None
+
+
+def test_segment_request_openai_compressible_paths_resolve() -> None:
+    """All compressible-candidate paths emitted by OpenAI segmentation
+    resolve to concrete string leaves."""
+    payload = {
+        "model": "gpt-4",
+        "messages": [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "tool", "content": "ERR: timeout\nERR: timeout\nOK\n"},
+        ],
+    }
+    segmentation = segment_request(payload, protocol="openai")
+    candidate_paths = [
+        s.content_path
+        for s in segmentation.segments
+        if s.compressible_candidate and s.kind is SegmentKind.VOLATILE_SUFFIX
+    ]
+    assert ("messages", 1, "content") in candidate_paths
+    for path in candidate_paths:
+        assert resolve_text_path(payload, path) is not None
 
 
 # ---------------------------------------------------------------------------

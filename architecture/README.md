@@ -698,6 +698,60 @@ The applier:
 7. Never raises on malformed input; all exceptions are caught
    and rendered as fail-closed results with `failed_fallback=True`.
 
+### Path Semantics
+
+Every emitted `RequestSegment.content_path` is a concrete JSON path
+that resolves to an actual string leaf of the request payload — not a
+semantic role label. Examples after the Phase 5 Anthropic closure:
+
+- OpenAI string content: `("messages", i, "content")`
+- OpenAI list content part: `("messages", i, "content", j, "text")`
+- Anthropic string system: `("system",)`
+- Anthropic system block: `("system", j, "text")`
+- Anthropic message text block: `("messages", i, "content", j, "text")`
+- Anthropic `tool_result` with string content:
+  `("messages", i, "content", j, "content")`
+- Anthropic `tool_result` with nested text part:
+  `("messages", i, "content", j, "content", k, "text")`
+
+`resolve_path(payload, content_path)` walks the path on the live
+payload; `resolve_text_path` is the same plus a `str` leaf check.
+The applier's `_collect_text` and `_replace_path` use the same walk
+internally. The fail-closed verification re-hashes the mutated
+payload's stable-prefix content via `stable_prefix_content_hash`,
+so a path that does not resolve to a real leaf would either be
+ignored by the applier (no compression, no fail-closed trip) or
+trigger a stable-prefix hash mismatch. Production emits a tight
+invariant: every compressible-candidate path must resolve to a
+non-`None` string leaf; this is asserted by
+`tests/unit/test_compression_path_resolution.py`.
+
+A single block may emit multiple segments (Anthropic
+`tool_result` with nested content lists emit one segment per text
+leaf). The applier walks each segment independently and combines
+markers into the targeted text leaf.
+
+### Stable-Prefix Content Hash vs Structural Descriptor Hash
+
+Two distinct hashes live on `SegmentationResult`:
+
+- `stable_prefix_hash` — STRUCTURAL descriptor hash computed by
+  `_stable_prefix_descriptor` (byte totals, token totals, source
+  kinds, path signatures). This is the Phase 2 dashboard-grouping
+  hash. It is NOT sufficient for exact cache equality across
+  requests with identical structure but different content.
+- `stable_prefix_content_hash(payload, segmentation)` — EXACT
+  content hash computed by `stable_prefix_content_hash`. Re-extracts
+  canonical stable-prefix values from the live payload via
+  stable-prefix segment paths and hashes them. This is the hash
+  the Phase 5 applier uses for the pre/post fail-closed check.
+
+`apply_safe_compression` carries BOTH (`pre_content_hash` drives
+fail-closed; `pre_shape_hash` is recorded for dashboard grouping).
+Code paths must consume `stable_prefix_content_hash` for any
+equality decision that matters for cache hits; `stable_prefix_hash`
+is for grouping and rollout observability only.
+
 ### Context-Limit Precedence
 
 Context-limit checks happen before compression. Compression does NOT

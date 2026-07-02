@@ -675,6 +675,60 @@ def test_static_prefix_candidates_recorded_when_respect_cache_boundaries_false()
     assert observation.reason_code_counts.get(REASON_STATIC_PREFIX, 0) > 0
 
 
+def test_end_to_end_observation_via_phase5_anthropic_tool_result(
+    enabled_policy: CompressionConfig,
+) -> None:
+    """The analyzer accepts Anthropic ``tool_result`` payloads emitted
+    by the Phase 5 segmenter and processes the new concrete
+    ``content_path`` values (string and nested-list shapes) without
+    raising and without ever mutating the segmentation result."""
+    body = {
+        "model": "claude-sonnet-4",
+        "system": "You are a helpful assistant.",
+        "messages": [
+            {"role": "user", "content": "Run the test suite."},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t1",
+                        "content": "ERR\n" * 200 + "OK\n",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t2",
+                        "content": [
+                            {"type": "text", "text": "INFO\n" * 100 + "OK\n"},
+                        ],
+                    }
+                ],
+            },
+        ],
+    }
+    segmentation_before = segment_request(body, protocol="anthropic")
+    assert segmentation_before is not None
+    observation = analyze_compression(segmentation_before, policy=enabled_policy)
+    assert observation is not None
+    # Both Anthropic tool_result shapes produced segments the analyzer
+    # could process without raising.
+    assert observation.candidate_count > 0
+    # The observation must never mutate the segmentation result.
+    segmentation_after = segment_request(body, protocol="anthropic")
+    assert (
+        segmentation_after.stable_prefix_hash == segmentation_before.stable_prefix_hash
+    )
+    assert (
+        segmentation_after.stable_prefix_segments
+        == segmentation_before.stable_prefix_segments
+    )
+
+
 def test_analyzer_handles_empty_segment_text(enabled_policy: CompressionConfig) -> None:
     """Segments with no estimated text still produce a clean observation."""
     segmentation = _segmentation(
