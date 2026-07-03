@@ -1,5 +1,12 @@
 """Phase 10 closed-loop threshold tuning engine.
 
+Phase 10 is currently recommendation-only.  ``mode = "apply"`` is
+accepted at config time but does not currently register runtime
+overrides -- a future supervised background task must call
+``build_runtime_override()`` then ``registry.register()`` before
+apply mode takes effect.  Until then, ``compute_recommendation``
+always tags recommendations as ``recommendation_only``.
+
 The tuning engine analyses a per-policy window of compression
 observations and produces bounded recommendations to adjust
 ``min_candidate_tokens``, ``min_savings_tokens``, and
@@ -28,8 +35,8 @@ Public surface:
 
 - :class:`TuningWindowMetrics` -- per-policy aggregate window data.
 - :class:`CompressionTuningRecommendation` -- immutable output.
-- :class:`RuntimeCompressionPolicyOverride` -- runtime overlay when
-  ``mode = "apply"`` is enabled.
+- :class:`RuntimeCompressionPolicyOverride` -- runtime overlay for
+  future apply mode.  Currently unused outside tests.
 - :func:`compute_recommendation` -- pure function from inputs to
   recommendation.
 - :func:`clamp_int`, :func:`clamp_float`, :func:`clamp_step` --
@@ -164,8 +171,11 @@ class CompressionTuningRecommendation:
     - ``"insufficient_data"``: window smaller than ``min_window_requests``.
     - ``"recommended"``: at least one tunable was recommended.
     - ``"suppressed"``: cooldown active or no change suggested.
-    - ``"applied"``: ``mode = "apply"`` and a runtime override was
-      produced in-memory.
+
+    ``mode = "apply"`` is accepted at config time for forward
+    compatibility but no background task currently wires
+    recommendations into the runtime override registry.  All
+    recommendations are tagged ``"recommended"`` regardless of mode.
     """
 
     policy_name: str
@@ -410,10 +420,11 @@ def compute_recommendation(
 
     Returns a :class:`CompressionTuningRecommendation` whose
     ``status`` is ``"insufficient_data"`` / ``"recommended"`` /
-    ``"suppressed"`` / ``"applied"`` -- but ``"applied"`` is set by
-    the caller (the registry) once the runtime override is wired
-    into the resolver; this function only emits the recommendation
-    itself.
+    ``"suppressed"``.  ``mode = "apply"`` is accepted at config time
+    for forward compatibility, but no background task currently wires
+    recommendations into the ``RuntimeCompressionPolicyOverrideRegistry``.
+    Until a future lifecycle task is added, every recommendation is
+    advisory regardless of mode.
 
     The function is pure: no I/O, no clock reads, no logging.  The
     caller passes ``now`` and the persisted ``last_recommendation_at``
@@ -666,17 +677,15 @@ def compute_recommendation(
             generated_at=generated_at,
         )
 
-    # Step 9: tags that indicate mode; the resolver flips to "applied"
-    # when it actually wires the override.
-    is_apply_mode = tuning_config.mode == "apply"
-    reasons_list = list(reasons)
-    if is_apply_mode:
-        reasons_list.append(REASON_APPLIED_RUNTIME_OVERRIDE)
-    else:
-        reasons_list.append(REASON_RECOMMENDATION_ONLY)
+    # Step 9: tag with recommendation_only.  ``mode = "apply"`` is
+    # accepted at config time for forward compatibility, but no
+    # background task currently wires recommendations into the
+    # RuntimeCompressionPolicyOverrideRegistry.  Until a future
+    # lifecycle task is added, every recommendation is advisory.
+    reasons_list = list(reasons) + [REASON_RECOMMENDATION_ONLY]
     return CompressionTuningRecommendation(
         policy_name=policy_name,
-        status="applied" if is_apply_mode else "recommended",
+        status="recommended",  # always; never "applied"
         window_request_count=window_count,
         current=current,
         recommended=suggested,

@@ -987,6 +987,9 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         metrics_coalescer=metrics_coalescer,
         dispatch_overhead_recorder=dispatch_overhead_recorder,
         transcoder_policy=config.transcoder,
+        cache_config=config.cache,
+        compression_tuning_registry=app.state.compression_tuning_registry,
+        compression_policy=config.compression,
     )
     app.state.coordinator = coordinator
 

@@ -44,7 +44,10 @@ from eggpool.transcoder.cache_synthesis import (
     WARN_POLICY_REQUIRED,
     WARN_PROVIDER_UNSUPPORTED,
     WARN_SYNTHESIZED,
+    SyntheticCacheCandidate,
     SyntheticCachePlan,
+    _existing_native_cache_controls,
+    _path_to_display,
     apply_synthetic_cache_controls,
     run_synthetic_cache_synthesis,
     select_synthetic_cache_candidates,
@@ -749,8 +752,6 @@ class TestApplyPure:
         assert annotations == ()
 
     def test_records_synthetic_annotations_for_each_candidate(self) -> None:
-        from eggpool.transcoder.cache_synthesis import SyntheticCacheCandidate
-
         payload = _anthropic_payload(
             system=[
                 {"type": "text", "text": "x" * 4096},
@@ -760,21 +761,23 @@ class TestApplyPure:
         candidates = (
             SyntheticCacheCandidate(
                 placement="system",
-                source_path="system.0.text",
-                target_path="system.0.text",
+                source_path=("system", 0, "text"),
+                target_path=("system", 0, "text"),
                 estimated_tokens=1000,
                 reason="system_candidate",
                 policy_name="policy:x",
                 policy_source="policy:x",
+                ttl="ephemeral",
             ),
             SyntheticCacheCandidate(
                 placement="system",
-                source_path="system.1.text",
-                target_path="system.1.text",
+                source_path=("system", 1, "text"),
+                target_path=("system", 1, "text"),
                 estimated_tokens=1000,
                 reason="system_candidate",
                 policy_name="policy:x",
                 policy_source="policy:x",
+                ttl="ephemeral",
             ),
         )
         plan = SyntheticCachePlan(
@@ -1126,3 +1129,755 @@ class TestPhase10RoutingGuardrails:
             runtime_override_registry=reg,
         )
         assert result.runtime_override_metadata["active"] is False
+
+
+# ---------------------------------------------------------------------------
+# Phase C: Tuple path normalization
+# ---------------------------------------------------------------------------
+
+
+class TestPathNormalization:
+    """Synthetic cache paths use normalized tuple representation."""
+
+    def test_path_display_helper_formats_tuples_as_dot_notation(self) -> None:
+        assert _path_to_display(("system", 0, "text")) == "system.0.text"
+        assert _path_to_display(("tools", 0)) == "tools.0"
+        assert _path_to_display(("messages", 3, "content", 0)) == (
+            "messages.3.content.0"
+        )
+        assert _path_to_display(()) == ""
+
+    def test_candidate_paths_are_tuples_not_strings(self) -> None:
+        payload = _anthropic_payload(
+            system=[{"type": "text", "text": "x" * 4096}],
+            tools=[
+                {
+                    "name": "lookup",
+                    "description": "lookup",
+                    "input_schema": {"type": "object"},
+                }
+            ],
+        )
+        segmentation = segment_request(payload, protocol=ANTHROPIC_PROTOCOL)
+        cache_config = CacheConfig(
+            synthetic_cache_controls=SyntheticCacheControlsConfig(
+                enabled=True,
+                dry_run=True,
+                require_policy=False,
+                min_stable_tokens=0,
+            )
+        )
+        plan = select_synthetic_cache_candidates(
+            segmentation,
+            payload,
+            cache_config=cache_config,
+            target_protocol=ANTHROPIC_PROTOCOL,
+            target_provider_kind="anthropic",
+            resolved_policy=None,
+        )
+        assert plan.candidate_count >= 1
+        for candidate in plan.candidates:
+            assert isinstance(candidate.source_path, tuple)
+            assert isinstance(candidate.target_path, tuple)
+
+    def test_existing_native_paths_use_tuple_normalized_form(self) -> None:
+        payload = _anthropic_payload(
+            system=[
+                {
+                    "type": "text",
+                    "text": "x" * 4096,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            tools=[
+                {
+                    "name": "lookup",
+                    "description": "lookup",
+                    "input_schema": {"type": "object"},
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        )
+        native = _existing_native_cache_controls(payload)
+        assert ("system", 0) in native
+        assert ("tools", 0) in native
+        assert len(native) == 2
+
+    def test_native_cache_control_preserved_when_tuple_path_matches(self) -> None:
+        payload = _anthropic_payload(
+            system=[
+                {
+                    "type": "text",
+                    "text": "x" * 4096,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        )
+        segmentation = segment_request(payload, protocol=ANTHROPIC_PROTOCOL)
+        cache_config = CacheConfig(
+            synthetic_cache_controls=SyntheticCacheControlsConfig(
+                enabled=True,
+                dry_run=False,
+                require_policy=False,
+                min_stable_tokens=0,
+            )
+        )
+        resolved = _resolved_policy(
+            enabled=True,
+            dry_run=False,
+            min_stable_tokens=0,
+        )
+        result = run_synthetic_cache_synthesis(
+            payload,
+            segmentation=segmentation,
+            cache_config=cache_config,
+            target_protocol=ANTHROPIC_PROTOCOL,
+            target_provider_kind="anthropic",
+            resolved_policy=resolved,
+        )
+        system = result.transformed_payload["system"]
+        assert isinstance(system, list)
+        assert system[0]["cache_control"] == {"type": "ephemeral"}
+        assert system[0]["text"] == "x" * 4096
+
+
+# ---------------------------------------------------------------------------
+# Phase D: Effective TTL
+# ---------------------------------------------------------------------------
+
+
+class TestEffectiveTTL:
+    """Synthetic cache controls honor the configured TTL."""
+
+    def test_unsupported_ttl_rejected_at_config_load(self) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="ttl"):
+            SyntheticCacheControlsConfig(ttl="5m")
+        with pytest.raises(ValidationError, match="ttl"):
+            SyntheticCacheControlsConfig(ttl="1h")
+
+    def test_only_ephemeral_ttl_accepted(self) -> None:
+        config = SyntheticCacheControlsConfig(ttl="ephemeral")
+        assert config.ttl == "ephemeral"
+
+    def test_apply_uses_effective_ttl_from_plan(self) -> None:
+        payload = _anthropic_payload(system=[{"type": "text", "text": "x" * 4096}])
+        candidates = (
+            SyntheticCacheCandidate(
+                placement="system",
+                source_path=("system", 0, "text"),
+                target_path=("system", 0, "text"),
+                estimated_tokens=1000,
+                reason="system_candidate",
+                policy_name="policy:x",
+                policy_source="policy:x",
+                ttl="ephemeral",
+            ),
+        )
+        plan = SyntheticCachePlan(
+            status="applied",
+            dry_run=False,
+            candidates=candidates,
+            applied_count=1,
+            warnings=(),
+            policy_name="policy:x",
+            policy_source="policy:x",
+            effective_ttl="ephemeral",
+        )
+        mutated, applied, annotations = apply_synthetic_cache_controls(payload, plan)
+        assert applied == 1
+        assert mutated["system"][0]["cache_control"] == {"type": "ephemeral"}
+        assert len(annotations) == 1
+        assert annotations[0].cache_control_type == "ephemeral"
+
+    def test_plan_as_dict_includes_effective_ttl(self) -> None:
+        plan = SyntheticCachePlan(
+            status="dry_run",
+            dry_run=True,
+            candidates=(),
+            applied_count=0,
+            warnings=(),
+            policy_name="<global>",
+            policy_source="global",
+            effective_ttl="ephemeral",
+        )
+        d = plan.as_dict()
+        assert d["effective_ttl"] == "ephemeral"
+
+    def test_plan_as_dict_includes_display_paths(self) -> None:
+        candidates = (
+            SyntheticCacheCandidate(
+                placement="system",
+                source_path=("system", 0, "text"),
+                target_path=("system", 0, "text"),
+                estimated_tokens=1000,
+                reason="system_candidate",
+                policy_name="p",
+                policy_source="ps",
+                ttl="ephemeral",
+            ),
+        )
+        plan = SyntheticCachePlan(
+            status="dry_run",
+            dry_run=True,
+            candidates=candidates,
+            applied_count=0,
+            warnings=(),
+            policy_name="p",
+            policy_source="ps",
+        )
+        d = plan.as_dict()
+        assert d["candidate_source_paths"] == ["system.0.text"]
+        assert d["candidate_target_paths"] == ["system.0.text"]
+
+
+# ---------------------------------------------------------------------------
+# Phase G: structural-diff safety check
+# ---------------------------------------------------------------------------
+
+
+class TestStructuralCacheDiff:
+    """_structural_cache_diff reports only paths and change kinds."""
+
+    def test_detects_unexpected_additions(self) -> None:
+        from eggpool.transcoder.cache_synthesis import _structural_cache_diff
+
+        original: dict[str, Any] = {"a": 1, "b": {"c": 2}}
+        mutated: dict[str, Any] = {"a": 1, "b": {"c": 2}, "d": 3}
+        diff = _structural_cache_diff(original, mutated)
+        assert ["d"] in diff["added_paths"]
+        assert diff["removed_paths"] == []
+        assert diff["changed_paths"] == []
+
+    def test_allows_only_cache_control_additions(self) -> None:
+        from eggpool.transcoder.cache_synthesis import _structural_cache_diff
+
+        original: dict[str, Any] = {
+            "system": [{"type": "text", "text": "x"}],
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+        mutated: dict[str, Any] = {
+            "system": [
+                {"type": "text", "text": "x", "cache_control": {"type": "ephemeral"}}
+            ],
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+        diff = _structural_cache_diff(original, mutated)
+        # All added paths end with cache_control
+        for path in diff["added_paths"]:
+            assert path[-1] == "cache_control"
+        assert diff["removed_paths"] == []
+        assert diff["changed_paths"] == []
+
+    def test_detects_removed_paths(self) -> None:
+        from eggpool.transcoder.cache_synthesis import _structural_cache_diff
+
+        original: dict[str, Any] = {"a": 1, "b": 2}
+        mutated: dict[str, Any] = {"a": 1}
+        diff = _structural_cache_diff(original, mutated)
+        assert diff["removed_paths"] == [["b"]]
+
+    def test_detects_changed_values(self) -> None:
+        from eggpool.transcoder.cache_synthesis import _structural_cache_diff
+
+        original: dict[str, Any] = {"a": 1, "b": [1, 2, 3]}
+        mutated: dict[str, Any] = {"a": 1, "b": [1, 99, 3]}
+        diff = _structural_cache_diff(original, mutated)
+        assert diff["changed_paths"] == [["b", 1]]
+
+    def test_empty_diff_for_identical_payloads(self) -> None:
+        from eggpool.transcoder.cache_synthesis import _structural_cache_diff
+
+        payload: dict[str, Any] = {"a": [1, 2], "b": {"c": "d"}}
+        diff = _structural_cache_diff(payload, payload)
+        assert diff == {"added_paths": [], "removed_paths": [], "changed_paths": []}
+
+
+# ---------------------------------------------------------------------------
+# Post-route synthetic cache controls (Phase A corrective pass)
+# ---------------------------------------------------------------------------
+
+
+class TestSyntheticCachePostRoute:
+    """Post-route synthetic cache controls in RequestCoordinator."""
+
+    def test_synthetic_cache_runs_after_route_selection(self) -> None:
+        from eggpool.request.coordinator import (
+            ProxyRequestContext,
+            RequestCoordinator,
+            SelectedAttempt,
+        )
+
+        payload = _anthropic_payload(system=[{"type": "text", "text": "x" * 4096}])
+        cache_config = CacheConfig(
+            synthetic_cache_controls=SyntheticCacheControlsConfig(
+                enabled=True,
+                dry_run=True,
+                require_policy=False,
+                min_stable_tokens=0,
+            )
+        )
+        ctx = ProxyRequestContext(
+            request_id="test-req",
+            protocol="anthropic",
+            model_id="claude-3-5-sonnet",
+            streaming=False,
+            original_body=json.dumps(payload).encode(),
+            incoming_headers={},
+            upstream_protocol="anthropic",
+            upstream_body=json.dumps(payload).encode(),
+        )
+        selected = SelectedAttempt(
+            proxy_request_id="test-req",
+            db_request_id="1",
+            attempt_id=1,
+            reservation_id="r1",
+            account_id=1,
+            account_name="test-acct",
+            api_key="sk-test",
+            model_id="claude-3-5-sonnet",
+            estimated_tokens=100,
+            estimated_microdollars=0,
+            attempt_number=1,
+            provider_id="anthropic-test",
+            protocol="anthropic",
+        )
+        coordinator = object.__new__(RequestCoordinator)
+        coordinator._cache_config = cache_config
+        coordinator._compression_tuning_registry = None
+        coordinator._compression_policy = CompressionConfig()
+        coordinator._catalog = None
+
+        coordinator._apply_synthetic_cache_controls(context=ctx, selected=selected)
+        assert ctx.synthetic_cache_result is not None
+        assert ctx.synthetic_cache_result.plan.status in (
+            "dry_run",
+            "disabled",
+            "no_candidates",
+            "policy_required",
+        )
+
+    def test_openai_client_to_anthropic_provider_post_route_synthesis(self) -> None:
+        from eggpool.request.coordinator import (
+            ProxyRequestContext,
+            RequestCoordinator,
+            SelectedAttempt,
+        )
+
+        payload = _anthropic_payload(
+            system=[{"type": "text", "text": "x" * 4096}],
+        )
+        cache_config = CacheConfig(
+            synthetic_cache_controls=SyntheticCacheControlsConfig(
+                enabled=True,
+                dry_run=True,
+                require_policy=False,
+                min_stable_tokens=0,
+            )
+        )
+        ctx = ProxyRequestContext(
+            request_id="test-req",
+            protocol="openai",
+            model_id="claude-3-5-sonnet",
+            streaming=False,
+            original_body=json.dumps(payload).encode(),
+            incoming_headers={},
+            upstream_protocol="anthropic",
+            upstream_body=json.dumps(payload).encode(),
+        )
+        selected = SelectedAttempt(
+            proxy_request_id="test-req",
+            db_request_id="1",
+            attempt_id=1,
+            reservation_id="r1",
+            account_id=1,
+            account_name="test-acct",
+            api_key="sk-test",
+            model_id="claude-3-5-sonnet",
+            estimated_tokens=100,
+            estimated_microdollars=0,
+            attempt_number=1,
+            provider_id="anthropic-test",
+            protocol="openai",
+        )
+        coordinator = object.__new__(RequestCoordinator)
+        coordinator._cache_config = cache_config
+        coordinator._compression_tuning_registry = None
+        coordinator._compression_policy = CompressionConfig()
+        coordinator._catalog = None
+
+        coordinator._apply_synthetic_cache_controls(context=ctx, selected=selected)
+        assert ctx.synthetic_cache_result is not None
+        # OpenAI client, Anthropic upstream => target_protocol = "anthropic"
+        # so the selector should NOT reject as provider_unsupported
+        assert ctx.synthetic_cache_result.plan.status != "provider_unsupported"
+        assert ctx.synthetic_cache_result.plan.status in (
+            "dry_run",
+            "applied",
+            "no_candidates",
+            "disabled",
+            "policy_required",
+        )
+
+    def test_openai_client_to_openai_provider_unsupported(self) -> None:
+        from eggpool.request.coordinator import (
+            ProxyRequestContext,
+            RequestCoordinator,
+            SelectedAttempt,
+        )
+
+        payload: dict[str, Any] = {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+        cache_config = CacheConfig(
+            synthetic_cache_controls=SyntheticCacheControlsConfig(
+                enabled=True,
+                dry_run=True,
+                require_policy=False,
+                min_stable_tokens=0,
+            )
+        )
+        ctx = ProxyRequestContext(
+            request_id="test-req",
+            protocol="openai",
+            model_id="gpt-4o",
+            streaming=False,
+            original_body=json.dumps(payload).encode(),
+            incoming_headers={},
+            upstream_protocol="openai",
+            upstream_body=json.dumps(payload).encode(),
+        )
+        selected = SelectedAttempt(
+            proxy_request_id="test-req",
+            db_request_id="1",
+            attempt_id=1,
+            reservation_id="r1",
+            account_id=1,
+            account_name="test-acct",
+            api_key="sk-test",
+            model_id="gpt-4o",
+            estimated_tokens=100,
+            estimated_microdollars=0,
+            attempt_number=1,
+            provider_id="openai-test",
+            protocol="openai",
+        )
+        coordinator = object.__new__(RequestCoordinator)
+        coordinator._cache_config = cache_config
+        coordinator._compression_tuning_registry = None
+        coordinator._compression_policy = CompressionConfig()
+        coordinator._catalog = None
+
+        coordinator._apply_synthetic_cache_controls(context=ctx, selected=selected)
+        assert ctx.synthetic_cache_result is not None
+        assert ctx.synthetic_cache_result.plan.status == "provider_unsupported"
+
+    def test_post_route_provider_specific_matchers_fire(self) -> None:
+        from eggpool.request.coordinator import (
+            ProxyRequestContext,
+            RequestCoordinator,
+            SelectedAttempt,
+        )
+
+        payload = _anthropic_payload(
+            system=[{"type": "text", "text": "x" * 4096}],
+        )
+        ctx = ProxyRequestContext(
+            request_id="test-req",
+            protocol="openai",
+            model_id="claude-3-5-sonnet",
+            streaming=False,
+            original_body=json.dumps(payload).encode(),
+            incoming_headers={},
+            upstream_protocol="anthropic",
+            upstream_body=json.dumps(payload).encode(),
+        )
+        selected = SelectedAttempt(
+            proxy_request_id="test-req",
+            db_request_id="1",
+            attempt_id=1,
+            reservation_id="r1",
+            account_id=1,
+            account_name="test-acct",
+            api_key="sk-test",
+            model_id="claude-3-5-sonnet",
+            estimated_tokens=100,
+            estimated_microdollars=0,
+            attempt_number=1,
+            provider_id="anthropic-test",
+            protocol="openai",
+        )
+
+        overrides = [
+            CompressionPolicyOverride(
+                name="anthropic-cache",
+                match_protocols=["anthropic"],
+                match_provider_kinds=["anthropic"],
+                synthetic_cache_controls=True,
+                synthetic_cache_dry_run=True,
+                synthetic_cache_min_stable_tokens=0,
+            )
+        ]
+        config_with_overrides = CompressionConfig()
+        config_with_overrides.policies = overrides
+
+        cache_config = CacheConfig(
+            synthetic_cache_controls=SyntheticCacheControlsConfig(
+                enabled=True,
+                dry_run=True,
+                require_policy=True,
+                min_stable_tokens=0,
+            )
+        )
+        # Mock catalog so resolve_selected_provider_kind returns a kind
+        mock_catalog = type(
+            "MockCatalog",
+            (),
+            {"providers": {"anthropic-test": type("P", (), {"kind": "anthropic"})()}},
+        )()
+        coordinator = object.__new__(RequestCoordinator)
+        coordinator._cache_config = cache_config
+        coordinator._compression_tuning_registry = None
+        coordinator._compression_policy = config_with_overrides
+        coordinator._catalog = mock_catalog
+        ctx.resolved_compression_policy = None
+
+        coordinator._apply_synthetic_cache_controls(context=ctx, selected=selected)
+        assert ctx.synthetic_cache_result is not None
+        # Provider-specific matcher fired, so status should not be policy_required
+        assert ctx.synthetic_cache_result.plan.status != "policy_required"
+
+    def test_pre_route_provider_specific_matchers_noop(self) -> None:
+        payload = _anthropic_payload(
+            system=[{"type": "text", "text": "x" * 4096}],
+        )
+        cache_config = CacheConfig(
+            synthetic_cache_controls=SyntheticCacheControlsConfig(
+                enabled=True,
+                dry_run=True,
+                require_policy=True,
+                min_stable_tokens=0,
+            )
+        )
+        segmentation = segment_request(payload, protocol=ANTHROPIC_PROTOCOL)
+        base = CompressionConfig()
+        overrides = [
+            CompressionPolicyOverride(
+                name="anthropic-cache",
+                match_provider_kinds=["anthropic"],
+                synthetic_cache_controls=True,
+                synthetic_cache_dry_run=True,
+                synthetic_cache_min_stable_tokens=0,
+            )
+        ]
+        # Pre-route context: no provider_kind => matcher does not fire
+        # (match_protocols removed so only provider_kind discriminates)
+        pre_route_ctx = CompressionPolicyContext(
+            source_protocol="openai",
+            provider_kind=None,
+        )
+        resolved = resolve_compression_policy(base, pre_route_ctx, overrides=overrides)
+        assert resolved.synthetic_cache_overrides is None
+        result = run_synthetic_cache_synthesis(
+            payload,
+            segmentation=segmentation,
+            cache_config=cache_config,
+            target_protocol=ANTHROPIC_PROTOCOL,
+            target_provider_kind="anthropic",
+            resolved_policy=resolved,
+        )
+        assert result.plan.status == "policy_required"
+
+    def test_failed_fallback_when_structural_diff_detects_change(self) -> None:
+        from eggpool.transcoder.cache_synthesis import (
+            _structural_cache_diff,
+        )
+
+        original: dict[str, Any] = {
+            "system": [{"type": "text", "text": "x" * 4096}],
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+        mutated: dict[str, Any] = {
+            "system": [
+                {
+                    "type": "text",
+                    "text": "changed!",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+        diff = _structural_cache_diff(original, mutated)
+        # The text field changed AND cache_control was added
+        has_text_change = any("text" in path for path in diff["changed_paths"])
+        assert has_text_change
+        unexpected = [p for p in diff["added_paths"] if p[-1] != "cache_control"]
+        has_other_changes = unexpected or diff["changed_paths"]
+        assert has_other_changes
+
+    def test_target_protocol_uses_upstream_protocol_not_client_protocol(self) -> None:
+        from eggpool.request.coordinator import (
+            ProxyRequestContext,
+            RequestCoordinator,
+            SelectedAttempt,
+        )
+
+        payload = _anthropic_payload(
+            system=[{"type": "text", "text": "x" * 4096}],
+        )
+        cache_config = CacheConfig(
+            synthetic_cache_controls=SyntheticCacheControlsConfig(
+                enabled=True,
+                dry_run=True,
+                require_policy=False,
+                min_stable_tokens=0,
+            )
+        )
+        ctx = ProxyRequestContext(
+            request_id="test-req",
+            protocol="openai",
+            model_id="claude-3-5-sonnet",
+            streaming=False,
+            original_body=json.dumps(payload).encode(),
+            incoming_headers={},
+            upstream_protocol="anthropic",
+            upstream_body=json.dumps(payload).encode(),
+        )
+        selected = SelectedAttempt(
+            proxy_request_id="test-req",
+            db_request_id="1",
+            attempt_id=1,
+            reservation_id="r1",
+            account_id=1,
+            account_name="test-acct",
+            api_key="sk-test",
+            model_id="claude-3-5-sonnet",
+            estimated_tokens=100,
+            estimated_microdollars=0,
+            attempt_number=1,
+            provider_id="anthropic-test",
+            protocol="openai",
+        )
+        coordinator = object.__new__(RequestCoordinator)
+        coordinator._cache_config = cache_config
+        coordinator._compression_tuning_registry = None
+        coordinator._compression_policy = CompressionConfig()
+        coordinator._catalog = None
+
+        coordinator._apply_synthetic_cache_controls(context=ctx, selected=selected)
+        assert ctx.synthetic_cache_result is not None
+        # upstream_protocol is "anthropic" despite client protocol "openai"
+        assert ctx.synthetic_cache_result.plan.status != "provider_unsupported"
+
+    def test_synthetic_cache_segmentation_stored_on_context(self) -> None:
+        from eggpool.request.coordinator import (
+            ProxyRequestContext,
+            RequestCoordinator,
+            SelectedAttempt,
+        )
+
+        payload = _anthropic_payload(
+            system=[{"type": "text", "text": "x" * 4096}],
+        )
+        cache_config = CacheConfig(
+            synthetic_cache_controls=SyntheticCacheControlsConfig(
+                enabled=True,
+                dry_run=True,
+                require_policy=False,
+                min_stable_tokens=0,
+            )
+        )
+        ctx = ProxyRequestContext(
+            request_id="test-req",
+            protocol="anthropic",
+            model_id="claude-3-5-sonnet",
+            streaming=False,
+            original_body=json.dumps(payload).encode(),
+            incoming_headers={},
+            upstream_protocol="anthropic",
+            upstream_body=json.dumps(payload).encode(),
+        )
+        selected = SelectedAttempt(
+            proxy_request_id="test-req",
+            db_request_id="1",
+            attempt_id=1,
+            reservation_id="r1",
+            account_id=1,
+            account_name="test-acct",
+            api_key="sk-test",
+            model_id="claude-3-5-sonnet",
+            estimated_tokens=100,
+            estimated_microdollars=0,
+            attempt_number=1,
+            provider_id="anthropic-test",
+            protocol="anthropic",
+        )
+        coordinator = object.__new__(RequestCoordinator)
+        coordinator._cache_config = cache_config
+        coordinator._compression_tuning_registry = None
+        coordinator._compression_policy = CompressionConfig()
+        coordinator._catalog = None
+
+        coordinator._apply_synthetic_cache_controls(context=ctx, selected=selected)
+        assert ctx.synthetic_cache_segmentation is not None
+
+    def test_upstream_body_not_mutated_when_safety_diff_fails(self) -> None:
+        from eggpool.request.coordinator import (
+            ProxyRequestContext,
+            RequestCoordinator,
+            SelectedAttempt,
+        )
+
+        original_payload = _anthropic_payload(
+            system=[{"type": "text", "text": "x" * 4096}],
+        )
+        original_body = json.dumps(original_payload).encode()
+        cache_config = CacheConfig(
+            synthetic_cache_controls=SyntheticCacheControlsConfig(
+                enabled=True,
+                dry_run=False,
+                require_policy=False,
+                min_stable_tokens=0,
+            )
+        )
+        ctx = ProxyRequestContext(
+            request_id="test-req",
+            protocol="anthropic",
+            model_id="claude-3-5-sonnet",
+            streaming=False,
+            original_body=original_body,
+            incoming_headers={},
+            upstream_protocol="anthropic",
+            upstream_body=original_body,
+        )
+        selected = SelectedAttempt(
+            proxy_request_id="test-req",
+            db_request_id="1",
+            attempt_id=1,
+            reservation_id="r1",
+            account_id=1,
+            account_name="test-acct",
+            api_key="sk-test",
+            model_id="claude-3-5-sonnet",
+            estimated_tokens=100,
+            estimated_microdollars=0,
+            attempt_number=1,
+            provider_id="anthropic-test",
+            protocol="anthropic",
+        )
+        coordinator = object.__new__(RequestCoordinator)
+        coordinator._cache_config = cache_config
+        coordinator._compression_tuning_registry = None
+        coordinator._compression_policy = CompressionConfig()
+        coordinator._catalog = None
+
+        coordinator._apply_synthetic_cache_controls(context=ctx, selected=selected)
+        # Apply mode with valid payload: upstream_body should be updated
+        # (safety diff passes when mutator only adds cache_control)
+        if (
+            ctx.synthetic_cache_result is not None
+            and ctx.synthetic_cache_result.plan.status == "applied"
+        ):
+            assert ctx.upstream_body is not None

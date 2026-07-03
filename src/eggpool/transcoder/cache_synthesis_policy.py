@@ -28,11 +28,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-# Supported TTL values per provider.  Initially we only know how to
-# emit Anthropic-style ``ephemeral`` hints; ``5m`` / ``1h`` are
-# reserved and accepted at config time so operators can express
-# intent without breaking config validation.
-SyntheticCacheControlTTL = Literal["ephemeral", "5m", "1h"]
+SyntheticCacheControlTTL = Literal["ephemeral"]
 
 # Provider kinds that are eligible for synthetic cache controls.
 # Phase 9 ships with ``anthropic`` only.  ``openai`` and others are
@@ -79,9 +75,8 @@ class SyntheticCacheControlsConfig(BaseModel):
     ttl: SyntheticCacheControlTTL = Field(
         default="ephemeral",
         description=(
-            "Anthropic cache TTL hint to emit.  ``ephemeral`` is the "
-            "documented Anthropic default; ``5m`` and ``1h`` are "
-            "reserved."
+            "Anthropic cache TTL hint to emit.  Only ``ephemeral`` "
+            "is currently supported; other values are rejected."
         ),
     )
     min_stable_tokens: int = Field(

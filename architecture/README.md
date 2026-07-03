@@ -1185,16 +1185,38 @@ full design.
 
 ## Synthetic Cache Controls (Phase 9)
 
-Phase 9 adds opt-in synthetic cache controls for providers that
-support explicit cache boundary hints, primarily Anthropic-style
-`cache_control` annotations.  When enabled, the selector identifies
-eligible `stable_prefix` segments and produces a plan; the mutator
-applies `cache_control` annotations to the provider-bound body.
-The feature is disabled by default and dry-run by default when
-enabled, so operators can observe the plan without changing request
-bodies.  Only protected `stable_prefix` segments are eligible;
-volatile suffix and compressed content are never annotated.  Native
-`cache_control` is never duplicated.
+Phase 9 layers opt-in synthetic `cache_control` annotations onto
+the provider-bound body for providers that support explicit cache
+boundary hints (initially Anthropic-style).  The selector and
+mutator run inside `RequestCoordinator._apply_synthetic_cache_controls`
+AFTER account selection and provider-bound transcoding, so the
+feature sees `context.upstream_protocol` (not `endpoint.protocol`).
+OpenAI clients routed to Anthropic providers are supported because
+the selector sees the actual upstream protocol.
+
+When enabled (and not in dry-run), the mutator annotates supported
+stable-prefix containers so the upstream cache can reuse them across
+requests.  Dry-run is the default when enabled so operators can
+observe the plan without changing wire bodies.
+
+### Key invariants
+
+- **Post-route, provider-bound**: the selector operates on
+  provider-bound segmentation computed after account selection and
+  transcoding.  Only protected `stable_prefix` segments from
+  `SYSTEM`, `DEVELOPER`, or `TOOL_SCHEMA` sources are eligible.
+  Volatile suffix and compressed content are never annotated.
+- **Native preservation**: existing native `cache_control` annotations
+  are preserved byte-for-byte and never duplicated.  Path
+  representation is normalized internally to `tuple[str | int, ...]`
+  so candidates and native-preservation checks use the same form.
+  Display strings are generated only in summary JSON.
+- **TTL is explicit**: only `ttl = "ephemeral"` is currently accepted.
+  `5m` and `1h` are reserved and rejected at config load.
+- **Structural-diff safety**: apply mode validates the mutated payload
+  only differs by added `cache_control` keys at candidate containers.
+  Any unexpected change triggers `failed_fallback` and preserves the
+  original payload.
 
 ### Routing non-interference
 
@@ -1204,15 +1226,17 @@ count + health.  The synthetic cache selector is content-private --
 it never reads prompt text, tool outputs, or system messages.
 Per-policy overrides ride on the Phase 6 `[[compression.policies]]`
 via `synthetic_cache_*` overlay fields resolved by
-`resolve_compression_policy`.
+`resolve_compression_policy`.  `_overlay_config()` skips
+synthetic-cache fields so a policy row containing only synthetic-cache
+overrides does not trigger compression config validation warnings.
 
 ### Code references
 
-- `src/eggpool/transcoder/cache_synthesis.py:679` -- `run_synthetic_cache_synthesis`
-- `src/eggpool/transcoder/cache_synthesis_policy.py:43` -- `CacheConfig`
-- `src/eggpool/transcoder/compression/policy_resolver.py:99` -- `synthetic_cache_overrides`
+- `src/eggpool/transcoder/cache_synthesis.py` -- `run_synthetic_cache_synthesis`
+- `src/eggpool/transcoder/cache_synthesis_policy.py` -- `CacheConfig`
+- `src/eggpool/transcoder/compression/policy_resolver.py` -- `synthetic_cache_overrides`, `_overlay_config()`
+- `src/eggpool/request/coordinator.py` -- `_apply_synthetic_cache_controls`
 - `src/eggpool/db/schema/0045_synthetic_cache_controls.sql` -- migration
-- `src/eggpool/api/proxy_request.py:_resolve_target_provider_kind`
 
 ## Closed-Loop Threshold Tuning (Phase 10)
 
@@ -1224,15 +1248,20 @@ three tunable thresholds:
 - `min_savings_tokens`
 - `max_compression_latency_ms`
 
+Phase 10 is currently **recommendation-only**.  `mode = "apply"` is
+accepted at config time but does not currently register runtime
+overrides -- a future supervised background task must call
+`build_runtime_override()` then `registry.register()` before apply
+mode takes effect.  Until then, `compute_recommendation` always tags
+recommendations as `recommendation_only`.
+
 The engine is disabled by default.  When `[compression.tuning] mode`
 is `recommend` (the default), the engine writes advisory
 recommendations to the `compression_tuning_recommendations` table and
-the dashboard; request behaviour never changes.  When `mode = apply`,
-the engine additionally registers an entry in the in-memory
-`RuntimeCompressionPolicyOverrideRegistry` so the resolver overlays
-the suggested values onto the per-request compression config.  Entries
-expire after `apply_ttl_seconds`; the registry is operator-clearable
-and is never persisted beyond the audit table.
+the dashboard; request behaviour never changes.  The in-memory
+`RuntimeCompressionPolicyOverrideRegistry` and `apply_runtime_override`
+helper exist for forward compatibility but no production code path
+registers entries yet.
 
 ### Safety rails
 
@@ -1295,7 +1324,7 @@ SQLite via aiosqlite with WAL mode. Single-connection serialization via a lock +
 
 ### Schema Migrations
 
-Ordered SQL migrations in `db/schema/` (0001 through 0038). Checksums tracked in `checksums.json`.
+Ordered SQL migrations in `db/schema/` (0001 through 0046). Checksums tracked in `checksums.json`.
 
 ### Repositories
 

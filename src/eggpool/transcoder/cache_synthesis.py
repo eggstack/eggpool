@@ -78,6 +78,17 @@ WARN_NA_PAYLOAD = "synthetic_cache_control_payload_not_mapping"
 ANTHROPIC_MAX_BREAKPOINTS: int = 4
 
 
+def _path_to_display(path: tuple[str | int, ...]) -> str:
+    """Convert a tuple path to a stable dot-notation display string.
+
+    ``("system", 0, "text")`` becomes ``"system.0.text"``;
+    ``("tools", 0)`` becomes ``"tools.0"``.  Integers are rendered
+    as decimal strings.  Used only for display and persisted JSON;
+    never for structural comparison.
+    """
+    return ".".join(str(p) for p in path)
+
+
 @dataclass(frozen=True, slots=True)
 class SyntheticCacheCandidate:
     """One candidate placement for a synthetic cache_control.
@@ -91,11 +102,11 @@ class SyntheticCacheCandidate:
     placement: str
     """``"system"`` or ``"tools"``."""
 
-    source_path: str
-    """Provider-visible JSON path the annotation would land at."""
+    source_path: tuple[str | int, ...]
+    """Internal canonical path the annotation would land at."""
 
-    target_path: str
-    """Provider-visible JSON path after any transcoding; same as
+    target_path: tuple[str | int, ...]
+    """Internal canonical path after any transcoding; same as
     ``source_path`` when no transcoding occurred."""
 
     estimated_tokens: int | None
@@ -112,6 +123,9 @@ class SyntheticCacheCandidate:
 
     policy_source: str
     """Audit string identifying the source (global vs. policy)."""
+
+    ttl: str
+    """Effective TTL the mutator will apply (e.g. ``"ephemeral"``)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +154,7 @@ class SyntheticCachePlan:
     warnings: tuple[str, ...]
     policy_name: str
     policy_source: str
+    effective_ttl: str = "ephemeral"
 
     @property
     def candidate_count(self) -> int:
@@ -161,8 +176,15 @@ class SyntheticCachePlan:
             "warnings": list(self.warnings),
             "policy_name": self.policy_name,
             "policy_source": self.policy_source,
+            "effective_ttl": self.effective_ttl,
             "placements": sorted({c.placement for c in self.candidates}),
             "reasons": sorted({c.reason for c in self.candidates}),
+            "candidate_source_paths": sorted(
+                _path_to_display(c.source_path) for c in self.candidates
+            ),
+            "candidate_target_paths": sorted(
+                _path_to_display(c.target_path) for c in self.candidates
+            ),
         }
 
 
@@ -288,6 +310,7 @@ def _select_candidates_for_anthropic(
     candidates: list[SyntheticCacheCandidate] = []
     warnings: list[str] = []
     placements = set(config.placements)
+    ttl = config.ttl
 
     native_preserved = 0
     for segment in segmentation.stable_prefix_segments:
@@ -322,16 +345,17 @@ def _select_candidates_for_anthropic(
         if tokens is not None and tokens < config.min_stable_tokens:
             warnings.append(WARN_BELOW_MIN_TOKENS)
             continue
-        source_path = ".".join(str(p) for p in segment.content_path)
+        path = tuple(segment.content_path)
         candidates.append(
             SyntheticCacheCandidate(
                 placement=placement,
-                source_path=source_path,
-                target_path=source_path,
+                source_path=path,
+                target_path=path,
                 estimated_tokens=tokens,
                 reason=reason,
                 policy_name=policy_name,
                 policy_source=policy_source,
+                ttl=ttl,
             )
         )
 
@@ -354,14 +378,20 @@ def _select_candidates_for_anthropic(
     return (tuple(candidates), tuple(warnings))
 
 
-def _existing_native_cache_controls(payload: Any) -> set[str]:
-    """Return provider-visible paths that already carry a native
+def _existing_native_cache_controls(
+    payload: Any,
+) -> set[tuple[str | int, ...]]:
+    """Return container paths that already carry a native
     ``cache_control`` annotation.
+
+    Paths are **container** paths — the path TO the dict that holds
+    ``cache_control``, not including the ``.cache_control`` leaf.
+    For example ``("system", 0)`` for ``system[0].cache_control``.
 
     Walks the same surfaces the segmenter walked; never raises on
     malformed input.
     """
-    found: set[str] = set()
+    found: set[tuple[str | int, ...]] = set()
     if not isinstance(payload, dict):
         return found
     payload_dict = cast("dict[str, Any]", payload)
@@ -371,14 +401,14 @@ def _existing_native_cache_controls(payload: Any) -> set[str]:
             if isinstance(block, dict) and cast("dict[str, Any]", block).get(
                 "cache_control"
             ):
-                found.add(f"system[{index}].cache_control")
+                found.add(("system", index))
     tools = payload_dict.get("tools")
     if isinstance(tools, list):
         for index, tool in enumerate(cast("list[Any]", tools)):
             if isinstance(tool, dict) and cast("dict[str, Any]", tool).get(
                 "cache_control"
             ):
-                found.add(f"tools[{index}].cache_control")
+                found.add(("tools", index))
     messages = payload_dict.get("messages")
     if isinstance(messages, list):
         for message_index, message in enumerate(cast("list[Any]", messages)):
@@ -391,11 +421,68 @@ def _existing_native_cache_controls(payload: Any) -> set[str]:
                     if isinstance(block, dict) and cast("dict[str, Any]", block).get(
                         "cache_control"
                     ):
-                        found.add(
-                            f"messages[{message_index}].content"
-                            f"[{block_index}].cache_control"
-                        )
+                        found.add(("messages", message_index, "content", block_index))
     return found
+
+
+def _structural_cache_diff(
+    original: dict[str, Any],
+    mutated: dict[str, Any],
+) -> dict[str, Any]:
+    """Compare two payloads and report paths of changes.
+
+    Returns a dict with:
+    - ``added_paths``: paths present in ``mutated`` but not in ``original``.
+    - ``removed_paths``: paths present in ``original`` but not in ``mutated``.
+    - ``changed_paths``: paths whose values differ.
+
+    Paths are represented as ``list[str | int]`` using dot-style
+    string keys and integer indices.  The mutator is supposed to
+    **only** add ``cache_control`` keys at candidate container
+    paths.  Any other change is a safety failure.
+    """
+    added: list[list[str | int]] = []
+    removed: list[list[str | int]] = []
+    changed: list[list[str | int]] = []
+
+    def _walk(
+        o: Any,
+        m: Any,
+        path: list[str | int],
+    ) -> None:
+        if type(o) is not type(m):
+            changed.append(list(path))
+            return
+        if isinstance(o, dict):
+            o_dict = cast("dict[str, Any]", o)
+            m_dict = cast("dict[str, Any]", m)
+            all_keys = set(o_dict) | set(m_dict)
+            for key in sorted(all_keys, key=str):
+                child = list(path) + [key]
+                if key not in o_dict:
+                    added.append(child)
+                elif key not in m_dict:
+                    removed.append(child)
+                else:
+                    _walk(o_dict[key], m_dict[key], child)
+        elif isinstance(o, list):
+            o_list = cast("list[Any]", o)
+            m_list = cast("list[Any]", m)
+            max_len = max(len(o_list), len(m_list))
+            for i in range(max_len):
+                child = list(path) + [i]
+                if i >= len(o_list):
+                    added.append(child)
+                elif i >= len(m_list):
+                    removed.append(child)
+                else:
+                    _walk(o_list[i], m_list[i], child)
+        else:
+            if o != m:
+                changed.append(list(path))
+
+    _walk(original, mutated, [])
+    return {"added_paths": added, "removed_paths": removed, "changed_paths": changed}
 
 
 def select_synthetic_cache_candidates(
@@ -431,6 +518,7 @@ def select_synthetic_cache_candidates(
             warnings=(WARN_DISABLED,),
             policy_name=policy_name,
             policy_source=policy_source,
+            effective_ttl=effective.ttl,
         )
 
     if effective.require_policy and policy_source == "global":
@@ -442,6 +530,7 @@ def select_synthetic_cache_candidates(
             warnings=(WARN_POLICY_REQUIRED,),
             policy_name=policy_name,
             policy_source=policy_source,
+            effective_ttl=effective.ttl,
         )
 
     supported_provider_kinds: set[str] = set(effective.provider_kinds)
@@ -458,6 +547,7 @@ def select_synthetic_cache_candidates(
             warnings=(WARN_PROVIDER_UNSUPPORTED,),
             policy_name=policy_name,
             policy_source=policy_source,
+            effective_ttl=effective.ttl,
         )
 
     if not isinstance(payload, dict):
@@ -469,6 +559,7 @@ def select_synthetic_cache_candidates(
             warnings=(WARN_NA_PAYLOAD,),
             policy_name=policy_name,
             policy_source=policy_source,
+            effective_ttl=effective.ttl,
         )
 
     payload_dict = cast("dict[str, Any]", payload)
@@ -482,6 +573,7 @@ def select_synthetic_cache_candidates(
             warnings=(WARN_NO_STABLE_CANDIDATE,),
             policy_name=policy_name,
             policy_source=policy_source,
+            effective_ttl=effective.ttl,
         )
 
     if target_protocol != "anthropic":
@@ -493,6 +585,7 @@ def select_synthetic_cache_candidates(
             warnings=(WARN_PROVIDER_UNSUPPORTED,),
             policy_name=policy_name,
             policy_source=policy_source,
+            effective_ttl=effective.ttl,
         )
 
     existing_native = _existing_native_cache_controls(payload_dict)
@@ -514,6 +607,7 @@ def select_synthetic_cache_candidates(
             warnings=tuple(warnings),
             policy_name=policy_name,
             policy_source=policy_source,
+            effective_ttl=effective.ttl,
         )
     if effective.dry_run:
         warnings = list(selector_warnings) + [WARN_DRY_RUN]
@@ -525,6 +619,7 @@ def select_synthetic_cache_candidates(
             warnings=tuple(warnings),
             policy_name=policy_name,
             policy_source=policy_source,
+            effective_ttl=effective.ttl,
         )
     warnings = list(selector_warnings) + [WARN_SYNTHESIZED]
     return SyntheticCachePlan(
@@ -535,28 +630,26 @@ def select_synthetic_cache_candidates(
         warnings=tuple(warnings),
         policy_name=policy_name,
         policy_source=policy_source,
+        effective_ttl=effective.ttl,
     )
 
 
-def _resolve_payload_path(payload: dict[str, Any], path: str) -> Any:
-    """Resolve a dot-separated JSON path inside ``payload``.
+def _resolve_tuple_path(payload: dict[str, Any], path: tuple[str | int, ...]) -> Any:
+    """Resolve a tuple path inside ``payload``.
 
-    Returns ``None`` when the path cannot be resolved.  Used only
-    for defensive validation; the mutator mutates the payload by
-    reference to keep its effect idempotent for the candidate list.
+    Returns ``None`` when the path cannot be resolved.
     """
-    parts = path.split(".")
     current: Any = payload
-    for raw_part in parts:
+    for part in path:
         if isinstance(current, dict):
-            current = cast("dict[str, Any]", current).get(raw_part)
+            if not isinstance(part, str):
+                return None
+            current = cast("dict[str, Any]", current).get(part)
         elif isinstance(current, list):
-            try:
-                index = int(raw_part)
-            except ValueError:
+            if not isinstance(part, int):
                 return None
             try:
-                current = cast("list[Any]", current)[index]
+                current = cast("list[Any]", current)[part]
             except IndexError:
                 return None
         else:
@@ -566,11 +659,53 @@ def _resolve_payload_path(payload: dict[str, Any], path: str) -> Any:
     return current
 
 
+def _walk_to_dict_container(
+    payload: dict[str, Any],
+    path: tuple[str | int, ...],
+) -> Any:
+    """Resolve ``path`` against ``payload``; if the leaf is not a
+    dict, walk back one path component at a time until one is.
+
+    Stable-prefix segments sometimes point at string leaves
+    (``("system", 0, "text")``) where the provider cache_control
+    belongs on the parent block (``("system", 0)``).  When the
+    segmenter has already pointed at the dict (``("tools", 0)``),
+    the first lookup succeeds.  Returns ``None`` when no dict
+    ancestor exists, so the caller can silently skip the candidate.
+    """
+    while path:
+        candidate: Any = _resolve_tuple_path(payload, path)
+        if isinstance(candidate, dict):
+            return cast("dict[str, Any]", candidate)
+        path = path[:-1]
+    return None
+
+
+def _container_path_for_candidate(
+    path: tuple[str | int, ...],
+) -> tuple[str | int, ...]:
+    """Derive the container path from a candidate's target path.
+
+    If the path already points at a dict container (last element is
+    an int or a known container key), return it unchanged.  If the
+    path points at a text leaf (e.g. ``("system", 0, "text")``),
+    strip the last component to reach the owning container.
+    """
+    if not path:
+        return path
+    last = path[-1]
+    if isinstance(last, int):
+        return path
+    if last == "text" and len(path) >= 2:
+        return path[:-1]
+    return path
+
+
 def _synthesize_anthropic_payload(
     payload: dict[str, Any],
     candidates: tuple[SyntheticCacheCandidate, ...],
     ttl: str,
-    existing_native: set[str],
+    existing_native: set[tuple[str | int, ...]],
 ) -> tuple[dict[str, Any], int]:
     """Apply the candidate annotations to a deep copy of ``payload``.
 
@@ -581,55 +716,26 @@ def _synthesize_anthropic_payload(
     under-token candidates).
 
     The ``target_path`` of a candidate points at the **content leaf**
-    the segmenter recorded (e.g. ``system.0.text`` for an Anthropic
-    ``system`` block whose ``text`` field is the string leaf).  The
-    mutator walks back up the path until it lands on a dict so
-    ``cache_control`` can be attached as a sibling.  ``tools``
+    the segmenter recorded (e.g. ``("system", 0, "text")`` for an
+    Anthropic ``system`` block whose ``text`` field is the string
+    leaf).  The mutator walks back up the path until it lands on a
+    dict so ``cache_control`` can be attached as a sibling.  ``tools``
     candidates already point at the dict container
-    (``tools.0``) so they resolve on the first try.
+    (``("tools", 0)``) so they resolve on the first try.
     """
     mutated = copy.deepcopy(payload)
     applied = 0
     cache_control_block = {"type": ttl}
     for candidate in candidates:
-        path = candidate.target_path
-        if not path:
+        container_path = _container_path_for_candidate(candidate.target_path)
+        if container_path in existing_native:
             continue
-        if path in existing_native:
-            continue
-        if path.endswith(".cache_control"):
-            container_path = path[: -len(".cache_control")]
-        else:
-            container_path = path
         container = _walk_to_dict_container(mutated, container_path)
         if not isinstance(container, dict):
             continue
         cast("dict[str, Any]", container)["cache_control"] = dict(cache_control_block)
         applied += 1
     return mutated, applied
-
-
-def _walk_to_dict_container(
-    payload: dict[str, Any],
-    path: str,
-) -> Any:
-    """Resolve ``path`` against ``payload``; if the leaf is not a
-    dict, walk back one path component at a time until one is.
-
-    Stable-prefix segments sometimes point at string leaves
-    (``system.0.text``) where the provider cache_control belongs
-    on the parent block (``system.0``).  When the segmenter has
-    already pointed at the dict (``tools.0``), the first lookup
-    succeeds.  Returns ``None`` when no dict ancestor exists, so
-    the caller can silently skip the candidate.
-    """
-    parts = path.split(".")
-    while parts:
-        candidate: Any = _resolve_payload_path(payload, ".".join(parts))
-        if isinstance(candidate, dict):
-            return cast("dict[str, Any]", candidate)
-        parts.pop()
-    return None
 
 
 def apply_synthetic_cache_controls(
@@ -653,21 +759,22 @@ def apply_synthetic_cache_controls(
     mutated, applied_count = _synthesize_anthropic_payload(
         payload,
         plan.candidates,
-        ttl="ephemeral",
+        ttl=plan.effective_ttl,
         existing_native=existing_native,
     )
     annotations: list[CacheBoundaryAnnotation] = []
     for candidate in plan.candidates:
-        if candidate.target_path in existing_native:
+        container_path = _container_path_for_candidate(candidate.target_path)
+        if container_path in existing_native:
             continue
         annotations.append(
             CacheBoundaryAnnotation(
                 kind=CACHE_BOUNDARY_KIND_SYNTHESIZED,
                 source_protocol="anthropic",
                 target_protocol="anthropic",
-                source_path=candidate.source_path,
-                target_path=f"{candidate.target_path}.cache_control",
-                cache_control_type="ephemeral",
+                source_path=_path_to_display(candidate.source_path),
+                target_path=_path_to_display(container_path) + ".cache_control",
+                cache_control_type=plan.effective_ttl,
             )
         )
     return mutated, applied_count, tuple(annotations)
@@ -719,6 +826,7 @@ def run_synthetic_cache_synthesis(
                 warnings=plan.warnings,
                 policy_name=plan.policy_name,
                 policy_source=plan.policy_source,
+                effective_ttl=plan.effective_ttl,
             )
         if transcode_context is not None:
             tracker = transcode_context.cache_boundary_tracker
@@ -750,6 +858,8 @@ __all__ = [
     "WARN_POLICY_REQUIRED",
     "WARN_PROVIDER_UNSUPPORTED",
     "WARN_SYNTHESIZED",
+    "_path_to_display",
+    "_structural_cache_diff",
     "apply_synthetic_cache_controls",
     "run_synthetic_cache_synthesis",
     "select_synthetic_cache_candidates",

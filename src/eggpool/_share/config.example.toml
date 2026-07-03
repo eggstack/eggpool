@@ -643,8 +643,14 @@ protocol = "anthropic"
 protocol = "anthropic"
 
 # [cache]
-# Synthetic provider cache controls (Phase 9). Disabled by default;
-# dry-run is the default when enabled.
+# Synthetic provider cache controls (Phase 9).  Applied POST-ROUTE
+# to the provider-bound body (after account selection and transcoding).
+# Disabled by default; dry-run is the default when enabled so operators
+# can observe the plan without changing wire bodies.  Path normalization
+# is internal and not user-visible.  Only `ttl = "ephemeral"` is
+# currently supported; `5m` and `1h` are rejected at config load.
+# Structural-diff safety rejects any unexpected mutation and falls back
+# to the original payload.
 # [cache.synthetic_cache_controls]
 # enabled = false
 # dry_run = true
@@ -654,6 +660,10 @@ protocol = "anthropic"
 # max_breakpoints = 4
 # require_policy = true
 # placements = ["system", "tools"]
+#
+# Apply mode mutates provider-bound Anthropic requests by adding
+# cache_control to stable-prefix containers only.  Leave dry_run=true
+# until dashboard counters show the expected candidates.
 #
 # Per-policy overrides ride on the Phase 6 resolver. Example:
 #
@@ -672,13 +682,10 @@ protocol = "anthropic"
 # The tuning engine observes Phase 4-6 compression metrics and emits
 # recommendations for `min_candidate_tokens`, `min_savings_tokens`, and
 # `max_compression_latency_ms`.  `mode = "recommend"` (the default)
-# writes recommendations to the dashboard and the
-# `compression_tuning_recommendations` table only.  Set
-# `mode = "apply"` to additionally push the recommendation onto an
-# in-memory runtime override registry (`<global>` and matched policy
-# names) -- the registry is operator-clearable, expires after
-# `apply_ttl_seconds`, and is never persisted beyond the per-policy
-# audit table.
+# writes advisory recommendations to the dashboard and the
+# `compression_tuning_recommendations` table only.  `mode = "apply"` is
+# accepted but currently behaves like `recommend` until a future
+# lifecycle task wires the registry path.
 #
 # [compression.tuning]
 # mode = "recommend"

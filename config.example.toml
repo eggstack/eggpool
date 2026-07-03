@@ -822,3 +822,76 @@ protocol = "anthropic"
 
 [model_overrides."claude-sonnet-4"]
 protocol = "anthropic"
+
+# [cache]
+# Synthetic provider cache controls (Phase 9).  Applied POST-ROUTE
+# to the provider-bound body (after account selection and transcoding).
+# Disabled by default; dry-run is the default when enabled so operators
+# can observe the plan without changing wire bodies.  Path normalization
+# is internal and not user-visible.  Only `ttl = "ephemeral"` is
+# currently supported; `5m` and `1h` are rejected at config load.
+# Structural-diff safety rejects any unexpected mutation and falls back
+# to the original payload.
+# [cache.synthetic_cache_controls]
+# enabled = false
+# dry_run = true
+# provider_kinds = ["anthropic"]
+# ttl = "ephemeral"
+# min_stable_tokens = 1024
+# max_breakpoints = 4
+# require_policy = true
+# placements = ["system", "tools"]
+#
+# Apply mode mutates provider-bound Anthropic requests by adding
+# cache_control to stable-prefix containers only.  Leave dry_run=true
+# until dashboard counters show the expected candidates.
+#
+# Per-policy overrides ride on the Phase 6 resolver. Example:
+#
+#   [[compression.policies]]
+#   name = "anthropic-cache"
+#   match_protocols = ["anthropic"]
+#   match_provider_kinds = ["anthropic"]
+#   synthetic_cache_controls = true
+#   synthetic_cache_dry_run = true
+#   synthetic_cache_min_stable_tokens = 0
+#   synthetic_cache_max_breakpoints = 4
+
+# ----------------------------------------------------------------------
+# Phase 10: closed-loop threshold tuning (advisory by default)
+# ----------------------------------------------------------------------
+# The tuning engine observes Phase 4-6 compression metrics and emits
+# recommendations for `min_candidate_tokens`, `min_savings_tokens`, and
+# `max_compression_latency_ms`.  `mode = "recommend"` (the default)
+# writes advisory recommendations to the dashboard and the
+# `compression_tuning_recommendations` table only.  `mode = "apply"` is
+# accepted but currently behaves like `recommend` until a future
+# lifecycle task wires the registry path.
+#
+# [compression.tuning]
+# mode = "recommend"
+# window_seconds = 3600
+# min_window_requests = 200
+# max_adjustment_pct = 25
+# cooldown_seconds = 1800
+# apply_ttl_seconds = 900
+#
+# Operator-defined targets (the algorithm nudges thresholds toward
+# these targets without ever exceeding the bounds below):
+#
+# [compression.tuning.targets]
+# max_failed_fallback_rate = 0.05
+# max_latency_warning_rate = 0.10
+# min_positive_savings_rate = 0.60
+# target_compression_latency_ms = 4000.0
+#
+# Hard bounds (the algorithm clamps every suggested value to these
+# ranges; no override can escape them):
+#
+# [compression.tuning.bounds]
+# min_candidate_tokens_min = 64
+# min_candidate_tokens_max = 8192
+# min_savings_tokens_min = 32
+# min_savings_tokens_max = 4096
+# max_compression_latency_ms_min = 250.0
+# max_compression_latency_ms_max = 30000.0

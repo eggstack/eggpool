@@ -23,6 +23,8 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Canonical request segmentation — every finalized request is annotated into `stable_prefix` / `semi_stable_context` / `volatile_suffix` regions without mutating the payload, giving later compression phases a safe way to identify cache-continuity boundaries and compressible candidates. Segmentation `content_path` values are concrete JSON paths that resolve to actual string leaves of the request payload (not semantic role labels), with `resolve_path` and `resolve_text_path` helpers available for tests and debug assertions
 - Transcoder cache stability — every cross-protocol request carries a bounded `cache_boundary_tracker` that records whether `cache_control` annotations were preserved, relocated, or dropped, plus deterministic SHA-256 of the provider-visible stable prefix so downstream phases can compare cache-equivalent bodies without re-parsing
 - Safe suffix compression — when `[compression] mode = "safe"`, deterministic transforms fold repeated lines, compact logs/search/stack traces, elide base64 blobs, and minify machine JSON inside `volatile_suffix` regions, preserving every `stable_prefix` segment byte-for-byte (recomputed SHA-256 verified via exact content hash of the stable-prefix segments re-extracted from both original and transformed payloads) and degrading to the original payload on any mismatch. All six transforms emit unified markers via `markers.build_marker` with the format `[EggPool compression: <transform> | segment=<id> | lines=<n> | tokens=<n> | sha256=<digest>]`. Context-limit checks happen before compression, so compression cannot rescue over-limit requests
+- Phase 9: synthetic provider cache controls (post-route, disabled by default, dry-run by default)
+- Phase 10: closed-loop threshold tuning (recommendation-only)
 
 ## Quick Start
 
@@ -250,6 +252,32 @@ The guarantee rests on three pins:
 Same-provider account fairness (e.g., multiple OpenAI subscriptions) is preserved because cache hit ratios or compression savings never enter the score. Compression failure (`failed_fallback=True`) is observational — it never marks an account unhealthy. Phase 6 policy overrides cannot reroute; they only adjust the analyzer / applier knobs for the already-selected route.
 
 A future **cache-aware routing mode** would require an explicit `routing.cache_aware = true` config flag plus per-provider support detection, a cost model using cached-token prices, backtesting metrics, per-client opt-in, and dashboard warnings. Phase 8 deliberately does NOT implement it. See `plans/cache_compression_phase_08_routing_guardrails.md` for the full design.
+
+### Phase 9: Synthetic provider cache controls (post-route)
+
+Phase 9 layers opt-in synthetic `cache_control` annotations onto the provider-bound body for providers that support explicit cache boundary hints (initially Anthropic-style).  When enabled (and not in dry-run), the mutator annotates supported stable-prefix containers so the upstream cache can reuse them across requests.
+
+Key invariants:
+
+- **Post-route, provider-bound**: the selector and mutator run inside `RequestCoordinator._apply_synthetic_cache_controls` AFTER account selection and provider-bound transcoding.  OpenAI clients routed to Anthropic providers are supported because the selector sees the actual upstream protocol.
+- **Disabled by default, dry-run by default**: opt-in via `[cache] synthetic_cache_controls.enabled = true`.  Dry-run is the default when enabled so operators can observe the plan without changing wire bodies.
+- **Stable-prefix only**: only protected `stable_prefix` segments whose source is `SYSTEM`, `DEVELOPER`, or `TOOL_SCHEMA` are eligible.  Volatile suffix and compressed content are never annotated.
+- **Native preservation**: existing native `cache_control` annotations are preserved byte-for-byte and never duplicated.  Path representation is normalized internally so candidates and native-preservation checks use the same tuple form.
+- **TTL is explicit**: only `ttl = "ephemeral"` is currently accepted.  `5m` and `1h` are reserved and rejected at config load.
+- **Structural-diff safety**: apply mode validates the mutated payload only differs by added `cache_control` keys at candidate containers.  Any unexpected change triggers `failed_fallback` and preserves the original payload.
+- **Per-policy overrides**: Phase 6 `[[compression.policies]]` rows can set `synthetic_cache_*` fields (post-route); provider-specific matchers (`match_provider_ids`, `match_provider_kinds`) now fire because the resolver sees post-route context.  `_overlay_config()` skips synthetic-cache fields so a policy row containing only synthetic-cache overrides does not poison the compression config overlay.
+
+### Phase 10: Closed-loop threshold tuning (recommendation-only)
+
+Phase 10 adds an advisory recommendation engine that observes Phase 4-6 compression metrics and suggests bounded adjustments to the three tunable thresholds (`min_candidate_tokens`, `min_savings_tokens`, `max_compression_latency_ms`).
+
+- **Currently recommendation-only**: `mode = "recommend"` (the default) writes recommendations to the `compression_tuning_recommendations` table and the dashboard only.  Request behaviour never changes.
+- **`mode = "apply"` is accepted at config but does NOT currently register runtime overrides**: the in-memory `RuntimeCompressionPolicyOverrideRegistry` and `apply_runtime_override` helper exist for forward compatibility, but no production code path automatically calls `build_runtime_override()` then `registry.register()`.  A future supervised background task must wire this lifecycle before apply mode takes effect.
+- The recommendation engine is content-private (no prompt inspection), bounded (every suggested value clamped to `[compression.tuning.bounds]`), rate-limited (`max_adjustment_pct` per step; `cooldown_seconds` suppresses the next recommendation), and immutable on every other compression knob (mode, enabled, static-prefix, transforms, synthetic cache knobs).
+
+Both phases preserve routing non-interference: `QuotaFairScorer` does NOT consume synthetic cache or tuning fields.  Same-provider account fairness is preserved.
+
+See `plans/cache_compression_phase_09_synthetic_cache_controls.md` and `plans/cache_compression_phase_10_closed_loop_threshold_tuning.md` for the full design.
 
 ## API Endpoints
 

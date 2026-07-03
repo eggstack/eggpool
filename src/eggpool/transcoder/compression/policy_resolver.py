@@ -277,6 +277,18 @@ def _overlay_config(
     for key, value in override_dict.items():
         if key in _OVERRIDE_ONLY_FIELDS:
             continue
+        # Phase 9: synthetic cache-control override fields ride on
+        # CompressionPolicyOverride for match-and-merge reuse, but
+        # they live on a different Pydantic model
+        # (SyntheticCacheControlsConfig).  Skip them here so a
+        # policy row that contains ONLY synthetic-cache fields does
+        # not trigger a ValidationError against
+        # :class:`CompressionConfig` (which uses ``extra='forbid'``).
+        # The resolver surfaces them separately via
+        # ``synthetic_cache_overrides`` for the cache-synthesis
+        # module to read.
+        if key in _SYNTHETIC_CACHE_OVERLAY_FIELDS:
+            continue
         if value is None:
             continue
         if key == "transforms" and isinstance(value, dict):

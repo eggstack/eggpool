@@ -148,6 +148,34 @@ def _serialize_thinking_trace(trace: dict[str, Any] | None) -> str | None:
     return json.dumps(trace) if trace else None
 
 
+def resolve_selected_provider_kind(
+    catalog: Any,  # noqa: ANN401
+    selected: Any,  # noqa: ANN401
+) -> str | None:
+    """Look up the selected provider's ``kind`` from the catalog.
+
+    Returns ``None`` when the catalog is missing, the provider is not
+    in the catalog, or the kind field is unset.  Never raises.
+    """
+    if not selected or not getattr(selected, "provider_id", None):
+        return None
+    provider_id: str = selected.provider_id
+    try:
+        providers_obj: Any = getattr(catalog, "providers", None)
+        if not isinstance(providers_obj, dict):
+            return None
+        providers_dict: dict[str, Any] = cast("dict[str, Any]", providers_obj)
+        provider_config: Any = providers_dict.get(provider_id)
+        if provider_config is None:
+            return None
+        kind_attr: Any = getattr(provider_config, "kind", None)
+        if isinstance(kind_attr, str) and kind_attr:
+            return kind_attr
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
 def _extract_original_thinking_budget_inputs(
     context: ProxyRequestContext,
 ) -> tuple[str | None, int | None]:
@@ -404,6 +432,14 @@ class ProxyRequestContext:
     # failed, or on legacy / error paths.  Observational only:
     # never feeds into the :class:`QuotaFairScorer`.
     synthetic_cache_result: Any | None = None
+    # Post-route segmentation of the provider-bound payload used
+    # exclusively by Phase 9 synthetic cache synthesis.  Computed in
+    # ``_apply_synthetic_cache_controls`` after provider selection and
+    # transcoding so the selector sees Anthropic-style paths even when
+    # the client sent an OpenAI payload.  ``None`` before post-route
+    # processing; the original ``segmentation`` field (client-side)
+    # is never replaced.
+    synthetic_cache_segmentation: Any | None = None
 
     def __post_init__(self) -> None:
         if not self.upstream_protocol:
@@ -491,6 +527,9 @@ class RequestCoordinator:
         metrics_coalescer: Any | None = None,  # noqa: ANN401
         dispatch_overhead_recorder: Any | None = None,  # noqa: ANN401
         transcoder_policy: TranscoderPolicy | None = None,
+        cache_config: Any | None = None,  # noqa: ANN401
+        compression_tuning_registry: Any | None = None,  # noqa: ANN401
+        compression_policy: Any | None = None,  # noqa: ANN401
     ) -> None:
         self._registry = registry
         self._catalog = catalog
@@ -525,6 +564,9 @@ class RequestCoordinator:
         self._metrics_coalescer = metrics_coalescer
         self._dispatch_overhead_recorder = dispatch_overhead_recorder
         self._transcoder_policy = transcoder_policy
+        self._cache_config = cache_config
+        self._compression_tuning_registry = compression_tuning_registry
+        self._compression_policy = compression_policy
 
         # Build the attempt finalizer with all dependencies
         self._attempt_finalizer = AttemptFinalizer(
@@ -1588,6 +1630,10 @@ class RequestCoordinator:
                 context=context,
                 selected=selected,
             )
+            self._apply_synthetic_cache_controls(
+                context=context,
+                selected=selected,
+            )
         except CapabilityError as err:
             await self._finalize_selected_capability_rejection(
                 context=context,
@@ -1867,6 +1913,10 @@ class RequestCoordinator:
         # the proxy layer renders an HTTP 400 with no leaked state.
         try:
             self._apply_selected_provider_transcode_adjustments(
+                context=context,
+                selected=selected,
+            )
+            self._apply_synthetic_cache_controls(
                 context=context,
                 selected=selected,
             )
@@ -2692,6 +2742,133 @@ class RequestCoordinator:
             selected=selected,
             thinking_capability=thinking_capability,
         )
+
+    def _apply_synthetic_cache_controls(
+        self,
+        *,
+        context: ProxyRequestContext,
+        selected: SelectedAttempt,
+    ) -> None:
+        """Apply Phase 9 synthetic cache_control annotations on the provider-bound body.
+
+        Runs AFTER ``_apply_selected_provider_transcode_adjustments`` so it
+        operates on the same provider-bound payload the upstream sees.
+        Runs BEFORE ``client.build_request(...)`` so the synthesized
+        annotations are dispatched.
+
+        Provider-specific policy matches (``match_provider_ids``,
+        ``match_provider_kinds``) are evaluated here with full
+        post-route context.  Pre-route resolver matched names are
+        re-resolved against the actual provider/account/protocol;
+        the second pass overrides the pre-route result.
+        """
+        if self._cache_config is None:
+            return
+        if not getattr(self._cache_config, "synthetic_cache_controls", None):
+            return
+        body = context.upstream_body
+        if body is None:
+            return
+        try:
+            payload_obj: object = json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            return
+        if not isinstance(payload_obj, dict):
+            return
+        payload: dict[str, Any] = payload_obj  # pyright: ignore[reportUnknownVariableType]
+
+        target_provider_kind = resolve_selected_provider_kind(self._catalog, selected)
+
+        from eggpool.transcoder.segmentation import segment_request
+
+        try:
+            context.synthetic_cache_segmentation = segment_request(
+                payload, protocol=context.upstream_protocol or "openai"
+            )
+        except Exception:  # noqa: BLE001
+            context.synthetic_cache_segmentation = None
+
+        resolved_policy = context.resolved_compression_policy
+        try:
+            from eggpool.transcoder.compression import (
+                CompressionPolicyContext,
+                resolve_compression_policy,
+            )
+
+            post_route_ctx = CompressionPolicyContext(
+                client_id=context.incoming_headers.get("x-eggpool-client"),
+                client_name=context.incoming_headers.get("user-agent"),
+                source_protocol=context.protocol,
+                target_protocol=context.upstream_protocol,
+                requested_model=context.model_id,
+                resolved_model=context.model_id,
+                provider_id=selected.provider_id,
+                provider_kind=target_provider_kind,
+                transcoded=context.transcode_required,
+            )
+            resolved_policy = resolve_compression_policy(
+                self._compression_policy,  # type: ignore[arg-type]
+                post_route_ctx,
+                overrides=(
+                    self._compression_policy.policies
+                    if self._compression_policy is not None
+                    and hasattr(self._compression_policy, "policies")
+                    else None
+                ),
+                runtime_override_registry=self._compression_tuning_registry,
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug(
+                "synthetic_cache_post_route_policy_resolution_failed",
+                extra={"proxy_request_id": context.request_id},
+                exc_info=True,
+            )
+            resolved_policy = context.resolved_compression_policy
+
+        from eggpool.transcoder.cache_synthesis import (
+            _structural_cache_diff,
+            run_synthetic_cache_synthesis,
+        )
+
+        result = run_synthetic_cache_synthesis(
+            payload,
+            segmentation=context.synthetic_cache_segmentation,
+            cache_config=self._cache_config,
+            target_protocol=context.upstream_protocol or "openai",
+            target_provider_kind=target_provider_kind,
+            resolved_policy=resolved_policy,
+            transcode_context=context.transcode_context,
+        )
+
+        if result.transformed_payload is not None:
+            diff = _structural_cache_diff(payload, result.transformed_payload)
+            unexpected_additions = [
+                p for p in diff["added_paths"] if not (p and p[-1] == "cache_control")
+            ]
+            if unexpected_additions or diff["removed_paths"] or diff["changed_paths"]:
+                from eggpool.transcoder.cache_synthesis import (
+                    SyntheticCachePlan,
+                )
+
+                warnings = list(result.plan.warnings) + [
+                    "synthetic_cache_control_safety_diff_failed"
+                ]
+                result.plan = SyntheticCachePlan(
+                    status="failed_fallback",
+                    dry_run=result.plan.dry_run,
+                    candidates=result.plan.candidates,
+                    applied_count=0,
+                    warnings=tuple(warnings),
+                    policy_name=result.plan.policy_name,
+                    policy_source=result.plan.policy_source,
+                    effective_ttl=result.plan.effective_ttl,
+                )
+                result.transformed_payload = None
+                result.cache_boundary_entries = ()
+            else:
+                context.upstream_body = encode_json_body(result.transformed_payload)
+
+        context.synthetic_cache_result = result
 
     async def _finalize_selected_capability_rejection(
         self,
