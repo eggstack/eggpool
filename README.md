@@ -13,7 +13,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - OpenAI- and Anthropic-compatible upstream request paths, with transparent bidirectional protocol transcoding
 - Dynamically discovers available models; routes by quota utilization (load-based, never cost-based)
 - Per-account outbound proxy support ([pproxy](https://pypi.org/project/pproxy/) — SOCKS5, HTTP, Shadowsocks)
-- Tracks requests, tokens, latency, errors, and cost provenance in SQLite (`provider_reported`, trusted local `derived`/`partial`, bounded `estimated`)
+- Tracks requests, tokens, latency, errors, and cost provenance in SQLite (`provider_reported`, trusted local `derived`/`partial`, bounded `estimated`; reservation is advisory, not a floor)
 - Multi-page dashboard with 50+ themes, reliability, routing, and runtime views
 - Model metadata enrichment from provider catalogs, OpenRouter, Artificial Analysis, and Hugging Face
 - Provider-neutral request shaping: cache reporting, safe suffix compression, policy-scoped overrides, optional synthetic cache controls, and advisory threshold tuning

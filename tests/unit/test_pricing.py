@@ -10,6 +10,7 @@ from eggpool.catalog.pricing import (
     CostCalculator,
     PriceSnapshot,
     _extract_decimal,
+    choose_bounded_estimated_cost,
     coerce_token_count,
     microdollars_per_million_from_price_per_1k,
     parse_microdollars_per_million,
@@ -738,6 +739,40 @@ class TestPartialFallbackPricing:
         trusted_input_share = (30_000_000 * 100_000) // 1_000_000
         assert trusted_input_share == 3_000_000
         assert cost == trusted_input_share + 15_000_000
+
+
+class TestBoundedEstimatedCostSelection:
+    """Bounded estimated cost chooses the least surprising plausible value."""
+
+    def test_lower_local_estimate_wins_when_both_plausible(self) -> None:
+        cost, provenance = choose_bounded_estimated_cost(
+            local_estimate_microdollars=21,
+            reservation_microdollars=100,
+            input_tokens=1,
+            output_tokens=0,
+        )
+        assert cost == 21
+        assert provenance == "min_local_reservation_estimated"
+
+    def test_lower_reservation_wins_when_both_plausible(self) -> None:
+        cost, provenance = choose_bounded_estimated_cost(
+            local_estimate_microdollars=100,
+            reservation_microdollars=21,
+            input_tokens=1,
+            output_tokens=0,
+        )
+        assert cost == 21
+        assert provenance == "reservation_estimated"
+
+    def test_generic_estimated_is_used_when_both_implausible(self) -> None:
+        cost, provenance = choose_bounded_estimated_cost(
+            local_estimate_microdollars=250_000_000,
+            reservation_microdollars=1_000_000,
+            input_tokens=1,
+            output_tokens=0,
+        )
+        assert cost == 5
+        assert provenance == "generic_estimated"
 
 
 class TestMicrodollarsPerMillionConversion:

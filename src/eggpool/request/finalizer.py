@@ -221,9 +221,9 @@ class RequestFinalizer:
         #      reservation are available we pick the lower plausible
         #      one via :func:`choose_bounded_estimated_cost`. A
         #      generous reservation MUST NOT silently override a
-        #      tighter local estimate (see plans/2026-07-03-*). If
-        #      neither estimate is plausible we fall through to the
-        #      generic bounded estimate.
+        #      tighter local estimate (see plans/2026-07-03-*), and
+        #      nothing later in this method may floor the selected
+        #      estimate back to the reservation amount.
         #   4. ``unknown`` — no usage and no billable work, so cost
         #      stays at zero.
         #
@@ -354,9 +354,13 @@ class RequestFinalizer:
                     provenance,
                 )
         # 4. No trusted calculator value but billable work exists.
-        #    The reservation estimate stands; ``choose_bounded_estimated_cost``
-        #    enforces the per-token reservation ceiling so the canonical
-        #    value cannot become a multi-dollar reservation fallback.
+        #    ``choose_bounded_estimated_cost`` applies the same
+        #    plausibility checks to the reservation-only path and may
+        #    return a generic bounded estimate when neither estimate is
+        #    trustworthy. When there are no billable tokens at all we
+        #    still preserve the reservation estimate so zero-usage
+        #    successes and emitted-byte-only failures keep a nonzero
+        #    billable signal.
         elif may_have_billable_work:
             chosen, _provenance = choose_bounded_estimated_cost(
                 local_estimate_microdollars=None,
@@ -366,6 +370,8 @@ class RequestFinalizer:
                 cache_read_tokens=data.cache_read_tokens,
                 cache_write_tokens=data.cache_write_tokens,
             )
+            if not has_usage and reservation_microdollars > 0:
+                chosen = reservation_microdollars
             cost_microdollars = chosen
             exactness = "estimated"
             local_cost_microdollars = cost_microdollars
@@ -373,17 +379,6 @@ class RequestFinalizer:
         else:
             cost_microdollars = 0
             exactness = "unknown"
-
-        # 5. Estimated-cost floor: even when a calculator produced a
-        #    positive-but-trivially-small value under the ``estimated``
-        #    label, the dashboard must reflect at least the conservative
-        #    reservation amount so quota accounting never reports less
-        #    spend than the routing layer pre-reserved. This applies
-        #    only when exactness stayed at ``estimated``; derived /
-        #    partial / exact values reflect real pricing and must not
-        #    be inflated by a reservation floor.
-        if exactness == "estimated" and cost_microdollars < reservation_microdollars:
-            cost_microdollars = reservation_microdollars
 
         capped_cost_microdollars = clamp_request_cost_microdollars(cost_microdollars)
         if capped_cost_microdollars != cost_microdollars:

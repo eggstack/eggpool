@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
 
+from eggpool.cost_repair import repair_request_costs
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
 from eggpool.db.repositories import RequestRepository, ReservationRepository
@@ -156,6 +157,79 @@ class TestFetchSummary:
             db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
         )
         assert result["tokens_per_second"] == 0.0
+
+    @pytest.mark.asyncio()
+    async def test_reservation_fallback_rows_drop_after_repair(
+        self, db: Database
+    ) -> None:
+        request_repo = RequestRepository(db)
+        async with db.transaction():
+            account_id = await db.execute_insert(
+                "INSERT INTO accounts (name, api_key_env, enabled, provider_id) "
+                "VALUES (?, ?, 1, ?)",
+                ("summary-acct", "SUMMARY_ENV", "minimax"),
+            )
+            await db.execute_write(
+                "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+                ("MiniMax-M3", "openai"),
+            )
+        async with db.transaction():
+            suspicious_id = await request_repo.create_pending(
+                request_id="summary-suspicious",
+                model_id="MiniMax-M3",
+                protocol="openai",
+                streamed=False,
+                account_id=account_id,
+                reserved_microdollars=5_411_079,
+                provider_id="minimax",
+            )
+            await request_repo.update_after_completion(
+                suspicious_id,
+                status="completed",
+                input_tokens=353,
+                output_tokens=1_386,
+                cost_microdollars=5_411_079,
+                exactness="estimated",
+                local_cost_microdollars=21_848,
+                local_cost_exactness="estimated",
+            )
+            clean_id = await request_repo.create_pending(
+                request_id="summary-clean",
+                model_id="MiniMax-M3",
+                protocol="openai",
+                streamed=False,
+                account_id=account_id,
+                reserved_microdollars=5_411_079,
+                provider_id="minimax",
+            )
+            await request_repo.update_after_completion(
+                clean_id,
+                status="completed",
+                input_tokens=353,
+                output_tokens=1_386,
+                cost_microdollars=21_848,
+                exactness="estimated",
+                local_cost_microdollars=21_848,
+                local_cost_exactness="estimated",
+            )
+
+        summary = await queries.fetch_summary(
+            db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+        assert summary["reservation_fallback_rows"] == 1
+        assert summary["reservation_fallback_excess_microdollars"] == 5_389_231
+
+        repair_summary = await repair_request_costs(db, dry_run=False)
+        assert repair_summary.repaired == 1
+        assert repair_summary.changed_rows[0]["reason"] == (
+            "reservation_fallback_overrode_lower_local_estimate"
+        )
+
+        repaired_summary = await queries.fetch_summary(
+            db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"
+        )
+        assert repaired_summary["reservation_fallback_rows"] == 0
+        assert repaired_summary["reservation_fallback_excess_microdollars"] == 0
 
 
 class TestFetchAccountStats:

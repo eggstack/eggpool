@@ -25,6 +25,7 @@ from eggpool.dashboard.render import (
     _render_bandwidth_heatmap,
     _render_nav,
     _render_period_selector,
+    _render_reservation_fallback_warning,
     _render_system_health,
     render_accounts,
     render_bandwidth,
@@ -3530,6 +3531,42 @@ class TestRenderOverviewSystemHealth:
 
     def test_empty_returns_empty(self) -> None:
         assert _render_system_health(None, None, None) == ""
+
+
+class TestReservationFallbackWarning:
+    """Tests for the reservation-fallback banner visibility."""
+
+    def test_empty_summary_returns_empty(self) -> None:
+        assert (
+            _render_reservation_fallback_warning(
+                {
+                    "reservation_fallback_rows": 0,
+                    "reservation_fallback_excess_microdollars": 0,
+                }
+            )
+            == ""
+        )
+
+    def test_banner_renders_when_rows_are_nonzero(self) -> None:
+        html = _render_reservation_fallback_warning(
+            {
+                "reservation_fallback_rows": 1,
+                "reservation_fallback_excess_microdollars": 5_389_231,
+            }
+        )
+        assert "Reservation-fallback warning:" in html
+        assert "1 request(s)" in html
+        assert "~$5.39 of inflated spend" in html
+
+    def test_banner_renders_when_excess_is_nonzero(self) -> None:
+        html = _render_reservation_fallback_warning(
+            {
+                "reservation_fallback_rows": 0,
+                "reservation_fallback_excess_microdollars": 5_389_231,
+            }
+        )
+        assert "Reservation-fallback warning:" in html
+        assert "0 request(s)" in html
 
 
 class TestRenderNavUpdated:

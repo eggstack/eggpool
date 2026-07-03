@@ -62,13 +62,9 @@ def _repair_reason(row: dict[str, Any]) -> str | None:
     )
     if old_cost >= _REQUEST_CAP_SUSPICION_THRESHOLD:
         return "near_request_cap"
-    if cost_per_token_is_implausible(old_cost, total_tokens):
-        return "implausible_cost_per_token"
 
     reserved = int(row.get("reserved_microdollars") or 0)
     exactness = str(row.get("exactness") or "unknown")
-    if exactness == "estimated" and reserved > 0 and old_cost > max(reserved * 4, 0):
-        return "estimated_far_above_reservation"
 
     # New suspicion class for the reservation-fallback
     # canonicalization regression: the canonical ``cost_microdollars``
@@ -89,6 +85,12 @@ def _repair_reason(row: dict[str, Any]) -> str | None:
         and exactness == "estimated"
     ):
         return "reservation_fallback_overrode_lower_local_estimate"
+
+    if cost_per_token_is_implausible(old_cost, total_tokens):
+        return "implausible_cost_per_token"
+
+    if exactness == "estimated" and reserved > 0 and old_cost > max(reserved * 4, 0):
+        return "estimated_far_above_reservation"
     return None
 
 

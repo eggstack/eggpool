@@ -246,7 +246,7 @@ class TestAlreadyReleasedReservation:
         windows = await usage_window_repo.get_usage_windows(
             account_id=1, now_iso="2026-01-01 00:00:00"
         )
-        assert windows["5h"] >= 100_000
+        assert windows["5h"] > 0
 
         await db.disconnect()
 

@@ -54,16 +54,30 @@ async def _seed_request(
     request_repo: RequestRepository,
     attempt_repo: AttemptRepository,
     reservation_repo: ReservationRepository,
+    *,
+    proxy_request_id: str = "finalizer-1",
+    model_id: str = "gpt-4",
+    protocol: str = "openai",
+    provider_id: str = "opencode-go",
+    reservation_microdollars: int = 100_000,
+    selected_estimated_microdollars: int | None = None,
+    estimated_tokens: int = 1000,
 ) -> tuple[SimpleNamespace, str]:
+    if selected_estimated_microdollars is None:
+        selected_estimated_microdollars = reservation_microdollars
     async with db.transaction():
+        await db.execute_write(
+            "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+            (model_id, protocol),
+        )
         request_id = await request_repo.create_pending(
-            request_id="finalizer-1",
-            model_id="gpt-4",
-            protocol="openai",
+            request_id=proxy_request_id,
+            model_id=model_id,
+            protocol=protocol,
             streamed=False,
             account_id=1,
-            reserved_microdollars=100_000,
-            provider_id="opencode-go",
+            reserved_microdollars=reservation_microdollars,
+            provider_id=provider_id,
         )
         attempt_id = await attempt_repo.create(
             request_id=request_id,
@@ -73,21 +87,21 @@ async def _seed_request(
         reservation_id = await reservation_repo.create(
             request_id=request_id,
             account_id=1,
-            model_id="gpt-4",
-            estimated_tokens=1000,
-            estimated_microdollars=100_000,
+            model_id=model_id,
+            estimated_tokens=estimated_tokens,
+            estimated_microdollars=reservation_microdollars,
             ttl_seconds=300,
         )
     selected = SimpleNamespace(
         db_request_id=request_id,
         account_name="finalizer-acct",
-        model_id="gpt-4",
+        model_id=model_id,
         attempt_id=attempt_id,
         reservation_id=reservation_id,
-        estimated_microdollars=100_000,
+        estimated_microdollars=selected_estimated_microdollars,
         attempt_number=1,
-        provider_id="opencode-go",
-        protocol="openai",
+        provider_id=provider_id,
+        protocol=protocol,
     )
     return selected, request_id
 
@@ -141,7 +155,7 @@ class TestRequestFinalizerCostPrecedence:
             await db.disconnect()
 
     @pytest.mark.asyncio
-    async def test_positive_local_estimated_cost_falls_back_to_reservation(
+    async def test_estimated_local_cost_beats_higher_reservation_floor_regression(
         self,
     ) -> None:
         db, request_repo, attempt_repo, reservation_repo = await _fresh_finalizer_db()
@@ -151,11 +165,61 @@ class TestRequestFinalizerCostPrecedence:
                 request_repo,
                 attempt_repo,
                 reservation_repo,
+                proxy_request_id="finalizer-minimax-1",
+                model_id="MiniMax-M3",
+                provider_id="minimax",
+                reservation_microdollars=5_411_079,
+                selected_estimated_microdollars=5_411_079,
+                estimated_tokens=1_739,
             )
             calculator = AsyncMock()
-            calculator.calculate_cost = AsyncMock(
-                return_value=(250_000_000, "estimated")
+            calculator.calculate_cost = AsyncMock(return_value=(21_848, "estimated"))
+            finalizer = RequestFinalizer(
+                db=db,
+                request_repo=request_repo,
+                attempt_repo=attempt_repo,
+                reservation_repo=reservation_repo,
+                cost_calculator=calculator,
             )
+
+            await finalizer.finalize(
+                selected,
+                FinalizationData(
+                    outcome=FinalizationOutcome.COMPLETED,
+                    status_code=200,
+                    input_tokens=353,
+                    output_tokens=1_386,
+                ),
+            )
+
+            row = await db.fetch_one(
+                "SELECT cost_microdollars, exactness, local_cost_microdollars, "
+                "local_cost_exactness FROM requests WHERE id = ?",
+                (request_id,),
+            )
+            assert row is not None
+            assert int(row["cost_microdollars"]) == 21_848
+            assert row["exactness"] == "estimated"
+            assert int(row["local_cost_microdollars"]) == 21_848
+            assert row["local_cost_exactness"] == "estimated"
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_reservation_lower_than_local_can_win_when_plausible(self) -> None:
+        db, request_repo, attempt_repo, reservation_repo = await _fresh_finalizer_db()
+        try:
+            selected, request_id = await _seed_request(
+                db,
+                request_repo,
+                attempt_repo,
+                reservation_repo,
+                proxy_request_id="finalizer-plausible-reservation-1",
+                reservation_microdollars=40_000,
+                selected_estimated_microdollars=40_000,
+            )
+            calculator = AsyncMock()
+            calculator.calculate_cost = AsyncMock(return_value=(80_000, "estimated"))
             finalizer = RequestFinalizer(
                 db=db,
                 request_repo=request_repo,
@@ -180,15 +244,27 @@ class TestRequestFinalizerCostPrecedence:
                 (request_id,),
             )
             assert row is not None
-            assert int(row["cost_microdollars"]) == 100_000
+            assert int(row["cost_microdollars"]) == 40_000
             assert row["exactness"] == "estimated"
-            assert int(row["local_cost_microdollars"]) == 250_000_000
+            assert int(row["local_cost_microdollars"]) == 80_000
             assert row["local_cost_exactness"] == "estimated"
         finally:
             await db.disconnect()
 
+    @pytest.mark.parametrize(
+        ("local_exactness", "local_cost_microdollars"),
+        [
+            ("exact", 12_345),
+            ("derived", 18_900),
+            ("partial", 23_456),
+        ],
+    )
     @pytest.mark.asyncio
-    async def test_trusted_local_partial_cost_persists_as_canonical(self) -> None:
+    async def test_trusted_local_exactness_still_ignores_reservation(
+        self,
+        local_exactness: str,
+        local_cost_microdollars: int,
+    ) -> None:
         db, request_repo, attempt_repo, reservation_repo = await _fresh_finalizer_db()
         try:
             selected, request_id = await _seed_request(
@@ -196,9 +272,13 @@ class TestRequestFinalizerCostPrecedence:
                 request_repo,
                 attempt_repo,
                 reservation_repo,
+                proxy_request_id=f"finalizer-{local_exactness}-1",
+                reservation_microdollars=1_000_000,
             )
             calculator = AsyncMock()
-            calculator.calculate_cost = AsyncMock(return_value=(18_900, "partial"))
+            calculator.calculate_cost = AsyncMock(
+                return_value=(local_cost_microdollars, local_exactness)
+            )
             finalizer = RequestFinalizer(
                 db=db,
                 request_repo=request_repo,
@@ -224,7 +304,58 @@ class TestRequestFinalizerCostPrecedence:
                 (request_id,),
             )
             assert row is not None
-            assert int(row["cost_microdollars"]) == 18_900
-            assert row["exactness"] == "partial"
+            assert int(row["cost_microdollars"]) == local_cost_microdollars
+            assert row["exactness"] == local_exactness
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_generic_estimate_is_not_floored_to_implausible_reservation(
+        self,
+    ) -> None:
+        db, request_repo, attempt_repo, reservation_repo = await _fresh_finalizer_db()
+        try:
+            selected, request_id = await _seed_request(
+                db,
+                request_repo,
+                attempt_repo,
+                reservation_repo,
+                proxy_request_id="finalizer-generic-1",
+                reservation_microdollars=1_000_000,
+                selected_estimated_microdollars=1_000_000,
+                estimated_tokens=1,
+            )
+            calculator = AsyncMock()
+            calculator.calculate_cost = AsyncMock(
+                return_value=(250_000_000, "estimated")
+            )
+            finalizer = RequestFinalizer(
+                db=db,
+                request_repo=request_repo,
+                attempt_repo=attempt_repo,
+                reservation_repo=reservation_repo,
+                cost_calculator=calculator,
+            )
+
+            await finalizer.finalize(
+                selected,
+                FinalizationData(
+                    outcome=FinalizationOutcome.COMPLETED,
+                    status_code=200,
+                    input_tokens=1,
+                    output_tokens=0,
+                ),
+            )
+
+            row = await db.fetch_one(
+                "SELECT cost_microdollars, exactness, local_cost_microdollars, "
+                "local_cost_exactness FROM requests WHERE id = ?",
+                (request_id,),
+            )
+            assert row is not None
+            assert int(row["cost_microdollars"]) == 5
+            assert row["exactness"] == "estimated"
+            assert int(row["local_cost_microdollars"]) == 250_000_000
+            assert row["local_cost_exactness"] == "estimated"
         finally:
             await db.disconnect()
