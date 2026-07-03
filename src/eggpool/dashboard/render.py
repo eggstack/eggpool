@@ -3719,25 +3719,39 @@ def render_runtime(
             restarts = int(task.get("restart_count", 0) or 0)
             max_restarts = task.get("max_restarts")
             interval_s = task.get("interval_s")
+            last_started_at = task.get("last_started_at")
             last_completed_at = task.get("last_completed_at")
             status = "running" if running else ("cancelled" if cancelled else "stopped")
             status_cls = "yes" if running else ("no" if cancelled else "")
             max_str = format_int(max_restarts) if max_restarts is not None else "—"
             interval_str = format_interval_seconds(interval_s)
             # "Next run" is the projected wall-clock time the loop
-            # will fire next, derived from the last completed iteration
-            # + the configured interval. If the task has never completed
-            # (still in its first sleep / just registered) we cannot
-            # estimate next run and render an em-dash. If the projected
+            # will fire next. In practice every registered task is a
+            # long-lived ``while True`` coroutine that owns its own
+            # sleep loop and never returns to the supervisor, so
+            # ``last_completed_at`` stays at zero forever. We anchor on
+            # ``last_started_at`` (set when the supervisor re-entered
+            # the loop body) and add ``interval_s`` — for these tasks
+            # that's exactly when the inner sleep wakes and the work
+            # runs. If neither anchor is set (never started) or the
+            # cadence is unknown we render an em-dash. If the projected
             # time is already in the past the task is overdue and we
             # surface the magnitude with an explicit marker.
+            anchor = (
+                last_completed_at
+                if isinstance(last_completed_at, (int, float)) and last_completed_at > 0
+                else (
+                    last_started_at
+                    if isinstance(last_started_at, (int, float)) and last_started_at > 0
+                    else None
+                )
+            )
             if (
                 isinstance(interval_s, (int, float))
                 and interval_s > 0
-                and isinstance(last_completed_at, (int, float))
-                and last_completed_at > 0
+                and anchor is not None
             ):
-                next_run_at = float(last_completed_at) + float(interval_s)
+                next_run_at = float(anchor) + float(interval_s)
                 delta_s = next_run_at - now_ts
                 if delta_s <= 0:
                     next_run_str = f"overdue {format_age_seconds(-delta_s)}"

@@ -4413,6 +4413,61 @@ class TestRenderRuntimeBackgroundTasks:
         )
         assert match is not None, html
 
+    def test_next_run_anchors_on_last_started_at(self) -> None:
+        """Long-lived ``while True`` coros never complete, so we fall
+        back to ``last_started_at`` + ``interval_s`` as the next-run
+        estimate. Started 30s ago with a 5m cadence → "in 4m30s"."""
+        snapshot = self._base_snapshot()
+        snapshot["background_tasks"] = [
+            {
+                "name": "catalog_refresh",
+                "registered": True,
+                "running": True,
+                "done": False,
+                "cancelled": False,
+                "iteration_count": 0,
+                "restart_count": 0,
+                "max_restarts": 10,
+                "last_started_at": time.time() - 30,
+                "last_completed_at": 0.0,
+                "last_failure_at": None,
+                "last_error_at": None,
+                "last_error_class": None,
+                "interval_s": 300.0,
+            },
+        ]
+        html = render_runtime(snapshot)
+        match = re.search(
+            r'<td data-priority="3">in 4m\d+s</td>',
+            html,
+        )
+        assert match is not None, html
+
+    def test_next_run_renders_dash_when_no_anchor(self) -> None:
+        """Tasks registered but never entered (no started_at, no
+        completed_at, no interval) render em-dash in Next run."""
+        snapshot = self._base_snapshot()
+        snapshot["background_tasks"] = [
+            {
+                "name": "not_started",
+                "registered": True,
+                "running": False,
+                "done": False,
+                "cancelled": False,
+                "iteration_count": 0,
+                "restart_count": 0,
+                "max_restarts": 10,
+                "last_started_at": None,
+                "last_completed_at": None,
+                "last_failure_at": None,
+                "last_error_at": None,
+                "last_error_class": None,
+                "interval_s": 60.0,
+            },
+        ]
+        html = render_runtime(snapshot)
+        assert '<td data-priority="3">—</td>' in html
+
     def test_empty_state_still_works(self) -> None:
         snapshot = self._base_snapshot()
         snapshot["background_tasks"] = []
