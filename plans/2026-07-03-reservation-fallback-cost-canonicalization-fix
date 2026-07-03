@@ -1,0 +1,475 @@
+# Reservation Fallback Cost Canonicalization Fix Plan
+
+Date: 2026-07-03
+Repository: `eggstack/eggpool`
+Status: handoff plan
+Priority: critical accounting correctness
+Suggested file path in repo: `plans/2026-07-03-reservation-fallback-cost-canonicalization-fix.md`
+
+## Problem statement
+
+The previous pricing-parser hardening did not fully fix MiniMax cost inflation. The parser/calculator now appears to produce a bounded local estimated cost, but the request finalizer rejects local `estimated` costs and falls back to the reservation estimate. The reservation estimate is inflated, so the canonical `requests.cost_microdollars` value still becomes wrong and the dashboard continues to overstate spend.
+
+Observed live database evidence from `usage.sqlite3` after the prior hardening pass:
+
+```text
+id  provider_id  model_id    input  output  reserved_usd  cost_usd  local_cost_usd  exactness   local_cost_exactness
+7   minimax      MiniMax-M3  100    8       0.003449      0.003449  0.000420        estimated   estimated
+8   minimax      MiniMax-M3  23387  65      0.113867      0.113867  0.071136        estimated   estimated
+9   minimax      MiniMax-M3  3682   77      0.132204      0.132204  0.012201        estimated   estimated
+10  minimax      MiniMax-M3  347    56      0.133939      0.133939  0.001881        estimated   estimated
+11  minimax      MiniMax-M3  208    371     0.135043      0.135043  0.006189        estimated   estimated
+12  minimax      MiniMax-M3  353    1386    5.411079      5.411079  0.021848        estimated   estimated
+```
+
+The diagnostic repair that replaced canonical `cost_microdollars` with the lower `local_cost_microdollars` reduced observed total usage to about `$0.19`. That confirms the active inflation path is reservation fallback canonicalization, not only metadata price parsing.
+
+The key regression fixture is row 12:
+
+```text
+input_tokens=353
+output_tokens=1386
+reserved_usd=5.411079
+cost_usd=5.411079
+local_cost_usd=0.021848
+exactness=estimated
+local_cost_exactness=estimated
+```
+
+Expected behavior after the fix:
+
+```text
+canonical cost_usd=0.021848
+exactness=estimated
+reservation remains advisory/audit data only
+```
+
+## Root cause
+
+Current request finalization behavior treats local cost exactness in this approximate order:
+
+1. Trust provider-reported cost.
+2. Trust local cost when exactness is `exact`, `derived`, or `partial`.
+3. Reject local `estimated` cost.
+4. Fall back to `selected.estimated_microdollars` / `reserved_microdollars` when billable work is plausible.
+
+That logic is unsafe because `selected.estimated_microdollars` comes from `QuotaEstimator.estimate_cost()`, which may be based on EWMA, model overrides, family fallbacks, or prior polluted accounting. It is a routing/reservation budget, not an authoritative billing value. Once persisted as canonical `requests.cost_microdollars`, it pollutes dashboard totals, persisted usage windows, quota snapshots, and future EWMA estimates.
+
+There is a second contributing bug: request-level implausibility checks in `CostCalculator.calculate_cost()` currently run after per-request clamping. A huge raw derived cost can be clamped to the maximum request cost, and the post-clamp cost/token ratio can appear plausible for high-token requests. The implausibility check must run against raw, unclamped cost before clamp.
+
+## Desired invariants
+
+1. Reservation estimates must never be treated as more authoritative than a positive, bounded local estimate.
+2. `selected.estimated_microdollars` is a reservation/routing estimate, not a billing source.
+3. Provider-reported costs remain highest precedence only when parsed from explicit trusted fields.
+4. Local `exact`, `derived`, and `partial` costs remain trusted canonical values.
+5. Local `estimated` costs may become canonical only after passing sanity checks and should be preferred over reservation fallback when lower and plausible.
+6. Any fallback estimate persisted as canonical must pass per-request and per-token bounds.
+7. Raw derived costs must be validated before any per-request clamp hides implausibility.
+8. Repair tooling must be able to correct already-persisted rows where `cost_microdollars == reserved_microdollars` and `local_cost_microdollars` is lower and plausible.
+9. Dashboard/stat APIs should make reservation-fallback canonicalization visible enough that this class of failure is obvious.
+
+## Phase 1: Introduce shared cost-sanity helpers
+
+Create a small provider-neutral helper module, or extend `eggpool.catalog.pricing`, with reusable functions for canonicalization safety.
+
+Suggested functions:
+
+```python
+def total_billable_tokens(
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int | None = None,
+    cache_write_tokens: int | None = None,
+) -> int:
+    ...
+
+
+def is_plausible_request_cost(
+    *,
+    cost_microdollars: int,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int | None = None,
+    cache_write_tokens: int | None = None,
+) -> bool:
+    ...
+
+
+def choose_bounded_estimated_cost(
+    *,
+    local_estimate_microdollars: int | None,
+    reservation_microdollars: int | None,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int | None = None,
+    cache_write_tokens: int | None = None,
+) -> tuple[int, str]:
+    ...
+```
+
+The return provenance string can be values such as:
+
+```text
+local_estimated
+reservation_estimated
+min_local_reservation_estimated
+generic_estimated
+unknown
+```
+
+Rules:
+
+- Reject negative values.
+- Reject zero when billable tokens are nonzero unless no estimate exists.
+- Apply the existing `_MAX_TRUSTED_COST_PER_TOKEN_MICRODOLLARS`, or add a slightly stricter estimate-specific ceiling.
+- If both local estimated and reservation values exist, prefer the lower plausible value.
+- If only local estimated exists and is plausible, use it.
+- If only reservation exists and is plausible, use it but keep exactness `estimated` and log that canonical value came from reservation fallback.
+- If neither is plausible, fall back to `_estimate_cost(input_tokens, output_tokens)` or zero/unknown depending on billable work.
+- Keep helper behavior provider-neutral; do not special-case MiniMax.
+
+## Phase 2: Fix `RequestFinalizer` canonical cost precedence
+
+Modify `src/eggpool/request/finalizer.py` so the fallback branch for `local_cost_exactness == "estimated"` does not discard a positive local estimate in favor of reservation.
+
+Target precedence:
+
+1. Provider-reported cost, exactness `provider_reported`.
+2. Local `exact`, `derived`, or `partial` cost if positive or semantically trusted.
+3. Local `estimated` cost if positive and plausible.
+4. Minimum plausible value between local estimated and reservation estimate when both are available.
+5. Plausible reservation fallback only if no usable local estimate exists.
+6. Generic bounded estimate if billable work exists but all available estimates are implausible.
+7. Zero/unknown when no billable work exists.
+
+Important behavioral change:
+
+```python
+# Bad current outcome:
+# local_cost_exactness == "estimated"
+# local_cost_microdollars == 21_848
+# selected.estimated_microdollars == 5_411_079
+# canonical cost becomes 5_411_079
+
+# Desired outcome:
+# canonical cost becomes 21_848
+# exactness remains "estimated"
+```
+
+Add structured warning logs when reservation is higher than a plausible local estimate by more than a configured ratio. Example event:
+
+```text
+cost.reservation_fallback_suppressed
+provider=minimax
+model=MiniMax-M3
+local_usd=0.021848
+reserved_usd=5.411079
+ratio=247.7
+```
+
+Fields to include:
+
+- request id
+- provider id
+- account name if available
+- model id
+- input/output/cache token counts
+- local cost
+- reservation cost
+- selected canonical cost
+- ratio
+- reason
+
+## Phase 3: Fix `CostCalculator` raw-cost validation before clamp
+
+In `src/eggpool/catalog/pricing.py`, separate raw derived cost from clamped stored cost.
+
+Current unsafe shape:
+
+```python
+cost_microdollars = clamp_request_cost_microdollars(raw_cost)
+implicit_cost_per_token = implicit_cost_per_token_microdollars(cost_microdollars, total_tokens)
+
+if implicit_cost_per_token > MAX:
+    return self._estimate_cost(input_tokens, output_tokens), "estimated"
+```
+
+Required shape:
+
+```python
+raw_cost_microdollars = ...
+raw_implicit_cost_per_token = implicit_cost_per_token_microdollars(
+    raw_cost_microdollars,
+    total_tokens,
+)
+
+if raw_implicit_cost_per_token > MAX:
+    return self._estimate_cost(input_tokens, output_tokens), "estimated"
+
+cost_microdollars = clamp_request_cost_microdollars(raw_cost_microdollars)
+```
+
+Also apply the same pre-clamp check to partial-cost paths where missing categories are filled with fallback values.
+
+This matters because a raw derived cost can be extremely high, then hidden by the per-request cap. For a high-token request, the post-clamp implied cost/token can look acceptable even though the raw calculation was obviously wrong.
+
+## Phase 4: Harden `QuotaEstimator.estimate_cost()` output
+
+`QuotaEstimator.estimate_cost()` should not be allowed to emit runaway reservation values. Add a final guard at every return point, or wrap all return paths through a `_finalize_estimate()` helper.
+
+Suggested helper:
+
+```python
+def _finalize_estimate(
+    self,
+    *,
+    estimated_tokens: int,
+    raw_cost_microdollars: int,
+    source: str,
+    model_id: str,
+    account_name: str,
+) -> int:
+    ...
+```
+
+Rules:
+
+- Clamp integer range as today.
+- Apply a maximum microdollars/token ceiling for reservation estimates.
+- Apply a conservative maximum reservation-per-request ceiling. This should be much lower than the hard canonical request cap. The hard `$250` cap is too high for reservation fallback because it can become canonical if downstream logic regresses.
+- Log source-specific suppression when EWMA or override values are implausible.
+- If an EWMA estimate is implausible, do not return it; fall through to safer tiers or use global fallback.
+- Do not allow the first bad EWMA sample to seed future estimates. Current outlier rejection only works after existing history; add absolute-cost sanity before recording EWMA samples in `record_usage()`.
+
+Concrete recommendation:
+
+- Treat reservation cost as advisory.
+- It should be enough to prevent quota oversubscription, but it should not be capable of creating multi-dollar canonical spend for tiny requests.
+- If exact provider pricing is unknown, use the global fallback bounded by tokens.
+
+## Phase 5: Update repair tooling
+
+Update `src/eggpool/cost_repair.py` so it detects the confirmed failure pattern.
+
+Suspicious row criteria:
+
+- `provider_cost_microdollars IS NULL`
+- `local_cost_exactness = 'estimated'`
+- `local_cost_microdollars IS NOT NULL`
+- `local_cost_microdollars > 0`
+- `cost_microdollars = reserved_microdollars`
+- `local_cost_microdollars < cost_microdollars`
+- reservation/canonical cost exceeds local by a material ratio, e.g. `> 4x`, or row cost/token is implausible.
+
+Repair action:
+
+- Set canonical `cost_microdollars` to `local_cost_microdollars` when the local estimate is plausible.
+- Preserve `exactness = 'estimated'`.
+- Insert an audit row into `request_cost_repairs` with reason `reservation_fallback_overrode_lower_local_estimate`.
+- Skip provider-reported rows.
+- Skip rows where the local estimate is missing, zero, negative, higher than canonical, or implausible.
+
+Suggested CLI behavior:
+
+```bash
+eggpool stats repair-costs --provider minimax --dry-run
+eggpool stats repair-costs --provider minimax --apply
+```
+
+For hand validation, the emergency repair shape that confirmed the diagnosis was equivalent to:
+
+```sql
+UPDATE requests
+SET
+  cost_microdollars = local_cost_microdollars,
+  exactness = 'estimated'
+WHERE LOWER(COALESCE(provider_id, '')) LIKE '%minimax%'
+  AND model_id = 'MiniMax-M3'
+  AND local_cost_exactness = 'estimated'
+  AND local_cost_microdollars IS NOT NULL
+  AND local_cost_microdollars > 0
+  AND reserved_microdollars = cost_microdollars
+  AND local_cost_microdollars < cost_microdollars;
+```
+
+The production repair command should implement the same intent with plausibility checks and audit logging.
+
+## Phase 6: Add regression tests
+
+Add or update unit tests in `tests/unit/test_request_finalizer.py`.
+
+### `test_estimated_local_cost_beats_higher_reservation_fallback`
+
+Fixture:
+
+```text
+local_cost_microdollars = 21_848
+local_cost_exactness = "estimated"
+selected.estimated_microdollars = 5_411_079
+input_tokens = 353
+output_tokens = 1386
+```
+
+Expected:
+
+```text
+cost_microdollars = 21_848
+exactness = "estimated"
+```
+
+### `test_estimated_local_cost_uses_minimum_plausible_estimate`
+
+Cases:
+
+- local estimated lower than reservation: choose local.
+- reservation lower than local: choose reservation only if plausible.
+- both equal: choose either but preserve exactness `estimated` and avoid warning.
+
+### `test_implausible_local_estimate_falls_back_to_bounded_reservation_or_generic_estimate`
+
+Cases:
+
+- local estimate absurd; reservation plausible; choose reservation.
+- local estimate plausible; reservation absurd; choose local.
+- both absurd; choose generic bounded estimate.
+
+### `test_provider_reported_cost_still_wins_over_estimates`
+
+Provider-reported cost remains canonical regardless of lower local or reservation estimates.
+
+### `test_trusted_partial_derived_exact_still_win`
+
+`exact`, `derived`, and `partial` local exactness values continue to use local cost as canonical.
+
+Add or update tests in `tests/unit/test_pricing.py`.
+
+### `test_raw_cost_per_token_checked_before_request_cap`
+
+Construct a snapshot that produces raw cost far above cap. Ensure `calculate_cost()` returns bounded estimate rather than clamped raw cost.
+
+### `test_partial_cost_raw_cost_checked_before_request_cap`
+
+Same as above, but with missing category/fallback partial calculation.
+
+Add or update tests in `tests/unit/test_quota_estimation.py`.
+
+### `test_estimate_cost_rejects_implausible_ewma_output`
+
+Seed EWMA with implausible cost/token and verify the estimate path falls through to safer fallback or clamps to a safe bound.
+
+### `test_record_usage_does_not_seed_ewma_with_absurd_cost_per_token`
+
+A first bad observation should not initialize EWMA.
+
+### `test_override_estimate_is_bounded_before_return`
+
+Configured overrides should not bypass final estimate safety.
+
+Add or update tests in `tests/unit/test_cost_repair.py`.
+
+### `test_repair_detects_reservation_fallback_overrode_lower_local_estimate`
+
+Use the live MiniMax fixture.
+
+### `test_repair_does_not_change_provider_reported_rows`
+
+Provider-reported cost is authoritative.
+
+### `test_repair_skips_when_local_estimate_missing_or_higher`
+
+Avoid destructive repair when local estimate is absent or less trustworthy.
+
+## Phase 7: Add dashboard/provenance visibility
+
+The dashboard should help operators distinguish cost provenance. Do not only show one blended total.
+
+Add or expose:
+
+- total provider-reported cost
+- total local trusted cost (`exact`, `derived`, `partial`)
+- total estimated cost
+- total reservation-fallback canonical cost, if any
+- count of rows where `cost_microdollars = reserved_microdollars` and `local_cost_microdollars < cost_microdollars`
+- sum of excess reservation-over-local cost for suspicious rows
+
+This can be a small card or diagnostics table, not necessarily a full UI redesign. The point is to make this failure class obvious.
+
+## Phase 8: Verification commands
+
+Focused tests:
+
+```bash
+uv run pytest tests/unit/test_request_finalizer.py -q
+uv run pytest tests/unit/test_pricing.py -q
+uv run pytest tests/unit/test_quota_estimation.py -q
+uv run pytest tests/unit/test_cost_repair.py -q
+```
+
+Broad test pass:
+
+```bash
+uv run pytest
+```
+
+After implementation, validate against a copied `usage.sqlite3` using:
+
+```sql
+SELECT
+  COUNT(*) AS suspicious_rows,
+  ROUND(SUM(COALESCE(cost_microdollars, 0)) / 1000000.0, 6) AS suspicious_cost_usd,
+  ROUND(SUM(COALESCE(local_cost_microdollars, 0)) / 1000000.0, 6) AS local_cost_usd,
+  ROUND(SUM(COALESCE(reserved_microdollars, 0)) / 1000000.0, 6) AS reserved_cost_usd
+FROM requests
+WHERE provider_cost_microdollars IS NULL
+  AND local_cost_exactness = 'estimated'
+  AND local_cost_microdollars IS NOT NULL
+  AND local_cost_microdollars > 0
+  AND reserved_microdollars = cost_microdollars
+  AND local_cost_microdollars < cost_microdollars;
+```
+
+Expected after repair/apply:
+
+```text
+suspicious_rows = 0
+```
+
+Validate MiniMax aggregate:
+
+```sql
+SELECT
+  COUNT(*) AS request_count,
+  ROUND(SUM(COALESCE(cost_microdollars, 0)) / 1000000.0, 6) AS total_cost_usd,
+  ROUND(SUM(COALESCE(local_cost_microdollars, 0)) / 1000000.0, 6) AS total_local_cost_usd,
+  ROUND(SUM(COALESCE(reserved_microdollars, 0)) / 1000000.0, 6) AS total_reserved_usd,
+  SUM(CASE WHEN provider_cost_microdollars IS NOT NULL THEN 1 ELSE 0 END) AS provider_reported_rows
+FROM requests
+WHERE LOWER(COALESCE(provider_id, '')) LIKE '%minimax%';
+```
+
+For the known fixture, canonical total should stay near the repaired total, not rebound to reservation total.
+
+## Acceptance criteria
+
+- MiniMax rows with lower plausible `local_cost_microdollars` no longer persist inflated `reserved_microdollars` as canonical cost.
+- The known fixture repairs from about `$5.93` to the lower local-estimated total, and the observed dashboard total remains near `$0.19` after all usage is included.
+- `RequestFinalizer` has tests proving local estimated cost beats a higher reservation estimate.
+- `CostCalculator` checks raw derived cost before per-request clamping.
+- `QuotaEstimator` cannot return or record absurd cost/token EWMA values.
+- Repair command detects and audits `reservation_fallback_overrode_lower_local_estimate` rows.
+- Provider-reported cost precedence is unchanged.
+- Local `exact`, `derived`, and `partial` precedence is unchanged.
+- Dashboard or stats diagnostics expose reservation-fallback canonical cost separately enough that this class of error is visible.
+
+## Non-goals
+
+- Do not add provider-specific MiniMax pricing branches.
+- Do not trust ambiguous bare provider cost fields.
+- Do not remove reservation accounting; reserve estimates are still useful for routing/quota protection.
+- Do not make dashboard totals depend on live recomputation; persisted canonical request cost should be correct at write time.
+
+## Notes for implementer
+
+The critical mental model is: reservation is a preflight budget, not a bill. It can be conservative and even wrong without harming routing, but it must not become canonical billing if a lower plausible local estimate exists. The previous hardening pass correctly stopped trusting inflated local `estimated` costs, but it accidentally promoted an even worse fallback. This plan fixes that precedence error and adds guardrails so both local estimates and reservation estimates remain bounded.
+

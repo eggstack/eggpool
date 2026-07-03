@@ -116,6 +116,32 @@ async def fetch_summary(
         COALESCE(SUM(CASE WHEN exactness = 'estimated'
             THEN cost_microdollars ELSE 0 END), 0)
             as estimated_cost_sum_microdollars,
+        -- Reservation-fallback canonicalization visibility. A row
+        -- whose canonical ``cost_microdollars`` equals its
+        -- ``reserved_microdollars`` while carrying a non-null,
+        -- smaller ``local_cost_microdollars`` is the exact failure
+        -- mode plans/2026-07-03-reservation-fallback-cost-canonicalization-fix
+        -- targets: the routing reservation silently overrode the
+        -- tighter local estimate. Operators use ``reservation_fallback_*``
+        -- to spot inflated spend and ``reservation_fallback_excess_usd``
+        -- to quantify the gap for repair tooling.
+        COALESCE(SUM(CASE WHEN exactness = 'estimated'
+            AND reserved_microdollars IS NOT NULL
+            AND cost_microdollars = reserved_microdollars
+            AND local_cost_microdollars IS NOT NULL
+            AND local_cost_microdollars > 0
+            AND local_cost_microdollars < cost_microdollars
+            THEN 1 ELSE 0 END), 0)
+            as reservation_fallback_rows,
+        COALESCE(SUM(CASE WHEN exactness = 'estimated'
+            AND reserved_microdollars IS NOT NULL
+            AND cost_microdollars = reserved_microdollars
+            AND local_cost_microdollars IS NOT NULL
+            AND local_cost_microdollars > 0
+            AND local_cost_microdollars < cost_microdollars
+            THEN cost_microdollars - local_cost_microdollars
+            ELSE 0 END), 0)
+            as reservation_fallback_excess_microdollars,
         COALESCE(SUM(bytes_received), 0) as total_bytes_received,
         COALESCE(SUM(bytes_emitted), 0) as total_bytes_emitted,
         (SELECT COUNT(DISTINCT provider_id) FROM accounts) as total_providers,
@@ -972,6 +998,14 @@ def _build_summary(row: dict[str, Any]) -> dict[str, Any]:
         "estimated_cost_sum_microdollars": int(
             row.get("estimated_cost_sum_microdollars", 0)
         ),
+        # Reservation-fallback canonicalization visibility. See
+        # plans/2026-07-03-reservation-fallback-cost-canonicalization-fix.
+        # When ``reservation_fallback_rows > 0`` the dashboard renders
+        # a notice and the repair CLI surfaces the offending rows.
+        "reservation_fallback_rows": int(row.get("reservation_fallback_rows", 0)),
+        "reservation_fallback_excess_microdollars": int(
+            row.get("reservation_fallback_excess_microdollars", 0)
+        ),
         "total_bytes_received": int(row.get("total_bytes_received", 0)),
         "total_bytes_emitted": int(row.get("total_bytes_emitted", 0)),
         "total_providers": int(row.get("total_providers", 0)),
@@ -1008,6 +1042,8 @@ def _empty_summary() -> dict[str, Any]:
         "provider_reported_count": 0,
         "provider_reported_cost_microdollars": 0,
         "estimated_cost_sum_microdollars": 0,
+        "reservation_fallback_rows": 0,
+        "reservation_fallback_excess_microdollars": 0,
         "total_bytes_received": 0,
         "total_bytes_emitted": 0,
         "total_providers": 0,

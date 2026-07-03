@@ -20,7 +20,11 @@ from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from eggpool.constants import clamp_sqlite_integer
+from eggpool.constants import (
+    MAX_REQUEST_COST_MICRODOLLARS,
+    clamp_request_cost_microdollars,
+    clamp_sqlite_integer,
+)
 
 if TYPE_CHECKING:
     from eggpool.db.repositories import UsageWindowRepository
@@ -405,6 +409,84 @@ MODEL_FAMILY_FALLBACKS: dict[str, tuple[float, float]] = {
 GLOBAL_FALLBACK = (3.0, 15.0)
 GLOBAL_FALLBACK_FLOOR_MICRODOLLARS_PER_TOKEN = 0.5
 
+# Reservation cost is a routing safety budget, not a billed value.
+# Bound every cost returned by :meth:`QuotaEstimator.estimate_cost`
+# so a runaway EWMA or override cannot inflate a tiny request into a
+# multi-dollar reservation. This is much smaller than
+# ``MAX_REQUEST_COST_MICRODOLLARS`` ($250) which guards canonical
+# billed cost only — reservation fallback should never be large
+# enough to create canonical spend if downstream logic regresses.
+_QUOTA_RESERVATION_COST_CEILING_MICRODOLLARS = (
+    MAX_REQUEST_COST_MICRODOLLARS // 100
+)  # $2.50
+
+# Per-token ceiling for any reservation estimate.  Mirrors the
+# ``_MAX_ESTIMATED_COST_PER_TOKEN_MICRODOLLARS`` used by the
+# canonicalization helpers in :mod:`eggpool.catalog.pricing` so the
+# router and finalizer agree on what a ``plausible`` estimate looks
+# like.
+_QUOTA_ESTIMATED_COST_PER_TOKEN_CEILING_MICRODOLLARS = 100  # $0.10 / token
+
+
+def _finalize_estimate(
+    raw_cost_microdollars: int,
+    *,
+    estimated_tokens: int,
+    source: str,
+    model_id: str,
+    account_name: str,
+) -> int:
+    """Clamp a raw cost through every reservation safety guard.
+
+    Centralises the per-tier bounds so a future regression in any
+    single tier cannot let an absurd value escape into the
+    :meth:`QuotaEstimator.estimate_cost` callers (the request
+    coordinator, capacity scoring, ``add_reservation``).  The helpers
+    never raise; they emit a structured log line and fall through to
+    the conservative global fallback so the reservation ceiling is
+    always defensible.
+
+    The same helper is reused by ``record_usage`` to validate the
+    first EWMA observation: a single implausible seed would otherwise
+    persist into every future reservation for the same model.
+    """
+    if estimated_tokens <= 0:
+        return 0
+    safe = max(0, raw_cost_microdollars)
+    # Per-token ceiling — rejects rates that dwarf even the most
+    # expensive frontier model.
+    ceiling_per_token = _QUOTA_ESTIMATED_COST_PER_TOKEN_CEILING_MICRODOLLARS
+    safe_per_token = min(safe, estimated_tokens * ceiling_per_token)
+    if safe != safe_per_token:
+        logger.warning(
+            "Suppressing implausible reservation from %s for %s/%s: "
+            "raw %s microdollars exceeds %s microdollars/token ceiling for "
+            "%s tokens.",
+            source,
+            account_name,
+            model_id,
+            safe,
+            ceiling_per_token,
+            estimated_tokens,
+        )
+        safe = safe_per_token
+    # Absolute reservation ceiling. Distinct from
+    # ``MAX_REQUEST_COST_MICRODOLLARS`` because reservation fallback
+    # should not be capable of creating multi-dollar canonical spend.
+    if safe > _QUOTA_RESERVATION_COST_CEILING_MICRODOLLARS:
+        logger.warning(
+            "Capping reservation from %s for %s/%s: %s microdollars exceeds "
+            "%s microdollars reservation ceiling.",
+            source,
+            account_name,
+            model_id,
+            safe,
+            _QUOTA_RESERVATION_COST_CEILING_MICRODOLLARS,
+        )
+        safe = _QUOTA_RESERVATION_COST_CEILING_MICRODOLLARS
+    return clamp_request_cost_microdollars(safe)
+
+
 # Hard caps for the in-memory EWMA tables (Phase 2 of the memory
 # footprint plan). These bound the worst-case memory of the two
 # ``dict`` structures on ``QuotaEstimator`` so a fleet with a long
@@ -499,6 +581,25 @@ class QuotaEstimator:
         # the next tier on cache miss.
         if model_id and tokens > 0 and cost_microdollars > 0:
             cost_per_token = cost_microdollars / tokens
+            # Absolute pre-seed guard.  The :meth:`_is_outlier` band
+            # only kicks in once there is a running estimate to
+            # compare against; without this guard the very first
+            # observation for a model would silently seed the EWMA
+            # with an implausible rate and inflate every future
+            # reservation for the same model.
+            if cost_per_token > _QUOTA_ESTIMATED_COST_PER_TOKEN_CEILING_MICRODOLLARS:
+                logger.warning(
+                    "Refusing to seed EWMA with implausible rate for %s/%s: "
+                    "%s microdollars/token exceeds %s microdollars/token "
+                    "ceiling (tokens=%s, cost=%s microdollars).",
+                    account_name,
+                    model_id,
+                    cost_per_token,
+                    _QUOTA_ESTIMATED_COST_PER_TOKEN_CEILING_MICRODOLLARS,
+                    tokens,
+                    cost_microdollars,
+                )
+                return
             self._record_account_model_ewma(account_name, model_id, cost_per_token)
             self._record_global_model_ewma(model_id, cost_per_token)
 
@@ -620,7 +721,10 @@ class QuotaEstimator:
     ) -> int:
         """Estimate cost using the 5-tier hierarchy.
 
-        Returns estimated cost in microdollars.
+        Returns estimated cost in microdollars. Every tier routes its
+        raw value through :func:`_finalize_estimate` so a single
+        misconfigured override or poisoned EWMA seed cannot escape the
+        reservation safety ceiling.
         """
         # Tier 1: Account/model EWMA. On miss, fall through to Tier 2;
         # the LRU helpers above bound memory for the hit case.
@@ -634,7 +738,16 @@ class QuotaEstimator:
                 * am_estimate.estimate_cost_per_token
                 * self.default_safety_factor
             )
-            return max(clamp_sqlite_integer(cost), 1)
+            return max(
+                _finalize_estimate(
+                    cost,
+                    estimated_tokens=estimated_tokens,
+                    source="account_model_ewma",
+                    model_id=model_id,
+                    account_name=account_name,
+                ),
+                1,
+            )
 
         # Tier 2: Global model EWMA
         global_est = self.global_model_ewma.get(model_id)
@@ -644,7 +757,16 @@ class QuotaEstimator:
                 * global_est.estimate_cost_per_token
                 * self.default_safety_factor
             )
-            return max(clamp_sqlite_integer(cost), 1)
+            return max(
+                _finalize_estimate(
+                    cost,
+                    estimated_tokens=estimated_tokens,
+                    source="global_model_ewma",
+                    model_id=model_id,
+                    account_name=account_name,
+                ),
+                1,
+            )
 
         # Tier 3: Configured per-model override
         override = self.account_model_overrides.get(account_name, {}).get(model_id)
@@ -655,7 +777,16 @@ class QuotaEstimator:
             avg_rate = (input_rate + output_rate) / 2.0
             cost_per_token = avg_rate
             cost = int(estimated_tokens * cost_per_token * self.default_safety_factor)
-            return max(clamp_sqlite_integer(cost), 1)
+            return max(
+                _finalize_estimate(
+                    cost,
+                    estimated_tokens=estimated_tokens,
+                    source="model_override",
+                    model_id=model_id,
+                    account_name=account_name,
+                ),
+                1,
+            )
 
         # Tier 4: Model-family moving average
         family_cost = self._get_family_estimate(model_id)
@@ -668,7 +799,16 @@ class QuotaEstimator:
             # microdollars/token.
             cost_per_token = avg_rate
             cost = int(estimated_tokens * cost_per_token * self.default_safety_factor)
-            return max(clamp_sqlite_integer(cost), 1)
+            return max(
+                _finalize_estimate(
+                    cost,
+                    estimated_tokens=estimated_tokens,
+                    source="model_family_fallback",
+                    model_id=model_id,
+                    account_name=account_name,
+                ),
+                1,
+            )
 
         # Tier 5: Global unknown-request fallback. Use the conservative
         # lower bound of the unknown-price range, clamped by a small
@@ -679,7 +819,16 @@ class QuotaEstimator:
             GLOBAL_FALLBACK_FLOOR_MICRODOLLARS_PER_TOKEN,
         )
         cost = int(estimated_tokens * cost_per_token * self.default_safety_factor)
-        return max(clamp_sqlite_integer(cost), 1)
+        return max(
+            _finalize_estimate(
+                cost,
+                estimated_tokens=estimated_tokens,
+                source="global_unknown_fallback",
+                model_id=model_id,
+                account_name=account_name,
+            ),
+            1,
+        )
 
     def _get_family_estimate(self, model_id: str) -> tuple[float, float] | None:
         """Get model-family fallback estimate."""

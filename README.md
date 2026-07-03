@@ -54,7 +54,7 @@ See [Deployment](docs/deployment.md) for alternative install methods (pipx, manu
 | `eggpool accounts status` | Show account status (provider, priority, weight, enabled) |
 | `eggpool accounts explain` | Show per-account routing eligibility for a model |
 | `eggpool stats transcoding` | Show protocol transcoding statistics |
-| `eggpool stats repair-costs` | Dry-run/apply repair for suspicious historical request costs |
+| `eggpool stats repair-costs` | Dry-run/apply repair for suspicious historical request costs (incl. reservation-fallback rows where canonical cost equals the inflated reservation while a smaller local estimate exists) |
 | `eggpool stats recompute-costs` | Recompute `cost_microdollars` on historical requests |
 | `eggpool runtime-status` | Print runtime health summary |
 | `eggpool backup` | Create a timestamped backup |

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, cast
 
+from eggpool.catalog.pricing import choose_bounded_estimated_cost
 from eggpool.constants import (
     MAX_REQUEST_COST_MICRODOLLARS,
     clamp_request_cost_microdollars,
@@ -213,11 +214,16 @@ class RequestFinalizer:
         #   2. ``derived`` / ``partial`` / ``exact`` — EggPool's local
         #      CostCalculator produced a value from a trusted price
         #      snapshot. Preserve the calculator's exactness label.
-        #   3. ``estimated`` — the calculator returned zero/unknown
-        #      but billable work likely occurred; fall back to the
-        #      conservative reservation estimate. Distinct from a real
-        #      provider figure so the dashboard can attribute spend
-        #      correctly.
+        #   3. ``estimated`` — the calculator returned a value but
+        #      flagged its per-token rate as implausible or used a
+        #      heuristic fallback.  When the value is plausible we
+        #      trust it; when both the local estimate and the
+        #      reservation are available we pick the lower plausible
+        #      one via :func:`choose_bounded_estimated_cost`. A
+        #      generous reservation MUST NOT silently override a
+        #      tighter local estimate (see plans/2026-07-03-*). If
+        #      neither estimate is plausible we fall through to the
+        #      generic bounded estimate.
         #   4. ``unknown`` — no usage and no billable work, so cost
         #      stays at zero.
         #
@@ -263,53 +269,104 @@ class RequestFinalizer:
                 provider_id=selected.provider_id,
             )
 
+        reservation_microdollars = int(
+            getattr(selected, "estimated_microdollars", 0) or 0
+        )
+
         # 1. Provider-reported cost wins outright when present.
         if data.provider_cost_microdollars is not None:
             cost_microdollars = data.provider_cost_microdollars
             exactness = "provider_reported"
         # 2. Trusted local calculation: derived / partial / exact.
-        #
-        #    CRITICAL: positivity alone is NOT a sufficient signal. A
-        #    local result tagged ``estimated`` (the
-        #    ``CostCalculator`` flagged the per-token rate as implausible
-        #    or no snapshot existed) may still carry a large positive
-        #    microdollar value when the heuristic fallback or a clamped
-        #    rate ran. Persisting that value as canonical spend inflates
-        #    the dashboard by the same factor that triggered the
-        #    downgrade, so the finalizer rejects ``estimated`` local
-        #    results and falls through to the reservation estimate.
         elif (
             local_cost_microdollars is not None
             and local_cost_exactness in _TRUSTED_LOCAL_EXACTNESS
         ):
             cost_microdollars = local_cost_microdollars
             exactness = local_cost_exactness
-        # 2a. Local result was tagged ``estimated`` — never persist its
-        #     positive value as canonical. If billable work is plausible
-        #     we fall back to the reservation estimate; otherwise the
-        #     request cost stays at zero with exactness ``unknown``.
+        # 3. ``estimated`` path.  A positive local estimate is NOT
+        #    discarded outright — instead :func:`choose_bounded_estimated_cost`
+        #    picks the lower plausible value between the local
+        #    estimate and the reservation, with the reservation as
+        #    fallback when only one is plausible.  When the local
+        #    estimate is implausibly high (the historical unit-
+        #    misclassification class of bug) we still drop it so it
+        #    cannot become canonical.
         elif (
             local_cost_microdollars is not None
             and local_cost_exactness == "estimated"
-            and local_cost_microdollars > 0
+            and may_have_billable_work
         ):
-            logger.warning(
-                "Ignoring positive local estimated cost (%s microdollars) "
-                "for %s; falling back to reservation estimate to prevent "
-                "canonical spend inflation.",
-                local_cost_microdollars,
-                getattr(selected, "request_id", "<unknown>"),
+            chosen, provenance = choose_bounded_estimated_cost(
+                local_estimate_microdollars=local_cost_microdollars,
+                reservation_microdollars=reservation_microdollars,
+                input_tokens=data.input_tokens,
+                output_tokens=data.output_tokens,
+                cache_read_tokens=data.cache_read_tokens,
+                cache_write_tokens=data.cache_write_tokens,
             )
-            if may_have_billable_work:
-                cost_microdollars = selected.estimated_microdollars
-                exactness = "estimated"
-            else:
-                cost_microdollars = 0
-                exactness = "unknown"
-        # 3. Conservative reservation fallback only when billable work
-        #    is plausible AND no trusted value is available.
+            cost_microdollars = chosen
+            exactness = "estimated"
+            if (
+                provenance == "reservation_estimated"
+                and local_cost_microdollars > cost_microdollars
+            ):
+                logger.info(
+                    "cost.reservation_fallback_suppressed "
+                    "request_id=%s provider=%s model=%s input_tokens=%s "
+                    "output_tokens=%s cache_read_tokens=%s cache_write_tokens=%s "
+                    "local_microdollars=%s reservation_microdollars=%s "
+                    "canonical_microdollars=%s provenance=%s "
+                    "reason=reservation_lower_than_estimated_local",
+                    getattr(selected, "request_id", "<unknown>"),
+                    getattr(selected, "provider_id", "<unknown>"),
+                    _get_model_id(selected),
+                    data.input_tokens,
+                    data.output_tokens,
+                    data.cache_read_tokens,
+                    data.cache_write_tokens,
+                    local_cost_microdollars,
+                    reservation_microdollars,
+                    cost_microdollars,
+                    provenance,
+                )
+            elif (
+                provenance == "min_local_reservation_estimated"
+                and reservation_microdollars > max(local_cost_microdollars * 4, 0)
+            ):
+                logger.info(
+                    "cost.reservation_fallback_suppressed "
+                    "request_id=%s provider=%s model=%s input_tokens=%s "
+                    "output_tokens=%s cache_read_tokens=%s cache_write_tokens=%s "
+                    "local_microdollars=%s reservation_microdollars=%s "
+                    "canonical_microdollars=%s provenance=%s "
+                    "reason=reservation_above_plausible_local_estimate",
+                    getattr(selected, "request_id", "<unknown>"),
+                    getattr(selected, "provider_id", "<unknown>"),
+                    _get_model_id(selected),
+                    data.input_tokens,
+                    data.output_tokens,
+                    data.cache_read_tokens,
+                    data.cache_write_tokens,
+                    local_cost_microdollars,
+                    reservation_microdollars,
+                    cost_microdollars,
+                    provenance,
+                )
+        # 4. No trusted calculator value but billable work exists.
+        #    The reservation estimate stands; ``choose_bounded_estimated_cost``
+        #    enforces the per-token reservation ceiling so the canonical
+        #    value cannot become a multi-dollar reservation fallback.
         elif may_have_billable_work:
-            cost_microdollars = selected.estimated_microdollars
+            chosen, _provenance = choose_bounded_estimated_cost(
+                local_estimate_microdollars=None,
+                reservation_microdollars=reservation_microdollars,
+                input_tokens=data.input_tokens,
+                output_tokens=data.output_tokens,
+                cache_read_tokens=data.cache_read_tokens,
+                cache_write_tokens=data.cache_write_tokens,
+            )
+            cost_microdollars = chosen
             exactness = "estimated"
             local_cost_microdollars = cost_microdollars
             local_cost_exactness = "estimated"
@@ -317,7 +374,7 @@ class RequestFinalizer:
             cost_microdollars = 0
             exactness = "unknown"
 
-        # 4. Estimated-cost floor: even when a calculator produced a
+        # 5. Estimated-cost floor: even when a calculator produced a
         #    positive-but-trivially-small value under the ``estimated``
         #    label, the dashboard must reflect at least the conservative
         #    reservation amount so quota accounting never reports less
@@ -325,11 +382,8 @@ class RequestFinalizer:
         #    only when exactness stayed at ``estimated``; derived /
         #    partial / exact values reflect real pricing and must not
         #    be inflated by a reservation floor.
-        if (
-            exactness == "estimated"
-            and cost_microdollars < selected.estimated_microdollars
-        ):
-            cost_microdollars = selected.estimated_microdollars
+        if exactness == "estimated" and cost_microdollars < reservation_microdollars:
+            cost_microdollars = reservation_microdollars
 
         capped_cost_microdollars = clamp_request_cost_microdollars(cost_microdollars)
         if capped_cost_microdollars != cost_microdollars:

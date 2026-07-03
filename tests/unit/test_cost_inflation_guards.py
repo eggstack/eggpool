@@ -188,13 +188,50 @@ class TestEWMAOutlierRejection:
         assert bucket["m"].estimate_cost_per_token == baseline_estimate
 
     def test_first_observation_never_rejected(self) -> None:
-        """The first sample for a new model is always accepted (no baseline)."""
+        """The first plausible sample for a new model is always accepted.
+
+        Updated after the reservation-fallback fix: the pre-seed
+        absolute-cost guard now refuses to seed EWMA with an
+        implausibly inflated first observation (the historical
+        unit-misclassification regression vector). ``record_usage``
+        still records the cost on the daily/hourly windows; only the
+        EWMA used by future reservations is shielded from the
+        contamination.
+        """
+        from eggpool.quota.estimation import (
+            _QUOTA_ESTIMATED_COST_PER_TOKEN_CEILING_MICRODOLLARS,
+        )
+
         estimator = QuotaEstimator()
+        # 1 microdollar/token → 1000 tokens × 1 = 1_000 microdollars.
         estimator.record_usage(
-            "acct", tokens=1000, cost_microdollars=10_000_000, model_id="new"
+            "acct",
+            tokens=1000,
+            cost_microdollars=_QUOTA_ESTIMATED_COST_PER_TOKEN_CEILING_MICRODOLLARS
+            * 1000,
+            model_id="new",
         )
         assert "new" in estimator.global_model_ewma
         assert estimator.global_model_ewma["new"].sample_count == 1
+
+    def test_first_observation_above_ceiling_is_refused(self) -> None:
+        """First observation that exceeds the per-token ceiling must not seed EWMA.
+
+        Locked in by the reservation-fallback canonicalization fix so
+        a unit-misclassification sample ($0.20/token being read as
+        $0.20/M) cannot permanently seed future reservation
+        estimates. Without this guard the very first outlier passes
+        the relative outlier band (no prior to compare against) and
+        every reservation for that model is inflated forever.
+        """
+        estimator = QuotaEstimator()
+        estimator.record_usage(
+            "acct",
+            tokens=1000,
+            cost_microdollars=15_000_000_000,  # 15_000 microdollars/token
+            model_id="minimax-m3",
+        )
+        assert "minimax-m3" not in estimator.global_model_ewma
 
     def test_legitimate_price_change_admitted(self) -> None:
         """A 5x price change (within the band) folds into the EWMA."""

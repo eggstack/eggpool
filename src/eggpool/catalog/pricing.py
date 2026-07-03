@@ -231,6 +231,161 @@ _MAX_TRUSTED_RATE_PER_MILLION_MICRODOLLARS = 1_000_000_000  # $1,000 / 1M
 # that the upstream unit-misclassification bug produces.
 _MAX_TRUSTED_COST_PER_TOKEN_MICRODOLLARS = 1_000  # $1 / token
 
+# Stricter per-token ceiling used for ``estimated`` / reservation
+# fallback canonicalization in :func:`choose_bounded_estimated_cost`.
+# Reservation estimates are routing safety values, not bills, so we
+# reject any estimate that implies more than this rate regardless of the
+# broader ``_MAX_TRUSTED_COST_PER_TOKEN_MICRODOLLARS`` trust ceiling.
+_MAX_ESTIMATED_COST_PER_TOKEN_MICRODOLLARS = 100  # $0.10 / token
+
+# Conservative absolute reservation ceiling. Distinct from
+# ``MAX_REQUEST_COST_MICRODOLLARS`` ($250) which exists to bound
+# canonical billed cost. Reservation fallback should be large enough to
+# prevent quota oversubscription but never large enough to create
+# multi-dollar canonical spend if downstream logic regresses.
+MAX_RESERVATION_COST_MICRODOLLARS = 1_000_000  # $1.00 per reservation
+
+
+def total_billable_tokens(
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int | None = None,
+    cache_write_tokens: int | None = None,
+) -> int:
+    """Sum the billable token categories for a request.
+
+    Provider-neutral helper shared between the request finalizer, the
+    CostCalculator, the repair tooling, and the QuotaEstimator.  Cache
+    counters default to zero so callers that do not have those values
+    do not have to thread ``None`` through their call sites.
+    """
+    read = cache_read_tokens or 0
+    write = cache_write_tokens or 0
+    return input_tokens + output_tokens + read + write
+
+
+def is_plausible_request_cost(
+    *,
+    cost_microdollars: int,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int | None = None,
+    cache_write_tokens: int | None = None,
+    max_cost_per_token: int = _MAX_TRUSTED_COST_PER_TOKEN_MICRODOLLARS,
+) -> bool:
+    """Whether a cost value is plausible for the billable tokens supplied.
+
+    Rejects negative or zero-when-tokens-nonzero values and enforces a
+    per-token ceiling.  Used by both the finalizer and the repair
+    tooling so the canonicalization rules agree on what ``plausible``
+    means.
+    """
+    if cost_microdollars <= 0:
+        return False
+    total_tokens = total_billable_tokens(
+        input_tokens,
+        output_tokens,
+        cache_read_tokens,
+        cache_write_tokens,
+    )
+    if total_tokens <= 0:
+        return False
+    implicit = implicit_cost_per_token_microdollars(cost_microdollars, total_tokens)
+    return implicit is not None and implicit <= max_cost_per_token
+
+
+def choose_bounded_estimated_cost(
+    *,
+    local_estimate_microdollars: int | None,
+    reservation_microdollars: int | None,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int | None = None,
+    cache_write_tokens: int | None = None,
+) -> tuple[int, str]:
+    """Pick the most defensible bounded estimate for a request.
+
+    The reservation is a preflight budget, not a bill; the local
+    ``estimated`` heuristic is a back-of-envelope price guess.  When
+    both exist, the lower plausible value wins so a generous
+    reservation cannot override a tighter local estimate.  When only
+    one exists, that value is used iff it is plausible; otherwise the
+    function falls back to zero with exactness ``unknown`` so the
+    caller can record a minimal billable signal without trusting the
+    implausible estimate.  The returned ``provenance`` string makes it
+    easy to surface this decision in structured logs.
+
+    Provenance values:
+      * ``"local_estimated"`` — local estimate used, reservation absent
+        or implausible.
+      * ``"reservation_estimated"`` — reservation used, local estimate
+        absent or implausible.
+      * ``"min_local_reservation_estimated"`` — local estimate lower
+        than a plausible reservation; the local value was selected.
+      * ``"generic_estimated"`` — both available estimates are
+        implausible; the bounded generic floor was selected.
+      * ``"unknown"`` — no billable work or no usable estimate.
+    """
+    local_plausible = is_plausible_request_cost(
+        cost_microdollars=local_estimate_microdollars or 0,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=cache_write_tokens,
+        max_cost_per_token=_MAX_ESTIMATED_COST_PER_TOKEN_MICRODOLLARS,
+    )
+    reservation_bounded = (
+        reservation_microdollars
+        if (
+            reservation_microdollars is not None
+            and reservation_microdollars > 0
+            and reservation_microdollars <= MAX_RESERVATION_COST_MICRODOLLARS
+        )
+        else None
+    )
+    reservation_plausible = (
+        reservation_bounded is not None
+        and is_plausible_request_cost(
+            cost_microdollars=reservation_bounded,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read_tokens,
+            cache_write_tokens=cache_write_tokens,
+            max_cost_per_token=_MAX_ESTIMATED_COST_PER_TOKEN_MICRODOLLARS,
+        )
+    )
+
+    total_tokens = total_billable_tokens(
+        input_tokens,
+        output_tokens,
+        cache_read_tokens,
+        cache_write_tokens,
+    )
+    if total_tokens <= 0:
+        return 0, "unknown"
+
+    if local_plausible and reservation_plausible:
+        local_value = cast_int(local_estimate_microdollars)
+        reservation_value = cast_int(reservation_bounded)
+        if local_value <= reservation_value:
+            return local_value, "min_local_reservation_estimated"
+        return reservation_value, "reservation_estimated"
+    if local_plausible:
+        return cast_int(local_estimate_microdollars), "local_estimated"
+    if reservation_plausible:
+        return cast_int(reservation_bounded), "reservation_estimated"
+
+    # Both available estimates are implausible. Use the generic
+    # full-request bounded estimate so a future repair can recover
+    # the row using the same fallback the calculator would emit.
+    generic = max(1, total_tokens * 5)
+    return clamp_request_cost_microdollars(generic), "generic_estimated"
+
+
+def cast_int(value: int | None) -> int:
+    """Coerce a possibly-None int to int, treating ``None`` as zero."""
+    return 0 if value is None else int(value)
+
 
 def coerce_token_count(value: object) -> int:
     """Coerce a provider token count to a non-negative int.
@@ -572,9 +727,30 @@ class CostCalculator:
                 fallback_cost += self._fallback_microdollars_for_category(
                     "cache_write", cache_write_tokens
                 )
-            cost_microdollars = clamp_request_cost_microdollars(
-                trusted_cost + fallback_cost
-            )
+            # Validate the RAW (pre-clamp) partial cost so a wildly
+            # inflated snapshot rate cannot hide behind the per-request
+            # cap and reappear as a plausible post-clamp cost/token.
+            raw_partial_cost = trusted_cost + fallback_cost
+            if total_tokens > 0:
+                raw_implicit = implicit_cost_per_token_microdollars(
+                    raw_partial_cost,
+                    total_tokens,
+                )
+                if (
+                    raw_implicit is not None
+                    and raw_implicit > _MAX_TRUSTED_COST_PER_TOKEN_MICRODOLLARS
+                ):
+                    logger.warning(
+                        "Partial cost for %s/%s implies %s microdollars/token "
+                        "(> %s trust ceiling, pre-clamp). Replacing with "
+                        "bounded estimate.",
+                        model_id,
+                        provider_id or "*",
+                        raw_implicit,
+                        _MAX_TRUSTED_COST_PER_TOKEN_MICRODOLLARS,
+                    )
+                    return self._estimate_cost(input_tokens, output_tokens), "estimated"
+            cost_microdollars = clamp_request_cost_microdollars(raw_partial_cost)
             return cost_microdollars, "partial"
 
         # All categories priced — pure derived cost. If the integer
@@ -582,10 +758,27 @@ class CostCalculator:
         # to zero (e.g. an extremely cheap rate or tiny token count),
         # downgrade exactness so the request finalizer floors the cost
         # at the reservation estimate rather than recording zero.
-        cost_microdollars = clamp_request_cost_microdollars(
-            round(trusted_numerator / 1_000_000)
-        )
+        # Validate the RAW (pre-clamp) cost first so a wildly inflated
+        # snapshot rate cannot hide behind the per-request cap and
+        # reappear as a plausible post-clamp cost/token.
+        raw_cost_microdollars = round(trusted_numerator / 1_000_000)
         exactness = "derived"
+        raw_implicit = implicit_cost_per_token_microdollars(
+            raw_cost_microdollars, total_tokens
+        )
+        if raw_implicit is not None and raw_implicit > (
+            _MAX_TRUSTED_COST_PER_TOKEN_MICRODOLLARS
+        ):
+            logger.warning(
+                "Derived cost for %s/%s implies %s microdollars/token "
+                "(> %s trust ceiling, pre-clamp). Replacing with bounded estimate.",
+                model_id,
+                provider_id or "*",
+                raw_implicit,
+                _MAX_TRUSTED_COST_PER_TOKEN_MICRODOLLARS,
+            )
+            return self._estimate_cost(input_tokens, output_tokens), "estimated"
+        cost_microdollars = clamp_request_cost_microdollars(raw_cost_microdollars)
         if cost_microdollars == 0 and any(
             (
                 input_tokens,
@@ -595,33 +788,6 @@ class CostCalculator:
             )
         ):
             exactness = "estimated"
-        # Per-request sanity check on the implicit cost-per-token. An
-        # inflated snapshot rate (the unit-misclassification class of
-        # bug) produces a derived cost whose per-token rate exceeds
-        # every legitimate frontier model. Downgrade the exactness
-        # label to ``estimated`` so the finalizer applies the
-        # reservation floor (which is bounded by the
-        # MAX_REQUEST_COST_MICRODOLLARS clamp) rather than recording
-        # the inflated derived value as authoritative spend. The
-        # dashboard surfaces the discrepancy via the exactness label.
-        if exactness in {"derived", "partial"} and total_tokens > 0:
-            implicit_cost_per_token = implicit_cost_per_token_microdollars(
-                cost_microdollars,
-                total_tokens,
-            )
-            if (
-                implicit_cost_per_token is not None
-                and implicit_cost_per_token > _MAX_TRUSTED_COST_PER_TOKEN_MICRODOLLARS
-            ):
-                logger.warning(
-                    "Derived cost for %s/%s implies %s microdollars/token "
-                    "(> %s trust ceiling). Replacing with bounded estimate.",
-                    model_id,
-                    provider_id or "*",
-                    implicit_cost_per_token,
-                    _MAX_TRUSTED_COST_PER_TOKEN_MICRODOLLARS,
-                )
-                return self._estimate_cost(input_tokens, output_tokens), "estimated"
         return cost_microdollars, exactness
 
     def _estimate_cost(self, input_tokens: int, output_tokens: int) -> int:

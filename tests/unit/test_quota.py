@@ -6,7 +6,6 @@ import time
 
 import pytest
 
-from eggpool.constants import SQLITE_INTEGER_MAX
 from eggpool.quota.estimation import (
     EWMA_HARD_CAP,
     GLOBAL_EWMA_HARD_CAP,
@@ -567,8 +566,22 @@ class TestEstimateCostTierPriority:
         cost = estimator.estimate_cost("acct", "unknown", 0)
         assert cost >= 1
 
-    def test_extreme_override_estimate_clamps_to_sqlite_integer(self) -> None:
-        """Bad price metadata must not produce an unpersistable reservation."""
+    def test_extreme_override_estimate_clamps_to_reservation_ceiling(self) -> None:
+        """Bad price metadata must not produce an unpersistable reservation.
+
+        The previous hardening pass bound the value at
+        ``SQLITE_INTEGER_MAX`` to keep the reservation persistable.
+        The reservation-fallback canonicalization fix tightens that
+        further: a poisoned model override cannot inflate the
+        reservation to more than the dedicated reservation ceiling
+        ($2.50) which is well below ``MAX_REQUEST_COST_MICRODOLLARS``
+        so downstream regressions cannot use the reservation as
+        canonical billing.
+        """
+        from eggpool.quota.estimation import (
+            _QUOTA_RESERVATION_COST_CEILING_MICRODOLLARS,
+        )
+
         estimator = QuotaEstimator()
         estimator.set_model_override(
             "minimax-m3",
@@ -578,7 +591,8 @@ class TestEstimateCostTierPriority:
 
         cost = estimator.estimate_cost("acct", "minimax-m3", 128_000)
 
-        assert cost == SQLITE_INTEGER_MAX
+        assert cost <= _QUOTA_RESERVATION_COST_CEILING_MICRODOLLARS
+        assert cost >= 1
 
 
 class TestEWMAHardCaps:

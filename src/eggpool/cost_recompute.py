@@ -115,11 +115,15 @@ async def recompute_request_costs(
             or old_cost > 0
             or reserved > 0
         )
-        new_cost, exactness = canonicalize_repaired_cost(
+        new_cost, exactness, _provenance = canonicalize_repaired_cost(
             local_cost_microdollars=local_cost,
             local_cost_exactness=local_exactness,
             reserved_microdollars=reserved,
             may_have_billable_work=may_have_billable_work,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read,
+            cache_write_tokens=cache_write,
         )
         new_total += new_cost
         if new_cost == old_cost and exactness == str(row["exactness"] or "unknown"):

@@ -1047,6 +1047,36 @@ def _render_pricing_warnings(
     return "".join(parts)
 
 
+def _render_reservation_fallback_warning(summary: dict[str, Any]) -> str:
+    """Banner for reservation-fallback canonicalization visibility.
+
+    When the persistence layer carried rows where the canonical
+    ``cost_microdollars`` equals the reservation estimate while a
+    non-null, smaller persisted ``local_cost_microdollars`` exists,
+    the spend total has been silently inflated.  This banner surfaces
+    both the row count and the dollar gap so operators can run
+    ``eggpool stats repair-costs`` against the offending window.  The
+    banner is omitted when no suspicious rows are present; if a
+    future hardening pass eliminates the failure mode entirely the
+    banner will simply disappear.
+    """
+    rows = int(summary.get("reservation_fallback_rows", 0) or 0)
+    excess_micro = int(summary.get("reservation_fallback_excess_microdollars", 0) or 0)
+    if rows <= 0 and excess_micro <= 0:
+        return ""
+    excess_dollars = excess_micro / 1_000_000.0
+    return (
+        '<div class="panel warn reservation-fallback-warning">'
+        "<strong>Reservation-fallback warning:</strong> "
+        f"{rows:,} request(s) carry canonical cost equal to the routing "
+        f"reservation while a tighter local estimate was available; "
+        f"~${excess_dollars:,.2f} of inflated spend in the selected period. "
+        "Repair with "
+        "<code>eggpool stats repair-costs --apply</code>."
+        "</div>"
+    )
+
+
 def _render_provider_health(ping_summary: list[dict[str, Any]]) -> str:
     """Render the provider health section for the overview page."""
     if not ping_summary:
@@ -1682,6 +1712,8 @@ def render_overview(
 {_render_period_selector(period, current_theme)}
 
 {_render_system_health(pending_health, attempt_stats, operational_summary)}
+
+{_render_reservation_fallback_warning(summary)}
 
 <section class="cards">
   {

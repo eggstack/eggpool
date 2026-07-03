@@ -463,6 +463,113 @@ class TestPriceParsing:
         assert cost == 18000
 
 
+class TestRawCostPerTokenBeforeClamp:
+    """Phase 3 regression: raw pre-clamp cost validated before per-request cap.
+
+    The derived/partial paths now check the implicit cost-per-token
+    against ``_MAX_TRUSTED_COST_PER_TOKEN_MICRODOLLARS`` BEFORE
+    applying ``clamp_request_cost_microdollars``. A wildly inflated
+    snapshot rate that would pass a post-clamp check (because the cap
+    hides the inflation) is rejected and replaced by a bounded
+    estimate.
+    """
+
+    @pytest.mark.asyncio
+    async def test_raw_derived_cost_above_ceiling_returns_estimated(self) -> None:
+        """output_per_million_microdollars=2.5B → raw rate > 1000 μ$/token ceiling."""
+        snapshot = PriceSnapshot(
+            model_id="inflated-derived",
+            input_price_per_1k=None,
+            output_price_per_1k=None,
+            captured_at="2026-07-03T00:00:00",
+            input_per_million_microdollars=0,
+            output_per_million_microdollars=2_500_000_000,
+        )
+        mock_repo = AsyncMock()
+        mock_repo.get_latest_snapshot = AsyncMock(return_value=snapshot)
+        calculator = CostCalculator(price_repo=mock_repo)
+
+        cost, exactness = await calculator.calculate_cost(
+            "inflated-derived",
+            input_tokens=1_000,
+            output_tokens=1_000,
+        )
+
+        # Raw cost: 1_000 * 2_500_000_000 / 1_000_000 = 2_500_000 microdollars
+        # Raw per-token: 2_500_000 / 2_000 = 1250 > 1000 ceiling → rejected
+        assert exactness == "estimated"
+        assert cost < 2_500_000  # must NOT be the inflated raw value
+
+    @pytest.mark.asyncio
+    async def test_high_token_request_with_inflated_rate_rejected_before_clamp(
+        self,
+    ) -> None:
+        """100k tokens + inflated rate: post-clamp looks plausible but raw does not."""
+        snapshot = PriceSnapshot(
+            model_id="inflated-high-token",
+            input_price_per_1k=None,
+            output_price_per_1k=None,
+            captured_at="2026-07-03T00:00:00",
+            input_per_million_microdollars=2_500_000_000,
+            output_per_million_microdollars=10_000_000_000,
+        )
+        mock_repo = AsyncMock()
+        mock_repo.get_latest_snapshot = AsyncMock(return_value=snapshot)
+        calculator = CostCalculator(price_repo=mock_repo)
+
+        cost, exactness = await calculator.calculate_cost(
+            "inflated-high-token",
+            input_tokens=100_000,
+            output_tokens=100_000,
+        )
+
+        # Raw cost: (100k * 2.5B + 100k * 10B) / 1M = 1.25e12 microdollars
+        # Raw per-token: 1.25e12 / 200k = 6.25e6 > 1000 → rejected
+        # Post-clamp would be 250M which is 1250 μ$/token (plausible-looking!)
+        # but the raw check catches it BEFORE clamping.
+        assert exactness == "estimated"
+        assert cost < 250_000_000  # must NOT be the post-clamp value
+
+    @pytest.mark.asyncio
+    async def test_partial_path_validates_raw_cost_before_clamp(self) -> None:
+        """Partial path: fallback cost added to trusted numerator before raw check.
+
+        The partial path computes ``trusted_cost + fallback_cost`` as the raw
+        pre-clamp value.  With an inflated output rate the trusted share alone
+        can push the raw per-token rate above the ceiling, triggering the same
+        rejection as the derived path.
+        """
+        snapshot = PriceSnapshot(
+            model_id="inflated-partial",
+            input_price_per_1k=None,
+            output_price_per_1k=None,
+            captured_at="2026-07-03T00:00:00",
+            input_per_million_microdollars=0,
+            output_per_million_microdollars=2_500_000_000,
+            cache_read_per_million_microdollars=None,
+            cache_write_per_million_microdollars=None,
+        )
+        mock_repo = AsyncMock()
+        mock_repo.get_latest_snapshot = AsyncMock(return_value=snapshot)
+        calculator = CostCalculator(price_repo=mock_repo)
+
+        cost, exactness = await calculator.calculate_cost(
+            "inflated-partial",
+            input_tokens=100,
+            output_tokens=1_000,
+            cache_read_tokens=50,
+            cache_write_tokens=50,
+        )
+
+        # Trusted output: 1000 * 2.5B / 1M = 2_500_000
+        # Fallback cache_read: 50 * 300k / 1M = 15
+        # Fallback cache_write: 50 * 3.75M / 1M = 187
+        # raw_partial = 2_500_202
+        # total_tokens = 1200, implicit ≈ 2083 > 1000 → rejected
+        assert exactness == "estimated"
+        assert cost < 250_000_000
+
+
 class TestNegativePriceHandling:
     """Negative prices from upstream catalogs return None instead of crashing."""
 
