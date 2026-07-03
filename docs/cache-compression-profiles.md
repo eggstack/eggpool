@@ -1,12 +1,12 @@
-# Cache-Compression Profiles
+# Request-Shaping Profiles
 
-Six copy-pasteable configuration profiles. Each profile is a complete, self-contained TOML snippet. Copy the relevant sections into your `config.toml` and run `eggpool check-config` then `eggpool rehash`.
+Copy-pasteable configuration profiles for EggPool's request-shaping stack. Each profile is a complete, self-contained TOML snippet. Copy the relevant sections into your `config.toml` and run `eggpool check-config` then `eggpool rehash`.
 
-Profiles are ordered from safest (Profile 1) to most aggressive (Profile 6). Always start with Profile 1, walk up after inspecting the dashboard.
+Profiles are ordered from safest to most aggressive. Always start with the baseline profile, then walk up after inspecting the dashboard.
 
-## Profile 1 — Baseline / disabled
+## Baseline / disabled
 
-**Purpose:** preserve current behavior while collecting only existing request stats (Phase 1-4 observability runs by default).
+**Purpose:** preserve current behavior while collecting cache-reporting and segmentation visibility.
 
 ```toml
 [compression]
@@ -25,12 +25,12 @@ mode = "recommend"
 **Behavior:**
 
 - No request mutation from compression or synthetic cache controls.
-- Phase 1-4 observability (cache counters, segmentation, transcoder cache stability, observe-mode compression accounting) is recorded.
+- Cache reporting, request segmentation, and native cache-preservation visibility remain available.
 - Routing is unaffected.
 
 **When to use:** new installs, production deployments that have not yet evaluated cache-compression, or while validating baseline traffic patterns.
 
-## Profile 2 — Observe-only diagnostics
+## Observe-only diagnostics
 
 **Purpose:** learn whether safe suffix compression would help without mutating requests.
 
@@ -55,7 +55,7 @@ compact_stack_traces = true
 
 **Behavior:**
 
-- Analyzer runs on every request and records a `CompressionObservation` (Phase 4).
+- Analyzer runs on every request and records a `CompressionObservation`.
 - No request mutation. The applier (`apply_safe_compression`) is a no-op.
 - Durable counters persist per request: `compression_status`, `compression_mode`, candidate / eligible / suppressed counts, savings estimates, reason codes.
 
@@ -70,7 +70,7 @@ compact_stack_traces = true
 
 **When to use:** first evaluation pass; deploy Profile 2 for 24-48 hours and inspect the candidate rate and suppression reasons before deciding whether to enable safe mode.
 
-## Profile 3 — Safe suffix compression for coding agents
+## Safe suffix compression for coding agents
 
 **Purpose:** reduce large volatile tool / log / search output while preserving stable prompts and cache controls.
 
@@ -124,7 +124,7 @@ min_savings_tokens = 512
 
 **When to use:** after 24-48 hours of Profile 2 confirms a useful candidate rate. Start with one client/policy (the optional `[[compression.policies]]` row) before expanding globally.
 
-## Profile 4 — Anthropic synthetic cache dry-run
+## Anthropic synthetic cache dry-run
 
 **Purpose:** discover whether provider-bound Anthropic requests have stable prefix blocks that could be annotated.
 
@@ -165,7 +165,7 @@ synthetic_cache_max_breakpoints = 4
 
 **When to use:** after Profile 3 is stable, if you want to start experimenting with provider cache hints. Always use dry-run first; inspect candidate counts before applying.
 
-## Profile 5 — Anthropic synthetic cache apply mode
+## Anthropic synthetic cache apply mode
 
 **Purpose:** opt-in provider-bound mutation after dry-run confidence.
 
@@ -205,7 +205,7 @@ synthetic_cache_max_breakpoints = 4
 
 **When to use:** only after Profile 4 dry-run shows clean candidate/applied dry-run counts and no `synthetic_cache_control_safety_diff_failed` warnings for 24-48 hours. Scope to one provider/client first.
 
-## Profile 6 — Threshold tuning recommendation-only
+## Advisory threshold tuning
 
 **Purpose:** surface suggested threshold changes but never alter runtime policy.
 
@@ -223,9 +223,9 @@ persist_recommendations = true
 
 **Behavior:**
 
-- The tuning engine observes Phase 4-6 compression metrics and emits recommendations for `min_candidate_tokens`, `min_savings_tokens`, and `max_compression_latency_ms`.
+- The tuning engine observes compression metrics and emits recommendations for `min_candidate_tokens`, `min_savings_tokens`, and `max_compression_latency_ms`.
 - Recommendations are advisory only. `mode = "recommend"` (the default) writes suggestions to the `compression_tuning_recommendations` table and the dashboard only.
-- Every suggestion is content-private (no prompt inspection), bounded (clamped to `[compression.tuning.bounds]`), rate-limited (`max_adjustment_pct` per step; `cooldown_seconds` suppresses the next recommendation), and immutable on every other compression knob.
+- Every suggestion is content-private (no prompt inspection), bounded (clamped to `[compression.tuning.bounds]`), rate-limited (`max_adjustment_pct` per step; `cooldown_s` suppresses the next recommendation), and immutable on every other compression knob.
 - `mode = "apply"` is currently dormant. The in-memory `RuntimeCompressionPolicyOverrideRegistry` and `apply_runtime_override` helper exist for forward compatibility, but no production code path registers entries today. A future supervised background task must wire the lifecycle before apply mode takes effect.
 
 **Dashboard fields to watch (`/api/stats/compression-tuning`):**
@@ -251,7 +251,7 @@ persist_recommendations = true
 | `recommendation_only` | Every recommendation is tagged with this regardless of mode. |
 | `applied_runtime_override` | Reserved for future apply-mode lifecycle. |
 
-**When to use:** after Phase 5 safe compression is stable and you want data-driven threshold suggestions. Always start with `mode = "recommend"`; never set `mode = "apply"` today.
+**When to use:** after safe compression is stable and you want data-driven threshold suggestions. Always start with `mode = "recommend"`; never set `mode = "apply"` today.
 
 ## Profile combinations
 
@@ -285,5 +285,5 @@ Rollback to Profile 1 (baseline disabled) at any time — see `docs/cache-compre
 
 - `docs/cache-compression.md` — main operator guide, dashboard interpretation, privacy section
 - `docs/cache-compression-troubleshooting.md` — symptom-to-cause guide
-- `architecture/README.md` § Safe-Mode Suffix Compression (Phase 5), Compression Policy Overrides (Phase 6), Synthetic Cache Controls (Phase 9), Closed-Loop Threshold Tuning (Phase 10)
-- `config.example.toml` § Phase 9 / Phase 10 commented blocks — equivalent verbose config
+- `architecture/README.md` § Safe-Mode Suffix Compression, Compression Policy Overrides, Synthetic Cache Controls, Closed-Loop Threshold Tuning
+- `config.example.toml` § Advanced request-shaping overrides and advisory tuning — equivalent verbose config

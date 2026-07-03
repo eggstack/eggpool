@@ -188,6 +188,28 @@ class TestRenderOverview:
         )
         assert '<script defer src="/static/chart.js"></script>' in html
 
+    def test_renders_request_shaping_card(self) -> None:
+        html = render_overview(
+            overview={
+                "summary": {"total_requests": 0},
+                "imbalance": {"imbalance_ratio": 0.0},
+            },
+            accounts=[],
+            request_shaping_summary={
+                "mode": {
+                    "compression": "observe",
+                    "synthetic_cache": "dry_run",
+                },
+                "compression": {"estimated_savings_tokens": 5000},
+                "cache": {"cache_counter_reported_rate": 0.72},
+            },
+        )
+        assert "Request shaping" in html
+        assert "Observe" in html
+        assert "Potential 5,000 tokens" in html
+        assert "Cache reported 72.0%" in html
+        assert "Synthetic Dry Run" in html
+
     def test_chart_preloads_inlined_timeseries_data(self) -> None:
         """The chart must be seeded from an inlined JSON data island so
         the deferred dashboard.js can initialise Chart.js without an

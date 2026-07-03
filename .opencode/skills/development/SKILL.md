@@ -96,11 +96,10 @@ Run with:
 uv run pytest tests/unit/test_routing_priority.py -v
 ```
 
-### Phase 7 — Cache/Compression Dashboard & Runtime Views Tests
+### Runtime visibility tests
 
-Phase 7 unifies the data from Phases 1–6 into dashboard cards and
-runtime API endpoints. Three focused unit test files cover the new
-surface:
+Cache/compression runtime visibility is covered by three focused unit
+test files:
 
 - `tests/unit/test_compression_stats_phase7.py` — query-layer tests
   for `fetch_compression_runtime`, `fetch_compression_policy_stats`,
@@ -112,7 +111,7 @@ surface:
 - `tests/unit/test_api_phase7.py` — endpoint-layer tests for the six
   `/api/stats/...` JSON endpoints and auth gating.
 
-All three together are the Phase 7 acceptance test set:
+All three together are the runtime request-shaping acceptance set:
 
 ```bash
 uv run pytest tests/unit/test_compression_stats_phase7.py tests/unit/test_dashboard_phase7.py tests/unit/test_api_phase7.py -v
@@ -120,25 +119,25 @@ uv run pytest tests/unit/test_compression_stats_phase7.py tests/unit/test_dashbo
 
 **Critical rules**:
 
-- Phase 7 test fixtures must enable `dashboard.enabled = True`
+- Runtime request-shaping test fixtures must enable `dashboard.enabled = True`
   (unlike runtime tests, which use the runtime-only route set and
   leave the dashboard disabled).
-- Phase 7 must NEVER consume cache or compression fields in the
+- Runtime request-shaping surfaces must NEVER consume cache or compression fields in the
   `QuotaFairScorer`. The pinned invariants are
   `tests/unit/test_routing.py::test_scorer_does_not_consume_cache_counter_status`
   (Phase 1), the same shape repeated for Phase 2/3/4/5/6/7. If you
   add a new Phase X field, add a corresponding scorer-isolation test
   in `test_routing.py` before wiring it into a dashboard card or
   stats roll-up.
-- Phase 7 dashboard cards must never include raw prompts, tool
+- Runtime dashboard cards must never include raw prompts, tool
   outputs, system messages, or request bodies. The render tests
   assert negative space (`assert "<raw prompt marker>" not in html`)
   not just positive presence.
 
-### Phase 8 — Routing Guardrails & Non-Interference Tests
+### Routing guardrails & non-interference tests
 
-Phase 8 codifies the invariant that cache/compression metrics NEVER
-enter account scoring, health removal, or route reselection. One
+Routing guardrails codify the invariant that cache/compression metrics
+NEVER enter account scoring, health removal, or route reselection. One
 focused test file is the regression surface:
 
 - `tests/unit/test_routing_guardrails.py` — 19 tests across 7 classes:
@@ -162,7 +161,7 @@ focused test file is the regression surface:
 
 **Critical rules**:
 
-- Phase 8 scoring-input boundary is exactly 4 parameters:
+- The scoring-input boundary is exactly 4 parameters:
   `account_names`, `model_name`, `active_requests`, `request_estimates`.
   Adding any cache/compression/policy/stable-prefix field to
   `QuotaFairScorer.score_accounts` or to `RoutingScore` is a Phase 8
@@ -187,11 +186,10 @@ Acceptance:
 uv run pytest tests/unit/test_routing_guardrails.py -v
 ```
 
-### Phase 11 -- Replay Fixtures & Regression Harness
+### Replay fixtures & regression harness
 
-Phase 11 ships a tiny test-only replay harness so operators can pin
-down the high-risk Phase 2/3/5/9 behaviour without ever shipping a real
-prompt to disk.
+The replay harness pins high-risk request-shaping behavior without ever
+shipping a real prompt to disk.
 
 - **Fixtures** -- `tests/fixtures/cache_compression/{openai,anthropic,transcode,routing,stats}/*.json`
   plus `tests/fixtures/cache_compression/README.md` (schema, sentinel
@@ -206,12 +204,12 @@ prompt to disk.
   `synthetic_cache_config`, `run_segmentation`/`run_compression`/
   `run_transcode`/`run_synthetic`, `path_keys`, `collect_segment_strings`.
 - **Regression suite** -- `tests/unit/test_replay_fixtures_regression.py`
-  pins 8 invariants: stable-prefix preservation, volatile-only
-  mutation, provider-bound synthetic cache, native cache_control
-  preservation, fail-closed fallback, request-shape hashing, harness
-  surface sanity, and routing non-interference.  Phase 12 polish pass
-  added `TestProviderBoundSyntheticReplay` (provider-bound contract) and
-  `TestReplaySmoke` (cheap default-suite smoke) classes.
+  pins stable-prefix preservation, volatile-only mutation,
+  provider-bound synthetic cache, native cache_control preservation,
+  fail-closed fallback, request-shape hashing, harness surface sanity,
+  and routing non-interference. `TestProviderBoundSyntheticReplay` and
+  `TestReplaySmoke` cover the provider-bound contract and default-suite
+  smoke path.
 - **Replay shape semantics** -- `run_full_replay()` records which shape
   was used via `ReplayBundle.synthetic_cache_shape`:
   - `disabled` -- no `synthetic_cache` config supplied
@@ -228,12 +226,13 @@ prompt to disk.
 
 **Critical rules**:
 
-- Phase 11 is reporting-only.  No Phase 11 column lands in the database
-  and no Phase 11 field enters `QuotaFairScorer.score_accounts`.
+- Replay fixtures are reporting-only. No replay-fixture field lands in
+  the database and no replay-fixture field enters
+  `QuotaFairScorer.score_accounts`.
 - All replay fixtures and helpers MUST stay content-private.  Never
   log raw request content on failure -- emit fixture name + status
   delta only.
-- When adding a new Phase 2/5/9 regression case, drop the fixture JSON
+- When adding a new request-shaping regression case, drop the fixture JSON
   under the right subdirectory and assert via the harness helpers;
   do not import production DB code.
 - The sanitization linter MUST pass before any fixture can land.

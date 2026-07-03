@@ -1,9 +1,8 @@
-"""Tests for the Phase 7 dashboard runtime cards.
+"""Tests for the runtime request-shaping dashboard surfaces.
 
-These tests verify that the new compression observability, compression
-runtime, compression policy rollup, and cache-stability cards render
-correctly on the runtime page.  The tests focus on operator-facing
-behaviour:
+These tests verify that the request-shaping summary plus the detailed
+compression/cache panels render correctly on the runtime page. The
+tests focus on operator-facing behaviour:
 
 - Empty data renders the panel header and metric strip without errors.
 - Non-empty data shows the headline metric counts.
@@ -73,7 +72,8 @@ class TestCompressionObservabilityCard:
                 "applied_p95_latency_ms": None,
             },
         )
-        assert "Compression observability" in html
+        assert "Request shaping" in html
+        assert "Compression opportunities" in html
         assert "Observed requests" in html
         assert "Applied (safe mode)" in html
         assert "Fail-closed fallbacks" in html
@@ -162,7 +162,7 @@ class TestCompressionRuntimeCard:
                 },
             },
         )
-        assert "Compression runtime" in html
+        assert "Safe compression" in html
         assert "Mode: observe" in html
         assert "Mode: safe" in html
         assert "Mode: disabled" in html
@@ -242,7 +242,7 @@ class TestCompressionPolicyCard:
                 "total_policies": 0,
             },
         )
-        assert "Compression policy rollup" in html
+        assert "Policy overrides" in html
         assert "Tracked policies" in html
         assert "Total requests" in html
 
@@ -317,12 +317,12 @@ class TestCacheStabilityCard:
             _base_snapshot(),
             cache_stability={
                 "transcoded_request_count": 0,
-                "notes": "Phase 3 cache stability is per-request and in-memory.",
+                "notes": "Boundary detail lives in per-request traces.",
             },
         )
-        assert "Cache stability" in html
+        assert "Native cache preservation" in html
         assert "Transcoded requests" in html
-        assert "TranscodeContext" in html
+        assert "per-request traces" in html
 
     def test_populated_data_renders_count(self) -> None:
         """Populated transcoded count surfaces."""
@@ -330,17 +330,17 @@ class TestCacheStabilityCard:
             _base_snapshot(),
             cache_stability={
                 "transcoded_request_count": 42,
-                "notes": "Phase 3 cache stability is per-request and in-memory.",
+                "notes": "Boundary detail lives in per-request traces.",
             },
         )
         assert "42" in html
 
 
-class TestRoutingSeparationNotice:
-    """Routing separation notice always renders."""
+class TestRequestShapingSummary:
+    """Request-shaping summary always renders."""
 
-    def test_notice_renders_when_compression_data_present(self) -> None:
-        """Notice renders when compression_observability is provided."""
+    def test_summary_renders_when_compression_data_present(self) -> None:
+        """Summary renders when compression data is provided."""
         html = render_runtime(
             _base_snapshot(),
             compression_observability={
@@ -351,19 +351,22 @@ class TestRoutingSeparationNotice:
                 "per_model_status": {},
             },
         )
-        assert "Routing separation" in html
+        assert "Request shaping" in html
+        assert "Compression" in html
+        assert "Cache controls" in html
+        assert "Safety" in html
         assert "QuotaFairScorer" in html
         assert "reporting-only" in html
 
-    def test_notice_does_not_render_when_compression_data_absent(self) -> None:
-        """Notice stays inside the runtime page even when cards are absent.
-
-        The notice is purely informational; it always renders on the
-        runtime page because operators may not have compression data
-        yet but should still see the routing separation guarantee.
-        """
+    def test_summary_renders_when_compression_data_absent(self) -> None:
+        """The runtime page always shows the summary even with no data."""
         html = render_runtime(_base_snapshot())
-        assert "Routing separation" in html
+        assert "Request shaping" in html
+
+    def test_runtime_avoids_phase_headings(self) -> None:
+        html = render_runtime(_base_snapshot())
+        for needle in ("Phase 1", "Phase 2", "Phase 4", "Phase 9", "Phase 10"):
+            assert needle not in html
 
 
 class TestRoutingGuardrailsPanel:
@@ -372,7 +375,7 @@ class TestRoutingGuardrailsPanel:
     def test_guardrails_panel_renders_with_default_data(self) -> None:
         """The hardcoded guardrails diagnostic shows up on the runtime page."""
         html = render_runtime(_base_snapshot())
-        assert "Routing guardrails (Phase 8)" in html
+        assert "Routing guardrails" in html
         assert "reporting_only" in html
         assert "Scorer inputs (allowed)" in html
         # Sanity: every "no" metric should appear in the rendered cards.
@@ -393,7 +396,7 @@ class TestRoutingGuardrailsPanel:
         snapshot = _base_snapshot()
         snapshot["routing_runtime"] = {}
         html = render_runtime(snapshot)
-        assert "Routing guardrails (Phase 8)" in html
+        assert "Routing guardrails" in html
         assert "reporting_only" in html
 
     def test_guardrails_panel_never_advertises_cache_in_scorer(self) -> None:
@@ -539,13 +542,11 @@ class TestSyntheticCacheCard:
         assert "synthetic_cache_control_dry_run" in html
         assert "&lt;global&gt;" in html
         assert "anthropic-cache" in html
-        # Phase 9 reminder text
-        assert "Phase 9" in html
         assert "reporting only" in html.lower() or "Reporting only" in html
         assert "QuotaFairScorer" in html
 
-    def test_phase9_reminder_text_present(self) -> None:
-        """The static Phase 9 reminder text appears in the card."""
+    def test_reporting_only_reminder_text_present(self) -> None:
+        """The reporting-only reminder appears in the card."""
         html = render_runtime(
             _base_snapshot(),
             synthetic_cache_summary={
@@ -560,8 +561,8 @@ class TestSyntheticCacheCard:
                 "by_policy": [],
             },
         )
-        assert "Phase 9: synthetic cache controls" in html
-        assert "not consumed by QuotaFairScorer" in html
+        assert "Reporting only" in html
+        assert "QuotaFairScorer" in html
 
     def test_global_sentinel_appears_before_overrides(self) -> None:
         """The <global> sentinel renders before override policies."""

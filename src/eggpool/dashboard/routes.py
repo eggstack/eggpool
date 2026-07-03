@@ -46,6 +46,8 @@ if TYPE_CHECKING:
 
     from fastapi.responses import Response  # noqa: TCH004
 
+    from eggpool.models.config import AppConfig
+
 _ReliabilityPayload = tuple[
     dict[str, Any],
     list[dict[str, Any]],
@@ -79,6 +81,239 @@ class ModelInfoDashboardState:
     degraded_reason: str | None = None
     error_class: str | None = None
     summary_count: int = 0
+
+
+def _configured_compression_mode(config: AppConfig) -> str:
+    compression = config.compression
+    if not compression.enabled:
+        return "off"
+    return str(compression.mode)
+
+
+def _configured_synthetic_cache_mode(config: AppConfig) -> str:
+    synthetic = config.cache.synthetic_cache_controls
+    if not synthetic.enabled:
+        return "off"
+    return "dry_run" if synthetic.dry_run else "apply"
+
+
+def _configured_tuning_mode(config: AppConfig) -> str:
+    tuning = config.compression.tuning
+    if not tuning.enabled or tuning.mode == "off":
+        return "off"
+    return str(tuning.mode)
+
+
+def _observed_mode_from_counts(
+    counts: dict[str, Any],
+    *,
+    active_keys: tuple[str, ...],
+) -> str:
+    active = [key for key in active_keys if int(counts.get(key, 0) or 0) > 0]
+    inactive = [
+        key
+        for key, value in counts.items()
+        if int(value or 0) > 0 and key not in active
+    ]
+    if len(active) > 1 or (active and inactive):
+        return "mixed"
+    if active:
+        return active[0]
+    if inactive:
+        return "off"
+    return "off"
+
+
+def _build_request_shaping_summary(
+    config: AppConfig,
+    *,
+    routing_runtime: dict[str, Any] | None = None,
+    cache_observability: dict[str, Any] | None = None,
+    canonical_request_segmentation: dict[str, Any] | None = None,
+    compression_observability: dict[str, Any] | None = None,
+    compression_runtime: dict[str, Any] | None = None,
+    compression_policy_stats: dict[str, Any] | None = None,
+    cache_stability: dict[str, Any] | None = None,
+    synthetic_cache_summary: dict[str, Any] | None = None,
+    compression_tuning: dict[str, Any] | None = None,
+    period: str = "24h",
+) -> dict[str, Any]:
+    cache_observability = cache_observability or {}
+    canonical_request_segmentation = canonical_request_segmentation or {}
+    compression_observability = compression_observability or {}
+    compression_runtime = compression_runtime or {}
+    compression_policy_stats = compression_policy_stats or {}
+    cache_stability = cache_stability or {}
+    synthetic_cache_summary = synthetic_cache_summary or {}
+    compression_tuning = compression_tuning or {}
+    routing_runtime = routing_runtime or {}
+
+    cache_status = cast("dict[str, Any]", cache_observability.get("by_status") or {})
+    reported = int(cache_status.get("reported", 0) or 0)
+    not_reported = int(cache_status.get("not_reported", 0) or 0)
+    unknown = int(cache_status.get("unknown_format", 0) or 0)
+    known_total = reported + not_reported + unknown
+    cache_reported_rate = (reported / known_total) if known_total > 0 else None
+
+    compression_modes = cast(
+        "dict[str, Any]",
+        compression_runtime.get("mode_counts") or {},
+    )
+    synthetic_status_counts = cast(
+        "dict[str, Any]",
+        synthetic_cache_summary.get("status_counts") or {},
+    )
+    guardrails = cast("dict[str, Any]", routing_runtime.get("guardrails") or {})
+    cache_safety = cast(
+        "dict[str, Any]",
+        compression_runtime.get("cache_safety") or {},
+    )
+    compression_totals = cast(
+        "dict[str, Any]",
+        compression_observability.get("totals") or {},
+    )
+    compression_latency = cast(
+        "dict[str, Any]",
+        compression_runtime.get("latency_ms") or {},
+    )
+    segmentation_by_status = cast(
+        "dict[str, Any]",
+        canonical_request_segmentation.get("by_status") or {},
+    )
+    tuning_recommendations = cast(
+        "list[dict[str, Any]]",
+        compression_tuning.get("recommendations") or [],
+    )
+    tuning_overrides = cast(
+        "list[dict[str, Any]]",
+        compression_tuning.get("overrides") or [],
+    )
+    policy_counts = cast(
+        "list[dict[str, Any]]",
+        compression_policy_stats.get("policy_counts") or [],
+    )
+    stable_prefix_preserved = int(cache_safety.get("stable_prefix_preserved", 0) or 0)
+    stable_prefix_mismatch = int(cache_safety.get("stable_prefix_mismatch", 0) or 0)
+    stable_prefix_total = stable_prefix_preserved + stable_prefix_mismatch
+    stable_prefix_rate = (
+        stable_prefix_preserved / stable_prefix_total
+        if stable_prefix_total > 0
+        else None
+    )
+
+    policy_warning_count = sum(
+        int(entry.get("warning_count", 0) or 0) for entry in policy_counts
+    )
+
+    return {
+        "period": period,
+        "mode": {
+            "compression": _configured_compression_mode(config),
+            "compression_observed": _observed_mode_from_counts(
+                compression_modes,
+                active_keys=("observe", "safe"),
+            ),
+            "synthetic_cache": _configured_synthetic_cache_mode(config),
+            "synthetic_cache_observed": _observed_mode_from_counts(
+                synthetic_status_counts,
+                active_keys=("dry_run", "applied"),
+            ),
+            "tuning": _configured_tuning_mode(config),
+            "routing": str(
+                guardrails.get("routing_cache_compression_mode", "reporting_only")
+            ),
+        },
+        "compression": {
+            "requests_analyzed": int(
+                compression_totals.get("observed_requests", 0) or 0
+            ),
+            "requests_compressed": int(
+                compression_runtime.get("applied_count", 0) or 0
+            ),
+            "estimated_savings_tokens": int(
+                compression_runtime.get("estimated_savings_tokens", 0) or 0
+            ),
+            "actual_savings_tokens": int(
+                compression_runtime.get("actual_savings_tokens", 0) or 0
+            ),
+            "failed_fallback_count": int(
+                compression_runtime.get("failed_fallback_count", 0) or 0
+            ),
+            "p95_latency_ms": compression_latency.get("p95"),
+            "warning_count": int(
+                sum(
+                    int(count or 0)
+                    for count in cast(
+                        "dict[str, Any]",
+                        compression_runtime.get("warnings") or {},
+                    ).values()
+                )
+            ),
+        },
+        "cache": {
+            "cache_counter_reported_rate": cache_reported_rate,
+            "cache_counter_reported_rows": reported,
+            "cache_counter_known_rows": known_total,
+            "cached_input_tokens": int(
+                cache_observability.get("total_cached_input_tokens", 0) or 0
+            ),
+            "cache_read_tokens": int(
+                cache_observability.get("total_cache_read_input_tokens", 0) or 0
+            ),
+            "cache_write_tokens": int(
+                cache_observability.get("total_cache_creation_input_tokens", 0) or 0
+            ),
+            "native_cache_observed_requests": int(
+                cache_stability.get("transcoded_request_count", 0) or 0
+            ),
+        },
+        "segmentation": {
+            "requests_segmented": int(segmentation_by_status.get("segmented", 0) or 0),
+            "protected_requests": int(
+                canonical_request_segmentation.get("protected_requests", 0) or 0
+            ),
+            "compressible_candidate_requests": int(
+                canonical_request_segmentation.get("compressible_candidate_requests", 0)
+                or 0
+            ),
+        },
+        "synthetic_cache": {
+            "dry_run_count": int(synthetic_cache_summary.get("dry_run_count", 0) or 0),
+            "applied_count": int(synthetic_cache_summary.get("applied_count", 0) or 0),
+            "candidate_count": int(
+                synthetic_cache_summary.get("candidate_count_total", 0) or 0
+            ),
+            "warning_count": int(
+                synthetic_cache_summary.get("warning_count_total", 0) or 0
+            ),
+        },
+        "tuning": {
+            "recommendation_count": len(tuning_recommendations),
+            "override_count": len(tuning_overrides),
+            "policy_window_count": len(
+                cast("dict[str, Any]", compression_tuning.get("windows") or {})
+            ),
+        },
+        "guardrails": {
+            "routing_uses_cache_metrics": bool(
+                guardrails.get("routing_uses_cache_metrics", False)
+            ),
+            "routing_uses_compression_metrics": bool(
+                guardrails.get("routing_uses_compression_metrics", False)
+            ),
+            "routing_uses_stable_prefix_hash": bool(
+                guardrails.get("routing_uses_stable_prefix_hash", False)
+            ),
+            "routing_uses_compression_policy": bool(
+                guardrails.get("routing_uses_compression_policy", False)
+            ),
+            "stable_prefix_preserved_rate": stable_prefix_rate,
+            "failed_fallback_count": int(
+                compression_runtime.get("failed_fallback_count", 0) or 0
+            ),
+            "policy_warning_count": policy_warning_count,
+        },
+    }
 
 
 async def _get_model_info_summary_state(
@@ -328,6 +563,9 @@ async def handle_overview(
         attempt_stats,
         operational_summary,
         pending_health,
+        cache_observability,
+        compression_runtime,
+        synthetic_cache_summary,
     ) = await asyncio.gather(
         stats.get_account_stats(
             time_range, include_disabled=show_disabled, use_cache=True
@@ -341,6 +579,9 @@ async def handle_overview(
         stats.get_attempt_stats(time_range),
         stats.get_operational_event_summary(time_range),
         stats.get_pending_health_snapshot(),
+        stats.get_cache_observability(time_range.label),
+        stats.get_compression_runtime(time_range.label),
+        stats.get_synthetic_cache_summary(time_range.label),
     )
 
     # ``get_dashboard_overview`` is derived from ``accounts`` and the
@@ -356,6 +597,13 @@ async def handle_overview(
     refresh_s = dashboard_config.refresh_interval_s
     theme_css, heatmap_colors, current_theme, available = _get_theme_data(
         request, theme
+    )
+    request_shaping_summary = _build_request_shaping_summary(
+        request.app.state.config,
+        cache_observability=cache_observability,
+        compression_runtime=compression_runtime,
+        synthetic_cache_summary=synthetic_cache_summary,
+        period=time_range.label,
     )
     enabled_count = sum(1 for a in accounts if a.get("account_enabled"))
     html = render_overview(
@@ -381,6 +629,7 @@ async def handle_overview(
         disabled_count=disabled_count,
         enabled_count=enabled_count,
         thinking_stats=thinking_stats,
+        request_shaping_summary=request_shaping_summary,
     )
     return HTMLResponse(content=html)
 
@@ -1454,22 +1703,42 @@ async def handle_runtime(
     from eggpool.stats import StatsService
 
     stats_service = StatsService(db)
-    transcoding_stats = await stats_service.get_transcoding_stats(period)
-    cache_observability = await stats_service.get_cache_observability(period)
-    canonical_request_segmentation = (
-        await stats_service.get_canonical_request_segmentation(period)
+    (
+        transcoding_stats,
+        cache_observability,
+        canonical_request_segmentation,
+        compression_observability,
+        compression_runtime,
+        compression_policy_stats,
+        cache_stability,
+        synthetic_cache_summary,
+        compression_tuning,
+        snapshot,
+    ) = await asyncio.gather(
+        stats_service.get_transcoding_stats(period),
+        stats_service.get_cache_observability(period),
+        stats_service.get_canonical_request_segmentation(period),
+        stats_service.get_compression_observability(period),
+        stats_service.get_compression_runtime(period),
+        stats_service.get_compression_policy_stats(period),
+        stats_service.get_cache_stability(period),
+        stats_service.get_synthetic_cache_summary(period),
+        stats_service.get_compression_tuning_window_metrics(period),
+        runtime_metrics.snapshot(),
     )
-    compression_observability = await stats_service.get_compression_observability(
-        period
+    request_shaping_summary = _build_request_shaping_summary(
+        request.app.state.config,
+        routing_runtime=cast("dict[str, Any]", snapshot.get("routing_runtime") or {}),
+        cache_observability=cache_observability,
+        canonical_request_segmentation=canonical_request_segmentation,
+        compression_observability=compression_observability,
+        compression_runtime=compression_runtime,
+        compression_policy_stats=compression_policy_stats,
+        cache_stability=cache_stability,
+        synthetic_cache_summary=synthetic_cache_summary,
+        compression_tuning=compression_tuning,
+        period=period or "24h",
     )
-    compression_runtime = await stats_service.get_compression_runtime(period)
-    compression_policy_stats = await stats_service.get_compression_policy_stats(period)
-    cache_stability = await stats_service.get_cache_stability(period)
-    synthetic_cache_summary = await stats_service.get_synthetic_cache_summary(period)
-    compression_tuning = await stats_service.get_compression_tuning_window_metrics(
-        period,
-    )
-    snapshot = await runtime_metrics.snapshot()
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
     return HTMLResponse(
         content=render_runtime(
@@ -1487,6 +1756,7 @@ async def handle_runtime(
             cache_stability=cache_stability,
             synthetic_cache_summary=synthetic_cache_summary,
             compression_tuning=compression_tuning,
+            request_shaping_summary=request_shaping_summary,
             period=period or "24h",
         )
     )
@@ -1599,6 +1869,55 @@ async def handle_compression_tuning_json(request: Request) -> Response:
             ),
             **data,
         }
+    )
+
+
+async def handle_request_shaping_json(request: Request) -> Response:
+    """Return the operator-facing request-shaping summary as JSON."""
+    _get_dashboard_config(request)
+    db = request.app.state.db
+    runtime_metrics = request.app.state.runtime_metrics
+    from eggpool.stats import StatsService
+
+    period = request.query_params.get("period", "24h")
+    stats_service = StatsService(db)
+    (
+        cache_observability,
+        canonical_request_segmentation,
+        compression_observability,
+        compression_runtime,
+        compression_policy_stats,
+        cache_stability,
+        synthetic_cache_summary,
+        compression_tuning,
+        snapshot,
+    ) = await asyncio.gather(
+        stats_service.get_cache_observability(period),
+        stats_service.get_canonical_request_segmentation(period),
+        stats_service.get_compression_observability(period),
+        stats_service.get_compression_runtime(period),
+        stats_service.get_compression_policy_stats(period),
+        stats_service.get_cache_stability(period),
+        stats_service.get_synthetic_cache_summary(period),
+        stats_service.get_compression_tuning_window_metrics(period),
+        runtime_metrics.snapshot(),
+    )
+    return JSONResponse(
+        content=_build_request_shaping_summary(
+            request.app.state.config,
+            routing_runtime=cast(
+                "dict[str, Any]", snapshot.get("routing_runtime") or {}
+            ),
+            cache_observability=cache_observability,
+            canonical_request_segmentation=canonical_request_segmentation,
+            compression_observability=compression_observability,
+            compression_runtime=compression_runtime,
+            compression_policy_stats=compression_policy_stats,
+            cache_stability=cache_stability,
+            synthetic_cache_summary=synthetic_cache_summary,
+            compression_tuning=compression_tuning,
+            period=period,
+        )
     )
 
 
@@ -1723,6 +2042,7 @@ def register_dashboard_routes(app: Any, require_auth: bool = False) -> None:
             handle_compression_tuning_json,
             JSONResponse,
         ),
+        ("/api/stats/request-shaping", handle_request_shaping_json, JSONResponse),
     ):
         app.add_api_route(
             path=path,
@@ -1750,6 +2070,7 @@ __all__ = [
     "handle_models",
     "handle_overview",
     "handle_pings",
+    "handle_request_shaping_json",
     "handle_reliability",
     "handle_routing",
     "handle_runtime",

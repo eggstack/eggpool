@@ -73,7 +73,7 @@ operator explicitly opts in via ``allow_static_prefix_override = true``.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -81,6 +81,14 @@ CompressionMode = Literal["observe", "safe"]
 CompressionPlacement = Literal["suffix_only", "after_cache_boundary", "anywhere"]
 CompressionProtocolMatch = Literal["openai", "anthropic"]
 CompressionTuningMode = Literal["off", "recommend", "apply"]
+
+_COMMON_TUNING_KEY_RENAMES: dict[str, str] = {
+    "window_seconds": "window_requests or update_interval_s, depending on intent",
+    "cooldown_seconds": "cooldown_s",
+    "apply_ttl_seconds": "not supported; apply mode does not use a TTL field",
+    "max_latency_warning_rate": "max_latency_budget_warning_rate",
+    "target_compression_latency_ms": "max_p95_latency_ms",
+}
 
 
 class CompressionTransforms(BaseModel):
@@ -295,6 +303,24 @@ class CompressionTuningConfig(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_common_legacy_keys(cls, value: Any) -> Any:
+        """Surface a precise error for the old documented tuning keys."""
+        if not isinstance(value, dict):
+            return value
+        raw_value = cast("dict[str, Any]", value)
+        bad_keys = sorted(key for key in raw_value if key in _COMMON_TUNING_KEY_RENAMES)
+        if not bad_keys:
+            return raw_value
+        replacements = "; ".join(
+            f"{key} -> {_COMMON_TUNING_KEY_RENAMES[key]}" for key in bad_keys
+        )
+        raise ValueError(
+            "compression.tuning contains legacy example keys; "
+            f"replace them with schema-valid names ({replacements})."
+        )
 
     enabled: bool = Field(
         default=False,

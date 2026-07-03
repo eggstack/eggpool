@@ -250,6 +250,25 @@ class TestCacheStabilityEndpoint:
         assert data["transcoded_request_count"] == 0
 
 
+class TestRequestShapingEndpoint:
+    """GET /api/stats/request-shaping returns the aggregated summary JSON."""
+
+    def test_returns_200_with_auth(self, app_with_key: FastAPI) -> None:
+        client = TestClient(app_with_key)
+        response = client.get(
+            "/api/stats/request-shaping",
+            headers={"Authorization": "Bearer test-key-12345678"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["period"] == "24h"
+        assert "mode" in data
+        assert "compression" in data
+        assert "cache" in data
+        assert "synthetic_cache" in data
+        assert "guardrails" in data
+
+
 # ---------------------------------------------------------------------------
 # Auth gating
 # ---------------------------------------------------------------------------
@@ -267,6 +286,7 @@ class TestAuthGating:
             "/api/stats/compression-runtime",
             "/api/stats/compression-policies",
             "/api/stats/cache-stability",
+            "/api/stats/request-shaping",
         ],
     )
     def test_endpoint_requires_auth(self, app_with_key: FastAPI, endpoint: str) -> None:
@@ -281,6 +301,7 @@ class TestAuthGating:
             "/api/stats/compression-runtime",
             "/api/stats/compression-policies",
             "/api/stats/cache-stability",
+            "/api/stats/request-shaping",
         ],
     )
     def test_endpoint_accepts_auth(self, app_with_key: FastAPI, endpoint: str) -> None:
@@ -302,6 +323,7 @@ class TestPublicDashboard:
             "/api/stats/compression-runtime",
             "/api/stats/compression-policies",
             "/api/stats/cache-stability",
+            "/api/stats/request-shaping",
         ],
     )
     def test_endpoint_accepts_no_auth_when_public(
@@ -329,6 +351,7 @@ class TestJsonSafety:
             "/api/stats/compression-runtime",
             "/api/stats/compression-policies",
             "/api/stats/cache-stability",
+            "/api/stats/request-shaping",
         ],
     )
     def test_no_raw_prompt_leakage(self, app_with_key: FastAPI, endpoint: str) -> None:

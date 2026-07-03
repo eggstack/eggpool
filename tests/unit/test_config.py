@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+import re
+from pathlib import Path
 
 import pytest
 
 from eggpool.errors import ConfigError
 from eggpool.models.config import AppConfig, DatabaseConfig
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 @pytest.fixture()
@@ -527,6 +525,28 @@ def test_config_example_validates() -> None:
     assert config.pricing.catalogs.opencode_zen.max_entries == 4096
     # All accounts are commented out — users add them via `connect`
     assert len(config.all_accounts()) == 0
+
+
+def test_packaged_config_example_validates() -> None:
+    config = AppConfig.from_toml("src/eggpool/_share/config.example.toml")
+    assert config.server.port == 11300
+    assert len(config.all_accounts()) == 0
+
+
+def test_config_examples_omit_known_bad_tuning_keys() -> None:
+    for path in ("config.example.toml", "src/eggpool/_share/config.example.toml"):
+        text = Path(path).read_text()
+        for bad_key in (
+            "window_seconds",
+            "cooldown_seconds",
+            "apply_ttl_seconds",
+            "max_latency_warning_rate",
+            "target_compression_latency_ms",
+        ):
+            assert not re.search(
+                rf"(?m)^\s*#?\s*{re.escape(bad_key)}\s*=",
+                text,
+            ), f"{bad_key} leaked into {path}"
 
 
 def test_provider_models_method_is_normalized() -> None:

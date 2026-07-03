@@ -78,7 +78,7 @@ CI sets `PYTHONHASHSEED=0` and `TZ=UTC`; reproduce locally for deterministic res
 - **Dashboard**: server-rendered HTML, Chart.js v4, grouped timeseries, CSS tooltips.
 - **Model capabilities**: protocol-neutral `ThinkingCapability` / `ModelCapabilities` with deterministic merge. Config overrides at `[model_capabilities."<id>".thinking]` and per-provider scoped.
 - **Catalog refresh**: non-destructive by default; destructive withdrawal gated on `authoritative=True AND allow_withdrawals=True`. `static_models` is the source of truth for provider-specific protocol.
-- **Cache/compression observability**: Phases 1–12 build a cache-preserving compression stack. `QuotaFairScorer` does NOT consume cache, compression, synthetic-cache, or tuning fields — routing stays load-based (request count + token count + active count + health). Phase 8 pins this invariant with hardcoded runtime diagnostics and test assertions in `tests/unit/test_routing_guardrails.py`. See `architecture/README.md` § Routing Guardrails for details.
+- **Request shaping**: cache reporting, request segmentation, native cache preservation, compression opportunities, and runtime summaries are reporting-first surfaces. `QuotaFairScorer` does NOT consume cache, compression, synthetic-cache, or tuning fields — routing stays load-based (request count + token count + active count + health). `tests/unit/test_routing_guardrails.py` pins the invariant.
 - **Rollup correctness invariants**: `usage_rollups.bucket_start` is `YYYY-MM-DD HH:MM:SS` UTC (matches `format_dt`) — legacy `T...Z` rows are normalized by migration `0047_normalize_rollup_bucket_start.sql`. Cache read share uses the bounded denominator `cache_read / (input + cache_read + cache_write)`, returns `None` when zero. Rollup-backed summaries are gated by `_rollup_is_fresh` so a stalled coalescer cannot under-report the in-flight hour. `fresh_tokens = input + output` and `accounted_tokens = input + output + cache_read + cache_write` are added to the summary payload. Runtime diagnostics expose `rollup_freshness.staleness_seconds` under `/api/stats/runtime`.
 - **Model info sources**: `src/eggpool/model_info/` enriches model metadata from multiple sources (OpenRouter, Artificial Analysis, HuggingFace, provider catalog) with dedup, identity resolution, and scheduler-driven refresh.
 - **Background tasks**: `src/eggpool/background/` manages retention cleanup, periodic tasks, and startup crash recovery via `TaskSupervisor`.
@@ -86,8 +86,8 @@ CI sets `PYTHONHASHSEED=0` and `TZ=UTC`; reproduce locally for deterministic res
 - **Retry classification**: `src/eggpool/retry/` classifies upstream errors for failover and retry decisions.
 - **Security**: `src/eggpool/security/` handles header redaction middleware and security utilities.
 - **Integrations**: `src/eggpool/integrations/` generates external tool configs (OpenCode, Claude Code, Aider, Codex, etc.).
-- **Transcoder compression**: `src/eggpool/transcoder/compression/` implements the cache-preserving compression stack (Phases 4–12) — analyzer, applier, policy resolver, tuning, markers.
-- **Replay fixtures**: `tests/fixtures/cache_compression/` holds sanitized JSON fixtures (content-private, never enter routing). `tests/helpers/cache_compression_replay.py` is the harness. `tests/unit/test_replay_fixtures_regression.py` and `tests/unit/test_replay_fixtures_sanitization.py` pin invariants.
+- **Safe compression and advanced overrides**: `src/eggpool/transcoder/compression/` implements observe/safe compression, policy resolution, advisory tuning, and the deterministic markers used for operator visibility.
+- **Replay fixtures**: `tests/fixtures/cache_compression/` holds sanitized JSON fixtures (content-private, never enter routing). `tests/helpers/cache_compression_replay.py` is the harness. Treat them as developer regression assets, not operator surfaces.
 
 ## Gotchas
 

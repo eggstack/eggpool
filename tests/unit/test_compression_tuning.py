@@ -1133,6 +1133,16 @@ class TestCompressionTuningConfigValidation:
         with pytest.raises(ValidationError):
             CompressionTuningConfig(nonexistent_field=42)  # type: ignore[arg-type]
 
+    def test_legacy_example_keys_raise_clear_error(self) -> None:
+        with pytest.raises(ValidationError, match="legacy example keys"):
+            CompressionTuningConfig.model_validate(
+                {
+                    "window_seconds": 3600,
+                    "cooldown_seconds": 1800,
+                    "max_latency_warning_rate": 0.1,
+                }
+            )
+
 
 # ---------------------------------------------------------------------------
 # 8. CompressionTuningBoundsConfig validation

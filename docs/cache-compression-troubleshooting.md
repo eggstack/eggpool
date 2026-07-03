@@ -23,18 +23,19 @@ Companion docs:
 
 ## Dashboard interpretation reference
 
-Before troubleshooting, confirm you are reading the right endpoint. Phase 7 exposes six JSON endpoints under `/api/stats/`:
+Before troubleshooting, confirm you are reading the right endpoint:
 
-| Endpoint | Phase | What it answers |
-|----------|-------|-----------------|
-| `/api/stats/cache-observability` | 1 | Are providers reporting cache counters? Coverage by `reported` / `not_reported` / `unknown_format`; known-only cache hit ratio; cached input tokens by provider/model. |
-| `/api/stats/canonical-request-segmentation` | 2 | Are requests segmenting correctly? Status counts; avg stable/semi/volatile token estimates; top request-shape hashes. |
-| `/api/stats/cache-stability` | 3 | Narrow summary only. Per-boundary preservation/drop detail lives on the in-memory `CacheBoundaryTracker` for live requests; this endpoint confirms the tracker is wired and reports durable counters where persisted. |
-| `/api/stats/compression-observability` | 4 + 6 | Observe-mode opportunity (candidates, estimated savings, suppress reasons). Plus Phase 6 `by_policy` / `by_policy_source` / `policy_warning_count_total` roll-ups. |
-| `/api/stats/compression-runtime` | 5 | What safe mode actually did: applied / failed_fallback counts, candidate counts, estimated + actual savings tokens, latency (avg/p50/p95/max), per-transform applied/tokens_saved, warnings rollup, cache_safety stable-prefix preserved/mismatch. |
-| `/api/stats/compression-policies` | 6 | Per-policy rollup table with `<global>` sentinel first: request count, mode distribution, applied, failed_fallback, candidates, warnings. |
-| `/api/stats/synthetic-cache-observability` | 9 | Synthetic cache plan / apply results: status counts (disabled / dry_run / applied / no_candidates / policy_required / provider_unsupported), warning counts, per-policy roll-up. |
-| `/api/stats/compression-tuning` | 10 | Recommendation status, deltas, reason codes. `overrides` is empty in `recommend` mode today. |
+| Endpoint | What it answers |
+|----------|-----------------|
+| `/api/stats/request-shaping` | Current operator summary: compression mode, cache-reporting coverage, synthetic cache state, advisory tuning, and routing guardrails. |
+| `/api/stats/cache-observability` | Are providers reporting cache counters? Coverage by `reported` / `not_reported` / `unknown_format`; known-only cache hit ratio; cached input tokens by provider/model. |
+| `/api/stats/canonical-request-segmentation` | Are requests segmenting correctly? Status counts; avg stable/semi/volatile token estimates; top request-shape hashes. |
+| `/api/stats/cache-stability` | Narrow summary only. Per-boundary preservation/drop detail lives on the in-memory `CacheBoundaryTracker` for live requests; this endpoint confirms the tracker is wired and reports durable counters where persisted. |
+| `/api/stats/compression-observability` | Observe-mode opportunities plus policy/source warning rollups. |
+| `/api/stats/compression-runtime` | What safe mode actually did: applied / failed_fallback counts, candidate counts, estimated + actual savings tokens, latency (avg/p50/p95/max), per-transform applied/tokens_saved, warnings rollup, cache_safety stable-prefix preserved/mismatch. |
+| `/api/stats/compression-policies` | Per-policy rollup table with `<global>` sentinel first: request count, mode distribution, applied, failed_fallback, candidates, warnings. |
+| `/api/stats/synthetic-cache-observability` | Synthetic cache plan / apply results: status counts (disabled / dry_run / applied / no_candidates / policy_required / provider_unsupported), warning counts, per-policy roll-up. |
+| `/api/stats/compression-tuning` | Recommendation status, deltas, reason codes. `overrides` is empty in `recommend` mode today. |
 
 ### Cache observability
 
@@ -60,9 +61,9 @@ Before troubleshooting, confirm you are reading the right endpoint. Phase 7 expo
 Two hashes coexist:
 
 - `stable_prefix_shape_hash` (a.k.a. the legacy `stable_prefix_hash`) — structural descriptor hash.
-- `stable_prefix_content_hash` — exact SHA-256 of canonical stable-prefix content, re-extracted from the payload via stable-prefix segment paths. The Phase 5 fail-closed verification recomputes this on the transformed payload.
+- `stable_prefix_content_hash` — exact SHA-256 of canonical stable-prefix content, re-extracted from the payload via stable-prefix segment paths. Safe compression recomputes this on the transformed payload before sending upstream.
 
-### Compression observability (Phase 4)
+### Compression opportunities
 
 | Field | Meaning |
 |-------|---------|
@@ -86,7 +87,7 @@ Top reason codes:
 | `transform_disabled` | The transform that would apply to this segment is disabled. |
 | `empty_segment` | Segment contained no text. |
 
-### Compression runtime (Phase 5)
+### Safe compression
 
 | Field | Meaning |
 |-------|---------|
@@ -275,7 +276,7 @@ One account or one provider is getting a disproportionate share of requests.
 - Synthetic-cache apply rate.
 - Tuning recommendation state.
 
-A future cache-aware routing mode would require an explicit `routing.cache_aware = true` config flag plus per-provider support detection, a cost model using cached-token prices, backtesting, per-client opt-in, and dashboard warnings. Phase 8 deliberately does NOT implement it.
+A future cache-aware routing mode would require an explicit `routing.cache_aware = true` config flag plus per-provider support detection, a cost model using cached-token prices, backtesting, per-client opt-in, and dashboard warnings. The current routing guardrails deliberately do NOT implement it.
 
 ### Symptom: tuning recommendations not appearing
 
@@ -341,6 +342,6 @@ curl -s "http://127.0.0.1:11300/api/stats/compression-tuning?api_key=$EGGPOOL_AP
 
 - `docs/cache-compression.md` § Dashboard cards / API endpoints overview
 - `docs/cache-compression-profiles.md` § Profile combinations and migration
-- `architecture/README.md` § Routing Guardrails and Non-Interference (Phase 8) — invariant documentation
+- `architecture/README.md` § Routing Guardrails and Non-Interference — invariant documentation
 - `tests/unit/test_routing_guardrails.py` — regression tests for the routing invariant
 - `tests/unit/test_replay_fixtures_regression.py` — fail-closed fallback regression

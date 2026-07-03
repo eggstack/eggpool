@@ -659,24 +659,23 @@ protocol = "anthropic"
 # `enabled = false` and `mode = "observe"` are the shipped defaults so
 # this whole stack is no-op until an operator opts in. The applier mutates
 # only eligible `volatile_suffix` segments and fails closed if the stable
-# prefix content hash changes (failed_fallback=True). Context-limit checks
-# happen before compression (compression cannot rescue over-limit requests).
-# `compress_static_prefix` is rejected in non-default policy overrides
-# unless `allow_static_prefix_override = true` is set globally. Migration
-# 0043 adds 13 columns + 2 indexes to `requests`; `EXPECTED_SCHEMA_VERSION`
-# in `scripts/check_database.py` is 43. The `QuotaFairScorer` does NOT
-# consume compression fields; routing stays load-based.
+# prefix content hash changes. Context-limit checks happen before
+# compression, and routing never consumes these metrics.
+#
+# ----------------------------------------------------------------------
+# Request shaping: cache-preserving compression
+# ----------------------------------------------------------------------
+# Disabled by default. "observe" records opportunities without changing
+# requests. "safe" compresses only volatile suffix content and fails
+# closed if a stable prefix would change.
 # [compression]
 # enabled = false
-# mode = "observe"                 # "observe" (default) or "safe"
-# placement = "suffix_only"        # "suffix_only" | "after_cache_boundary" | "anywhere"
-# respect_cache_boundaries = true
-# compress_static_prefix = false   # rejected in non-default policy overrides unless allow_static_prefix_override = true
-# allow_static_prefix_override = false
+# mode = "observe"                 # "observe" or "safe"
 # min_candidate_tokens = 2048
 # min_savings_tokens = 1024
 # max_compression_latency_ms = 25.0
 #
+# Optional: disable individual deterministic transforms if one is noisy.
 # [compression.transforms]
 # fold_repeated_lines = true
 # compact_logs = true
@@ -685,109 +684,67 @@ protocol = "anthropic"
 # minify_machine_json = true
 # compact_stack_traces = true
 #
-# Per-request policy overlays (Phase 6). Provider-specific matchers are
-# reserved for post-route resolution (silently skipped pre-route). Match is
-# union OR across fields; last-match-wins for scalars, field-by-field
-# merge for `transforms`. Fail-closed: malformed overrides skip with a
-# structured warning. The reserved name "default" produces a catch-all
-# override (no match fields = fires on every request).
+# ----------------------------------------------------------------------
+# Synthetic cache controls
+# ----------------------------------------------------------------------
+# Optional provider-bound cache annotations for supported upstreams.
+# Leave disabled unless you are validating Anthropic-style cache_control
+# behavior; dry-run records candidates without mutating requests.
+# [cache.synthetic_cache_controls]
+# enabled = false
+# dry_run = true
+# min_stable_tokens = 1024
+#
+# ----------------------------------------------------------------------
+# Advanced request-shaping overrides
+# ----------------------------------------------------------------------
+# Use policy overrides for scoped rollouts. Most operators should leave
+# placement, static-prefix, header, and provider-specific knobs at their
+# defaults and manage them from docs-driven playbooks instead.
 #
 # [[compression.policies]]
 # name = "opencode-safe-suffix"
 # match_clients = ["opencode"]
 # enabled = true
 # mode = "safe"
-# placement = "suffix_only"
 # min_candidate_tokens = 1024
 # min_savings_tokens = 512
 #
-# Per-policy synthetic cache overrides ride here too (Phase 9):
-#
-#   [[compression.policies]]
-#   name = "anthropic-cache-dry-run"
-#   match_provider_kinds = ["anthropic"]
-#   synthetic_cache_controls = true
-#   synthetic_cache_dry_run = true
-#   synthetic_cache_min_stable_tokens = 1024
-#   synthetic_cache_max_breakpoints = 4
+# [[compression.policies]]
+# name = "anthropic-cache-dry-run"
+# match_provider_kinds = ["anthropic"]
+# synthetic_cache_controls = true
+# synthetic_cache_dry_run = true
+# synthetic_cache_min_stable_tokens = 1024
+# synthetic_cache_max_breakpoints = 4
 #
 # ----------------------------------------------------------------------
-# Phase 9: synthetic provider cache controls (post-route, opt-in)
+# Advisory threshold tuning
 # ----------------------------------------------------------------------
-
-# [cache]
-# Synthetic provider cache controls (Phase 9).  Applied POST-ROUTE
-# to the provider-bound body (after account selection and transcoding).
-# Disabled by default; dry-run is the default when enabled so operators
-# can observe the plan without changing wire bodies.  Path normalization
-# is internal and not user-visible.  Only `ttl = "ephemeral"` is
-# currently supported; `5m` and `1h` are rejected at config load.
-# Structural-diff safety rejects any unexpected mutation and falls back
-# to the original payload.  Apply mode is gated by structural-diff
-# safety: cache_control may only be added at selected candidate
-# containers (see `_validate_synthetic_cache_diff`).  The structural-diff
-# rejects cache_control on non-candidate containers, non-cache_control
-# additions, removals, and changes.
-# [cache.synthetic_cache_controls]
-# enabled = false
-# dry_run = true
-# provider_kinds = ["anthropic"]
-# ttl = "ephemeral"
-# min_stable_tokens = 1024
-# max_breakpoints = 4
-# require_policy = true
-# placements = ["system", "tools"]
-#
-# Apply mode mutates provider-bound Anthropic requests by adding
-# cache_control to stable-prefix containers only.  Leave dry_run=true
-# until dashboard counters show the expected candidates.
-#
-# Per-policy overrides ride on the Phase 6 resolver. Example:
-#
-#   [[compression.policies]]
-#   name = "anthropic-cache"
-#   match_protocols = ["anthropic"]
-#   match_provider_kinds = ["anthropic"]
-#   synthetic_cache_controls = true
-#   synthetic_cache_dry_run = true
-#   synthetic_cache_min_stable_tokens = 0
-#   synthetic_cache_max_breakpoints = 4
-#
-# ----------------------------------------------------------------------
-# Phase 10: closed-loop threshold tuning (advisory by default)
-# ----------------------------------------------------------------------
-# The tuning engine observes Phase 4-6 compression metrics and emits
-# recommendations for `min_candidate_tokens`, `min_savings_tokens`, and
-# `max_compression_latency_ms`.  `mode = "recommend"` (the default)
-# writes advisory recommendations to the dashboard and the
-# `compression_tuning_recommendations` table only.  `mode = "apply"` is
-# accepted but currently behaves like `recommend` until a future
-# lifecycle task wires the registry path.
+# Recommendation-only by default. Keep this in docs-driven rollout space
+# until you need automated threshold suggestions.
 #
 # [compression.tuning]
+# enabled = false
 # mode = "recommend"
-# window_seconds = 3600
-# min_window_requests = 200
-# max_adjustment_pct = 25
-# cooldown_seconds = 1800
-# apply_ttl_seconds = 900
-#
-# Operator-defined targets (the algorithm nudges thresholds toward
-# these targets without ever exceeding the bounds below):
+# window_requests = 500
+# min_window_requests = 50
+# update_interval_s = 300
+# max_adjustment_pct = 25.0
+# cooldown_s = 900
+# persist_recommendations = true
 #
 # [compression.tuning.targets]
-# max_failed_fallback_rate = 0.05
-# max_latency_warning_rate = 0.10
-# min_positive_savings_rate = 0.60
-# target_compression_latency_ms = 4000.0
-#
-# Hard bounds (the algorithm clamps every suggested value to these
-# ranges; no override can escape them):
+# max_latency_budget_warning_rate = 0.01
+# max_failed_fallback_rate = 0.001
+# min_positive_savings_rate = 0.8
+# min_median_savings_tokens = 512
+# max_p95_latency_ms = 25.0
 #
 # [compression.tuning.bounds]
-# min_candidate_tokens_min = 64
-# min_candidate_tokens_max = 8192
-# min_savings_tokens_min = 32
-# min_savings_tokens_max = 4096
-# max_compression_latency_ms_min = 250.0
-# max_compression_latency_ms_max = 30000.0
+# min_candidate_tokens_min = 256
+# min_candidate_tokens_max = 16384
+# min_savings_tokens_min = 128
+# min_savings_tokens_max = 8192
+# max_compression_latency_ms_min = 5.0
+# max_compression_latency_ms_max = 100.0

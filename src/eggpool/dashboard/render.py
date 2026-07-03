@@ -1637,6 +1637,7 @@ def render_overview(
     disabled_count: int = 0,
     enabled_count: int = 0,
     thinking_stats: dict[str, Any] | None = None,
+    request_shaping_summary: dict[str, Any] | None = None,
 ) -> str:
     """Render the overview dashboard page.
 
@@ -1707,6 +1708,56 @@ def render_overview(
     most: dict[str, Any] = imbalance.get("most_used") or {}
     least: dict[str, Any] = imbalance.get("least_used") or {}
 
+    request_shaping_card = ""
+    if request_shaping_summary is not None:
+        shaping_mode_map = cast(
+            "dict[str, Any]",
+            request_shaping_summary.get("mode") or {},
+        )
+        shaping_mode = str(shaping_mode_map.get("compression", "off"))
+        shaping_compression = cast(
+            "dict[str, Any]",
+            request_shaping_summary.get("compression") or {},
+        )
+        shaping_cache = cast(
+            "dict[str, Any]",
+            request_shaping_summary.get("cache") or {},
+        )
+        shaping_synthetic = str(shaping_mode_map.get("synthetic_cache", "off"))
+
+        def _display_mode(value: str) -> str:
+            return value.replace("_", " ").title()
+
+        if shaping_mode == "safe":
+            shaping_sub = (
+                "Saved "
+                f"{format_int(shaping_compression.get('actual_savings_tokens', 0))} "
+                "tokens"
+            )
+        elif shaping_mode == "observe":
+            shaping_sub = (
+                "Potential "
+                f"{format_int(shaping_compression.get('estimated_savings_tokens', 0))} "
+                "tokens"
+            )
+        else:
+            shaping_sub = "Compression disabled"
+
+        cache_rate = shaping_cache.get("cache_counter_reported_rate")
+        cache_reported = (
+            _format_percent_unit(cache_rate, digits=1)
+            if cache_rate is not None
+            else "—"
+        )
+        request_shaping_card = _render_metric_card(
+            title="Request shaping",
+            metric=_display_mode(shaping_mode),
+            sub=(
+                f"{shaping_sub} · Cache reported {cache_reported} · "
+                f"Synthetic {_display_mode(shaping_synthetic)}"
+            ),
+        )
+
     body = f"""
 <h2>Overview</h2>
 {_render_period_selector(period, current_theme)}
@@ -1760,6 +1811,7 @@ def render_overview(
                     metric=total_tok,
                     sub=f"in {in_tok} · out {out_tok}",
                 ),
+                request_shaping_card,
                 _render_metric_card(
                     title="Cache tokens",
                     metric=cache_read,
@@ -3568,6 +3620,7 @@ def render_runtime(
     cache_stability: dict[str, Any] | None = None,
     synthetic_cache_summary: dict[str, Any] | None = None,
     compression_tuning: dict[str, Any] | None = None,
+    request_shaping_summary: dict[str, Any] | None = None,
     period: str = "24h",
 ) -> str:
     """Render the runtime metrics page."""
@@ -3694,6 +3747,10 @@ def render_runtime(
     active_requests = routing.get("active_requests_total")
     active_backoff_count = routing.get("active_backoff_count")
     health_states: dict[str, str] = routing.get("health_states_by_account") or {}
+    guardrails = _as_dict(routing.get("guardrails"))
+    guardrails_mode = escape(
+        str(guardrails.get("routing_cache_compression_mode", "reporting_only"))
+    )
 
     # Process count warning card
     process_count_display = (
@@ -4136,6 +4193,248 @@ def render_runtime(
 
     # Cache observability card (Phase 1)
     cache_card = ""
+    if request_shaping_summary is None:
+        fallback_compression_runtime = compression_runtime or {}
+        fallback_compression_observability = compression_observability or {}
+        fallback_compression_totals = cast(
+            "dict[str, Any]",
+            fallback_compression_observability.get("totals") or {},
+        )
+        fallback_synthetic_cache_summary = synthetic_cache_summary or {}
+        request_shaping_summary = {
+            "mode": {
+                "compression": (
+                    "safe"
+                    if int(fallback_compression_runtime.get("applied_count", 0) or 0)
+                    > 0
+                    else (
+                        "observe"
+                        if int(
+                            fallback_compression_totals.get("observed_requests", 0) or 0
+                        )
+                        > 0
+                        else "off"
+                    )
+                ),
+                "synthetic_cache": (
+                    "apply"
+                    if int(
+                        fallback_synthetic_cache_summary.get("applied_count", 0) or 0
+                    )
+                    > 0
+                    else (
+                        "dry_run"
+                        if int(
+                            fallback_synthetic_cache_summary.get("dry_run_count", 0)
+                            or 0
+                        )
+                        > 0
+                        else "off"
+                    )
+                ),
+                "tuning": "off",
+                "routing": guardrails_mode,
+            },
+            "compression": {
+                "requests_analyzed": int(
+                    fallback_compression_totals.get("observed_requests", 0) or 0
+                ),
+                "requests_compressed": int(
+                    fallback_compression_runtime.get("applied_count", 0) or 0
+                ),
+                "estimated_savings_tokens": int(
+                    fallback_compression_runtime.get("estimated_savings_tokens", 0) or 0
+                ),
+                "actual_savings_tokens": int(
+                    fallback_compression_runtime.get("actual_savings_tokens", 0) or 0
+                ),
+                "failed_fallback_count": int(
+                    fallback_compression_runtime.get("failed_fallback_count", 0) or 0
+                ),
+            },
+            "cache": {
+                "cache_counter_reported_rate": None,
+                "native_cache_observed_requests": int(
+                    (cache_stability or {}).get("transcoded_request_count", 0) or 0
+                ),
+            },
+            "synthetic_cache": {
+                "dry_run_count": int(
+                    (synthetic_cache_summary or {}).get("dry_run_count", 0) or 0
+                ),
+                "applied_count": int(
+                    (synthetic_cache_summary or {}).get("applied_count", 0) or 0
+                ),
+                "candidate_count": int(
+                    (synthetic_cache_summary or {}).get("candidate_count_total", 0) or 0
+                ),
+                "warning_count": int(
+                    (synthetic_cache_summary or {}).get("warning_count_total", 0) or 0
+                ),
+            },
+            "tuning": {"recommendation_count": 0, "override_count": 0},
+            "guardrails": {
+                "routing_uses_cache_metrics": guardrails.get(
+                    "routing_uses_cache_metrics", False
+                ),
+                "routing_uses_compression_metrics": guardrails.get(
+                    "routing_uses_compression_metrics", False
+                ),
+                "routing_uses_stable_prefix_hash": guardrails.get(
+                    "routing_uses_stable_prefix_hash", False
+                ),
+                "routing_uses_compression_policy": guardrails.get(
+                    "routing_uses_compression_policy", False
+                ),
+                "stable_prefix_preserved_rate": None,
+                "failed_fallback_count": int(
+                    (compression_runtime or {}).get("failed_fallback_count", 0) or 0
+                ),
+                "policy_warning_count": 0,
+            },
+        }
+
+    def _display_request_shaping_mode(value: str) -> str:
+        return value.replace("_", " ").title()
+
+    shaping_mode = cast("dict[str, Any]", request_shaping_summary.get("mode") or {})
+    shaping_compression = cast(
+        "dict[str, Any]",
+        request_shaping_summary.get("compression") or {},
+    )
+    shaping_cache = cast("dict[str, Any]", request_shaping_summary.get("cache") or {})
+    shaping_synthetic = cast(
+        "dict[str, Any]",
+        request_shaping_summary.get("synthetic_cache") or {},
+    )
+    shaping_tuning = cast(
+        "dict[str, Any]",
+        request_shaping_summary.get("tuning") or {},
+    )
+    shaping_guardrails = cast(
+        "dict[str, Any]",
+        request_shaping_summary.get("guardrails") or {},
+    )
+    shaping_segmentation = cast(
+        "dict[str, Any]",
+        request_shaping_summary.get("segmentation") or {},
+    )
+
+    compression_mode_label = _display_request_shaping_mode(
+        str(shaping_mode.get("compression", "off"))
+    )
+    synthetic_mode_label = _display_request_shaping_mode(
+        str(shaping_mode.get("synthetic_cache", "off"))
+    )
+    tuning_mode_label = _display_request_shaping_mode(
+        str(shaping_mode.get("tuning", "off"))
+    )
+    routing_mode_label = escape(str(shaping_mode.get("routing", "reporting_only")))
+    cache_reported_rate = shaping_cache.get("cache_counter_reported_rate")
+    cache_reported_label = (
+        _format_percent_unit(cache_reported_rate, digits=1)
+        if cache_reported_rate is not None
+        else "—"
+    )
+    stable_prefix_rate = shaping_guardrails.get("stable_prefix_preserved_rate")
+    stable_prefix_label = (
+        _format_percent_unit(stable_prefix_rate, digits=1)
+        if stable_prefix_rate is not None
+        else "—"
+    )
+    synthetic_candidate_count = format_int(shaping_synthetic.get("candidate_count", 0))
+    failed_fallback_count = format_int(
+        shaping_guardrails.get("failed_fallback_count", 0)
+    )
+    policy_warning_count = format_int(shaping_guardrails.get("policy_warning_count", 0))
+    recommendation_count = format_int(shaping_tuning.get("recommendation_count", 0))
+    tuning_override_count = format_int(shaping_tuning.get("override_count", 0))
+    requests_segmented_count = format_int(
+        shaping_segmentation.get("requests_segmented", 0)
+    )
+
+    if str(shaping_mode.get("compression", "off")) == "safe":
+        compression_sub = (
+            f"{format_int(shaping_compression.get('requests_compressed', 0))} "
+            "requests compressed · saved "
+            f"{format_int(shaping_compression.get('actual_savings_tokens', 0))} "
+            "tokens"
+        )
+    elif str(shaping_mode.get("compression", "off")) == "observe":
+        compression_sub = (
+            f"{format_int(shaping_compression.get('requests_analyzed', 0))} "
+            "requests analyzed · potential "
+            f"{format_int(shaping_compression.get('estimated_savings_tokens', 0))} "
+            "tokens"
+        )
+    else:
+        compression_sub = "disabled by config"
+
+    request_shaping_panel = f"""
+<section class="panel">
+  <h3>Request shaping ({escape(period)})</h3>
+  <p class="sub">
+    Operator summary for cache reporting, safe compression, synthetic cache
+    controls, advisory tuning, and routing guardrails. Routing stays
+    load-based and reporting-only metrics never enter the scorer.
+  </p>
+  <section class="cards">
+    {
+        "".join(
+            [
+                _render_metric_card(
+                    title="Compression",
+                    metric=compression_mode_label,
+                    sub=compression_sub,
+                    warning=int(
+                        shaping_compression.get("failed_fallback_count", 0) or 0
+                    )
+                    > 0,
+                ),
+                _render_metric_card(
+                    title="Cache controls",
+                    metric=cache_reported_label,
+                    sub=(
+                        "reported rows · "
+                        f"Synthetic {synthetic_mode_label} · "
+                        f"{synthetic_candidate_count} candidates"
+                    ),
+                ),
+                _render_metric_card(
+                    title="Safety",
+                    metric=stable_prefix_label,
+                    sub=(
+                        "stable prefix preserved · "
+                        f"{failed_fallback_count} fallbacks · "
+                        f"{policy_warning_count} policy warnings"
+                    ),
+                    warning=int(shaping_guardrails.get("failed_fallback_count", 0) or 0)
+                    > 0,
+                ),
+                _render_metric_card(
+                    title="Advisory tuning",
+                    metric=tuning_mode_label,
+                    sub=(
+                        f"{recommendation_count} recommendations · "
+                        f"{tuning_override_count} overrides"
+                    ),
+                ),
+                _render_metric_card(
+                    title="Routing",
+                    metric=routing_mode_label,
+                    sub=(
+                        f"segmented {requests_segmented_count} · "
+                        "cache/compression stay out of scorer"
+                    ),
+                ),
+            ]
+        )
+    }
+  </section>
+</section>
+"""
+
+    cache_card = ""
     if cache_observability is not None:
         co_by_status: Any = cache_observability.get("by_status", {}) or {}
         co_reported = int(co_by_status.get("reported", 0))
@@ -4266,7 +4565,7 @@ def render_runtime(
 
         cache_card = f"""
 <section class="panel">
-  <h3>Cache observability ({escape(period)})</h3>
+  <h3>Cache reporting ({escape(period)})</h3>
   <p class="sub">
     Provider-reported cache counters; the hit ratio only divides rows
     whose upstream payload actually surfaced cache fields.
@@ -4397,13 +4696,10 @@ def render_runtime(
 
         segmentation_card = f"""
 <section class="panel">
-  <h3>Canonical request segmentation ({escape(period)})</h3>
+  <h3>Request segmentation ({escape(period)})</h3>
   <p class="sub">
-    Phase 2 structural segmentation: each request body is annotated
-    into stable_prefix / semi_stable_context / volatile_suffix
-    regions without mutating the payload.  This view is reporting
-    only; later phases will read these aggregates to enable
-    cache-preserving compression.
+    Structural segmentation shows how much traffic lands in protected
+    prefixes versus volatile suffixes without mutating requests.
   </p>
   <section class="cards">
     {
@@ -4578,11 +4874,10 @@ def render_runtime(
 
         compression_card = f"""
 <section class="panel">
-  <h3>Compression observability ({escape(period)})</h3>
+  <h3>Compression opportunities ({escape(period)})</h3>
   <p class="sub">
-    Phase 4 observe-mode accounting + Phase 5 safe-mode outcomes +
-    Phase 6 resolved-policy rollup.  All metrics are reporting-only
-    and are NOT consumed by the same-provider QuotaFairScorer.
+    Opportunity analysis and safe-mode outcomes. These metrics stay
+    reporting-only and do not enter routing.
   </p>
   <section class="cards">
     {
@@ -4771,13 +5066,11 @@ def render_runtime(
 
         compression_runtime_card = f"""
 <section class="panel">
-  <h3>Compression runtime ({escape(period)})</h3>
+  <h3>Safe compression ({escape(period)})</h3>
   <p class="sub">
-    Phase 7 runtime aggregates: mode counts, applied/fallback totals,
-    latency distribution, per-transform outcomes, warnings rollup,
-    and stable-prefix cache-safety counters.  Latency stays inside
-    the SBC-safe budget configured at ``[compression]
-    max_compression_latency_ms``.
+    Runtime outcomes for observe and safe modes: mode counts,
+    applied/fallback totals, latency distribution, per-transform
+    outcomes, warnings rollup, and stable-prefix safety counters.
   </p>
   <section class="cards">
     {
@@ -4907,11 +5200,11 @@ def render_runtime(
 
         compression_policy_card = f"""
 <section class="panel">
-  <h3>Compression policy rollup ({escape(period)})</h3>
+  <h3>Policy overrides ({escape(period)})</h3>
   <p class="sub">
-    Phase 6 resolved-policy audit: one row per resolved policy.  The
+    One row per resolved policy. The
     ``&lt;global&gt;`` sentinel is the no-override path; operator-chosen
-    names come from ``[[compression.policies]]``.  Metrics are
+    names come from ``[[compression.policies]]``. Metrics are
     reporting-only and are NOT consumed by the QuotaFairScorer.
   </p>
   <section class="cards">
@@ -4961,18 +5254,22 @@ def render_runtime(
         cs_notes = str(
             cache_stability.get(
                 "notes",
-                "Phase 3 cache stability is per-request and in-memory.",
+                "Boundary detail lives in per-request traces.",
             )
         )
+        if "Phase 3" in cs_notes:
+            cs_notes = (
+                "Boundary detail lives in per-request traces; durable summaries "
+                "count transcoded requests only."
+            )
         cache_stability_card = f"""
 <section class="panel">
-  <h3>Cache stability ({escape(period)})</h3>
+  <h3>Native cache preservation ({escape(period)})</h3>
   <p class="sub">
-    Phase 3 transcoder cache-stability is per-request and lives on
-    <code>TranscodeContext.cache_boundary_tracker</code>.  The
-    durable summary below confirms the tracker is wired and counts
-    transcoded requests in window; per-boundary detail is in the
-    request trace.
+    Native cache annotations are tracked per request during transcoding.
+    The durable summary below confirms the tracker is wired and counts
+    transcoded requests in window; per-boundary detail is in the request
+    trace.
   </p>
   <section class="cards">
     {
@@ -5120,9 +5417,8 @@ def render_runtime(
 <section class="panel">
   <h3>Synthetic cache controls ({escape(period)})</h3>
   <p class="sub">
-    Phase 9 synthetic cache controls: opt-in Anthropic-style
-    cache_control annotations on protected stable_prefix segments.
-    Selector is disabled by default and dry-run by default.
+    Opt-in provider-bound cache annotations on protected stable-prefix
+    segments. Disabled by default; dry-run is the safe rollout path.
   </p>
   <section class="cards">
     {
@@ -5166,8 +5462,8 @@ def render_runtime(
   {sc_warnings_section}
   {sc_policy_section}
   <p class="sub">
-    Phase 9: synthetic cache controls.  Reporting only &mdash;
-    not consumed by QuotaFairScorer.
+    Reporting only &mdash; synthetic cache signals do not enter
+    QuotaFairScorer.
   </p>
 </section>
 """
@@ -5303,10 +5599,9 @@ def render_runtime(
 
         compression_tuning_card = f"""
 <section class="panel">
-  <h3>Compression tuning ({escape(period)})</h3>
+  <h3>Advisory tuning ({escape(period)})</h3>
   <p class="sub">
-    Phase 10 closed-loop threshold tuning.  Disabled by default.
-    When <code>mode = "recommend"</code>, the engine surfaces
+    Disabled by default. When <code>mode = "recommend"</code>, the engine surfaces
     advisory suggestions without changing request behaviour;
     <code>mode = "apply"</code> overlays bounded runtime overrides
     on the resolved policy.  Tuning never inspects raw prompt
@@ -5364,8 +5659,8 @@ def render_runtime(
     <tbody>{ct_ov_rows_html}</tbody>
   </table>
   <p class="sub">
-    Phase 10: tuning is reporting-only and never consumed by
-    QuotaFairScorer.  Tunable fields are limited to
+    Reporting only and never consumed by QuotaFairScorer. Tunable fields
+    are limited to
     <code>min_candidate_tokens</code>, <code>min_savings_tokens</code>,
     and <code>max_compression_latency_ms</code>.
   </p>
@@ -5409,14 +5704,13 @@ def render_runtime(
 
     routing_guardrails_panel = f"""
 <section class="panel">
-  <h3>Routing guardrails (Phase 8)</h3>
+  <h3>Routing guardrails</h3>
   <p class="sub">
-    Cache and compression metrics are reporting-only.  The
+    Cache and compression metrics are reporting-only. The
     <code>QuotaFairScorer</code> does NOT consume cache, compression,
-    stable-prefix-hash, or compression-policy fields.  Same-provider
-    account scoring stays load-based.  These flags are hardcoded —
-    they reflect how the router is built, not the current request
-    stream.
+    stable-prefix-hash, or compression-policy fields. Same-provider
+    account scoring stays load-based. These flags are hardcoded; they
+    reflect how the router is built, not the current request stream.
   </p>
   <section class="cards">
     {
@@ -5455,24 +5749,6 @@ def render_runtime(
 </section>
 """
 
-    # Static Phase 7 routing-separation notice.  Cache and compression
-    # metrics are reporting-only; the QuotaFairScorer does not
-    # consume them.
-    routing_separation_notice = """
-<section class="panel">
-  <h3>Routing separation</h3>
-  <p class="sub">
-    Cache and compression metrics are reporting-only.  The
-    <code>QuotaFairScorer</code> does NOT consume
-    <code>cache_counter_status</code>, segmentation columns,
-    <code>compression_*</code> columns, or
-    <code>compression_policy_*</code> columns.  Same-provider account
-    scoring stays load-based (request count + token count + active
-    count + health).
-  </p>
-</section>
-"""
-
     body = f"""
 <h2>Runtime</h2>
 <p class="sub">Process-level diagnostics for the running EggPool instance.</p>
@@ -5496,6 +5772,8 @@ def render_runtime(
 
 {tc_card}
 
+{request_shaping_panel}
+
 {cache_card}
 
 {segmentation_card}
@@ -5512,8 +5790,6 @@ def render_runtime(
 {compression_tuning_card}
 
 {routing_guardrails_panel}
-
-{routing_separation_notice}
 
 <section class="panel">
   <h3>Health states</h3>
