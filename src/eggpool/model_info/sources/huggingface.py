@@ -103,11 +103,12 @@ class HuggingFaceSource:
             if response.status_code == 404:
                 return None
             response.raise_for_status()
-            payload = response.json()
+            payload_obj: object = response.json()
         except (httpx.HTTPError, ValueError) as exc:
             raise ModelInfoSourceFetchError(
                 f"Hugging Face model-info fetch failed for {model_id}: {exc}"
             ) from exc
+        payload = _parse_model_payload(model_id, payload_obj)
 
         # Store in cache
         async with self._cache.lock:
@@ -213,6 +214,21 @@ def _parse_hf_entry(
 # ---------------------------------------------------------------------------
 # Field extraction helpers
 # ---------------------------------------------------------------------------
+
+
+def _parse_model_payload(model_id: str, payload: object) -> dict[str, object]:
+    """Validate a Hugging Face model response payload.
+
+    The Hub returns one JSON object for ``/api/models/{model_id}``. Valid
+    non-object JSON is still a source failure because later parsing and
+    cache storage require a mapping.
+    """
+    if not isinstance(payload, dict):
+        raise ModelInfoSourceFetchError(
+            "Hugging Face model-info fetch failed for "
+            f"{model_id}: invalid model response shape"
+        )
+    return cast("dict[str, object]", payload)
 
 
 def _opt_str(raw: dict[str, object], key: str) -> str | None:

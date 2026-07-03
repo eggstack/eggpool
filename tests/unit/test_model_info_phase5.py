@@ -94,7 +94,7 @@ def _make_cache_with_models(
 class _MockHttpClient:
     """Mock HTTP client that returns pre-configured responses."""
 
-    def __init__(self, response: dict | Exception | None = None) -> None:
+    def __init__(self, response: object | Exception | None = None) -> None:
         self._response = response
         self.call_count = 0
         self.last_url: str | None = None
@@ -118,7 +118,7 @@ class _MockHttpClient:
 class _SequenceHttpClient:
     """Mock HTTP client that returns one response per request."""
 
-    def __init__(self, responses: list[dict]) -> None:
+    def __init__(self, responses: list[object]) -> None:
         self._responses = responses
         self.call_count = 0
 
@@ -604,6 +604,39 @@ class TestHuggingFaceSource:
             "org/model-b",
         }
         assert client.call_count == 2
+
+    @pytest.mark.asyncio()
+    async def test_invalid_json_shape_raises_fetch_error(self) -> None:
+        """Valid JSON with the wrong shape is recorded as a source failure."""
+        client = _MockHttpClient(["not", "a", "model"])
+        config = ModelInfoSourceConfig(api_key="hf-key")
+        source = HuggingFaceSource(config=config, client=client)
+
+        with pytest.raises(ModelInfoSourceFetchError, match="invalid model response"):
+            await source.fetch_one("org/model")
+
+        assert await source.fetch_all() == []
+
+    @pytest.mark.asyncio()
+    async def test_invalid_json_shape_does_not_poison_cache(self) -> None:
+        """Malformed later responses do not replace previously cached models."""
+        client = _SequenceHttpClient(
+            [
+                _make_hf_model("org/model-a", name="Model A"),
+                ["not", "a", "model"],
+            ]
+        )
+        config = ModelInfoSourceConfig(api_key="hf-key")
+        source = HuggingFaceSource(config=config, client=client)
+
+        first = await source.fetch_one("org/model-a")
+        assert first is not None
+
+        with pytest.raises(ModelInfoSourceFetchError, match="invalid model response"):
+            await source.fetch_one("org/model-b")
+
+        records = await source.fetch_all()
+        assert [record.source_model_id for record in records] == ["org/model-a"]
 
     def test_name_is_huggingface(self) -> None:
         """Source name is 'huggingface'."""

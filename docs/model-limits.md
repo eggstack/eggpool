@@ -86,4 +86,24 @@ Configuration changes to model limits require a service restart. Live reload is 
 
 ## Dashboard Visibility
 
-Dashboard visibility of discovered and effective context limits is planned as a follow-up. Currently the dashboard model table does not display limit-related columns.
+The public `/v1/models` response includes configured effective limits under the
+namespaced `eggpool.limits` object when the catalog knows them:
+
+```json
+{
+  "id": "MiniMax-M3/opencode-go",
+  "object": "model",
+  "eggpool": {
+    "limits": {
+      "context": 220000,
+      "output": 16384
+    }
+  }
+}
+```
+
+The dashboard Models table links each model ID to its model-info detail page.
+That detail page renders the effective and externally observed context/output
+limits when model-info enrichment has populated them. The table itself remains
+focused on routing availability, usage, cost, and pricing exactness so the
+default Models view stays scannable.
