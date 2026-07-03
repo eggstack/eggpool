@@ -57,9 +57,10 @@ def default_pid_file() -> Path:
 def default_log_file() -> Path:
     """Return ``$EGGPOOL_LOG_FILE`` if set, else ``<state_dir>/eggpool.log``.
 
-    Ensures the parent directory exists when it can. ``/tmp`` fallback
-    is not used here; missing state dir is logged and the path returned
-    anyway so the daemon can decide what to do.
+    Ensures the parent directory exists when it can. Falls back to a
+    UID-scoped ``/tmp`` path when the state dir cannot be created or is
+    not writable so watchdog-style callers can still spawn the daemon
+    from restricted environments.
     """
     explicit = os.environ.get("EGGPOOL_LOG_FILE")
     if explicit:
@@ -72,7 +73,9 @@ def default_log_file() -> Path:
     path = state / "eggpool.log"
     with contextlib.suppress(OSError):
         state.mkdir(parents=True, exist_ok=True)
-    return path
+    if state.exists() and os.access(state, os.W_OK):
+        return path
+    return Path("/tmp") / f"eggpool-{os.getuid()}.log"
 
 
 def read_pid_file(path: Path | None = None) -> int | None:

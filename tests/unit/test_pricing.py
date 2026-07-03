@@ -260,6 +260,31 @@ class TestCostCalculator:
         assert exactness == "estimated"
 
     @pytest.mark.asyncio
+    async def test_calculate_cost_replaces_implausible_request_total_with_estimate(
+        self,
+    ) -> None:
+        snapshot = PriceSnapshot(
+            model_id="inflated-request",
+            input_price_per_1k=None,
+            output_price_per_1k=None,
+            captured_at="2026-07-03T00:00:00",
+            input_per_million_microdollars=0,
+            output_per_million_microdollars=2_500_000_000,
+        )
+        mock_repo = AsyncMock()
+        mock_repo.get_latest_snapshot = AsyncMock(return_value=snapshot)
+        calculator = CostCalculator(price_repo=mock_repo)
+
+        cost, exactness = await calculator.calculate_cost(
+            "inflated-request",
+            input_tokens=1_000,
+            output_tokens=2_000,
+        )
+
+        assert cost == 33_000
+        assert exactness == "estimated"
+
+    @pytest.mark.asyncio
     async def test_calculate_cost_with_cache_tokens(self) -> None:
         snapshot = PriceSnapshot(
             model_id="gpt-4",

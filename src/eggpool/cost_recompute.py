@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from eggpool.catalog.pricing import CostCalculator, PriceRepository
+from eggpool.cost_repair import canonicalize_repaired_cost
 
 if TYPE_CHECKING:
     from eggpool.db.connection import Database
@@ -56,10 +57,11 @@ async def recompute_request_costs(
     if limit is not None:
         params.append(int(limit))
     rows = await db.fetch_all(
-        f"SELECT id, model_id, original_model_id, provider_id, "
+        f"SELECT id, model_id, provider_id, exactness, "
         f"input_tokens, output_tokens, cache_read_tokens, "
         f"cache_write_tokens, reasoning_tokens, "
-        f"cost_microdollars "
+        f"cost_microdollars, provider_cost_microdollars, "
+        f"reserved_microdollars "
         f"FROM requests "
         f"WHERE status != 'pending' "
         f"ORDER BY started_at DESC, id DESC{limit_clause}",
@@ -74,17 +76,23 @@ async def recompute_request_costs(
     skipped_no_snapshot = 0
     skipped_missing_tokens = 0
     changes: list[dict[str, Any]] = []
-    updates: list[tuple[int, int]] = []
+    updates: list[tuple[int, int, str]] = []
 
     for row in rows:
         old_cost = int(row["cost_microdollars"] or 0)
         cost_total += old_cost
-        model_key = str(row["original_model_id"] or row["model_id"])
+        if row["provider_cost_microdollars"] is not None:
+            skipped_unchanged += 1
+            new_total += old_cost
+            continue
+
+        model_key = str(row["model_id"] or "")
         provider_id = str(row["provider_id"] or "opencode-go")
         input_tokens = int(row["input_tokens"] or 0)
         output_tokens = int(row["output_tokens"] or 0)
         cache_read = int(row["cache_read_tokens"] or 0)
         cache_write = int(row["cache_write_tokens"] or 0)
+        reserved = int(row["reserved_microdollars"] or 0)
         if (
             input_tokens == 0
             and output_tokens == 0
@@ -94,7 +102,7 @@ async def recompute_request_costs(
             skipped_missing_tokens += 1
             continue
 
-        new_cost, exactness = await calculator.calculate_cost(
+        local_cost, local_exactness = await calculator.calculate_cost(
             model_id=model_key,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
@@ -102,8 +110,19 @@ async def recompute_request_costs(
             cache_write_tokens=cache_write,
             provider_id=provider_id,
         )
+        may_have_billable_work = (
+            input_tokens + output_tokens + cache_read + cache_write > 0
+            or old_cost > 0
+            or reserved > 0
+        )
+        new_cost, exactness = canonicalize_repaired_cost(
+            local_cost_microdollars=local_cost,
+            local_cost_exactness=local_exactness,
+            reserved_microdollars=reserved,
+            may_have_billable_work=may_have_billable_work,
+        )
         new_total += new_cost
-        if new_cost == old_cost:
+        if new_cost == old_cost and exactness == str(row["exactness"] or "unknown"):
             skipped_unchanged += 1
             continue
 
@@ -128,19 +147,24 @@ async def recompute_request_costs(
                 "old_cost_microdollars": old_cost,
                 "new_cost_microdollars": new_cost,
                 "delta_microdollars": delta,
-                "exactness": exactness,
+                "old_exactness": str(row["exactness"] or "unknown"),
+                "new_exactness": exactness,
             }
         )
         updated += 1
-        updates.append((int(row["id"]), new_cost))
+        updates.append((int(row["id"]), new_cost, exactness))
 
     if updates and not dry_run:
         async with db.transaction():
             for batch_start in range(0, len(updates), batch_size):
                 batch = updates[batch_start : batch_start + batch_size]
+                params_for_batch: list[tuple[int, str, int]] = [
+                    (cost, exactness, rid) for rid, cost, exactness in batch
+                ]
                 await db.execute_many(
-                    "UPDATE requests SET cost_microdollars = ? WHERE id = ?",
-                    [(cost, rid) for rid, cost in batch],
+                    "UPDATE requests SET cost_microdollars = ?, exactness = ? "
+                    "WHERE id = ?",
+                    params_for_batch,
                 )
 
     return RecomputeSummary(

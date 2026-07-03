@@ -2347,3 +2347,12 @@ Long-running deployments — especially Raspberry Pi / SBC nodes — must keep s
 | `HealthManager.AccountHealth.disabled_models` | `src/eggpool/health/health_manager.py:111` | Pruned by `health_disabled_models_prune` supervisor task (60s cycle) | — |
 
 The `frozenset` switch on `_account_support` (`src/eggpool/catalog/cache.py:639`) eliminates one O(n) `set.copy()` per routing decision. Every caller of `get_supporting_accounts(...)` / `get_supporting_accounts_for_model(...)` is read-only (membership, intersection, iteration), so the immutability is a strict superset of caller needs.
+
+## Pricing Resolution and Cost Exactness
+
+- Resolution order: global/provider `model_overrides` → upstream `/v1/models` metadata → external pricing catalogs (OpenRouter, OpenCode Zen) through the alias registry. The metadata path is `resolve_pricing_from_metadata()` in `src/eggpool/catalog/pricing_resolver.py`; external fallbacks live in `src/eggpool/catalog/catalog_resolvers.py`.
+- Ambiguous bare upstream prices fail toward underestimation: absent an explicit suffix (`/token`, `/1k`, `/1M`) or an unambiguous field-name hint, the resolver defaults bare values to dollars-per-million, not dollars-per-token. Nested `pricing.cache_read` / `pricing.cache_write` fields inherit the surrounding pricing-cluster unit regime instead of hardcoding per-token semantics.
+- Every resolved category is normalized to microdollars-per-million before persistence. Implausible local rates are rejected by snapshot trust gates in `apply_snapshot_trust_gates()` so a bad upstream payload cannot become the latest trusted snapshot.
+- Canonical request-cost precedence in `RequestFinalizer`: `provider_reported` upstream cost wins; otherwise only trusted local `derived` / `partial` / `exact` values may become canonical. Positive local `estimated` values are audit-only and fall back to the bounded reservation estimate for canonical spend.
+- Exactness labels on `requests.cost_microdollars`: `provider_reported`, `exact`, `derived`, `partial`, `estimated`, `unknown`. `estimated` covers both “no trusted rate exists” and “a local rate/cost was guardrailed as implausible”.
+- Historical cleanup uses `eggpool stats repair-costs` for suspicious rows (dry-run by default, provider-reported rows skipped, audit rows written to `request_cost_repairs`). `eggpool stats recompute-costs` remains the broader whole-table recalculation command.

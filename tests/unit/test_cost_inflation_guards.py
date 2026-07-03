@@ -353,7 +353,7 @@ class TestDerivedCostPerTokenSanity:
         cost, exactness = await calculator.calculate_cost(
             "victim", input_tokens=1000, output_tokens=2000
         )
-        assert cost > 0
+        assert cost == 33_000
         assert exactness == "estimated"
 
     @pytest.mark.asyncio

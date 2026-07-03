@@ -39,7 +39,10 @@ from eggpool.catalog.pricing_aliases import (
     PricingAliasResolver,
     seed_default_aliases,
 )
-from eggpool.catalog.pricing_resolver import resolve_pricing_from_metadata
+from eggpool.catalog.pricing_resolver import (
+    apply_snapshot_trust_gates,
+    resolve_pricing_from_metadata,
+)
 from eggpool.catalog.protocols import SUPPORTED_PROTOCOLS, ModelProtocolResolver
 from eggpool.constants import DEFAULT_PROVIDER_ID, DEPRECATED_MODEL_ID
 from eggpool.db.repositories import (
@@ -1519,6 +1522,13 @@ class CatalogService:
                 provider_id=provider_id,
                 model_id=model_id,
             )
+        if resolved is None:
+            return
+        resolved = apply_snapshot_trust_gates(
+            resolved,
+            model_id=model_id,
+            provider_id=provider_id,
+        )
         if resolved is None:
             return
 

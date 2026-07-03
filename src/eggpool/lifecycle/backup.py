@@ -68,7 +68,12 @@ def default_backup_dir() -> Path:
     prod_data = Path("/var/lib/eggpool")
     if prod_data.is_dir():
         return prod_data / "backups"
-    return Path.home() / "backups" / "eggpool"
+    home_target = Path.home() / "backups" / "eggpool"
+    try:
+        home_target.mkdir(parents=True, exist_ok=True)
+        return home_target
+    except OSError:
+        return Path.cwd() / "backups" / "eggpool"
 
 
 def backup_filename(now: datetime | None = None) -> str:

@@ -183,6 +183,28 @@ def microdollars_per_million_from_price_per_1k(
     return clamp_sqlite_integer(int(round(price_per_1k * 1_000_000_000)))
 
 
+def implicit_cost_per_token_microdollars(
+    cost_microdollars: int,
+    total_tokens: int,
+) -> float | None:
+    """Return the implied microdollars/token rate for a request total."""
+    if total_tokens <= 0:
+        return None
+    return cost_microdollars / total_tokens
+
+
+def cost_per_token_is_implausible(
+    cost_microdollars: int,
+    total_tokens: int,
+) -> bool:
+    """Whether a request total implies an implausible microdollars/token rate."""
+    implicit = implicit_cost_per_token_microdollars(
+        cost_microdollars,
+        total_tokens,
+    )
+    return implicit is not None and implicit > _MAX_TRUSTED_COST_PER_TOKEN_MICRODOLLARS
+
+
 # Cache category fallbacks used by CostCalculator when a per-token rate
 # is missing but the model has nonzero tokens in that category. These
 # are conservative local heuristics, intentionally higher than typical
@@ -582,18 +604,24 @@ class CostCalculator:
         # MAX_REQUEST_COST_MICRODOLLARS clamp) rather than recording
         # the inflated derived value as authoritative spend. The
         # dashboard surfaces the discrepancy via the exactness label.
-        if exactness == "derived" and total_tokens > 0:
-            implicit_cost_per_token = cost_microdollars / total_tokens
-            if implicit_cost_per_token > _MAX_TRUSTED_COST_PER_TOKEN_MICRODOLLARS:
+        if exactness in {"derived", "partial"} and total_tokens > 0:
+            implicit_cost_per_token = implicit_cost_per_token_microdollars(
+                cost_microdollars,
+                total_tokens,
+            )
+            if (
+                implicit_cost_per_token is not None
+                and implicit_cost_per_token > _MAX_TRUSTED_COST_PER_TOKEN_MICRODOLLARS
+            ):
                 logger.warning(
                     "Derived cost for %s/%s implies %s microdollars/token "
-                    "(> %s trust ceiling). Treating as estimated.",
+                    "(> %s trust ceiling). Replacing with bounded estimate.",
                     model_id,
                     provider_id or "*",
                     implicit_cost_per_token,
                     _MAX_TRUSTED_COST_PER_TOKEN_MICRODOLLARS,
                 )
-                exactness = "estimated"
+                return self._estimate_cost(input_tokens, output_tokens), "estimated"
         return cost_microdollars, exactness
 
     def _estimate_cost(self, input_tokens: int, output_tokens: int) -> int:
@@ -638,5 +666,9 @@ class CostCalculator:
         return clamp_request_cost_microdollars((tokens * rate) // 1_000_000)
 
 
-def _rate_is_implausible(rate: int | None) -> bool:
+def rate_is_implausible(rate: int | None) -> bool:
     return rate is not None and rate > _MAX_TRUSTED_RATE_PER_MILLION_MICRODOLLARS
+
+
+def _rate_is_implausible(rate: int | None) -> bool:
+    return rate_is_implausible(rate)

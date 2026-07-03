@@ -2720,6 +2720,99 @@ def stats_recompute_costs(
     sys.exit(asyncio.run(_runner()))
 
 
+@stats.command("repair-costs")
+@click.option(
+    "--provider",
+    "provider_filter",
+    default=None,
+    help="Filter suspicious rows by provider id or account name substring.",
+)
+@click.option(
+    "--since",
+    default=None,
+    help="Only inspect rows with started_at on or after YYYY-MM-DD.",
+)
+@click.option(
+    "--dry-run/--apply",
+    default=True,
+    help="Dry-run (default) only reports the changes; --apply writes them.",
+)
+@click.option(
+    "--limit",
+    default=None,
+    type=int,
+    help="Maximum number of historical requests to inspect.",
+)
+@click.pass_context
+def stats_repair_costs(
+    ctx: click.Context,
+    provider_filter: str | None,
+    since: str | None,
+    dry_run: bool,
+    limit: int | None,
+) -> None:
+    """Repair suspicious historical request costs.
+
+    Targets provider-neutral cost-inflation signatures: near-cap rows,
+    implausible cost-per-token, and estimated rows far above their
+    reservation estimate. Provider-reported cost rows are skipped.
+    """
+    import asyncio
+
+    config_path_raw = ctx.obj.get("config_path") if ctx.obj else None
+    config = AppConfig.from_toml(config_path_raw) if config_path_raw else None
+    if config is None:
+        click.echo(
+            "No config available; pass --config or set EGGPOOL_CONFIG.", err=True
+        )
+        sys.exit(2)
+
+    async def _runner() -> int:
+        from eggpool.cost_repair import repair_request_costs
+
+        db = Database(
+            path=config.database.path,
+            busy_timeout_ms=config.database.busy_timeout_ms,
+            wal=config.database.wal,
+            synchronous=config.database.synchronous,
+        )
+        await db.connect()
+        try:
+            result = await repair_request_costs(
+                db,
+                provider_filter=provider_filter,
+                since=since,
+                limit=limit,
+                dry_run=dry_run,
+            )
+        finally:
+            await db.disconnect()
+
+        prefix = "DRY-RUN" if dry_run else "APPLY"
+        delta = result.proposed_total_microdollars - result.old_total_microdollars
+        click.echo(
+            f"{prefix}: scanned {result.scanned} rows, "
+            f"flagged {result.suspicious} suspicious, "
+            f"repaired {result.repaired}, "
+            f"skipped {result.skipped_provider_reported} provider-reported, "
+            f"unchanged {result.unchanged}"
+        )
+        click.echo(
+            f"old total {result.old_total_microdollars:,} μ$  "
+            f"proposed total {result.proposed_total_microdollars:,} μ$  "
+            f"delta {delta:+,} μ$"
+        )
+        if result.changed_rows:
+            click.echo("")
+            click.echo(_format_change_rows(result.changed_rows))
+        if result.breakdown_rows:
+            click.echo("")
+            click.echo(_format_repair_breakdown_rows(result.breakdown_rows))
+        return 0
+
+    sys.exit(asyncio.run(_runner()))
+
+
 @stats.command("transcoding")
 @click.option(
     "--period",
@@ -2802,18 +2895,54 @@ def stats_transcoding(
 
 def _format_change_rows(rows: list[dict[str, Any]]) -> str:
     """Format recompute-costs output as a small text table."""
-    headers = ("model", "provider", "old_μ$", "new_μ$", "Δ μ$")
-    widths = (28, 14, 12, 12, 12)
+    include_exactness = any("new_exactness" in row for row in rows)
+    exactness_width = 18
+    headers = (
+        ("model", "provider", "old_μ$", "new_μ$", "Δ μ$", "exactness")
+        if include_exactness
+        else ("model", "provider", "old_μ$", "new_μ$", "Δ μ$")
+    )
+    widths = (
+        (28, 14, 12, 12, 12, exactness_width)
+        if include_exactness
+        else (28, 14, 12, 12, 12)
+    )
+    parts = [
+        "  ".join(h.ljust(w) for h, w in zip(headers, widths, strict=True)),
+        "  ".join("-" * w for w in widths),
+    ]
+    for row in rows:
+        cells = [
+            str(row.get("model_id", ""))[: widths[0]],
+            str(row.get("provider_id", ""))[: widths[1]],
+            f"{int(row.get('old_cost_microdollars', 0)):,}",
+            f"{int(row.get('new_cost_microdollars', 0)):,}",
+            f"{int(row.get('delta_microdollars', 0)):+,}",
+        ]
+        if include_exactness:
+            old_exactness = str(row.get("old_exactness", row.get("exactness", "")))
+            new_exactness = str(row.get("new_exactness", row.get("exactness", "")))
+            cells.append(f"{old_exactness}->{new_exactness}"[:exactness_width])
+        parts.append("  ".join(c.ljust(w) for c, w in zip(cells, widths, strict=True)))
+    return "\n".join(parts)
+
+
+def _format_repair_breakdown_rows(rows: list[dict[str, Any]]) -> str:
+    """Format repair-costs provider/account/model deltas as a small table."""
+    headers = ("provider", "account", "model", "rows", "old_μ$", "new_μ$", "Δ μ$")
+    widths = (14, 18, 28, 6, 12, 12, 12)
     parts = [
         "  ".join(h.ljust(w) for h, w in zip(headers, widths, strict=True)),
         "  ".join("-" * w for w in widths),
     ]
     for row in rows:
         cells = (
-            str(row.get("model_id", ""))[: widths[0]],
-            str(row.get("provider_id", ""))[: widths[1]],
-            f"{int(row.get('old_cost_microdollars', 0)):,}",
-            f"{int(row.get('new_cost_microdollars', 0)):,}",
+            str(row.get("provider_id", ""))[: widths[0]],
+            str(row.get("account_name", ""))[: widths[1]],
+            str(row.get("model_id", ""))[: widths[2]],
+            str(int(row.get("request_count", 0))),
+            f"{int(row.get('old_total_microdollars', 0)):,}",
+            f"{int(row.get('new_total_microdollars', 0)):,}",
             f"{int(row.get('delta_microdollars', 0)):+,}",
         )
         parts.append("  ".join(c.ljust(w) for c, w in zip(cells, widths, strict=True)))
@@ -4316,6 +4445,7 @@ def backup(ctx: click.Context, output_dir: str | None) -> None:
         sys.exit(1)
 
     target_dir = Path(output_dir) if output_dir else default_backup_dir()
+    fallback_target_dir = None if output_dir else Path.cwd() / "backups" / "eggpool"
     db_path = Path(config.database.path).expanduser().resolve()
     resolved_config_path = Path(config_path).resolve()
     env_path = resolved_config_path.parent / ".env"
@@ -4351,8 +4481,12 @@ def backup(ctx: click.Context, output_dir: str | None) -> None:
         try:
             archive = create_backup(contents, output_dir=target_dir)
         except OSError as exc:
-            click.echo(f"Error: could not write backup: {exc}", err=True)
-            sys.exit(1)
+            if fallback_target_dir is not None and fallback_target_dir != target_dir:
+                archive = create_backup(contents, output_dir=fallback_target_dir)
+                target_dir = fallback_target_dir
+            else:
+                click.echo(f"Error: could not write backup: {exc}", err=True)
+                sys.exit(1)
 
     click.echo(f"Wrote backup: {archive}")
     if env_path.exists():

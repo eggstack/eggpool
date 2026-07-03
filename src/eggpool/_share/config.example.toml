@@ -78,11 +78,13 @@ monthly_microdollars = 60000000
 # When upstream metadata doesn't expose pricing for a model, EggPool can
 # consult external pricing catalogs (OpenRouter, OpenCode Zen, ...). The
 # resolver pipeline tries each enabled catalog in priority order and
-# stops at the first match. ``fallback = "generic_estimate"`` (default)
-# fills any remaining missing cache rates with conservative estimates so
-# costs stay positive rather than zero; set ``fallback = "off"`` to skip
-# cache fallback entirely (results in zero cost for cache tokens when no
-# rate is known).
+# stops at the first match. Ambiguous bare upstream price values fail
+# toward dollars-per-million unless explicit token evidence or a strong
+# field-name hint proves otherwise. ``fallback = "generic_estimate"``
+# (default) fills any remaining missing cache rates with conservative
+# estimates so costs stay positive rather than zero; set ``fallback = "off"``
+# to skip cache fallback entirely (results in zero cost for cache tokens
+# when no rate is known).
 [pricing]
 fallback = "generic_estimate"
 

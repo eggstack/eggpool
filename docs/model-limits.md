@@ -106,4 +106,6 @@ The dashboard Models table links each model ID to its model-info detail page.
 That detail page renders the effective and externally observed context/output
 limits when model-info enrichment has populated them. The table itself remains
 focused on routing availability, usage, cost, and pricing exactness so the
-default Models view stays scannable.
+default Models view stays scannable. Pricing exactness follows the same
+request-cost labels used elsewhere in EggPool: `provider_reported`,
+`exact`, `derived`, `partial`, `estimated`, and `unknown`.

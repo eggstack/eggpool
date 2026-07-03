@@ -37,6 +37,13 @@ logger = logging.getLogger(__name__)
 
 MAX_ERROR_DETAIL_CHARS = MAX_REDACTED_ERROR_DETAIL_CHARS
 
+# Exactness labels the request finalizer treats as canonical local
+# ``cost_microdollars`` candidates. ``estimated`` is explicitly excluded
+# so a positive-but-inflated heuristic value cannot become dashboard
+# spend; the finalizer falls through to the reservation estimate when
+# the local calculator flagged its result as ``estimated``.
+_TRUSTED_LOCAL_EXACTNESS = frozenset({"derived", "partial", "exact"})
+
 
 class FinalizationOutcome(StrEnum):
     """Terminal outcome of a request."""
@@ -226,13 +233,17 @@ class RequestFinalizer:
                 data.cache_write_tokens,
             )
         )
-        may_have_billable_work = data.outcome in (FinalizationOutcome.COMPLETED,) or (
-            data.outcome
-            in (
-                FinalizationOutcome.CLIENT_CANCELLED,
-                FinalizationOutcome.MIDSTREAM_ERROR,
+        may_have_billable_work = (
+            has_usage
+            or data.outcome in (FinalizationOutcome.COMPLETED,)
+            or (
+                data.outcome
+                in (
+                    FinalizationOutcome.CLIENT_CANCELLED,
+                    FinalizationOutcome.MIDSTREAM_ERROR,
+                )
+                and data.bytes_emitted > 0
             )
-            and (has_usage or data.bytes_emitted > 0)
         )
 
         # Local calculator result — preserved as an audit field even
@@ -257,12 +268,44 @@ class RequestFinalizer:
             cost_microdollars = data.provider_cost_microdollars
             exactness = "provider_reported"
         # 2. Trusted local calculation: derived / partial / exact.
-        elif local_cost_microdollars is not None and (
-            local_cost_microdollars > 0
-            or local_cost_exactness in {"derived", "partial", "exact"}
+        #
+        #    CRITICAL: positivity alone is NOT a sufficient signal. A
+        #    local result tagged ``estimated`` (the
+        #    ``CostCalculator`` flagged the per-token rate as implausible
+        #    or no snapshot existed) may still carry a large positive
+        #    microdollar value when the heuristic fallback or a clamped
+        #    rate ran. Persisting that value as canonical spend inflates
+        #    the dashboard by the same factor that triggered the
+        #    downgrade, so the finalizer rejects ``estimated`` local
+        #    results and falls through to the reservation estimate.
+        elif (
+            local_cost_microdollars is not None
+            and local_cost_exactness in _TRUSTED_LOCAL_EXACTNESS
         ):
             cost_microdollars = local_cost_microdollars
-            exactness = local_cost_exactness or "derived"
+            exactness = local_cost_exactness
+        # 2a. Local result was tagged ``estimated`` — never persist its
+        #     positive value as canonical. If billable work is plausible
+        #     we fall back to the reservation estimate; otherwise the
+        #     request cost stays at zero with exactness ``unknown``.
+        elif (
+            local_cost_microdollars is not None
+            and local_cost_exactness == "estimated"
+            and local_cost_microdollars > 0
+        ):
+            logger.warning(
+                "Ignoring positive local estimated cost (%s microdollars) "
+                "for %s; falling back to reservation estimate to prevent "
+                "canonical spend inflation.",
+                local_cost_microdollars,
+                getattr(selected, "request_id", "<unknown>"),
+            )
+            if may_have_billable_work:
+                cost_microdollars = selected.estimated_microdollars
+                exactness = "estimated"
+            else:
+                cost_microdollars = 0
+                exactness = "unknown"
         # 3. Conservative reservation fallback only when billable work
         #    is plausible AND no trusted value is available.
         elif may_have_billable_work:
