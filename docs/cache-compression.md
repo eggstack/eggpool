@@ -108,7 +108,7 @@ What **is** shown:
 - Policy names and policy source (`global` / `policy:<name>`)
 - Status counters (mode counts, status_counts, warning_counts)
 
-The replay harness (`tests/fixtures/cache_compression/`) uses seven sentinel strings (`SYSTEM_POLICY_SENTINEL_DO_NOT_COMPRESS`, `TOOL_SCHEMA_SENTINEL_DO_NOT_COMPRESS`, `VOLATILE_LOG_LINE`, `STACK_TRACE_SENTINEL`, `SYNTHETIC_BASE64_BLOB`, `LONG_USER_INSTRUCTION`, `LATEST_USER_SENTINEL`) so a sanitization linter can prove no real prompt text leaked in.
+The replay harness (`tests/fixtures/cache_compression/`) uses seven sentinel strings (`SYSTEM_POLICY_SENTINEL_DO_NOT_COMPRESS`, `TOOL_SCHEMA_SENTINEL_DO_NOT_COMPRESS`, `VOLATILE_LOG_LINE`, `STACK_TRACE_SENTINEL`, `SYNTHETIC_BASE64_BLOB`, `LONG_USER_INSTRUCTION`, `LATEST_USER_SENTINEL`) so a sanitization linter can prove no real prompt text leaked in. The harness supports two replay shapes (client-shape and provider-bound) — see `tests/fixtures/cache_compression/README.md` § Replay shape semantics for the contract and `tests/unit/test_replay_fixtures_regression.py::TestProviderBoundSyntheticReplay` for the pin.
 
 ## Config validation notes
 

@@ -135,6 +135,42 @@ adding a fixture you must use the established sentinel markers:
 The sentinels are content-private — they cannot be confused with
 real prompts and they make assertions unambiguous.
 
+## Replay shape semantics
+
+The replay harness exercises the cache/compression pipeline in two
+distinct shapes. Both shapes are exercised by `run_full_replay()`; the
+shape used is recorded on the resulting `ReplayBundle` via
+`synthetic_cache_shape`:
+
+- **client-shape replay** — segmentation, compression, and synthetic
+  cache all run against the original client payload using
+  `client_protocol`. Used whenever the fixture does not cross protocols
+  (`client_protocol == target_protocol`). This matches Phase 5 safe
+  compression, which is intentionally client-bound.
+- **provider-bound replay** — when `client_protocol != target_protocol`
+  the body transcoder runs first, and synthetic-cache segmentation
+  / selection / dry-run / apply are all performed against the
+  **provider-bound** body using `target_protocol`. This mirrors the
+  production Phase 9 path (`_apply_synthetic_cache_controls`) which
+  runs post-route against the upstream body.
+
+For transcode fixtures `run_full_replay` will set
+`synthetic_cache_shape = "provider_bound"` and populates the
+provider-bound observability fields on the bundle
+(`provider_bound_segmentation_status`,
+`provider_bound_synthetic_cache_status`,
+`provider_bound_synthetic_cache_candidate_count`).
+
+Callers that need a guaranteed provider-bound lifecycle even when the
+fixture does not declare `target_protocol` differently should prefer
+`run_provider_bound_synthetic_replay()` — it always uses the post-
+transcode body for the synthetic-cache step. The helper is
+intentionally explicit so future contributors do not accidentally
+assert against the wrong payload shape.
+
+See `plans/cache_compression_phase_12_polish_pass.md` for the full
+discussion of when each shape is appropriate.
+
 ## Running the replay suite
 
 The default replay subset is wired into the standard test run and stays
@@ -142,11 +178,12 @@ under the 5 second performance budget. The full matrix is gated behind the
 `cache_compression_replay_full` mark:
 
 ```bash
-# Default subset
+# Default smoke coverage -- runs on every pytest invocation
 uv run pytest tests/unit/test_replay_fixtures_*.py -v
 
-# Full matrix (slower, includes all combinations of modes × fixtures)
-uv run pytest -m cache_compression_replay_full tests/unit/test_replay_fixtures_*.py -v
+# Full cache/compression replay matrix (slower; runs exhaustive
+# combinations of modes x fixtures across all five fixture categories)
+uv run pytest -m cache_compression_replay_full tests/unit/test_replay_fixtures_regression.py -v
 ```
 
 ## Why fixtures use sentinels instead of real prompts

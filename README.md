@@ -293,10 +293,26 @@ Phase 11 ships a tiny replay fixture harness under `tests/fixtures/cache_compres
 Run the Phase 11 suite locally:
 
 ```bash
+# Default smoke coverage (included in plain `uv run pytest`)
 uv run pytest tests/unit/test_replay_fixtures_regression.py tests/unit/test_replay_fixtures_sanitization.py -v
+
+# Full cache/compression replay matrix (slower; exhaustive modes × fixtures)
+uv run pytest -m cache_compression_replay_full tests/unit/test_replay_fixtures_regression.py -v
 ```
 
 See `plans/cache_compression_phase_11_replay_fixtures_regression_tests.md` and `architecture/README.md` § Replay Fixtures and Regression Harness (Phase 11) for the design.
+
+### Phase 12 polish pass: replay-shape and default smoke coverage
+
+The Phase 11 harness has a follow-up polish pass (Phase 12 polish) that hardens how transcode fixtures exercise provider-bound synthetic cache and promotes a small smoke subset into the default pytest run. There are no production runtime changes.
+
+- **Provider-bound synthetic replay.** `run_full_replay()` now runs synthetic-cache against the **provider-bound** body (post-transcode) whenever `client_protocol != target_protocol`. A dedicated `run_provider_bound_synthetic_replay()` helper is available for callers that need an explicit provider-bound lifecycle.
+- **`ReplayBundle.synthetic_cache_shape`.** A new field on the bundle records which replay shape was used (`disabled` / `client_bound` / `provider_bound` / `provider_bound_unavailable`); provider-bound observability is recorded on `provider_bound_segmentation_status`, `provider_bound_synthetic_cache_status`, and `provider_bound_synthetic_cache_candidate_count`.
+- **Default smoke coverage.** A `TestReplaySmoke` class (`tests/unit/test_replay_fixtures_regression.py`) promotes six cheap invariants outside the `cache_compression_replay_full` mark: OpenAI prefix preservation, Anthropic nested-tool-result compression, provider-bound synthetic dry-run, native-cache preserve-apply, scoring guardrails, and a sentinel-linter smoke pass. They run on every `pytest` invocation.
+- **`TestProviderBoundSyntheticReplay`.** A new test class pins the contract for transcode fixtures: dry-run must not mutate client or provider body, apply mode only mutates the provider body, native `cache_control` survives apply, and bundle fields never expose the provider-bound payload.
+- **Routing invariant.** Unchanged. `QuotaFairScorer` still accepts only the four canonical inputs and does not consume any Phase 12 polish pass fields.
+
+Replay shape semantics (client-shape vs provider-bound) are documented in `tests/fixtures/cache_compression/README.md` § Replay shape semantics. See `plans/cache_compression_phase_12_polish_pass.md` for the full plan.
 
 ### Phase 12: Operator guide, profiles, and rollout
 

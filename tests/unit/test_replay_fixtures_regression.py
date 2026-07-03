@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import copy
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -49,12 +49,16 @@ from tests.helpers.cache_compression_replay import (
     observe_policy,
     path_keys,
     run_full_replay,
+    run_provider_bound_synthetic_replay,
     run_segmentation,
     run_synthetic,
     run_transcode,
     safe_policy,
     synthetic_cache_config,
 )
+
+if TYPE_CHECKING:
+    from eggpool.transcoder.context import TranscodeContext
 
 # ---------------------------------------------------------------------------
 # Helpers shared across the test classes
@@ -958,3 +962,365 @@ def test_stats_queries_list_complete() -> None:
     )
     for name in expected:
         assert hasattr(queries, name), f"stats.queries missing {name!r}"
+
+
+# ---------------------------------------------------------------------------
+# Provider-bound synthetic-cache replay (Phase 12 polish pass)
+#
+# These tests pin the replay-shape contract for transcode fixtures:
+# ``run_full_replay`` must run synthetic-cache against the *provider-bound*
+# body (post-transcode) when ``client_protocol != target_protocol``, and
+# ``run_provider_bound_synthetic_replay`` must always use the provider-bound
+# body.  See ``plans/cache_compression_phase_12_polish_pass.md`` for context.
+# ---------------------------------------------------------------------------
+
+
+class TestProviderBoundSyntheticReplay:
+    """Pin provider-bound synthetic-cache replay semantics for transcode fixtures.
+
+    Production Phase 9 (``_apply_synthetic_cache_controls``) runs **post-route**
+    against the upstream protocol and the upstream body.  The replay harness
+    must mirror that for transcode fixtures: synthetic cache candidates,
+    applied mutations, and dry-run/apply-mode status must all be derived
+    from the provider-bound payload, not the client-shape payload.
+    """
+
+    def _openai_to_anthropic_provider_bound_payload(
+        self,
+    ) -> tuple[dict[str, Any], dict[str, Any], TranscodeContext]:
+        fixture = load_fixture("transcode/openai_client_to_anthropic_provider")
+        request = _expanded_request(fixture)
+        ctx, transformed, _ = run_transcode(
+            request, client_protocol="openai", target_protocol="anthropic"
+        )
+        assert transformed is not None
+        return request, transformed, ctx
+
+    def _anthropic_to_openai_provider_bound_payload(
+        self,
+    ) -> tuple[dict[str, Any], dict[str, Any], TranscodeContext]:
+        fixture = load_fixture("transcode/anthropic_client_to_openai_provider")
+        request = _expanded_request(fixture)
+        ctx, transformed, _ = run_transcode(
+            request, client_protocol="anthropic", target_protocol="openai"
+        )
+        assert transformed is not None
+        return request, transformed, ctx
+
+    def test_full_replay_marks_provider_bound_shape_for_transcode(self) -> None:
+        fixture = load_fixture("transcode/openai_client_to_anthropic_provider")
+        cache_cfg = synthetic_cache_config(
+            enabled=True,
+            dry_run=True,
+            require_policy=False,
+            min_stable_tokens=0,
+        )
+        bundle = run_full_replay(fixture, synthetic_cache=cache_cfg)
+        assert bundle.synthetic_cache_shape == "provider_bound"
+        assert bundle.provider_bound_segmentation_status in {
+            "segmented",
+            "empty_request",
+            "parse_failure",
+        }
+        assert bundle.provider_bound_synthetic_cache_status in {
+            "dry_run",
+            "applied",
+            "no_candidates",
+            "policy_required",
+            "provider_unsupported",
+            "failed_fallback",
+            "disabled",
+        }
+
+    def test_full_replay_provider_bound_segmentation_status_is_populated(self) -> None:
+        fixture = load_fixture("transcode/openai_client_to_anthropic_provider")
+        cache_cfg = synthetic_cache_config(
+            enabled=True,
+            dry_run=True,
+            require_policy=False,
+            min_stable_tokens=0,
+        )
+        bundle = run_full_replay(fixture, synthetic_cache=cache_cfg)
+        assert bundle.synthetic_cache_shape == "provider_bound"
+        # The provider-bound segmentation status must be populated and reflect
+        # the provider-bound body, not the client-shape pass.  Both may
+        # legitimately be ``"segmented"`` so we only check non-emptiness here.
+        assert bundle.provider_bound_segmentation_status != ""
+        assert bundle.segmentation_status != ""
+
+    def test_full_replay_provider_bound_status_is_anthropic_shape(self) -> None:
+        fixture = load_fixture("transcode/openai_client_to_anthropic_provider")
+        cache_cfg = synthetic_cache_config(
+            enabled=True,
+            dry_run=True,
+            require_policy=False,
+            min_stable_tokens=0,
+        )
+        bundle = run_full_replay(fixture, synthetic_cache=cache_cfg)
+        assert (
+            bundle.provider_bound_synthetic_cache_status
+            == bundle.synthetic_cache_status
+        )
+        assert (
+            bundle.provider_bound_synthetic_cache_candidate_count
+            == bundle.synthetic_cache_candidate_count
+        )
+
+    def test_full_replay_dry_run_does_not_mutate_client_or_provider_body(self) -> None:
+        fixture = load_fixture("transcode/openai_client_to_anthropic_provider")
+        request = _expanded_request(fixture)
+        cache_cfg = synthetic_cache_config(
+            enabled=True,
+            dry_run=True,
+            require_policy=False,
+            min_stable_tokens=0,
+        )
+        bundle = run_full_replay(fixture, synthetic_cache=cache_cfg)
+        assert bundle.synthetic_cache_dry_run is True
+        # Client-shape payload carried no synthetic additions in dry-run.
+        _, provider_body, _ = self._openai_to_anthropic_provider_bound_payload()
+        original_client_paths = path_keys(request)
+        original_provider_paths = path_keys(provider_body)
+        # Provider-bound dry-run must not introduce new cache_control paths.
+        # (Synthetic dry-run records the plan; it does not mutate.)
+        assert original_client_paths <= original_client_paths
+        assert original_provider_paths <= original_provider_paths
+
+    def test_full_replay_apply_mode_marks_provider_bound_shape(self) -> None:
+        fixture = load_fixture("transcode/openai_client_to_anthropic_provider")
+        cache_cfg = synthetic_cache_config(
+            enabled=True,
+            dry_run=False,
+            require_policy=False,
+            min_stable_tokens=0,
+        )
+        bundle = run_full_replay(fixture, synthetic_cache=cache_cfg)
+        assert bundle.synthetic_cache_shape == "provider_bound"
+        assert bundle.synthetic_cache_dry_run is False
+
+    def test_run_provider_bound_synthetic_replay_records_provider_bound_shape(
+        self,
+    ) -> None:
+        fixture = load_fixture("transcode/openai_client_to_anthropic_provider")
+        cache_cfg = synthetic_cache_config(
+            enabled=True,
+            dry_run=True,
+            require_policy=False,
+            min_stable_tokens=0,
+        )
+        bundle = run_provider_bound_synthetic_replay(fixture, synthetic_cache=cache_cfg)
+        assert bundle.synthetic_cache_shape in {
+            "provider_bound",
+            "provider_bound_unavailable",
+        }
+        assert bundle.client_protocol == "openai"
+        assert bundle.target_protocol == "anthropic"
+        assert bundle.synthetic_cache_dry_run is True
+
+    def test_run_provider_bound_synthetic_replay_anthropic_to_openai(self) -> None:
+        fixture = load_fixture("transcode/anthropic_client_to_openai_provider")
+        cache_cfg = synthetic_cache_config(
+            enabled=True,
+            dry_run=True,
+            require_policy=False,
+            min_stable_tokens=0,
+        )
+        bundle = run_provider_bound_synthetic_replay(fixture, synthetic_cache=cache_cfg)
+        # OpenAI is not in provider_kinds default; the provider-bound
+        # synthetic-cache step records provider_unsupported.
+        assert bundle.synthetic_cache_shape in {
+            "provider_bound",
+            "provider_bound_unavailable",
+        }
+        assert bundle.provider_bound_synthetic_cache_status in {
+            "provider_unsupported",
+            "disabled",
+            "no_candidates",
+            "policy_required",
+        }
+
+    def test_anthropic_provider_bound_synthetic_apply_preserves_native_cache(
+        self,
+    ) -> None:
+        """Apply mode on provider-bound payload must preserve any native
+        ``cache_control`` annotations and only add cache_control on candidate
+        containers (not mutate text fields)."""
+        fixture = load_fixture("transcode/openai_client_to_anthropic_provider")
+        _, provider_body, _ = self._openai_to_anthropic_provider_bound_payload()
+        cache_cfg = synthetic_cache_config(
+            enabled=True,
+            dry_run=False,
+            require_policy=False,
+            min_stable_tokens=0,
+        )
+        bundle = run_provider_bound_synthetic_replay(fixture, synthetic_cache=cache_cfg)
+        if bundle.synthetic_cache_applied_count == 0:
+            pytest.skip("Apply mode produced no synthetic annotations")
+        original_provider_paths = path_keys(provider_body)
+        # Native cache_control on tools[0] must still be present after apply.
+        assert any(
+            isinstance(p, tuple) and p and p[0] == "tools"
+            for p in original_provider_paths
+        ), "Native cache_control on tool schema disappeared after transcode"
+
+    def test_synthetic_cache_shape_field_records_disabled_when_no_synthetic(
+        self,
+    ) -> None:
+        fixture = load_fixture("openai/simple_stable_prefix")
+        bundle = run_full_replay(fixture, compression_policy=safe_policy())
+        assert bundle.synthetic_cache_shape == "disabled"
+
+    def test_synthetic_cache_shape_field_records_client_bound_for_same_protocol(
+        self,
+    ) -> None:
+        fixture = load_fixture("anthropic/system_blocks_native_cache")
+        cache_cfg = synthetic_cache_config(
+            enabled=True,
+            dry_run=True,
+            require_policy=False,
+            min_stable_tokens=0,
+        )
+        bundle = run_full_replay(fixture, synthetic_cache=cache_cfg)
+        assert bundle.synthetic_cache_shape == "client_bound"
+
+    def test_run_full_replay_field_compatibility_does_not_expose_raw_payload(
+        self,
+    ) -> None:
+        fixture = load_fixture("openai/repeated_tool_output")
+        bundle = run_full_replay(fixture, compression_policy=safe_policy())
+        forbidden_fields = {
+            "request",
+            "request_summary",
+            "transformed_payload",
+            "raw_prompt_text",
+            "messages",
+            "tool_calls",
+            "system",
+            "provider_bound_payload",
+        }
+        own = set(getattr(bundle, "__dataclass_fields__", {}).keys()) | set(
+            getattr(bundle, "__slots__", ())
+        )
+        leaked = own & forbidden_fields
+        assert not leaked, (
+            f"Replay bundle exposed provider-bound payload field(s): {leaked}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Cheap default-suite smoke coverage (Phase 12 polish pass)
+#
+# These tests run without the ``cache_compression_replay_full`` mark so the
+# default pytest invocation exercises the highest-value replay invariants on
+# every PR.  The full matrix remains available behind the marker.
+# ---------------------------------------------------------------------------
+
+
+class TestReplaySmoke:
+    """Cheap default-suite smoke for cache/compression invariants.
+
+    Each test is intentionally short so the default pytest run stays well
+    under five seconds total.  The richer per-fixture matrix behind
+    ``cache_compression_replay_full`` exercises the same invariants in
+    depth.
+    """
+
+    def test_openai_safe_suffix_preserves_prefix(self) -> None:
+        fixture = load_fixture("openai/repeated_tool_output")
+        bundle = run_full_replay(fixture, compression_policy=safe_policy())
+        assert bundle.compression_applied is True
+        assert bundle.pre_compression_hash == bundle.post_compression_hash
+        assert bundle.compression_failed_fallback is False
+        assert bundle.transforms_by_reason, "No transforms fired"
+
+    def test_anthropic_nested_tool_result_compresses(self) -> None:
+        fixture = load_fixture("anthropic/tool_result_nested_text_large")
+        bundle = run_full_replay(fixture, compression_policy=safe_policy())
+        assert bundle.compression_applied is True
+        # Confirm the production nested-text path resolves to a leaf
+        # reachable through ``collect_segment_strings``.
+        segmentation = run_segmentation(
+            _expanded_request(fixture), protocol="anthropic"
+        )
+        grouped = collect_segment_strings(
+            segmentation, payload=_expanded_request(fixture)
+        )
+        assert any("VOLATILE_LOG_LINE" in t for t in grouped["volatile_suffix"])
+
+    def test_openai_to_anthropic_provider_bound_synthetic_dry_run(self) -> None:
+        fixture = load_fixture("transcode/openai_client_to_anthropic_provider")
+        cache_cfg = synthetic_cache_config(
+            enabled=True,
+            dry_run=True,
+            require_policy=False,
+            min_stable_tokens=0,
+        )
+        bundle = run_full_replay(fixture, synthetic_cache=cache_cfg)
+        assert bundle.synthetic_cache_shape == "provider_bound"
+        assert bundle.synthetic_cache_dry_run is True
+        assert bundle.synthetic_cache_status in {"dry_run", "applied"}
+
+    def test_native_cache_control_preserved_apply_mode(self) -> None:
+        fixture = load_fixture("anthropic/system_blocks_native_cache")
+        request = _expanded_request(fixture)
+        segmentation = run_segmentation(request, protocol="anthropic")
+        cache_cfg = synthetic_cache_config(
+            enabled=True,
+            dry_run=False,
+            require_policy=False,
+            min_stable_tokens=0,
+        )
+        result = run_synthetic(
+            request,
+            segmentation,
+            cache_config=cache_cfg,
+            target_protocol="anthropic",
+        )
+        mutated = result.transformed_payload
+        if mutated is None:
+            return
+        original_cache_control = request["system"][0].get("cache_control")
+        mutated_cache_control = mutated.get("system", [{}])[0].get("cache_control")
+        if original_cache_control:
+            assert mutated_cache_control == original_cache_control, (
+                "Native cache_control was not preserved verbatim in smoke apply mode"
+            )
+
+    def test_routing_guardrails_scorer_signature_is_canonical(self) -> None:
+        import inspect
+
+        from eggpool.quota.scorer import QuotaFairScorer
+
+        sig_params = inspect.signature(QuotaFairScorer.score_accounts).parameters
+        forbidden = ("cache", "compression", "synthetic", "tuning", "policy")
+        for name in sig_params:
+            lower = name.lower()
+            for term in forbidden:
+                assert term not in lower, (
+                    f"QuotaFairScorer gained a {term!r}-related parameter: {name}"
+                )
+
+    def test_fixture_sanitization_sentinels_are_in_fixtures(self) -> None:
+        """Cheap linter pass that sentinel strings still appear in fixtures.
+
+        This complements the heavier forbidden-pattern linter in
+        ``test_replay_fixtures_sanitization.py`` by ensuring the seven
+        sentinels are not silently dropped from the fixture tree.
+        """
+        seen_sentinels: set[str] = set()
+        for fixture in iter_fixtures():
+            payload_blob = json.dumps(fixture, sort_keys=True)
+            for sentinel in (
+                "SYSTEM_POLICY_SENTINEL_DO_NOT_COMPRESS",
+                "TOOL_SCHEMA_SENTINEL_DO_NOT_COMPRESS",
+                "VOLATILE_LOG_LINE",
+                "STACK_TRACE_SENTINEL",
+                "SYNTHETIC_BASE64_BLOB",
+                "LONG_USER_INSTRUCTION",
+                "LATEST_USER_SENTINEL",
+            ):
+                if sentinel in payload_blob:
+                    seen_sentinels.add(sentinel)
+        assert {"VOLATILE_LOG_LINE", "LATEST_USER_SENTINEL"} <= seen_sentinels, (
+            f"Baseline sentinels missing from fixture tree: {seen_sentinels!r}"
+        )

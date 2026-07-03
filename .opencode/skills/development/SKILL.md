@@ -195,18 +195,32 @@ prompt to disk.
 
 - **Fixtures** -- `tests/fixtures/cache_compression/{openai,anthropic,transcode,routing,stats}/*.json`
   plus `tests/fixtures/cache_compression/README.md` (schema, sentinel
-  reference, sanitization rules, repeat expansion).  All prompts use
-  the seven sentinel strings; any new fixture MUST follow the README.
+  reference, sanitization rules, repeat expansion, **replay-shape
+  semantics**).  All prompts use the seven sentinel strings; any new
+  fixture MUST follow the README.
 - **Helper module** -- `tests/helpers/cache_compression_replay.py`
   exposes `load_fixture`, `expand_repeats`, `run_full_replay`,
-  `ReplayBundle`, `safe_policy`/`observe_policy`/`disabled_policy`,
+  `run_provider_bound_synthetic_replay` (explicit provider-bound
+  lifecycle for transcode fixtures), `ReplayBundle`,
+  `safe_policy`/`observe_policy`/`disabled_policy`,
   `synthetic_cache_config`, `run_segmentation`/`run_compression`/
   `run_transcode`/`run_synthetic`, `path_keys`, `collect_segment_strings`.
 - **Regression suite** -- `tests/unit/test_replay_fixtures_regression.py`
   pins 8 invariants: stable-prefix preservation, volatile-only
   mutation, provider-bound synthetic cache, native cache_control
   preservation, fail-closed fallback, request-shape hashing, harness
-  surface sanity, and routing non-interference.
+  surface sanity, and routing non-interference.  Phase 12 polish pass
+  added `TestProviderBoundSyntheticReplay` (provider-bound contract) and
+  `TestReplaySmoke` (cheap default-suite smoke) classes.
+- **Replay shape semantics** -- `run_full_replay()` records which shape
+  was used via `ReplayBundle.synthetic_cache_shape`:
+  - `disabled` -- no `synthetic_cache` config supplied
+  - `client_bound` -- synthetic cache ran on the client-shape payload
+    (used when `client_protocol == target_protocol`)
+  - `provider_bound` -- transcode ran first, synthetic cache ran on the
+    provider-bound body using `target_protocol` (matches production)
+  - `provider_bound_unavailable` -- transcode produced no provider body;
+    no synthetic cache applied
 - **Sanitization linter** -- `tests/unit/test_replay_fixtures_sanitization.py`
   enforces no bearer tokens, no `sk-...` keys, no `Authorization:`
   lines, no oversized strings, no real prompt text, and unique fixture
@@ -223,11 +237,23 @@ prompt to disk.
   under the right subdirectory and assert via the harness helpers;
   do not import production DB code.
 - The sanitization linter MUST pass before any fixture can land.
+- For transcode fixtures, prefer `run_provider_bound_synthetic_replay()`
+  when you need to assert provider-bound synthetic-cache behaviour;
+  `run_full_replay()` already runs synthetic cache on the provider-bound
+  body for transcode fixtures but the dedicated helper makes the
+  intent explicit.
 
-Acceptance:
+Acceptance (default smoke coverage; runs on every pytest):
 
 ```bash
 uv run pytest tests/unit/test_replay_fixtures_regression.py tests/unit/test_replay_fixtures_sanitization.py -v
+```
+
+Full matrix (exhaustive modes x fixtures; gated by the
+`cache_compression_replay_full` marker):
+
+```bash
+uv run pytest -m cache_compression_replay_full tests/unit/test_replay_fixtures_regression.py -v
 ```
 
 ## Code Style

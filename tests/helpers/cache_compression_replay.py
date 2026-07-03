@@ -7,25 +7,52 @@ the helpers for in-process use without going through a fixture file.
 
 Public surface:
 
-- :func:`load_fixture` — read a JSON fixture from disk
-- :func:`expand_repeats` — apply a compact repeat spec to a payload
-- :func:`safe_policy` / :func:`observe_policy` — deterministic policies
-- :func:`run_full_replay` — execute every pipeline step, return bundle
-- :class:`ReplayBundle` — the deterministic structural summary
-- :func:`default_fixture_root` — repo-relative fixture root path
+- :func:`load_fixture` -- read a JSON fixture from disk
+- :func:`expand_repeats` -- apply a compact repeat spec to a payload
+- :func:`safe_policy` / :func:`observe_policy` -- deterministic policies
+- :func:`run_full_replay` -- execute every pipeline step, return bundle
+- :func:`run_provider_bound_synthetic_replay` -- explicit provider-bound
+  helper for transcode fixtures (Phase 12 polish pass)
+- :class:`ReplayBundle` -- the deterministic structural summary
+- :func:`default_fixture_root` -- repo-relative fixture root path
+
+Replay shape semantics
+----------------------
+
+The harness exposes two replay shapes:
+
+- **client-shape replay**: segmentation + compression + synthetic cache
+  are all run against the original client payload using the
+  ``client_protocol``. This is the default for ``run_full_replay`` and
+  matches Phase 5 compression, which is intentionally client-bound.
+- **provider-bound replay**: transcode is run first when
+  ``client_protocol != target_protocol``; segmentation, synthetic
+  cache, and cache-stability observation are then run against the
+  **provider-bound** body using the ``target_protocol``. This matches
+  the production Phase 9 path (``_apply_synthetic_cache_controls``)
+  which executes post-route on the upstream body.
+
+``run_full_replay`` records the shape it used in
+``ReplayBundle.synthetic_cache_shape``.  When ``client_protocol !=
+target_protocol`` and a ``synthetic_cache`` config is supplied, the
+bundle additionally records provider-bound segmentation/synthesis
+fields alongside the client-shape fields. Callers that need the full
+provider-bound lifecycle should use :func:`run_provider_bound_synthetic_replay`
+which always uses the post-transcode body for synthetic cache.
 
 The harness never logs raw request content on failure. Failure log lines
 emit the fixture name, the expected vs observed status, and the
-structural path tuples — never the underlying prompt text.
+structural path tuples -- never the underlying prompt text.
 """
 
 from __future__ import annotations
 
+import copy as _copy
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from eggpool.transcoder.cache_synthesis import (
     run_synthetic_cache_synthesis,
@@ -61,6 +88,13 @@ _REPO_ROOT: Path = Path(__file__).resolve().parents[2]
 _FIXTURE_ROOT: Path = _REPO_ROOT / "tests" / "fixtures" / "cache_compression"
 
 DEFAULT_PROVIDER_KIND = "anthropic"
+
+SyntheticCacheShape = Literal[
+    "disabled",
+    "client_bound",
+    "provider_bound",
+    "provider_bound_unavailable",
+]
 
 
 def default_fixture_root() -> Path:
@@ -133,16 +167,14 @@ def expand_repeats(payload: Mapping[str, Any]) -> dict[str, Any]:
     (dot-separated) on the payload.  Each entry may contain:
 
     - ``fields``: dict of fields to set on every repeated element
-    - ``repeat``: int — number of copies to materialise
+    - ``repeat``: int -- number of copies to materialise
     - ``append_after_role``: optional role name under
       ``messages`` after which to insert the repeats
 
     The overlay mutates a deep copy so the caller's payload is never
     affected.
     """
-    import copy
-
-    base = copy.deepcopy(dict(payload))
+    base = _copy.deepcopy(dict(payload))
     repeats = base.pop("repeats", None)
     if not isinstance(repeats, Mapping):
         return base
@@ -162,8 +194,8 @@ def _apply_repeat(
     """Insert ``count`` repeated entries into a list at ``path``.
 
     Paths use dot notation with bracketed indices, e.g. ``messages``.
-    The simplest supported shape is ``messages`` — append after a chosen
-    role — or any plain list at a nested key.
+    The simplest supported shape is ``messages`` -- append after a chosen
+    role -- or any plain list at a nested key.
     """
     parts = path.split(".")
     cursor = payload
@@ -201,6 +233,31 @@ class ReplayBundle:
     No raw prompt text is captured; only segment paths, hashes, statuses,
     transform counts, and marker counts are stored.  Tests compare these
     fields to fixture expectations.
+
+    Replay shape semantics
+    ----------------------
+
+    The :attr:`synthetic_cache_shape` field records which replay shape
+    the synthetic-cache step used:
+
+    - ``disabled``: no ``synthetic_cache`` config supplied
+    - ``client_bound``: synthetic cache ran against the client-shape
+      payload using ``client_protocol`` (used when
+      ``client_protocol == target_protocol``, or for transcode
+      fixtures when no transcode was needed)
+    - ``provider_bound``: synthetic cache ran against the provider-bound
+      payload using ``target_protocol`` (transcode ran first)
+    - ``provider_bound_unavailable``: transcode produced no provider
+      payload so the synthetic-cache step had to fall back to client-shape
+
+    When ``synthetic_cache_shape == "provider_bound"``,
+    :attr:`provider_bound_segmentation_status`,
+    :attr:`provider_bound_synthetic_cache_status`, and
+    :attr:`provider_bound_synthetic_cache_candidate_count` carry
+    the provider-bound observations. The
+    ``synthetic_cache_status`` /
+    ``synthetic_cache_candidate_count`` fields still reflect the
+    client-shape pass for backwards compatibility.
     """
 
     fixture_name: str
@@ -214,10 +271,14 @@ class ReplayBundle:
     compression_applied: bool
     compression_failed_fallback: bool
     transforms_by_reason: dict[str, int]
-    synthetic_cache_status: str
-    synthetic_cache_dry_run: bool
-    synthetic_cache_candidate_count: int
-    synthetic_cache_applied_count: int
+    synthetic_cache_shape: SyntheticCacheShape = "disabled"
+    synthetic_cache_status: str = "disabled"
+    synthetic_cache_dry_run: bool = True
+    synthetic_cache_candidate_count: int = 0
+    synthetic_cache_applied_count: int = 0
+    provider_bound_segmentation_status: str = ""
+    provider_bound_synthetic_cache_status: str = ""
+    provider_bound_synthetic_cache_candidate_count: int = 0
     cache_boundary_counts: dict[str, int] = field(default_factory=dict)
     transcoded_warnings: tuple[str, ...] = ()
     raw_segmentation: SegmentationResult | None = None
@@ -398,6 +459,49 @@ def run_synthetic(
 # ---------------------------------------------------------------------------
 
 
+def _transcode_request(
+    request: Mapping[str, Any],
+    *,
+    client_protocol: str,
+    target_protocol: str,
+) -> tuple[TranscodeContext, dict[str, Any] | None, tuple[dict[str, Any], ...]]:
+    """Wrap :func:`run_transcode` for transcode-fixture replay.
+
+    Returns the (context, provider_bound_body_or_none, warnings) tuple.
+    """
+    return run_transcode(
+        request,
+        client_protocol=client_protocol,
+        target_protocol=target_protocol,
+    )
+
+
+def _run_synthetic_with_shape(
+    *,
+    shape: SyntheticCacheShape,
+    payload: Mapping[str, Any],
+    target_protocol: str,
+    cache_config: CacheConfig,
+    provider_kind: str = DEFAULT_PROVIDER_KIND,
+) -> tuple[Any, SegmentationResult | None]:
+    """Run synthetic cache and return (result, segmentation_used).
+
+    ``segmentation_used`` is the segmentation that drove the synthetic
+    cache decision -- it can be the client-shape segmentation or the
+    provider-bound one.
+    """
+    segmentation = segment_request(payload, protocol=target_protocol)
+    result = run_synthetic_cache_synthesis(
+        payload,
+        segmentation=segmentation,
+        cache_config=cache_config,
+        target_protocol=target_protocol,
+        target_provider_kind=provider_kind,
+        resolved_policy=None,
+    )
+    return result, segmentation
+
+
 def run_full_replay(
     fixture: Mapping[str, Any],
     *,
@@ -406,6 +510,32 @@ def run_full_replay(
     synthetic_cache: CacheConfig | None = None,
 ) -> ReplayBundle:
     """Run segmentation + compression + synthesis + transcoder and bundle the result.
+
+    Replay shape semantics
+    ----------------------
+
+    Compression is always run in **client-shape** -- Phase 5 is by design
+    client-bound in production too.  Synthetic cache follows this rule:
+
+    - If ``client_protocol == target_protocol`` (or no transcode is
+      needed): synthetic cache runs on the client-shape payload; the
+      bundle records ``synthetic_cache_shape="client_bound"``.
+    - If ``client_protocol != target_protocol``: transcode runs first
+      and synthetic cache runs on the provider-bound payload using
+      ``target_protocol`` -- the bundle records
+      ``synthetic_cache_shape="provider_bound"``. The provider-bound
+      segmentation status and candidate count are recorded on the
+      bundle as ``provider_bound_*`` fields. The client-shape
+      ``synthetic_cache_status`` / ``synthetic_cache_candidate_count``
+      fields still reflect the *client-shape* pass for backwards
+      compatibility.
+    - If transcode produces no provider-bound body, synthetic cache
+      cannot run provider-bound; the bundle records
+      ``synthetic_cache_shape="provider_bound_unavailable"`` and the
+      synthetic-cache fields stay at ``disabled`` defaults.
+
+    Callers that need explicit provider-bound semantics for transcode
+    fixtures should prefer :func:`run_provider_bound_synthetic_replay`.
 
     Compression is run in safe mode unless ``compression_policy`` is
     supplied.  Synthesis is skipped unless ``synthetic_cache`` is supplied.
@@ -437,36 +567,23 @@ def run_full_replay(
         compression_result.transformed_payload, segmentation
     )
 
-    synthetic_status = "disabled"
-    synthetic_dry_run = True
-    synthetic_candidate_count = 0
-    synthetic_applied_count = 0
-    if synthetic_cache is not None:
-        synthetic_result = run_synthetic_cache_synthesis(
-            request,
-            segmentation=segmentation,
-            cache_config=synthetic_cache,
-            target_protocol=target_protocol,
-            target_provider_kind=DEFAULT_PROVIDER_KIND,
-            resolved_policy=None,
-        )
-        plan = synthetic_result.plan
-        synthetic_status = plan.status
-        synthetic_dry_run = plan.dry_run
-        synthetic_candidate_count = len(plan.candidates)
-        synthetic_applied_count = plan.applied_count
-
-    cache_boundary_counts: dict[str, int] = {}
-    transcoded_warnings: tuple[str, ...] = ()
-    if client_protocol != target_protocol:
-        _, _, warnings = run_transcode(
-            request,
-            client_protocol=client_protocol,
-            target_protocol=target_protocol,
-        )
-        transcoded_warnings = tuple(
-            str(w.get("kind")) for w in warnings if isinstance(w, dict)
-        )
+    (
+        synthetic_shape,
+        synthetic_status,
+        synthetic_dry_run,
+        synthetic_candidate_count,
+        synthetic_applied_count,
+        provider_segmentation_status,
+        provider_synthetic_status,
+        provider_candidate_count,
+        cache_boundary_counts,
+        transcoded_warnings,
+    ) = _replay_synthetic_and_transcode(
+        request=request,
+        client_protocol=client_protocol,
+        target_protocol=target_protocol,
+        synthetic_cache=synthetic_cache,
+    )
 
     return ReplayBundle(
         fixture_name=name,
@@ -485,10 +602,288 @@ def run_full_replay(
         transforms_by_reason={
             str(k): int(v) for k, v in compression_result.transforms_by_reason.items()
         },
+        synthetic_cache_shape=synthetic_shape,
         synthetic_cache_status=synthetic_status,
         synthetic_cache_dry_run=synthetic_dry_run,
         synthetic_cache_candidate_count=synthetic_candidate_count,
         synthetic_cache_applied_count=synthetic_applied_count,
+        provider_bound_segmentation_status=provider_segmentation_status,
+        provider_bound_synthetic_cache_status=provider_synthetic_status,
+        provider_bound_synthetic_cache_candidate_count=provider_candidate_count,
+        cache_boundary_counts=cache_boundary_counts,
+        transcoded_warnings=transcoded_warnings,
+        raw_segmentation=segmentation,
+    )
+
+
+def _replay_synthetic_and_transcode(
+    *,
+    request: Mapping[str, Any],
+    client_protocol: str,
+    target_protocol: str,
+    synthetic_cache: CacheConfig | None,
+) -> tuple[
+    SyntheticCacheShape,
+    str,
+    bool,
+    int,
+    int,
+    str,
+    str,
+    int,
+    dict[str, int],
+    tuple[str, ...],
+]:
+    """Drive the (transcode + synthetic cache) slice of ``run_full_replay``.
+
+    Returns the (shape, status, dry_run, candidate_count, applied_count,
+    provider_segmentation_status, provider_synthetic_status,
+    provider_candidate_count, cache_boundary_counts, transcoded_warnings)
+    tuple used to populate a :class:`ReplayBundle`.
+
+    The helper isolates the branching used to pick between client-shape
+    and provider-bound synthetic-cache replay. ``run_full_replay``
+    delegates here so this logic does not have to be inlined in the
+    public entrypoint.
+    """
+    cache_boundary_counts: dict[str, int] = {}
+    transcoded_warnings: tuple[str, ...] = ()
+
+    synthetic_shape: SyntheticCacheShape = "disabled"
+    synthetic_status = "disabled"
+    synthetic_dry_run = True
+    synthetic_candidate_count = 0
+    synthetic_applied_count = 0
+    provider_segmentation_status = ""
+    provider_synthetic_status = ""
+    provider_candidate_count = 0
+
+    needs_transcode = client_protocol != target_protocol
+    has_synthetic = synthetic_cache is not None
+
+    if needs_transcode:
+        # always evaluate transcode warnings for transcode fixtures
+        _, provider_body, warnings = _transcode_request(
+            request,
+            client_protocol=client_protocol,
+            target_protocol=target_protocol,
+        )
+        transcoded_warnings = tuple(
+            str(w.get("kind")) for w in warnings if isinstance(w, dict)
+        )
+
+    if not has_synthetic:
+        return (
+            synthetic_shape,
+            synthetic_status,
+            synthetic_dry_run,
+            synthetic_candidate_count,
+            synthetic_applied_count,
+            provider_segmentation_status,
+            provider_synthetic_status,
+            provider_candidate_count,
+            cache_boundary_counts,
+            transcoded_warnings,
+        )
+
+    if not needs_transcode:
+        # client-shape synthetic cache for same-protocol fixtures
+        result, _ = _run_synthetic_with_shape(
+            shape="client_bound",
+            payload=request,
+            target_protocol=client_protocol,
+            cache_config=synthetic_cache,
+        )
+        plan = result.plan
+        synthetic_shape = "client_bound"
+        synthetic_status = plan.status
+        synthetic_dry_run = plan.dry_run
+        synthetic_candidate_count = len(plan.candidates)
+        synthetic_applied_count = plan.applied_count
+        return (
+            synthetic_shape,
+            synthetic_status,
+            synthetic_dry_run,
+            synthetic_candidate_count,
+            synthetic_applied_count,
+            provider_segmentation_status,
+            provider_synthetic_status,
+            provider_candidate_count,
+            cache_boundary_counts,
+            transcoded_warnings,
+        )
+
+    # transcode present -- run synthetic cache on the provider-bound body
+    if provider_body is None:
+        # transcode produced no body; record unavailable sentinel and skip
+        synthetic_shape = "provider_bound_unavailable"
+        return (
+            synthetic_shape,
+            synthetic_status,
+            synthetic_dry_run,
+            synthetic_candidate_count,
+            synthetic_applied_count,
+            provider_segmentation_status,
+            provider_synthetic_status,
+            provider_candidate_count,
+            cache_boundary_counts,
+            transcoded_warnings,
+        )
+
+    provider_segmentation = segment_request(provider_body, protocol=target_protocol)
+    provider_segmentation_status = str(provider_segmentation.status.value)
+
+    result = run_synthetic_cache_synthesis(
+        provider_body,
+        segmentation=provider_segmentation,
+        cache_config=synthetic_cache,
+        target_protocol=target_protocol,
+        target_provider_kind=DEFAULT_PROVIDER_KIND,
+        resolved_policy=None,
+    )
+    plan = result.plan
+    synthetic_shape = "provider_bound"
+    synthetic_status = plan.status
+    synthetic_dry_run = plan.dry_run
+    synthetic_candidate_count = len(plan.candidates)
+    synthetic_applied_count = plan.applied_count
+    provider_synthetic_status = plan.status
+    provider_candidate_count = len(plan.candidates)
+    return (
+        synthetic_shape,
+        synthetic_status,
+        synthetic_dry_run,
+        synthetic_candidate_count,
+        synthetic_applied_count,
+        provider_segmentation_status,
+        provider_synthetic_status,
+        provider_candidate_count,
+        cache_boundary_counts,
+        transcoded_warnings,
+    )
+
+
+def run_provider_bound_synthetic_replay(
+    fixture: Mapping[str, Any],
+    *,
+    compression_policy: CompressionConfig | None = None,
+    text_hints: Mapping[str, str] | None = None,
+    synthetic_cache: CacheConfig | None = None,
+) -> ReplayBundle:
+    """Run the full replay with explicit provider-bound semantics.
+
+    This helper mirrors production Phase 9: it transcribes the client
+    payload into the target provider protocol first, then runs
+    segmentation, compression, and synthetic cache against the
+    provider-bound body.
+
+    When ``client_protocol == target_protocol`` (no transcode needed),
+    this behaves the same as :func:`run_full_replay`.
+
+    The returned :class:`ReplayBundle` always carries
+    ``synthetic_cache_shape="provider_bound"`` (or
+    ``"provider_bound_unavailable"`` if transcode produced no body).
+
+    Use this helper for tests that need to assert against the
+    provider-bound segmentation/protocol path -- for example, the
+    OpenAI-to-Anthropic transcoding fixture.
+    """
+    name = str(fixture.get("name", "<unknown>"))
+    client_protocol = str(fixture.get("client_protocol", "openai"))
+    target_protocol = str(fixture.get("target_protocol", client_protocol))
+    expanded = expand_repeats(fixture)
+    request = expanded.get("request") if "request" in expanded else expanded
+    if not isinstance(request, dict):
+        raise ValueError(
+            f"Fixture {name!r} must declare a 'request' object after expansion."
+        )
+
+    needs_transcode = client_protocol != target_protocol
+    provider_body: dict[str, Any] | None = None
+    transcoded_warnings: tuple[str, ...] = ()
+    cache_boundary_counts: dict[str, int] = {}
+    if needs_transcode:
+        _, provider_body, warnings = _transcode_request(
+            request,
+            client_protocol=client_protocol,
+            target_protocol=target_protocol,
+        )
+        transcoded_warnings = tuple(
+            str(w.get("kind")) for w in warnings if isinstance(w, dict)
+        )
+
+    payload_for_pipeline: dict[str, Any] = (
+        provider_body if provider_body is not None else dict(request)
+    )
+    pipeline_protocol = target_protocol
+
+    segmentation = segment_request(payload_for_pipeline, protocol=pipeline_protocol)
+    pre_hash = stable_prefix_content_hash(payload_for_pipeline, segmentation)
+
+    comp_policy = (
+        compression_policy if compression_policy is not None else safe_policy()
+    )
+    compression_result = apply_safe_compression(
+        payload_for_pipeline,
+        segmentation,
+        policy=comp_policy,
+        text_hints=text_hints,
+    )
+    post_hash = stable_prefix_content_hash(
+        compression_result.transformed_payload, segmentation
+    )
+
+    synthetic_shape: SyntheticCacheShape = "disabled"
+    synthetic_status = "disabled"
+    synthetic_dry_run = True
+    synthetic_candidate_count = 0
+    synthetic_applied_count = 0
+    provider_segmentation_status = ""
+    if synthetic_cache is not None:
+        if needs_transcode and provider_body is None:
+            synthetic_shape = "provider_bound_unavailable"
+        else:
+            result = run_synthetic_cache_synthesis(
+                payload_for_pipeline,
+                segmentation=segmentation,
+                cache_config=synthetic_cache,
+                target_protocol=pipeline_protocol,
+                target_provider_kind=DEFAULT_PROVIDER_KIND,
+                resolved_policy=None,
+            )
+            plan = result.plan
+            synthetic_shape = "provider_bound"
+            synthetic_status = plan.status
+            synthetic_dry_run = plan.dry_run
+            synthetic_candidate_count = len(plan.candidates)
+            synthetic_applied_count = plan.applied_count
+        provider_segmentation_status = str(segmentation.status.value)
+
+    return ReplayBundle(
+        fixture_name=name,
+        client_protocol=client_protocol,
+        target_protocol=target_protocol,
+        segmentation_status=str(segmentation.status.value),
+        segment_counts_by_kind={
+            kind.value: count
+            for kind, count in segmentation.segment_count_by_kind.items()
+        },
+        stable_prefix_content_hash=str(segmentation.stable_prefix_hash),
+        pre_compression_hash=pre_hash,
+        post_compression_hash=post_hash,
+        compression_applied=bool(compression_result.applied),
+        compression_failed_fallback=bool(compression_result.failed_fallback),
+        transforms_by_reason={
+            str(k): int(v) for k, v in compression_result.transforms_by_reason.items()
+        },
+        synthetic_cache_shape=synthetic_shape,
+        synthetic_cache_status=synthetic_status,
+        synthetic_cache_dry_run=synthetic_dry_run,
+        synthetic_cache_candidate_count=synthetic_candidate_count,
+        synthetic_cache_applied_count=synthetic_applied_count,
+        provider_bound_segmentation_status=provider_segmentation_status,
+        provider_bound_synthetic_cache_status=synthetic_status,
+        provider_bound_synthetic_cache_candidate_count=synthetic_candidate_count,
         cache_boundary_counts=cache_boundary_counts,
         transcoded_warnings=transcoded_warnings,
         raw_segmentation=segmentation,
@@ -544,6 +939,7 @@ def path_keys(payload: Mapping[str, Any]) -> set[tuple[Any, ...]]:
 __all__ = [
     "DEFAULT_PROVIDER_KIND",
     "ReplayBundle",
+    "SyntheticCacheShape",
     "collect_segment_strings",
     "default_fixture_root",
     "disabled_policy",
@@ -554,6 +950,7 @@ __all__ = [
     "path_keys",
     "run_compression",
     "run_full_replay",
+    "run_provider_bound_synthetic_replay",
     "run_segmentation",
     "run_synthetic",
     "run_transcode",
