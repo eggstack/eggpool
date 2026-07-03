@@ -26,6 +26,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Phase 9: synthetic provider cache controls (post-route, disabled by default, dry-run by default)
 - Phase 10: closed-loop threshold tuning (recommendation-only)
 - Phase 11: replay fixture harness + regression tests (`tests/fixtures/cache_compression/`, `tests/unit/test_replay_fixtures_*.py`)
+- Phase 12: operator docs, profiles, and rollout guide ([docs/cache-compression.md](docs/cache-compression.md), [profiles](docs/cache-compression-profiles.md), [troubleshooting](docs/cache-compression-troubleshooting.md))
 
 ## Quick Start
 
@@ -297,6 +298,22 @@ uv run pytest tests/unit/test_replay_fixtures_regression.py tests/unit/test_repl
 
 See `plans/cache_compression_phase_11_replay_fixtures_regression_tests.md` and `architecture/README.md` § Replay Fixtures and Regression Harness (Phase 11) for the design.
 
+### Phase 12: Operator guide, profiles, and rollout
+
+Phase 12 turns the cache-preserving deterministic compression stack into a usable operator feature set. The runtime machinery is unchanged; the documentation surface catches up.
+
+- **Operator guide** — [docs/cache-compression.md](docs/cache-compression.md) walks through the ten-step operator model (observe cache counters, segment, preserve cacheability, observe compression, apply safe suffix compression, apply policy controls, inspect runtime views, keep routing separate, opt into synthetic cache controls, opt into tuning recommendations). The guide also documents what is safe by default, what is experimental, what never affects routing, and the privacy invariants.
+- **Profiles** — [docs/cache-compression-profiles.md](docs/cache-compression-profiles.md) ships six copy-pasteable config profiles (baseline / observe-only / safe suffix / synthetic cache dry-run / synthetic cache apply / tuning recommendation-only). Each profile lists the dashboard fields to watch and the JSON endpoint that surfaces them.
+- **Troubleshooting** — [docs/cache-compression-troubleshooting.md](docs/cache-compression-troubleshooting.md) maps common symptoms (`compression never applies`, `observe mode sees candidates but safe mode does not mutate`, `provider_unsupported`, `policy_required`, `no_candidates`, `failed_fallback`, `routing seems uneven`, `tuning recommendations not appearing`) to root causes and the next diagnostic step. The dashboard interpretation reference explains every counter, status, and warning code on every Phase 1-11 endpoint.
+
+**Privacy invariants:** no raw prompt, tool output, system message, request body, auth header, or provider API key is ever shown or persisted in any cache, compression, or synthetic-cache surface. The replay harness uses seven sentinel strings so a sanitization linter can prove no real prompt text leaked in.
+
+**Routing invariant:** `QuotaFairScorer` still accepts only `account_names`, `model_name`, `active_requests`, `request_estimates`. `GET /api/stats/runtime.guardrails` reports hardcoded constants (`routing_uses_cache_metrics: false`, `routing_uses_compression_metrics: false`, `routing_uses_synthetic_cache: false`, `routing_uses_compression_tuning: false`). Cache-aware routing would require an explicit `routing.cache_aware = true` flag plus per-provider support detection and is deliberately not implemented.
+
+**Rollback** is a documented config-only change (set `[compression] enabled = false`, `[cache.synthetic_cache_controls] enabled = false`, `[compression.tuning] enabled = false`, then `eggpool rehash`). No schema rollback is required.
+
+See `plans/cache_compression_phase_12_operator_docs_profiles.md` for the design.
+
 ## API Endpoints
 
 | Method | Path | Description |
@@ -329,6 +346,9 @@ When `[dashboard].enabled = true`, a multi-page dashboard is served at `/` with 
 | Filesystem layout | [docs/filesystem-layout.md](docs/filesystem-layout.md) |
 | Network & DNS diagnostics | [docs/network-diagnostics.md](docs/network-diagnostics.md) |
 | Protocol transcoding | [docs/transcoding.md](docs/transcoding.md) |
+| Cache & compression operator guide | [docs/cache-compression.md](docs/cache-compression.md) |
+| Cache & compression profiles | [docs/cache-compression-profiles.md](docs/cache-compression-profiles.md) |
+| Cache & compression troubleshooting | [docs/cache-compression-troubleshooting.md](docs/cache-compression-troubleshooting.md) |
 | Thinking & reasoning | [docs/thinking.md](docs/thinking.md) |
 
 ## Development

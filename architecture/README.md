@@ -1368,6 +1368,110 @@ Phase 11 is reporting-only.  The harness is invoked from pytest fixtures and nev
 - `src/eggpool/transcoder/__init__.py` -- public exports used by the harness
 - `plans/cache_compression_phase_11_replay_fixtures_regression_tests.md` -- design plan
 
+## Operator Documentation, Profiles, and Rollout (Phase 12)
+
+Phase 12 closes the gap between the cache-preserving deterministic compression primitives and operator usability. The runtime surface is unchanged; this phase ships documentation, six copy-pasteable config profiles, a dashboard interpretation reference, a symptom-to-cause troubleshooting guide, and a conservative rollout plan.
+
+### Documentation surface
+
+- `docs/cache-compression.md` -- ten-step operator model, what is safe by default, what is experimental, what never affects routing, privacy invariants, config validation notes, rollout summary, rollback.
+- `docs/cache-compression-profiles.md` -- six profiles (baseline / observe-only / safe suffix / synthetic cache dry-run / synthetic cache apply / tuning recommendation-only) with the dashboard fields to watch and the JSON endpoint that surfaces them.
+- `docs/cache-compression-troubleshooting.md` -- dashboard interpretation reference (every counter, status, and warning code on every Phase 1-11 endpoint) plus a symptom-to-cause guide for the common no-op and fallback cases.
+
+### Profiles (config-only)
+
+Each profile is a self-contained TOML snippet:
+
+1. **Baseline / disabled** -- `[compression] enabled = false`, synthetic cache `enabled = false`, tuning `enabled = false`. No mutation. Phase 1-4 observability continues.
+2. **Observe-only diagnostics** -- `[compression] enabled = true, mode = "observe"`. Analyzer runs on every request, no mutation. Phase 4 counters persist.
+3. **Safe suffix compression for coding agents** -- `[compression] enabled = true, mode = "safe"`. Six transforms fire on eligible volatile-suffix segments. Stable-prefix content hash is recomputed; mismatch triggers fail-closed fallback.
+4. **Anthropic synthetic cache dry-run** -- `[cache.synthetic_cache_controls] enabled = true, dry_run = true` plus a matching `[[compression.policies]]` row. Post-route selector computes a plan but does not mutate.
+5. **Anthropic synthetic cache apply mode** -- same as Profile 4 with `dry_run = false`. Structural-diff safety (`_validate_synthetic_cache_diff`) gates every mutation.
+6. **Threshold tuning recommendation-only** -- `[compression.tuning] enabled = true, mode = "recommend"`. Recommendations are advisory; `mode = "apply"` is accepted but currently dormant.
+
+### What is safe by default
+
+With shipped defaults the entire stack is observability-only. No request body, header, or route is altered:
+
+- Phase 1 cache counters recorded, never affects quota scoring.
+- Phase 2 segmentation annotates durable columns without inspecting prompts.
+- Phase 3 cache stability records boundary events on the in-memory `CacheBoundaryTracker`.
+- Phase 4 observe mode runs the analyzer on every request but never mutates.
+- Phase 5 safe compression defaults to `mode = "observe"`.
+- Phase 6 policy overrides default to `policies = []`.
+- Phase 9 synthetic cache defaults to `enabled = false`.
+- Phase 10 threshold tuning defaults to `enabled = false`.
+
+### What is experimental
+
+These ship behind explicit operator opt-in:
+
+- Phase 5 `mode = "safe"` -- actually mutates eligible volatile-suffix segments. Even then, the applier fails closed on any stable-prefix mismatch.
+- Phase 9 synthetic cache `apply` mode -- adds `cache_control` annotations to provider-bound Anthropic requests. Dry-run is the default when enabled. Apply mode requires a matching policy row by default (`require_policy = true`).
+- Phase 10 `mode = "apply"` -- accepted at config time but currently dormant. No production code path registers runtime overrides today.
+
+### What never affects routing
+
+The invariant from Phase 8 holds. `QuotaFairScorer.score_accounts` accepts only `account_names`, `model_name`, `active_requests`, `request_estimates`. `GET /api/stats/runtime` exposes a `guardrails` dict with hardcoded constants (`routing_cache_compression_mode: "reporting_only"`, `routing_uses_cache_metrics: false`, `routing_uses_compression_metrics: false`, `routing_uses_stable_prefix_hash: false`, `routing_uses_compression_policy: false`, `routing_uses_synthetic_cache: false`, `routing_uses_compression_tuning: false`). Same-provider account fairness is preserved because cache hit ratios, compression savings, synthetic-cache status, and tuning state never enter the scorer inputs.
+
+### Privacy invariants
+
+No raw prompt, tool output, system message, request body, auth header, or provider API key is ever shown or persisted in any cache, compression, or synthetic-cache surface. The replay harness uses seven sentinel strings (`SYSTEM_POLICY_SENTINEL_DO_NOT_COMPRESS`, `TOOL_SCHEMA_SENTINEL_DO_NOT_COMPRESS`, `VOLATILE_LOG_LINE`, `STACK_TRACE_SENTINEL`, `SYNTHETIC_BASE64_BLOB`, `LONG_USER_INSTRUCTION`, `LATEST_USER_SENTINEL`) so `tests/unit/test_replay_fixtures_sanitization.py` can prove no real prompt text leaked in. Phase 12 documentation re-states this invariant verbatim on every page so operators do not have to reconstruct it from plan files.
+
+### Config validation notes (documented for operators)
+
+- Synthetic cache `ttl = "ephemeral"` is the only currently accepted value. `5m` and `1h` are reserved and rejected at config load.
+- `compress_static_prefix = true` in any non-default policy override is rejected unless `allow_static_prefix_override = true` is set globally.
+- Tuning `mode = "apply"` is accepted at config time but currently behaves like `recommend` (no production code path registers runtime overrides today).
+- `compress_static_prefix = false` is the normal setting.
+- Context-limit checks happen before compression. Compression cannot rescue over-limit requests.
+- Default `max_breakpoints = 4` (Anthropic's documented limit).
+
+### Rollout guide (conservative staging)
+
+1. **Baseline disabled** -- confirm only Phase 1-4 observability is recorded.
+2. **Observe-only compression** for 24-48 hours. Inspect candidate rate, estimated savings, analyzer latency, suppression reasons.
+3. **Safe suffix compression** for one client/policy. Inspect stable-prefix preserved count and failed fallback count.
+4. **Expand safe compression** to additional clients if stable.
+5. **Synthetic cache dry-run** for Anthropic providers only. Inspect candidate/applied dry-run counts and native-preserved warnings.
+6. **Synthetic apply mode** for one Anthropic provider/client only if dry-run is clean.
+7. **Tuning recommendation-only** mode if operator wants threshold advice.
+
+### Rollback
+
+Operator rollback is a documented config-only change. No schema rollback is required; added columns and audit tables are additive:
+
+```toml
+[compression]
+enabled = false
+mode = "observe"
+
+[cache.synthetic_cache_controls]
+enabled = false
+dry_run = true
+
+[compression.tuning]
+enabled = false
+mode = "recommend"
+```
+
+After editing, run `eggpool rehash` to restart the supervisor.
+
+### Routing non-interference
+
+Phase 12 is documentation-only. No Phase 12 columns are added to the database and no migrations are required. `QuotaFairScorer.score_accounts` is unchanged from Phase 8. The `RuntimeCompressionPolicyOverrideRegistry` from Phase 10 is still dormant; no production code path registers entries. Same-provider account fairness (e.g., multiple OpenAI subscriptions) is preserved because the new docs explicitly state cache hit ratios, compression savings, synthetic-cache status, and tuning state never enter the scorer inputs.
+
+### Code references
+
+- `docs/cache-compression.md` -- main operator guide
+- `docs/cache-compression-profiles.md` -- six copy-pasteable profiles
+- `docs/cache-compression-troubleshooting.md` -- dashboard interpretation and symptom-to-cause
+- `config.example.toml` § Phase 9 / Phase 10 commented blocks -- equivalent verbose config
+- `src/eggpool/_share/config.example.toml` -- pipx-install copy
+- `src/eggpool/api/stats.py` -- `/api/stats/cache-observability`, `/api/stats/canonical-request-segmentation`, `/api/stats/cache-stability`, `/api/stats/compression-observability`, `/api/stats/compression-runtime`, `/api/stats/compression-policies`, `/api/stats/synthetic-cache-observability`, `/api/stats/compression-tuning`
+- `src/eggpool/dashboard/render.py` -- four Phase 7 runtime cards (`compression`, `compression_runtime`, `compression_policy`, `cache_stability`) plus synthetic cache and tuning cards
+- `plans/cache_compression_phase_12_operator_docs_profiles.md` -- design plan
+
 ## Database
 
 SQLite via aiosqlite with WAL mode. Single-connection serialization via a lock + ContextVar.
