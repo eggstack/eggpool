@@ -844,14 +844,22 @@ label.trace-limit {
 
   /* The nav is no longer the right-aligned wide-viewport column on
      mobile; it shares a row with the burger and the brand title.
-     `margin-left: auto` is intentionally dropped here so the burger,
-     h1, and refresh stay tightly grouped on the same row instead of
-     being pushed apart by an auto margin.  `width: auto` lets the
-     nav hug its content (the refresh button + the hidden menu). */
+     `width: auto` lets the nav hug its content (the refresh button +
+     the hidden menu).  `margin-left: auto` pushes the nav — and the
+     refresh button inside it — to the right edge of the topbar so the
+     reload icon sits flush against the right side of the screen, as
+     the operator expects on a phone-sized viewport.
+
+     `position: relative` anchors the absolutely-positioned dropdown
+     menu (see `nav.topnav.topnav-open .topnav-menu` below) to the
+     nav, so opening the menu drops the dropdown below the topbar
+     without consuming any flow space — keeping the burger, brand,
+     and refresh on their single row. */
   nav.topnav {
     order: 2;
     width: auto;
-    margin-left: 0;
+    margin-left: auto;
+    position: relative;
   }
 
   .overview-grid {
@@ -907,6 +915,28 @@ label.trace-limit {
 
   nav.topnav.topnav-open .topnav-menu {
     display: flex;
+    /* Drop the menu below the topbar as a full-width overlay so it
+       actually expands on narrow viewports.  Without `position:
+       absolute`, the menu is constrained to its parent's content
+       width — and the parent nav is `width: auto` hugging only the
+       refresh button — which silently clips the dropdown to zero
+       width and leaves the operator staring at a non-responsive
+       burger on a phone.  `top: 100%` places the dropdown flush
+       against the bottom edge of the topbar; `left: 0; right: 0`
+       stretches it edge-to-edge across the viewport.  `z-index`
+       lifts it above any sibling content beneath the topbar. */
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    width: auto;
+    margin-top: 0.5rem;
+    padding: 0.5rem;
+    background: var(--topbar-bg);
+    border: 1px solid var(--topbar-border);
+    border-radius: 3px;
+    box-shadow: 0 2px 6px color-mix(in srgb, var(--page-text) 12%, transparent);
+    z-index: 6;
   }
 
   .topnav-menu a {

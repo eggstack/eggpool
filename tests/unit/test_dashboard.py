@@ -2688,6 +2688,70 @@ class TestTooltipStylesheet:
         nav_block = self._first_mobile_block_for("nav.topnav")
         assert "width: 100%" not in nav_block
 
+    def test_mobile_nav_pushes_refresh_to_right(self) -> None:
+        """The reload icon must sit at the right edge of the topbar on
+        narrow viewports.  `margin-left: auto` on the nav inside the
+        topbar flex row pushes the nav (and the refresh button nested
+        inside it) flush against the right side of the screen — the
+        layout the operator expects when thumbing the dashboard on a
+        phone.
+
+        Regression for the "reload icon is not all the way to the
+        right" mobile UX report: the previous `margin-left: 0` left
+        the refresh button hugging the brand title instead of
+        aligning to the viewport edge.
+        """
+        nav_block = self._first_mobile_block_for("nav.topnav")
+        assert "margin-left: auto" in nav_block
+
+    def test_mobile_nav_is_relative_for_dropdown_anchor(self) -> None:
+        """The nav needs `position: relative` on mobile so the
+        absolutely-positioned dropdown menu (rendered when the burger
+        is clicked) can anchor against it via `top: 100%; left: 0;
+        right: 0`.  Without this, the menu would anchor against the
+        nearest other positioned ancestor (the sticky topbar or the
+        viewport) and render in the wrong place — or clip outside the
+        topbar entirely on long content.
+        """
+        nav_block = self._first_mobile_block_for("nav.topnav")
+        assert "position: relative" in nav_block
+
+    def test_mobile_open_menu_is_absolutely_positioned(self) -> None:
+        """When the burger toggles `.topnav-open` on the nav, the menu
+        must become absolutely-positioned so it can drop below the
+        topbar as a full-width overlay.  Without `position:
+        absolute`, the menu's `width: 100%` is interpreted relative to
+        the nav (which is `width: auto` and hugs only the refresh
+        button) and the dropdown collapses to zero width — the
+        exact regression that left mobile operators staring at a
+        non-responsive burger.
+
+        The companion rule `display: flex` keeps the menu visible;
+        together they let the dropdown expand edge-to-edge below the
+        single-row topbar instead of being clamped to its collapsed
+        parent's content width.
+        """
+        css = self._load_css()
+        needle = "nav.topnav.topnav-open .topnav-menu"
+        assert needle in css, (
+            f"mobile dropdown rule for {needle!r} not found in stylesheet"
+        )
+        # Grab the rule body so we can assert its declarations without
+        # accidentally matching the rule in another media query.
+        match = re.search(
+            r"nav\.topnav\.topnav-open \.topnav-menu\s*\{[^}]*\}",
+            css,
+        )
+        assert match is not None, (
+            "nav.topnav.topnav-open .topnav-menu rule body not found"
+        )
+        rule_body = match.group(0)
+        assert "display: flex" in rule_body
+        assert "position: absolute" in rule_body
+        assert "top: 100%" in rule_body
+        assert "left: 0" in rule_body
+        assert "right: 0" in rule_body
+
     @staticmethod
     def _first_mobile_block_for(selector: str) -> str:
         """Find the first rule body in the @media (max-width: 760px)
