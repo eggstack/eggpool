@@ -440,6 +440,10 @@ def _structural_cache_diff(
     string keys and integer indices.  The mutator is supposed to
     **only** add ``cache_control`` keys at candidate container
     paths.  Any other change is a safety failure.
+
+    Use :func:`_validate_synthetic_cache_diff` to confirm the diff
+    is consistent with a candidate set; this helper only reports
+    raw structural differences.
     """
     added: list[list[str | int]] = []
     removed: list[list[str | int]] = []
@@ -483,6 +487,33 @@ def _structural_cache_diff(
 
     _walk(original, mutated, [])
     return {"added_paths": added, "removed_paths": removed, "changed_paths": changed}
+
+
+def _validate_synthetic_cache_diff(
+    diff: dict[str, Any],
+    candidates: tuple[SyntheticCacheCandidate, ...],
+) -> bool:
+    """Return ``True`` when the diff is consistent with a candidate set.
+
+    A mutator is allowed to add ``cache_control`` only at the
+    container paths implied by the candidate set.  Any added path
+    whose last component is ``"cache_control"`` but whose container
+    is not in the candidate set is a safety failure — the mutator
+    must never annotate containers that the selector did not pick.
+    Any non-``cache_control`` addition, removal, or change is also
+    a safety failure.
+    """
+    allowed_added_paths: set[tuple[str | int, ...]] = {
+        tuple(list(_container_path_for_candidate(c.target_path)) + ["cache_control"])
+        for c in candidates
+    }
+    for added_path in diff.get("added_paths", []):
+        last = added_path[-1] if added_path else None
+        if last != "cache_control":
+            return False
+        if tuple(added_path) not in allowed_added_paths:
+            return False
+    return not diff.get("removed_paths") and not diff.get("changed_paths")
 
 
 def select_synthetic_cache_candidates(
@@ -860,6 +891,7 @@ __all__ = [
     "WARN_SYNTHESIZED",
     "_path_to_display",
     "_structural_cache_diff",
+    "_validate_synthetic_cache_diff",
     "apply_synthetic_cache_controls",
     "run_synthetic_cache_synthesis",
     "select_synthetic_cache_candidates",

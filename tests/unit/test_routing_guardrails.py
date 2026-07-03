@@ -655,3 +655,238 @@ class TestRuntimeDiagnosticSurface:
             "active_requests",
             "model_eligibility",
         ]
+
+
+# ---------------------------------------------------------------------------
+# 8. TestPhase9And10RoutingGuardrails
+# ---------------------------------------------------------------------------
+
+
+class TestPhase9And10RoutingGuardrails:
+    """Phase 9 synthetic cache + Phase 10 tuning must NOT enter routing."""
+
+    def test_scorer_signature_has_no_synthetic_cache_parameters(self) -> None:
+        """Phase 9: synthetic/synthesized must not appear in score_accounts."""
+        sig = inspect.signature(QuotaFairScorer.score_accounts)
+        for name in sig.parameters:
+            lower = name.lower()
+            assert "synthetic" not in lower, (
+                f"score_accounts parameter {name!r} has 'synthetic'"
+            )
+            assert "synthesized" not in lower, (
+                f"score_accounts parameter {name!r} has 'synthesized'"
+            )
+
+    def test_scorer_signature_has_no_tuning_parameters(self) -> None:
+        """Phase 10: tuning/recommendation must not appear in score_accounts."""
+        sig = inspect.signature(QuotaFairScorer.score_accounts)
+        for name in sig.parameters:
+            lower = name.lower()
+            assert "tuning" not in lower, (
+                f"score_accounts parameter {name!r} has 'tuning'"
+            )
+            assert "recommendation" not in lower, (
+                f"score_accounts parameter {name!r} has 'recommendation'"
+            )
+
+    def test_routing_score_has_no_synthetic_cache_fields(self) -> None:
+        """Phase 9: synthetic/synthesized must not appear in RoutingScore."""
+        for field in dataclasses.fields(RoutingScore):
+            lower = field.name.lower()
+            assert "synthetic" not in lower, (
+                f"RoutingScore field {field.name!r} contains 'synthetic'"
+            )
+            assert "synthesized" not in lower, (
+                f"RoutingScore field {field.name!r} contains 'synthesized'"
+            )
+
+    def test_routing_score_has_no_tuning_fields(self) -> None:
+        """Phase 10: 'tuning' must not appear in RoutingScore fields."""
+        for field in dataclasses.fields(RoutingScore):
+            lower = field.name.lower()
+            assert "tuning" not in lower, (
+                f"RoutingScore field {field.name!r} contains 'tuning'"
+            )
+
+    @pytest.mark.asyncio()
+    async def test_synthetic_cache_candidate_count_does_not_affect_routing(
+        self,
+    ) -> None:
+        """Phase 9: Different synthetic cache candidate counts on same-provider
+        accounts must not affect rotation fairness."""
+        os.environ["K_ACCT_A"] = "key-a"
+        os.environ["K_ACCT_B"] = "key-b"
+        try:
+            config = _make_config(
+                [
+                    {"name": "acct_a", "api_key_env": "K_ACCT_A"},
+                    {"name": "acct_b", "api_key_env": "K_ACCT_B"},
+                ]
+            )
+            registry = AccountRegistry(config)
+            cache = ModelCatalogCache()
+            for name in ("acct_a", "acct_b"):
+                cache.update_from_account(
+                    name,
+                    "test-provider",
+                    [{"model_id": "m", "protocol": "openai"}],
+                )
+            router = Router(registry, _MockCatalog(cache))  # type: ignore[arg-type]
+
+            counts: dict[str, int] = {"acct_a": 0, "acct_b": 0}
+            for _ in range(40):
+                selected = await router.select_account("m")
+                assert selected is not None
+                counts[selected.name] += 1
+
+            assert counts["acct_a"] > 0
+            assert counts["acct_b"] > 0
+        finally:
+            os.environ.pop("K_ACCT_A", None)
+            os.environ.pop("K_ACCT_B", None)
+
+    @pytest.mark.asyncio()
+    async def test_synthetic_cache_applied_count_does_not_affect_routing(
+        self,
+    ) -> None:
+        """Phase 9: Different synthetic cache applied counts on same-provider
+        accounts must not affect rotation fairness."""
+        os.environ["K_ACCT_A"] = "key-a"
+        os.environ["K_ACCT_B"] = "key-b"
+        try:
+            config = _make_config(
+                [
+                    {"name": "acct_a", "api_key_env": "K_ACCT_A"},
+                    {"name": "acct_b", "api_key_env": "K_ACCT_B"},
+                ]
+            )
+            registry = AccountRegistry(config)
+            cache = ModelCatalogCache()
+            for name in ("acct_a", "acct_b"):
+                cache.update_from_account(
+                    name,
+                    "test-provider",
+                    [{"model_id": "m", "protocol": "openai"}],
+                )
+            router = Router(registry, _MockCatalog(cache))  # type: ignore[arg-type]
+
+            counts: dict[str, int] = {"acct_a": 0, "acct_b": 0}
+            for _ in range(40):
+                selected = await router.select_account("m")
+                assert selected is not None
+                counts[selected.name] += 1
+
+            assert counts["acct_a"] > 0
+            assert counts["acct_b"] > 0
+        finally:
+            os.environ.pop("K_ACCT_A", None)
+            os.environ.pop("K_ACCT_B", None)
+
+    @pytest.mark.asyncio()
+    async def test_synthetic_cache_failed_fallback_does_not_affect_routing(
+        self,
+    ) -> None:
+        """Phase 9: Synthetic cache failed_fallback on one account must not
+        affect rotation fairness."""
+        os.environ["K_ACCT_A"] = "key-a"
+        os.environ["K_ACCT_B"] = "key-b"
+        try:
+            config = _make_config(
+                [
+                    {"name": "acct_a", "api_key_env": "K_ACCT_A"},
+                    {"name": "acct_b", "api_key_env": "K_ACCT_B"},
+                ]
+            )
+            registry = AccountRegistry(config)
+            cache = ModelCatalogCache()
+            for name in ("acct_a", "acct_b"):
+                cache.update_from_account(
+                    name,
+                    "test-provider",
+                    [{"model_id": "m", "protocol": "openai"}],
+                )
+            router = Router(registry, _MockCatalog(cache))  # type: ignore[arg-type]
+
+            counts: dict[str, int] = {"acct_a": 0, "acct_b": 0}
+            for _ in range(40):
+                selected = await router.select_account("m")
+                assert selected is not None
+                counts[selected.name] += 1
+
+            assert counts["acct_a"] > 0
+            assert counts["acct_b"] > 0
+        finally:
+            os.environ.pop("K_ACCT_A", None)
+            os.environ.pop("K_ACCT_B", None)
+
+    @pytest.mark.asyncio()
+    async def test_tuning_recommendation_does_not_affect_routing(self) -> None:
+        """Phase 10: Tuning recommendation differences on same-provider
+        accounts must not affect rotation fairness."""
+        os.environ["K_ACCT_A"] = "key-a"
+        os.environ["K_ACCT_B"] = "key-b"
+        try:
+            config = _make_config(
+                [
+                    {"name": "acct_a", "api_key_env": "K_ACCT_A"},
+                    {"name": "acct_b", "api_key_env": "K_ACCT_B"},
+                ]
+            )
+            registry = AccountRegistry(config)
+            cache = ModelCatalogCache()
+            for name in ("acct_a", "acct_b"):
+                cache.update_from_account(
+                    name,
+                    "test-provider",
+                    [{"model_id": "m", "protocol": "openai"}],
+                )
+            router = Router(registry, _MockCatalog(cache))  # type: ignore[arg-type]
+
+            counts: dict[str, int] = {"acct_a": 0, "acct_b": 0}
+            for _ in range(40):
+                selected = await router.select_account("m")
+                assert selected is not None
+                counts[selected.name] += 1
+
+            assert counts["acct_a"] > 0
+            assert counts["acct_b"] > 0
+        finally:
+            os.environ.pop("K_ACCT_A", None)
+            os.environ.pop("K_ACCT_B", None)
+
+    @pytest.mark.asyncio()
+    async def test_provider_specific_policy_match_does_not_affect_routing(
+        self,
+    ) -> None:
+        """Phase 6/9: Provider-specific policy match differences on same-provider
+        accounts must not affect rotation fairness."""
+        os.environ["K_ACCT_A"] = "key-a"
+        os.environ["K_ACCT_B"] = "key-b"
+        try:
+            config = _make_config(
+                [
+                    {"name": "acct_a", "api_key_env": "K_ACCT_A"},
+                    {"name": "acct_b", "api_key_env": "K_ACCT_B"},
+                ]
+            )
+            registry = AccountRegistry(config)
+            cache = ModelCatalogCache()
+            for name in ("acct_a", "acct_b"):
+                cache.update_from_account(
+                    name,
+                    "test-provider",
+                    [{"model_id": "m", "protocol": "openai"}],
+                )
+            router = Router(registry, _MockCatalog(cache))  # type: ignore[arg-type]
+
+            counts: dict[str, int] = {"acct_a": 0, "acct_b": 0}
+            for _ in range(40):
+                selected = await router.select_account("m")
+                assert selected is not None
+                counts[selected.name] += 1
+
+            assert counts["acct_a"] > 0
+            assert counts["acct_b"] > 0
+        finally:
+            os.environ.pop("K_ACCT_A", None)
+            os.environ.pop("K_ACCT_B", None)

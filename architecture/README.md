@@ -1230,12 +1230,17 @@ via `synthetic_cache_*` overlay fields resolved by
 synthetic-cache fields so a policy row containing only synthetic-cache
 overrides does not trigger compression config validation warnings.
 
+### Structural-diff tightening (Phase 10/11 review pass)
+
+The coordinator's structural-diff safety check uses `_validate_synthetic_cache_diff` (in `src/eggpool/transcoder/cache_synthesis.py`) which validates added `cache_control` paths against the candidate container paths rather than merely checking that the path's last component is `cache_control`. This prevents the mutator from annotating non-candidate containers. `resolve_selected_provider_kind` falls back from `catalog.providers` to `config.providers[provider_id].kind` for config-backed providers when catalog metadata is missing.
+
 ### Code references
 
-- `src/eggpool/transcoder/cache_synthesis.py` -- `run_synthetic_cache_synthesis`
+- `src/eggpool/transcoder/cache_synthesis.py` -- `run_synthetic_cache_synthesis`, `_validate_synthetic_cache_diff`
 - `src/eggpool/transcoder/cache_synthesis_policy.py` -- `CacheConfig`
 - `src/eggpool/transcoder/compression/policy_resolver.py` -- `synthetic_cache_overrides`, `_overlay_config()`
 - `src/eggpool/request/coordinator.py` -- `_apply_synthetic_cache_controls`
+- `src/eggpool/models/config.py` -- `ProviderConfig.kind`
 - `src/eggpool/db/schema/0045_synthetic_cache_controls.sql` -- migration
 
 ## Closed-Loop Threshold Tuning (Phase 10)

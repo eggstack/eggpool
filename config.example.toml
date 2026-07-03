@@ -831,7 +831,11 @@ protocol = "anthropic"
 # is internal and not user-visible.  Only `ttl = "ephemeral"` is
 # currently supported; `5m` and `1h` are rejected at config load.
 # Structural-diff safety rejects any unexpected mutation and falls back
-# to the original payload.
+# to the original payload.  Apply mode is gated by structural-diff
+# safety: cache_control may only be added at selected candidate
+# containers (see `_validate_synthetic_cache_diff`).  The structural-diff
+# rejects cache_control on non-candidate containers, non-cache_control
+# additions, removals, and changes.
 # [cache.synthetic_cache_controls]
 # enabled = false
 # dry_run = true

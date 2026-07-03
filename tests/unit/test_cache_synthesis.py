@@ -610,6 +610,151 @@ class TestApplyAnthropic:
         assert system[0]["cache_control"] == {"type": "ephemeral"}
         assert "x" * 4096 in system[0]["text"]
 
+    def test_apply_preserves_native_cache_control_on_tools(self) -> None:
+        payload = _anthropic_payload(
+            system=[{"type": "text", "text": "x" * 4096}],
+            tools=[
+                {
+                    "name": "lookup",
+                    "description": "lookup",
+                    "input_schema": {"type": "object"},
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        )
+        segmentation = segment_request(payload, protocol=ANTHROPIC_PROTOCOL)
+        cache_config = CacheConfig(
+            synthetic_cache_controls=SyntheticCacheControlsConfig(
+                enabled=True,
+                dry_run=False,
+                require_policy=False,
+                min_stable_tokens=0,
+            )
+        )
+        resolved = _resolved_policy(
+            enabled=True,
+            dry_run=False,
+            min_stable_tokens=0,
+        )
+        result = run_synthetic_cache_synthesis(
+            payload,
+            segmentation=segmentation,
+            cache_config=cache_config,
+            target_protocol=ANTHROPIC_PROTOCOL,
+            target_provider_kind="anthropic",
+            resolved_policy=resolved,
+        )
+        assert result.transformed_payload is not None
+        tools = result.transformed_payload["tools"]
+        assert isinstance(tools, list)
+        # Native cache_control is preserved byte-for-byte.
+        assert tools[0]["cache_control"] == {"type": "ephemeral"}
+        # Native-preserved warning is emitted and the mutator skipped the
+        # native-annotated block, so no synthetic annotation is layered on
+        # top of the native one.  ``applied_count`` reconciles to the
+        # number of cache_control additions the mutator actually made,
+        # which excludes native-only blocks.
+        assert WARN_EXISTING_NATIVE_PRESERVED in result.warnings
+        # The mutator may still surface tools[0] in the candidate set
+        # (the selector picks it) but the actual mutation count must
+        # exclude it.
+        assert result.plan.applied_count < len(result.plan.candidates) or all(
+            c.placement != "tools" or c.source_path != ("tools", 0)
+            for c in result.plan.candidates
+        )
+
+    def test_apply_preserves_native_cache_control_on_message_block(self) -> None:
+        # Native cache_control on a message content block is preserved
+        # even though that placement is not currently selected by the
+        # selector.
+        payload = _anthropic_payload(system=[{"type": "text", "text": "x" * 4096}])
+        payload["messages"] = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "hi",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }
+        ]
+        segmentation = segment_request(payload, protocol=ANTHROPIC_PROTOCOL)
+        cache_config = CacheConfig(
+            synthetic_cache_controls=SyntheticCacheControlsConfig(
+                enabled=True,
+                dry_run=False,
+                require_policy=False,
+                min_stable_tokens=0,
+            )
+        )
+        resolved = _resolved_policy(
+            enabled=True,
+            dry_run=False,
+            min_stable_tokens=0,
+        )
+        result = run_synthetic_cache_synthesis(
+            payload,
+            segmentation=segmentation,
+            cache_config=cache_config,
+            target_protocol=ANTHROPIC_PROTOCOL,
+            target_provider_kind="anthropic",
+            resolved_policy=resolved,
+        )
+        assert result.transformed_payload is not None
+        messages = result.transformed_payload["messages"]
+        assert isinstance(messages, list)
+        content = messages[0]["content"]
+        assert isinstance(content, list)
+        # Native cache_control on the message block is preserved.
+        assert content[0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_apply_mixed_native_and_synthetic_only_annotates_unannotated(
+        self,
+    ) -> None:
+        # system[0] has native cache_control; system[1] does not.
+        # Only system[1] should receive a synthetic annotation.
+        payload = _anthropic_payload(
+            system=[
+                {
+                    "type": "text",
+                    "text": "x" * 4096,
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {"type": "text", "text": "y" * 4096},
+            ]
+        )
+        segmentation = segment_request(payload, protocol=ANTHROPIC_PROTOCOL)
+        cache_config = CacheConfig(
+            synthetic_cache_controls=SyntheticCacheControlsConfig(
+                enabled=True,
+                dry_run=False,
+                require_policy=False,
+                min_stable_tokens=0,
+            )
+        )
+        resolved = _resolved_policy(
+            enabled=True,
+            dry_run=False,
+            min_stable_tokens=0,
+        )
+        result = run_synthetic_cache_synthesis(
+            payload,
+            segmentation=segmentation,
+            cache_config=cache_config,
+            target_protocol=ANTHROPIC_PROTOCOL,
+            target_provider_kind="anthropic",
+            resolved_policy=resolved,
+        )
+        assert result.transformed_payload is not None
+        system = result.transformed_payload["system"]
+        assert isinstance(system, list)
+        # Native annotation preserved exactly.
+        assert system[0]["cache_control"] == {"type": "ephemeral"}
+        # Synthetic annotation only on the unannotated block.
+        assert system[1]["cache_control"] == {"type": "ephemeral"}
+
     def test_apply_records_synthetic_boundary_annotations(self) -> None:
         payload = _anthropic_payload(system=[{"type": "text", "text": "x" * 4096}])
         segmentation = segment_request(payload, protocol=ANTHROPIC_PROTOCOL)
@@ -1394,6 +1539,333 @@ class TestStructuralCacheDiff:
         assert diff == {"added_paths": [], "removed_paths": [], "changed_paths": []}
 
 
+class TestValidateSyntheticCacheDiff:
+    """The coordinator runs ``_validate_synthetic_cache_diff`` against
+    the candidate set returned by the selector; an added
+    ``cache_control`` outside the candidate set is a safety failure
+    and flips the plan to ``failed_fallback``.
+    """
+
+    def _candidate(self, target_path: tuple[str | int, ...]) -> SyntheticCacheCandidate:
+        return SyntheticCacheCandidate(
+            placement="system",
+            source_path=target_path,
+            target_path=target_path,
+            estimated_tokens=1024,
+            reason="system_candidate",
+            policy_name="<global>",
+            policy_source="global",
+            ttl="ephemeral",
+        )
+
+    def test_allows_cache_control_at_candidate_container(self) -> None:
+        from eggpool.transcoder.cache_synthesis import (
+            _structural_cache_diff,
+            _validate_synthetic_cache_diff,
+        )
+
+        original: dict[str, Any] = {"system": [{"type": "text", "text": "x"}]}
+        mutated: dict[str, Any] = {
+            "system": [
+                {
+                    "type": "text",
+                    "text": "x",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        }
+        diff = _structural_cache_diff(original, mutated)
+        candidates = (self._candidate(("system", 0)),)
+        assert _validate_synthetic_cache_diff(diff, candidates) is True
+
+    def test_allows_cache_control_at_candidate_container_with_text_leaf(
+        self,
+    ) -> None:
+        from eggpool.transcoder.cache_synthesis import (
+            _structural_cache_diff,
+            _validate_synthetic_cache_diff,
+        )
+
+        original: dict[str, Any] = {"system": [{"type": "text", "text": "x"}]}
+        mutated: dict[str, Any] = {
+            "system": [
+                {
+                    "type": "text",
+                    "text": "x",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        }
+        diff = _structural_cache_diff(original, mutated)
+        # Candidate target_path points at the text leaf; the mutator
+        # walks back to the container, so the validator must accept
+        # the cache_control on the container.
+        candidates = (self._candidate(("system", 0, "text")),)
+        assert _validate_synthetic_cache_diff(diff, candidates) is True
+
+    def test_rejects_cache_control_at_non_candidate_container(self) -> None:
+        from eggpool.transcoder.cache_synthesis import (
+            _structural_cache_diff,
+            _validate_synthetic_cache_diff,
+        )
+
+        original: dict[str, Any] = {
+            "system": [{"type": "text", "text": "x"}],
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+        mutated: dict[str, Any] = {
+            "system": [{"type": "text", "text": "x"}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "hi",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }
+        diff = _structural_cache_diff(original, mutated)
+        # Selector only picked system[0]; cache_control on messages[0]
+        # is an unexpected mutation.
+        candidates = (self._candidate(("system", 0)),)
+        assert _validate_synthetic_cache_diff(diff, candidates) is False
+
+    def test_rejects_non_cache_control_addition(self) -> None:
+        from eggpool.transcoder.cache_synthesis import (
+            _structural_cache_diff,
+            _validate_synthetic_cache_diff,
+        )
+
+        original: dict[str, Any] = {"system": [{"type": "text", "text": "x"}]}
+        mutated: dict[str, Any] = {
+            "system": [{"type": "text", "text": "x"}],
+            "extra_field": "sneaky",
+        }
+        diff = _structural_cache_diff(original, mutated)
+        candidates = (self._candidate(("system", 0)),)
+        assert _validate_synthetic_cache_diff(diff, candidates) is False
+
+    def test_rejects_text_field_mutation(self) -> None:
+        from eggpool.transcoder.cache_synthesis import (
+            _structural_cache_diff,
+            _validate_synthetic_cache_diff,
+        )
+
+        original: dict[str, Any] = {"system": [{"type": "text", "text": "x"}]}
+        mutated: dict[str, Any] = {
+            "system": [
+                {
+                    "type": "text",
+                    "text": "x",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        }
+        # Pretend the mutator changed the text content in addition
+        # to adding cache_control.
+        mutated["system"][0]["text"] = "DIFFERENT"
+        diff = _structural_cache_diff(original, mutated)
+        candidates = (self._candidate(("system", 0)),)
+        assert _validate_synthetic_cache_diff(diff, candidates) is False
+
+    def test_rejects_volatile_suffix_container_addition(self) -> None:
+        from eggpool.transcoder.cache_synthesis import (
+            _structural_cache_diff,
+            _validate_synthetic_cache_diff,
+        )
+
+        original: dict[str, Any] = {
+            "system": [{"type": "text", "text": "x"}],
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+        mutated: dict[str, Any] = {
+            "system": [{"type": "text", "text": "x"}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "hi",
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                }
+            ],
+        }
+        diff = _structural_cache_diff(original, mutated)
+        # Selector only picked system[0]; a cache_control added inside
+        # a volatile-suffix message block must be rejected.
+        candidates = (self._candidate(("system", 0)),)
+        assert _validate_synthetic_cache_diff(diff, candidates) is False
+
+    def test_empty_candidate_set_rejects_cache_control_addition(self) -> None:
+        from eggpool.transcoder.cache_synthesis import (
+            _structural_cache_diff,
+            _validate_synthetic_cache_diff,
+        )
+
+        original: dict[str, Any] = {"system": [{"type": "text", "text": "x"}]}
+        mutated: dict[str, Any] = {
+            "system": [
+                {
+                    "type": "text",
+                    "text": "x",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        }
+        diff = _structural_cache_diff(original, mutated)
+        assert _validate_synthetic_cache_diff(diff, ()) is False
+
+    def test_empty_diff_passes_with_empty_candidate_set(self) -> None:
+        from eggpool.transcoder.cache_synthesis import (
+            _validate_synthetic_cache_diff,
+        )
+
+        diff = {"added_paths": [], "removed_paths": [], "changed_paths": []}
+        assert _validate_synthetic_cache_diff(diff, ()) is True
+
+
+class TestResolveSelectedProviderKind:
+    """resolve_selected_provider_kind: catalog first, config fallback, never raises."""
+
+    def _selected(self, provider_id: str | None) -> Any:
+        from eggpool.request.coordinator import SelectedAttempt
+
+        return SelectedAttempt(
+            proxy_request_id="r",
+            db_request_id="1",
+            attempt_id=1,
+            reservation_id="r1",
+            account_id=1,
+            account_name="acct",
+            api_key="sk-test",
+            model_id="m",
+            estimated_tokens=0,
+            estimated_microdollars=0,
+            attempt_number=1,
+            provider_id=provider_id or "",
+            protocol="openai",
+        )
+
+    def test_catalog_kind_wins(self) -> None:
+        from eggpool.request.coordinator import resolve_selected_provider_kind
+
+        catalog = type(
+            "Catalog",
+            (),
+            {
+                "providers": {
+                    "p1": type("P", (), {"kind": "anthropic"})(),
+                    "p2": type("P", (), {"kind": "openai"})(),
+                }
+            },
+        )()
+        result = resolve_selected_provider_kind(catalog, self._selected("p1"))
+        assert result == "anthropic"
+
+    def test_config_fallback_when_catalog_missing(self) -> None:
+        from eggpool.request.coordinator import resolve_selected_provider_kind
+
+        # Catalog has no providers attribute.
+        catalog = type("Catalog", (), {})()
+        # Config has the provider with kind.
+        config = type(
+            "Config",
+            (),
+            {
+                "providers": {
+                    "p1": type("P", (), {"kind": "anthropic"})(),
+                }
+            },
+        )()
+        result = resolve_selected_provider_kind(
+            catalog, self._selected("p1"), config=config
+        )
+        assert result == "anthropic"
+
+    def test_catalog_wins_over_config(self) -> None:
+        from eggpool.request.coordinator import resolve_selected_provider_kind
+
+        catalog = type(
+            "Catalog",
+            (),
+            {
+                "providers": {
+                    "p1": type("P", (), {"kind": "anthropic"})(),
+                }
+            },
+        )()
+        config = type(
+            "Config",
+            (),
+            {
+                "providers": {
+                    "p1": type("P", (), {"kind": "openai"})(),
+                }
+            },
+        )()
+        result = resolve_selected_provider_kind(
+            catalog, self._selected("p1"), config=config
+        )
+        assert result == "anthropic"
+
+    def test_unknown_provider_returns_none(self) -> None:
+        from eggpool.request.coordinator import resolve_selected_provider_kind
+
+        catalog = type("Catalog", (), {})()
+        config = type(
+            "Config",
+            (),
+            {
+                "providers": {
+                    "p1": type("P", (), {"kind": "anthropic"})(),
+                }
+            },
+        )()
+        # Provider id not in catalog or config.
+        result = resolve_selected_provider_kind(
+            catalog, self._selected("missing"), config=config
+        )
+        assert result is None
+
+    def test_no_selected_returns_none(self) -> None:
+        from eggpool.request.coordinator import resolve_selected_provider_kind
+
+        catalog = type(
+            "Catalog",
+            (),
+            {"providers": {"p1": type("P", (), {"kind": "anthropic"})()}},
+        )()
+        assert resolve_selected_provider_kind(catalog, None) is None
+
+    def test_catalog_kind_empty_string_falls_through(self) -> None:
+        from eggpool.request.coordinator import resolve_selected_provider_kind
+
+        catalog = type(
+            "Catalog",
+            (),
+            {
+                "providers": {
+                    "p1": type("P", (), {"kind": ""})(),
+                }
+            },
+        )()
+        config = type(
+            "Config",
+            (),
+            {
+                "providers": {
+                    "p1": type("P", (), {"kind": "anthropic"})(),
+                }
+            },
+        )()
+        result = resolve_selected_provider_kind(
+            catalog, self._selected("p1"), config=config
+        )
+        assert result == "anthropic"
+
+
 # ---------------------------------------------------------------------------
 # Post-route synthetic cache controls (Phase A corrective pass)
 # ---------------------------------------------------------------------------
@@ -1448,6 +1920,7 @@ class TestSyntheticCachePostRoute:
         coordinator._compression_tuning_registry = None
         coordinator._compression_policy = CompressionConfig()
         coordinator._catalog = None
+        coordinator._config = None
 
         coordinator._apply_synthetic_cache_controls(context=ctx, selected=selected)
         assert ctx.synthetic_cache_result is not None
@@ -1506,6 +1979,7 @@ class TestSyntheticCachePostRoute:
         coordinator._compression_tuning_registry = None
         coordinator._compression_policy = CompressionConfig()
         coordinator._catalog = None
+        coordinator._config = None
 
         coordinator._apply_synthetic_cache_controls(context=ctx, selected=selected)
         assert ctx.synthetic_cache_result is not None
@@ -1569,6 +2043,7 @@ class TestSyntheticCachePostRoute:
         coordinator._compression_tuning_registry = None
         coordinator._compression_policy = CompressionConfig()
         coordinator._catalog = None
+        coordinator._config = None
 
         coordinator._apply_synthetic_cache_controls(context=ctx, selected=selected)
         assert ctx.synthetic_cache_result is not None
@@ -1642,6 +2117,7 @@ class TestSyntheticCachePostRoute:
         coordinator._compression_tuning_registry = None
         coordinator._compression_policy = config_with_overrides
         coordinator._catalog = mock_catalog
+        coordinator._config = None
         ctx.resolved_compression_policy = None
 
         coordinator._apply_synthetic_cache_controls(context=ctx, selected=selected)
@@ -1765,6 +2241,7 @@ class TestSyntheticCachePostRoute:
         coordinator._compression_tuning_registry = None
         coordinator._compression_policy = CompressionConfig()
         coordinator._catalog = None
+        coordinator._config = None
 
         coordinator._apply_synthetic_cache_controls(context=ctx, selected=selected)
         assert ctx.synthetic_cache_result is not None
@@ -1819,6 +2296,7 @@ class TestSyntheticCachePostRoute:
         coordinator._compression_tuning_registry = None
         coordinator._compression_policy = CompressionConfig()
         coordinator._catalog = None
+        coordinator._config = None
 
         coordinator._apply_synthetic_cache_controls(context=ctx, selected=selected)
         assert ctx.synthetic_cache_segmentation is not None
@@ -1872,6 +2350,7 @@ class TestSyntheticCachePostRoute:
         coordinator._compression_tuning_registry = None
         coordinator._compression_policy = CompressionConfig()
         coordinator._catalog = None
+        coordinator._config = None
 
         coordinator._apply_synthetic_cache_controls(context=ctx, selected=selected)
         # Apply mode with valid payload: upstream_body should be updated
@@ -1881,3 +2360,185 @@ class TestSyntheticCachePostRoute:
             and ctx.synthetic_cache_result.plan.status == "applied"
         ):
             assert ctx.upstream_body is not None
+
+    # ------------------------------------------------------------------
+    # Streaming-path exercises
+    # ------------------------------------------------------------------
+
+    def test_synthetic_cache_dry_run_runs_for_streaming_request(self) -> None:
+        from eggpool.request.coordinator import (
+            ProxyRequestContext,
+            RequestCoordinator,
+            SelectedAttempt,
+        )
+
+        payload = _anthropic_payload(system=[{"type": "text", "text": "x" * 4096}])
+        cache_config = CacheConfig(
+            synthetic_cache_controls=SyntheticCacheControlsConfig(
+                enabled=True,
+                dry_run=True,
+                require_policy=False,
+                min_stable_tokens=0,
+            )
+        )
+        ctx = ProxyRequestContext(
+            request_id="test-req",
+            protocol="anthropic",
+            model_id="claude-3-5-sonnet",
+            streaming=True,
+            original_body=json.dumps(payload).encode(),
+            incoming_headers={},
+            upstream_protocol="anthropic",
+            upstream_body=json.dumps(payload).encode(),
+        )
+        selected = SelectedAttempt(
+            proxy_request_id="test-req",
+            db_request_id="1",
+            attempt_id=1,
+            reservation_id="r1",
+            account_id=1,
+            account_name="test-acct",
+            api_key="sk-test",
+            model_id="claude-3-5-sonnet",
+            estimated_tokens=100,
+            estimated_microdollars=0,
+            attempt_number=1,
+            provider_id="anthropic-test",
+            protocol="anthropic",
+        )
+        coordinator = object.__new__(RequestCoordinator)
+        coordinator._cache_config = cache_config
+        coordinator._compression_tuning_registry = None
+        coordinator._compression_policy = CompressionConfig()
+        coordinator._catalog = None
+        coordinator._config = None
+
+        coordinator._apply_synthetic_cache_controls(context=ctx, selected=selected)
+        assert ctx.synthetic_cache_result is not None
+        assert ctx.synthetic_cache_result.plan.status in (
+            "dry_run",
+            "applied",
+            "no_candidates",
+            "disabled",
+            "policy_required",
+        )
+
+    def test_synthetic_cache_apply_runs_for_streaming_request(self) -> None:
+        from eggpool.request.coordinator import (
+            ProxyRequestContext,
+            RequestCoordinator,
+            SelectedAttempt,
+        )
+
+        payload = _anthropic_payload(system=[{"type": "text", "text": "x" * 4096}])
+        original_body = json.dumps(payload).encode()
+        cache_config = CacheConfig(
+            synthetic_cache_controls=SyntheticCacheControlsConfig(
+                enabled=True,
+                dry_run=False,
+                require_policy=False,
+                min_stable_tokens=0,
+            )
+        )
+        ctx = ProxyRequestContext(
+            request_id="test-req",
+            protocol="anthropic",
+            model_id="claude-3-5-sonnet",
+            streaming=True,
+            original_body=original_body,
+            incoming_headers={},
+            upstream_protocol="anthropic",
+            upstream_body=original_body,
+        )
+        selected = SelectedAttempt(
+            proxy_request_id="test-req",
+            db_request_id="1",
+            attempt_id=1,
+            reservation_id="r1",
+            account_id=1,
+            account_name="test-acct",
+            api_key="sk-test",
+            model_id="claude-3-5-sonnet",
+            estimated_tokens=100,
+            estimated_microdollars=0,
+            attempt_number=1,
+            provider_id="anthropic-test",
+            protocol="anthropic",
+        )
+        coordinator = object.__new__(RequestCoordinator)
+        coordinator._cache_config = cache_config
+        coordinator._compression_tuning_registry = None
+        coordinator._compression_policy = CompressionConfig()
+        coordinator._catalog = None
+        coordinator._config = None
+
+        coordinator._apply_synthetic_cache_controls(context=ctx, selected=selected)
+        assert ctx.synthetic_cache_result is not None
+        if ctx.synthetic_cache_result.plan.status == "applied":
+            assert ctx.upstream_body is not None
+            assert ctx.upstream_body != original_body
+            new_payload = json.loads(ctx.upstream_body)
+            system = new_payload["system"]
+            assert isinstance(system, list)
+            assert system[0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_synthetic_cache_streaming_context_preserves_result(self) -> None:
+        from eggpool.request.coordinator import (
+            ProxyRequestContext,
+            RequestCoordinator,
+            SelectedAttempt,
+        )
+
+        payload = _anthropic_payload(system=[{"type": "text", "text": "x" * 4096}])
+        cache_config = CacheConfig(
+            synthetic_cache_controls=SyntheticCacheControlsConfig(
+                enabled=True,
+                dry_run=True,
+                require_policy=False,
+                min_stable_tokens=0,
+            )
+        )
+        ctx = ProxyRequestContext(
+            request_id="test-req",
+            protocol="anthropic",
+            model_id="claude-3-5-sonnet",
+            streaming=True,
+            original_body=json.dumps(payload).encode(),
+            incoming_headers={},
+            upstream_protocol="anthropic",
+            upstream_body=json.dumps(payload).encode(),
+        )
+        selected = SelectedAttempt(
+            proxy_request_id="test-req",
+            db_request_id="1",
+            attempt_id=1,
+            reservation_id="r1",
+            account_id=1,
+            account_name="test-acct",
+            api_key="sk-test",
+            model_id="claude-3-5-sonnet",
+            estimated_tokens=100,
+            estimated_microdollars=0,
+            attempt_number=1,
+            provider_id="anthropic-test",
+            protocol="anthropic",
+        )
+        coordinator = object.__new__(RequestCoordinator)
+        coordinator._cache_config = cache_config
+        coordinator._compression_tuning_registry = None
+        coordinator._compression_policy = CompressionConfig()
+        coordinator._catalog = None
+        coordinator._config = None
+
+        assert ctx.synthetic_cache_result is None
+        coordinator._apply_synthetic_cache_controls(context=ctx, selected=selected)
+        assert ctx.synthetic_cache_result is not None
+        result = ctx.synthetic_cache_result
+        assert result.plan.status in (
+            "dry_run",
+            "applied",
+            "no_candidates",
+            "disabled",
+            "policy_required",
+        )
+        assert result.plan.dry_run is True

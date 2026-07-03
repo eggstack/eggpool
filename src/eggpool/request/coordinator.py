@@ -151,26 +151,45 @@ def _serialize_thinking_trace(trace: dict[str, Any] | None) -> str | None:
 def resolve_selected_provider_kind(
     catalog: Any,  # noqa: ANN401
     selected: Any,  # noqa: ANN401
+    config: Any = None,  # noqa: ANN401
 ) -> str | None:
-    """Look up the selected provider's ``kind`` from the catalog.
+    """Look up the selected provider's ``kind``.
 
-    Returns ``None`` when the catalog is missing, the provider is not
-    in the catalog, or the kind field is unset.  Never raises.
+    Lookup order:
+
+    1. ``catalog.providers[provider_id].kind`` (catalog-backed metadata)
+    2. ``config.providers[provider_id].kind`` (config-backed metadata
+       when the catalog row is missing or has no ``kind``)
+
+    Returns ``None`` when neither source carries a ``kind`` or when
+    the selected attempt has no ``provider_id``.  Never raises so
+    the synthetic-cache post-route hook always has a deterministic
+    fallback.
     """
     if not selected or not getattr(selected, "provider_id", None):
         return None
     provider_id: str = selected.provider_id
     try:
         providers_obj: Any = getattr(catalog, "providers", None)
-        if not isinstance(providers_obj, dict):
-            return None
-        providers_dict: dict[str, Any] = cast("dict[str, Any]", providers_obj)
-        provider_config: Any = providers_dict.get(provider_id)
-        if provider_config is None:
-            return None
-        kind_attr: Any = getattr(provider_config, "kind", None)
-        if isinstance(kind_attr, str) and kind_attr:
-            return kind_attr
+        if isinstance(providers_obj, dict):
+            providers_dict: dict[str, Any] = cast("dict[str, Any]", providers_obj)
+            provider_config: Any = providers_dict.get(provider_id)
+            if provider_config is not None:
+                kind_attr: Any = getattr(provider_config, "kind", None)
+                if isinstance(kind_attr, str) and kind_attr:
+                    return kind_attr
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        if config is not None:
+            config_providers: Any = getattr(config, "providers", None)
+            if isinstance(config_providers, dict):
+                config_dict: dict[str, Any] = cast("dict[str, Any]", config_providers)
+                provider_config: Any = config_dict.get(provider_id)
+                if provider_config is not None:
+                    kind_attr: Any = getattr(provider_config, "kind", None)
+                    if isinstance(kind_attr, str) and kind_attr:
+                        return kind_attr
     except Exception:  # noqa: BLE001
         return None
     return None
@@ -2777,7 +2796,9 @@ class RequestCoordinator:
             return
         payload: dict[str, Any] = payload_obj  # pyright: ignore[reportUnknownVariableType]
 
-        target_provider_kind = resolve_selected_provider_kind(self._catalog, selected)
+        target_provider_kind = resolve_selected_provider_kind(
+            self._catalog, selected, config=self._config
+        )
 
         from eggpool.transcoder.segmentation import segment_request
 
@@ -2827,6 +2848,7 @@ class RequestCoordinator:
 
         from eggpool.transcoder.cache_synthesis import (
             _structural_cache_diff,
+            _validate_synthetic_cache_diff,
             run_synthetic_cache_synthesis,
         )
 
@@ -2842,10 +2864,7 @@ class RequestCoordinator:
 
         if result.transformed_payload is not None:
             diff = _structural_cache_diff(payload, result.transformed_payload)
-            unexpected_additions = [
-                p for p in diff["added_paths"] if not (p and p[-1] == "cache_control")
-            ]
-            if unexpected_additions or diff["removed_paths"] or diff["changed_paths"]:
+            if not _validate_synthetic_cache_diff(diff, result.plan.candidates):
                 from eggpool.transcoder.cache_synthesis import (
                     SyntheticCachePlan,
                 )

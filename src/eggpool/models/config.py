@@ -455,6 +455,11 @@ class ProviderConfig(BaseModel):
         default_factory=lambda: ["openai"],
         min_length=1,
     )
+    kind: str | None = None
+    """Provider family (e.g. ``"anthropic"``, ``"openai"``).  Used by
+    Phase 9 synthetic-cache post-route selection as a fallback when
+    the catalog row is missing or has no ``kind`` attribute.  The
+    catalog (live or cached) is authoritative when present."""
     openai_path: str = "/chat/completions"
     anthropic_path: str = "/messages"
     models_method: Literal["GET", "POST"] = "GET"
