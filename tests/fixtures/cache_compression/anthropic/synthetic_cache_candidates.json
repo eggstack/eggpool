@@ -1,0 +1,45 @@
+{
+  "name": "synthetic_cache_candidates",
+  "category": "anthropic",
+  "client_protocol": "anthropic",
+  "target_protocol": "anthropic",
+  "description": "Anthropic request with no native cache_control; both system and tool become synthetic candidates.",
+  "request": {
+    "model": "claude-test",
+    "system": [
+      {
+        "type": "text",
+        "text": "SYSTEM_POLICY_SENTINEL_DO_NOT_COMPRESS You are a helpful assistant. Follow all instructions carefully."
+      }
+    ],
+    "messages": [
+      {
+        "role": "user",
+        "content": "LATEST_USER_SENTINEL Hello there."
+      }
+    ],
+    "tools": [
+      {
+        "name": "TOOL_SCHEMA_SENTINEL_DO_NOT_COMPRESS",
+        "description": "Returns a string.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    ],
+    "max_tokens": 1024
+  },
+  "expectations": {
+    "synthetic_cache_status": "applied",
+    "synthetic_cache_candidate_count": 2,
+    "compression_safe_applies": false
+  }
+}

@@ -1316,6 +1316,58 @@ is operator-visible only; it does not flow into scorer inputs.
 - `src/eggpool/dashboard/routes.py` and `src/eggpool/dashboard/render.py`
   -- runtime card and JSON handler
 
+## Replay Fixtures and Regression Harness (Phase 11)
+
+Phase 11 is the test-only layer that pins down the high-risk Phase 2/3/5/9 behaviour without ever shipping a real prompt to disk.  The harness lives entirely under `tests/` and never enters the production code path.
+
+### What ships
+
+- **Fixture tree** -- `tests/fixtures/cache_compression/` with four subdirectories:
+  - `openai/` (6 fixtures): `simple_stable_prefix`, `repeated_tool_output`, `large_search_results`, `base64_blob`, `stack_trace`, `mixed_native_cache_like_fields`.
+  - `anthropic/` (6 fixtures): `system_blocks_native_cache`, `tool_schema_native_cache`, `tool_result_string_large`, `tool_result_nested_text_large`, `thinking_block_protected`, `synthetic_cache_candidates`.
+  - `transcode/` (2 fixtures): `openai_client_to_anthropic_provider` (preserves `cache_control` on `tools[0]`), `anthropic_client_to_openai_provider` (drops unsupported nested `cache_control`).
+  - `routing/` (1 fixture): `same_provider_two_accounts_equal_load` -- two same-provider accounts with identical load but adversarial cache/compression metrics for routing-guardrails testing.
+- **Sentinel strings** -- every fixture uses one of seven sentinels (`SYSTEM_POLICY_SENTINEL_DO_NOT_COMPRESS`, `TOOL_SCHEMA_SENTINEL_DO_NOT_COMPRESS`, `VOLATILE_LOG_LINE`, `STACK_TRACE_SENTINEL`, `SYNTHETIC_BASE64_BLOB`, `LONG_USER_INSTRUCTION`, `LATEST_USER_SENTINEL`) so the sanitization linter can prove no real prompt text leaked in.
+- **Compact repeat spec** -- `expand_repeats()` lets fixtures declare repeating blocks (e.g., 32 volatile log lines) without writing thousands of lines of JSON.
+- **Deterministic policies** -- `safe_policy`/`observe_policy`/`disabled_policy` mirror the canonical Phase 4-6 configs without the operator config surface.
+- **`ReplayBundle` dataclass** -- summarises the structural outcome (segmentation status, stable-prefix hash pre/post, compression transforms by reason code, synthetic cache status, transcoder cache boundary tracker snapshot) without leaking raw payloads.  Failure paths emit fixture name + status delta, never raw prompt text.
+- **Helper API** -- `load_fixture`, `expand_repeats`, `run_full_replay`, `run_segmentation`, `run_compression`, `run_transcode`, `run_synthetic`, `path_keys`, `collect_segment_strings`.
+
+### Regression suite
+
+`tests/unit/test_replay_fixtures_regression.py` ships with 8 test classes covering:
+
+1. **TestReplayHarness** -- every fixture loads, segment+compress+transcode+synthetic pipeline runs end-to-end, stable-prefix hash is recomputed and matches.
+2. **TestStablePrefixPreservation** -- safe compression never mutates `stable_prefix` content (hash unchanged before/after).
+3. **TestVolatileOnlyMutation** -- only `volatile_suffix` segments are mutated; `stable_prefix` and `semi_stable_context` are untouched.
+4. **TestSyntheticCacheProviderBound** -- synthetic cache candidates come from provider-bound segmentation (post-transcode), not client-bound segmentation.
+5. **TestNativeCacheControlPreservation** -- apply mode never duplicates, relocates, or removes native `cache_control` annotations.
+6. **TestFailClosedFallback** -- structural-diff mismatch triggers `failed_fallback=True` and preserves the original payload.
+7. **TestRequestShapeHash** -- request shape hash (Phase 2) is deterministic across replay runs.
+8. **TestRoutingNonInterference** -- `inspect.getsource(QuotaFairScorer.score_accounts)` and `inspect.getsource(RuntimeMetricsService._snapshot_routing_runtime)` prove the scorer signature is the canonical 4-tuple and the guardrails dict still pins `routing_uses_*` to `false`.
+
+### Sanitization linter
+
+`tests/unit/test_replay_fixtures_sanitization.py` enforces content privacy:
+
+- No bearer tokens (`Bearer `), `sk-...` keys, or `Authorization:` lines.
+- No oversized strings (>5 KB leaves), no real prompt text (sentinel coverage).
+- Synthetic IDs follow the `synthetic_(call|id|use)_[A-Za-z0-9_]+` pattern.
+- Unique fixture names across all subdirectories.
+
+### Routing non-interference
+
+Phase 11 is reporting-only.  The harness is invoked from pytest fixtures and never touches the routing layer, the database, or the dashboard.  `QuotaFairScorer.score_accounts` signature is unchanged from Phase 8.  No Phase 11 columns are added to the database and no migrations are required.  Same-provider account fairness (e.g., multiple OpenAI subscriptions) is preserved because cache hit ratios, compression savings, stable-prefix hashes, synthetic-cache status, and tuning state never enter the scorer inputs.
+
+### Code references
+
+- `tests/fixtures/cache_compression/` -- 15 sanitized JSON fixtures + `README.md`
+- `tests/helpers/cache_compression_replay.py` -- harness (load_fixture, expand_repeats, ReplayBundle, run_* helpers, safe_policy/observe_policy/disabled_policy, synthetic_cache_config, path_keys, collect_segment_strings)
+- `tests/unit/test_replay_fixtures_regression.py` -- 8 regression test classes
+- `tests/unit/test_replay_fixtures_sanitization.py` -- 6 sanitization linter tests
+- `src/eggpool/transcoder/__init__.py` -- public exports used by the harness
+- `plans/cache_compression_phase_11_replay_fixtures_regression_tests.md` -- design plan
+
 ## Database
 
 SQLite via aiosqlite with WAL mode. Single-connection serialization via a lock + ContextVar.

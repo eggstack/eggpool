@@ -1,0 +1,68 @@
+{
+  "name": "tool_result_nested_text_large",
+  "category": "anthropic",
+  "client_protocol": "anthropic",
+  "target_protocol": "anthropic",
+  "description": "Anthropic request with large nested text tool_result content for compression.",
+  "request": {
+    "model": "claude-test",
+    "system": [
+      {
+        "type": "text",
+        "text": "SYSTEM_POLICY_SENTINEL_DO_NOT_COMPRESS You are a helpful assistant."
+      }
+    ],
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "synthetic_id_001",
+            "content": [
+              {
+                "type": "text",
+                "text": "VOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\n"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "LONG_USER_INSTRUCTION Processing the results."
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": "LATEST_USER_SENTINEL Continue."
+      }
+    ],
+    "tools": [
+      {
+        "name": "TOOL_SCHEMA_SENTINEL_DO_NOT_COMPRESS",
+        "description": "Returns a string.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    ],
+    "max_tokens": 1024
+  },
+  "expectations": {
+    "segmentation_status": "segmented",
+    "compression_safe_applies": true
+  }
+}

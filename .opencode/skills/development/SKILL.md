@@ -187,6 +187,49 @@ Acceptance:
 uv run pytest tests/unit/test_routing_guardrails.py -v
 ```
 
+### Phase 11 -- Replay Fixtures & Regression Harness
+
+Phase 11 ships a tiny test-only replay harness so operators can pin
+down the high-risk Phase 2/3/5/9 behaviour without ever shipping a real
+prompt to disk.
+
+- **Fixtures** -- `tests/fixtures/cache_compression/{openai,anthropic,transcode,routing}/*.json`
+  plus `tests/fixtures/cache_compression/README.md` (schema, sentinel
+  reference, sanitization rules, repeat expansion).  All prompts use
+  the seven sentinel strings; any new fixture MUST follow the README.
+- **Helper module** -- `tests/helpers/cache_compression_replay.py`
+  exposes `load_fixture`, `expand_repeats`, `run_full_replay`,
+  `ReplayBundle`, `safe_policy`/`observe_policy`/`disabled_policy`,
+  `synthetic_cache_config`, `run_segmentation`/`run_compression`/
+  `run_transcode`/`run_synthetic`, `path_keys`, `collect_segment_strings`.
+- **Regression suite** -- `tests/unit/test_replay_fixtures_regression.py`
+  pins 8 invariants: stable-prefix preservation, volatile-only
+  mutation, provider-bound synthetic cache, native cache_control
+  preservation, fail-closed fallback, request-shape hashing, harness
+  surface sanity, and routing non-interference.
+- **Sanitization linter** -- `tests/unit/test_replay_fixtures_sanitization.py`
+  enforces no bearer tokens, no `sk-...` keys, no `Authorization:`
+  lines, no oversized strings, no real prompt text, and unique fixture
+  names.
+
+**Critical rules**:
+
+- Phase 11 is reporting-only.  No Phase 11 column lands in the database
+  and no Phase 11 field enters `QuotaFairScorer.score_accounts`.
+- All replay fixtures and helpers MUST stay content-private.  Never
+  log raw request content on failure -- emit fixture name + status
+  delta only.
+- When adding a new Phase 2/5/9 regression case, drop the fixture JSON
+  under the right subdirectory and assert via the harness helpers;
+  do not import production DB code.
+- The sanitization linter MUST pass before any fixture can land.
+
+Acceptance:
+
+```bash
+uv run pytest tests/unit/test_replay_fixtures_regression.py tests/unit/test_replay_fixtures_sanitization.py -v
+```
+
 ## Code Style
 
 - Python 3.11+ with `from __future__ import annotations` in all files

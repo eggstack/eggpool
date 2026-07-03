@@ -1,0 +1,60 @@
+{
+  "name": "thinking_block_protected",
+  "category": "anthropic",
+  "client_protocol": "anthropic",
+  "target_protocol": "anthropic",
+  "description": "Anthropic request with large thinking block that must not be compressed or have synthetic cache applied.",
+  "request": {
+    "model": "claude-test",
+    "system": [
+      {
+        "type": "text",
+        "text": "SYSTEM_POLICY_SENTINEL_DO_NOT_COMPRESS You are a helpful assistant."
+      }
+    ],
+    "messages": [
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION LONG_USER_INSTRUCTION Reasoning through the problem step by step. Reasoning through the problem step by step. Reasoning through the problem step by step. Reasoning through the problem step by step. Reasoning through the problem step by step. Reasoning through the problem step by step. Reasoning through the problem step by step. Reasoning through the problem step by step. Reasoning through the problem step by step. Reasoning through the problem step by step. Reasoning through the problem step by step. Reasoning through the problem step by step. Reasoning through the problem step by step. Reasoning through the problem step by step. Reasoning through the problem step by step. Reasoning through the problem step by step. Reasoning through the problem step by step. Reasoning through the problem step by step. Reasoning through the problem step by step. Reasoning through the problem step by step. Reasoning through the problem step by step. Reasoning through the problem step by step. Reasoning through the problem step by step. Reasoning through the problem step by step. Reasoning through the problem step by step. Reasoning through the problem step by step. Reasoning through the problem step by step. Reasoning through the problem step by step. Reasoning through the problem step by step. Reasoning through the problem step by step. "
+          },
+          {
+            "type": "text",
+            "text": "LONG_USER_INSTRUCTION Based on my analysis, here is the answer."
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": "VOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nVOLATILE_LOG_LINE timeout\nLATEST_USER_SENTINEL Thanks, now try this."
+      }
+    ],
+    "tools": [
+      {
+        "name": "TOOL_SCHEMA_SENTINEL_DO_NOT_COMPRESS",
+        "description": "Returns a string.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    ],
+    "max_tokens": 1024
+  },
+  "expectations": {
+    "segmentation_status": "segmented",
+    "compression_safe_applies": true,
+    "no_synthetic_cache_at_paths": [
+      "messages.0.content.0"
+    ]
+  }
+}

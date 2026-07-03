@@ -25,6 +25,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Safe suffix compression — when `[compression] mode = "safe"`, deterministic transforms fold repeated lines, compact logs/search/stack traces, elide base64 blobs, and minify machine JSON inside `volatile_suffix` regions, preserving every `stable_prefix` segment byte-for-byte (recomputed SHA-256 verified via exact content hash of the stable-prefix segments re-extracted from both original and transformed payloads) and degrading to the original payload on any mismatch. All six transforms emit unified markers via `markers.build_marker` with the format `[EggPool compression: <transform> | segment=<id> | lines=<n> | tokens=<n> | sha256=<digest>]`. Context-limit checks happen before compression, so compression cannot rescue over-limit requests
 - Phase 9: synthetic provider cache controls (post-route, disabled by default, dry-run by default)
 - Phase 10: closed-loop threshold tuning (recommendation-only)
+- Phase 11: replay fixture harness + regression tests (`tests/fixtures/cache_compression/`, `tests/unit/test_replay_fixtures_*.py`)
 
 ## Quick Start
 
@@ -278,6 +279,23 @@ Phase 10 adds an advisory recommendation engine that observes Phase 4-6 compress
 Both phases preserve routing non-interference: `QuotaFairScorer` does NOT consume synthetic cache or tuning fields.  Same-provider account fairness is preserved.
 
 See `plans/cache_compression_phase_09_synthetic_cache_controls.md` and `plans/cache_compression_phase_10_closed_loop_threshold_tuning.md` for the full design.
+
+### Phase 11: Replay fixtures and regression harness
+
+Phase 11 ships a tiny replay fixture harness under `tests/fixtures/cache_compression/` and `tests/helpers/cache_compression_replay.py`.  It exists so that operators can pin down the high-risk Phase 2/3/5/9 behaviour without ever shipping a real prompt to disk.
+
+- **15 sanitized JSON fixtures** across `openai/` (6), `anthropic/` (6), `transcode/` (2), and `routing/` (1).  All prompts use the documented sentinel strings (`SYSTEM_POLICY_SENTINEL_DO_NOT_COMPRESS`, `TOOL_SCHEMA_SENTINEL_DO_NOT_COMPRESS`, `VOLATILE_LOG_LINE`, `STACK_TRACE_SENTINEL`, `SYNTHETIC_BASE64_BLOB`, `LONG_USER_INSTRUCTION`, `LATEST_USER_SENTINEL`) so a linter can prove no real prompt text, bearer token, `sk-...` key, or `Authorization:` header slipped in.
+- **Deterministic helpers**: `load_fixture`, `expand_repeats` (compact repeat spec), `safe_policy`/`observe_policy`/`disabled_policy`, `synthetic_cache_config`, `run_segmentation`/`run_compression`/`run_transcode`/`run_synthetic`, and a `ReplayBundle` dataclass that summarises the structural outcome (segmentation status, stable-prefix hash, compression transforms, synthetic cache status) without leaking raw payloads.
+- **Two test files** ship by default: `tests/unit/test_replay_fixtures_regression.py` (8 test classes pinning stable-prefix preservation, volatile-only mutation, provider-bound synthetic cache, native cache_control preservation, fail-closed fallback, request-shape hashing, and routing non-interference) and `tests/unit/test_replay_fixtures_sanitization.py` (6 linter tests enforcing content privacy and fixture uniqueness).
+- The harness is reporting-only: it never enters the routing layer, never persists anything to the production DB, and never logs raw request content on failure.  The `QuotaFairScorer` does NOT consume any Phase 11 fields; routing stays load-based.
+
+Run the Phase 11 suite locally:
+
+```bash
+uv run pytest tests/unit/test_replay_fixtures_regression.py tests/unit/test_replay_fixtures_sanitization.py -v
+```
+
+See `plans/cache_compression_phase_11_replay_fixtures_regression_tests.md` and `architecture/README.md` § Replay Fixtures and Regression Harness (Phase 11) for the design.
 
 ## API Endpoints
 

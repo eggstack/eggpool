@@ -1,0 +1,67 @@
+{
+  "name": "base64_blob",
+  "category": "openai",
+  "client_protocol": "openai",
+  "target_protocol": "openai",
+  "description": "OpenAI request with a synthetic base64-encoded image in tool output.",
+  "request": {
+    "model": "gpt-test",
+    "messages": [
+      {
+        "role": "system",
+        "content": "SYSTEM_POLICY_SENTINEL_DO_NOT_COMPRESS You are a helpful assistant."
+      },
+      {
+        "role": "user",
+        "content": "LONG_USER_INSTRUCTION Process the following data."
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "synthetic_call_001",
+            "type": "function",
+            "function": {
+              "name": "TOOL_SCHEMA_SENTINEL_DO_NOT_COMPRESS",
+              "arguments": "{\"query\": \"fetch image\"}"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "synthetic_call_001",
+        "content": "iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAQAAADGVwjkAAAAAmJLR0QA/4ePzL8AAAAJcEhZcwAACxIAAAsSAdLdfvwAAAAHZWlNQzlMz4DZAAAAKklEQVR42u3OAQ0AAAjDMK5/aWAcDS8P1l1RUA2NkTGpIBET2pxVmQE0qVbpVC0AAAAASUVORK5CYII=AAAAGGZ0eXBtcDQyAAAAAGlwIGlzbGlzdAAAAAAAAAAAAAAAABGkzZWhyZXIAAAAKZHM4MwAAAAAAAAAAQ3VicFRZUlMAc3RlZGEAAAAAAAAAV2lwa1oAAAAAAAAAAQ3VicFRSU0EAVGVscGQAAAAAAAAAVHJhawAAAAAAAEF2aWRlAAAAAAAAAAAAAAAAU2NyZWVuc2hvdAAAAAAAAAAAAAAGRl5ysgAAAAxpdG9mYXNwAAAAAAAAADAAAB6AFwATwAAAAh0dHRwczovL2V2aXN5dGVzdGluZy5naXRodWJ1c2VyY29udGVudC5jb20vR3V5UGlsb3R0aW5nVGVzdGluZ1NldHRpbmdzUmVwby9yYXcvZ2l0aGV1YnVzZXJjb250ZW50LmNvbS9ndXlwaWxvdHRpbmd0ZXN0aW5nc2V0dGluZ3NyZXBvL3Jhdy9naXRoZWJ1c2VyY29udGVudC5jb20vZ3V5cGlsb3Rpbmd0ZXN0aW5nc2V0dGluZ3NyZXBvL3ByaW1hZ3JhcGg=AAAAGGZ0eXBtcDQyAAAAGmF1dG9wcmVkaWN0AAAAFmlwYXIAAAAUaW1wZGF0YQAAAAxpbmd0eD0xMDglM0E7eG1wdG9wPSI3LjUuMSI7eG1wdG9wPSI3LjUuMSI7eG1wdWw9InBpeGVsIjtkYXRhPSAxNjU0OTg5NjAwMDAwOyB0aW1lc3RhbXA9IDE2NTQ5ODk2MDAwMDA7IGR1cmF0aW9uPSA2MDAwMDAwOyByZWNvcmRpbmctc3RhcnQ9IDE2NTQ5ODk2MDAwMDA7IHN0b3JpbmdzPSAxNjU0OTg5NjAwMDAwOwAAAAZ2aWRlbgAAAAAAdmlkZWVkPjxyZWN0IHdpZHRoPSI4MDAiIGhlaWdodD0iNjAwIiBzdHlsZT0iZmlsbDo5NDAwMDsgY29sb3Itc3BhY2Utc3JjOiB1bnNldCIgLz4="
+      },
+      {
+        "role": "user",
+        "content": "LATEST_USER_SENTINEL Summarise the image content."
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "TOOL_SCHEMA_SENTINEL_DO_NOT_COMPRESS",
+          "description": "Returns a string.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string"
+              }
+            },
+            "required": ["query"]
+          }
+        }
+      }
+    ]
+  },
+  "expectations": {
+    "segmentation_status": "segmented",
+    "compression_safe_applies": true,
+    "expected_transforms_present": ["elide_base64_blobs"],
+    "stable_prefix_content_hash_unchanged_after_compression": true
+  }
+}
