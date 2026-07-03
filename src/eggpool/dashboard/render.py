@@ -193,7 +193,8 @@ _CARD_TOOLTIPS: dict[str, str] = {
     ),
     "Cache tokens": (
         "Prompt-cache token activity. The metric shows cache reads; the "
-        "subtext shows read share of input and cache writes."
+        "subtext shows the bounded read share "
+        "(cache_read / (input + cache_read + cache_write)) and cache writes."
     ),
     "Reasoning tokens": (
         "Tokens reported by upstreams as reasoning or extended-thinking output."
@@ -1649,8 +1650,11 @@ def render_overview(
     cache_write = format_tokens(summary.get("total_cache_write_tokens", 0))
     total_cache_read_tokens = int(summary.get("total_cache_read_tokens", 0))
     total_input_tokens = int(summary.get("total_input_tokens", 0))
-    if total_input_tokens > 0:
-        cache_read_ratio = total_cache_read_tokens / total_input_tokens
+    total_cache_write_tokens = int(summary.get("total_cache_write_tokens", 0))
+    if total_input_tokens > 0 or total_cache_read_tokens > 0:
+        cache_read_ratio = total_cache_read_tokens / (
+            total_input_tokens + total_cache_read_tokens + total_cache_write_tokens
+        )
     else:
         cache_read_ratio = summary.get("cache_read_ratio")
     cache_read_pct = _format_percent_unit(cache_read_ratio, digits=1)
@@ -1727,7 +1731,7 @@ def render_overview(
                 _render_metric_card(
                     title="Cache tokens",
                     metric=cache_read,
-                    sub=f"{cache_read_pct} of input · write {cache_write}",
+                    sub=f"{cache_read_pct} of prompt · write {cache_write}",
                 ),
                 _render_metric_card(
                     title="Reasoning tokens",

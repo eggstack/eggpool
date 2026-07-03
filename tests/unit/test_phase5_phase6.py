@@ -93,8 +93,8 @@ async def test_account_stats_exactness_counters(db: Database) -> None:
     assert exact_row["cache_write_tokens"] == 50
     assert exact_row["reasoning_tokens"] == 100
     assert exact_row["estimated_cost_fraction"] == 0.0
-    assert exact_row["cache_read_ratio"] == pytest.approx(0.2)
-    assert exact_row["cache_write_ratio"] == pytest.approx(0.05)
+    assert exact_row["cache_read_ratio"] == pytest.approx(200 / 1250)
+    assert exact_row["cache_write_ratio"] == pytest.approx(50 / 1250)
     assert exact_row["reasoning_output_ratio"] == pytest.approx(0.2)
     assert exact_row["avg_cost_per_request"] == 10000.0
     assert exact_row["avg_cost_per_1k_tokens"] == pytest.approx(10000.0 * 1000 / 1500)
@@ -102,8 +102,8 @@ async def test_account_stats_exactness_counters(db: Database) -> None:
     est_row = by_name["acct_est"]
     assert est_row["estimated_count"] == 1
     assert est_row["estimated_cost_fraction"] == 1.0
-    # acct_est has input=800, cache=0 → ratio is 0.0 (not NULL,
-    # because the input denominator is positive).
+    # acct_est has input=800, cache=0 → bounded ratio is 0.0
+    # (denominator = 800, numerator = 0).
     assert est_row["cache_read_ratio"] == 0.0
     assert est_row["cache_write_ratio"] == 0.0
     # reasoning_output_ratio: output_tokens = 0 → NULL.
@@ -125,7 +125,7 @@ async def test_model_stats_exactness_counters(db: Database) -> None:
     assert row["cache_read_tokens"] == 200
     assert row["reasoning_tokens"] == 100
     assert row["estimated_cost_fraction"] == pytest.approx(0.5)
-    assert row["cache_read_ratio"] == pytest.approx(200 / 1800)
+    assert row["cache_read_ratio"] == pytest.approx(200 / 2050)
     assert row["avg_cost_per_1k_tokens"] == pytest.approx(14000.0 * 1000 / 2300)
 
 

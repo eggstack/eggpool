@@ -20,6 +20,7 @@ import platform
 import sys
 import threading
 import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -171,6 +172,10 @@ class RuntimeMetricsService:
 
         # Metrics buffer health
         result["metrics_buffer"] = self._snapshot_metrics_buffer(probe_errors)
+
+        # Rollup freshness — surface a stalled coalescer before the
+        # dashboard starts under-reporting the in-flight hour.
+        result["rollup_freshness"] = await self._snapshot_rollup_freshness(probe_errors)
 
         # Outbound client manager health
         result["outbound_client"] = self._snapshot_outbound_client(probe_errors)
@@ -674,6 +679,54 @@ class RuntimeMetricsService:
         except Exception as exc:
             _append_probe_error(probe_errors, f"Metrics buffer snapshot failed: {exc}")
             return {"error": str(exc)}
+
+    async def _snapshot_rollup_freshness(
+        self, probe_errors: list[str]
+    ) -> dict[str, Any]:
+        """Compare the rollup table's latest bucket against the live
+        ``requests.started_at`` so operators can spot a stalled
+        coalescer before the dashboard starts under-reporting.
+
+        ``staleness_seconds`` is the gap between the most recent
+        ``started_at`` and the most recent ``bucket_start``; positive
+        values mean the rollup is trailing the live table.
+        """
+        if self._metrics_coalescer is None:
+            return {"enabled": False}
+        rollup_repo = getattr(self._metrics_coalescer, "_rollup_repo", None)
+        if rollup_repo is None:
+            return {"enabled": False}
+        try:
+            end_dt = datetime.now(UTC)
+            start_dt = end_dt - timedelta(days=7)
+            from eggpool.stats.queries import fetch_latest_started_at
+
+            rollup_latest = await rollup_repo.latest_bucket_start(
+                end=end_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            )
+            requests_latest = await fetch_latest_started_at(
+                self._db,
+                start_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                end_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            )
+            staleness_seconds: float | None = None
+            if rollup_latest is not None and requests_latest is not None:
+                rt = datetime.strptime(rollup_latest, "%Y-%m-%d %H:%M:%S").replace(
+                    tzinfo=UTC
+                )
+                lt = datetime.strptime(requests_latest, "%Y-%m-%d %H:%M:%S").replace(
+                    tzinfo=UTC
+                )
+                staleness_seconds = max(0.0, (lt - rt).total_seconds())
+            return {
+                "enabled": True,
+                "rollup_latest_bucket_start": rollup_latest,
+                "requests_latest_started_at": requests_latest,
+                "staleness_seconds": staleness_seconds,
+            }
+        except Exception as exc:
+            _append_probe_error(probe_errors, f"Rollup freshness probe failed: {exc}")
+            return {"enabled": True, "error": str(exc)}
 
 
 # -- Helpers ----------------------------------------------------------------

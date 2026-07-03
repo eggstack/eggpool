@@ -914,3 +914,98 @@ async def test_snapshot_load_zero_cpu_count(db: Database) -> None:
     assert load["available"] is True
     assert load["cpu_count"] == 0
     assert load["normalized_1m"] is None
+
+
+@pytest.mark.asyncio
+async def test_rollup_freshness_disabled_without_coalescer(
+    db: Database,
+) -> None:
+    service = _make_service(db)
+    snapshot = await service.snapshot()
+    freshness = snapshot["rollup_freshness"]
+    assert freshness == {"enabled": False}
+
+
+@pytest.mark.asyncio
+async def test_rollup_freshness_reports_staleness(
+    db: Database,
+) -> None:
+    """When the rollup table trails the live requests table, the
+    snapshot must surface ``staleness_seconds`` so operators can spot
+    a stalled coalescer."""
+    from datetime import UTC, datetime, timedelta
+
+    from eggpool.db.migrations import MigrationRunner
+    from eggpool.db.rollup_repository import UsageRollupRepository
+    from eggpool.metrics.buffer import MetricsWriteCoalescer
+    from eggpool.models.config import MetricsConfig
+
+    await MigrationRunner(db).run()  # idempotent
+
+    # Anchor both timestamps inside the probe's 7-day look-back window.
+    now = datetime.now(UTC)
+    recent_dt = now - timedelta(minutes=5)
+    older_dt = now - timedelta(hours=2)
+    recent_str = recent_dt.strftime("%Y-%m-%d %H:%M:%S")
+    older_str = older_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    async with db.transaction():
+        account_id_row = await db.fetch_one(
+            "INSERT INTO accounts (name, api_key_env, enabled) "
+            "VALUES ('rtm_acct', 'RTM_ENV', 1) RETURNING id"
+        )
+        account_id = int(account_id_row["id"])
+        await db.execute_write(
+            "INSERT INTO models (model_id, protocol) VALUES ('rtm_model', 'openai')"
+        )
+        await db.execute_write(
+            """
+            INSERT INTO requests (
+                account_id, model_id, provider_id, started_at,
+                completed_at, status, input_tokens, output_tokens,
+                cost_microdollars, upstream_latency_ms,
+                cache_read_tokens, cache_write_tokens, reasoning_tokens
+            ) VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, 0)
+            """,
+            (
+                account_id,
+                "rtm_model",
+                "provider_a",
+                recent_str,
+                recent_str,
+                1,
+                1,
+                0,
+                10.0,
+                0,
+                0,
+            ),
+        )
+
+    rollup_repo = UsageRollupRepository(db)
+    coalescer = MetricsWriteCoalescer(
+        config=MetricsConfig(write_mode="balanced"),
+        db=db,
+        rollup_repo=rollup_repo,
+    )
+    await coalescer.flush(reason="test_setup")
+    async with db.transaction():
+        await db.execute_write(
+            """
+            INSERT INTO usage_rollups (
+                bucket_start, bucket_size_s, provider_id, model_id,
+                account_id, protocol, streamed, status
+            ) VALUES (?, 60, 'provider_a', 'rtm_model', ?, 'openai', 0, 'completed')
+            """,
+            (older_str, account_id),
+        )
+
+    service = _make_service(db)
+    service._metrics_coalescer = coalescer  # noqa: SLF001
+    snapshot = await service.snapshot()
+    freshness = snapshot["rollup_freshness"]
+    assert freshness["enabled"] is True
+    assert freshness["rollup_latest_bucket_start"] == older_str
+    assert freshness["requests_latest_started_at"] == recent_str
+    expected_gap = (recent_dt - older_dt).total_seconds()
+    assert freshness["staleness_seconds"] == pytest.approx(expected_gap)

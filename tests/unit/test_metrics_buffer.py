@@ -105,27 +105,36 @@ class TestComputeBucketStart:
     def test_rounds_down_to_60s_bucket(self) -> None:
         ts = datetime(2025, 6, 15, 12, 30, 45, tzinfo=UTC)
         result = _compute_bucket_start(ts, 60)
-        assert result == "2025-06-15T12:30:00Z"
+        assert result == "2025-06-15 12:30:00"
 
     def test_already_on_bucket_boundary(self) -> None:
         ts = datetime(2025, 6, 15, 12, 30, 0, tzinfo=UTC)
         result = _compute_bucket_start(ts, 60)
-        assert result == "2025-06-15T12:30:00Z"
+        assert result == "2025-06-15 12:30:00"
 
     def test_3600s_bucket(self) -> None:
         ts = datetime(2025, 6, 15, 12, 45, 30, tzinfo=UTC)
         result = _compute_bucket_start(ts, 3600)
-        assert result == "2025-06-15T12:00:00Z"
+        assert result == "2025-06-15 12:00:00"
 
     def test_86400s_bucket(self) -> None:
         ts = datetime(2025, 6, 15, 23, 59, 59, tzinfo=UTC)
         result = _compute_bucket_start(ts, 86400)
-        assert result == "2025-06-15T00:00:00Z"
+        assert result == "2025-06-15 00:00:00"
 
     def test_midnight_boundary(self) -> None:
         ts = datetime(2025, 6, 16, 0, 0, 0, tzinfo=UTC)
         result = _compute_bucket_start(ts, 86400)
-        assert result == "2025-06-16T00:00:00Z"
+        assert result == "2025-06-16 00:00:00"
+
+    def test_format_matches_format_dt(self) -> None:
+        """The bucket_start shape must equal stats.service.format_dt so
+        rollup queries can compare bucket_start with started_at bounds.
+        Mixing 'T' and ' ' silently excludes same-day rows."""
+        from eggpool.stats.service import format_dt
+
+        ts = datetime(2025, 6, 15, 12, 30, 45, tzinfo=UTC)
+        assert _compute_bucket_start(ts, 60) == format_dt(ts.replace(second=0))
 
 
 class TestRecordUsageImmediateMode:
@@ -230,8 +239,8 @@ class TestFlushWritesToRollups:
         assert result.rows_flushed == 1
 
         rows = await rollup_repo.query_timeseries(
-            start="2000-01-01T00:00:00Z",
-            end="2099-12-31T23:59:59Z",
+            start="2000-01-01 00:00:00",
+            end="2099-12-31 23:59:59",
             bucket_size_s=60,
         )
         assert len(rows) == 1
@@ -323,8 +332,8 @@ class TestAggregationSameKey:
         await coalescer.flush()
 
         rows = await rollup_repo.query_timeseries(
-            start="2000-01-01T00:00:00Z",
-            end="2099-12-31T23:59:59Z",
+            start="2000-01-01 00:00:00",
+            end="2099-12-31 23:59:59",
             bucket_size_s=60,
         )
         assert len(rows) == 1
@@ -349,8 +358,8 @@ class TestAggregationDifferentKeys:
         await coalescer.flush()
 
         rows = await rollup_repo.query_timeseries(
-            start="2000-01-01T00:00:00Z",
-            end="2099-12-31T23:59:59Z",
+            start="2000-01-01 00:00:00",
+            end="2099-12-31 23:59:59",
             bucket_size_s=60,
         )
         assert len(rows) == 2
@@ -373,8 +382,8 @@ class TestFirstByteMsNone:
         await coalescer.flush()
 
         rows = await rollup_repo.query_timeseries(
-            start="2000-01-01T00:00:00Z",
-            end="2099-12-31T23:59:59Z",
+            start="2000-01-01 00:00:00",
+            end="2099-12-31 23:59:59",
             bucket_size_s=60,
         )
         assert len(rows) == 1
@@ -400,8 +409,8 @@ class TestLatencyMinMaxTracking:
         await coalescer.flush()
 
         rows = await rollup_repo.query_timeseries(
-            start="2000-01-01T00:00:00Z",
-            end="2099-12-31T23:59:59Z",
+            start="2000-01-01 00:00:00",
+            end="2099-12-31 23:59:59",
             bucket_size_s=60,
         )
         assert len(rows) == 1

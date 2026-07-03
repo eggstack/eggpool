@@ -20,10 +20,17 @@ logger = logging.getLogger(__name__)
 
 
 def _compute_bucket_start(ts: datetime, bucket_size_s: int) -> str:
-    """Compute the bucket start ISO timestamp for a given event timestamp."""
+    """Compute the bucket start UTC timestamp for a given event timestamp.
+
+    Returns ``YYYY-MM-DD HH:MM:SS`` (UTC, no ``T`` / ``Z`` separator) so
+    that rollup ``bucket_start`` columns are lexicographically
+    comparable with the ``started_at`` filters used by the requests
+    table (``format_dt()`` emits the same shape).  Mixing ``T`` with
+    spaces would silently exclude rows from the same calendar day.
+    """
     epoch = int(ts.timestamp())
     bucket_epoch = (epoch // bucket_size_s) * bucket_size_s
-    return datetime.fromtimestamp(bucket_epoch, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.fromtimestamp(bucket_epoch, tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 
 @dataclass(frozen=True, slots=True)

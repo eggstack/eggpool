@@ -33,7 +33,7 @@ def repo(db: Database) -> UsageRollupRepository:
 
 def _row(
     *,
-    bucket_start: str = "2025-06-15T12:00:00Z",
+    bucket_start: str = "2025-06-15 12:00:00",
     bucket_size_s: int = 60,
     provider_id: str = "prov_a",
     model_id: str = "model_a",
@@ -102,8 +102,8 @@ class TestUpsertManyCreatesRows:
         assert count == 1
 
         rows = await repo.query_timeseries(
-            start="2000-01-01T00:00:00Z",
-            end="2099-12-31T23:59:59Z",
+            start="2000-01-01 00:00:00",
+            end="2099-12-31 23:59:59",
             bucket_size_s=60,
         )
         assert len(rows) == 1
@@ -117,8 +117,8 @@ class TestUpsertManyIncrementsCounters:
         await repo.upsert_many([_row(input_tokens=30, output_tokens=40)])
 
         rows = await repo.query_timeseries(
-            start="2000-01-01T00:00:00Z",
-            end="2099-12-31T23:59:59Z",
+            start="2000-01-01 00:00:00",
+            end="2099-12-31 23:59:59",
             bucket_size_s=60,
         )
         assert len(rows) == 1
@@ -134,8 +134,8 @@ class TestUpsertManyIncrementsCounters:
         await repo.upsert_many([_row(cost_microdollars=50)])
 
         rows = await repo.query_timeseries(
-            start="2000-01-01T00:00:00Z",
-            end="2099-12-31T23:59:59Z",
+            start="2000-01-01 00:00:00",
+            end="2099-12-31 23:59:59",
             bucket_size_s=60,
         )
 
@@ -152,8 +152,8 @@ class TestUpsertManyLatencyMinMax:
         await repo.upsert_many([_row(latency_ms_min=75, latency_ms_max=150)])
 
         rows = await repo.query_timeseries(
-            start="2000-01-01T00:00:00Z",
-            end="2099-12-31T23:59:59Z",
+            start="2000-01-01 00:00:00",
+            end="2099-12-31 23:59:59",
             bucket_size_s=60,
         )
         assert len(rows) == 1
@@ -170,8 +170,8 @@ class TestUpsertManyLatencyMinMaxNull:
         await repo.upsert_many([_row(latency_ms_min=42, latency_ms_max=99)])
 
         rows = await repo.query_timeseries(
-            start="2000-01-01T00:00:00Z",
-            end="2099-12-31T23:59:59Z",
+            start="2000-01-01 00:00:00",
+            end="2099-12-31 23:59:59",
             bucket_size_s=60,
         )
         assert len(rows) == 1
@@ -184,8 +184,8 @@ class TestUpsertManyLatencyMinMaxNull:
         await repo.upsert_many([_row(latency_ms_min=None, latency_ms_max=None)])
 
         rows = await repo.query_timeseries(
-            start="2000-01-01T00:00:00Z",
-            end="2099-12-31T23:59:59Z",
+            start="2000-01-01 00:00:00",
+            end="2099-12-31 23:59:59",
             bucket_size_s=60,
         )
         assert len(rows) == 1
@@ -198,19 +198,19 @@ class TestQueryTimeseriesBasic:
     async def test_returns_grouped_data(self, repo: UsageRollupRepository) -> None:
         await repo.upsert_many(
             [
-                _row(bucket_start="2025-06-15T12:00:00Z"),
-                _row(bucket_start="2025-06-15T12:01:00Z"),
+                _row(bucket_start="2025-06-15 12:00:00"),
+                _row(bucket_start="2025-06-15 12:01:00"),
             ]
         )
 
         rows = await repo.query_timeseries(
-            start="2025-06-15T12:00:00Z",
-            end="2025-06-15T12:02:00Z",
+            start="2025-06-15 12:00:00",
+            end="2025-06-15 12:02:00",
             bucket_size_s=60,
         )
         assert len(rows) == 2
-        assert rows[0]["bucket"] == "2025-06-15T12:00:00Z"
-        assert rows[1]["bucket"] == "2025-06-15T12:01:00Z"
+        assert rows[0]["bucket"] == "2025-06-15 12:00:00"
+        assert rows[1]["bucket"] == "2025-06-15 12:01:00"
         assert "series_key" in rows[0]
 
     @pytest.mark.asyncio()
@@ -225,8 +225,8 @@ class TestQueryTimeseriesBasic:
         )
 
         rows = await repo.query_timeseries(
-            start="2000-01-01T00:00:00Z",
-            end="2099-12-31T23:59:59Z",
+            start="2000-01-01 00:00:00",
+            end="2099-12-31 23:59:59",
             bucket_size_s=60,
         )
         assert len(rows) == 1
@@ -245,8 +245,8 @@ class TestQueryTimeseriesProviderFilter:
         )
 
         rows = await repo.query_timeseries(
-            start="2000-01-01T00:00:00Z",
-            end="2099-12-31T23:59:59Z",
+            start="2000-01-01 00:00:00",
+            end="2099-12-31 23:59:59",
             bucket_size_s=60,
             provider_id="prov_a",
         )
@@ -265,8 +265,8 @@ class TestQueryTimeseriesModelFilter:
         )
 
         rows = await repo.query_timeseries(
-            start="2000-01-01T00:00:00Z",
-            end="2099-12-31T23:59:59Z",
+            start="2000-01-01 00:00:00",
+            end="2099-12-31 23:59:59",
             bucket_size_s=60,
             model_id="m1",
         )
@@ -285,8 +285,8 @@ class TestQueryTimeseriesAccountFilter:
         )
 
         rows = await repo.query_timeseries(
-            start="2000-01-01T00:00:00Z",
-            end="2099-12-31T23:59:59Z",
+            start="2000-01-01 00:00:00",
+            end="2099-12-31 23:59:59",
             bucket_size_s=60,
             group_by="account",
             account_id=1,
@@ -299,8 +299,8 @@ class TestQueryTimeseriesEmpty:
     @pytest.mark.asyncio()
     async def test_returns_empty_list(self, repo: UsageRollupRepository) -> None:
         rows = await repo.query_timeseries(
-            start="2000-01-01T00:00:00Z",
-            end="2099-12-31T23:59:59Z",
+            start="2000-01-01 00:00:00",
+            end="2099-12-31 23:59:59",
             bucket_size_s=60,
         )
         assert rows == []
@@ -313,8 +313,8 @@ class TestQueryTimeseriesInvalidGroupBy:
     ) -> None:
         with pytest.raises(ValueError, match="Invalid group_by"):
             await repo.query_timeseries(
-                start="2000-01-01T00:00:00Z",
-                end="2099-12-31T23:59:59Z",
+                start="2000-01-01 00:00:00",
+                end="2099-12-31 23:59:59",
                 bucket_size_s=60,
                 group_by="bogus",
             )
@@ -328,19 +328,19 @@ class TestQueryFlatTimeseries:
         await repo.upsert_many(
             [
                 _row(
-                    bucket_start="2025-06-15T12:00:00Z",
+                    bucket_start="2025-06-15 12:00:00",
                     model_id="m1",
                     request_count=3,
                     input_tokens=30,
                 ),
                 _row(
-                    bucket_start="2025-06-15T12:00:00Z",
+                    bucket_start="2025-06-15 12:00:00",
                     model_id="m2",
                     request_count=2,
                     input_tokens=20,
                 ),
                 _row(
-                    bucket_start="2025-06-15T12:01:00Z",
+                    bucket_start="2025-06-15 12:01:00",
                     model_id="m1",
                     request_count=1,
                     input_tokens=10,
@@ -349,15 +349,15 @@ class TestQueryFlatTimeseries:
         )
 
         rows = await repo.query_flat_timeseries(
-            start="2025-06-15T12:00:00Z",
-            end="2025-06-15T12:02:00Z",
+            start="2025-06-15 12:00:00",
+            end="2025-06-15 12:02:00",
             bucket_size_s=60,
         )
         assert len(rows) == 2
-        assert rows[0]["bucket"] == "2025-06-15T12:00:00Z"
+        assert rows[0]["bucket"] == "2025-06-15 12:00:00"
         assert rows[0]["request_count"] == 5
         assert rows[0]["input_tokens"] == 50
-        assert rows[1]["bucket"] == "2025-06-15T12:01:00Z"
+        assert rows[1]["bucket"] == "2025-06-15 12:01:00"
         assert rows[1]["request_count"] == 1
 
 
@@ -382,8 +382,8 @@ class TestQuerySummaryBasic:
         )
 
         summary = await repo.query_summary(
-            start="2000-01-01T00:00:00Z",
-            end="2099-12-31T23:59:59Z",
+            start="2000-01-01 00:00:00",
+            end="2099-12-31 23:59:59",
         )
         assert summary["total_requests"] == 5
         assert summary["total_input_tokens"] == 500
@@ -402,8 +402,8 @@ class TestQuerySummaryBasic:
         )
 
         summary = await repo.query_summary(
-            start="2000-01-01T00:00:00Z",
-            end="2099-12-31T23:59:59Z",
+            start="2000-01-01 00:00:00",
+            end="2099-12-31 23:59:59",
         )
         assert summary["total_requests"] == 5
         assert summary["streamed_requests"] == 3
@@ -414,8 +414,8 @@ class TestQuerySummaryEmpty:
     @pytest.mark.asyncio()
     async def test_returns_zero_valued_dict(self, repo: UsageRollupRepository) -> None:
         summary = await repo.query_summary(
-            start="2000-01-01T00:00:00Z",
-            end="2099-12-31T23:59:59Z",
+            start="2000-01-01 00:00:00",
+            end="2099-12-31 23:59:59",
         )
         assert summary["total_requests"] == 0
         assert summary["error_requests"] == 0
@@ -431,14 +431,14 @@ class TestCleanupOldRollups:
         await repo.upsert_many(
             [
                 _row(
-                    bucket_start="2020-01-01T00:00:00Z",
+                    bucket_start="2020-01-01 00:00:00",
                     model_id="old_model_a",
                 ),
                 _row(
-                    bucket_start="2020-01-02T00:00:00Z",
+                    bucket_start="2020-01-02 00:00:00",
                     model_id="old_model_b",
                 ),
-                _row(bucket_start="2026-06-20T12:00:00Z"),
+                _row(bucket_start="2026-06-20 12:00:00"),
             ]
         )
 
@@ -446,12 +446,12 @@ class TestCleanupOldRollups:
         assert deleted == 2
 
         rows = await repo.query_timeseries(
-            start="2000-01-01T00:00:00Z",
-            end="2099-12-31T23:59:59Z",
+            start="2000-01-01 00:00:00",
+            end="2099-12-31 23:59:59",
             bucket_size_s=60,
         )
         assert len(rows) == 1
-        assert rows[0]["bucket"] == "2026-06-20T12:00:00Z"
+        assert rows[0]["bucket"] == "2026-06-20 12:00:00"
 
 
 class TestCleanupOldRollupsNoOldData:
@@ -459,7 +459,7 @@ class TestCleanupOldRollupsNoOldData:
     async def test_returns_zero_when_no_old_data(
         self, repo: UsageRollupRepository
     ) -> None:
-        await repo.upsert_many([_row(bucket_start="2026-06-20T12:00:00Z")])
+        await repo.upsert_many([_row(bucket_start="2026-06-20 12:00:00")])
 
         deleted = await repo.cleanup_old_rollups(retain_days=30)
         assert deleted == 0

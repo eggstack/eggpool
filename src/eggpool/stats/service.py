@@ -240,7 +240,9 @@ class StatsService:
                 time_range,
                 account_id=account_id,
             )
-            if int(result.get("total_requests", 0)) > 0:
+            if int(result.get("total_requests", 0)) > 0 and await self._rollup_is_fresh(
+                time_range, account_id=account_id
+            ):
                 return result
         return await fetch_summary(
             self._db,
@@ -248,6 +250,60 @@ class StatsService:
             time_range.end_str(),
             account_id=account_id,
         )
+
+    async def _rollup_is_fresh(
+        self,
+        time_range: TimeRange,
+        *,
+        account_id: int | None = None,
+    ) -> bool:
+        """Guard: only trust rollup-backed summaries when their latest
+        activity is at least as recent as the requests table.
+
+        The ``MetricsWriteCoalescer`` flushes periodically; if the
+        latest flush is stale (worker stalled, crash before flush,
+        write_mode=immediate on a quiet cluster) the rollup table
+        can trail the live ``requests`` rows.  Preferring rollups in
+        that state would under-report the in-flight hour.  We compare
+        the most recent ``bucket_start`` returned by the rollup
+        query against the most recent ``started_at`` from the
+        requests table; when the requests table is fresher, the
+        caller falls back to ``fetch_summary``.
+
+        For entirely historic time windows (the end is more than one
+        bucket ago) the rollup is considered authoritative regardless
+        of the freshness comparison — there's no live data to be
+        fresher than.
+        """
+        assert self._rollup_repo is not None
+        end_dt = time_range.end
+        now = datetime.now(UTC)
+        # Normalize end_dt for the freshness comparison so callers can
+        # hand in either tz-aware or naive datetimes (TimeRange accepts
+        # both, since format_dt treats naive as UTC).
+        if end_dt.tzinfo is None:
+            end_dt = end_dt.replace(tzinfo=UTC)
+        # Historic window: end is in the past and we are at least one
+        # rollup bucket past it. The rollup table is the only store.
+        if end_dt <= now and (now - end_dt) >= timedelta(seconds=3600):
+            return True
+        rollup_latest = await self._rollup_repo.latest_bucket_start(
+            end=time_range.end_str(),
+            account_id=account_id,
+        )
+        if rollup_latest is None:
+            return False
+        requests_latest = await queries.fetch_latest_started_at(
+            self._db,
+            time_range.start_str(),
+            time_range.end_str(),
+            account_id=account_id,
+        )
+        if requests_latest is None:
+            return True
+        # Lexicographic comparison is safe — both timestamps share the
+        # canonical ``YYYY-MM-DD HH:MM:SS`` shape.
+        return rollup_latest >= requests_latest
 
     async def get_account_stats(
         self,
@@ -648,6 +704,8 @@ class StatsService:
                 "total_input_tokens": 0,
                 "total_output_tokens": 0,
                 "total_tokens": 0,
+                "fresh_tokens": 0,
+                "accounted_tokens": 0,
                 "total_cost_microdollars": 0,
                 "avg_latency_ms": 0.0,
                 "total_cache_read_tokens": 0,
@@ -674,8 +732,11 @@ class StatsService:
             }
         total_input_tokens = _int(row.get("total_input_tokens", 0))
         total_cache_read = _int(row.get("total_cache_read_tokens", 0))
-        cache_read_ratio = (
-            total_cache_read / total_input_tokens if total_input_tokens > 0 else None
+        total_cache_write = _int(row.get("total_cache_write_tokens", 0))
+        cache_read_ratio = queries.bounded_cache_ratio(
+            float(total_cache_read),
+            float(total_input_tokens),
+            float(total_cache_write),
         )
         error_requests = _int(row.get("error_requests", 0))
         total_output_tokens = _int(row.get("total_output_tokens", 0))
@@ -695,10 +756,17 @@ class StatsService:
             "total_input_tokens": total_input_tokens,
             "total_output_tokens": total_output_tokens,
             "total_tokens": total_input_tokens + total_output_tokens,
+            "fresh_tokens": total_input_tokens + total_output_tokens,
+            "accounted_tokens": (
+                total_input_tokens
+                + total_output_tokens
+                + total_cache_read
+                + total_cache_write
+            ),
             "total_cost_microdollars": _int(row.get("total_cost_microdollars", 0)),
             "avg_latency_ms": _float(row.get("avg_latency_ms", 0.0)),
             "total_cache_read_tokens": total_cache_read,
-            "total_cache_write_tokens": _int(row.get("total_cache_write_tokens", 0)),
+            "total_cache_write_tokens": total_cache_write,
             "total_reasoning_tokens": _int(row.get("total_reasoning_tokens", 0)),
             "cache_read_ratio": cache_read_ratio,
             "streamed_requests": _int(row.get("streamed_requests", 0)),

@@ -387,6 +387,40 @@ class UsageRollupRepository:
         rows = await self._db.fetch_all(sql, tuple(params))
         return [dict(row) for row in rows]
 
+    async def latest_bucket_start(
+        self,
+        *,
+        end: str,
+        account_id: int | None = None,
+    ) -> str | None:
+        """Return the most recent ``bucket_start`` <= ``end`` for any rollup row.
+
+        Used by ``StatsService._rollup_is_fresh`` to compare against the
+        live ``requests`` table.  Returns ``None`` when no rollups
+        exist in the window (caller falls back to live aggregation).
+        The comparison bound is inclusive on ``end`` so the freshness
+        check tolerates clock skew between the writer and the
+        scheduler that picks the time range.
+        """
+        conditions = ["bucket_start <= ?"]
+        params: list[Any] = [end]
+        _append_optional_filters(
+            conditions,
+            params,
+            account_id=account_id,
+        )
+        where = " AND ".join(conditions)
+        row = await self._db.fetch_one(
+            f"SELECT MAX(bucket_start) AS latest FROM usage_rollups WHERE {where}",
+            tuple(params),
+        )
+        if row is None:
+            return None
+        latest = row["latest"]
+        if latest is None:
+            return None
+        return str(latest)
+
     async def cleanup_old_rollups(self, retain_days: int, max_rows: int = 5000) -> int:
         """Delete old rollup buckets. Returns rows deleted.
 

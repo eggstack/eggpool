@@ -556,7 +556,8 @@ class TestRenderOverview:
         cache_idx = html.index(">Cache tokens<")
         next_card_idx = html.index(">Reasoning tokens<")
         cache_section = html[cache_idx:next_card_idx]
-        assert "25.0% of input" in cache_section
+        # Bounded cache-read share: 250 / (1000 + 250 + 50) ≈ 19.2%
+        assert "19.2% of prompt" in cache_section
         # Write token sub-line still renders alongside the percent.
         assert "write 50" in cache_section
 
@@ -590,7 +591,7 @@ class TestRenderOverview:
         cache_idx = html.index(">Cache tokens<")
         next_card_idx = html.index(">Reasoning tokens<")
         cache_section = html[cache_idx:next_card_idx]
-        assert "— of input" in cache_section
+        assert "— of prompt" in cache_section
 
     def test_escapes_period_in_timeseries_chart(self) -> None:
         """Regression test: ``period`` is interpolated into a JS literal;

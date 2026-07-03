@@ -35,6 +35,34 @@ def _format_dt(dt: str) -> str:
     return dt
 
 
+def bounded_cache_ratio(
+    cache_read: float, input_tokens: float, cache_write: float
+) -> float | None:
+    """Return cache_read share of (input + cache_read + cache_write).
+
+    Bounded in ``[0, 1]`` so dashboards never display ``> 100%``.  Returns
+    ``None`` when the denominator is zero (no usage) so the UI can render
+    an em-dash instead of a misleading ``0.0%``.
+    """
+    denom = input_tokens + cache_read + cache_write
+    if denom <= 0:
+        return None
+    return cache_read / denom
+
+
+def bounded_cache_write_ratio(
+    cache_write: float, input_tokens: float, cache_read: float
+) -> float | None:
+    """Return cache_write share of (input + cache_read + cache_write).
+
+    Bounded in ``[0, 1]``.  Returns ``None`` when the denominator is zero.
+    """
+    denom = input_tokens + cache_read + cache_write
+    if denom <= 0:
+        return None
+    return cache_write / denom
+
+
 async def fetch_summary(
     db: Database,
     start: str,
@@ -254,15 +282,23 @@ async def fetch_account_stats(
             ELSE 0
         END as unknown_cost_fraction,
         CASE
-            WHEN COALESCE(ps.input_tokens, 0) > 0
+            WHEN (COALESCE(ps.input_tokens, 0)
+                  + COALESCE(ps.cache_read_tokens, 0)
+                  + COALESCE(ps.cache_write_tokens, 0)) > 0
             THEN CAST(COALESCE(ps.cache_read_tokens, 0) AS REAL)
-                / ps.input_tokens
+                / (COALESCE(ps.input_tokens, 0)
+                   + COALESCE(ps.cache_read_tokens, 0)
+                   + COALESCE(ps.cache_write_tokens, 0))
             ELSE NULL
         END as cache_read_ratio,
         CASE
-            WHEN COALESCE(ps.input_tokens, 0) > 0
+            WHEN (COALESCE(ps.input_tokens, 0)
+                  + COALESCE(ps.cache_read_tokens, 0)
+                  + COALESCE(ps.cache_write_tokens, 0)) > 0
             THEN CAST(COALESCE(ps.cache_write_tokens, 0) AS REAL)
-                / ps.input_tokens
+                / (COALESCE(ps.input_tokens, 0)
+                   + COALESCE(ps.cache_read_tokens, 0)
+                   + COALESCE(ps.cache_write_tokens, 0))
             ELSE NULL
         END as cache_write_ratio,
         CASE
@@ -386,15 +422,23 @@ async def fetch_model_stats(
             ELSE 0
         END as unknown_cost_fraction,
         CASE
-            WHEN COALESCE(SUM(r.input_tokens), 0) > 0
+            WHEN (COALESCE(SUM(r.input_tokens), 0)
+                  + COALESCE(SUM(r.cache_read_tokens), 0)
+                  + COALESCE(SUM(r.cache_write_tokens), 0)) > 0
             THEN CAST(COALESCE(SUM(r.cache_read_tokens), 0) AS REAL)
-                / SUM(r.input_tokens)
+                / (COALESCE(SUM(r.input_tokens), 0)
+                   + COALESCE(SUM(r.cache_read_tokens), 0)
+                   + COALESCE(SUM(r.cache_write_tokens), 0))
             ELSE NULL
         END as cache_read_ratio,
         CASE
-            WHEN COALESCE(SUM(r.input_tokens), 0) > 0
+            WHEN (COALESCE(SUM(r.input_tokens), 0)
+                  + COALESCE(SUM(r.cache_read_tokens), 0)
+                  + COALESCE(SUM(r.cache_write_tokens), 0)) > 0
             THEN CAST(COALESCE(SUM(r.cache_write_tokens), 0) AS REAL)
-                / SUM(r.input_tokens)
+                / (COALESCE(SUM(r.input_tokens), 0)
+                   + COALESCE(SUM(r.cache_read_tokens), 0)
+                   + COALESCE(SUM(r.cache_write_tokens), 0))
             ELSE NULL
         END as cache_write_ratio,
         CASE
@@ -601,6 +645,39 @@ async def fetch_account_id(db: Database, name: str) -> int | None:
     if row is None:
         return None
     return int(row["id"])
+
+
+async def fetch_latest_started_at(
+    db: Database,
+    start: str,
+    end: str,
+    *,
+    account_id: int | None = None,
+) -> str | None:
+    """Return the most recent ``started_at`` in the requests table
+    within ``[start, end)``.
+
+    Used by ``StatsService._rollup_is_fresh`` to compare against the
+    rollup table's latest ``bucket_start`` so a stalled coalescer can't
+    cause the dashboard to under-report the in-flight hour.  Returns
+    ``None`` when no rows exist in the window.
+    """
+    params: list[Any] = [_format_dt(start), _format_dt(end)]
+    account_filter = ""
+    if account_id is not None:
+        account_filter = " AND account_id = ?"
+        params.append(account_id)
+    row = await db.fetch_one(
+        f"SELECT MAX(started_at) AS latest FROM requests "
+        f"WHERE started_at >= ? AND started_at < ?{account_filter}",
+        tuple(params),
+    )
+    if row is None:
+        return None
+    latest = row["latest"]
+    if latest is None:
+        return None
+    return str(latest)
 
 
 async def fetch_bandwidth_timeseries(
@@ -855,8 +932,10 @@ def _build_summary(row: dict[str, Any]) -> dict[str, Any]:
     error_rate = (errors / total) if total > 0 else 0.0
     total_input_tokens = int(row.get("total_input_tokens", 0))
     total_cache_read_tokens = int(row.get("total_cache_read_tokens", 0))
-    cache_read_ratio = (
-        total_cache_read_tokens / total_input_tokens if total_input_tokens > 0 else None
+    total_cache_write_tokens = int(row.get("total_cache_write_tokens", 0))
+    total_output_tokens = int(row.get("total_output_tokens", 0))
+    cache_read_ratio = bounded_cache_ratio(
+        total_cache_read_tokens, total_input_tokens, total_cache_write_tokens
     )
     return {
         "total_requests": total,
@@ -864,12 +943,19 @@ def _build_summary(row: dict[str, Any]) -> dict[str, Any]:
         "error_requests": errors,
         "error_rate": error_rate,
         "total_input_tokens": total_input_tokens,
-        "total_output_tokens": int(row.get("total_output_tokens", 0)),
+        "total_output_tokens": total_output_tokens,
         "total_tokens": int(row.get("total_tokens", 0)),
+        "fresh_tokens": total_input_tokens + total_output_tokens,
+        "accounted_tokens": (
+            total_input_tokens
+            + total_output_tokens
+            + total_cache_read_tokens
+            + total_cache_write_tokens
+        ),
         "total_cost_microdollars": int(row.get("total_cost_microdollars", 0)),
         "avg_latency_ms": float(row.get("avg_latency_ms", 0.0)),
         "total_cache_read_tokens": total_cache_read_tokens,
-        "total_cache_write_tokens": int(row.get("total_cache_write_tokens", 0)),
+        "total_cache_write_tokens": total_cache_write_tokens,
         "total_reasoning_tokens": int(row.get("total_reasoning_tokens", 0)),
         "cache_read_ratio": cache_read_ratio,
         "streamed_requests": int(row.get("streamed_requests", 0)),
@@ -904,6 +990,8 @@ def _empty_summary() -> dict[str, Any]:
         "total_input_tokens": 0,
         "total_output_tokens": 0,
         "total_tokens": 0,
+        "fresh_tokens": 0,
+        "accounted_tokens": 0,
         "total_cost_microdollars": 0,
         "avg_latency_ms": 0.0,
         "total_cache_read_tokens": 0,
