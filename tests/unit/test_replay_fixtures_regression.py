@@ -147,6 +147,7 @@ def _assert_expected_segmentation(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.cache_compression_replay_full
 class TestFixtureTreeStructuralInvariants:
     """Every fixture must round-trip through expand + segment + safe-compress."""
 
@@ -258,6 +259,7 @@ class TestSegmentationInvariants:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.cache_compression_replay_full
 class TestSafeCompressionReplay:
     def test_openai_repeated_tool_output_applies_and_preserves_prefix(self) -> None:
         fixture = load_fixture("openai/repeated_tool_output")
@@ -303,6 +305,7 @@ class TestSafeCompressionReplay:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.cache_compression_replay_full
 class TestSyntheticCacheReplay:
     def test_anthropic_synthetic_apply_mode_preserves_native_cache(self) -> None:
         fixture = load_fixture("anthropic/system_blocks_native_cache")
@@ -412,6 +415,7 @@ class TestSyntheticCacheReplay:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.cache_compression_replay_full
 class TestTranscoderCacheStability:
     def test_openai_to_anthropic_preserves_native_cache_control(self) -> None:
         fixture = load_fixture("transcode/openai_client_to_anthropic_provider")
@@ -466,6 +470,7 @@ class TestTranscoderCacheStability:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.cache_compression_replay_full
 class TestReplayStructureInvariants:
     """Cross-cutting checks that span segment / compress / synthesis."""
 
@@ -525,6 +530,7 @@ class TestReplayStructureInvariants:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.cache_compression_replay_full
 class TestSyntheticCacheCoexistWithCompression:
     @pytest.fixture()
     def native_cache_fixture(self) -> dict[str, Any]:
@@ -575,6 +581,7 @@ class TestSyntheticCacheCoexistWithCompression:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.cache_compression_replay_full
 class TestFailClosedFallback:
     """When the safe applier detects an unexpected mutation path the
     caller must receive ``failed_fallback=True`` with the original payload."""
@@ -648,6 +655,7 @@ class TestFailClosedFallback:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.cache_compression_replay_full
 class TestRoutingGuardrailsReplay:
     """Verify adversarial cache / compression / synthetic / tuning metrics
     do not influence account selection.  This is a routing fixture that the
@@ -728,7 +736,18 @@ class TestRoutingGuardrailsReplay:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.cache_compression_replay_full
 class TestStatsReplay:
+    SENTINELS = (
+        "SYSTEM_POLICY_SENTINEL_DO_NOT_COMPRESS",
+        "TOOL_SCHEMA_SENTINEL_DO_NOT_COMPRESS",
+        "VOLATILE_LOG_LINE",
+        "STACK_TRACE_SENTINEL",
+        "SYNTHETIC_BASE64_BLOB",
+        "LONG_USER_INSTRUCTION",
+        "LATEST_USER_SENTINEL",
+    )
+
     def test_compaction_summaries_exclude_prompt_text(self) -> None:
         from eggpool.transcoder.compression.apply import result_to_summary
 
@@ -754,12 +773,59 @@ class TestStatsReplay:
         # No sentinel string should ever appear in the summary JSON.
         assert "VOLATILE_LOG_LINE" not in summary
 
+    def test_compression_result_summary_json_is_content_private(self) -> None:
+        """Every CompressionResult.summary_json must be free of sentinel strings."""
+        from eggpool.transcoder.compression import apply_safe_compression
+        from eggpool.transcoder.compression.policy import (
+            CompressionConfig,
+            CompressionTransforms,
+        )
+
+        for fixture_path in sorted(
+            str(p.relative_to(default_fixture_root()).with_suffix(""))
+            for p in default_fixture_root().rglob("*.json")
+            if "routing" not in str(p) and "stats" not in str(p)
+        ):
+            fixture = load_fixture(fixture_path)
+            request = _expanded_request(fixture)
+            protocol = str(fixture.get("client_protocol", "openai"))
+            segmentation = run_segmentation(request, protocol=protocol)
+            result = apply_safe_compression(
+                request,
+                segmentation,
+                policy=CompressionConfig(
+                    enabled=True,
+                    mode="safe",
+                    transforms=CompressionTransforms(),
+                ),
+            )
+            summary = result.summary_json
+            for sentinel in self.SENTINELS:
+                assert sentinel not in summary, (
+                    f"{fixture_path}: sentinel {sentinel!r} leaked into "
+                    f"compression summary_json"
+                )
+
+    def test_stats_fixture_rows_are_content_private(self) -> None:
+        """The stats fixture must not contain any sentinel strings in row values."""
+        fixture = load_fixture("stats/request_rows_phase_1_to_10")
+        rows = fixture.get("rows", [])
+        assert rows, "stats fixture has no rows"
+        for row in rows:
+            row_json = json.dumps(row, sort_keys=True)
+            for sentinel in self.SENTINELS:
+                assert sentinel not in row_json, (
+                    f"stats row {row.get('request_id')!r}: sentinel "
+                    f"{sentinel!r} leaked into stats fixture"
+                )
+
 
 # ---------------------------------------------------------------------------
 # Synthetic cache failure paths
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.cache_compression_replay_full
 class TestSyntheticCacheFailurePaths:
     def test_apply_with_native_cache_does_not_mutate_other_blocks(self) -> None:
         fixture = load_fixture("anthropic/tool_schema_native_cache")
@@ -797,6 +863,7 @@ class TestSyntheticCacheFailurePaths:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.cache_compression_replay_full
 class TestFixtureSuppliedExpectations:
     """Walk every fixture, run the replay, and verify the recorded
     expectations against the bundle.  This is the one-stop regression
@@ -844,6 +911,7 @@ class TestFixtureSuppliedExpectations:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.cache_compression_replay_full
 class TestHarnessSurfaceSanity:
     def test_default_fixture_root_is_repo_relative(self) -> None:
         root = default_fixture_root()
@@ -870,6 +938,7 @@ class TestHarnessSurfaceSanity:
         assert cfg.synthetic_cache_controls.provider_kinds == ["anthropic"]
 
 
+@pytest.mark.cache_compression_replay_full
 def test_stats_queries_list_complete() -> None:
     """The replay suite tracks every public Phase 7 / Phase 9 / Phase 10
     queries helper so the harness coverage map does not drift."""

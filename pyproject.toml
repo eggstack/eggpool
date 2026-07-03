@@ -116,4 +116,5 @@ exclude = ["tests"]
 asyncio_mode = "strict"
 markers = [
     "slow: marks tests as slow (run in nightly CI, deselect in PR CI)",
+    "cache_compression_replay_full: full matrix replay for cache/compression fixtures (select with -m cache_compression_replay_full)",
 ]

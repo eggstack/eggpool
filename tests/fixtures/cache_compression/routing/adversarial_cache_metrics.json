@@ -1,0 +1,41 @@
+{
+  "name": "adversarial_cache_metrics",
+  "category": "routing",
+  "client_protocol": "openai",
+  "target_protocol": "openai",
+  "description": "Three same-provider accounts with heavily skewed cache hit ratios, compression savings, and synthetic cache counts. Exercises the invariant that cache/compression/synthetic metrics never enter QuotaFairScorer.",
+  "accounts": [
+    {"name": "cache_heavy", "provider_id": "test-provider", "model_id": "gpt-test"},
+    {"name": "compression_heavy", "provider_id": "test-provider", "model_id": "gpt-test"},
+    {"name": "baseline", "provider_id": "test-provider", "model_id": "gpt-test"}
+  ],
+  "baseline_load": {
+    "cache_heavy": 0.34,
+    "compression_heavy": 0.33,
+    "baseline": 0.33
+  },
+  "adversarial_cache": {
+    "cache_heavy": {"cached_input_tokens": 50000, "cache_counter_status": "reported"},
+    "compression_heavy": {"cached_input_tokens": 0, "cache_counter_status": "reported"},
+    "baseline": {"cached_input_tokens": 1200, "cache_counter_status": "reported"}
+  },
+  "adversarial_compression": {
+    "cache_heavy": {"savings_tokens": 0, "compression_applied_count": 0},
+    "compression_heavy": {"savings_tokens": 8000, "compression_applied_count": 200},
+    "baseline": {"savings_tokens": 500, "compression_applied_count": 10}
+  },
+  "adversarial_synthetic": {
+    "cache_heavy": {"synthetic_cache_applied": 0, "synthetic_cache_candidates": 0},
+    "compression_heavy": {"synthetic_cache_applied": 150, "synthetic_cache_candidates": 200},
+    "baseline": {"synthetic_cache_applied": 5, "synthetic_cache_candidates": 10}
+  },
+  "adversarial_tuning": {
+    "cache_heavy": {"tuning_recommendations": 0, "tuning_suppressed": 0},
+    "compression_heavy": {"tuning_recommendations": 40, "tuning_suppressed": 5},
+    "baseline": {"tuning_recommendations": 2, "tuning_suppressed": 0}
+  },
+  "expectations": {
+    "fair_rotation": true,
+    "candidate_order_invariant": true
+  }
+}

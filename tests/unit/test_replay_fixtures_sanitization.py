@@ -52,6 +52,18 @@ FORBIDDEN_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"\b(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(?:\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}\b"
         ),
     ),
+    (
+        "openai_request_id",
+        re.compile(r"req_[A-Za-z0-9]{16,}"),
+    ),
+    (
+        "openai_chatcmpl_id",
+        re.compile(r"chatcmpl-[A-Za-z0-9]{16,}"),
+    ),
+    (
+        "anthropic_request_id",
+        re.compile(r"msg_[A-Za-z0-9]{16,}"),
+    ),
 )
 
 
@@ -177,4 +189,51 @@ def test_each_fixture_has_target_protocol_for_transcode_routing() -> None:
             transcode_routing.append(name)
     assert not transcode_routing, (
         "Transcode/routing fixtures missing protocols: " + ",".join(transcode_routing)
+    )
+
+
+def test_no_natural_language_paragraphs_in_fixtures() -> None:
+    """Reject strings that look like copied real prompts.
+
+    Only strings inside ``request`` payloads are inspected — fixture-level
+    metadata like ``description`` is expected to be English prose.
+
+    A string is flagged as a natural-language paragraph if it is longer
+    than 200 characters and more than 70 % of its characters are
+    lowercase letters or spaces — a strong signal of English prose.
+    Strings beginning with a known sentinel are excluded (synthetic
+    by construction).  Sentinel strings, hash-like tokens, and
+    structured JSON are otherwise excluded because they contain mostly
+    uppercase/digits/punctuation.
+    """
+    min_length = 200
+    prose_ratio_threshold = 0.70
+    sentinel_prefixes = (
+        "SYSTEM_POLICY_SENTINEL",
+        "TOOL_SCHEMA_SENTINEL",
+        "VOLATILE_LOG_LINE",
+        "STACK_TRACE_SENTINEL",
+        "SYNTHETIC_BASE64_BLOB",
+        "LONG_USER_INSTRUCTION",
+        "LATEST_USER_SENTINEL",
+        "[EggPool compression:",
+    )
+    offenders: list[str] = []
+    for fixture in iter_fixtures():
+        name = str(fixture.get("name"))
+        request = fixture.get("request")
+        if not isinstance(request, dict):
+            continue
+        for value in _flatten_strings(request):
+            if len(value) < min_length:
+                continue
+            if any(value.startswith(p) for p in sentinel_prefixes):
+                continue
+            lower_count = sum(1 for c in value if c.islower() or c == " ")
+            ratio = lower_count / len(value)
+            if ratio >= prose_ratio_threshold:
+                offenders.append(f"{name}: {len(value)} chars, prose_ratio={ratio:.2f}")
+    assert not offenders, (
+        "Fixtures contain natural-language paragraphs that may be real prompts:\n"
+        + "\n".join(offenders)
     )

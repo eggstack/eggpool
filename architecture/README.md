@@ -1335,7 +1335,7 @@ Phase 11 is the test-only layer that pins down the high-risk Phase 2/3/5/9 behav
 
 ### Regression suite
 
-`tests/unit/test_replay_fixtures_regression.py` ships with 8 test classes covering:
+`tests/unit/test_replay_fixtures_regression.py` ships with 12 test classes covering:
 
 1. **TestReplayHarness** -- every fixture loads, segment+compress+transcode+synthetic pipeline runs end-to-end, stable-prefix hash is recomputed and matches.
 2. **TestStablePrefixPreservation** -- safe compression never mutates `stable_prefix` content (hash unchanged before/after).
@@ -1361,9 +1361,9 @@ Phase 11 is reporting-only.  The harness is invoked from pytest fixtures and nev
 
 ### Code references
 
-- `tests/fixtures/cache_compression/` -- 15 sanitized JSON fixtures + `README.md`
+- `tests/fixtures/cache_compression/` -- 17 sanitized JSON fixtures + `README.md`
 - `tests/helpers/cache_compression_replay.py` -- harness (load_fixture, expand_repeats, ReplayBundle, run_* helpers, safe_policy/observe_policy/disabled_policy, synthetic_cache_config, path_keys, collect_segment_strings)
-- `tests/unit/test_replay_fixtures_regression.py` -- 8 regression test classes
+- `tests/unit/test_replay_fixtures_regression.py` -- 12 regression test classes
 - `tests/unit/test_replay_fixtures_sanitization.py` -- 6 sanitization linter tests
 - `src/eggpool/transcoder/__init__.py` -- public exports used by the harness
 - `plans/cache_compression_phase_11_replay_fixtures_regression_tests.md` -- design plan

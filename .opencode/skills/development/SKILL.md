@@ -193,7 +193,7 @@ Phase 11 ships a tiny test-only replay harness so operators can pin
 down the high-risk Phase 2/3/5/9 behaviour without ever shipping a real
 prompt to disk.
 
-- **Fixtures** -- `tests/fixtures/cache_compression/{openai,anthropic,transcode,routing}/*.json`
+- **Fixtures** -- `tests/fixtures/cache_compression/{openai,anthropic,transcode,routing,stats}/*.json`
   plus `tests/fixtures/cache_compression/README.md` (schema, sentinel
   reference, sanitization rules, repeat expansion).  All prompts use
   the seven sentinel strings; any new fixture MUST follow the README.
