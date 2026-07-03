@@ -247,6 +247,8 @@ class ModelInfoService:
         is currently active or matched.
         """
         model_ids = set(self._catalog._models.keys())  # pyright: ignore[reportPrivateUsage]
+        provider_keys = list(self._catalog._provider_models.keys())  # pyright: ignore[reportPrivateUsage]
+        model_ids.update(mid for (mid, _pid) in provider_keys)
 
         created = 0
         updated = 0
@@ -1327,7 +1329,12 @@ class ModelInfoService:
         if existing is not None:
             return existing
 
-        in_catalog = model_id in self._catalog._models  # pyright: ignore[reportPrivateUsage]
+        provider_keys = list(self._catalog._provider_models.keys())  # pyright: ignore[reportPrivateUsage]
+        provider_model_ids = {mid for mid, _ in provider_keys}
+        in_catalog = (
+            model_id in self._catalog._models  # pyright: ignore[reportPrivateUsage]
+            or model_id in provider_model_ids
+        )
         status, sparse = self._classify_model(model_id)
         detail = self._build_detail(model_id) if in_catalog else {}
 
@@ -1505,12 +1512,63 @@ class ModelInfoService:
     async def get_summary_map(
         self, model_ids: Iterable[str] | None = None
     ) -> dict[str, CanonicalModelInfo]:
-        """Return canonical summaries keyed by model ID."""
+        """Return canonical summaries keyed by model ID.
+
+        When ``model_ids`` is provided, fetches the explicit list.  When
+        omitted, returns every catalog-visible model: the global
+        ``_models`` keys plus any ``(model_id, provider_id)`` keys from
+        ``_provider_models`` that aren't already represented.
+        """
         if model_ids is not None:
             id_list = list(model_ids)
         else:
-            id_list = list(self._catalog._models.keys())  # pyright: ignore[reportPrivateUsage]
+            id_set = set(self._catalog._models.keys())  # pyright: ignore[reportPrivateUsage]
+            provider_keys = list(self._catalog._provider_models.keys())  # pyright: ignore[reportPrivateUsage]
+            id_set.update(mid for mid, _pid in provider_keys)
+            id_list = list(id_set)
         return await self._repo.get_canonical_many(id_list)
+
+    async def health_snapshot(self) -> dict[str, Any]:
+        """Return a best-effort snapshot for runtime diagnostics.
+
+        Payload keys:
+        * ``enabled`` — whether model-info is configured.
+        * ``canonical_count`` — total canonical rows.
+        * ``catalog_model_count`` — global ``_models`` keys count.
+        * ``provider_model_count`` — ``(model_id, provider_id)`` keys count.
+        * ``due_count`` — canonical rows due for refresh.
+        * ``source_health`` — per-source health rows from
+          ``source_health_snapshot``.  No raw payloads are exposed.
+
+        Failures are caught: a single failing counter never blocks the
+        rest.  The diagnostic error is returned as ``error``.
+        """
+        if not self._config.enabled:
+            return {"enabled": False, "error": "model_info disabled"}
+
+        payload: dict[str, Any] = {"enabled": True}
+        try:
+            payload["canonical_count"] = await self._repo.count_canonical()
+        except Exception as exc:
+            payload["canonical_count_error"] = type(exc).__name__
+        try:
+            payload["catalog_model_count"] = len(
+                self._catalog._models.keys()  # pyright: ignore[reportPrivateUsage]
+            )
+            payload["provider_model_count"] = len(
+                self._catalog._provider_models.keys()  # pyright: ignore[reportPrivateUsage]
+            )
+        except Exception as exc:
+            payload["catalog_counts_error"] = type(exc).__name__
+        try:
+            payload["due_count"] = await self._repo.count_due()
+        except Exception as exc:
+            payload["due_count_error"] = type(exc).__name__
+        try:
+            payload["source_health"] = await self._repo.source_health_snapshot()
+        except Exception as exc:
+            payload["source_health_error"] = type(exc).__name__
+        return payload
 
     def _classify_model(self, model_id: str) -> tuple[ModelInfoStatus, bool]:
         """Classify a model's info status based on available data.
@@ -1638,36 +1696,50 @@ class ModelInfoService:
         return now + timedelta(seconds=self._config.known_ttl_s)
 
     def _build_detail(self, model_id: str) -> dict[str, object]:
-        """Build a detail dict from catalog data."""
+        """Build a detail dict from catalog data.
+
+        Falls back to provider-specific entries (``_provider_models``)
+        when no global ``_models`` row exists, so dashboard-visible
+        provider-scoped rows still get a populated detail block.
+        """
         global_info = self._catalog._models.get(model_id)  # pyright: ignore[reportPrivateUsage]
+        provider_info: dict[str, object] | None = None
         if global_info is None:
+            for (mid, _pid), entry in self._catalog._provider_models.items():  # pyright: ignore[reportPrivateUsage]
+                if mid == model_id:
+                    provider_info = entry
+                    break
+        if global_info is None and provider_info is None:
             return {}
+        source_info = global_info if global_info is not None else provider_info
+        assert source_info is not None
 
         detail: dict[str, object] = {}
 
-        display_name = global_info.get("display_name")
+        display_name = source_info.get("display_name")
         if display_name:
             detail["display_name"] = display_name
 
-        protocol = global_info.get("protocol")
+        protocol = source_info.get("protocol")
         if protocol:
             detail["protocol"] = protocol
 
-        caps_raw = global_info.get("capabilities")
+        caps_raw = source_info.get("capabilities")
         caps = cast("dict[str, object]", caps_raw) if isinstance(caps_raw, dict) else {}
         if caps.get("supports_tools") is not None:
             detail["supports_tools"] = caps["supports_tools"]
         if caps.get("supports_vision") is not None:
             detail["supports_vision"] = caps["supports_vision"]
 
-        limits = self._catalog._effective_limits_from_info(global_info)  # pyright: ignore[reportPrivateUsage]
+        limits = self._catalog._effective_limits_from_info(  # pyright: ignore[reportPrivateUsage]
+            cast("dict[str, Any]", source_info)
+        )
         if limits:
             limits_block: dict[str, object] = dict(
                 cast("dict[str, object]", detail.get("limits", {}))
             )
             if limits.context_tokens is not None:
                 limits_block["effective_context"] = limits.context_tokens
-                # Legacy flat key kept for migration; renderer prefers limits.*.
                 detail["context_tokens"] = limits.context_tokens
             if limits.input_tokens is not None:
                 limits_block["effective_input"] = limits.input_tokens

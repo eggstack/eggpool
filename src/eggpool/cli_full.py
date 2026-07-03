@@ -3236,7 +3236,11 @@ def models() -> None:
 @models.command("refresh")
 @click.pass_context
 def models_refresh(ctx: click.Context) -> None:
-    """Refresh the model catalog from upstream."""
+    """Refresh the model catalog from upstream.
+
+    Model-info enrichment (canonical sidecar) is refreshed separately
+    via ``POST /api/model-info/{model_id}/refresh``.
+    """
     from eggpool.accounts.registry import AccountRegistry
     from eggpool.catalog.service import CatalogService
 

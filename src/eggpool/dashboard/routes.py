@@ -7,6 +7,8 @@ All free-text fields are HTML-escaped.
 from __future__ import annotations
 
 import asyncio
+import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
@@ -40,6 +42,8 @@ from eggpool.stats.grouped_timeseries import clamp_grouped_limit
 from eggpool.stats.queries import fetch_disabled_account_count
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from fastapi.responses import Response  # noqa: TCH004
 
 _ReliabilityPayload = tuple[
@@ -63,25 +67,82 @@ _BandwidthPayload = tuple[
 ]
 _PingsPayload = tuple[list[dict[str, Any]], list[dict[str, Any]]]
 
+logger = logging.getLogger(__name__)
 
-async def _get_model_info_summary_map(
+
+@dataclass(frozen=True, slots=True)
+class ModelInfoDashboardState:
+    """Compact diagnostic bundle for the dashboard's model-info summary call."""
+
+    summaries: dict[str, dict[str, Any]]
+    available: bool
+    degraded_reason: str | None = None
+    error_class: str | None = None
+    summary_count: int = 0
+
+
+async def _get_model_info_summary_state(
     model_info_service: Any,
+    *,
+    model_ids: Iterable[str] | None = None,
+) -> ModelInfoDashboardState:
+    """Fetch compact model-info summaries with diagnostic state.
+
+    Returns a dataclass carrying the summaries plus a degraded-state
+    signal.  The dashboard renderer uses ``degraded_reason`` to decide
+    whether to show a degraded-state notice above the table.
+    """
+    if model_info_service is None:
+        logger.warning(
+            "Model-info dashboard summary unavailable: "
+            "app.state.model_info is not attached"
+        )
+        return ModelInfoDashboardState(
+            summaries={},
+            available=False,
+            degraded_reason="service_unattached",
+            summary_count=0,
+        )
+    try:
+        raw_map = await model_info_service.get_summary_map(model_ids)
+    except Exception as exc:
+        logger.exception(
+            "Failed to fetch model_info summary map for dashboard models page"
+        )
+        return ModelInfoDashboardState(
+            summaries={},
+            available=True,
+            degraded_reason="fetch_error",
+            error_class=type(exc).__name__,
+            summary_count=0,
+        )
+    compact = {
+        mid: compact_model_info_summary(info, display_status=False)
+        for mid, info in raw_map.items()
+    }
+    logger.debug(
+        "Model-info dashboard summary map fetched: %d canonical rows",
+        len(compact),
+    )
+    return ModelInfoDashboardState(
+        summaries=compact,
+        available=True,
+        summary_count=len(compact),
+    )
+
+
+async def _get_model_info_summary_map(  # pyright: ignore[reportUnusedFunction]
+    model_info_service: Any,
+    *,
+    model_ids: Iterable[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Fetch compact model-info summaries keyed by model_id.
 
-    Returns an empty dict when the service is unavailable so dashboard
-    rendering never blocks on model-info.
+    Thin wrapper around ``_get_model_info_summary_state`` that returns
+    only the summaries dict for backwards compatibility.
     """
-    if model_info_service is None:
-        return {}
-    try:
-        raw_map = await model_info_service.get_summary_map()
-        return {
-            mid: compact_model_info_summary(info, display_status=False)
-            for mid, info in raw_map.items()
-        }
-    except Exception:
-        return {}
+    state = await _get_model_info_summary_state(model_info_service, model_ids=model_ids)
+    return state.summaries
 
 
 DEFAULT_REFRESH_S = 15
@@ -392,18 +453,29 @@ async def handle_models(
     app_config = getattr(request.app.state, "config", None)
     collapse_models = _read_collapse_models(app_config)
 
-    # Fetch stats, model-info summaries, and the catalog snapshot
-    # concurrently so the page renders in a single round-trip.
-    models, model_info_summary_map, catalog_rows = cast(
-        "tuple[list[dict[str, Any]] | None, dict[str, Any], list[dict[str, Any]]]",
+    catalog_rows = await _get_catalog_rows(
+        catalog, account=account or None, config=app_config
+    )
+    requested_ids: set[str] = set()
+    for row in catalog_rows:
+        base_id = row.get("base_model_id")
+        if base_id:
+            requested_ids.add(str(base_id))
+        elif row.get("model_id"):
+            requested_ids.add(str(row["model_id"]))
+
+    models, model_info_state = cast(
+        "tuple[list[dict[str, Any]] | None, ModelInfoDashboardState]",
         await asyncio.gather(
             stats.get_model_stats(
                 time_range, account_name=account or None, use_cache=True
             ),
-            _get_model_info_summary_map(model_info_service),
-            _get_catalog_rows(catalog, account=account or None, config=app_config),
+            _get_model_info_summary_state(
+                model_info_service, model_ids=requested_ids or None
+            ),
         ),
     )
+    model_info_summary_map = model_info_state.summaries
     merged_rows = _merge_models_with_catalog(
         models if models is not None else [],
         catalog_rows,
@@ -433,6 +505,7 @@ async def handle_models(
             used_filter=used or "",
             has_filters=any(v is not None for v in (info_status, availability, used)),
             account_options=account_options,
+            model_info_state=model_info_state,
         )
     )
 
@@ -972,13 +1045,19 @@ async def handle_model_detail(
         known_providers = set(config.providers)
     lookup_id, _provider_suffix = parse_model_provider(decoded_id, known_providers)
     info = None
+    info_error: str | None = None
     if model_info_service is not None:
         try:
             info = await model_info_service.get_summary(lookup_id)
             if info is None:
                 info = await model_info_service.ensure_canonical(lookup_id)
-        except Exception:
-            info = None
+        except Exception as exc:
+            logger.exception(
+                "Model-info detail lookup failed for decoded_id=%r lookup_id=%r",
+                decoded_id,
+                lookup_id,
+            )
+            info_error = type(exc).__name__
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
     return HTMLResponse(
         content=render_model_detail(
@@ -988,6 +1067,7 @@ async def handle_model_detail(
             available_themes=available,
             current_theme=current_theme,
             update_info=_get_update_info(request),
+            model_info_error=info_error,
         )
     )
 

@@ -2223,6 +2223,7 @@ def render_models(
     used_filter: str = "",
     has_filters: bool = False,
     account_options: list[str] | None = None,
+    model_info_state: Any | None = None,
 ) -> str:
     """Render the models page."""
     mi_map = model_info_map or {}
@@ -2442,8 +2443,31 @@ def render_models(
         "</form>"
     )
 
+    model_info_warning = ""
+    if (
+        model_info_state is not None
+        and getattr(model_info_state, "degraded_reason", None) == "service_unattached"
+    ):
+        model_info_warning = (
+            '<p class="empty" role="status">'
+            "Model info unavailable: service not attached. "
+            "Check `app.state.model_info` and server logs."
+            "</p>"
+        )
+    elif (
+        model_info_state is not None
+        and getattr(model_info_state, "degraded_reason", None) == "fetch_error"
+    ):
+        model_info_warning = (
+            '<p class="empty" role="status">'
+            "Model info unavailable: summary map fetch failed; "
+            "see server logs for traceback."
+            "</p>"
+        )
+
     body = f"""
 <h2>Models</h2>
+{model_info_warning}
 {filter_form}
 {_render_period_selector(period, current_theme)}
 <section class="panel">
@@ -2469,10 +2493,19 @@ def render_model_detail(
     available_themes: list[str] | None = None,
     current_theme: str = "",
     update_info: Any | None = None,
+    model_info_error: str | None = None,
 ) -> str:
     """Render the model-info detail page for a single model."""
     if info is None:
-        body = f"""
+        if model_info_error:
+            body = f"""
+<h2>Model: {escape(model_id)}</h2>
+<p class="empty" role="status">
+  Model info unavailable: lookup failed (see server logs).
+</p>
+"""
+        else:
+            body = f"""
 <h2>Model: {escape(model_id)}</h2>
 <p class="empty">Model info not available.</p>
 """

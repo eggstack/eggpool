@@ -1029,6 +1029,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         dns_backend=dns_backend,
         provider_client_pool=client_pool,
         dispatch_overhead_recorder=dispatch_overhead_recorder,
+        model_info=model_info,
     )
 
     # Register catalog refresh task

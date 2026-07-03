@@ -117,6 +117,7 @@ class RuntimeMetricsService:
         dns_backend: Any | None = None,  # noqa: ANN401
         provider_client_pool: Any | None = None,  # noqa: ANN401
         dispatch_overhead_recorder: Any | None = None,  # noqa: ANN401
+        model_info: Any | None = None,  # noqa: ANN401
     ) -> None:
         self._config = config
         self._db = db
@@ -132,6 +133,7 @@ class RuntimeMetricsService:
         self._dns_backend = dns_backend
         self._provider_client_pool = provider_client_pool
         self._dispatch_overhead_recorder = dispatch_overhead_recorder
+        self._model_info = model_info
 
     async def snapshot(self) -> dict[str, Any]:
         """Return a best-effort runtime snapshot.
@@ -190,6 +192,8 @@ class RuntimeMetricsService:
 
         # Thinking/reasoning observability counters
         result["thinking_metrics"] = await self._snapshot_thinking_metrics(probe_errors)
+
+        result["model_info"] = await self._snapshot_model_info(probe_errors)
 
         return result
 
@@ -604,6 +608,20 @@ class RuntimeMetricsService:
                 probe_errors, f"Thinking metrics snapshot failed: {exc}"
             )
             return {"total": 0, "counters": {}, "label_breakdown": {}}
+
+    async def _snapshot_model_info(self, probe_errors: list[str]) -> dict[str, Any]:
+        """Best-effort snapshot of the model-info subsystem."""
+        model_info_service: Any | None = getattr(self, "_model_info", None)  # pyright: ignore[reportPrivateUsage]
+        if model_info_service is None:
+            return {"enabled": False}
+        try:
+            snapshot = await model_info_service.health_snapshot()  # pyright: ignore[reportOptionalMemberAccess]
+            return snapshot
+        except AttributeError:
+            return {"enabled": True, "snapshot_unavailable": True}
+        except Exception as exc:
+            _append_probe_error(probe_errors, f"Model info snapshot failed: {exc}")
+            return {"enabled": True, "error": str(exc)}
 
     def _snapshot_load(self, probe_errors: list[str]) -> dict[str, Any]:
         """Best-effort snapshot of the OS load average."""

@@ -220,16 +220,38 @@ class ModelInfoRepository:
     async def get_canonical_many(
         self, model_ids: list[str] | None = None
     ) -> dict[str, CanonicalModelInfo]:
-        """Return canonical records keyed by model ID."""
+        """Return canonical records keyed by requested model ID.
+
+        When ``model_ids`` is provided, returns a dict keyed by the
+        **requested** id (not the stored id) so callers can use either
+        casing. Matching against stored rows is case-insensitive via
+        ``COLLATE NOCASE`` to mirror :meth:`get_canonical`.
+
+        When ``model_ids`` is ``None``, returns every canonical row keyed
+        by the stored ``model_id``.
+        """
+        if model_ids is not None and not model_ids:
+            return {}
         if model_ids is not None:
-            placeholders = ",".join("?" for _ in model_ids)
+            normalized = [m.casefold() for m in model_ids]
+            placeholders = ",".join("?" for _ in normalized)
             rows = await self._db.fetch_all(
                 "SELECT * FROM model_info_canonical "
-                f"WHERE model_id IN ({placeholders})",
-                tuple(model_ids),
+                f"WHERE lower(model_id) IN ({placeholders})",
+                tuple(normalized),
             )
-        else:
-            rows = await self._db.fetch_all("SELECT * FROM model_info_canonical")
+            by_stored: dict[str, CanonicalModelInfo] = {
+                row["model_id"]: self._row_to_canonical(row) for row in rows
+            }
+            result: dict[str, CanonicalModelInfo] = {}
+            for requested in model_ids:
+                folded = requested.casefold()
+                for stored_id, info in by_stored.items():
+                    if stored_id.casefold() == folded:
+                        result[requested] = info
+                        break
+            return result
+        rows = await self._db.fetch_all("SELECT * FROM model_info_canonical")
         return {row["model_id"]: self._row_to_canonical(row) for row in rows}
 
     async def list_all_canonical(self, limit: int = 1000) -> list[CanonicalModelInfo]:
@@ -545,6 +567,28 @@ class ModelInfoRepository:
                 else None,
             }
         return result
+
+    async def count_canonical(self) -> int:
+        """Return the number of canonical rows."""
+        row = await self._db.fetch_one(
+            "SELECT COUNT(*) AS count FROM model_info_canonical"
+        )
+        if row is None:
+            return 0
+        return int(row["count"] or 0)
+
+    async def count_due(self, now: datetime | None = None) -> int:
+        """Return the number of canonical rows due for refresh."""
+        if now is None:
+            now = datetime.now(UTC)
+        row = await self._db.fetch_one(
+            "SELECT COUNT(*) AS count FROM model_info_canonical "
+            "WHERE next_refresh_at IS NULL OR next_refresh_at <= ?",
+            (now.isoformat(),),
+        )
+        if row is None:
+            return 0
+        return int(row["count"] or 0)
 
     async def get_source_failure_count(self, source: str) -> int:
         """Return the current failure_count for a source (0 if unknown)."""
