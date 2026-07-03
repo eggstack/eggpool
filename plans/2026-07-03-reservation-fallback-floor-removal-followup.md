@@ -2,8 +2,11 @@
 
 Date: 2026-07-03
 Repository: `eggstack/eggpool`
-Status: handoff plan
+Status: completed
 Priority: critical accounting correctness
+
+Note: The issue has been fixed in commit `d9164c29`. The sections below are
+preserved as the original execution plan and acceptance record.
 
 ## Context
 
