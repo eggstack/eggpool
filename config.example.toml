@@ -173,10 +173,10 @@ ttl_seconds = 86400
 
 # ─── Model Information ────────────────────────────────────────────────
 # The model_info subsystem provides a persistent metadata sidecar for
-# all known models. Source adapters enrich models with display names,
-# context limits, benchmarks, and pipeline tags. Phase 5 adds
-# Artificial Analysis and Hugging Face sources, manual overrides,
-# and alias expansion.
+# all known models. OpenRouter is the default catalog source; additional
+# enrichment providers (Artificial Analysis, Hugging Face) augment
+# metadata with display names, context limits, benchmarks, and pipeline
+# tags. Manual overrides and alias expansion are also supported.
 # [model_info]
 # enabled = true                   # enable model_info sidecar (default: true)
 # include_in_models_endpoint = true  # compact fields in /v1/models (default: true)
@@ -824,22 +824,14 @@ protocol = "anthropic"
 protocol = "anthropic"
 
 # ----------------------------------------------------------------------
-# Phase 12: operator docs, profiles, and rollout
+# Request shaping surfaces
 # ----------------------------------------------------------------------
-# The cache-preserving deterministic compression stack ships observability-only
-# by default. Phase 12 turns the runtime primitives into a usable operator
-# feature set with three new docs (see docs/cache-compression.md,
-# docs/cache-compression-profiles.md, docs/cache-compression-troubleshooting.md)
-# and six copy-pasteable config profiles. Profiles 1-3 cover compression,
-# Profile 4-5 cover synthetic cache controls, Profile 6 covers threshold
-# tuning. The full set is documented in docs/cache-compression-profiles.md.
-#
-# Phase 5 first request-mutating layer (deterministic suffix compression).
-# `enabled = false` and `mode = "observe"` are the shipped defaults so
-# this whole stack is no-op until an operator opts in. The applier mutates
-# only eligible `volatile_suffix` segments and fails closed if the stable
-# prefix content hash changes. Context-limit checks happen before
-# compression, and routing never consumes these metrics.
+# The cache-preserving compression stack ships observability-only by
+# default. The applier mutates only eligible volatile-suffix segments
+# and fails closed if the stable prefix content hash changes.
+# Context-limit checks happen before compression, and routing never
+# consumes these metrics. Stable operator knobs are documented below;
+# keep advanced overrides in the playbook until you need them.
 #
 # ----------------------------------------------------------------------
 # Request shaping: cache-preserving compression

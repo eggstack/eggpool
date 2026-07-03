@@ -368,6 +368,26 @@ class TestRequestShapingSummary:
         for needle in ("Phase 1", "Phase 2", "Phase 4", "Phase 9", "Phase 10"):
             assert needle not in html
 
+    def test_advanced_request_shaping_details_present(self) -> None:
+        """The runtime page wraps legacy detail panels in a collapsible."""
+        html = render_runtime(
+            _base_snapshot(),
+            cache_observability={
+                "total_requests": 1,
+                "by_status": {"reported": 1},
+                "per_protocol_status": {},
+                "per_account_status": {},
+                "per_model_status": {},
+            },
+        )
+        # Summary panel is visible.
+        assert "Request shaping" in html
+        # Collapsible block exists.
+        assert '<details class="advanced-request-shaping">' in html
+        assert "Advanced request-shaping details" in html
+        # At least one legacy panel is inside the details block.
+        assert "Cache reporting" in html
+
 
 class TestRoutingGuardrailsPanel:
     """Phase 8 routing-guardrails diagnostic panel renders on /runtime."""

@@ -283,7 +283,7 @@ Edge cases:
 
 #### `pause_turn` handling
 
-Anthropic's `pause_turn` `stop_reason` signals that the model paused mid-turn (typically to wait for a long-running tool). Phase 6.1 surfaces this to OpenAI clients by mapping `stop_reason: pause_turn` to `finish_reason: "tool_calls"` and appending a synthetic sentinel entry to `message.tool_calls`:
+Anthropic's `pause_turn` `stop_reason` signals that the model paused mid-turn (typically to wait for a long-running tool). EggPool surfaces this to OpenAI clients by mapping `stop_reason: pause_turn` to `finish_reason: "tool_calls"` and appending a synthetic sentinel entry to `message.tool_calls`:
 
 ```json
 {

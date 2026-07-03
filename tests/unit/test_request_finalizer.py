@@ -206,6 +206,56 @@ class TestRequestFinalizerCostPrecedence:
             await db.disconnect()
 
     @pytest.mark.asyncio
+    async def test_higher_reservation_does_not_floor_after_lower_local_selection(
+        self,
+    ) -> None:
+        """When local estimate and reservation are both plausible but local is lower,
+        the bounded selector picks the local and reservation must not raise it."""
+        db, request_repo, attempt_repo, reservation_repo = await _fresh_finalizer_db()
+        try:
+            selected, request_id = await _seed_request(
+                db,
+                request_repo,
+                attempt_repo,
+                reservation_repo,
+                proxy_request_id="finalizer-higher-res-1",
+                reservation_microdollars=80_000,
+                selected_estimated_microdollars=80_000,
+            )
+            calculator = AsyncMock()
+            calculator.calculate_cost = AsyncMock(return_value=(60_000, "estimated"))
+            finalizer = RequestFinalizer(
+                db=db,
+                request_repo=request_repo,
+                attempt_repo=attempt_repo,
+                reservation_repo=reservation_repo,
+                cost_calculator=calculator,
+            )
+
+            await finalizer.finalize(
+                selected,
+                FinalizationData(
+                    outcome=FinalizationOutcome.COMPLETED,
+                    status_code=200,
+                    input_tokens=1_000,
+                    output_tokens=2_000,
+                ),
+            )
+
+            row = await db.fetch_one(
+                "SELECT cost_microdollars, exactness, local_cost_microdollars, "
+                "local_cost_exactness FROM requests WHERE id = ?",
+                (request_id,),
+            )
+            assert row is not None
+            assert int(row["cost_microdollars"]) == 60_000
+            assert row["exactness"] == "estimated"
+            assert int(row["local_cost_microdollars"]) == 60_000
+            assert row["local_cost_exactness"] == "estimated"
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio
     async def test_reservation_lower_than_local_can_win_when_plausible(self) -> None:
         db, request_repo, attempt_repo, reservation_repo = await _fresh_finalizer_db()
         try:

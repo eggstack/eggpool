@@ -5774,6 +5774,8 @@ def render_runtime(
 
 {request_shaping_panel}
 
+<details class="advanced-request-shaping">
+  <summary>Advanced request-shaping details</summary>
 {cache_card}
 
 {segmentation_card}
@@ -5790,6 +5792,7 @@ def render_runtime(
 {compression_tuning_card}
 
 {routing_guardrails_panel}
+</details>
 
 <section class="panel">
   <h3>Health states</h3>

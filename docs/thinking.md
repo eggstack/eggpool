@@ -637,7 +637,7 @@ Phase C noted that strict rejections propagate as `CapabilityError`, but did not
 - Increments the thinking-metrics rejected counter with the rejection reason (`strict_clamp` / `unknown_effort_strict` / `capability_rejected`).
 - Does **not** record a health failure — this is a client-validation outcome, not an account health signal.
 
-The streaming and non-streaming dispatch paths share identical cleanup semantics via `_apply_selected_provider_transcode_adjustments()` (Phase 3 of the cleanup plan).
+The streaming and non-streaming dispatch paths share identical cleanup semantics via `_apply_selected_provider_transcode_adjustments()`.
 
 ### Phase I — Final Polish
 

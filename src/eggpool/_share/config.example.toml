@@ -645,22 +645,14 @@ protocol = "anthropic"
 protocol = "anthropic"
 
 # ----------------------------------------------------------------------
-# Phase 12: operator docs, profiles, and rollout
+# Request shaping surfaces
 # ----------------------------------------------------------------------
-# The cache-preserving deterministic compression stack ships observability-only
-# by default. Phase 12 turns the runtime primitives into a usable operator
-# feature set with three new docs (see docs/cache-compression.md,
-# docs/cache-compression-profiles.md, docs/cache-compression-troubleshooting.md)
-# and six copy-pasteable config profiles. Profiles 1-3 cover compression,
-# Profile 4-5 cover synthetic cache controls, Profile 6 cover threshold
-# tuning. The full set is documented in docs/cache-compression-profiles.md.
-#
-# Phase 5 first request-mutating layer (deterministic suffix compression).
-# `enabled = false` and `mode = "observe"` are the shipped defaults so
-# this whole stack is no-op until an operator opts in. The applier mutates
-# only eligible `volatile_suffix` segments and fails closed if the stable
-# prefix content hash changes. Context-limit checks happen before
-# compression, and routing never consumes these metrics.
+# The cache-preserving compression stack ships observability-only by
+# default. The applier mutates only eligible volatile-suffix segments
+# and fails closed if the stable prefix content hash changes.
+# Context-limit checks happen before compression, and routing never
+# consumes these metrics. Stable operator knobs are documented below;
+# keep advanced overrides in the playbook until you need them.
 #
 # ----------------------------------------------------------------------
 # Request shaping: cache-preserving compression

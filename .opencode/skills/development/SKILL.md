@@ -186,6 +186,14 @@ Acceptance:
 uv run pytest tests/unit/test_routing_guardrails.py -v
 ```
 
+### Request finalizer cost precedence
+
+Canonical cost precedence: provider-reported → trusted local exact/derived/partial → bounded-estimated. Reservation estimates are routing budgets, NOT cost floors. The regression test `test_estimated_local_cost_beats_higher_reservation_floor_regression` in `tests/unit/test_request_finalizer.py` pins the invariant. Run with:
+
+```bash
+uv run pytest tests/unit/test_request_finalizer.py -v
+```
+
 ### Replay fixtures & regression harness
 
 The replay harness pins high-risk request-shaping behavior without ever
