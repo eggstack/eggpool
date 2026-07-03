@@ -164,7 +164,7 @@ enabled = false
 mode = "recommend"
 ```
 
-After editing, run `eggpool rehash` to restart the supervisor with the new config.
+After editing, run `eggpool restart` (or `systemctl restart eggpool`) to apply the new config.
 
 ## See also
 

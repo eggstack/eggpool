@@ -276,7 +276,7 @@ Profiles are config-only changes. No schema migration is required:
 
 1. Edit `config.toml` to the new profile.
 2. Run `eggpool check-config` to validate.
-3. Run `eggpool rehash` to restart the supervisor.
+3. Run `eggpool restart` (or `systemctl restart eggpool`) to apply.
 4. Inspect the relevant `/api/stats/...` endpoint to confirm the new mode is active.
 
 Rollback to Profile 1 (baseline disabled) at any time — see `docs/cache-compression.md` § Rollback.

@@ -2162,7 +2162,7 @@ EggPool supports configurable effective context limits per model per provider, a
 
 ### OpenCode Integration
 
-`eggpool configsetup opencode --json-only` generates OpenCode provider config with explicit `limit.context`, `limit.input`, and `limit.output` per model. This drives OpenCode's native compaction machinery.
+`eggpool configsetup opencode` generates OpenCode provider config with explicit `limit.context`, `limit.input`, and `limit.output` per model. This drives OpenCode's native compaction machinery.
 
 Models whose `capabilities.thinking.status` is `"supported"` receive a `"thinking": "supported"` annotation in the generated entry. All other thinking statuses (`"unknown"`, `"unsupported"`, `"mixed"`, `"conflicting"`) are omitted so the config never claims thinking support without confirmed upstream backing. Mixed collapsed models do not silently appear as uniformly thinking-capable.
 

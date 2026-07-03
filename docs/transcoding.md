@@ -368,6 +368,10 @@ The following `kind` values may appear on `TranscodeContext.loss_warnings`:
 | `anthropic_top_level_thinking_dropped` | The Anthropic top-level `thinking` block was dropped when transcoding to OpenAI (no verified mapping) | `reason` |
 | `response_format_to_system_prompt` | An OpenAI `response_format` was coerced to a system-prompt instruction | `field` |
 | `top_k_dropped` | Anthropic `top_k` was dropped (OpenAI has no top-k sampling knob) | `field` |
+| `budget_clamped` | A thinking budget was clamped to the provider's maximum | `requested`, `resolved` |
+| `unknown_effort` | A `reasoning_effort` value could not be mapped to a budget | `effort` |
+| `budget_rejected` | Strict policy rejected an unresolvable thinking budget | `requested`, `policy` |
+| `budget_resolution_no_input` | Budget resolution was requested but no input was provided | `policy` |
 
 The complete catalogue lives in `eggpool.transcoder.LOSS_WARNING_KINDS`.
 
@@ -493,6 +497,10 @@ Every loss warning is a structured dict with at minimum `kind` and `field`. The 
 | `reasoning_content_dropped` | A thinking/reasoning content block was dropped because the feature was disabled | `{"kind": "reasoning_content_dropped", "field": "content[].thinking"}` |
 | `response_format_to_system_prompt` | An OpenAI `response_format` was coerced to a system-prompt instruction | `{"kind": "response_format_to_system_prompt", "field": "response_format"}` |
 | `top_k_dropped` | Anthropic `top_k` was dropped (OpenAI has no top-k sampling knob) | `{"kind": "top_k_dropped", "field": "top_k"}` |
+| `budget_clamped` | A thinking budget was clamped to the provider's maximum | `{"kind": "budget_clamped", "requested": 16384, "resolved": 8192}` |
+| `unknown_effort` | A `reasoning_effort` value could not be mapped to a budget | `{"kind": "unknown_effort", "effort": "xlow"}` |
+| `budget_rejected` | Strict policy rejected an unresolvable thinking budget | `{"kind": "budget_rejected", "requested": 32768, "policy": "strict"}` |
+| `budget_resolution_no_input` | Budget resolution was requested but no input was provided | `{"kind": "budget_resolution_no_input", "policy": "strict"}` |
 
 Additional context fields that may appear:
 

@@ -73,12 +73,19 @@ CI sets `PYTHONHASHSEED=0` and `TZ=UTC`; reproduce locally for deterministic res
 - **Protocol transcoding**: transparent request/response format conversion between OpenAI and Anthropic protocols. Implemented in `src/eggpool/transcoder/` and `src/eggpool/request/coordinator.py`.
 - **Database invariants**: SQLite WAL, single-connection serialization, `async with db.transaction():` for all DML.
 - **Quota and routing**: tier-based routing via `routing_priority`, `QuotaFairScorer`, upstream-authoritative suppression, same-tier fairness rotor.
-- **Error hierarchy**: `AggregatorError` → `UpstreamError` → specific subclasses. `CapabilityError` for thinking/reasoning capability mismatches.
+- **Error hierarchy**: `AggregatorError` → `UpstreamError` → specific subclasses. `CapabilityError` for thinking/reasoning capability mismatches. `TranscodeLossError` (HTTP 400) for loss-policy reject. `ProtocolMismatchError` for endpoint/model-protocol mismatches.
 - **Process model**: supervisor + Granian worker, PID file lifecycle, daemon mode.
 - **Dashboard**: server-rendered HTML, Chart.js v4, grouped timeseries, CSS tooltips.
 - **Model capabilities**: protocol-neutral `ThinkingCapability` / `ModelCapabilities` with deterministic merge. Config overrides at `[model_capabilities."<id>".thinking]` and per-provider scoped.
 - **Catalog refresh**: non-destructive by default; destructive withdrawal gated on `authoritative=True AND allow_withdrawals=True`. `static_models` is the source of truth for provider-specific protocol.
 - **Cache/compression observability**: Phases 1–12 build a cache-preserving compression stack. `QuotaFairScorer` does NOT consume cache, compression, synthetic-cache, or tuning fields — routing stays load-based (request count + token count + active count + health). Phase 8 pins this invariant with hardcoded runtime diagnostics and test assertions in `tests/unit/test_routing_guardrails.py`. See `architecture/README.md` § Routing Guardrails for details.
+- **Model info sources**: `src/eggpool/model_info/` enriches model metadata from multiple sources (OpenRouter, Artificial Analysis, HuggingFace, provider catalog) with dedup, identity resolution, and scheduler-driven refresh.
+- **Background tasks**: `src/eggpool/background/` manages retention cleanup, periodic tasks, and startup crash recovery via `TaskSupervisor`.
+- **Health management**: `src/eggpool/health/` implements `HealthManager` circuit breaker and per-account health tracking for routing eligibility.
+- **Retry classification**: `src/eggpool/retry/` classifies upstream errors for failover and retry decisions.
+- **Security**: `src/eggpool/security/` handles header redaction middleware and security utilities.
+- **Integrations**: `src/eggpool/integrations/` generates external tool configs (OpenCode, Claude Code, Aider, Codex, etc.).
+- **Transcoder compression**: `src/eggpool/transcoder/compression/` implements the cache-preserving compression stack (Phases 4–12) — analyzer, applier, policy resolver, tuning, markers.
 - **Replay fixtures**: `tests/fixtures/cache_compression/` holds sanitized JSON fixtures (content-private, never enter routing). `tests/helpers/cache_compression_replay.py` is the harness. `tests/unit/test_replay_fixtures_regression.py` and `tests/unit/test_replay_fixtures_sanitization.py` pin invariants.
 
 ## Gotchas

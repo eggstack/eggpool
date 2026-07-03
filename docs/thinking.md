@@ -26,7 +26,7 @@ Status values (`CapabilityStatus`):
 | `mixed` | Some backing providers support thinking, others do not |
 | `conflicting` | External sources disagree on support status; requires operator resolution via manual override |
 
-Source: `src/eggpool/catalog/capabilities.py:35-45`
+Source: `src/eggpool/catalog/capabilities.py:36-44`
 
 ## 2. Enabling Thinking Transcoding
 
@@ -554,7 +554,7 @@ native_protocols = ["anthropic"]
 
 ---
 
-## 11. Closing-Pass Hardening
+## 12. Closing-Pass Hardening
 
 This section documents the semantic hardening applied to thinking/reasoning handling in the **closing pass** (Phase A–G).
 
@@ -648,7 +648,7 @@ This small polish pass (`plans/thinking_reasoning_final_polish.md`) hardens the 
 
 ---
 
-## 12. Tests for Closing-Pass Behavior
+## 13. Tests for Closing-Pass Behavior
 
 The closing pass adds regression coverage in:
 

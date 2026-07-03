@@ -69,7 +69,7 @@ When the same model is served by multiple providers:
 Generate an OpenCode configuration with model limits:
 
 ```bash
-eggpool configsetup opencode --json-only > opencode-config.json
+eggpool configsetup opencode > opencode-config.json
 ```
 
 This produces a JSON file with explicit `limit.context`, `limit.input`, and `limit.output` values for each model. OpenCode uses these to trigger compaction before exceeding the configured window.
