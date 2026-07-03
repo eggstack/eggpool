@@ -7,7 +7,7 @@ SQL logic lives here, not in HTTP route handlers.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from eggpool.stats.grouped_timeseries import postprocess_grouped_timeseries
 
@@ -3548,3 +3548,330 @@ async def fetch_synthetic_cache_summary(
         "by_policy": by_policy,
         "by_status_timeseries": None,
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 10: closed-loop threshold tuning
+# ---------------------------------------------------------------------------
+
+
+async def fetch_compression_tuning_window_metrics(
+    db: Database,
+    start: str,
+    end: str,
+    *,
+    window_requests: int = 500,
+) -> dict[str, Any]:
+    """Phase 10 per-policy window metrics for the tuning engine.
+
+    Reads the Phase 4/5/6 ``compression_*`` columns populated by
+    :mod:`eggpool.transcoder.compression.analyzer` /
+    :mod:`eggpool.transcoder.compression.apply` finalizers and
+    aggregates one :class:`TuningWindowMetrics` per resolved
+    policy (``<global>`` sentinel for requests without a Phase 6
+    override).
+
+    The query is bounded by ``window_requests`` per policy: only the
+    most recent N rows are scanned, so the dashboard stays fast even
+    on heavy traffic.  All rates are computed in SQL; the
+    ``TuningWindowMetrics`` values are flattened into the response so
+    the dashboard can render without re-importing the tuning module.
+
+    The output is keyed by ``policy_name`` (using ``<global>`` as
+    the sentinel) and contains the exact field names consumed by
+    :func:`eggpool.transcoder.compression.tuning.compute_recommendation`.
+
+    No raw prompts, tool outputs, system messages, request bodies,
+    or auth headers are ever read by this query.
+    """
+    start_dt = _format_dt(start)
+    end_dt = _format_dt(end)
+    bounded_window = max(int(window_requests), 1)
+
+    # --- per-policy aggregate row (latest N requests) ---
+    per_policy_sql = """
+    WITH ranked AS (
+        SELECT
+            COALESCE(compression_policy_name, '<global>') AS policy_name,
+            COALESCE(compression_status, 'disabled') AS compression_status,
+            COALESCE(compression_applied, 0) AS compression_applied,
+            COALESCE(compression_failed_fallback, 0) AS compression_failed_fallback,
+            COALESCE(compression_savings_tokens, 0) AS compression_savings_tokens,
+            COALESCE(compression_latency_ms, 0) AS compression_latency_ms,
+            COALESCE(compression_warning_count, 0) AS compression_warning_count,
+            compression_reason_code_counts_json,
+            compression_warnings_json,
+            started_at,
+            ROW_NUMBER() OVER (
+                PARTITION BY COALESCE(compression_policy_name, '<global>')
+                ORDER BY started_at DESC
+            ) AS rn
+        FROM requests
+        WHERE started_at >= ? AND started_at < ?
+            AND status != 'pending'
+    )
+    SELECT
+        policy_name,
+        COUNT(*) AS total_requests,
+        COALESCE(SUM(compression_applied), 0) AS applied_count,
+        COALESCE(SUM(compression_failed_fallback), 0) AS failed_fallback_count,
+        COALESCE(SUM(compression_warning_count), 0)
+            AS latency_budget_warning_count_proxy,
+        COALESCE(SUM(CASE WHEN compression_status IN (
+            'disabled', 'skipped', 'observe_skipped'
+        ) THEN 1 ELSE 0 END), 0) AS suppressed_count
+    FROM ranked
+    WHERE rn <= ?
+    GROUP BY policy_name
+    """
+    rows = await db.fetch_all(
+        per_policy_sql,
+        (start_dt, end_dt, bounded_window),
+    )
+
+    # --- per-policy latency / savings sorted samples for percentiles ---
+    samples_sql = """
+    WITH ranked AS (
+        SELECT
+            COALESCE(compression_policy_name, '<global>') AS policy_name,
+            COALESCE(compression_latency_ms, 0) AS compression_latency_ms,
+            COALESCE(compression_savings_tokens, 0) AS compression_savings_tokens,
+            COALESCE(compression_applied, 0) AS compression_applied,
+            compression_warnings_json,
+            compression_reason_code_counts_json,
+            ROW_NUMBER() OVER (
+                PARTITION BY COALESCE(compression_policy_name, '<global>')
+                ORDER BY started_at DESC
+            ) AS rn
+        FROM requests
+        WHERE started_at >= ? AND started_at < ?
+            AND status != 'pending'
+            AND compression_applied = 1
+    )
+    SELECT policy_name, compression_latency_ms, compression_savings_tokens,
+           compression_warnings_json, compression_reason_code_counts_json
+    FROM ranked
+    WHERE rn <= ?
+    ORDER BY policy_name, compression_latency_ms
+    """
+    sample_rows = await db.fetch_all(
+        samples_sql,
+        (start_dt, end_dt, bounded_window),
+    )
+
+    # Bucket samples per policy.
+    samples_by_policy: dict[str, list[tuple[float, float]]] = {}
+    warning_by_policy: dict[str, dict[str, int]] = {}
+    reason_by_policy: dict[str, dict[str, int]] = {}
+    for row in sample_rows:
+        d = dict(row)
+        policy = str(d["policy_name"])
+        latency = float(d["compression_latency_ms"] or 0)
+        savings = float(d["compression_savings_tokens"] or 0)
+        samples_by_policy.setdefault(policy, []).append((latency, savings))
+        import json as _json
+
+        warnings_raw = d.get("compression_warnings_json")
+        if warnings_raw:
+            try:
+                parsed = _json.loads(warnings_raw)
+            except (TypeError, ValueError):
+                parsed = None
+            if isinstance(parsed, list):
+                bucket = warning_by_policy.setdefault(policy, {})
+                for item in cast("list[str]", parsed):
+                    bucket[item] = bucket.get(item, 0) + 1
+        reason_raw = d.get("compression_reason_code_counts_json")
+        if reason_raw:
+            try:
+                parsed = _json.loads(reason_raw)
+            except (TypeError, ValueError):
+                parsed = None
+            if isinstance(parsed, dict):
+                bucket = reason_by_policy.setdefault(policy, {})
+                for code_key, count_value in cast("dict[str, Any]", parsed).items():
+                    if isinstance(count_value, (int, float)):
+                        bucket[code_key] = bucket.get(code_key, 0) + int(count_value)
+
+    # --- assemble the per-policy dict ---
+    out: dict[str, Any] = {}
+    for row in rows:
+        d = dict(row)
+        policy = str(d["policy_name"])
+        total = int(d["total_requests"] or 0)
+        applied = int(d["applied_count"] or 0)
+        samples = samples_by_policy.get(policy, [])
+        latencies = sorted(s for s, _ in samples)
+        savings_list = sorted((s for _, s in samples), key=lambda x: x)
+
+        def _percentile(values: list[float], pct: float) -> float:
+            if not values:
+                return 0.0
+            idx = int(round((len(values) - 1) * pct))
+            return float(values[idx])
+
+        # Count warning kinds for below-threshold suppression; these
+        # come from per-request reason_code_counts which is the
+        # canonical record of why a request was suppressed.
+        reason_counts = reason_by_policy.get(policy, {})
+        below_min_candidate = int(reason_counts.get("below_min_candidate_tokens", 0))
+        below_min_savings = int(reason_counts.get("below_min_savings_tokens", 0))
+        # positive_savings_count is "applied requests with savings > 0".
+        positive_savings = sum(1 for _, s in samples if s > 0)
+        # Latency-budget warnings: surfaced via compression_warning_count
+        # when compression_warnings_json contains a "latency_budget"
+        # entry.  Approximation: count rows whose warnings include
+        # latency_budget_exceeded.
+        latency_budget_warning_count = sum(
+            int(v)
+            for code, v in warning_by_policy.get(policy, {}).items()
+            if "latency_budget" in code
+        )
+
+        out[policy] = {
+            "total_requests": total,
+            "applied_count": applied,
+            "suppressed_count": int(d["suppressed_count"] or 0),
+            "below_min_candidate_count": below_min_candidate,
+            "below_min_savings_count": below_min_savings,
+            "latency_budget_warning_count": latency_budget_warning_count,
+            "failed_fallback_count": int(d["failed_fallback_count"] or 0),
+            "positive_savings_count": positive_savings,
+            "p95_latency_ms": _percentile(latencies, 0.95),
+            "median_latency_ms": _percentile(latencies, 0.50),
+            "median_savings_tokens": _percentile(savings_list, 0.50),
+            "p95_savings_tokens": _percentile(savings_list, 0.95),
+            "warning_counts": dict(warning_by_policy.get(policy, {})),
+            "reason_counts": dict(reason_counts),
+        }
+    return out
+
+
+async def fetch_compression_tuning_recommendations(
+    db: Database,
+) -> list[dict[str, Any]]:
+    """Return the persisted Phase 10 recommendations.
+
+    Reads the ``compression_tuning_recommendations`` table populated
+    by the recommendation registry.  No raw prompts or content are
+    ever stored.  Returns one row per policy (``<global>`` sentinel
+    for the no-override path).
+    """
+    rows = await db.fetch_all(
+        """
+        SELECT policy_name, status, recommendation_json, generated_at
+        FROM compression_tuning_recommendations
+        ORDER BY generated_at DESC
+        """,
+    )
+    import json as _json
+
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        d = dict(row)
+        raw = d.get("recommendation_json")
+        parsed: Any = None
+        if raw:
+            try:
+                parsed = _json.loads(raw)
+            except (TypeError, ValueError):
+                parsed = None
+        out.append(
+            {
+                "policy_name": str(d["policy_name"]),
+                "status": str(d["status"]),
+                "recommendation": parsed,
+                "generated_at": str(d["generated_at"]),
+            },
+        )
+    return out
+
+
+async def upsert_compression_tuning_recommendation(
+    db: Database,
+    *,
+    policy_name: str,
+    status: str,
+    recommendation_json: str,
+    generated_at: str,
+) -> None:
+    """Insert or update the recommendation row for one policy.
+
+    The caller (the registry) is responsible for serialising the
+    :class:`CompressionTuningRecommendation` payload to JSON; this
+    function never inspects the body, so it cannot accidentally
+    persist raw prompt content.  Writes use an owned transaction so
+    the audit row is atomic with respect to other registry writes.
+    """
+    async with db.transaction():
+        await db._execute_cursor(  # pyright: ignore[reportPrivateUsage]
+            """
+            INSERT INTO compression_tuning_recommendations
+                (policy_name, status, recommendation_json, generated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(policy_name) DO UPDATE SET
+                status = excluded.status,
+                recommendation_json = excluded.recommendation_json,
+                generated_at = excluded.generated_at
+            """,
+            (policy_name, status, recommendation_json, generated_at),
+        )
+
+
+async def fetch_compression_tuning_overrides(
+    db: Database,
+) -> list[dict[str, Any]]:
+    """Return currently-active runtime overrides.
+
+    Reads ``compression_tuning_overrides`` for the audit trail.  Rows
+    whose ``expires_at`` is in the past are returned with
+    ``is_expired`` set so dashboards can show the historic audit
+    without losing context.
+    """
+    rows = await db.fetch_all(
+        """
+        SELECT id, policy_name, fields_json, reason_codes_json,
+               generated_at, expires_at
+        FROM compression_tuning_overrides
+        ORDER BY generated_at DESC
+        LIMIT 50
+        """,
+    )
+    import json as _json
+    from datetime import UTC, datetime
+
+    now = datetime.now(UTC)
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        d = dict(row)
+        fields = None
+        reasons = None
+        try:
+            fields = _json.loads(d["fields_json"])
+        except (TypeError, ValueError):
+            fields = None
+        try:
+            reasons = _json.loads(d["reason_codes_json"])
+        except (TypeError, ValueError):
+            reasons = None
+        expires_raw = d.get("expires_at")
+        expires_at: datetime | None = None
+        is_expired = False
+        if expires_raw:
+            try:
+                expires_at = datetime.fromisoformat(str(expires_raw))
+                is_expired = expires_at <= now
+            except ValueError:
+                expires_at = None
+        out.append(
+            {
+                "id": int(d["id"]),
+                "policy_name": str(d["policy_name"]),
+                "fields": fields,
+                "reason_codes": reasons,
+                "generated_at": str(d["generated_at"]),
+                "expires_at": expires_at.isoformat() if expires_at else None,
+                "is_expired": is_expired,
+            },
+        )
+    return out

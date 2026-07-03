@@ -1507,6 +1507,38 @@ class StatsService:
             time_range.end_str(),
         )
 
+    async def get_compression_tuning_window_metrics(
+        self,
+        period: str | None = None,
+        *,
+        window_requests: int = 500,
+    ) -> dict[str, Any]:
+        """Phase 10 per-policy window metrics for the tuning engine.
+
+        Returns the per-policy window aggregates from
+        :func:`eggpool.stats.queries.fetch_compression_tuning_window_metrics`
+        plus the persisted ``compression_tuning_recommendations``
+        rows so the dashboard can render the recommendation table
+        alongside the live window.  No raw prompts or content are
+        read or persisted by this query path.
+        """
+        time_range = resolve_time_range(period)
+        windows = await queries.fetch_compression_tuning_window_metrics(
+            self._db,
+            time_range.start_str(),
+            time_range.end_str(),
+            window_requests=window_requests,
+        )
+        recommendations = await queries.fetch_compression_tuning_recommendations(
+            self._db,
+        )
+        overrides = await queries.fetch_compression_tuning_overrides(self._db)
+        return {
+            "windows": windows,
+            "recommendations": recommendations,
+            "overrides": overrides,
+        }
+
 
 _BUCKET_SIZES: dict[str, int] = {
     "hour": 3600,

@@ -665,3 +665,45 @@ protocol = "anthropic"
 #   synthetic_cache_dry_run = true
 #   synthetic_cache_min_stable_tokens = 0
 #   synthetic_cache_max_breakpoints = 4
+#
+# ----------------------------------------------------------------------
+# Phase 10: closed-loop threshold tuning (advisory by default)
+# ----------------------------------------------------------------------
+# The tuning engine observes Phase 4-6 compression metrics and emits
+# recommendations for `min_candidate_tokens`, `min_savings_tokens`, and
+# `max_compression_latency_ms`.  `mode = "recommend"` (the default)
+# writes recommendations to the dashboard and the
+# `compression_tuning_recommendations` table only.  Set
+# `mode = "apply"` to additionally push the recommendation onto an
+# in-memory runtime override registry (`<global>` and matched policy
+# names) -- the registry is operator-clearable, expires after
+# `apply_ttl_seconds`, and is never persisted beyond the per-policy
+# audit table.
+#
+# [compression.tuning]
+# mode = "recommend"
+# window_seconds = 3600
+# min_window_requests = 200
+# max_adjustment_pct = 25
+# cooldown_seconds = 1800
+# apply_ttl_seconds = 900
+#
+# Operator-defined targets (the algorithm nudges thresholds toward
+# these targets without ever exceeding the bounds below):
+#
+# [compression.tuning.targets]
+# max_failed_fallback_rate = 0.05
+# max_latency_warning_rate = 0.10
+# min_positive_savings_rate = 0.60
+# target_compression_latency_ms = 4000.0
+#
+# Hard bounds (the algorithm clamps every suggested value to these
+# ranges; no override can escape them):
+#
+# [compression.tuning.bounds]
+# min_candidate_tokens_min = 64
+# min_candidate_tokens_max = 8192
+# min_savings_tokens_min = 32
+# min_savings_tokens_max = 4096
+# max_compression_latency_ms_min = 250.0
+# max_compression_latency_ms_max = 30000.0

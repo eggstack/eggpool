@@ -1214,6 +1214,74 @@ via `synthetic_cache_*` overlay fields resolved by
 - `src/eggpool/db/schema/0045_synthetic_cache_controls.sql` -- migration
 - `src/eggpool/api/proxy_request.py:_resolve_target_provider_kind`
 
+## Closed-Loop Threshold Tuning (Phase 10)
+
+Phase 10 adds a side-effect-free recommendation engine that observes
+Phase 4-6 compression metrics and emits bounded suggestions for the
+three tunable thresholds:
+
+- `min_candidate_tokens`
+- `min_savings_tokens`
+- `max_compression_latency_ms`
+
+The engine is disabled by default.  When `[compression.tuning] mode`
+is `recommend` (the default), the engine writes advisory
+recommendations to the `compression_tuning_recommendations` table and
+the dashboard; request behaviour never changes.  When `mode = apply`,
+the engine additionally registers an entry in the in-memory
+`RuntimeCompressionPolicyOverrideRegistry` so the resolver overlays
+the suggested values onto the per-request compression config.  Entries
+expire after `apply_ttl_seconds`; the registry is operator-clearable
+and is never persisted beyond the audit table.
+
+### Safety rails
+
+- The algorithm is **content-private**: it never inspects raw
+  prompts, tool outputs, system messages, or request bodies.  The
+  only inputs are per-policy aggregates of Phase 4-6 columns.
+- The algorithm is **bounded**: every suggested value is clamped to
+  `[field_min, field_max]` from `[compression.tuning.bounds]`.  No
+  override can escape these ranges even in `apply` mode.
+- The algorithm is **rate-limited**: per-step deltas are capped by
+  `max_adjustment_pct`, and a second recommendation within
+  `cooldown_seconds` of the previous one is suppressed with
+  `REASON_COOLDOWN_ACTIVE`.
+- The algorithm never enables `compress_static_prefix`, never toggles
+  `mode`, never adds or removes transforms, and never modifies the
+  synthetic cache knobs.  Only the three tunable thresholds move.
+- The runtime override is fail-closed: a malformed entry (unknown
+  field, invalid value, validation error) is dropped and recorded in
+  `runtime_override_metadata.dropped_fields` without affecting the
+  previous config.
+
+### Routing non-interference
+
+The `QuotaFairScorer` does NOT consume Phase 10 tuning state.  Routing
+stays load-based: request count + token count + active count +
+health.  Phase 10 only mutates compression thresholds; it never
+inspects the request body, never picks an account, never alters the
+health feed.  The `QuotaFairScorer.score_accounts` signature is
+unchanged from Phase 8.  `ResolvedCompressionPolicy.runtime_override_metadata`
+is operator-visible only; it does not flow into scorer inputs.
+
+### Code references
+
+- `src/eggpool/transcoder/compression/tuning.py` -- `compute_recommendation`,
+  `apply_runtime_override`, `RuntimeCompressionPolicyOverrideRegistry`
+- `src/eggpool/transcoder/compression/policy.py` -- `CompressionTuningConfig`,
+  `CompressionTuningTargetsConfig`, `CompressionTuningBoundsConfig`
+- `src/eggpool/transcoder/compression/policy_resolver.py` --
+  `resolve_compression_policy(runtime_override_registry=...)`
+- `src/eggpool/db/schema/0046_closed_loop_threshold_tuning.sql` -- migration
+- `src/eggpool/app.py` -- `app.state.compression_tuning_registry`
+- `src/eggpool/api/proxy_request.py` -- resolver call site
+- `src/eggpool/stats/queries.py` -- `fetch_compression_tuning_window_metrics`
+  and persistence helpers
+- `src/eggpool/stats/service.py` -- `get_compression_tuning_window_metrics`
+- `src/eggpool/api/stats.py` -- `/api/stats/compression-tuning` endpoint
+- `src/eggpool/dashboard/routes.py` and `src/eggpool/dashboard/render.py`
+  -- runtime card and JSON handler
+
 ## Database
 
 SQLite via aiosqlite with WAL mode. Single-connection serialization via a lock + ContextVar.

@@ -24,6 +24,17 @@ scalar fields, merge-on-boolean for transforms), never inspects
 request content, and fails closed (returns the global config plus a
 warning) on any malformed override.
 
+Phase 10 adds optional closed-loop threshold tuning.  The
+``[compression.tuning]`` block enables a recommendation engine that
+analyses recent compression observations and suggests bounded
+adjustments to ``min_candidate_tokens``, ``min_savings_tokens``, and
+``max_compression_latency_ms``.  Tuning never inspects raw prompt
+content, never enables stable-prefix compression, never changes
+routing, and never adds new transforms; it only adjusts the existing
+conservative thresholds within operator-defined bounds.  The first
+implementation milestone is ``mode = "recommend"`` (advisory) with
+``mode = "apply"`` behind explicit opt-in.
+
 This module owns the typed config surface.  Validation rules:
 
 - ``enabled = false`` is the safe default; no analyzer work runs
@@ -46,6 +57,12 @@ This module owns the typed config surface.  Validation rules:
   not reset the global default.  ``compress_static_prefix=true`` in
   an override requires the same ``allow_static_prefix_override=true``
   safety guard as the global config.
+- ``[compression.tuning]`` mode must be one of ``"off"``,
+  ``"recommend"``, or ``"apply"``.  Windows and cooldowns must be
+  positive integers and percentage bounds must satisfy
+  ``min <= max``.  Bounds are non-overlapping guards: the tuning
+  engine never produces values outside
+  ``[bounds.min_*, bounds.max_*]``.
 
 The ``compress_static_prefix`` flag exists for forward-compatibility
 with later phases.  In Phase 4 it is documentation-only: the
@@ -63,6 +80,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 CompressionMode = Literal["observe", "safe"]
 CompressionPlacement = Literal["suffix_only", "after_cache_boundary", "anywhere"]
 CompressionProtocolMatch = Literal["openai", "anthropic"]
+CompressionTuningMode = Literal["off", "recommend", "apply"]
 
 
 class CompressionTransforms(BaseModel):
@@ -125,6 +143,252 @@ class CompressionTransforms(BaseModel):
             "from collapsing repeated frames."
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 10: closed-loop threshold tuning
+# ---------------------------------------------------------------------------
+
+
+class CompressionTuningTargetsConfig(BaseModel):
+    """Phase 10 tuning target guardrails.
+
+    The recommendation engine compares per-policy window metrics
+    against these targets and emits a reason code when a target is
+    breached.  Defaults match
+    ``plans/cache_compression_phase_10_closed_loop_threshold_tuning.md``
+    and are intentionally conservative: latency and fallback guard
+    rails come first, savings come second.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_latency_budget_warning_rate: float = Field(
+        default=0.01,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Maximum acceptable rate of latency_budget warnings "
+            "(fraction of requests in window).  Above this, "
+            "recommendations raise thresholds or shorten the "
+            "latency budget."
+        ),
+    )
+    max_failed_fallback_rate: float = Field(
+        default=0.001,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Maximum acceptable rate of fail-closed fallback "
+            "events.  Above this, recommendations raise "
+            "thresholds and surface a safety warning."
+        ),
+    )
+    min_positive_savings_rate: float = Field(
+        default=0.8,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Minimum acceptable fraction of applied requests "
+            "with positive token savings.  Below this, "
+            "recommendations raise ``min_savings_tokens``."
+        ),
+    )
+    min_median_savings_tokens: int = Field(
+        default=512,
+        ge=0,
+        description=(
+            "Minimum acceptable median savings tokens per applied "
+            "request.  Below this, recommendations raise "
+            "``min_savings_tokens``."
+        ),
+    )
+    max_p95_latency_ms: float = Field(
+        default=25.0,
+        ge=0.0,
+        description=(
+            "Maximum acceptable p95 compression latency in "
+            "milliseconds.  Above this, recommendations raise "
+            "``min_candidate_tokens`` to reduce per-request work."
+        ),
+    )
+
+
+class CompressionTuningBoundsConfig(BaseModel):
+    """Phase 10 hard bounds for tunables.
+
+    The tuning engine clamps every recommendation so the value never
+    falls outside ``[min_*, max_*]``.  These bounds are the
+    non-negotiable safety rail; the operator chooses the corridor.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    min_candidate_tokens_min: int = Field(
+        default=256,
+        ge=0,
+        description="Lower bound for ``min_candidate_tokens``.",
+    )
+    min_candidate_tokens_max: int = Field(
+        default=16384,
+        ge=0,
+        description="Upper bound for ``min_candidate_tokens``.",
+    )
+    min_savings_tokens_min: int = Field(
+        default=128,
+        ge=0,
+        description="Lower bound for ``min_savings_tokens``.",
+    )
+    min_savings_tokens_max: int = Field(
+        default=8192,
+        ge=0,
+        description="Upper bound for ``min_savings_tokens``.",
+    )
+    max_compression_latency_ms_min: float = Field(
+        default=5.0,
+        ge=0.0,
+        description="Lower bound for ``max_compression_latency_ms``.",
+    )
+    max_compression_latency_ms_max: float = Field(
+        default=100.0,
+        ge=0.0,
+        description="Upper bound for ``max_compression_latency_ms``.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_min_le_max(self) -> CompressionTuningBoundsConfig:
+        """Each knob's min must be <= max."""
+        for lo, hi, name in (
+            (
+                self.min_candidate_tokens_min,
+                self.min_candidate_tokens_max,
+                "min_candidate_tokens",
+            ),
+            (
+                self.min_savings_tokens_min,
+                self.min_savings_tokens_max,
+                "min_savings_tokens",
+            ),
+            (
+                self.max_compression_latency_ms_min,
+                self.max_compression_latency_ms_max,
+                "max_compression_latency_ms",
+            ),
+        ):
+            if lo > hi:
+                raise ValueError(
+                    f"compression.tuning.bounds: {name} min ({lo}) "
+                    f"must be <= max ({hi}).",
+                )
+        return self
+
+
+class CompressionTuningConfig(BaseModel):
+    """Phase 10 closed-loop threshold tuning configuration.
+
+    Disabled by default.  The first supported mode is ``"recommend"``,
+    which produces advisory suggestions without changing request
+    behaviour.  ``"apply"`` produces bounded runtime overrides that
+    are merged into the resolved compression policy post-resolution.
+    Neither mode ever touches routing fields, mode, enabled, or
+    static-prefix compression.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Master switch for the tuning engine.  When false, the "
+            "service runs no analysis, returns no recommendations, "
+            "and never produces runtime overrides."
+        ),
+    )
+    mode: CompressionTuningMode = Field(
+        default="recommend",
+        description=(
+            "Tuning behaviour.  ``off`` runs no analysis (overrides "
+            "the global ``enabled`` flag).  ``recommend`` produces "
+            "advisory recommendations without changing request "
+            "behaviour.  ``apply`` produces bounded runtime "
+            "overrides that overlay the resolved policy."
+        ),
+    )
+    window_requests: int = Field(
+        default=500,
+        gt=0,
+        description=(
+            "Maximum number of recent requests (per policy) used "
+            "as the analysis window.  Older requests are ignored."
+        ),
+    )
+    min_window_requests: int = Field(
+        default=50,
+        gt=0,
+        description=(
+            "Minimum number of requests required before the "
+            "engine produces a non-``insufficient_data`` "
+            "recommendation."
+        ),
+    )
+    update_interval_s: int = Field(
+        default=300,
+        gt=0,
+        description=(
+            "Suggested update cadence in seconds.  Used as a hint "
+            "for background tasks; the engine never relies on this "
+            "for correctness."
+        ),
+    )
+    max_adjustment_pct: float = Field(
+        default=25.0,
+        gt=0.0,
+        le=100.0,
+        description=(
+            "Maximum percentage change per recommendation.  "
+            "Caps the size of any single threshold step to prevent "
+            "oscillation."
+        ),
+    )
+    cooldown_s: int = Field(
+        default=900,
+        gt=0,
+        description=(
+            "Minimum seconds between two recommendations for the "
+            "same policy.  Suppresses oscillating changes."
+        ),
+    )
+    persist_recommendations: bool = Field(
+        default=True,
+        description=(
+            "When true, the latest recommendation per policy is "
+            "persisted to the ``compression_tuning_recommendations`` "
+            "table so dashboards survive restart."
+        ),
+    )
+    targets: CompressionTuningTargetsConfig = Field(
+        default_factory=CompressionTuningTargetsConfig,
+        description="Target guardrails the engine compares against.",
+    )
+    bounds: CompressionTuningBoundsConfig = Field(
+        default_factory=CompressionTuningBoundsConfig,
+        description="Hard bounds on every recommended threshold.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_windowing(self) -> CompressionTuningConfig:
+        """Window + cooldown + min-window consistency.
+
+        ``min_window_requests`` must not exceed ``window_requests``;
+        otherwise the engine could never satisfy its own precondition.
+        """
+        if self.min_window_requests > self.window_requests:
+            raise ValueError(
+                "compression.tuning: min_window_requests "
+                f"({self.min_window_requests}) must be <= "
+                f"window_requests ({self.window_requests}).",
+            )
+        return self
 
 
 class CompressionConfig(BaseModel):
@@ -251,6 +515,19 @@ class CompressionConfig(BaseModel):
             "inspects request content, and fails closed (returns the "
             "global config plus a warning) on any malformed override.  "
             "When the list is empty, behavior is unchanged from Phase 5."
+        ),
+    )
+    tuning: "CompressionTuningConfig" = Field(  # noqa: UP037
+        default_factory=CompressionTuningConfig,
+        description=(
+            "Phase 10 closed-loop threshold tuning.  Disabled by "
+            "default.  When enabled, the engine analyses recent "
+            "compression observations and produces bounded "
+            'threshold recommendations.  ``mode = "recommend"`` '
+            'is advisory; ``mode = "apply"`` overlays the '
+            "resolved policy at runtime.  Tuning never touches "
+            "routing, never enables stable-prefix compression, "
+            "and never inspects raw prompt content."
         ),
     )
 
@@ -551,8 +828,17 @@ __all__ = [
     "CompressionPlacement",
     "CompressionPolicyOverride",
     "CompressionProtocolMatch",
+    "CompressionTuningBoundsConfig",
+    "CompressionTuningConfig",
+    "CompressionTuningMode",
+    "CompressionTuningTargetsConfig",
     "CompressionTransforms",
 ]
+
+
+# Resolve the forward reference in ``CompressionConfig.tuning`` so
+# the embedded ``CompressionTuningConfig`` block is fully wired.
+CompressionConfig.model_rebuild()
 
 
 # Resolve the forward reference in ``CompressionConfig.policies``

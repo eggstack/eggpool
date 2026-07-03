@@ -538,6 +538,7 @@ class RuntimeMetricsService:
                 "routing_uses_compression_metrics": False,
                 "routing_uses_stable_prefix_hash": False,
                 "routing_uses_compression_policy": False,
+                "routing_uses_compression_tuning": False,
                 "route_scorer_inputs": [
                     "health",
                     "quota",

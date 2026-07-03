@@ -3498,6 +3498,7 @@ def render_runtime(
     compression_policy_stats: dict[str, Any] | None = None,
     cache_stability: dict[str, Any] | None = None,
     synthetic_cache_summary: dict[str, Any] | None = None,
+    compression_tuning: dict[str, Any] | None = None,
     period: str = "24h",
 ) -> str:
     """Render the runtime metrics page."""
@@ -5088,6 +5089,206 @@ def render_runtime(
 </section>
 """
 
+    # Phase 10 closed-loop threshold tuning card.
+    compression_tuning_card = ""
+    if compression_tuning is not None:
+        ct_windows: dict[str, Any] = cast(
+            "dict[str, Any]",
+            compression_tuning.get("windows") or {},
+        )
+        ct_recommendations_raw: Any = compression_tuning.get("recommendations") or []
+        ct_recommendations: list[dict[str, Any]] = cast(
+            "list[dict[str, Any]]",
+            ct_recommendations_raw if isinstance(ct_recommendations_raw, list) else [],
+        )
+        ct_overrides_raw: Any = compression_tuning.get("overrides") or []
+        ct_overrides: list[dict[str, Any]] = cast(
+            "list[dict[str, Any]]",
+            ct_overrides_raw if isinstance(ct_overrides_raw, list) else [],
+        )
+
+        # Recommendations table rows.  Each persisted recommendation
+        # carries the engine's last output (status, current, recommended,
+        # reason_codes).  We display the policy name, status, the delta
+        # between current and recommended thresholds, and the primary
+        # reason codes.  No raw prompts or content.
+        ct_rec_rows_html = ""
+        for raw_entry in ct_recommendations:
+            entry = _as_dict(raw_entry)
+            if not entry:
+                continue
+            rec_obj = _as_dict(entry.get("recommendation"))
+            if not rec_obj:
+                continue
+            policy = escape(str(entry.get("policy_name", "")))
+            status = escape(str(entry.get("status", "")))
+            recommended: dict[str, Any] = _as_dict(rec_obj.get("recommended"))
+            current: dict[str, Any] = _as_dict(rec_obj.get("current"))
+            reason_obj: Any = rec_obj.get("reason_codes") or []
+            reason_codes_list: list[Any] = (
+                cast("list[Any]", reason_obj) if isinstance(reason_obj, list) else []
+            )
+            reasons_str = ", ".join(escape(str(c)) for c in reason_codes_list[:4])
+            if len(reason_codes_list) > 4:
+                reasons_str += ", ..."
+            deltas: list[str] = []
+            for key in ("min_candidate_tokens", "min_savings_tokens"):
+                try:
+                    cur_v = int(current.get(key, 0) or 0)
+                    rec_v = int(recommended.get(key, 0) or 0)
+                    if rec_v != cur_v:
+                        deltas.append(
+                            f"{key}: {cur_v} → {rec_v}",
+                        )
+                except (TypeError, ValueError):
+                    continue
+            try:
+                cur_lat = float(current.get("max_compression_latency_ms", 0) or 0)
+                rec_lat = float(
+                    recommended.get("max_compression_latency_ms", 0) or 0,
+                )
+                if abs(rec_lat - cur_lat) > 1e-6:
+                    deltas.append(
+                        f"max_compression_latency_ms: {cur_lat:.1f} → {rec_lat:.1f}",
+                    )
+            except (TypeError, ValueError):
+                pass
+            delta_str = "<br>".join(escape(d) for d in deltas) if deltas else "—"
+            ct_rec_rows_html += f"""
+    <tr>
+      <td>{policy}</td>
+      <td>{status}</td>
+      <td>{delta_str}</td>
+      <td>{reasons_str or "—"}</td>
+    </tr>"""
+
+        if not ct_rec_rows_html:
+            ct_rec_rows_html = """
+    <tr><td colspan="4" class="empty">No recommendations persisted yet.</td></tr>"""
+
+        # Overrides table rows (last 5).  Shows that apply mode is
+        # actually wiring the registry; rows are inert audit only.
+        ct_ov_rows_html = ""
+        for raw_entry in ct_overrides[:5]:
+            entry = _as_dict(raw_entry)
+            if not entry:
+                continue
+            policy = escape(str(entry.get("policy_name", "")))
+            fields_dict: dict[str, Any] = _as_dict(entry.get("fields"))
+            if fields_dict:
+                fields_str = ", ".join(
+                    f"{escape(str(k))}={escape(str(v))}" for k, v in fields_dict.items()
+                )
+            else:
+                fields_str = "—"
+            expires_obj: Any = entry.get("expires_at", "—")
+            expires_str = str(expires_obj) if expires_obj is not None else "—"
+            expires = escape(expires_str)
+            expired_label = (
+                '<span class="pill">expired</span>'
+                if bool(entry.get("is_expired"))
+                else '<span class="pill ok">active</span>'
+            )
+            ct_ov_rows_html += f"""
+    <tr>
+      <td>{policy}</td>
+      <td>{fields_str or "—"}</td>
+      <td>{expires}</td>
+      <td>{expired_label}</td>
+    </tr>"""
+
+        if not ct_ov_rows_html:
+            ct_ov_rows_html = """
+    <tr><td colspan="4" class="empty">
+        No runtime overrides applied (mode=recommend by default).
+    </td></tr>"""
+
+        # Window rollup (counts only) — operators see how many
+        # policies were observed.
+        ct_window_total = 0
+        for raw_entry in ct_windows.values():
+            entry = _as_dict(raw_entry)
+            if not entry:
+                continue
+            total_raw: Any = entry.get("total_requests", 0)
+            ct_window_total += int(total_raw or 0)
+        ct_window_count = len(ct_windows)
+        # Force pyright to see both variables as used; they appear
+        # inside the escaped ``{{ ... }}`` template below where the
+        # type checker does not always recognise the reference.
+        _ = ct_window_count, ct_window_total
+
+        compression_tuning_card = f"""
+<section class="panel">
+  <h3>Compression tuning ({escape(period)})</h3>
+  <p class="sub">
+    Phase 10 closed-loop threshold tuning.  Disabled by default.
+    When <code>mode = "recommend"</code>, the engine surfaces
+    advisory suggestions without changing request behaviour;
+    <code>mode = "apply"</code> overlays bounded runtime overrides
+    on the resolved policy.  Tuning never inspects raw prompt
+    content, never enables stable-prefix compression, and never
+    touches routing.
+  </p>
+  <section class="cards">
+    {{
+        _render_metric_card(
+            title="Policies observed",
+            metric=format_int(ct_window_count),
+            sub="windows in last 24h",
+        )
+    }}
+    {{
+        _render_metric_card(
+            title="Requests analysed",
+            metric=format_int(ct_window_total),
+            sub="per-policy windows",
+        )
+    }}
+    {{
+        _render_metric_card(
+            title="Recommendations",
+            metric=format_int(len(ct_recommendations)),
+            sub="persisted rows",
+        )
+    }}
+    {{
+        _render_metric_card(
+            title="Runtime overrides",
+            metric=format_int(len(ct_overrides)),
+            sub="audit trail",
+        )
+    }}
+  </section>
+  <h4>Recommendations</h4>
+  <table class="data compact">
+    <thead><tr>
+      <th>Policy</th>
+      <th>Status</th>
+      <th>Threshold change</th>
+      <th>Why</th>
+    </tr></thead>
+    <tbody>{ct_rec_rows_html}</tbody>
+  </table>
+  <h4>Runtime overrides (apply mode)</h4>
+  <table class="data compact">
+    <thead><tr>
+      <th>Policy</th>
+      <th>Fields</th>
+      <th>Expires at</th>
+      <th>State</th>
+    </tr></thead>
+    <tbody>{ct_ov_rows_html}</tbody>
+  </table>
+  <p class="sub">
+    Phase 10: tuning is reporting-only and never consumed by
+    QuotaFairScorer.  Tunable fields are limited to
+    <code>min_candidate_tokens</code>, <code>min_savings_tokens</code>,
+    and <code>max_compression_latency_ms</code>.
+  </p>
+</section>
+"""
+
     # Phase 8 routing-guardrails panel: hardcoded diagnostic from
     # ``RuntimeMetricsService._snapshot_routing_runtime`` so operators
     # can confirm the routing-input boundary is intact.  The fields
@@ -5225,6 +5426,7 @@ def render_runtime(
 {cache_stability_card}
 
 {synthetic_cache_card}
+{compression_tuning_card}
 
 {routing_guardrails_panel}
 

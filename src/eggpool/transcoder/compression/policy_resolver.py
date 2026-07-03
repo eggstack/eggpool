@@ -97,6 +97,7 @@ class ResolvedCompressionPolicy:
     matched_policy_names: tuple[str, ...] = ()
     warnings: tuple[str, ...] = field(default_factory=tuple)
     synthetic_cache_overrides: dict[str, Any] | None = None
+    runtime_override_metadata: dict[str, Any] = field(default_factory=dict[str, Any])
 
     def as_dict(self) -> dict[str, Any]:
         """Compact dict for the persistence layer.
@@ -124,6 +125,12 @@ class ResolvedCompressionPolicy:
             "config_min_savings_tokens": int(self.config.min_savings_tokens),
             "config_max_compression_latency_ms": float(
                 self.config.max_compression_latency_ms,
+            ),
+            "runtime_override_active": bool(
+                self.runtime_override_metadata.get("active", False),
+            ),
+            "runtime_override_fields": dict(
+                self.runtime_override_metadata.get("applied_fields", {}),
             ),
         }
 
@@ -297,6 +304,7 @@ def resolve_compression_policy(
     ctx: CompressionPolicyContext,
     *,
     overrides: list[CompressionPolicyOverride] | None = None,
+    runtime_override_registry: Any | None = None,
 ) -> ResolvedCompressionPolicy:
     """Pick and merge the compression policy for one request.
 
@@ -348,6 +356,27 @@ def resolve_compression_policy(
         synthetic_cache_overrides or None
     )
     if not matched_names:
+        runtime_metadata = {"active": False, "applied_fields": {}}
+        if runtime_override_registry is not None:
+            try:
+                from eggpool.transcoder.compression.tuning import (
+                    apply_runtime_override,
+                )
+
+                override = runtime_override_registry.lookup(GLOBAL_POLICY_NAME)
+                if override is not None:
+                    merged, runtime_metadata = apply_runtime_override(merged, override)
+                    if not runtime_metadata.get("active", False):
+                        warnings.append(
+                            f"runtime_override: registry entry for "
+                            f"policy:{GLOBAL_POLICY_NAME} could not be applied; "
+                            "falling back to the previous config",
+                        )
+            except Exception as exc:  # pragma: no cover - safety net
+                warnings.append(
+                    f"runtime_override: registry lookup failed: {exc}; "
+                    "falling back to the previous config",
+                )
         return ResolvedCompressionPolicy(
             name=GLOBAL_POLICY_NAME,
             source=GLOBAL_POLICY_SOURCE,
@@ -355,9 +384,34 @@ def resolve_compression_policy(
             matched_policy_names=(),
             warnings=tuple(warnings),
             synthetic_cache_overrides=synthetic_cache_overrides_out,
+            runtime_override_metadata=runtime_metadata,
         )
     last = matched_names[-1]
     source = f"policy:{last}"
+    runtime_metadata: dict[str, Any] = {"active": False, "applied_fields": {}}
+    if runtime_override_registry is not None:
+        try:
+            # Lazy import to keep the resolver import graph tiny for
+            # code paths that never use runtime overrides (Phase 6).
+            from eggpool.transcoder.compression.tuning import (
+                apply_runtime_override,
+            )
+
+            policy_name = last if matched_names else GLOBAL_POLICY_NAME
+            override = runtime_override_registry.lookup(policy_name)
+            if override is not None:
+                merged, runtime_metadata = apply_runtime_override(merged, override)
+                if not runtime_metadata.get("active", False):
+                    warnings.append(
+                        f"runtime_override: registry entry for "
+                        f"policy:{policy_name} could not be applied; "
+                        "falling back to the previous config",
+                    )
+        except Exception as exc:  # pragma: no cover - safety net
+            warnings.append(
+                f"runtime_override: registry lookup failed: {exc}; "
+                "falling back to the previous config",
+            )
     return ResolvedCompressionPolicy(
         name=last,
         source=source,
@@ -365,6 +419,7 @@ def resolve_compression_policy(
         matched_policy_names=tuple(matched_names),
         warnings=tuple(warnings),
         synthetic_cache_overrides=synthetic_cache_overrides_out,
+        runtime_override_metadata=runtime_metadata,
     )
 
 

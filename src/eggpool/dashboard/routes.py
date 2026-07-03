@@ -1386,6 +1386,9 @@ async def handle_runtime(
     compression_policy_stats = await stats_service.get_compression_policy_stats(period)
     cache_stability = await stats_service.get_cache_stability(period)
     synthetic_cache_summary = await stats_service.get_synthetic_cache_summary(period)
+    compression_tuning = await stats_service.get_compression_tuning_window_metrics(
+        period,
+    )
     snapshot = await runtime_metrics.snapshot()
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
     return HTMLResponse(
@@ -1403,6 +1406,7 @@ async def handle_runtime(
             compression_policy_stats=compression_policy_stats,
             cache_stability=cache_stability,
             synthetic_cache_summary=synthetic_cache_summary,
+            compression_tuning=compression_tuning,
             period=period or "24h",
         )
     )
@@ -1485,6 +1489,33 @@ async def handle_synthetic_cache_observability_json(request: Request) -> Respons
             "routing_separation_notice": (
                 "Phase 9 synthetic cache controls. Reporting only -- "
                 "not consumed by QuotaFairScorer."
+            ),
+            **data,
+        }
+    )
+
+
+async def handle_compression_tuning_json(request: Request) -> Response:
+    """Return Phase 10 closed-loop threshold tuning aggregates as JSON.
+
+    Includes per-policy window metrics, persisted recommendation
+    rows, and the runtime override audit trail.  The static
+    routing-separation notice is appended at the top so dashboards
+    make the non-interference invariant obvious.
+    """
+    _get_dashboard_config(request)
+    db = request.app.state.db
+    from eggpool.stats import StatsService
+
+    period = request.query_params.get("period", "24h")
+    stats_service = StatsService(db)
+    data = await stats_service.get_compression_tuning_window_metrics(period)
+    return JSONResponse(
+        content={
+            "routing_separation_notice": (
+                "Phase 10 closed-loop threshold tuning. Reporting only "
+                "-- not consumed by QuotaFairScorer. Tuning never "
+                "enables stable-prefix compression."
             ),
             **data,
         }
@@ -1607,6 +1638,11 @@ def register_dashboard_routes(app: Any, require_auth: bool = False) -> None:
             handle_synthetic_cache_observability_json,
             JSONResponse,
         ),
+        (
+            "/api/stats/compression-tuning",
+            handle_compression_tuning_json,
+            JSONResponse,
+        ),
     ):
         app.add_api_route(
             path=path,
@@ -1626,6 +1662,7 @@ __all__ = [
     "handle_compression_observability_json",
     "handle_compression_policy_stats_json",
     "handle_compression_runtime_json",
+    "handle_compression_tuning_json",
     "handle_events",
     "handle_grouped_timeseries_json",
     "handle_latency",

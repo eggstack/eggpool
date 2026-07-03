@@ -671,6 +671,21 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # handler reads this from app.state and short-circuits the
     # analyzer when ``enabled = false``.
     app.state.compression_policy = config.compression
+    # 8c.b Phase 10 closed-loop threshold tuning.  The registry holds
+    # at most one runtime override per policy.  The proxy_request
+    # resolver looks up the registry by resolved policy name and
+    # overlays the tunable thresholds (min_candidate_tokens,
+    # min_savings_tokens, max_compression_latency_ms) onto the
+    # request's effective config.  All other knobs (enabled, mode,
+    # placement, transforms, static-prefix, synthetic cache knobs)
+    # are immutable from the registry.  Operators populate entries
+    # by setting ``[compression.tuning] mode = "apply"`` (advisory
+    # dashboards only fire in ``recommend`` mode).
+    from eggpool.transcoder.compression.tuning import (
+        RuntimeCompressionPolicyOverrideRegistry,
+    )
+
+    app.state.compression_tuning_registry = RuntimeCompressionPolicyOverrideRegistry()
     # 8d. Phase 9 synthetic cache-controls config.  Disabled by
     # default; the proxy_request handler reads this from app.state
     # and short-circuits the selector when ``enabled = false``.

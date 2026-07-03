@@ -412,6 +412,11 @@ async def handle_proxy_request(
     # specific policy must do a second post-route pass (or rely on
     # the broader client / protocol / model match fields).
     compression_policy = getattr(request.app.state, "compression_policy", None)
+    runtime_override_registry: Any = getattr(
+        request.app.state,
+        "compression_tuning_registry",
+        None,
+    )
     resolved_compression_policy: Any = None
     if compression_policy is not None:
         try:
@@ -434,6 +439,7 @@ async def handle_proxy_request(
             resolved_compression_policy = resolve_compression_policy(
                 compression_policy,
                 policy_ctx,
+                runtime_override_registry=runtime_override_registry,
             )
         except Exception:  # noqa: BLE001
             logger.debug(

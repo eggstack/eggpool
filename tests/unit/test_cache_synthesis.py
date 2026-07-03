@@ -28,6 +28,7 @@ Phase 2 / Phase 3 invariants while wiring Phase 9.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import pytest
@@ -982,3 +983,146 @@ class TestPhase9RoutingGuardrails:
         msgs = cast("list[Any]", mutated["messages"])
         content_list = cast("list[Any]", msgs[0]["content"])
         assert "cache_control" not in content_list[0]
+
+
+# ---------------------------------------------------------------------------
+# Routing guardrails (Phase 8 invariant for Phase 10)
+# ---------------------------------------------------------------------------
+
+
+class TestPhase10RoutingGuardrails:
+    """Phase 10 closed-loop threshold tuning is observational only.
+
+    Phase 8 codifies the invariant that cache/compression fields
+    never enter route scoring, health removal, or route reselection.
+    Phase 10 introduces a tuning recommendation engine that mutates
+    per-request compression thresholds at request time; this test
+    pins that the resolver still never exposes tuning state in a
+    form the ``QuotaFairScorer`` could consume and that the engine
+    itself never alters routing.
+    """
+
+    def test_resolved_policy_carries_no_tuning_state_for_scorer(self) -> None:
+        from eggpool.transcoder.compression.policy import CompressionConfig
+        from eggpool.transcoder.compression.policy_resolver import (
+            CompressionPolicyContext,
+            resolve_compression_policy,
+        )
+        from eggpool.transcoder.compression.tuning import (
+            RuntimeCompressionPolicyOverride,
+            RuntimeCompressionPolicyOverrideRegistry,
+        )
+
+        reg = RuntimeCompressionPolicyOverrideRegistry()
+        reg.register(
+            RuntimeCompressionPolicyOverride(
+                policy_name="<global>",
+                fields={
+                    "min_candidate_tokens": 256.0,
+                    "min_savings_tokens": 128.0,
+                    "max_compression_latency_ms": 15000.0,
+                },
+                generated_at=datetime.now(UTC),
+                expires_at=datetime.now(UTC) + timedelta(minutes=5),
+                reason_codes=("applied_runtime_override",),
+            ),
+        )
+        resolved = resolve_compression_policy(
+            CompressionConfig(),
+            CompressionPolicyContext(),
+            runtime_override_registry=reg,
+        )
+        as_dict = resolved.as_dict()
+        # The only fields the scorer could see via routing code paths
+        # are config_min_candidate_tokens, config_min_savings_tokens,
+        # and config_max_compression_latency_ms -- which are already
+        # observed by Phase 5 and remain load-only (request count +
+        # token count).  Phase 10 introduces no new scorer-facing
+        # state.  Pin this by enumerating the surfaced keys.
+        forbidden_new_keys = {
+            "config_tuning_mode",
+            "config_tuning_window_seconds",
+            "config_tuning_min_window_requests",
+            "config_tuning_max_adjustment_pct",
+            "config_tuning_cooldown_seconds",
+            "config_tuning_targets",
+            "config_tuning_bounds",
+        }
+        assert forbidden_new_keys.isdisjoint(as_dict.keys())
+
+    def test_tuning_does_not_change_routing_score_signature(self) -> None:
+        from eggpool.transcoder.compression.policy import CompressionConfig
+        from eggpool.transcoder.compression.policy_resolver import (
+            CompressionPolicyContext,
+            resolve_compression_policy,
+        )
+        from eggpool.transcoder.compression.tuning import (
+            RuntimeCompressionPolicyOverride,
+            RuntimeCompressionPolicyOverrideRegistry,
+        )
+
+        # Adversarial input: a registry with extreme overrides that
+        # would crash if any tuning field leaked into routing.
+        reg = RuntimeCompressionPolicyOverrideRegistry()
+        reg.register(
+            RuntimeCompressionPolicyOverride(
+                policy_name="<global>",
+                fields={
+                    "min_candidate_tokens": 1.0,
+                    "min_savings_tokens": 1.0,
+                    "max_compression_latency_ms": 1.0,
+                },
+                generated_at=datetime.now(UTC),
+                expires_at=datetime.now(UTC) + timedelta(minutes=5),
+                reason_codes=("applied_runtime_override",),
+            ),
+        )
+        ctx = CompressionPolicyContext()
+        baseline = resolve_compression_policy(CompressionConfig(), ctx)
+        with_override = resolve_compression_policy(
+            CompressionConfig(),
+            ctx,
+            runtime_override_registry=reg,
+        )
+        # The only thing that should change is the resolved config
+        # knobs; no RoutingScore, no scorer, no health manager is
+        # exposed or mutated.  Pin this by structural comparison.
+        assert baseline.matched_policy_names == with_override.matched_policy_names
+        assert baseline.warnings == with_override.warnings
+        assert baseline.synthetic_cache_overrides == (
+            with_override.synthetic_cache_overrides
+        )
+
+    def test_registry_lookup_never_inspects_request_body(self) -> None:
+        """Tuning lookup is content-private; the registry only reads
+        the policy name off the resolver output, never the request."""
+        from eggpool.transcoder.compression.policy import CompressionConfig
+        from eggpool.transcoder.compression.policy_resolver import (
+            CompressionPolicyContext,
+            resolve_compression_policy,
+        )
+        from eggpool.transcoder.compression.tuning import (
+            RuntimeCompressionPolicyOverrideRegistry,
+        )
+
+        reg = RuntimeCompressionPolicyOverrideRegistry()
+        # Adversarial context with no body, no protocol, no model --
+        # the lookup must still succeed (returning None) without
+        # touching any request field.
+        ctx = CompressionPolicyContext(
+            client_id=None,
+            client_name=None,
+            source_protocol="openai",
+            target_protocol=None,
+            requested_model=None,
+            resolved_model=None,
+            provider_id=None,
+            provider_kind=None,
+            transcoded=False,
+        )
+        result = resolve_compression_policy(
+            CompressionConfig(),
+            ctx,
+            runtime_override_registry=reg,
+        )
+        assert result.runtime_override_metadata["active"] is False

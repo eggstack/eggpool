@@ -61,7 +61,7 @@ class InvariantQueryError(CheckerError):
 #: Highest migration number this checker knows how to inspect.
 #: If the database is older or newer than this, the checker
 #: returns exit code 2 with a clear message.
-EXPECTED_SCHEMA_VERSION = 45
+EXPECTED_SCHEMA_VERSION = 46
 
 #: Required tables for the production EggPool schema.
 REQUIRED_TABLES: frozenset[str] = frozenset(
@@ -82,6 +82,8 @@ REQUIRED_TABLES: frozenset[str] = frozenset(
         "model_info_observations",
         "model_info_aliases",
         "model_info_source_health",
+        "compression_tuning_recommendations",
+        "compression_tuning_overrides",
         "_migrations",
     }
 )

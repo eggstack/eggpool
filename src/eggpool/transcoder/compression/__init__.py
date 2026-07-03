@@ -1,14 +1,15 @@
-"""Compression subpackage (Phase 4 + Phase 5 + Phase 6).
+"""Compression subpackage (Phase 4 + Phase 5 + Phase 6 + Phase 10).
 
 This subpackage implements Phase 4 (observe-mode accounting), Phase 5
-(safe-mode deterministic compression), and Phase 6 (operator-controllable
-policy overrides) of the cache-preserving deterministic compression
-roadmap.
+(safe-mode deterministic compression), Phase 6 (operator-controllable
+policy overrides), and Phase 10 (closed-loop threshold tuning) of
+the cache-preserving deterministic compression roadmap.
 
 Public surface:
 
 - :class:`CompressionConfig` (typed config in ``policy.py``)
 - :class:`CompressionPolicyOverride` (Phase 6 typed override row in ``policy.py``)
+- :class:`CompressionTuningConfig` (Phase 10 tuning config in ``policy.py``)
 - :func:`resolve_compression_policy` and :class:`ResolvedCompressionPolicy`
   (Phase 6 deterministic resolver in ``policy_resolver.py``)
 - :class:`CompressionPolicyContext` (Phase 6 input context)
@@ -18,6 +19,9 @@ Public surface:
   (safe-mode applier in ``apply.py``)
 - :func:`build_marker`, :func:`parse_marker`, :func:`is_marker_line`,
   :class:`MarkerLine` (deterministic markers in ``markers.py``)
+- :class:`TuningWindowMetrics`, :class:`CompressionTuningRecommendation`,
+  :class:`RuntimeCompressionPolicyOverride`, :func:`compute_recommendation`
+  (Phase 10 tuning engine in ``tuning.py``)
 
 The analyzer is observational: it records what a future phase
 would compress but never mutates the request body, never
@@ -28,7 +32,10 @@ prefixes or cache-protected blocks.  The Phase 6 resolver is
 content-private: it never inspects prompt bodies, model output,
 or any other request payload fields; it only matches on the
 client identity, source/target protocol, requested/resolved
-model, provider id/kind, and the transcoded flag.
+model, provider id/kind, and the transcoded flag.  The Phase 10
+tuning engine is content-private: it only reads aggregate
+metrics and never raw prompt content, and only tunes the three
+bounded threshold fields.
 """
 
 from __future__ import annotations
@@ -72,11 +79,22 @@ from eggpool.transcoder.compression.policy import (
     CompressionPolicyOverride,
     CompressionProtocolMatch,
     CompressionTransforms,
+    CompressionTuningBoundsConfig,
+    CompressionTuningConfig,
+    CompressionTuningMode,
+    CompressionTuningTargetsConfig,
 )
 from eggpool.transcoder.compression.policy_resolver import (
     CompressionPolicyContext,
     ResolvedCompressionPolicy,
     resolve_compression_policy,
+)
+from eggpool.transcoder.compression.tuning import (
+    CompressionTuningRecommendation,
+    RuntimeCompressionPolicyOverride,
+    TuningWindowMetrics,
+    build_runtime_override,
+    compute_recommendation,
 )
 
 __all__ = [
@@ -90,6 +108,11 @@ __all__ = [
     "CompressionProtocolMatch",
     "CompressionResult",
     "CompressionTransforms",
+    "CompressionTuningBoundsConfig",
+    "CompressionTuningConfig",
+    "CompressionTuningMode",
+    "CompressionTuningRecommendation",
+    "CompressionTuningTargetsConfig",
     "MarkerLine",
     "REASON_BASE64_ELISION",
     "REASON_BELOW_MIN_CANDIDATE_TOKENS",
@@ -107,10 +130,14 @@ __all__ = [
     "REASON_STATIC_PREFIX",
     "REASON_TRANSFORM_DISABLED",
     "ResolvedCompressionPolicy",
+    "RuntimeCompressionPolicyOverride",
     "TransformLiteral",
+    "TuningWindowMetrics",
     "analyze_compression",
     "apply_safe_compression",
     "build_marker",
+    "build_runtime_override",
+    "compute_recommendation",
     "is_marker_line",
     "parse_marker",
     "resolve_compression_policy",
