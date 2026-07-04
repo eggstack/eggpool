@@ -4979,6 +4979,39 @@ class TestRenderModelDetail:
         assert "Hugging Face" not in html
         assert "Conflicts" in html
 
+    def test_detail_renderer_surfaces_observations_error(self) -> None:
+        """When the repository observation read fails, the detail page
+        renders an explicit notice with the error class name instead
+        of an empty Observations panel."""
+        from datetime import UTC, datetime
+        from types import SimpleNamespace
+
+        from eggpool.dashboard.render import render_model_detail
+
+        now = datetime.now(UTC)
+        info = SimpleNamespace(
+            model_id="test",
+            status="partial",
+            summary="",
+            sparse=False,
+            detail={},
+            provenance={"sources": ["provider_catalog", "openrouter"]},
+            conflicts={},
+            first_seen_at=now,
+            last_seen_at=now,
+            last_refreshed_at=None,
+            next_refresh_at=None,
+        )
+        html = render_model_detail(
+            info=info,
+            model_id="test",
+            observations=[],
+            observations_error="OperationalError",
+        )
+        assert "Observations" in html
+        assert "Observation read failed" in html
+        assert "OperationalError" in html
+
     def test_api_detail_response_contains_normalized_limits(self) -> None:
         """The API ``_detail_response`` reader exposes the nested
         limits block with the expected keys."""

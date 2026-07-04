@@ -29,7 +29,9 @@ if TYPE_CHECKING:
 
 
 def _detail_response(
-    info: Any, observations: list[dict[str, Any]] | None = None
+    info: Any,
+    observations: list[dict[str, Any]] | None = None,
+    observations_error: str | None = None,
 ) -> dict[str, Any]:
     """Build a full detail dict from a CanonicalModelInfo.
 
@@ -43,6 +45,13 @@ def _detail_response(
     it is used for the ``observations`` field so callers see truthful
     DB rows rather than synthesised provenance-derived rows (Phase 4
     of the OpenRouter enrichment plan).
+
+    Phase 2 polish: when ``observations`` is ``None`` and
+    ``observations_error`` is set, the response returns an empty
+    ``observations`` list with an ``observations_error`` key so
+    callers see "no data" rather than fabricated external-source
+    rows.  Test doubles that don't pass observations continue to get
+    the synthesised fallback for back-compat.
     """
     detail = cast("dict[str, Any]", getattr(info, "detail", {}))
 
@@ -92,10 +101,15 @@ def _detail_response(
     # Source-scoped pricing (advisory)
     pricing = cast("dict[str, Any]", detail.get("pricing", {}))
 
-    # Observations come from the persisted DB rows when supplied;
-    # otherwise fall back to the synthesised projection so legacy
-    # test doubles still work.
-    observations_out = _build_observations(info, observations=observations)
+    # Observations: prefer real DB rows, then prefer-empty-with-error
+    # over synthetic rows when the repo lookup failed, then fall back
+    # to legacy synthesis only when the caller didn't pass either
+    # (test doubles).
+    observations_out, observations_error_out = _resolve_observations_payload(
+        info,
+        observations=observations,
+        observations_error=observations_error,
+    )
 
     compact = compact_model_info_summary(info)
     compact["detail"] = {
@@ -115,6 +129,8 @@ def _detail_response(
     compact["provenance"] = _compact_provenance(info)
     compact["conflicts"] = getattr(info, "conflicts", {})
     compact["observations"] = observations_out
+    if observations_error_out is not None:
+        compact["observations_error"] = observations_error_out
     return compact
 
 
@@ -129,43 +145,64 @@ def _compact_provenance(info: Any) -> dict[str, Any]:
     return result
 
 
-def _build_observations(
-    info: Any, observations: list[dict[str, Any]] | None = None
-) -> list[dict[str, Any]]:
-    """Build compact observation list from real DB rows.
+def _resolve_observations_payload(
+    info: Any,
+    *,
+    observations: list[dict[str, Any]] | None,
+    observations_error: str | None,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Decide what to put in the ``observations`` field.
 
-    When ``observations`` is provided, return it unchanged — those rows
-    come straight from ``model_info_observations`` via the repository
-    (see :meth:`ModelInfoRepository.list_compact_observations_for_model`)
-    and carry truthful ``source_model_id``, ``provider_id``,
-    ``observed_at``, and ``confidence`` values (Phase 4).
+    Resolution order (Phase 2 polish):
 
-    The legacy synthesised projection (derived from provenance +
-    providers + a fabricated ``confidence = 1.0``) is retained for
-    paths that still pass nothing — it survives until every caller
-    is migrated to the repository-backed path.
+    1. Real DB rows when ``observations`` is provided → pass through,
+       no error string.
+    2. Repo read failed → empty observations + ``observations_error``,
+       so callers see "no data" rather than fabricated source rows.
+    3. Caller passed neither (legacy/test-double path) → synthesised
+       fallback rows marked ``_synthetic: true`` for back-compat.
     """
     if observations is not None:
-        cleaned: list[dict[str, Any]] = []
-        for row in observations:
-            entry: dict[str, Any] = {
-                "source": row.get("source"),
-                "source_model_id": row.get("source_model_id"),
-                "provider_id": row.get("provider_id"),
-                "observed_at": row.get("observed_at"),
-                "confidence": row.get("confidence"),
-            }
-            for key in ("display_name", "context_window", "max_output_tokens"):
-                val = row.get(key)
-                if val is not None:
-                    entry[key] = val
-            modalities_raw_obj = row.get("modalities")
-            if isinstance(modalities_raw_obj, list) and modalities_raw_obj:
-                typed_mods: list[object] = cast("list[object]", modalities_raw_obj)
-                entry["modalities"] = [str(m) for m in typed_mods] if typed_mods else []  # type: ignore[arg-type]  # noqa: ERA001
-            cleaned.append(entry)
-        return cleaned
+        return _clean_observation_rows(observations), None
+    if observations_error is not None:
+        return [], observations_error
+    return _synthesize_observations(info), None
 
+
+def _clean_observation_rows(
+    observations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Project DB observation rows into the compact API shape."""
+    cleaned: list[dict[str, Any]] = []
+    for row in observations:
+        entry: dict[str, Any] = {
+            "source": row.get("source"),
+            "source_model_id": row.get("source_model_id"),
+            "provider_id": row.get("provider_id"),
+            "observed_at": row.get("observed_at"),
+            "confidence": row.get("confidence"),
+        }
+        for key in ("display_name", "context_window", "max_output_tokens"):
+            val = row.get(key)
+            if val is not None:
+                entry[key] = val
+        modalities_raw_obj = row.get("modalities")
+        if isinstance(modalities_raw_obj, list) and modalities_raw_obj:
+            typed_mods: list[object] = cast("list[object]", modalities_raw_obj)
+            entry["modalities"] = [str(m) for m in typed_mods] if typed_mods else []
+        cleaned.append(entry)
+    return cleaned
+
+
+def _synthesize_observations(info: Any) -> list[dict[str, Any]]:
+    """Legacy synthesised observation rows (test doubles only).
+
+    These rows fabricate ``source_model_id = info.model_id``,
+    ``provider_id = first provider``, and ``confidence = 1.0`` — they
+    are NOT used in production API paths.  Phase 2 polish returns an
+    empty list with ``observations_error`` instead whenever the
+    repository lookup fails.
+    """
     detail = cast("dict[str, Any]", getattr(info, "detail", {}))
     prov_raw = cast("dict[str, Any]", getattr(info, "provenance", {}))
     sources: list[str] = []
@@ -178,11 +215,6 @@ def _build_observations(
 
     obs: list[dict[str, Any]] = []
     for source in sources:
-        # Deprecated synthesised fallback. Each invocation fabricates
-        # ``source_model_id = info.model_id``,
-        # ``provider_id = first provider``, and
-        # ``confidence = 1.0``; this path is only used when the
-        # caller does not pass repo observations (e.g. test doubles).
         providers_raw = cast("list[object]", detail.get("providers", []))
         provider_value = str(providers_raw[0]) if providers_raw else None
         obs.append(
@@ -196,6 +228,21 @@ def _build_observations(
             }
         )
     return obs
+
+
+def _build_observations(  # pyright: ignore[reportUnusedFunction]
+    info: Any, observations: list[dict[str, Any]] | None = None
+) -> list[dict[str, Any]]:
+    """Backward-compat shim for direct callers / test doubles.
+
+    Prefer :func:`_resolve_observations_payload` in production code so
+    the read-failure branch can return an empty list with
+    ``observations_error``.  This helper still produces the legacy
+    synthesised projection when no observations are passed.
+    """
+    if observations is not None:
+        return _clean_observation_rows(observations)
+    return _synthesize_observations(info)
 
 
 def _known_provider_ids(request: Request) -> set[str] | None:
@@ -267,14 +314,23 @@ async def handle_model_info_detail(request: Request, model_id: str) -> Response:
     # ``model_info_observations`` so external-source ``source_model_id``,
     # ``provider_id``, ``observed_at``, and ``confidence`` are
     # truthful rather than synthesised from provenance.
+    # Phase 2 polish: when the read fails we return an empty
+    # observations list with ``observations_error`` set rather than
+    # synthesising external source rows that would mislead operators.
     try:
         observations = await model_info.repo.list_compact_observations_for_model(
             lookup_id
         )
+        observations_error: str | None = None
     except Exception as exc:
         logger.warning("Failed to read compact observations for %s: %s", lookup_id, exc)
         observations = None
-    return JSONResponse(content=_detail_response(info, observations=observations))
+        observations_error = type(exc).__name__
+    return JSONResponse(
+        content=_detail_response(
+            info, observations=observations, observations_error=observations_error
+        )
+    )
 
 
 async def handle_model_info_sources(request: Request) -> Response:

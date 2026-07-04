@@ -1297,6 +1297,7 @@ async def handle_model_detail(
     info = None
     info_error: str | None = None
     observations: list[dict[str, Any]] = []
+    observations_error: str | None = None
     if model_info_service is not None:
         try:
             info = await model_info_service.get_summary(lookup_id)
@@ -1306,11 +1307,20 @@ async def handle_model_detail(
             # page so operators can see which external sources
             # actually contributed and when they last observed this
             # canonical row.
-            observations = (
-                await model_info_service.repo.list_compact_observations_for_model(
-                    lookup_id
+            try:
+                observations = (
+                    await model_info_service.repo.list_compact_observations_for_model(
+                        lookup_id
+                    )
                 )
-            )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to read compact observations for %s: %s",
+                    lookup_id,
+                    exc,
+                )
+                observations = []
+                observations_error = type(exc).__name__
         except Exception as exc:
             logger.exception(
                 "Model-info detail lookup failed for decoded_id=%r lookup_id=%r",
@@ -1329,6 +1339,7 @@ async def handle_model_detail(
             update_info=_get_update_info(request),
             model_info_error=info_error,
             observations=observations,
+            observations_error=observations_error,
         )
     )
 

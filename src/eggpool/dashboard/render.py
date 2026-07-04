@@ -2579,6 +2579,7 @@ def render_model_detail(
     update_info: Any | None = None,
     model_info_error: str | None = None,
     observations: list[dict[str, Any]] | None = None,
+    observations_error: str | None = None,
 ) -> str:
     """Render the model-info detail page for a single model.
 
@@ -2589,6 +2590,11 @@ def render_model_detail(
     see which external sources actually contributed and when they
     last observed this canonical row (Phase 5.2 of the OpenRouter
     enrichment plan).
+
+    ``observations_error`` is set when the repository observation read
+    fails.  The detail page surfaces the error class in place of the
+    Observations panel so operators see "no data" rather than an
+    empty panel that could be mistaken for "we have nothing yet".
     """
     if info is None:
         if model_info_error:
@@ -2820,7 +2826,11 @@ def render_model_detail(
   </table>
 </section>
 
-{_render_model_observations_section(observations)}
+{
+        _render_model_observations_section(
+            observations, observations_error=observations_error
+        )
+    }
 """
     return _render_layout(
         title=f"Model: {title_text}",
@@ -2835,13 +2845,29 @@ def render_model_detail(
 
 def _render_model_observations_section(
     observations: list[dict[str, Any]] | None,
+    *,
+    observations_error: str | None = None,
 ) -> str:
     """Render the per-source Observations panel for the model detail page.
 
     Surfaces the same per-source rows that ``GET /api/model-info/{id}``
     returns in its ``observations[]`` array, so dashboard and API
     consumers see the same per-source truth (Phase 4 + Phase 5.2).
+
+    When ``observations_error`` is set the panel renders an
+    "observation read failed" notice with the error class name so
+    operators can see why the panel is empty (Phase 2 polish).
     """
+    if observations_error:
+        return (
+            '<section class="panel">'
+            "<h3>Observations</h3>"
+            '<p class="empty" role="status">'
+            f"Observation read failed: <code>{escape(observations_error)}</code>"
+            " — see server logs."
+            "</p>"
+            "</section>"
+        )
     if not observations:
         return ""
     rows: list[str] = []

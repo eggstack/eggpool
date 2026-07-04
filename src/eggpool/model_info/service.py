@@ -10,7 +10,11 @@ from typing import TYPE_CHECKING, Any, cast
 
 from eggpool.errors import ModelInfoSourceFetchError
 from eggpool.model_info.dedup import canonical_needs_update
-from eggpool.model_info.identity import resolve_openrouter_record
+from eggpool.model_info.identity import (
+    choose_alias_candidates,
+    dedupe_alias_strings,
+    resolve_openrouter_record,
+)
 from eggpool.model_info.repository import ModelInfoRepository
 from eggpool.model_info.scheduler import ModelInfoRefreshScheduler
 from eggpool.model_info.sources.provider_catalog import ProviderCatalogSource
@@ -570,6 +574,8 @@ class ModelInfoService:
 
         to_write: list[CanonicalModelInfo] = []
         skipped = 0
+        openrouter_attempted = 0
+        openrouter_matched = 0
         for canonical in due_rows:
             model_id = canonical.model_id
             existing = await self._repo.get_canonical(model_id)
@@ -588,10 +594,12 @@ class ModelInfoService:
             # Try OpenRouter identity resolution for this model.
             # Source success was already recorded above on the bulk
             # fetch; per-model matches only persist observations.
+            openrouter_attempted += 1
             or_record = await resolve_openrouter_record(
                 model_id, self._repo, openrouter_indexed
             )
             if or_record is not None:
+                openrouter_matched += 1
                 await self._persist_source_observation(or_record, model_id=model_id)
 
             # Try Artificial Analysis identity resolution
@@ -770,6 +778,9 @@ class ModelInfoService:
             "refreshed": len(to_write),
             "total": len(due_rows),
             "skipped": skipped,
+            "openrouter_attempted": openrouter_attempted,
+            "openrouter_matched": openrouter_matched,
+            "openrouter_missed": openrouter_attempted - openrouter_matched,
         }
 
     async def refresh_model_info(
@@ -939,13 +950,76 @@ class ModelInfoService:
                 if resolved is not None:
                     diag["matched_source_model_id"] = resolved.source_model_id
                     diag["miss_reason"] = "matched"
+                    # Phase 1 polish: surface exact-case vs case-folded
+                    # alias rows even on the matched path so operators
+                    # can audit which row the resolver chose.
+                    alias_rows = await self._repo.list_alias_rows_for_model(
+                        lookup_id, source="openrouter"
+                    )
+                    alias_candidates_rows = choose_alias_candidates(
+                        lookup_id, alias_rows
+                    )
+                    diag["alias_candidates"] = dedupe_alias_strings(
+                        alias_candidates_rows
+                    )
+                    diag["alias_rows"] = [
+                        {
+                            "model_id": row.get("model_id"),
+                            "alias": row.get("alias"),
+                            "source": row.get("source"),
+                            "provider_id": row.get("provider_id"),
+                            "confidence": row.get("confidence"),
+                            "match_kind": row.get("match_kind"),
+                        }
+                        for row in alias_candidates_rows
+                    ]
+                    diag["alias_selection"] = (
+                        (
+                            "exact_case"
+                            if any(
+                                r.get("match_kind") == "exact_case"
+                                for r in alias_candidates_rows
+                            )
+                            else "case_folded"
+                        )
+                        if alias_candidates_rows
+                        else "none"
+                    )
                     return resolved
                 # No match on this pass: capture alias candidates so
-                # operators can see what was looked up.
-                alias_candidates = await self._repo.get_aliases_for_model(
+                # operators can see what was looked up.  Phase 1
+                # polish: surface exact-case vs case-folded alias rows
+                # and the deduped alias list so operators can tell why
+                # a model didn't resolve.
+                alias_rows = await self._repo.list_alias_rows_for_model(
                     lookup_id, source="openrouter"
                 )
+                alias_candidates_rows = choose_alias_candidates(lookup_id, alias_rows)
+                alias_candidates = dedupe_alias_strings(alias_candidates_rows)
                 diag["alias_candidates"] = alias_candidates
+                diag["alias_rows"] = [
+                    {
+                        "model_id": row.get("model_id"),
+                        "alias": row.get("alias"),
+                        "source": row.get("source"),
+                        "provider_id": row.get("provider_id"),
+                        "confidence": row.get("confidence"),
+                        "match_kind": row.get("match_kind"),
+                    }
+                    for row in alias_candidates_rows
+                ]
+                diag["alias_selection"] = (
+                    (
+                        "exact_case"
+                        if any(
+                            r.get("match_kind") == "exact_case"
+                            for r in alias_candidates_rows
+                        )
+                        else "case_folded"
+                    )
+                    if alias_candidates_rows
+                    else "none"
+                )
                 if not alias_candidates:
                     diag["miss_reason"] = "no_aliases"
                     return None

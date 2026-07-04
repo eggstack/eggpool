@@ -108,6 +108,14 @@ def _make_cache(model_id: str, *, display_name: str | None = None) -> ModelCatal
             "enforce": True,
         },
     }
+    # ``_make_cache`` keeps the entry in both indexes by default but
+    # callers that want to test "provider has no display name" can
+    # pass ``display_name=None`` to mean "leave it unset".  When the
+    # explicit ``None`` is passed we drop the field entirely so the
+    # canonical detail merge falls back to OpenRouter's
+    # ``display_name_openrouter``.
+    if display_name is None:
+        entry.pop("display_name", None)
     cache._models[model_id] = entry
     cache._provider_models[(model_id, "openai")] = dict(entry)
     return cache
@@ -715,9 +723,9 @@ class TestDetailEndpointObservations:
             await db.disconnect()
 
     def test_detail_response_falls_back_to_synthetic(self) -> None:
-        """When the caller does not pass observations, the legacy
-        synthesised projection is preserved for backward compatibility
-        with existing test doubles."""
+        """When the caller does not pass observations AND does not pass
+        ``observations_error``, the legacy synthesised projection is
+        preserved for backward compatibility with existing test doubles."""
         from types import SimpleNamespace
 
         info = SimpleNamespace(
@@ -735,6 +743,93 @@ class TestDetailEndpointObservations:
         )
         response = _detail_response(info, observations=None)
         assert any(o.get("_synthetic") for o in response["observations"])
+
+    def test_detail_response_empty_observations_with_error(self) -> None:
+        """Phase 2 polish: when ``observations_error`` is set, the
+        response must NOT synthesise observation rows.  Callers see an
+        empty list + the error class name."""
+        from types import SimpleNamespace
+
+        info = SimpleNamespace(
+            detail={"providers": ["openai"]},
+            provenance={"sources": ["provider_catalog", "openrouter"]},
+            conflicts={},
+            status="fresh",
+            sparse=False,
+            summary="",
+            model_id="test",
+            first_seen_at=None,
+            last_seen_at=None,
+            last_refreshed_at=None,
+            next_refresh_at=None,
+        )
+        response = _detail_response(
+            info, observations=None, observations_error="OperationalError"
+        )
+        assert response["observations"] == []
+        assert response["observations_error"] == "OperationalError"
+        for obs in response["observations"]:
+            assert obs.get("_synthetic") is not True
+
+    @pytest.mark.asyncio()
+    async def test_detail_handler_observation_read_failure_returns_empty_with_error(
+        self,
+    ) -> None:
+        """Phase 2 polish: when ``repo.list_compact_observations_for_model``
+        raises, the API returns ``observations == []`` with
+        ``observations_error`` set to the exception class name.  No
+        synthetic rows leak into the response."""
+        import json
+
+        from fastapi import FastAPI
+
+        info = MagicMock()
+        info.detail = {
+            "providers": ["opencode-go"],
+            "limits": {},
+            "modalities": [],
+            "external_ids": {},
+            "benchmarks": [],
+            "huggingface_metadata": {},
+            "family": None,
+            "license": None,
+            "release_date": None,
+            "supports_tools": True,
+            "display_name": None,
+            "pricing": {},
+        }
+        info.provenance = {"sources": ["provider_catalog", "openrouter"]}
+        info.conflicts = {}
+        info.status = "partial"
+        info.sparse = False
+        info.summary = ""
+        info.model_id = "minimax-m3"
+        info.first_seen_at = None
+        info.last_seen_at = None
+        info.last_refreshed_at = None
+        info.next_refresh_at = None
+
+        service = MagicMock()
+        service.get_summary = AsyncMock(return_value=info)
+        service.repo.list_compact_observations_for_model = AsyncMock(
+            side_effect=RuntimeError("db locked")
+        )
+
+        app = FastAPI()
+        app.state.model_info = service
+
+        request = MagicMock()
+        request.app.state.model_info = service
+        request.app.state.config = MagicMock()
+        request.app.state.config.providers = {"opencode-go"}
+
+        response = await handle_model_info_detail(request, "minimax-m3")
+        data = json.loads(response.body)
+        assert data["observations"] == []
+        assert data["observations_error"] == "RuntimeError"
+        # No synthetic rows slipped through the handler error path.
+        for obs in data["observations"]:
+            assert obs.get("_synthetic") is not True
 
 
 # ---------------------------------------------------------------------------
@@ -756,3 +851,139 @@ class TestParseEntryToRecord:
         assert "image" in record.modalities
         assert "video" in record.modalities
         assert record.supports_tools is True
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: scheduled refresh parity (refresh_due_models)
+# ---------------------------------------------------------------------------
+
+
+class TestRefreshDueModelsEnrichment:
+    @pytest.mark.asyncio()
+    async def test_refresh_due_models_enriches_minimax_m3_from_openrouter(
+        self,
+    ) -> None:
+        """The scheduled ``refresh_due_models`` path must persist
+        OpenRouter observations and update the canonical detail with
+        external display_name / context / external_ids when the alias
+        resolves."""
+        from datetime import timedelta
+
+        from eggpool.model_info.types import CanonicalModelInfo
+
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await _run_migrations(db)
+            await _seed_model(db, "minimax-m3")
+
+            client = _MockHttpClient(response=_or_payload(_minimax_entry()))
+            aliases = [
+                ModelInfoAliasConfig(
+                    provider_id="opencode-go",
+                    model_id="minimax-m3",
+                    source="openrouter",
+                    source_model_id="minimax/minimax-m3",
+                    confidence="exact",
+                )
+            ]
+            config = _make_config(aliases=aliases)
+            cache = _make_cache("minimax-m3", display_name=None)
+            service = ModelInfoService(
+                config=config, db=db, catalog=cache, outbound_client=client
+            )
+            # Seed configured aliases since ``refresh_due_models`` does
+            # not re-seed them (only ``refresh_model_info`` does).
+            await service.seed_configured_aliases()
+
+            # Seed a due canonical row so the cycle picks it up.
+            now = datetime.now(UTC)
+            due_info = CanonicalModelInfo(
+                model_id="minimax-m3",
+                status="partial",
+                summary="seed",
+                sparse=False,
+                detail={},
+                provenance={"sources": ["provider_catalog"]},
+                conflicts={},
+                first_seen_at=now - timedelta(days=1),
+                last_seen_at=now - timedelta(hours=2),
+                last_refreshed_at=now - timedelta(hours=2),
+                next_refresh_at=now - timedelta(minutes=1),
+            )
+            await service.repo.upsert_canonical(due_info)
+
+            result = await service.refresh_due_models()
+            assert result["total"] >= 1
+            assert result["openrouter_attempted"] >= 1
+            assert result["openrouter_matched"] >= 1
+            assert result["openrouter_missed"] == (
+                result["openrouter_attempted"] - result["openrouter_matched"]
+            )
+
+            # Verify OpenRouter observation persisted
+            rows = await service.repo.list_compact_observations_for_model("minimax-m3")
+            or_rows = [r for r in rows if r["source"] == "openrouter"]
+            assert len(or_rows) == 1
+            assert or_rows[0]["source_model_id"] == "minimax/minimax-m3"
+
+            # Verify canonical detail has display_name + external context
+            canonical = await service.repo.get_canonical("minimax-m3")
+            assert canonical is not None
+            assert canonical.detail["display_name"] == "MiniMax: MiniMax M3"
+            assert canonical.detail["display_name_source"] == "openrouter"
+            assert canonical.detail["external_ids"]["openrouter"] == (
+                "minimax/minimax-m3"
+            )
+            assert canonical.detail["limits"]["external_context"] == 1_048_576
+            assert canonical.detail["limits"]["external_output"] == 512_000
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio()
+    async def test_refresh_due_models_records_openrouter_health_when_no_match(
+        self,
+    ) -> None:
+        """``refresh_due_models`` records OpenRouter source health even
+        when no alias matches the catalog."""
+        from datetime import timedelta
+
+        from eggpool.model_info.types import CanonicalModelInfo
+
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await _run_migrations(db)
+            await _seed_model(db, "no-match-model")
+
+            client = _MockHttpClient(response=_or_payload({"id": "some-other/model"}))
+            config = _make_config()
+            cache = _make_cache("no-match-model")
+            service = ModelInfoService(
+                config=config, db=db, catalog=cache, outbound_client=client
+            )
+
+            now = datetime.now(UTC)
+            due_info = CanonicalModelInfo(
+                model_id="no-match-model",
+                status="partial",
+                summary="seed",
+                sparse=False,
+                detail={},
+                provenance={"sources": ["provider_catalog"]},
+                conflicts={},
+                first_seen_at=now - timedelta(days=1),
+                last_seen_at=now - timedelta(hours=2),
+                last_refreshed_at=now - timedelta(hours=2),
+                next_refresh_at=now - timedelta(minutes=1),
+            )
+            await service.repo.upsert_canonical(due_info)
+
+            await service.refresh_due_models()
+
+            health = await service.repo.source_health_snapshot()
+            assert "openrouter" in health
+            assert health["openrouter"]["last_payload_count"] == 1
+            assert health["openrouter"]["failure_count"] == 0
+        finally:
+            await db.disconnect()
