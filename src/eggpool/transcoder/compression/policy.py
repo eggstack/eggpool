@@ -292,14 +292,16 @@ class CompressionTuningBoundsConfig(BaseModel):
 
 
 class CompressionTuningConfig(BaseModel):
-    """Phase 10 closed-loop threshold tuning configuration.
+    """Advisory threshold tuning configuration.
 
-    Disabled by default.  The first supported mode is ``"recommend"``,
+    Disabled by default.  The supported mode is ``"recommend"``,
     which produces advisory suggestions without changing request
-    behaviour.  ``"apply"`` produces bounded runtime overrides that
-    are merged into the resolved compression policy post-resolution.
-    Neither mode ever touches routing fields, mode, enabled, or
-    static-prefix compression.
+    behaviour.  ``"apply"`` is accepted at config time for forward
+    compatibility but is dormant today: no production code path
+    registers runtime overrides, and recommendations are always
+    surfaced with ``status = "recommended"``.  Tuning never touches
+    routing fields, mode, enabled, or static-prefix compression,
+    and never inspects raw prompt content.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -546,14 +548,16 @@ class CompressionConfig(BaseModel):
     tuning: "CompressionTuningConfig" = Field(  # noqa: UP037
         default_factory=CompressionTuningConfig,
         description=(
-            "Phase 10 closed-loop threshold tuning.  Disabled by "
-            "default.  When enabled, the engine analyses recent "
-            "compression observations and produces bounded "
-            'threshold recommendations.  ``mode = "recommend"`` '
-            'is advisory; ``mode = "apply"`` overlays the '
-            "resolved policy at runtime.  Tuning never touches "
-            "routing, never enables stable-prefix compression, "
-            "and never inspects raw prompt content."
+            "Advisory threshold tuning.  Disabled by default.  When "
+            "enabled, the engine analyses recent compression "
+            "observations and produces bounded threshold "
+            'recommendations.  ``mode = "recommend"`` is advisory '
+            'and surfaces suggestions; ``mode = "apply"`` is '
+            "accepted at config time but is dormant &mdash; no "
+            "production code path registers runtime overrides today.  "
+            "Tuning never touches routing, never enables "
+            "stable-prefix compression, and never inspects raw "
+            "prompt content."
         ),
     )
 

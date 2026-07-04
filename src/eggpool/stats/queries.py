@@ -3504,7 +3504,7 @@ async def fetch_cache_stability_summary(
     return {
         "transcoded_request_count": transcoded_count,
         "notes": (
-            "Phase 3 cache-stability is per-request and in-memory on "
+            "Cache-stability tracking is per-request and in-memory on "
             "TranscodeContext.cache_boundary_tracker; durable summary "
             "counts are reported-only."
         ),

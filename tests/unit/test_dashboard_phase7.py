@@ -388,6 +388,90 @@ class TestRequestShapingSummary:
         # At least one legacy panel is inside the details block.
         assert "Cache reporting" in html
 
+    def test_runtime_disclosure_structure_pins_summary_first_layout(self) -> None:
+        """Runtime page renders a summary-first layout with detailed
+        request-shaping panels collapsed inside the advanced
+        disclosure.  This pins the final UI contract.
+        """
+        html = render_runtime(
+            _base_snapshot(),
+            cache_observability={
+                "total_requests": 1,
+                "by_status": {"reported": 1},
+                "per_protocol_status": {},
+                "per_account_status": {},
+                "per_model_status": {},
+            },
+            compression_observability={
+                "total_requests": 1,
+                "by_status": {"observed": 1},
+                "totals": {"observed_requests": 1},
+                "per_model_status": {},
+            },
+            compression_runtime={
+                "window": {"seconds": 3600, "request_count": 1},
+                "mode_counts": {"observe": 1},
+                "applied_count": 0,
+                "failed_fallback_count": 0,
+                "candidate_count": 0,
+                "estimated_savings_tokens": 0,
+                "actual_savings_tokens": 0,
+                "latency_ms": {"avg": None, "p50": None, "p95": None, "max": None},
+                "transforms": {},
+                "warnings": {},
+                "cache_safety": {
+                    "stable_prefix_preserved": 0,
+                    "stable_prefix_mismatch": 0,
+                },
+            },
+            cache_stability={"transcoded_request_count": 0, "notes": ""},
+            compression_tuning={
+                "windows": {},
+                "recommendations": [],
+                "overrides": [],
+            },
+            synthetic_cache_summary={
+                "total_requests": 1,
+                "status_counts": {"applied": 1},
+                "dry_run_count": 0,
+                "applied_count": 1,
+                "candidate_count_total": 1,
+                "applied_count_total": 1,
+                "warning_count_total": 0,
+                "warning_counts": {},
+                "by_policy": [],
+            },
+        )
+
+        # The summary heading must precede the advanced disclosure.
+        summary_idx = html.index("Request shaping")
+        details_idx = html.index('<details class="advanced-request-shaping">')
+        summary_text_idx = html.index("Advanced request-shaping details")
+        assert summary_idx < details_idx < summary_text_idx
+
+        # Slice the content inside the disclosure block and verify all
+        # detailed labels live inside it.
+        closing = "</details>"
+        end_idx = html.index(closing, details_idx)
+        details_body = html[details_idx:end_idx]
+        for label in (
+            "Cache reporting",
+            "Compression opportunities",
+            "Safe compression",
+            "Synthetic cache controls",
+            "Advisory tuning",
+            "Routing guardrails",
+        ):
+            assert label in details_body, (
+                f"detailed label {label!r} missing from advanced-request-shaping body"
+            )
+
+        # Phase-era labels must not leak into operator-facing rendered HTML.
+        for needle in ("Phase 1", "Phase 5", "Phase 7", "Phase 9", "Phase 10"):
+            assert needle not in html, (
+                f"phase-era label {needle!r} leaked into runtime HTML"
+            )
+
 
 class TestRoutingGuardrailsPanel:
     """Phase 8 routing-guardrails diagnostic panel renders on /runtime."""

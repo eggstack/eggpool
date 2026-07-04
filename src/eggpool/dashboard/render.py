@@ -2641,7 +2641,7 @@ def render_model_detail(
     )
 
     # Limits — read the normalized nested block first, then fall back to
-    # pre-Phase-B flat keys (context_tokens, context_window_external,
+    # legacy flat keys (context_tokens, context_window_external,
     # max_output_tokens, max_output_tokens_external) for legacy rows
     # that haven't been backfilled yet. The startup backfill
     # (``backfill_legacy_detail_blocks``) lifts every such row on the
@@ -4191,7 +4191,7 @@ def render_runtime(
 </section>
 """
 
-    # Cache observability card (Phase 1)
+    # Cache reporting card
     cache_card = ""
     if request_shaping_summary is None:
         fallback_compression_runtime = compression_runtime or {}
@@ -4635,9 +4635,9 @@ def render_runtime(
 </section>
 """
 
-    # Phase 2 canonical request segmentation card.  Mirrors the
-    # cache-observability card layout: status counts in a metric
-    # strip, totals table, and per-model breakdown table.
+    # Request segmentation card.  Mirrors the cache reporting card
+    # layout: status counts in a metric strip, totals table, and
+    # per-model breakdown table.
     segmentation_card = ""
     if canonical_request_segmentation is not None:
         seg_by_status: Any = canonical_request_segmentation.get("by_status", {}) or {}
@@ -4775,11 +4775,12 @@ def render_runtime(
 </section>
 """
 
-    # Phase 7 compression observability card.  Aggregates Phase 4 /
-    # Phase 5 / Phase 6 data into a single operator-facing summary.
-    # Mirrors the cache_card / segmentation_card layout: status counts
-    # in a metric strip, totals table, and optional sub-tables for
-    # policy rollups, transform breakdown, and warning rollup.
+    # Compression opportunities panel.  Aggregates analyzer observations,
+    # eligibility, and estimated savings into a single operator-facing
+    # summary.  Mirrors the cache reporting and segmentation card
+    # layout: status counts in a metric strip, totals table, and
+    # optional sub-tables for policy rollups, transform breakdown, and
+    # warning rollup.
     compression_card = ""
     if compression_observability is not None:
         co_by_status: Any = compression_observability.get("by_status", {}) or {}
@@ -4793,7 +4794,7 @@ def render_runtime(
         co_observed_active = int(co_by_status.get("observed", 0))
         co_safe_active = int(co_by_status.get("safe", 0))
 
-        # Phase 5 applied-mode fields (only present when safe-mode ran).
+        # Safe-mode applied fields (only present when safe-mode ran).
         co_applied = int(
             compression_observability.get("requests_with_compression_applied", 0)
         )
@@ -4811,7 +4812,7 @@ def render_runtime(
         )
         co_applied_p95_latency = compression_observability.get("applied_p95_latency_ms")
 
-        # Phase 4 latency stats.
+        # Analyzer latency stats.
         co_analyzer_p95 = co_totals.get("analyzer_latency_ms_p95")
         co_analyzer_median = co_totals.get("analyzer_latency_ms_median")
 
@@ -4966,10 +4967,9 @@ def render_runtime(
 </section>
 """
 
-    # Phase 7 compression runtime card.  Surfaces mode counts,
-    # applied / fallback counts, latency stats, per-transform
-    # breakdown, warnings rollup, and cache-safety counters in one
-    # operator-facing summary.
+    # Safe compression runtime panel.  Surfaces mode counts, applied /
+    # fallback counts, latency stats, per-transform breakdown, warnings
+    # rollup, and cache-safety counters in one operator-facing summary.
     compression_runtime_card = ""
     if compression_runtime is not None:
         cr_window: Any = compression_runtime.get("window", {}) or {}
@@ -5160,7 +5160,7 @@ def render_runtime(
 </section>
 """
 
-    # Phase 7 compression policy rollup card.
+    # Policy overrides panel.
     compression_policy_card = ""
     if compression_policy_stats is not None:
         cps_total = int(compression_policy_stats.get("total_requests", 0))
@@ -5243,11 +5243,11 @@ def render_runtime(
 </section>
 """
 
-    # Phase 7 cache-stability card.  Phase 3 boundary tracking is
-    # per-request and lives on TranscodeContext; the durable summary
-    # just confirms the tracker is wired.  This card stays small on
-    # purpose so operators know to drill into the request trace for
-    # per-boundary detail.
+    # Native cache preservation panel.  Boundary tracking is per-request
+    # and lives on TranscodeContext; the durable summary just confirms
+    # the tracker is wired.  This panel stays small on purpose so
+    # operators know to drill into the request trace for per-boundary
+    # detail.
     cache_stability_card = ""
     if cache_stability is not None:
         cs_transcoded = int(cache_stability.get("transcoded_request_count", 0))
@@ -5257,7 +5257,7 @@ def render_runtime(
                 "Boundary detail lives in per-request traces.",
             )
         )
-        if "Phase 3" in cs_notes:
+        if cs_notes.startswith("Phase 3 ") or "Phase 3 cache-stability" in cs_notes:
             cs_notes = (
                 "Boundary detail lives in per-request traces; durable summaries "
                 "count transcoded requests only."
@@ -5284,10 +5284,10 @@ def render_runtime(
 </section>
 """
 
-    # Phase 9 synthetic cache controls card.  Surfaces status counts,
-    # dry-run vs applied totals, warning codes, and per-policy
-    # rollup in one operator-facing summary.  The card is hidden when
-    # there is no data (total_requests == 0).
+    # Synthetic cache controls panel.  Surfaces status counts, dry-run
+    # vs applied totals, warning codes, and per-policy rollup in one
+    # operator-facing summary.  The panel is hidden when there is no
+    # data (total_requests == 0).
     synthetic_cache_card = ""
     if synthetic_cache_summary is not None:
         sc_total = int(synthetic_cache_summary.get("total_requests", 0))
@@ -5468,7 +5468,10 @@ def render_runtime(
 </section>
 """
 
-    # Phase 10 closed-loop threshold tuning card.
+    # Advisory tuning panel.  Surfaces persisted threshold recommendations
+    # and any audit-trail runtime override rows.  Apply mode is dormant
+    # today — see docs/cache-compression.md and the Runtime overrides
+    # table caption.
     compression_tuning_card = ""
     if compression_tuning is not None:
         ct_windows: dict[str, Any] = cast(
@@ -5545,8 +5548,9 @@ def render_runtime(
             ct_rec_rows_html = """
     <tr><td colspan="4" class="empty">No recommendations persisted yet.</td></tr>"""
 
-        # Overrides table rows (last 5).  Shows that apply mode is
-        # actually wiring the registry; rows are inert audit only.
+        # Overrides table rows (last 5).  Rows are inert audit only;
+        # no production code path registers entries today, so this table
+        # is normally empty.
         ct_ov_rows_html = ""
         for raw_entry in ct_overrides[:5]:
             entry = _as_dict(raw_entry)
@@ -5601,11 +5605,12 @@ def render_runtime(
 <section class="panel">
   <h3>Advisory tuning ({escape(period)})</h3>
   <p class="sub">
-    Disabled by default. When <code>mode = "recommend"</code>, the engine surfaces
-    advisory suggestions without changing request behaviour;
-    <code>mode = "apply"</code> overlays bounded runtime overrides
-    on the resolved policy.  Tuning never inspects raw prompt
-    content, never enables stable-prefix compression, and never
+    Recommend-only by default. <code>mode = "recommend"</code> surfaces
+    advisory suggestions without changing request behaviour.
+    <code>mode = "apply"</code> is accepted at config time for forward
+    compatibility but is dormant &mdash; no production code path
+    registers runtime overrides today.  Tuning never inspects raw
+    prompt content, never enables stable-prefix compression, and never
     touches routing.
   </p>
   <section class="cards">
@@ -5648,7 +5653,7 @@ def render_runtime(
     </tr></thead>
     <tbody>{ct_rec_rows_html}</tbody>
   </table>
-  <h4>Runtime overrides (apply mode)</h4>
+  <h4>Runtime overrides (reserved, dormant)</h4>
   <table class="data compact">
     <thead><tr>
       <th>Policy</th>
@@ -5667,7 +5672,7 @@ def render_runtime(
 </section>
 """
 
-    # Phase 8 routing-guardrails panel: hardcoded diagnostic from
+    # Routing guardrails panel: hardcoded diagnostic from
     # ``RuntimeMetricsService._snapshot_routing_runtime`` so operators
     # can confirm the routing-input boundary is intact.  The fields
     # are constant — never derived from request content.  Cache and

@@ -912,7 +912,8 @@ def _read_collapse_models(config: Any) -> bool:
 
     Returns ``False`` when ``config`` is unavailable, the ``models``
     attribute is missing, or the value isn't a boolean — matching
-    the default behavior the dashboard has shipped since Phase D.
+    the default behavior the dashboard has shipped since
+    ``models.collapse_models`` was introduced.
     """
     if config is None:
         return False
@@ -1775,10 +1776,10 @@ async def handle_transcoding_stats_json(request: Request) -> Response:
 
 
 async def handle_cache_observability_json(request: Request) -> Response:
-    """Return Phase 1 cache-counter observability aggregates as JSON.
+    """Return cache-counter observability aggregates as JSON.
 
-    Phase 7 dashboard surface for ``cache_counter_status`` coverage,
-    cached-token totals, known-only cache hit ratio, and per-provider /
+    Dashboard surface for ``cache_counter_status`` coverage, cached-
+    token totals, known-only cache hit ratio, and per-provider /
     per-account / per-model breakdowns.  Empty data returns the
     stable zero shape so dashboards never blow up on bad input.
     """
@@ -1793,7 +1794,7 @@ async def handle_cache_observability_json(request: Request) -> Response:
 
 
 async def handle_canonical_request_segmentation_json(request: Request) -> Response:
-    """Return Phase 2 canonical request segmentation aggregates as JSON."""
+    """Return canonical request segmentation aggregates as JSON."""
     _get_dashboard_config(request)
     db = request.app.state.db
     from eggpool.stats import StatsService
@@ -1805,10 +1806,10 @@ async def handle_canonical_request_segmentation_json(request: Request) -> Respon
 
 
 async def handle_compression_observability_json(request: Request) -> Response:
-    """Return Phase 4/5/6 compression observability aggregates as JSON.
+    """Return compression observability aggregates as JSON.
 
     Includes observe-mode totals, applied-mode totals, per-policy
-    rollups, and Phase 6 policy source counts.
+    rollups, and policy source counts.
     """
     _get_dashboard_config(request)
     db = request.app.state.db
@@ -1821,7 +1822,7 @@ async def handle_compression_observability_json(request: Request) -> Response:
 
 
 async def handle_synthetic_cache_observability_json(request: Request) -> Response:
-    """Return Phase 9 synthetic cache controls aggregates as JSON.
+    """Return synthetic cache controls aggregates as JSON.
 
     Includes status counts, dry-run vs applied totals, candidate /
     applied / warning counts, per-policy rollup, and a static
@@ -1837,8 +1838,8 @@ async def handle_synthetic_cache_observability_json(request: Request) -> Respons
     return JSONResponse(
         content={
             "routing_separation_notice": (
-                "Phase 9 synthetic cache controls. Reporting only -- "
-                "not consumed by QuotaFairScorer."
+                "Synthetic cache controls. Reporting only -- not "
+                "consumed by QuotaFairScorer."
             ),
             **data,
         }
@@ -1846,7 +1847,7 @@ async def handle_synthetic_cache_observability_json(request: Request) -> Respons
 
 
 async def handle_compression_tuning_json(request: Request) -> Response:
-    """Return Phase 10 closed-loop threshold tuning aggregates as JSON.
+    """Return advisory threshold tuning aggregates as JSON.
 
     Includes per-policy window metrics, persisted recommendation
     rows, and the runtime override audit trail.  The static
@@ -1863,9 +1864,10 @@ async def handle_compression_tuning_json(request: Request) -> Response:
     return JSONResponse(
         content={
             "routing_separation_notice": (
-                "Phase 10 closed-loop threshold tuning. Reporting only "
-                "-- not consumed by QuotaFairScorer. Tuning never "
-                "enables stable-prefix compression."
+                "Advisory threshold tuning. Reporting only -- not "
+                "consumed by QuotaFairScorer. Tuning never enables "
+                "stable-prefix compression and never inspects raw "
+                "prompt content."
             ),
             **data,
         }
@@ -1922,13 +1924,12 @@ async def handle_request_shaping_json(request: Request) -> Response:
 
 
 async def handle_compression_runtime_json(request: Request) -> Response:
-    """Return Phase 7 runtime compression aggregates as JSON.
+    """Return safe-compression runtime aggregates as JSON.
 
     Mode counts, applied / failed-fallback counts, latency stats,
     per-transform breakdown, warnings rollup, and cache-safety
     counters.  All numbers are computed from durable ``requests``
-    columns populated by the Phase 4 / Phase 5 / Phase 6
-    finalizers.
+    columns populated by the observe-mode and safe-mode finalizers.
     """
     _get_dashboard_config(request)
     db = request.app.state.db
@@ -1941,7 +1942,7 @@ async def handle_compression_runtime_json(request: Request) -> Response:
 
 
 async def handle_compression_policy_stats_json(request: Request) -> Response:
-    """Return Phase 7 per-policy compression rollup as JSON.
+    """Return per-policy compression rollup as JSON.
 
     One entry per resolved policy (including the ``<global>`` sentinel
     for the no-override path).  Includes mode counts, applied counts,
@@ -1959,9 +1960,9 @@ async def handle_compression_policy_stats_json(request: Request) -> Response:
 
 
 async def handle_cache_stability_json(request: Request) -> Response:
-    """Return Phase 7 cache-stability summary as JSON.
+    """Return cache-stability summary as JSON.
 
-    Phase 3 cache stability is per-request and lives on
+    Cache boundary tracking is per-request and lives on
     :class:`TranscodeContext.cache_boundary_tracker`.  The durable
     summary counts transcoded requests so operators can confirm the
     tracker is wired; per-request loss warnings are surfaced through

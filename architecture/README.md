@@ -1281,11 +1281,12 @@ three tunable thresholds:
 - `max_compression_latency_ms`
 
 Phase 10 is currently **recommendation-only**.  `mode = "apply"` is
-accepted at config time but does not currently register runtime
-overrides -- a future supervised background task must call
-`build_runtime_override()` then `registry.register()` before apply
-mode takes effect.  Until then, `compute_recommendation` always tags
-recommendations as `recommendation_only`.
+accepted at config time for forward compatibility but is dormant: no
+production code path registers runtime overrides.  A future
+supervised background task must call `build_runtime_override()` then
+`registry.register()` before apply mode takes effect.  Until then,
+`compute_recommendation` always tags recommendations as
+`recommendation_only`.
 
 The engine is disabled by default.  When `[compression.tuning] mode`
 is `recommend` (the default), the engine writes advisory
@@ -1317,12 +1318,12 @@ registers entries yet.
 
 ### Routing non-interference
 
-The `QuotaFairScorer` does NOT consume Phase 10 tuning state.  Routing
+The `QuotaFairScorer` does NOT consume advisory tuning state.  Routing
 stays load-based: request count + token count + active count +
-health.  Phase 10 only mutates compression thresholds; it never
+health.  Advisory tuning only mutates compression thresholds; it never
 inspects the request body, never picks an account, never alters the
 health feed.  The `QuotaFairScorer.score_accounts` signature is
-unchanged from Phase 8.  `ResolvedCompressionPolicy.runtime_override_metadata`
+unchanged.  `ResolvedCompressionPolicy.runtime_override_metadata`
 is operator-visible only; it does not flow into scorer inputs.
 
 ### Code references
@@ -1516,17 +1517,25 @@ After editing, run `eggpool rehash` to restart the supervisor.
 
 ### Routing non-interference
 
-Phase 12 is documentation-only. No Phase 12 columns are added to the database and no migrations are required. `QuotaFairScorer.score_accounts` is unchanged from Phase 8. The `RuntimeCompressionPolicyOverrideRegistry` from Phase 10 is still dormant; no production code path registers entries. Same-provider account fairness (e.g., multiple OpenAI subscriptions) is preserved because the new docs explicitly state cache hit ratios, compression savings, synthetic-cache status, and tuning state never enter the scorer inputs.
+The routing non-interference rollout is documentation-only. No new
+columns are added to the database and no migrations are required.
+`QuotaFairScorer.score_accounts` is unchanged. The
+`RuntimeCompressionPolicyOverrideRegistry` is still dormant; no
+production code path registers entries. Same-provider account
+fairness (e.g., multiple OpenAI subscriptions) is preserved because
+the docs explicitly state cache hit ratios, compression savings,
+synthetic-cache status, and tuning state never enter the scorer
+inputs.
 
 ### Code references
 
 - `docs/cache-compression.md` -- main operator guide
 - `docs/cache-compression-profiles.md` -- six copy-pasteable profiles
 - `docs/cache-compression-troubleshooting.md` -- dashboard interpretation and symptom-to-cause
-- `config.example.toml` § Phase 9 / Phase 10 commented blocks -- equivalent verbose config
+- `config.example.toml` § synthetic cache and advisory tuning commented blocks -- equivalent verbose config
 - `src/eggpool/_share/config.example.toml` -- pipx-install copy
 - `src/eggpool/api/stats.py` -- `/api/stats/cache-observability`, `/api/stats/canonical-request-segmentation`, `/api/stats/cache-stability`, `/api/stats/compression-observability`, `/api/stats/compression-runtime`, `/api/stats/compression-policies`, `/api/stats/synthetic-cache-observability`, `/api/stats/compression-tuning`
-- `src/eggpool/dashboard/render.py` -- four Phase 7 runtime cards (`compression`, `compression_runtime`, `compression_policy`, `cache_stability`) plus synthetic cache and tuning cards
+- `src/eggpool/dashboard/render.py` -- request-shaping runtime cards (`compression`, `compression_runtime`, `compression_policy`, `cache_stability`) plus synthetic cache and tuning cards
 - `plans/cache_compression_phase_12_operator_docs_profiles.md` -- design plan
 
 ## Database
