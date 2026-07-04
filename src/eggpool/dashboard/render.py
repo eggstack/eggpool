@@ -3839,52 +3839,84 @@ def render_runtime(
         now_ts = time.time()
         for task in background_tasks:
             name = escape(str(task.get("name", "")))
+            mode = str(task.get("mode", "daemon"))
             running = bool(task.get("running", False))
             done = bool(task.get("done", False))
             cancelled = bool(task.get("cancelled", False))
             restarts = int(task.get("restart_count", 0) or 0)
             max_restarts = task.get("max_restarts")
             interval_s = task.get("interval_s")
-            last_started_at = task.get("last_started_at")
-            last_completed_at = task.get("last_completed_at")
-            status = "running" if running else ("cancelled" if cancelled else "stopped")
-            status_cls = "yes" if running else ("no" if cancelled else "")
-            max_str = format_int(max_restarts) if max_restarts is not None else "—"
-            interval_str = format_interval_seconds(interval_s)
-            # "Next run" is the projected wall-clock time the loop
-            # will fire next. In practice every registered task is a
-            # long-lived ``while True`` coroutine that owns its own
-            # sleep loop and never returns to the supervisor, so
-            # ``last_completed_at`` stays at zero forever. We anchor on
-            # ``last_started_at`` (set when the supervisor re-entered
-            # the loop body) and add ``interval_s`` — for these tasks
-            # that's exactly when the inner sleep wakes and the work
-            # runs. If neither anchor is set (never started) or the
-            # cadence is unknown we render an em-dash. If the projected
-            # time is already in the past the task is overdue and we
-            # surface the magnitude with an explicit marker.
-            anchor = (
-                last_completed_at
-                if isinstance(last_completed_at, (int, float)) and last_completed_at > 0
-                else (
-                    last_started_at
-                    if isinstance(last_started_at, (int, float)) and last_started_at > 0
-                    else None
+            success_count = int(task.get("success_count", 0) or 0)
+            failure_count = int(task.get("failure_count", 0) or 0)
+            last_error_class = task.get("last_error_class")
+            last_tick_started_at = task.get("last_tick_started_at")
+            last_tick_completed_at = task.get("last_tick_completed_at")
+            next_run_at = task.get("next_run_at")
+            overdue_seconds = task.get("overdue_seconds")
+            tick_in_progress = (
+                isinstance(last_tick_started_at, (int, float))
+                and last_tick_started_at > 0
+                and (
+                    not isinstance(last_tick_completed_at, (int, float))
+                    or float(last_tick_completed_at) < float(last_tick_started_at)
                 )
             )
-            if (
-                isinstance(interval_s, (int, float))
+            tick_running_long = (
+                tick_in_progress
+                and isinstance(interval_s, (int, float))
                 and interval_s > 0
-                and anchor is not None
-            ):
-                next_run_at = float(anchor) + float(interval_s)
-                delta_s = next_run_at - now_ts
-                if delta_s <= 0:
-                    next_run_str = f"overdue {format_age_seconds(-delta_s)}"
-                else:
-                    next_run_str = f"in {format_age_seconds(delta_s)}"
+                and (
+                    now_ts - float(last_tick_started_at)  # type: ignore[arg-type]
+                )
+                > float(interval_s) * 2.0
+            )
+            if cancelled:
+                status = "cancelled"
+                status_cls = "no"
+            elif done:
+                status = "stopped"
+                status_cls = ""
+            elif running and tick_running_long:
+                status = "tick slow"
+                status_cls = "no"
+            elif running and tick_in_progress:
+                status = "running"
+                status_cls = "yes"
+            elif running and failure_count and not success_count:
+                status = "failing"
+                status_cls = "no"
+            elif running:
+                status = "running"
+                status_cls = "yes"
             else:
+                status = "stopped"
+                status_cls = ""
+            max_str = format_int(max_restarts) if max_restarts is not None else "—"
+            interval_str = format_interval_seconds(interval_s)
+            # "Next run" rendering uses the supervisor-owned
+            # ``next_run_at`` + ``overdue_seconds`` fields when the
+            # task is periodic. Daemon tasks render "—" because they
+            # don't project a next run from process startup. If the
+            # scheduler is missing the new fields (older snapshot
+            # shape) we fall back to the legacy anchor math so the
+            # table never loses information while the supervisor
+            # rollout lands.
+            next_run_str = "—"
+            if mode == "daemon":
                 next_run_str = "—"
+            elif isinstance(overdue_seconds, (int, float)) and overdue_seconds > 0:
+                next_run_str = f"overdue {format_age_seconds(overdue_seconds)}"
+            elif isinstance(next_run_at, (int, float)) and next_run_at > 0:
+                delta_s = float(next_run_at) - now_ts
+                if delta_s > 0:
+                    next_run_str = f"in {format_age_seconds(delta_s)}"
+                else:
+                    next_run_str = "due now"
+            elif tick_running_long:
+                next_run_str = "tick running"
+            last_error_short = (
+                escape(str(last_error_class)) if last_error_class else "—"
+            )
             task_rows.append(
                 f"<tr>"
                 f"{_td_priority(escape(name), 1)}"
@@ -3894,6 +3926,8 @@ def render_runtime(
                 f"{_td_priority(interval_str, 2)}"
                 f"{_td_priority(next_run_str, 3)}"
                 f"{_td_priority('yes' if done else 'no', 3)}"
+                f"{_td_priority(f'{success_count}/{failure_count}', 4)}"
+                f"{_td_priority(last_error_short, 4)}"
                 f"</tr>"
             )
         tasks_table = (
@@ -3909,6 +3943,9 @@ def render_runtime(
             # Priority 3 — desktop only
             + _th("Next run", priority=3)
             + _th("Done", priority=3)
+            # Priority 4 — operator diagnostics, hidden on small screens
+            + _th("Success/Fail", priority=4)
+            + _th("Last error", priority=4)
             + "</tr></thead><tbody>"
             + f"{''.join(task_rows)}"
             + "</tbody></table>"

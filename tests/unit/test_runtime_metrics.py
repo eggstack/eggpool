@@ -669,6 +669,40 @@ async def test_task_monitor_handles_exception_class(db: Database) -> None:
     assert task["last_error_at"] is not None
 
 
+@pytest.mark.asyncio
+async def test_background_task_summary_counts_overdue_and_errors(
+    db: Database,
+) -> None:
+    """``background_task_summary`` aggregates registered / running /
+    failed / overdue / last-error counts so the dashboard can render an
+    at-a-glance overview without iterating every snapshot row."""
+    from eggpool.background import BackgroundTaskMonitor, TaskSupervisor
+
+    supervisor = TaskSupervisor()
+
+    async def tick() -> None:
+        return None
+
+    supervisor.register("healthy_daemon", tick)
+    supervisor.register_periodic("healthy_periodic", tick, interval_s=60.0)
+    supervisor.register_periodic("overdue_periodic", tick, interval_s=60.0)
+    # Force the overdue task's deadline into the past.
+    overdue_task = supervisor.get_task("overdue_periodic")
+    assert overdue_task is not None
+    overdue_task._next_run_at = time.time() - 600  # pyright: ignore[reportPrivateUsage]
+
+    monitor = BackgroundTaskMonitor(supervisor)
+    service = _make_service(db, supervisor=supervisor, task_monitor=monitor)
+    snapshot = await service.snapshot()
+
+    summary = snapshot["background_task_summary"]
+    assert summary["registered"] == 3
+    assert summary["overdue"] == 1
+    assert summary["failed"] == 0
+    assert summary["running"] == 0  # none started yet
+    assert summary["last_error_count"] == 0
+
+
 # -- Database contention counters -------------------------------------------
 
 

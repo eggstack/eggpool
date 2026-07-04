@@ -66,7 +66,7 @@ async def automatic_backup_loop(
 
     while True:
         try:
-            await _run_backup_once(
+            await run_backup_once(
                 config=config,
                 db=db,
                 config_path=config_path,
@@ -83,14 +83,20 @@ async def automatic_backup_loop(
             raise
 
 
-async def _run_backup_once(
+async def run_backup_once(
     *,
     config: AppConfig,
     db: Database,
     config_path: Path | None,
     env_path: Path | None,
 ) -> None:
-    """Run a single backup attempt: snapshot, archive, prune."""
+    """Run a single backup attempt: snapshot, archive, prune.
+
+    Public entry point so :func:`eggpool.app._lifespan_runtime` can
+    register this as a supervisor-driven periodic tick.  See
+    ``automatic_backup_loop`` for the legacy ``while True`` wrapper
+    that is preserved for backward compatibility.
+    """
     if config_path is None:
         logger.warning("Automatic backup skipped: no config path available")
         return

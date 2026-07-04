@@ -1,4 +1,4 @@
-"""Background task supervisor with restart and backoff."""
+"""Background task supervisor with restart, backoff, and periodic scheduling."""
 
 from __future__ import annotations
 
@@ -7,20 +7,61 @@ import contextlib
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
 
 logger = logging.getLogger(__name__)
 
+TaskMode = Literal["daemon", "periodic"]
+
+
+def _compute_overdue_seconds(
+    *, now: float, next_run_at: float | None, interval_s: float | None
+) -> float | None:
+    """Return overdue age in seconds, or ``None`` when not overdue.
+
+    A 25%-of-interval (capped at 60s, minimum 5s) grace band suppresses
+    flicker for tasks that wake a few hundred ms past their deadline
+    because of the scheduler's poll granularity.
+    """
+    if next_run_at is None:
+        return None
+    delta_s = now - float(next_run_at)
+    if delta_s <= 0:
+        return 0.0
+    if interval_s is None or interval_s <= 0:
+        grace_s = 5.0
+    else:
+        grace_s = max(5.0, min(float(interval_s) * 0.25, 60.0))
+    if delta_s <= grace_s:
+        return 0.0
+    return float(delta_s)
+
 
 @dataclass
 class SupervisedTask:
-    """A background task that restarts on failure with exponential backoff."""
+    """A supervised background task.
+
+    Two modes are supported:
+
+    - ``daemon``: a long-running coroutine supervised by the supervisor.
+      ``last_started_at`` reflects outer-coroutine lifecycle; ``next_run``
+      is ``None`` because daemons don't project a periodic next run.
+    - ``periodic``: the supervisor owns the ``while running`` outer loop
+      and delegates the per-tick work to ``tick_factory``.  The task
+      records explicit per-tick heartbeat fields so the dashboard can
+      distinguish running ticks from a healthy sleeping schedule.
+    """
 
     name: str
     _coro_factory: Callable[[], Coroutine[Any, Any, None]]
+    mode: TaskMode = "daemon"
+    _tick_factory: Callable[[], Coroutine[Any, Any, None]] | None = field(
+        default=None, repr=False
+    )
+    _interval_s: float | None = None
     _task: asyncio.Task[None] | None = field(default=None, repr=False)
     _restart_count: int = 0
     _max_restarts: int = 10
@@ -28,13 +69,20 @@ class SupervisedTask:
     _max_delay: float = 300.0
     _last_failure: float = 0.0
     _running: bool = False
-    # Heartbeat tracking (in-memory only, never persisted)
+    # Outer-coroutine lifecycle (kept for backward compatibility on daemon tasks).
     _last_started_at: float = 0.0
     _last_completed_at: float = 0.0
     _last_error_at: float = 0.0
     _last_error_class: str | None = None
+    # Periodic heartbeat fields (only populated when ``mode == "periodic"``).
+    _last_tick_started_at: float = 0.0
+    _last_tick_completed_at: float = 0.0
+    _next_run_at: float = 0.0
+    _tick_in_progress: bool = False
     _iteration_count: int = 0
-    _interval_s: float | None = None
+    _success_count: int = 0
+    _failure_count: int = 0
+    _consecutive_failure_count: int = 0
 
     async def start(self) -> None:
         """Start the supervised task."""
@@ -42,11 +90,12 @@ class SupervisedTask:
             return
         self._restart_count = 0
         self._running = True
-        self._task = asyncio.create_task(
-            self._run_loop(),
-            name=f"eggpool:{self.name}",
-        )
-        logger.info("Started supervised task %r", self.name)
+        if self.mode == "periodic" and self._tick_factory is not None:
+            runner = self._run_periodic_loop
+        else:
+            runner = self._run_daemon_loop
+        self._task = asyncio.create_task(runner(), name=f"eggpool:{self.name}")
+        logger.info("Started supervised task %r (mode=%s)", self.name, self.mode)
 
     async def stop(self) -> None:
         """Stop the supervised task."""
@@ -58,14 +107,10 @@ class SupervisedTask:
         self._task = None
         logger.info("Stopped supervised task %r", self.name)
 
-    async def _run_loop(self) -> None:
-        """Run the task, restarting on failure with backoff.
+    async def _run_daemon_loop(self) -> None:
+        """Run a daemon-style long-lived coroutine with restart on failure.
 
         Failure path uses exponential backoff bounded by ``_max_restarts``.
-        Normal completion path uses the registered ``_interval_s`` cadence
-        so one-shot periodic factories (e.g. ``_stale_request_loop``) keep
-        cycling on their intended schedule rather than tight-spinning or
-        being treated as failures.
         """
         try:
             while self._running:
@@ -120,6 +165,69 @@ class SupervisedTask:
         finally:
             self._running = False
 
+    async def _run_periodic_loop(self) -> None:
+        """Run the periodic scheduler loop around a one-shot tick coroutine.
+
+        The supervisor drives the outer ``while self._running`` cadence:
+        compute the next run timestamp, sleep until then, record
+        ``last_tick_started_at``, invoke the tick, then record
+        completion (or tick-level failure).  ``tick_factory`` is the
+        one-shot coroutine factory; the supervisor owns the wait loop
+        so dashboards stop confusing outer-coroutine startup time
+        with tick completion time.
+        """
+        assert self._tick_factory is not None
+        interval_s = float(self._interval_s) if self._interval_s else 0.0
+        self._last_started_at = time.time()
+        try:
+            while self._running:
+                try:
+                    await asyncio.sleep(interval_s)
+                except asyncio.CancelledError:
+                    break
+                self._tick_in_progress = True
+                tick_started = time.time()
+                self._last_tick_started_at = tick_started
+                try:
+                    await self._tick_factory()
+                except asyncio.CancelledError:
+                    self._tick_in_progress = False
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    tick_completed = time.time()
+                    self._last_tick_completed_at = tick_completed
+                    self._tick_in_progress = False
+                    self._iteration_count += 1
+                    self._failure_count += 1
+                    self._consecutive_failure_count += 1
+                    self._restart_count += 1
+                    self._last_error_at = time.time()
+                    self._last_error_class = type(exc).__qualname__
+                    self._last_failure = time.time()
+                    self._next_run_at = tick_completed + interval_s
+                    logger.exception(
+                        "Supervised periodic task %r tick failed",
+                        self.name,
+                    )
+                    if self._consecutive_failure_count >= self._max_restarts:
+                        logger.error(
+                            "Supervised periodic task %r exceeded max restarts, "
+                            "giving up",
+                            self.name,
+                        )
+                        break
+                else:
+                    tick_completed = time.time()
+                    self._last_tick_completed_at = tick_completed
+                    self._tick_in_progress = False
+                    self._iteration_count += 1
+                    self._success_count += 1
+                    self._consecutive_failure_count = 0
+                    self._next_run_at = tick_completed + interval_s
+        finally:
+            self._tick_in_progress = False
+            self._running = False
+
     @property
     def is_running(self) -> bool:
         """Check if the task is currently running."""
@@ -127,26 +235,58 @@ class SupervisedTask:
 
     def snapshot(self) -> dict[str, Any]:
         """Return the stable runtime-metrics payload for this task."""
+        next_run_at: float | None = None
+        overdue_seconds: float | None = None
+        if self.mode == "periodic" and self._next_run_at > 0:
+            next_run_at = self._next_run_at
+            if self._tick_in_progress:
+                overdue_seconds = None
+            else:
+                overdue_seconds = _compute_overdue_seconds(
+                    now=time.time(),
+                    next_run_at=next_run_at,
+                    interval_s=self._interval_s,
+                )
         return {
             "name": self.name,
             "registered": True,
+            "mode": self.mode,
             "running": self.is_running,
             "done": self._task is not None and self._task.done(),
             "cancelled": self._task is not None and self._task.cancelled(),
             "iteration_count": self._iteration_count,
+            "success_count": self._success_count,
+            "failure_count": self._failure_count,
+            "consecutive_failure_count": self._consecutive_failure_count,
             "restart_count": self._restart_count,
             "max_restarts": self._max_restarts,
+            "interval_s": self._interval_s,
             "last_started_at": self._last_started_at or None,
             "last_completed_at": self._last_completed_at or None,
             "last_failure_at": self._last_failure or None,
+            "last_tick_started_at": self._last_tick_started_at or None,
+            "last_tick_completed_at": self._last_tick_completed_at or None,
+            "next_run_at": next_run_at,
+            "overdue_seconds": overdue_seconds,
             "last_error_at": self._last_error_at or None,
             "last_error_class": self._last_error_class,
-            "interval_s": self._interval_s,
         }
 
 
 class TaskSupervisor:
-    """Manages multiple supervised background tasks."""
+    """Manages multiple supervised background tasks.
+
+    Tasks can be registered in two flavors:
+
+    - :meth:`register` for true daemon-style long-lived coroutines.
+    - :meth:`register_periodic` for supervisor-owned periodic scheduling
+      around a one-shot tick factory.  Heartbeat fields
+      (``last_tick_started_at``, ``last_tick_completed_at``,
+      ``next_run_at``, ``overdue_seconds``) are populated so the
+      runtime dashboard can distinguish a healthy sleeping task from
+      an overdue one without inferring from outer-coroutine lifecycle
+      timestamps.
+    """
 
     def __init__(self) -> None:
         self._tasks: dict[str, SupervisedTask] = {}
@@ -158,24 +298,88 @@ class TaskSupervisor:
         max_restarts: int = 10,
         interval_s: float | None = None,
     ) -> SupervisedTask:
-        """Register a new supervised task.
+        """Register a daemon-style supervised task.
 
         ``interval_s`` is the wall-clock cadence between successive
         iterations of *coro_factory* (i.e. the ``asyncio.sleep`` the
         loop awaits between runs). It is exposed in the runtime-metrics
-        snapshot so the dashboard can show "how often" each task runs
-        and estimate the time until its next run. ``None`` (default)
-        means the cadence is unknown — the task is registered without
-        timing metadata and the dashboard renders ``"—"``.
+        snapshot for legacy callers and is not used to project a
+        next-run timestamp because daemon tasks don't follow a fixed
+        schedule.
         """
         if name in self._tasks:
             raise ValueError(f"Task {name!r} is already registered")
         task = SupervisedTask(
             name=name,
             _coro_factory=coro_factory,
+            mode="daemon",
             _max_restarts=max_restarts,
             _interval_s=interval_s,
         )
+        self._tasks[name] = task
+        return task
+
+    def register_periodic(
+        self,
+        name: str,
+        tick_factory: Callable[[], Coroutine[Any, Any, None]],
+        *,
+        interval_s: float,
+        run_immediately: bool = False,
+        initial_delay_s: float | None = None,
+        timeout_s: float | None = None,
+        max_restarts: int = 10,
+    ) -> SupervisedTask:
+        """Register a periodic task whose cadence is owned by the supervisor.
+
+        The supervisor owns the outer ``while self._running`` loop and
+        delegates the per-tick work to *tick_factory*.  Heartbeat
+        fields are populated on every tick (success or failure) so
+        the runtime dashboard can show last/next run, duration, and
+        overdue state without inspecting outer-coroutine lifecycle
+        timestamps.
+
+        Args:
+            name: Unique task name.
+            tick_factory: A no-arg coroutine factory returning the
+                one-shot tick work.  Exceptions raised by the tick
+                count as failures; the supervisor continues to schedule
+                subsequent ticks unless the failure budget is exhausted.
+            interval_s: Seconds between scheduled ticks.  Required.
+            run_immediately: Reserved for future use; current periodic
+                scheduler sleeps for ``interval_s`` (or
+                ``initial_delay_s`` when provided) before the first
+                tick to match the historical sleep-first semantics of
+                the inline ``while True`` loops this replaces.
+            initial_delay_s: Optional override for the first-tick
+                delay.  Defaults to ``interval_s`` when omitted
+                (preserves current sleep-first semantics).
+            timeout_s: Reserved for future per-tick timeout
+                enforcement; currently accepted but unused.
+            max_restarts: Failure budget.  Defaults to 10; consumed
+                by ``_consecutive_failure_count``.  When exhausted the
+                task exits and the supervisor stops rescheduling.
+        """
+        del run_immediately, timeout_s  # reserved for future scheduler work
+        if name in self._tasks:
+            raise ValueError(f"Task {name!r} is already registered")
+        if interval_s <= 0:
+            raise ValueError(
+                f"Periodic task {name!r} requires interval_s > 0 (got {interval_s!r})"
+            )
+        delay_s = float(interval_s if initial_delay_s is None else initial_delay_s)
+        task = SupervisedTask(
+            name=name,
+            _coro_factory=tick_factory,
+            mode="periodic",
+            _tick_factory=tick_factory,
+            _max_restarts=max_restarts,
+            _interval_s=float(interval_s),
+        )
+        # Prime the first next-run window so the dashboard can show
+        # "in <interval>" before the very first tick lands.  Same
+        # module so private field assignment is intentional.
+        task._next_run_at = time.time() + delay_s  # pyright: ignore[reportPrivateUsage]
         self._tasks[name] = task
         return task
 

@@ -280,8 +280,8 @@ The `/timeseries` page replaces the old "table of bucket counts" with a stacked-
 ## Update Checker
 
 - `UpdateChecker` is the single source of truth for "is there a newer eggpool release available?"
-- Background task registered via `TaskSupervisor` under the exact name `update_checker`
-- `_register_update_checker()` helper in `app.py` creates the checker, stores it on `app.state.update_checker`, and registers it with the supervisor
+- Background task registered via `TaskSupervisor.register_periodic("update_checker", ...)` (24h cadence by default)
+- `_register_update_checker()` helper in `app.py` creates the checker, stores it on `app.state.update_checker`, and registers the periodic supervisor-owned tick
 - Default check interval is 24h; PyPI request timeout is 15s
 - `UpdateInfo` is a frozen dataclass that holds the snapshot; `snapshot()` returns an isolated copy via `dataclasses.replace` so callers cannot mutate the cached state
 - `async_check_for_update()` is the shared one-shot helper used by both the background periodic task and the `eggpool update` CLI — both paths MUST go through this helper instead of inlining their own PyPI lookup
@@ -289,6 +289,17 @@ The `/timeseries` page replaces the old "table of bucket counts" with a stacked-
 - Dashboard footer renders the update indicator only when `update_available=True`; renders nothing otherwise
 - PyPI failures are non-fatal and reflected in `last_check_error`; the checker preserves the previous `latest_version` on failure so the indicator still surfaces a known-newer release during momentary outages
 - The checker never auto-installs; it is passive notification only
+
+## TaskSupervisor — periodic scheduling
+
+- `TaskSupervisor` (`src/eggpool/background/__init__.py`) supports two flavors of supervised background work:
+  - `register(name, coro_factory, *, interval_s=None, max_restarts=10)` for daemon-style long-lived coroutines (`mode = "daemon"`). `last_started_at` reflects outer-coroutine lifecycle; `next_run_at` is `None`.
+  - `register_periodic(name, tick_factory, *, interval_s, run_immediately=False, initial_delay_s=None, timeout_s=None, max_restarts=10)` for supervisor-owned periodic scheduling around a one-shot tick factory (`mode = "periodic"`). The supervisor drives the outer `while running` loop and delegates per-tick work to the factory.
+- Periodic snapshot fields populated on every tick (`success_count`, `failure_count`, `consecutive_failure_count`, `last_tick_started_at`, `last_tick_completed_at`, `next_run_at`, `overdue_seconds`, `last_error_class`, `last_error_at`).
+- **Overdue detection** uses `grace_s = max(5.0, min(interval_s * 0.25, 60.0))` so transient scheduler jitter does not trip the alert. A tick that has been running longer than `interval_s * 2` is rendered `tick slow` rather than `overdue`.
+- Backward compatibility: the legacy `_finalize_stale_requests`, `_prune_health_disabled_models_loop`, and `_catalog_refresh_loop` `while True` wrappers are retained (with `# pyright: ignore[reportUnusedFunction]`) so existing tests that drive them with custom intervals still work. New registrations use `register_periodic` with the corresponding `*_once` helper.
+- Catalog refresh registration is supervisor-driven via `_catalog_refresh_once`; the catalog-refresh loop relies on `_finalize_stale_requests_once` style seam decomposition. A missing local symbol at registration time surfaces in `last_error_class = NameError` instead of a permanently-running zombie task.
+- `background_task_summary` is derived by `RuntimeMetricsService._snapshot_background_task_summary()` and exposed under `/api/stats/runtime` for at-a-glance operator visibility (`registered` / `running` / `failed` / `overdue` / `last_error_count`).
 
 ## Model Capabilities
 

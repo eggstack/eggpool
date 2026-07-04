@@ -2353,19 +2353,39 @@ Production (`eggpool deploy systemd --install --production`):
 
 ## Background Tasks
 
-`TaskSupervisor` (`background/__init__.py`) manages long-running loops with restart-on-failure and exponential backoff. All tasks are registered in `app.py` during lifespan setup:
+`TaskSupervisor` (`background/__init__.py`) manages two flavors of background work with restart-on-failure and exponential backoff:
 
-| Task | Condition | Description |
-|------|-----------|-------------|
-| `catalog_refresh` | `refresh_interval_s > 0` | Periodic upstream model catalog refresh |
-| `retention_cleanup` | Always | Hourly cleanup of old requests, events, pings, rollups, and expired reservations |
-| `checkpoint` | Always | Periodic SQLite WAL checkpoint (every 4h) |
-| `usage_window_refresh` | Always | Refreshes persisted usage windows every 60s |
-| `stale_request_finalizer` | Always | Safety net for leaked streaming requests (every 60s) |
-| `metrics_flush` | `write_mode != "immediate"` | Buffered analytics flush to `usage_rollups` |
-| `update_checker` | Always | Periodic PyPI update check (default 24h); see `update_checker.py` |
-| `automatic_backup` | `backup.enabled` | In-process SQLite backup with count-based retention; see `background/backup.py` |
-| `health_disabled_models_prune` | Always | Periodic sweep that drops stale `model_availability` and `disabled_models` entries (every 60s) |
+- **daemon tasks** registered via `TaskSupervisor.register(...)` — long-lived coroutines the supervisor owns end-to-end (e.g. update checker and automatic backup, when they are not yet converted). These report `mode = "daemon"` and `next_run_at = None`.
+- **periodic tasks** registered via `TaskSupervisor.register_periodic(...)` — the supervisor owns the cadence and a one-shot tick factory, recording per-tick heartbeat fields (`last_tick_started_at`, `last_tick_completed_at`, `next_run_at`, `overdue_seconds`, `success_count`, `failure_count`, `consecutive_failure_count`). The runtime dashboard consumes `next_run_at` / `overdue_seconds` directly instead of inferring from outer-coroutine lifecycle timestamps (which previously produced false ``overdue`` warnings for healthy periodic loops).
+
+Overdue detection uses a 25%-of-interval (capped at 60s, minimum 5s) grace band so transient scheduler jitter does not trip the alert.
+
+All tasks are registered in `app.py` during lifespan setup. Periodic registrations are summarised below:
+
+| Task | Interval | Mode | Description |
+|------|----------|------|-------------|
+| `catalog_refresh` | `refresh_interval_s` | periodic | Upstream model catalog refresh, model-info reconciliation after refresh |
+| `model_info_refresh` | `config.model_info.refresh_interval_s` | periodic | Refresh due model-info rows from configured sources |
+| `model_info_canonical_backfill` | 60s | periodic | Backfill canonical rows for orphaned models |
+| `usage_window_refresh` | 60s | periodic | Reload persisted quota windows into memory |
+| `stale_request_finalizer` | 60s | periodic | Safety net for leaked streaming requests |
+| `health_disabled_models_prune` | 60s | periodic | Drop stale `model_availability` and `disabled_models` rows |
+| `metrics_flush` | `config.metrics.flush_interval_s` | periodic | Buffered analytics flush to `usage_rollups` (lifespan shutdown path still issues a final `flush(reason="shutdown")` after `stop_all()`) |
+| `retention_cleanup` | 1h | periodic | Cleanup of old requests, events, pings, rollups, expired reservations |
+| `checkpoint` | 4h | periodic | SQLite WAL checkpoint |
+| `update_checker` | 24h | periodic | PyPI update check; per-tick probe reuses the shared outbound client |
+| `automatic_backup` | `config.backup.interval_s` | periodic | In-process SQLite backup with count-based retention (`initial_delay_s = config.backup.startup_delay_s` preserves the historical startup wait) |
+
+### Operator visibility
+
+The runtime dashboard renders the periodic-task table from the supervisor-owned snapshot fields:
+
+- **Status** — `running` (tick in flight), `tick slow` (tick running longer than 2×interval), `failing` (registered with failures and no successes), `cancelled`, `stopped`, or `daemon` (legacy mode without next-run projection).
+- **Next run** — `in <delta>` when `next_run_at` is in the future, `overdue <age>` when the deadline plus grace band has elapsed, or `—` for daemon tasks and tasks with no projected deadline.
+- **Success/Fail** — per-tick counters so a single transient failure does not look like a permanent regression.
+- **Last error** — `last_error_class` (type name) when a tick has failed.
+
+The runtime API (`/api/stats/runtime`) also exposes `background_task_summary` (`registered`, `running`, `failed`, `overdue`, `last_error_count`) so dashboards / alerts can consume a coherent at-a-glance count without iterating every task.
 
 ## In-Memory Bounds and Memory Footprint
 

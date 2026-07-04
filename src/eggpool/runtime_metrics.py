@@ -164,7 +164,11 @@ class RuntimeMetricsService:
         result["dispatch_overhead"] = self._snapshot_dispatch_overhead(probe_errors)
 
         # Background tasks
-        result["background_tasks"] = self._snapshot_background_tasks(probe_errors)
+        background_tasks = self._snapshot_background_tasks(probe_errors)
+        result["background_tasks"] = background_tasks
+        result["background_task_summary"] = self._snapshot_background_task_summary(
+            background_tasks
+        )
 
         # Database health
         result["db"] = await self._snapshot_db(probe_errors)
@@ -375,6 +379,44 @@ class RuntimeMetricsService:
             return []
 
         return self._supervisor.snapshot()
+
+    def _snapshot_background_task_summary(
+        self, tasks: list[dict[str, Any]]
+    ) -> dict[str, int]:
+        """Derive an at-a-glance summary for the background task table.
+
+        Counts registered vs. running vs. failed vs. overdue tasks plus
+        the total number of last-error ticks.  ``overdue`` only counts
+        periodic tasks whose ``overdue_seconds`` exceeds the grace band
+        so transient scheduler jitter does not fire the alert.
+        """
+        registered = len(tasks)
+        running = 0
+        failed = 0
+        overdue = 0
+        last_error_count = 0
+        for task in tasks:
+            is_running = bool(task.get("running"))
+            is_done = bool(task.get("done"))
+            is_cancelled = bool(task.get("cancelled"))
+            if is_running:
+                running += 1
+            if is_done or is_cancelled:
+                failed += 1
+            if (
+                isinstance(task.get("overdue_seconds"), (int, float))
+                and float(task["overdue_seconds"]) > 0
+            ):
+                overdue += 1
+            if task.get("last_error_class"):
+                last_error_count += 1
+        return {
+            "registered": registered,
+            "running": running,
+            "failed": failed,
+            "overdue": overdue,
+            "last_error_count": last_error_count,
+        }
 
     # -- Database health ----------------------------------------------------
 

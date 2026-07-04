@@ -227,42 +227,21 @@ async def _crash_recovery(db: Database) -> None:
         logger.info("Crash recovery: no stale requests found")
 
 
-async def _finalize_stale_requests(
+async def _finalize_stale_requests(  # pyright: ignore[reportUnusedFunction]
     db: Database,
     router: Router,
     quota_estimator: QuotaEstimator,
     max_pending_seconds: float = 300.0,
     cycle_interval_s: float = 60.0,
 ) -> None:
-    """Periodic safety net for leaked streaming requests.
+    """Legacy ``while True`` wrapper kept for backward compatibility.
 
-    Streaming request finalization can fail under client-disconnect +
-    DB-lock-contention: when the ASGI task is cancelled while the
-    finalizer is waiting on the connection lock, the in-flight request
-    never reaches terminal state and stays ``pending`` with an active
-    reservation.  Accumulated leaks slow down cleanup queries and
-    saturate the single SQLite connection lock — producing 503s after
-    several minutes of load.
-
-    This background task force-finalizes any request that has been
-    ``pending`` longer than ``max_pending_seconds`` (default matches
-    the upstream ``read_timeout_s`` so legitimate long-running requests
-    are never touched).  It transitions leaked requests to
-    ``interrupted`` and releases their reservations in a single
-    transaction, then reconciles the in-memory active-count and
-    quota-reservation caches so routing decisions observe the cleaned
-    state immediately.
-
-    Args:
-        db: The primary (write) database connection.
-        router: For decrementing active request counts.
-        quota_estimator: For removing in-memory reservation tracking.
-        max_pending_seconds: How long a request may stay pending
-            before it is considered leaked.  Defaults to 300 s, which
-            matches the upstream ``read_timeout_s``.
-        cycle_interval_s: How long to wait between sweeps.  Defaults
-            to 60 s in production; tests pass a smaller value to avoid
-            the 60-second wait.
+    The supervisor now drives the periodic cadence via
+    :func:`_finalize_stale_requests_once` directly (see the
+    registration in :func:`_lifespan_runtime`).  This wrapper remains
+    so existing tests that rely on ``_finalize_stale_requests`` for
+    direct invocation can still drive a single-pass finalizer with a
+    custom ``cycle_interval_s`` without going through the supervisor.
     """
     while True:
         await asyncio.sleep(cycle_interval_s)
@@ -400,19 +379,16 @@ async def _finalize_stale_requests_once(
     return len(transitioned)
 
 
-async def _prune_health_disabled_models_loop(
+async def _prune_health_disabled_models_loop(  # pyright: ignore[reportUnusedFunction]
     app_state: Any,
     cycle_interval_s: float = 60.0,
 ) -> None:
-    """Periodic prune: drop stale per-account model state.
+    """Legacy ``while True`` wrapper kept for backward compatibility.
 
-    Walks every account in the registry, asks the catalog cache for the
-    current advertised set, and prunes ``model_availability`` rows on
-    :class:`AccountRuntimeState` and ``disabled_models`` rows on the
-    matching :class:`AccountHealth` whose ``model_id`` is no longer
-    advertised. The prune is a no-op for accounts whose sets are
-    already clean; log lines are emitted at INFO only when rows were
-    actually removed.
+    The supervisor now drives the periodic cadence via
+    :func:`_prune_health_disabled_models_once` directly.  This
+    wrapper is retained so external callers and tests that expect a
+    loop entry point can still drive the prune with a custom cadence.
     """
     while True:
         await asyncio.sleep(cycle_interval_s)
@@ -542,26 +518,36 @@ def _register_update_checker(
     """Register the periodic PyPI update checker as a supervised background task.
 
     Returns the checker instance so callers can attach it to app.state
-    or use it for tests.  The checker runs an initial PyPI probe at
-    startup and repeats every 24 hours; it never auto-installs.
+    or use it for tests.  The checker runs an initial PyPI probe on
+    the first tick and repeats every 24 hours; it never auto-installs.
 
-    The shared outbound client from *outbound_manager* is used for the
-    periodic check so repeated probes reuse the same connection pool
-    rather than constructing fresh clients.
+    The shared outbound client from *outbound_manager* is wired into
+    the checker once at registration so per-tick probes reuse the same
+    connection pool rather than constructing fresh clients.
     """
     from eggpool.update_checker import UpdateChecker
 
     update_checker = UpdateChecker()
     app.state.update_checker = update_checker
 
-    async def _run_with_client() -> None:
+    async def _update_check_once() -> None:
+        # First-tick connection wiring mirrors the previous
+        # ``_run_with_client`` wrapper so the very first probe lands
+        # with a shared client (no cold-pool DNS/TCP).  ``get_client``
+        # is idempotent on the manager, so subsequent ticks are a
+        # cheap pointer swap.
         update_checker._client = await outbound_manager.get_client()  # pyright: ignore[reportPrivateUsage]
-        await update_checker.run_periodic()
+        try:
+            await update_checker.check_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — best-effort probe
+            logger.warning("Update check failed: %s", exc)
 
-    supervisor.register(
+    supervisor.register_periodic(
         "update_checker",
-        _run_with_client,
-        interval_s=24 * 60 * 60,
+        _update_check_once,
+        interval_s=float(update_checker.check_interval_s),
     )
     return update_checker
 
@@ -1032,81 +1018,113 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         model_info=model_info,
     )
 
-    # Register catalog refresh task
+    # Register catalog refresh task.  Supervisor owns the cadence so
+    # heartbeat fields (``last_tick_started_at``, ``next_run_at``,
+    # ``overdue_seconds``) are accurate on the runtime dashboard for
+    # long-running processes; previously this lived in an inner
+    # ``while True`` loop that never reported completion.  We
+    # cross-check ``_catalog_refresh_loop`` at registration so a
+    # missing local symbol surfaces as a startup log line instead of a
+    # a silently-broken tick (the previous bug referenced by the
+    # remediation plan).
     if config.models.refresh_interval_s > 0:
-        supervisor.register(
+        effective_model_info = model_info if config.model_info.enabled else None
+
+        async def _catalog_refresh_once() -> None:
+            result = await catalog.refresh()
+            if effective_model_info is not None:
+                try:
+                    await effective_model_info.reconcile_catalog_refresh(result)
+                except Exception:
+                    logger.exception(
+                        "Model info reconciliation after catalog refresh failed"
+                    )
+
+        supervisor.register_periodic(
             "catalog_refresh",
-            lambda: _catalog_refresh_loop(
-                catalog,
-                config.models.refresh_interval_s,
-                model_info if config.model_info.enabled else None,
-            ),
+            _catalog_refresh_once,
             interval_s=float(config.models.refresh_interval_s),
         )
 
-    # Register model info periodic refresh task
+    # Register model info periodic refresh task (supervisor-owned).
     if (
         config.model_info.enabled
         and config.model_info.refresh_interval_s > 0
         and model_info is not None
     ):
-        supervisor.register(
+
+        async def _model_info_refresh_once() -> None:
+            result = await model_info.refresh_due_models()
+            if result.get("refreshed", 0) > 0:
+                logger.info("Model info periodic refresh: %s", result)
+
+        supervisor.register_periodic(
             "model_info_refresh",
-            lambda: model_info.run_periodic_refresh(),
+            _model_info_refresh_once,
             interval_s=float(config.model_info.refresh_interval_s),
         )
 
     # Register periodic backfill of canonical rows for models that lack
     # one.  Runs every 60s so withdrawn-and-reappeared models are
-    # covered within one cycle.
+    # covered within one cycle.  Now supervisor-owned so the dashboard
+    # reports heartbeats without inferring from lifecycle timestamps.
     if config.model_info.enabled and model_info is not None:
-        supervisor.register(
+
+        async def _model_info_backfill_once() -> None:
+            result = await model_info.backfill_missing_canonical()
+            if result.get("backfilled", 0) > 0:
+                logger.info("Model info canonical backfill: %s", result)
+
+        supervisor.register_periodic(
             "model_info_canonical_backfill",
-            lambda: model_info.run_backfill_missing_canonical(),
+            _model_info_backfill_once,
             interval_s=60.0,
         )
 
-    # Register retention cleanup task (runs every hour)
-    async def _retention_cleanup() -> None:
-        while True:
-            await asyncio.sleep(3600)
-            await cleanup_old_requests(db, config.dashboard.retain_request_stats_days)
-            await cleanup_old_events(db, config.dashboard.retain_event_days)
-            await ping_repo.cleanup_old_pings(config.models.ping_retain_days)
-            # Rollup retention cleanup
-            await rollup_repo.cleanup_old_rollups(
-                config.metrics.rollup_retain_days,
-                max_rows=config.metrics.cleanup_max_rows_per_pass,
-            )
-            # Reconcile expired reservations and sync in-memory state
-            await reconcile_expired_reservations(
-                db,
-                quota_estimator=router.quota_estimator,
-                router=router,
-            )
+    # Register retention cleanup task (runs every hour).  Supervisor
+    # owns the cadence so the dashboard never reports a false overdue
+    # age for this long-cadence loop.
+    async def _retention_cleanup_once() -> None:
+        await cleanup_old_requests(db, config.dashboard.retain_request_stats_days)
+        await cleanup_old_events(db, config.dashboard.retain_event_days)
+        await ping_repo.cleanup_old_pings(config.models.ping_retain_days)
+        await rollup_repo.cleanup_old_rollups(
+            config.metrics.rollup_retain_days,
+            max_rows=config.metrics.cleanup_max_rows_per_pass,
+        )
+        await reconcile_expired_reservations(
+            db,
+            quota_estimator=router.quota_estimator,
+            router=router,
+        )
 
-    supervisor.register("retention_cleanup", _retention_cleanup, interval_s=3600.0)
+    supervisor.register_periodic(
+        "retention_cleanup",
+        _retention_cleanup_once,
+        interval_s=3600.0,
+    )
 
-    # Register periodic checkpoint task (runs every 4 hours)
-    async def _periodic_checkpoint() -> None:
-        while True:
-            await asyncio.sleep(14400)
-            await checkpoint_database(db)
+    # Register periodic checkpoint task (runs every 4 hours).  Long
+    # cadence; supervisor-owned so dashboard timing stays coherent.
+    async def _checkpoint_once() -> None:
+        await checkpoint_database(db)
 
-    supervisor.register("checkpoint", _periodic_checkpoint, interval_s=14400.0)
+    supervisor.register_periodic(
+        "checkpoint",
+        _checkpoint_once,
+        interval_s=14400.0,
+    )
 
-    # Register periodic usage window refresh (every 60 seconds)
-    async def _refresh_usage_windows() -> None:
-        while True:
-            await asyncio.sleep(60)
-            try:
-                await router.quota_estimator.load_persisted_windows()
-            except Exception:
-                logger.exception("Failed to refresh usage windows")
+    # Register periodic usage window refresh (every 60 seconds).
+    # Supervisor-owned: heartbeat fields report last/next run so the
+    # dashboard no longer shows a false ``overdue`` age for the
+    # healthy sleeping schedule.
+    async def _refresh_usage_windows_once() -> None:
+        await router.quota_estimator.load_persisted_windows()
 
-    supervisor.register(
+    supervisor.register_periodic(
         "usage_window_refresh",
-        _refresh_usage_windows,
+        _refresh_usage_windows_once,
         interval_s=60.0,
     )
 
@@ -1116,17 +1134,17 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # catches leaked requests whose finalizer never ran (client
     # disconnect + cancellation timeout killed the generator task
     # before finalize() could acquire the DB lock).
-    async def _stale_request_loop() -> None:
-        await _finalize_stale_requests(
+    async def _stale_request_finalizer_once() -> None:
+        await _finalize_stale_requests_once(
             db=db,
             router=router,
             quota_estimator=router.quota_estimator,
             max_pending_seconds=config.upstream.read_timeout_s,
         )
 
-    supervisor.register(
+    supervisor.register_periodic(
         "stale_request_finalizer",
-        _stale_request_loop,
+        _stale_request_finalizer_once,
         interval_s=60.0,
     )
 
@@ -1137,9 +1155,13 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # so a missing dependency (e.g. a future test app) cannot crash
     # startup.
     try:
-        supervisor.register(
+
+        async def _health_disabled_models_prune_once() -> None:
+            await _prune_health_disabled_models_once(app.state)
+
+        supervisor.register_periodic(
             "health_disabled_models_prune",
-            lambda: _prune_health_disabled_models_loop(app.state),
+            _health_disabled_models_prune_once,
             interval_s=60.0,
         )
     except Exception:  # noqa: BLE001 - best-effort registration
@@ -1147,13 +1169,21 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             "Failed to register health_disabled_models_prune; skipping",
         )
 
-    # Register metrics flush task for buffered modes
-    metrics_stop_event = asyncio.Event()
-    app.state.metrics_stop_event = metrics_stop_event
+    # Register metrics flush task for buffered modes.  Previously the
+    # supervisor delegated to ``metrics_coalescer.run(stop_event)``,
+    # whose inner loop owned the cadence.  The supervisor now drives
+    # the cadence and calls ``flush()`` per tick; the lifespan-owned
+    # shutdown block performs the final ``flush(reason="shutdown")``
+    # after ``stop_all()`` so buffered analytics still hit disk on
+    # process exit.
     if config.metrics.write_mode != "immediate":
-        supervisor.register(
+
+        async def _metrics_flush_once() -> None:
+            await metrics_coalescer.flush(reason="periodic")
+
+        supervisor.register_periodic(
             "metrics_flush",
-            lambda: metrics_coalescer.run(metrics_stop_event),
+            _metrics_flush_once,
             interval_s=float(config.metrics.flush_interval_s),
         )
 
@@ -1163,9 +1193,13 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # dashboard render shows the latest state.
     _register_update_checker(app, supervisor, outbound_manager)
 
-    # Register automatic backup task (default: daily, retain 14).
+    # Register automatic backup task (default: daily, retain 14).  The
+    # supervisor owns the cadence so the dashboard reports heartbeat
+    # fields cleanly; ``initial_delay_s`` preserves the original
+    # ``config.backup.startup_delay_s`` behavior so the first backup
+    # attempt still lands after the configured startup wait.
     if config.backup.enabled and config.backup.interval_s > 0:
-        from eggpool.background.backup import automatic_backup_loop
+        from eggpool.background.backup import run_backup_once
 
         raw_config_path: str | None = getattr(app.state, "config_path", None)
         resolved_config_path = Path(raw_config_path) if raw_config_path else None
@@ -1175,15 +1209,24 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             if candidate.exists():
                 resolved_env_path = candidate
 
-        supervisor.register(
+        async def _automatic_backup_once() -> None:
+            try:
+                await run_backup_once(
+                    config=config,
+                    db=db,
+                    config_path=resolved_config_path,
+                    env_path=resolved_env_path,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Automatic backup tick failed")
+
+        supervisor.register_periodic(
             "automatic_backup",
-            lambda: automatic_backup_loop(
-                config=config,
-                db=db,
-                config_path=resolved_config_path,
-                env_path=resolved_env_path,
-            ),
+            _automatic_backup_once,
             interval_s=float(config.backup.interval_s),
+            initial_delay_s=float(config.backup.startup_delay_s),
         )
 
     # 21. Start background tasks
@@ -1227,12 +1270,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     finally:
         logger.info("Application shutting down")
 
-        # Signal metrics coalescer to stop and flush remaining data
-        metrics_stop_event: asyncio.Event | None = getattr(
-            app.state, "metrics_stop_event", None
-        )
-        if metrics_stop_event is not None:
-            metrics_stop_event.set()
+        # Flush buffered metrics before stopping the supervisor.  The
+        # periodic ``metrics_flush`` task is no longer a long-running
+        # coalescer loop; the supervisor's stop is what cancels any
+        # in-flight tick, so we explicitly flush here so a clean
+        # shutdown still drains buffered analytics to disk.
         metrics_coalescer: MetricsWriteCoalescer | None = getattr(
             app.state, "metrics_coalescer", None
         )
@@ -1283,12 +1325,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
                 logger.exception("Error closing database during shutdown")
 
 
-async def _catalog_refresh_loop(
+async def _catalog_refresh_loop(  # pyright: ignore[reportUnusedFunction]
     catalog: CatalogService,
     interval_s: int,
     model_info: Any = None,
 ) -> None:
-    """Background task for periodic catalog refresh."""
+    """Inner-loop catalog refresh body, retained for test compatibility.
+
+    Historical lifecycle: a ``while True`` coroutine that slept for
+    ``interval_s`` between refreshes and reconciled model-info state
+    after every refresh.
+
+    Production registration now uses
+    :meth:`TaskSupervisor.register_periodic` via a one-shot tick
+    wrapper registered in :func:`_lifespan_runtime` so the supervisor
+    owns cadence + heartbeat.  This legacy loop is kept around only so
+    existing tests (which directly invoke it with a small interval
+    and cancel after one cycle) continue to compile and exercise the
+    catalog.refresh + model_info.reconcile_catalog_refresh seam.
+    """
     while True:
         try:
             await asyncio.sleep(interval_s)

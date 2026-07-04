@@ -118,7 +118,7 @@ class TestAutomaticBackupLoop:
     @pytest.mark.asyncio()
     async def test_creates_backup_and_prunes(self, tmp_path: Path) -> None:
         """A single backup iteration creates an archive and runs retention."""
-        from eggpool.background.backup import _run_backup_once
+        from eggpool.background.backup import run_backup_once
 
         config, config_path = _make_config(tmp_path, startup_delay_s=0, retain_count=2)
         db_path = Path(config.database.path)
@@ -129,7 +129,7 @@ class TestAutomaticBackupLoop:
         # Override directory in config
         config.backup.directory = str(backup_dir)
 
-        await _run_backup_once(
+        await run_backup_once(
             config=config,
             db=None,  # type: ignore[arg-type]
             config_path=config_path,
@@ -159,11 +159,11 @@ class TestAutomaticBackupLoop:
     @pytest.mark.asyncio()
     async def test_skips_when_no_config_path(self, tmp_path: Path, caplog) -> None:
         """Skips backup when config_path is None."""
-        from eggpool.background.backup import _run_backup_once
+        from eggpool.background.backup import run_backup_once
 
         config, _ = _make_config(tmp_path)
 
-        await _run_backup_once(
+        await run_backup_once(
             config=config,
             db=None,  # type: ignore[arg-type]
             config_path=None,
@@ -175,7 +175,7 @@ class TestAutomaticBackupLoop:
     @pytest.mark.asyncio()
     async def test_metadata_records_live_db_path(self, tmp_path: Path) -> None:
         """Archive META db_path points at the live DB, not the staged snapshot."""
-        from eggpool.background.backup import _run_backup_once
+        from eggpool.background.backup import run_backup_once
 
         config, config_path = _make_config(tmp_path, startup_delay_s=0)
         db_path = Path(config.database.path)
@@ -184,7 +184,7 @@ class TestAutomaticBackupLoop:
         backup_dir = tmp_path / "backups"
         config.backup.directory = str(backup_dir)
 
-        await _run_backup_once(
+        await run_backup_once(
             config=config,
             db=None,  # type: ignore[arg-type]
             config_path=config_path,
@@ -203,7 +203,7 @@ class TestAutomaticBackupLoop:
     @pytest.mark.asyncio()
     async def test_sqlite_snapshot_is_consistent(self, tmp_path: Path) -> None:
         """The archived SQLite snapshot contains expected data."""
-        from eggpool.background.backup import _run_backup_once
+        from eggpool.background.backup import run_backup_once
 
         config, config_path = _make_config(tmp_path, startup_delay_s=0)
         db_path = Path(config.database.path)
@@ -212,7 +212,7 @@ class TestAutomaticBackupLoop:
         backup_dir = tmp_path / "backups"
         config.backup.directory = str(backup_dir)
 
-        await _run_backup_once(
+        await run_backup_once(
             config=config,
             db=None,  # type: ignore[arg-type]
             config_path=config_path,
@@ -239,7 +239,7 @@ class TestAutomaticBackupLoop:
     @pytest.mark.asyncio()
     async def test_no_wal_shm_in_archive(self, tmp_path: Path) -> None:
         """Runtime backup archives do not contain WAL/SHM sidecars."""
-        from eggpool.background.backup import _run_backup_once
+        from eggpool.background.backup import run_backup_once
 
         config, config_path = _make_config(tmp_path, startup_delay_s=0)
         db_path = Path(config.database.path)
@@ -248,7 +248,7 @@ class TestAutomaticBackupLoop:
         backup_dir = tmp_path / "backups"
         config.backup.directory = str(backup_dir)
 
-        await _run_backup_once(
+        await run_backup_once(
             config=config,
             db=None,  # type: ignore[arg-type]
             config_path=config_path,

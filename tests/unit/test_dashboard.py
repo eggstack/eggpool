@@ -4416,53 +4416,69 @@ class TestRenderRuntimeBackgroundTasks:
 
     def test_next_run_countdown_with_known_completion(self) -> None:
         snapshot = self._base_snapshot()
-        # Pretend the last completion was 30s ago with a 5m cadence;
-        # next run should render as "in 4m30s".
+        # Periodic snapshot exposes ``next_run_at`` 30s in the future;
+        # next run renders as "in 4m30s" (countdown depends on now).
+        future = time.time() + 270
         snapshot["background_tasks"] = [
             {
                 "name": "checkpoint",
                 "registered": True,
+                "mode": "periodic",
                 "running": True,
                 "done": False,
                 "cancelled": False,
                 "iteration_count": 7,
+                "success_count": 7,
+                "failure_count": 0,
+                "consecutive_failure_count": 0,
                 "restart_count": 0,
                 "max_restarts": 10,
-                "last_started_at": 0.0,
+                "last_started_at": time.time() - 86400,
                 "last_completed_at": time.time() - 30,
+                "last_tick_started_at": time.time() - 30,
+                "last_tick_completed_at": time.time() - 30,
                 "last_failure_at": None,
                 "last_error_at": None,
                 "last_error_class": None,
+                "next_run_at": future,
+                "overdue_seconds": 0.0,
                 "interval_s": 300.0,
             },
         ]
         html = render_runtime(snapshot)
-        # The countdown is approximate (depends on render-time now);
-        # only require the "in " prefix and a "4m" prefix.
-        match = re.search(
-            r'<td data-priority="3">in 4m\d+s</td>',
-            html,
-        )
+        # Countdown should approximate the supervisor-owned window;
+        # require the "in " prefix within a few-second window.
+        match = re.search(r'<td data-priority="3">in 4m\d+s</td>', html)
         assert match is not None, html
 
     def test_next_run_marks_overdue(self) -> None:
         snapshot = self._base_snapshot()
-        # Last completion was 10 minutes ago with a 1m cadence → overdue.
+        # Periodic task whose last tick was 10 minutes ago and the
+        # grace band has been blown → overdue rendering kicks in.
+        last_tick = time.time() - 600
         snapshot["background_tasks"] = [
             {
                 "name": "stale_request_finalizer",
                 "registered": True,
+                "mode": "periodic",
                 "running": True,
                 "done": False,
                 "cancelled": False,
                 "iteration_count": 1,
+                "success_count": 0,
+                "failure_count": 1,
+                "consecutive_failure_count": 0,
                 "restart_count": 0,
                 "max_restarts": 10,
-                "last_started_at": 0.0,
-                "last_completed_at": time.time() - 600,
+                "last_started_at": time.time() - 86400,
+                "last_completed_at": last_tick,
+                "last_tick_started_at": last_tick,
+                "last_tick_completed_at": last_tick,
                 "last_failure_at": None,
                 "last_error_at": None,
                 "last_error_class": None,
+                "next_run_at": last_tick + 60.0,
+                "overdue_seconds": 540.0,
                 "interval_s": 60.0,
             },
         ]
@@ -4473,35 +4489,77 @@ class TestRenderRuntimeBackgroundTasks:
         )
         assert match is not None, html
 
-    def test_next_run_anchors_on_last_started_at(self) -> None:
-        """Long-lived ``while True`` coros never complete, so we fall
-        back to ``last_started_at`` + ``interval_s`` as the next-run
-        estimate. Started 30s ago with a 5m cadence → "in 4m30s"."""
+    def test_next_run_uses_next_run_at_for_periodic_task(self) -> None:
+        """Periodic supervisor snapshot carries ``next_run_at``; the
+        dashboard consumes that field rather than reconstructing the
+        deadline from outer-coroutine ``last_started_at``."""
         snapshot = self._base_snapshot()
+        # Stale outer lifecycle but a healthy next-run window ahead.
         snapshot["background_tasks"] = [
             {
                 "name": "catalog_refresh",
                 "registered": True,
+                "mode": "periodic",
                 "running": True,
                 "done": False,
                 "cancelled": False,
-                "iteration_count": 0,
+                "iteration_count": 3,
+                "success_count": 3,
+                "failure_count": 0,
+                "consecutive_failure_count": 0,
                 "restart_count": 0,
                 "max_restarts": 10,
-                "last_started_at": time.time() - 30,
-                "last_completed_at": 0.0,
+                "last_started_at": time.time() - 1200,  # 20m ago (legacy bug)
+                "last_completed_at": time.time() - 1200,
+                "last_tick_started_at": time.time() - 30,
+                "last_tick_completed_at": time.time() - 30,
                 "last_failure_at": None,
                 "last_error_at": None,
                 "last_error_class": None,
+                "next_run_at": time.time() + 270,
+                "overdue_seconds": 0.0,
                 "interval_s": 300.0,
             },
         ]
         html = render_runtime(snapshot)
-        match = re.search(
-            r'<td data-priority="3">in 4m\d+s</td>',
-            html,
-        )
+        # Despite the very-stale outer lifecycle, the dashboard should
+        # show "in 4m…" not "overdue 20m".
+        assert "overdue 20m" not in html
+        match = re.search(r'<td data-priority="3">in 4m\d+s</td>', html)
         assert match is not None, html
+
+    def test_daemon_task_does_not_project_overdue(self) -> None:
+        """Daemon-style tasks (no periodic cadence) render "—" in the
+        next-run column even when ``last_started_at`` is old."""
+        snapshot = self._base_snapshot()
+        snapshot["background_tasks"] = [
+            {
+                "name": "update_checker",
+                "registered": True,
+                "mode": "daemon",
+                "running": True,
+                "done": False,
+                "cancelled": False,
+                "iteration_count": 0,
+                "success_count": 0,
+                "failure_count": 0,
+                "consecutive_failure_count": 0,
+                "restart_count": 0,
+                "max_restarts": 10,
+                "last_started_at": time.time() - 86400,
+                "last_completed_at": None,
+                "last_tick_started_at": None,
+                "last_tick_completed_at": None,
+                "last_failure_at": None,
+                "last_error_at": None,
+                "last_error_class": None,
+                "next_run_at": None,
+                "overdue_seconds": None,
+                "interval_s": 86400.0,
+            },
+        ]
+        html = render_runtime(snapshot)
+        assert "overdue" not in html
 
     def test_next_run_renders_dash_when_no_anchor(self) -> None:
         """Tasks registered but never entered (no started_at, no

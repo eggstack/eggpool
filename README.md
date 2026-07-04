@@ -238,7 +238,7 @@ Advanced knobs still exist for policy-scoped rollouts and advisory tuning, but t
 | `GET` | `/api/stats/synthetic-cache-observability` | Synthetic cache candidate / applied / native-preserved counts |
 | `GET` | `/api/stats/compression-tuning` | Threshold tuning recommendations |
 | `GET` | `/api/stats/request-shaping` | Operator-facing request-shaping summary |
-| `GET` | `/api/stats/runtime` | Runtime metrics + hardcoded routing guardrails |
+| `GET` | `/api/stats/runtime` | Runtime metrics + hardcoded routing guardrails; background task summaries now expose supervisor-owned `mode`, `next_run_at`, `overdue_seconds`, plus `background_task_summary` (`registered` / `running` / `failed` / `overdue` / `last_error_count`) so healthy periodic loops no longer render as overdue |
 
 When `[dashboard].enabled = true`, a multi-page dashboard is served at `/` with request stats, latency metrics, provider health, model-info detail pages, and more. Stats API available under `/api/stats/*`.
 
