@@ -10,7 +10,7 @@ import json
 import time
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
-from html import escape as _html_escape
+from html import escape as _stdlib_escape
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote
 
@@ -458,7 +458,7 @@ def _render_layout(
     blocks HTML parsing on the critical path.
     """
     burger, nav = _render_nav(active_nav, period, available_themes, current_theme)
-    theme_href = f"/static/theme.css?theme={_html_escape(current_theme)}"
+    theme_href = f"/static/theme.css?theme={_stdlib_escape(current_theme)}"
     theme_link = f'<link rel="stylesheet" href="{theme_href}">' if current_theme else ""
     script_block = (
         _render_auto_refresh_script(refresh_interval_s) if auto_refresh else ""
@@ -480,7 +480,7 @@ def _render_layout(
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{_html_escape(title)}</title>
+<title>{_stdlib_escape(title)}</title>
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
 <link rel="preload" href="/static/dashboard.css" as="style">
 <link rel="stylesheet" href="/static/dashboard.css">
@@ -503,8 +503,8 @@ def _render_layout(
 </svg>
 <header class="topbar">
   {burger}
-  <h1><a href="/?period={_html_escape(period)}&amp;theme={
-        _html_escape(current_theme)
+  <h1><a href="/?period={_stdlib_escape(period)}&amp;theme={
+        _stdlib_escape(current_theme)
     }">EggPool</a></h1>
   {nav}
 </header>
@@ -512,7 +512,7 @@ def _render_layout(
 {body}
 </main>
 <footer>
-  <small>Period: <span class="period-label">{_html_escape(period)}</span>
+  <small>Period: <span class="period-label">{_stdlib_escape(period)}</span>
     &middot; auto-refresh {refresh_interval_s}s
     &middot; <span id="dashboard-updated">ready</span>{update_indicator}</small>
 </footer>
@@ -624,9 +624,9 @@ def _render_nav(
     for key, href, label in items:
         cls = "active" if key == active_nav else ""
         parts.append(
-            f'<a class="{cls}" href="{href}?period={_html_escape(period)}'
-            f'&amp;theme={_html_escape(current_theme)}">'
-            f"{_html_escape(label)}</a>"
+            f'<a class="{cls}" href="{href}?period={_stdlib_escape(period)}'
+            f'&amp;theme={_stdlib_escape(current_theme)}">'
+            f"{_stdlib_escape(label)}</a>"
         )
 
     # Theme selector lives inside the menu so on narrow viewports it
@@ -639,8 +639,8 @@ def _render_nav(
         for name in themes:
             sel = " selected" if name == current_theme else ""
             theme_options.append(
-                f'<option value="{_html_escape(name)}"{sel}>'
-                f"{_html_escape(name)}</option>"
+                f'<option value="{_stdlib_escape(name)}"{sel}>'
+                f"{_stdlib_escape(name)}</option>"
             )
         options_html = "".join(theme_options)
         parts.append(
@@ -651,7 +651,7 @@ def _render_nav(
             '<select name="theme" onchange="this.form.submit()">'
             f"{options_html}"
             "</select>"
-            f'<input type="hidden" name="period" value="{_html_escape(period)}">'
+            f'<input type="hidden" name="period" value="{_stdlib_escape(period)}">'
             "</form>"
         )
     parts.append("</div>")
@@ -812,7 +812,7 @@ def _th(label: str, *, priority: int = 1) -> str:
     the responsive contract is enforced at the source rather than
     relying on each renderer to remember the convention.
     """
-    safe_label = _html_escape(label)
+    safe_label = _stdlib_escape(label)
     return f'<th data-priority="{priority}">{safe_label}</th>'
 
 
@@ -844,20 +844,20 @@ def _render_metric_card(
 ) -> str:
     """Render a dashboard metric card with the shared tooltip contract."""
     tooltip_text = tooltip or _CARD_TOOLTIPS.get(title, title)
-    tooltip_attr = _html_escape(tooltip_text, quote=True)
+    tooltip_attr = _stdlib_escape(tooltip_text, quote=True)
     card_class = "card warning" if warning else "card"
     parts = [
         f'<div class="{card_class}" data-tooltip="{tooltip_attr}" '
         f'data-tooltip-pos="bottom" '
         f'aria-label="{tooltip_attr}">',
-        f"<h3>{_html_escape(title)}</h3>",
+        f"<h3>{_stdlib_escape(title)}</h3>",
     ]
     if metric is not None:
-        parts.append(f'<p class="metric">{metric}</p>')
+        parts.append(f'<p class="metric">{_stdlib_escape(metric)}</p>')
     if sub is not None:
-        parts.append(f'<p class="sub">{sub}</p>')
+        parts.append(f'<p class="sub">{_stdlib_escape(sub)}</p>')
     for line in extra_subs:
-        parts.append(f'<p class="sub">{line}</p>')
+        parts.append(f'<p class="sub">{_stdlib_escape(line)}</p>')
     parts.append("</div>")
     return "".join(parts)
 
@@ -1329,8 +1329,8 @@ def _render_event_glance(events: list[dict[str, Any]]) -> str:
         event_type = str(row.get("event_type", ""))
         badge_tooltip = _status_badge_tooltip(event_type) or ""
         badge_attrs = (
-            f' data-tooltip="{_html_escape(badge_tooltip)}"'
-            f' aria-label="{_html_escape(badge_tooltip)}"'
+            f' data-tooltip="{_stdlib_escape(badge_tooltip)}"'
+            f' aria-label="{_stdlib_escape(badge_tooltip)}"'
             if badge_tooltip
             else ""
         )
@@ -1520,12 +1520,12 @@ def _render_bandwidth_heatmap(
                         f"{pretty_date}\n{formatter(value)} tokens · "
                         f"{request_count_text}"
                     )
-                tooltip_attr = _html_escape(tooltip_text, quote=True)
+                tooltip_attr = _stdlib_escape(tooltip_text, quote=True)
                 cells.append(
                     f'<rect x="{x}" y="{y}" width="{cell_size}" '
                     f'height="{cell_size}" rx="2" fill="{color}" '
                     f'class="heatmap-cell" pointer-events="none">'
-                    f"<title>{_html_escape(tooltip)}</title></rect>"
+                    f"<title>{_stdlib_escape(tooltip)}</title></rect>"
                 )
                 hitboxes.append(
                     f'<div class="heatmap-hitbox" '
@@ -1538,7 +1538,7 @@ def _render_bandwidth_heatmap(
     svg = (
         f'<svg width="{svg_width}" height="{svg_height}" '
         f'viewBox="0 0 {svg_width} {svg_height}" '
-        f'role="img" aria-label="{_html_escape(title)}">'
+        f'role="img" aria-label="{_stdlib_escape(title)}">'
         f"{''.join(cells)}</svg>"
     )
     overlay = (
@@ -1900,10 +1900,10 @@ def render_overview(
 <section class="panel">
   <h3>Utilization range</h3>
   <p>
-    Most used: <strong>{_html_escape(str(most.get("name", "—")))}</strong>
+    Most used: <strong>{_stdlib_escape(str(most.get("name", "—")))}</strong>
     ({format_microdollars(most.get("cost_microdollars", 0))})
     &mdash; Least used:
-    <strong>{_html_escape(str(least.get("name", "—")))}</strong>
+    <strong>{_stdlib_escape(str(least.get("name", "—")))}</strong>
     ({format_microdollars(least.get("cost_microdollars", 0))})
   </p>
 </section>
@@ -2969,8 +2969,8 @@ def render_events(
             cls = sanitize_class_name(event_type)
             badge_tooltip = _status_badge_tooltip(event_type) or ""
             badge_attrs = (
-                f' data-tooltip="{_html_escape(badge_tooltip)}"'
-                f' aria-label="{_html_escape(badge_tooltip)}"'
+                f' data-tooltip="{_stdlib_escape(badge_tooltip)}"'
+                f' aria-label="{_stdlib_escape(badge_tooltip)}"'
                 if badge_tooltip
                 else ""
             )
@@ -5596,11 +5596,6 @@ def render_runtime(
             total_raw: Any = entry.get("total_requests", 0)
             ct_window_total += int(total_raw or 0)
         ct_window_count = len(ct_windows)
-        # Force pyright to see both variables as used; they appear
-        # inside the escaped ``{{ ... }}`` template below where the
-        # type checker does not always recognise the reference.
-        _ = ct_window_count, ct_window_total
-
         compression_tuning_card = f"""
 <section class="panel">
   <h3>Advisory tuning ({escape(period)})</h3>
@@ -5614,34 +5609,32 @@ def render_runtime(
     touches routing.
   </p>
   <section class="cards">
-    {{
-        _render_metric_card(
-            title="Policies observed",
-            metric=format_int(ct_window_count),
-            sub="windows in last 24h",
-        )
-    }}
-    {{
-        _render_metric_card(
-            title="Requests analysed",
-            metric=format_int(ct_window_total),
-            sub="per-policy windows",
-        )
-    }}
-    {{
-        _render_metric_card(
-            title="Recommendations",
-            metric=format_int(len(ct_recommendations)),
-            sub="persisted rows",
-        )
-    }}
-    {{
-        _render_metric_card(
-            title="Runtime overrides",
-            metric=format_int(len(ct_overrides)),
-            sub="audit trail",
-        )
-    }}
+    {
+            "".join(
+                [
+                    _render_metric_card(
+                        title="Policies observed",
+                        metric=format_int(ct_window_count),
+                        sub="windows in last 24h",
+                    ),
+                    _render_metric_card(
+                        title="Requests analysed",
+                        metric=format_int(ct_window_total),
+                        sub="per-policy windows",
+                    ),
+                    _render_metric_card(
+                        title="Recommendations",
+                        metric=format_int(len(ct_recommendations)),
+                        sub="persisted rows",
+                    ),
+                    _render_metric_card(
+                        title="Runtime overrides",
+                        metric=format_int(len(ct_overrides)),
+                        sub="audit trail",
+                    ),
+                ]
+            )
+        }
   </section>
   <h4>Recommendations</h4>
   <table class="data compact">

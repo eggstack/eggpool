@@ -69,7 +69,7 @@ def _extract_decimal(value: object) -> Decimal | None:
     if not number.is_finite():
         raise ValueError("price must be finite")
     if number < 0:
-        return None
+        raise ValueError(f"price must be non-negative: {value!r}")
     return number
 
 

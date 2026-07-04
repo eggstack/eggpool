@@ -473,8 +473,52 @@ class TestRequestShapingSummary:
             )
 
 
+class TestAdvisoryTuningCard:
+    """Advisory tuning panel renders concrete metrics."""
+
+    def test_tuning_metric_cards_render_values_not_template_code(self) -> None:
+        html = render_runtime(
+            _base_snapshot(),
+            compression_tuning={
+                "windows": {
+                    "global": {
+                        "total_requests": 42,
+                    },
+                },
+                "recommendations": [
+                    {
+                        "policy_name": "<global>",
+                        "status": "recommendation_only",
+                        "recommendation": {
+                            "current": {
+                                "min_candidate_tokens": 2048,
+                                "min_savings_tokens": 512,
+                                "max_compression_latency_ms": 12.0,
+                            },
+                            "recommended": {
+                                "min_candidate_tokens": 4096,
+                                "min_savings_tokens": 768,
+                                "max_compression_latency_ms": 10.0,
+                            },
+                            "reason_codes": ["recommendation_only"],
+                        },
+                    },
+                ],
+                "overrides": [],
+            },
+        )
+
+        assert "Advisory tuning" in html
+        assert "Policies observed" in html
+        assert "Requests analysed" in html
+        assert "42" in html
+        assert "Recommendations" in html
+        assert "recommendation_only" in html
+        assert "_render_metric_card" not in html
+
+
 class TestRoutingGuardrailsPanel:
-    """Phase 8 routing-guardrails diagnostic panel renders on /runtime."""
+    """Routing-guardrails diagnostic panel renders on /runtime."""
 
     def test_guardrails_panel_renders_with_default_data(self) -> None:
         """The hardcoded guardrails diagnostic shows up on the runtime page."""

@@ -2728,17 +2728,16 @@ class TestTooltipStylesheet:
         nav_block = self._first_mobile_block_for("nav.topnav")
         assert "margin-left: auto" in nav_block
 
-    def test_mobile_nav_is_relative_for_dropdown_anchor(self) -> None:
-        """The nav needs `position: relative` on mobile so the
-        absolutely-positioned dropdown menu (rendered when the burger
-        is clicked) can anchor against it via `top: 100%; left: 0;
-        right: 0`.  Without this, the menu would anchor against the
-        nearest other positioned ancestor (the sticky topbar or the
-        viewport) and render in the wrong place — or clip outside the
-        topbar entirely on long content.
+    def test_mobile_nav_is_static_so_dropdown_anchors_to_topbar(self) -> None:
+        """The nav is only as wide as the refresh button on mobile.
+        Keep it `position: static` so the absolutely-positioned
+        dropdown uses the sticky topbar as its containing block
+        instead of opening from the narrow right-side nav and drifting
+        off-screen.
         """
         nav_block = self._first_mobile_block_for("nav.topnav")
-        assert "position: relative" in nav_block
+        assert "position: static" in nav_block
+        assert "position: relative" not in nav_block
 
     def test_mobile_open_menu_is_absolutely_positioned(self) -> None:
         """When the burger toggles `.topnav-open` on the nav, the menu
@@ -2746,9 +2745,10 @@ class TestTooltipStylesheet:
         topbar as a full-width overlay.  Without `position:
         absolute`, the menu's `width: 100%` is interpreted relative to
         the nav (which is `width: auto` and hugs only the refresh
-        button) and the dropdown collapses to zero width — the
-        exact regression that left mobile operators staring at a
-        non-responsive burger.
+        button). Anchoring to that narrow right-side nav leaves the
+        dropdown far off to the right on phones; the mobile nav rule
+        keeps the nav static so this absolute panel instead uses the
+        sticky topbar as its viewport-width containing block.
 
         The companion rule `display: flex` keeps the menu visible;
         together they let the dropdown expand edge-to-edge below the

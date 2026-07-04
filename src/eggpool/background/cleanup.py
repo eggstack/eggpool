@@ -201,7 +201,7 @@ async def _reconcile_runtime_reservations(
         estimated_tokens = (
             estimated_tokens_value if isinstance(estimated_tokens_value, int) else 0
         )
-        if quota_estimator is not None and reserved_microdollars > 0:
+        if quota_estimator is not None:
             await quota_estimator.remove_reservation(
                 account_name_value,
                 reserved_microdollars,

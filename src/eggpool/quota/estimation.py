@@ -63,16 +63,25 @@ class QuotaWindow:
         self._prune_old_observations(timestamp)
 
     def _prune_old_observations(self, current_time: float) -> None:
-        """Remove observations older than the window."""
+        """Remove observations older than the window.
+
+        Performs a full scan rather than relying on the leftmost entry being
+        the oldest, so an out-of-order insertion (backfill, clock skew
+        correction, test fixture) cannot leave stale observations behind.
+        """
         cutoff = current_time - self.window_seconds
-        while self.observations and self.observations[0][0] < cutoff:
-            _, tokens, cost = self.observations.popleft()
-            self.used_tokens -= tokens
-            self.used_cost_microdollars -= cost
-        if self.used_tokens < 0:
-            self.used_tokens = 0
-        if self.used_cost_microdollars < 0:
-            self.used_cost_microdollars = 0
+        surviving: deque[tuple[float, int, int]] = deque()
+        kept_tokens = 0
+        kept_cost = 0
+        for ts, tokens, cost in self.observations:
+            if ts < cutoff:
+                continue
+            surviving.append((ts, tokens, cost))
+            kept_tokens += tokens
+            kept_cost += cost
+        self.observations = surviving
+        self.used_tokens = kept_tokens
+        self.used_cost_microdollars = kept_cost
 
     def get_usage(self, current_time: float | None = None) -> tuple[int, int]:
         """Get current usage within the window."""
@@ -235,14 +244,34 @@ class AccountQuota:
         eligibility gate.  Above-capacity accounts remain routable;
         upstream ``quota_exhausted`` health makes them temporarily
         ineligible when authoritative.
+
+        Checks all three dimensions — cost, request count, and token
+        count — across the configured windows because the scorer
+        treats each as an independent pressure signal.
         """
         cost_5h = (
             self.get_persisted_cost_5h() + self.five_hour_offset + self.reserved_cost
         )
         cost_7d = self.get_persisted_cost_7d() + self.weekly_offset
         cost_30d = self.get_persisted_cost_30d() + self.monthly_offset
+        requests_5h = (
+            self.get_persisted_request_count_5h()
+            + self.reserved_requests
+            + self.request_offset_5h
+        )
+        requests_7d = self.get_persisted_request_count_7d() + self.request_offset_7d
+        requests_30d = self.get_persisted_request_count_30d() + self.request_offset_30d
+        tokens_5h = (
+            self.get_persisted_token_count_5h()
+            + self.reserved_tokens
+            + self.token_offset_5h
+        )
+        tokens_7d = self.get_persisted_token_count_7d() + self.token_offset_7d
+        tokens_30d = self.get_persisted_token_count_30d() + self.token_offset_30d
 
-        # Consider exhausted if any configured capacity is exceeded
+        # Exhaustion semantics: ``>=`` matches the existing pre-extension
+        # behaviour (an account exactly at capacity is reported as
+        # exhausted) so existing callers and tests see no change.
         if (
             self.capacity_5h_microdollars is not None
             and cost_5h >= self.capacity_5h_microdollars
@@ -253,17 +282,42 @@ class AccountQuota:
             and cost_7d >= self.capacity_7d_microdollars
         ):
             return False
-        return not (
+        if (
             self.capacity_30d_microdollars is not None
             and cost_30d >= self.capacity_30d_microdollars
+        ):
+            return False
+        if (
+            self.capacity_5h_requests is not None
+            and requests_5h >= self.capacity_5h_requests
+        ):
+            return False
+        if (
+            self.capacity_7d_requests is not None
+            and requests_7d >= self.capacity_7d_requests
+        ):
+            return False
+        if (
+            self.capacity_30d_requests is not None
+            and requests_30d >= self.capacity_30d_requests
+        ):
+            return False
+        if self.capacity_5h_tokens is not None and tokens_5h >= self.capacity_5h_tokens:
+            return False
+        if self.capacity_7d_tokens is not None and tokens_7d >= self.capacity_7d_tokens:
+            return False
+        return not (
+            self.capacity_30d_tokens is not None
+            and tokens_30d >= self.capacity_30d_tokens
         )
 
     def get_remaining_capacity(self) -> float:
         """Get remaining capacity as a normalized score (0.0 to 1.0).
 
         Returns the minimum remaining capacity across all configured
-        windows so that a tight short-term capacity limits routing
-        even when long-term capacity is ample.
+        windows and dimensions (cost, request count, token count) so
+        that a tight short-term capacity limits routing even when
+        long-term capacity is ample.
         """
         capacities: list[float] = []
 
@@ -284,6 +338,46 @@ class AccountQuota:
         if self.capacity_30d_microdollars is not None:
             cost_30d = self.get_persisted_cost_30d() + self.monthly_offset
             used_ratio = cost_30d / self.capacity_30d_microdollars
+            capacities.append(max(0.0, 1.0 - used_ratio))
+
+        if self.capacity_5h_requests is not None:
+            requests_5h = (
+                self.get_persisted_request_count_5h()
+                + self.reserved_requests
+                + self.request_offset_5h
+            )
+            used_ratio = requests_5h / self.capacity_5h_requests
+            capacities.append(max(0.0, 1.0 - used_ratio))
+
+        if self.capacity_7d_requests is not None:
+            requests_7d = self.get_persisted_request_count_7d() + self.request_offset_7d
+            used_ratio = requests_7d / self.capacity_7d_requests
+            capacities.append(max(0.0, 1.0 - used_ratio))
+
+        if self.capacity_30d_requests is not None:
+            requests_30d = (
+                self.get_persisted_request_count_30d() + self.request_offset_30d
+            )
+            used_ratio = requests_30d / self.capacity_30d_requests
+            capacities.append(max(0.0, 1.0 - used_ratio))
+
+        if self.capacity_5h_tokens is not None:
+            tokens_5h = (
+                self.get_persisted_token_count_5h()
+                + self.reserved_tokens
+                + self.token_offset_5h
+            )
+            used_ratio = tokens_5h / self.capacity_5h_tokens
+            capacities.append(max(0.0, 1.0 - used_ratio))
+
+        if self.capacity_7d_tokens is not None:
+            tokens_7d = self.get_persisted_token_count_7d() + self.token_offset_7d
+            used_ratio = tokens_7d / self.capacity_7d_tokens
+            capacities.append(max(0.0, 1.0 - used_ratio))
+
+        if self.capacity_30d_tokens is not None:
+            tokens_30d = self.get_persisted_token_count_30d() + self.token_offset_30d
+            used_ratio = tokens_30d / self.capacity_30d_tokens
             capacities.append(max(0.0, 1.0 - used_ratio))
 
         if not capacities:
@@ -451,6 +545,13 @@ def _finalize_estimate(
     persist into every future reservation for the same model.
     """
     if estimated_tokens <= 0:
+        logger.debug(
+            "Skipping reservation estimate for %s/%s: zero or negative token "
+            "count (raw_cost=%s).",
+            account_name,
+            model_id,
+            raw_cost_microdollars,
+        )
         return 0
     safe = max(0, raw_cost_microdollars)
     # Per-token ceiling — rejects rates that dwarf even the most
@@ -484,6 +585,11 @@ def _finalize_estimate(
             _QUOTA_RESERVATION_COST_CEILING_MICRODOLLARS,
         )
         safe = _QUOTA_RESERVATION_COST_CEILING_MICRODOLLARS
+    # Defensive layering: ``safe`` is already bounded by
+    # ``_QUOTA_RESERVATION_COST_CEILING_MICRODOLLARS`` ($2.50), well
+    # below ``MAX_REQUEST_COST_MICRODOLLARS`` ($250). ``clamp_...``
+    # keeps the result non-negative and within the SQLite INTEGER
+    # range in case a future caller passes a negative ``raw_cost``.
     return clamp_request_cost_microdollars(safe)
 
 
@@ -699,6 +805,11 @@ class QuotaEstimator:
                 cost_microdollars=cost_microdollars,
                 model_id=model_id,
             )
+            # Lifecycle: ``persisted_snapshot`` is set exclusively by
+            # :meth:`load_persisted_windows` during startup and is
+            # never replaced afterwards. Reading it under
+            # ``_snapshot_lock`` guarantees the snapshot observed here
+            # is the same one ``record_usage`` mutated.
             quota = self.get_account_quota(account_name)
             if quota is not None and quota.persisted_snapshot is not None:
                 safe_cost = max(0, cost_microdollars)
@@ -1048,9 +1159,7 @@ class QuotaEstimator:
             return
         from eggpool.db.repositories import AccountRepository
 
-        acct_repo = AccountRepository(
-            self._usage_window_repo._db  # pyright: ignore[reportPrivateUsage]
-        )
+        acct_repo = AccountRepository(self._usage_window_repo.db)
         enabled = await acct_repo.list_enabled()
         now_iso = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
         all_windows = await self._usage_window_repo.get_all_usage_windows(now_iso)

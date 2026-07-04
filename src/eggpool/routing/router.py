@@ -1127,10 +1127,13 @@ class Router:
     def _schedule_missing_account_recovery(self, account_name: str) -> None:
         """Rate-limited dispatch of the configured recovery callback.
 
-        The dispatch is non-blocking: a single asyncio task is created
-        per call. The internal ``_missing_account_recovery_attempt_at``
-        map enforces a per-account minimum interval so a persistent
-        upstream failure cannot trigger a refresh storm.
+        The callback is invoked synchronously from the calling coroutine.
+        Callers that need non-blocking behaviour should arrange for the
+        callback itself to be cheap (e.g. ``loop.call_soon``) or to
+        schedule its work onto a background task. The internal
+        ``_missing_account_recovery_attempt_at`` map enforces a
+        per-account minimum interval so a persistent upstream failure
+        cannot trigger a refresh storm.
         """
         now = time.monotonic()
         last = self._missing_account_recovery_attempt_at.get(account_name, 0.0)

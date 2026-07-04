@@ -59,7 +59,14 @@ class SupervisedTask:
         logger.info("Stopped supervised task %r", self.name)
 
     async def _run_loop(self) -> None:
-        """Run the task, restarting on failure with backoff."""
+        """Run the task, restarting on failure with backoff.
+
+        Failure path uses exponential backoff bounded by ``_max_restarts``.
+        Normal completion path uses the registered ``_interval_s`` cadence
+        so one-shot periodic factories (e.g. ``_stale_request_loop``) keep
+        cycling on their intended schedule rather than tight-spinning or
+        being treated as failures.
+        """
         try:
             while self._running:
                 self._last_started_at = time.time()
@@ -70,7 +77,31 @@ class SupervisedTask:
                 except Exception as exc:
                     self._last_error_at = time.time()
                     self._last_error_class = type(exc).__qualname__
+                    self._restart_count += 1
+                    self._last_failure = time.time()
                     logger.exception("Supervised task %r failed", self.name)
+                    if self._restart_count >= self._max_restarts:
+                        logger.error(
+                            "Supervised task %r exceeded max restarts, giving up",
+                            self.name,
+                        )
+                        break
+
+                    delay = min(
+                        self._base_delay * (2 ** (self._restart_count - 1)),
+                        self._max_delay,
+                    )
+                    logger.info(
+                        "Restarting task %r in %.1fs (restart %d/%d)",
+                        self.name,
+                        delay,
+                        self._restart_count,
+                        self._max_restarts,
+                    )
+                    try:
+                        await asyncio.sleep(delay)
+                    except asyncio.CancelledError:
+                        break
                 else:
                     self._last_completed_at = time.time()
                     self._iteration_count += 1
@@ -80,31 +111,12 @@ class SupervisedTask:
                         "Supervised task %r completed unexpectedly",
                         self.name,
                     )
-
-                self._restart_count += 1
-                self._last_failure = time.time()
-                if self._restart_count >= self._max_restarts:
-                    logger.error(
-                        "Supervised task %r exceeded max restarts, giving up",
-                        self.name,
-                    )
-                    break
-
-                delay = min(
-                    self._base_delay * (2 ** (self._restart_count - 1)),
-                    self._max_delay,
-                )
-                logger.info(
-                    "Restarting task %r in %.1fs (restart %d/%d)",
-                    self.name,
-                    delay,
-                    self._restart_count,
-                    self._max_restarts,
-                )
-                try:
-                    await asyncio.sleep(delay)
-                except asyncio.CancelledError:
-                    break
+                    if self._interval_s is not None and self._interval_s > 0:
+                        try:
+                            await asyncio.sleep(self._interval_s)
+                        except asyncio.CancelledError:
+                            break
+                    continue
         finally:
             self._running = False
 

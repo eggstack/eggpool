@@ -10,12 +10,19 @@ from eggpool.background import SupervisedTask, TaskSupervisor
 
 
 @pytest.mark.asyncio
-async def test_unexpected_completion_uses_bounded_restart_policy() -> None:
+async def test_unexpected_completion_does_not_count_as_restart() -> None:
+    """Periodic tasks that return normally must not be killed by the
+    restart-budget. The supervisor must keep cycling even after more
+    than ``_max_restarts`` successful iterations, and ``_last_failure``
+    must remain at 0 because there was no failure."""
     calls = 0
+    stop_after = 5
 
     async def completes() -> None:
         nonlocal calls
         calls += 1
+        if calls >= stop_after:
+            raise asyncio.CancelledError()
 
     task = SupervisedTask(
         name="completes",
@@ -27,8 +34,9 @@ async def test_unexpected_completion_uses_bounded_restart_policy() -> None:
     assert task._task is not None
     await task._task
 
-    assert calls == 3
-    assert task.is_running is False
+    assert calls == stop_after
+    assert task._restart_count == 0
+    assert task._last_failure == 0.0
 
 
 @pytest.mark.asyncio

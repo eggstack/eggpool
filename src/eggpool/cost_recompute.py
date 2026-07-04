@@ -126,7 +126,9 @@ async def recompute_request_costs(
             cache_write_tokens=cache_write,
         )
         new_total += new_cost
-        if new_cost == old_cost and exactness == str(row["exactness"] or "unknown"):
+        old_exactness = str(row["exactness"] or "unknown")
+        upgrade_eligible = old_exactness in {"estimated", "unknown"}
+        if new_cost == old_cost and exactness == old_exactness and not upgrade_eligible:
             skipped_unchanged += 1
             continue
 
@@ -151,7 +153,7 @@ async def recompute_request_costs(
                 "old_cost_microdollars": old_cost,
                 "new_cost_microdollars": new_cost,
                 "delta_microdollars": delta,
-                "old_exactness": str(row["exactness"] or "unknown"),
+                "old_exactness": old_exactness,
                 "new_exactness": exactness,
             }
         )

@@ -379,8 +379,9 @@ class TestPriceParsing:
             parse_price_per_1k(raw)
 
     @pytest.mark.parametrize("raw", ["-1", "-$3 / 1M"])
-    def test_parse_price_returns_none_for_negative_values(self, raw: str) -> None:
-        assert parse_price_per_1k(raw) is None
+    def test_parse_price_rejects_negative_values(self, raw: str) -> None:
+        with pytest.raises(ValueError):
+            parse_price_per_1k(raw)
 
     @pytest.mark.asyncio
     async def test_calculate_cost_cache_read_missing_rate_is_partial(self) -> None:
@@ -583,8 +584,9 @@ class TestNegativePriceHandling:
             "-$3 / 1M",
         ],
     )
-    def test_extract_decimal_returns_none_for_negative(self, value: object) -> None:
-        assert _extract_decimal(value) is None
+    def test_extract_decimal_rejects_negative(self, value: object) -> None:
+        with pytest.raises(ValueError):
+            _extract_decimal(value)
 
     @pytest.mark.parametrize(
         "value",
@@ -595,8 +597,9 @@ class TestNegativePriceHandling:
             "-$3 / 1M",
         ],
     )
-    def test_parse_price_per_1k_returns_none_for_negative(self, value: object) -> None:
-        assert parse_price_per_1k(value) is None
+    def test_parse_price_per_1k_rejects_negative(self, value: object) -> None:
+        with pytest.raises(ValueError):
+            parse_price_per_1k(value)
 
     @pytest.mark.parametrize(
         "value",
@@ -607,8 +610,9 @@ class TestNegativePriceHandling:
             "-$3 / 1M",
         ],
     )
-    def test_parse_microdollars_returns_none_for_negative(self, value: object) -> None:
-        assert parse_microdollars_per_million(value) is None
+    def test_parse_microdollars_rejects_negative(self, value: object) -> None:
+        with pytest.raises(ValueError):
+            parse_microdollars_per_million(value)
 
     def test_zero_price_still_valid(self) -> None:
         assert _extract_decimal(0) is not None

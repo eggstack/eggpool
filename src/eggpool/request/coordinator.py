@@ -3235,6 +3235,10 @@ class RequestCoordinator:
                 upstream_protocol=context.upstream_protocol,
                 thinking_trace_json=_serialize_thinking_trace(context.thinking_trace),
                 segmentation=context.segmentation,
+                compression_observation=context.compression_observation,
+                compression_result=context.compression_result,
+                resolved_compression_policy=context.resolved_compression_policy,
+                synthetic_cache_result=context.synthetic_cache_result,
             ),
         )
 

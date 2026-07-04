@@ -199,6 +199,11 @@ async def repair_request_costs(
     for row in rows:
         old_cost = int(row["cost_microdollars"] or 0)
         old_total += old_cost
+        # Seed ``proposed_total`` with ``old_cost`` so the final value
+        # is the sum of every row's new cost. Deltas are applied only
+        # for changed rows; a future reordering of the early
+        # ``continue`` branches must preserve this invariant or risk
+        # double-counting provider-reported rows.
         proposed_total += old_cost
 
         if row["provider_cost_microdollars"] is not None:
@@ -226,9 +231,11 @@ async def repair_request_costs(
         # 0033_request_provider_local_cost).
         local_cost_raw = row["local_cost_microdollars"]
         local_exactness_raw = row["local_cost_exactness"]
-        if local_cost_raw is not None and local_exactness_raw:
+        if local_cost_raw is not None and local_exactness_raw is not None:
             local_cost = int(local_cost_raw)
-            local_exactness = str(local_exactness_raw)
+            local_exactness = (
+                str(local_exactness_raw) if local_exactness_raw else "unknown"
+            )
         else:
             local_cost, local_exactness = await calculator.calculate_cost(
                 model_id=model_id,

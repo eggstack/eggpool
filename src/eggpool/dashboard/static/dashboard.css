@@ -870,16 +870,16 @@ label.trace-limit {
      reload icon sits flush against the right side of the screen, as
      the operator expects on a phone-sized viewport.
 
-     `position: relative` anchors the absolutely-positioned dropdown
-     menu (see `nav.topnav.topnav-open .topnav-menu` below) to the
-     nav, so opening the menu drops the dropdown below the topbar
-     without consuming any flow space — keeping the burger, brand,
-     and refresh on their single row. */
+     `position: static` deliberately leaves the sticky topbar as the
+     containing block for the absolutely-positioned dropdown menu.
+     The nav itself is only as wide as the refresh button on mobile;
+     anchoring the menu there would push the dropdown off to the
+     right instead of spanning the viewport below the topbar. */
   nav.topnav {
     order: 2;
     width: auto;
     margin-left: auto;
-    position: relative;
+    position: static;
   }
 
   .overview-grid {
@@ -938,10 +938,10 @@ label.trace-limit {
     /* Drop the menu below the topbar as a full-width overlay so it
        actually expands on narrow viewports.  Without `position:
        absolute`, the menu is constrained to its parent's content
-       width — and the parent nav is `width: auto` hugging only the
-       refresh button — which silently clips the dropdown to zero
-       width and leaves the operator staring at a non-responsive
-       burger on a phone.  `top: 100%` places the dropdown flush
+       width.  The parent nav is `width: auto` and hugs only the
+       refresh button, so the mobile nav rule keeps it `position:
+       static`; this menu then anchors to the sticky topbar instead
+       of the narrow nav.  `top: 100%` places the dropdown flush
        against the bottom edge of the topbar; `left: 0; right: 0`
        stretches it edge-to-edge across the viewport.  `z-index`
        lifts it above any sibling content beneath the topbar. */

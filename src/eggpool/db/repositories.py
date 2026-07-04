@@ -1002,6 +1002,11 @@ class UsageWindowRepository:
     def __init__(self, db: Database) -> None:
         self._db = db
 
+    @property
+    def db(self) -> Database:
+        """Public accessor for the underlying database connection."""
+        return self._db
+
     async def get_usage_windows(
         self,
         account_id: int,

@@ -632,10 +632,17 @@ async def test_zero_cost_cleanup_still_reconciles_active_count() -> None:
     await MigrationRunner(db).run()
 
     class QuotaTracker:
-        removals: list[tuple[str, int]] = []
+        removals: list[tuple[str, int, int, int]] = []
 
-        async def remove_reservation(self, name: str, amount: int) -> None:
-            self.removals.append((name, amount))
+        async def remove_reservation(
+            self,
+            name: str,
+            amount: int,
+            *,
+            requests: int = 1,
+            tokens: int = 0,
+        ) -> None:
+            self.removals.append((name, amount, requests, tokens))
 
     class RouterTracker:
         decrements: list[str] = []
@@ -679,7 +686,10 @@ async def test_zero_cost_cleanup_still_reconciles_active_count() -> None:
         assert row is not None
         assert row["status"] == "released"
         assert row["release_reason"] == "stale_cleanup"
-        assert quota.removals == []
+        # ``remove_reservation`` must be called for zero-cost rows so
+        # the estimator's in-flight counters stay in sync with the
+        # router's active-request count.
+        assert quota.removals == [("zero-cost", 0, 1, 0)]
         assert router.decrements == ["zero-cost"]
     finally:
         await db.disconnect()

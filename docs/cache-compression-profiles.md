@@ -228,7 +228,10 @@ persist_recommendations = true
 - Every suggestion is content-private (no prompt inspection), bounded (clamped to `[compression.tuning.bounds]`), rate-limited (`max_adjustment_pct` per step; `cooldown_s` suppresses the next recommendation), and immutable on every other compression knob.
 - `mode = "apply"` is currently dormant. The in-memory `RuntimeCompressionPolicyOverrideRegistry` and `apply_runtime_override` helper exist for forward compatibility, but no production code path registers entries today. A future supervised background task must wire the lifecycle before apply mode takes effect.
 
-**Dashboard fields to watch (`/api/stats/compression-tuning`):**
+**Dashboard fields to watch:**
+
+The Runtime page's `Advisory tuning` panel summarizes these fields, and
+`/api/stats/compression-tuning` exposes the same data as JSON.
 
 - `recommendations` — list of recent recommendations with `status`, `delta`, and `reason_codes`.
 - `windows` — per-policy window metrics.

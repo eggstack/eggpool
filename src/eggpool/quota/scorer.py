@@ -27,7 +27,7 @@ Lower score = less utilized = preferred.
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -73,7 +73,6 @@ class RoutingScore:
     capacity_7d_tokens: int = 0
     capacity_30d_tokens: int = 0
     active_request_count: int = 0
-    random_tiebreaker: float = field(default_factory=random.random)
     # Tier boundary marker from the provider's routing_priority. Higher
     # tiers are preferred. Callers that want strict tier-bounded failover
     # can compare adjacent scores' ``tier`` and short-circuit at the
