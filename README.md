@@ -228,7 +228,7 @@ Advanced knobs still exist for policy-scoped rollouts and advisory tuning, but t
 | `GET` | `/api/model-info/{model_id}` | Enriched metadata detail for one model |
 | `GET` | `/api/model-info/{model_id}/aliases` | Source-keyed alias rows for one model |
 | `GET` | `/api/model-info/sources` | Model-info source health |
-| `POST` | `/api/model-info/refresh` | Trigger model-info refresh — `?model_id=<id>&source=<provider_catalog\|openrouter\|artificial_analysis\|huggingface>&force=1` for a single-model force refresh (auth-gated). `model_id` accepts provider-suffixed IDs (`gpt-4o/openai`); unknown source values return HTTP 400 |
+| `POST` | `/api/model-info/refresh` | Trigger model-info refresh — `?model_id=<id>&source=<provider_catalog\|openrouter\|artificial_analysis\|huggingface>&force=1` for a single-model force refresh (auth-gated). `model_id` accepts provider-suffixed IDs (`gpt-4o/openai`); unknown source values return HTTP 400. The response carries `source_diagnostics` (`initialized`, `fetched`, `catalog_count`, `alias_candidates`, `matched_source_model_id`, `miss_reason`, `cache_retry`) so operators can see why a refresh matched or missed |
 | `GET` | `/api/stats/cache-observability` | Cache counter status coverage |
 | `GET` | `/api/stats/canonical-request-segmentation` | Segmentation status and per-region token estimates |
 | `GET` | `/api/stats/cache-stability` | Transcoder cache boundary tracker counters |
@@ -247,6 +247,10 @@ When `[dashboard].enabled = true`, a multi-page dashboard is served at `/` with 
 - The dashboard `/models` page renders a degraded-state notice above the table if the model-info service is unattached (no `app.state.model_info`) or if `get_summary_map()` raises an exception. The exception's full traceback is logged under `eggpool.dashboard.routes` — the page never embeds the traceback text in HTML.
 - The dashboard `/models/{model_id:path}` detail page distinguishes "no canonical row exists" (empty-state copy) from "lookup failed" (degraded-state notice) when the service throws.
 - `/api/stats/runtime` includes a `model_info` section with `enabled`, `canonical_count`, `catalog_model_count`, `provider_model_count`, `due_count`, and a `source_health` dict (no raw source payloads). Failures surface as `*_error` keys and `probe_errors`, never as raised exceptions.
+- OpenRouter source health reflects catalog availability, not local match success — a successful fetch with zero matches still updates `last_success_at` / `last_payload_count`. When a forced refresh finds configured aliases but no catalog match, the OpenRouter cache is invalidated and the fetch retried once (recorded as `cache_retry: true` under `source_diagnostics.openrouter`).
+- `GET /api/model-info/{model_id}` returns `observations` rows read from `model_info_observations` (per source: `source_model_id`, `provider_id`, `observed_at`, `confidence`, display name, context window, modalities). Raw payloads are never returned. When no rows exist for a canonical model, the field is a synthetic placeholder flagged `_synthetic: true` so callers can distinguish real observation data from fallback synthesis.
+- The dashboard model detail page mirrors those observation rows in an Observations panel. External `display_name_<source>` values (e.g. `MiniMax: MiniMax M3`) are promoted into `detail.display_name` only when the provider did not seed one; `detail.display_name_source` records the chosen source. Source-scoped advisory pricing (e.g. OpenRouter's `$/Mtok`) lives under `detail.pricing.<source>`, separate from authoritative local cost accounting.
+- Alias and observation lookups are case-insensitive at the repository layer (`lower(model_id) = lower(?)`), so provider casing drift (`MiniMax-M3` vs `minimax-m3`) does not break refresh or detail lookup. Manual refreshes reseed configured `[model_info.aliases]` before external matching, so newly added aliases apply without a process restart.
 
 ## Documentation
 

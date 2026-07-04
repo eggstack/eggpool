@@ -126,6 +126,16 @@ class OpenRouterModelInfoSource:
         now = datetime.now(UTC)
         return _parse_entry_to_record(model_id, raw, now)
 
+    def invalidate_cache(self) -> None:
+        """Drop the cached OpenRouter catalog.
+
+        Used by the forced-refresh path when configured aliases exist
+        but do not match the cached catalog — the operator deserves a
+        fresh attempt rather than a stale ``alias_not_in_catalog``
+        answer (Phase 2.4 of the OpenRouter enrichment plan).
+        """
+        self._cache.invalidate()
+
     async def _fetch_indexed(self) -> dict[str, dict[str, object]]:
         """Return the catalog indexed by source model ID, using cache when fresh."""
         if self._cache.is_fresh:

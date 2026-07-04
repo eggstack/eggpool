@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from eggpool.model_info.types import (
     CanonicalModelInfo,
@@ -273,17 +273,22 @@ class ModelInfoRepository:
     async def get_aliases_for_model(
         self, model_id: str, *, source: str | None = None
     ) -> list[str]:
-        """Return active alias strings for a model, optionally filtered by source."""
+        """Return active alias strings for a model, optionally filtered by source.
+
+        Lookup is case-insensitive on ``model_id`` so casing drift between
+        providers (``MiniMax-M3`` vs ``minimax-m3``) does not silently
+        hide configured aliases.
+        """
         if source is not None:
             rows = await self._db.fetch_all(
                 "SELECT alias FROM model_info_aliases "
-                "WHERE model_id = ? AND source = ? AND active = 1",
+                "WHERE lower(model_id) = lower(?) AND source = ? AND active = 1",
                 (model_id, source),
             )
         else:
             rows = await self._db.fetch_all(
                 "SELECT alias FROM model_info_aliases "
-                "WHERE model_id = ? AND active = 1",
+                "WHERE lower(model_id) = lower(?) AND active = 1",
                 (model_id,),
             )
         return [row["alias"] for row in rows]
@@ -298,25 +303,31 @@ class ModelInfoRepository:
         the API alias endpoint so callers can distinguish configured
         aliases (with confidence) from auto-discovered ones, and can
         see which source each alias targets.
+
+        Lookup is case-insensitive on ``model_id`` so casing drift
+        between providers does not silently hide configured aliases;
+        stored row ``model_id`` casing is preserved in the return
+        values.
         """
         if source is not None:
             rows = await self._db.fetch_all(
-                "SELECT source, alias, provider_id, confidence, active, "
+                "SELECT model_id, source, alias, provider_id, confidence, active, "
                 "last_seen_at FROM model_info_aliases "
-                "WHERE model_id = ? AND source = ? "
+                "WHERE lower(model_id) = lower(?) AND source = ? "
                 "ORDER BY source, last_seen_at DESC",
                 (model_id, source),
             )
         else:
             rows = await self._db.fetch_all(
-                "SELECT source, alias, provider_id, confidence, active, "
+                "SELECT model_id, source, alias, provider_id, confidence, active, "
                 "last_seen_at FROM model_info_aliases "
-                "WHERE model_id = ? "
+                "WHERE lower(model_id) = lower(?) "
                 "ORDER BY source, last_seen_at DESC",
                 (model_id,),
             )
         return [
             {
+                "model_id": row["model_id"],
                 "source": row["source"],
                 "alias": row["alias"],
                 "provider_id": row["provider_id"],
@@ -567,6 +578,78 @@ class ModelInfoRepository:
                 else None,
             }
         return result
+
+    async def list_compact_observations_for_model(
+        self, model_id: str
+    ) -> list[dict[str, Any]]:
+        """Return compact observation rows for a model from ``model_info_observations``.
+
+        Each row is shaped for API consumers: ``source``, ``source_model_id``,
+        ``provider_id``, ``observed_at``, ``confidence``, and a small set of
+        normalized summary fields (``display_name``, ``context_window``,
+        ``max_output_tokens``, ``modalities``). Raw payloads are never
+        returned.
+
+        "Latest" semantics match :meth:`get_latest_observations_for_model`:
+        the most recently ``observed_at`` row per ``source`` wins,
+        breaking ties by the highest ``confidence``.
+
+        The lookup is case-insensitive on ``model_id`` so callers can pass
+        any casing without losing observations whose stored id differs
+        in case.
+        """
+        if not model_id:
+            return []
+        rows = await self._db.fetch_all(
+            "SELECT o.source, o.source_model_id, o.provider_id, "
+            "o.observed_at, o.confidence, o.normalized_json "
+            "FROM model_info_observations o "
+            "INNER JOIN ("
+            "  SELECT source, MAX(observed_at) AS max_obs "
+            "  FROM model_info_observations "
+            "  WHERE lower(model_id) = lower(?) "
+            "  GROUP BY source"
+            ") latest "
+            "ON o.source = latest.source "
+            "AND o.observed_at = latest.max_obs "
+            "WHERE lower(o.model_id) = lower(?)",
+            (model_id, model_id),
+        )
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            raw = row["normalized_json"]
+            try:
+                decoded = json.loads(raw) if isinstance(raw, str) else raw
+            except (ValueError, TypeError):
+                decoded = {}
+            if not isinstance(decoded, dict):
+                decoded = {}
+            decoded_dict: dict[str, Any] = cast("dict[str, Any]", decoded)
+            modalities_raw_obj = decoded_dict.get("modalities", [])
+            modalities_source: list[object] = (
+                cast("list[object]", modalities_raw_obj)
+                if isinstance(modalities_raw_obj, list)
+                else []
+            )
+            modalities: list[str] = []
+            for m in modalities_source:
+                if isinstance(m, str):
+                    modalities.append(m)
+            entry: dict[str, Any] = {
+                "source": row["source"],
+                "source_model_id": row["source_model_id"],
+                "provider_id": row["provider_id"],
+                "observed_at": row["observed_at"],
+                "confidence": float(row["confidence"] or 0.0),
+            }
+            for key in ("display_name", "context_window", "max_output_tokens"):
+                val = decoded_dict.get(key)
+                if val is not None:
+                    entry[key] = val
+            if modalities:
+                entry["modalities"] = modalities
+            out.append(entry)
+        return out
 
     async def count_canonical(self) -> int:
         """Return the number of canonical rows."""

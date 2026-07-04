@@ -9,6 +9,7 @@ Endpoints:
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import unquote
 
@@ -21,17 +22,27 @@ from eggpool.model_info.presentation import (
 )
 from eggpool.routing.provider import parse_model_provider
 
+logger = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     from fastapi.responses import Response
 
 
-def _detail_response(info: Any) -> dict[str, Any]:
+def _detail_response(
+    info: Any, observations: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
     """Build a full detail dict from a CanonicalModelInfo.
 
     Reads from the normalized ``limits`` block when present, falling
     back to the legacy flat keys (``context_tokens`` and
     ``context_window_external``) for canonical rows written before
     Phase B shipped.
+
+    When ``observations`` is supplied (typically from
+    :meth:`ModelInfoRepository.list_compact_observations_for_model`),
+    it is used for the ``observations`` field so callers see truthful
+    DB rows rather than synthesised provenance-derived rows (Phase 4
+    of the OpenRouter enrichment plan).
     """
     detail = cast("dict[str, Any]", getattr(info, "detail", {}))
 
@@ -78,12 +89,18 @@ def _detail_response(info: Any) -> dict[str, Any]:
     # Hugging Face metadata
     hf_metadata = cast("dict[str, Any]", detail.get("huggingface_metadata", {}))
 
-    # Observations (compact, no raw payloads)
-    observations = _build_observations(info)
+    # Source-scoped pricing (advisory)
+    pricing = cast("dict[str, Any]", detail.get("pricing", {}))
+
+    # Observations come from the persisted DB rows when supplied;
+    # otherwise fall back to the synthesised projection so legacy
+    # test doubles still work.
+    observations_out = _build_observations(info, observations=observations)
 
     compact = compact_model_info_summary(info)
     compact["detail"] = {
         "display_name": detail.get("display_name"),
+        "display_name_source": detail.get("display_name_source"),
         "family": detail.get("family"),
         "limits": limits if limits else {},
         "modalities": modalities,
@@ -93,10 +110,11 @@ def _detail_response(info: Any) -> dict[str, Any]:
         "huggingface_metadata": hf_metadata if hf_metadata else {},
         "license": detail.get("license"),
         "release_date": detail.get("release_date"),
+        "pricing": pricing if pricing else {},
     }
     compact["provenance"] = _compact_provenance(info)
     compact["conflicts"] = getattr(info, "conflicts", {})
-    compact["observations"] = observations
+    compact["observations"] = observations_out
     return compact
 
 
@@ -111,12 +129,43 @@ def _compact_provenance(info: Any) -> dict[str, Any]:
     return result
 
 
-def _build_observations(info: Any) -> list[dict[str, Any]]:
-    """Build compact observation list from detail/provenance.
+def _build_observations(
+    info: Any, observations: list[dict[str, Any]] | None = None
+) -> list[dict[str, Any]]:
+    """Build compact observation list from real DB rows.
 
-    This is derived from available metadata rather than raw DB
-    observations to avoid leaking raw payloads.
+    When ``observations`` is provided, return it unchanged — those rows
+    come straight from ``model_info_observations`` via the repository
+    (see :meth:`ModelInfoRepository.list_compact_observations_for_model`)
+    and carry truthful ``source_model_id``, ``provider_id``,
+    ``observed_at``, and ``confidence`` values (Phase 4).
+
+    The legacy synthesised projection (derived from provenance +
+    providers + a fabricated ``confidence = 1.0``) is retained for
+    paths that still pass nothing — it survives until every caller
+    is migrated to the repository-backed path.
     """
+    if observations is not None:
+        cleaned: list[dict[str, Any]] = []
+        for row in observations:
+            entry: dict[str, Any] = {
+                "source": row.get("source"),
+                "source_model_id": row.get("source_model_id"),
+                "provider_id": row.get("provider_id"),
+                "observed_at": row.get("observed_at"),
+                "confidence": row.get("confidence"),
+            }
+            for key in ("display_name", "context_window", "max_output_tokens"):
+                val = row.get(key)
+                if val is not None:
+                    entry[key] = val
+            modalities_raw_obj = row.get("modalities")
+            if isinstance(modalities_raw_obj, list) and modalities_raw_obj:
+                typed_mods: list[object] = cast("list[object]", modalities_raw_obj)
+                entry["modalities"] = [str(m) for m in typed_mods] if typed_mods else []  # type: ignore[arg-type]  # noqa: ERA001
+            cleaned.append(entry)
+        return cleaned
+
     detail = cast("dict[str, Any]", getattr(info, "detail", {}))
     prov_raw = cast("dict[str, Any]", getattr(info, "provenance", {}))
     sources: list[str] = []
@@ -124,23 +173,26 @@ def _build_observations(info: Any) -> list[dict[str, Any]]:
     for s in raw_sources:
         sources.append(str(s))
 
-    providers_raw = cast("list[object]", detail.get("providers", []))
-    providers: list[str] = []
-    for p in providers_raw:
-        providers.append(str(p))
-
     model_id = getattr(info, "model_id", "")
     last_seen = getattr(info, "last_seen_at", None)
 
     obs: list[dict[str, Any]] = []
     for source in sources:
+        # Deprecated synthesised fallback. Each invocation fabricates
+        # ``source_model_id = info.model_id``,
+        # ``provider_id = first provider``, and
+        # ``confidence = 1.0``; this path is only used when the
+        # caller does not pass repo observations (e.g. test doubles).
+        providers_raw = cast("list[object]", detail.get("providers", []))
+        provider_value = str(providers_raw[0]) if providers_raw else None
         obs.append(
             {
                 "source": source,
                 "source_model_id": model_id,
-                "provider_id": providers[0] if providers else None,
+                "provider_id": provider_value,
                 "observed_at": iso_datetime(last_seen),
                 "confidence": 1.0,
+                "_synthetic": True,
             }
         )
     return obs
@@ -211,7 +263,18 @@ async def handle_model_info_detail(request: Request, model_id: str) -> Response:
             status_code=404,
             content={"error": f"Model {decoded_id!r} not found"},
         )
-    return JSONResponse(content=_detail_response(info))
+    # Phase 4: read real compact observation rows from
+    # ``model_info_observations`` so external-source ``source_model_id``,
+    # ``provider_id``, ``observed_at``, and ``confidence`` are
+    # truthful rather than synthesised from provenance.
+    try:
+        observations = await model_info.repo.list_compact_observations_for_model(
+            lookup_id
+        )
+    except Exception as exc:
+        logger.warning("Failed to read compact observations for %s: %s", lookup_id, exc)
+        observations = None
+    return JSONResponse(content=_detail_response(info, observations=observations))
 
 
 async def handle_model_info_sources(request: Request) -> Response:
@@ -362,6 +425,7 @@ async def handle_model_info_refresh(request: Request) -> Response:
             "sources_attempted": result.get("sources_attempted", []),
             "sources_matched": result.get("sources_matched", []),
             "observations": result.get("observations", 0),
+            "source_diagnostics": result.get("source_diagnostics", {}),
         }
         return JSONResponse(content=body)
 

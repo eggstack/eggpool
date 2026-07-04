@@ -2578,8 +2578,18 @@ def render_model_detail(
     current_theme: str = "",
     update_info: Any | None = None,
     model_info_error: str | None = None,
+    observations: list[dict[str, Any]] | None = None,
 ) -> str:
-    """Render the model-info detail page for a single model."""
+    """Render the model-info detail page for a single model.
+
+    When ``observations`` is supplied (a list of compact rows read
+    directly from ``model_info_observations`` via
+    :meth:`ModelInfoRepository.list_compact_observations_for_model`),
+    the page renders a per-source Observations panel so operators can
+    see which external sources actually contributed and when they
+    last observed this canonical row (Phase 5.2 of the OpenRouter
+    enrichment plan).
+    """
     if info is None:
         if model_info_error:
             body = f"""
@@ -2809,6 +2819,8 @@ def render_model_detail(
     </tbody>
   </table>
 </section>
+
+{_render_model_observations_section(observations)}
 """
     return _render_layout(
         title=f"Model: {title_text}",
@@ -2818,6 +2830,56 @@ def render_model_detail(
         available_themes=available_themes,
         current_theme=current_theme,
         update_info=update_info,
+    )
+
+
+def _render_model_observations_section(
+    observations: list[dict[str, Any]] | None,
+) -> str:
+    """Render the per-source Observations panel for the model detail page.
+
+    Surfaces the same per-source rows that ``GET /api/model-info/{id}``
+    returns in its ``observations[]`` array, so dashboard and API
+    consumers see the same per-source truth (Phase 4 + Phase 5.2).
+    """
+    if not observations:
+        return ""
+    rows: list[str] = []
+    for obs in observations:
+        source = escape(str(obs.get("source", "")))
+        source_model_id = escape(str(obs.get("source_model_id", "—")))
+        provider_id = obs.get("provider_id")
+        provider_html = (
+            f"<code>{escape(str(provider_id))}</code>" if provider_id else "—"
+        )
+        observed_at = obs.get("observed_at") or ""
+        observed_html = (
+            f"<code>{escape(str(observed_at))}</code>" if observed_at else "—"
+        )
+        confidence = obs.get("confidence")
+        conf_html = f"{escape(str(confidence))}" if confidence is not None else "—"
+        synthetic = obs.get("_synthetic") is True
+        rows.append(
+            "<tr>"
+            f"<td>{source}</td>"
+            f"<td><code>{source_model_id}</code></td>"
+            f"<td>{provider_html}</td>"
+            f"<td>{observed_html}</td>"
+            f"<td>{conf_html}</td>"
+            "</tr>"
+        )
+        del synthetic
+    return (
+        '<section class="panel">'
+        "<h3>Observations</h3>"
+        '<table class="data">'
+        "<thead><tr>"
+        "<th>Source</th><th>Source model id</th><th>Provider</th>"
+        "<th>Observed</th><th>Confidence</th>"
+        "</tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody>"
+        "</table>"
+        "</section>"
     )
 
 

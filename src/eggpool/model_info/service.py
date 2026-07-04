@@ -532,12 +532,18 @@ class ModelInfoService:
         if not due_rows:
             return {"refreshed": 0, "total": 0, "skipped": 0}
 
-        # Bulk-fetch OpenRouter catalog once per cycle if the source is active
+        # Bulk-fetch OpenRouter catalog once per cycle if the source is active.
+        # Record source success *independently* of any per-model match so
+        # ``model_info_source_health`` reflects catalog availability, not
+        # local-model match success (Phase 1.1).
         openrouter_indexed: dict[str, SourceModelRecord] = {}
         if self._openrouter_source is not None:
             try:
                 or_records = await self._openrouter_source.fetch_all()
                 openrouter_indexed = {r.source_model_id: r for r in or_records}
+                await self.record_source_success(
+                    "openrouter", payload_count=len(or_records)
+                )
             except ModelInfoSourceFetchError as exc:
                 logger.warning("OpenRouter source fetch failed: %s", exc)
                 await self.record_source_error("openrouter", exc)
@@ -579,13 +585,14 @@ class ModelInfoService:
                 now=now,
             )
 
-            # Try OpenRouter identity resolution for this model
+            # Try OpenRouter identity resolution for this model.
+            # Source success was already recorded above on the bulk
+            # fetch; per-model matches only persist observations.
             or_record = await resolve_openrouter_record(
                 model_id, self._repo, openrouter_indexed
             )
             if or_record is not None:
                 await self._persist_source_observation(or_record, model_id=model_id)
-                await self.record_source_success("openrouter")
 
             # Try Artificial Analysis identity resolution
             aa_record = await _resolve_aa_record(model_id, self._repo, aa_indexed)
@@ -813,6 +820,26 @@ class ModelInfoService:
         # silently change which row we update.
         lookup_id = model_id
 
+        # 1a. Reseed configured aliases before external-source matching.
+        # Configured aliases are normally seeded at startup; the manual
+        # refresh path may be hit later (after a config reload or admin
+        # alias insert) without a process restart, so the reseed
+        # guarantees this cycle sees the same set of aliases the rest of
+        # the service already has. The call is idempotent.
+        seed_summary: dict[str, int] = {}
+        try:
+            seed_summary = await self.seed_configured_aliases()
+            if seed_summary.get("seeded"):
+                logger.debug(
+                    "Manual refresh reseeded %d configured alias(es) for %s",
+                    seed_summary["seeded"],
+                    lookup_id,
+                )
+        except Exception:
+            logger.exception(
+                "Configured alias reseed failed during refresh of %s", lookup_id
+            )
+
         existing = await self._repo.get_canonical(lookup_id)
         if existing is None:
             await self.ensure_canonical(lookup_id)
@@ -873,23 +900,98 @@ class ModelInfoService:
         sources_attempted.append("provider_catalog")
 
         # 3. Fetch external sources (filtered by ``source`` arg).
+        # ``source_diagnostics`` records per-source fetch/resolution
+        # state so operators and tests can distinguish among
+        # "source not initialized", "fetch error", "no matches", and
+        # "matched" outcomes. The mapping is populated by the inner
+        # fetch helpers via the closure.
+        source_diagnostics: dict[str, dict[str, object]] = {}
+
         async def _fetch_openrouter() -> SourceModelRecord | None:
+            nonlocal source_diagnostics
+            diag: dict[str, object] = {
+                "initialized": self._openrouter_source is not None,
+                "fetched": False,
+                "catalog_count": 0,
+                "alias_candidates": [],
+                "matched_source_model_id": None,
+                "miss_reason": "source_not_initialized",
+                "cache_retry": False,
+            }
+            source_diagnostics["openrouter"] = diag
             if self._openrouter_source is None:
                 return None
             try:
                 records = await self._openrouter_source.fetch_all()
+                diag["fetched"] = True
+                diag["catalog_count"] = len(records)
+                # Phase 1.1: record OpenRouter source success
+                # independently of match success so source health
+                # reflects catalog availability rather than local
+                # model match success.
+                await self.record_source_success(
+                    "openrouter", payload_count=len(records)
+                )
                 or_indexed = {r.source_model_id: r for r in records}
-                return await resolve_openrouter_record(
+                resolved = await resolve_openrouter_record(
                     lookup_id, self._repo, or_indexed
                 )
+                if resolved is not None:
+                    diag["matched_source_model_id"] = resolved.source_model_id
+                    diag["miss_reason"] = "matched"
+                    return resolved
+                # No match on this pass: capture alias candidates so
+                # operators can see what was looked up.
+                alias_candidates = await self._repo.get_aliases_for_model(
+                    lookup_id, source="openrouter"
+                )
+                diag["alias_candidates"] = alias_candidates
+                if not alias_candidates:
+                    diag["miss_reason"] = "no_aliases"
+                    return None
+                # Phase 2.4: cache bypass — if a forced refresh sees
+                # aliases but no match in the cached catalog, invalidate
+                # the OpenRouter TTL cache once and retry so a manual
+                # ``POST /api/model-info/refresh?force=1`` doesn't rely
+                # on stale catalog snapshots.
+                try:
+                    self._openrouter_source.invalidate_cache()  # type: ignore[attr-defined]
+                    diag["cache_retry"] = True
+                    records = await self._openrouter_source.fetch_all()
+                    diag["catalog_count"] = len(records)
+                    await self.record_source_success(
+                        "openrouter", payload_count=len(records)
+                    )
+                    or_indexed = {r.source_model_id: r for r in records}
+                except AttributeError:
+                    # Older test doubles may not expose
+                    # invalidate_cache — fall back to the cached
+                    # snapshot result.
+                    diag["cache_retry"] = False
+                resolved = await resolve_openrouter_record(
+                    lookup_id, self._repo, or_indexed
+                )
+                if resolved is not None:
+                    diag["matched_source_model_id"] = resolved.source_model_id
+                    diag["miss_reason"] = "matched"
+                    return resolved
+                # Still no match — distinguish empty catalog from
+                # "catalog has rows but none match the alias".
+                if not records:
+                    diag["miss_reason"] = "empty_catalog"
+                else:
+                    diag["miss_reason"] = "alias_not_in_catalog"
+                return None
             except ModelInfoSourceFetchError as exc:
                 logger.warning("OpenRouter fetch failed for %s: %s", lookup_id, exc)
+                diag["miss_reason"] = "fetch_error"
                 await self.record_source_error("openrouter", exc)
                 return None
             except Exception as exc:
                 logger.exception(
                     "OpenRouter unexpected error for %s: %s", lookup_id, exc
                 )
+                diag["miss_reason"] = "fetch_error"
                 await self.record_source_error("openrouter", exc)
                 return None
 
@@ -946,7 +1048,6 @@ class ModelInfoService:
             or_record = await _fetch_openrouter()
             if or_record is not None:
                 await self._persist_source_observation(or_record, model_id=lookup_id)
-                await self.record_source_success("openrouter")
                 observations_persisted += 1
                 sources_matched.append("openrouter")
             if self._openrouter_source is not None:
@@ -1053,6 +1154,7 @@ class ModelInfoService:
             "sources_attempted": sources_attempted,
             "sources_matched": sources_matched,
             "observations": observations_persisted,
+            "source_diagnostics": source_diagnostics,
         }
 
     async def force_refresh_batch(
@@ -2247,11 +2349,29 @@ def build_canonical_detail(
                 "benchmarks",
                 "huggingface_metadata",
                 "pricing_observation",
+                "thinking_capability",
             }:
                 continue
             if key not in detail or detail[key] in (None, ""):
                 detail[key] = val
                 contributed = True
+        # Phase 3.1: promote a per-source ``display_name_<source>`` into
+        # ``detail.display_name`` when the provider did not seed one.
+        # External sources like OpenRouter publish a curated display name
+        # (``MiniMax: MiniMax M3``) that's strictly better than nothing;
+        # the per-source key remains available so callers can still see
+        # the provenance.
+        if not detail.get("display_name"):
+            for source_key in sorted(fragment.keys()):
+                if source_key.startswith("display_name_") and isinstance(
+                    fragment[source_key], str
+                ):
+                    detail["display_name"] = fragment[source_key]
+                    detail["display_name_source"] = source_key.removeprefix(
+                        "display_name_"
+                    )
+                    contributed = True
+                    break
         if "pricing_observation" in fragment:
             pricing_obs = cast("dict[str, object]", fragment["pricing_observation"])
             existing_pricing = cast(
@@ -2261,6 +2381,15 @@ def build_canonical_detail(
                 if pk not in existing_pricing:
                     existing_pricing[pk] = pv
             detail["pricing_observation"] = existing_pricing
+            # Phase 3.1: surface source-scoped advisory pricing under
+            # ``detail.pricing.<source>`` so the dashboard can clearly
+            # separate advisory $/Mtok figures from authoritative
+            # provider-reported cost accounting.
+            pricing_block = cast("dict[str, object]", detail.get("pricing", {}))
+            source_pricing = dict(pricing_obs)
+            source_pricing.pop("source", None)
+            pricing_block[source] = source_pricing
+            detail["pricing"] = pricing_block
             contributed = True
         if "thinking_capability" in fragment:
             thinking_contributions.append(

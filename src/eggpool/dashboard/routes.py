@@ -1296,11 +1296,21 @@ async def handle_model_detail(
     lookup_id, _provider_suffix = parse_model_provider(decoded_id, known_providers)
     info = None
     info_error: str | None = None
+    observations: list[dict[str, Any]] = []
     if model_info_service is not None:
         try:
             info = await model_info_service.get_summary(lookup_id)
             if info is None:
                 info = await model_info_service.ensure_canonical(lookup_id)
+            # Phase 5: surface per-source observations on the model
+            # page so operators can see which external sources
+            # actually contributed and when they last observed this
+            # canonical row.
+            observations = (
+                await model_info_service.repo.list_compact_observations_for_model(
+                    lookup_id
+                )
+            )
         except Exception as exc:
             logger.exception(
                 "Model-info detail lookup failed for decoded_id=%r lookup_id=%r",
@@ -1318,6 +1328,7 @@ async def handle_model_detail(
             current_theme=current_theme,
             update_info=_get_update_info(request),
             model_info_error=info_error,
+            observations=observations,
         )
     )
 
