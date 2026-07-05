@@ -365,11 +365,11 @@ class TaskSupervisor:
                 count as failures; the supervisor continues to schedule
                 subsequent ticks unless the failure budget is exhausted.
             interval_s: Seconds between scheduled ticks.  Required.
-            run_immediately: Reserved for future use; current periodic
-                scheduler sleeps for ``interval_s`` (or
-                ``initial_delay_s`` when provided) before the first
-                tick to match the historical sleep-first semantics of
-                the inline ``while True`` loops this replaces.
+            run_immediately: When ``True``, the first tick fires
+                immediately (``first_delay_s=0.0``) instead of
+                sleeping for ``interval_s``.  Mutually exclusive
+                with ``initial_delay_s`` — supplying both raises
+                ``ValueError``.
             initial_delay_s: Optional override for the first-tick
                 delay.  Defaults to ``interval_s`` when omitted
                 (preserves current sleep-first semantics).
@@ -379,19 +379,30 @@ class TaskSupervisor:
                 by ``_consecutive_failure_count``.  When exhausted the
                 task exits and the supervisor stops rescheduling.
         """
-        del run_immediately, timeout_s  # reserved for future scheduler work
+        del timeout_s  # accepted for forward compatibility; currently unused
         if name in self._tasks:
             raise ValueError(f"Task {name!r} is already registered")
         if interval_s <= 0:
             raise ValueError(
                 f"Periodic task {name!r} requires interval_s > 0 (got {interval_s!r})"
             )
-        delay_s = float(interval_s if initial_delay_s is None else initial_delay_s)
-        if delay_s < 0:
+        if initial_delay_s is not None and initial_delay_s < 0:
             raise ValueError(
                 f"Periodic task {name!r} requires initial_delay_s >= 0"
-                f" (got {delay_s!r})"
+                f" (got {initial_delay_s!r})"
             )
+        if run_immediately and initial_delay_s is not None:
+            raise ValueError(
+                f"Periodic task {name!r} cannot set both run_immediately=True "
+                f"and initial_delay_s (got initial_delay_s={initial_delay_s!r})"
+            )
+        first_delay_s = (
+            0.0
+            if run_immediately
+            else (
+                float(interval_s) if initial_delay_s is None else float(initial_delay_s)
+            )
+        )
         task = SupervisedTask(
             name=name,
             _coro_factory=tick_factory,
@@ -399,12 +410,12 @@ class TaskSupervisor:
             _tick_factory=tick_factory,
             _max_restarts=max_restarts,
             _interval_s=float(interval_s),
-            _initial_delay_s=delay_s,
+            _initial_delay_s=first_delay_s,
         )
         # Prime the first next-run window so the dashboard can show
         # "in <interval>" before the very first tick lands.  Same
         # module so private field assignment is intentional.
-        task._next_run_at = time.time() + delay_s  # pyright: ignore[reportPrivateUsage]
+        task._next_run_at = time.time() + first_delay_s  # pyright: ignore[reportPrivateUsage]
         self._tasks[name] = task
         return task
 

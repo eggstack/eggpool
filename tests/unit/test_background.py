@@ -364,8 +364,7 @@ def test_register_periodic_rejects_negative_initial_delay() -> None:
 
 
 def test_register_periodic_allows_zero_initial_delay() -> None:
-    """``initial_delay_s=0.0`` means 'use interval_s as initial delay'
-    (sleep-first semantics)."""
+    """``initial_delay_s=0.0`` schedules the first tick immediately."""
     supervisor = TaskSupervisor()
 
     async def tick() -> None:
@@ -422,3 +421,72 @@ def test_snapshot_before_start_shows_next_run_at() -> None:
     assert snap["next_run_at"] is not None
     assert snap["next_run_at"] > time.time()
     assert snap["running"] is False
+
+
+@pytest.mark.asyncio
+async def test_register_periodic_run_immediately_first_tick() -> None:
+    """``run_immediately=True`` fires the first tick without waiting
+    ``interval_s``."""
+    tick_count = 0
+    tick_times: list[float] = []
+
+    async def tick() -> None:
+        nonlocal tick_count
+        tick_count += 1
+        tick_times.append(time.time())
+
+    supervisor = TaskSupervisor()
+    supervisor.register_periodic(
+        "immediate",
+        tick,
+        interval_s=1.0,
+        run_immediately=True,
+    )
+
+    start = time.time()
+    await supervisor.start_all()
+    for _ in range(20):
+        if tick_count >= 1:
+            break
+        await asyncio.sleep(0.01)
+    await supervisor.stop_all()
+
+    assert tick_count >= 1
+    assert tick_times[0] - start < 0.2
+
+
+def test_register_periodic_rejects_run_immediately_with_initial_delay() -> None:
+    """Supplying both ``run_immediately=True`` and ``initial_delay_s``
+    is rejected because the caller's intent is ambiguous."""
+
+    async def tick() -> None:
+        return None
+
+    supervisor = TaskSupervisor()
+    with pytest.raises(ValueError, match="run_immediately.*initial_delay_s"):
+        supervisor.register_periodic(
+            "ambiguous",
+            tick,
+            interval_s=10.0,
+            run_immediately=True,
+            initial_delay_s=5.0,
+        )
+
+
+def test_register_periodic_run_immediately_primes_next_run_at_now() -> None:
+    """``run_immediately=True`` primes ``next_run_at`` at or before now
+    so the dashboard countdown starts at zero."""
+
+    async def tick() -> None:
+        return None
+
+    supervisor = TaskSupervisor()
+    task = supervisor.register_periodic(
+        "immediate_prime",
+        tick,
+        interval_s=60.0,
+        run_immediately=True,
+    )
+    snap = task.snapshot()
+    assert snap["next_run_at"] is not None
+    assert snap["next_run_at"] <= time.time() + 0.1
