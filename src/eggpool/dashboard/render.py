@@ -588,6 +588,7 @@ def _render_nav(
         ("overview", "/", "Overview"),
         ("reliability", "/reliability", "Reliability"),
         ("routing", "/routing", "Routing"),
+        ("cache", "/cache", "Cache"),
         ("accounts", "/accounts", "Accounts"),
         ("models", "/models", "Models"),
         ("latency", "/latency", "Latency"),
@@ -3693,6 +3694,1488 @@ def render_pings(
     )
 
 
+def _display_request_shaping_mode(value: str) -> str:
+    """Format a request-shaping mode string for display."""
+    return value.replace("_", " ").title()
+
+
+def _render_request_shaping_summary_panel(
+    request_shaping_summary: dict[str, Any],
+    *,
+    period: str,
+    guardrails_mode: str,
+) -> str:
+    shaping_mode = cast("dict[str, Any]", request_shaping_summary.get("mode") or {})
+    shaping_compression = cast(
+        "dict[str, Any]",
+        request_shaping_summary.get("compression") or {},
+    )
+    shaping_cache = cast("dict[str, Any]", request_shaping_summary.get("cache") or {})
+    shaping_synthetic = cast(
+        "dict[str, Any]",
+        request_shaping_summary.get("synthetic_cache") or {},
+    )
+    shaping_tuning = cast(
+        "dict[str, Any]",
+        request_shaping_summary.get("tuning") or {},
+    )
+    shaping_guardrails = cast(
+        "dict[str, Any]",
+        request_shaping_summary.get("guardrails") or {},
+    )
+    shaping_segmentation = cast(
+        "dict[str, Any]",
+        request_shaping_summary.get("segmentation") or {},
+    )
+
+    compression_mode_label = _display_request_shaping_mode(
+        str(shaping_mode.get("compression", "off"))
+    )
+    synthetic_mode_label = _display_request_shaping_mode(
+        str(shaping_mode.get("synthetic_cache", "off"))
+    )
+    tuning_mode_label = _display_request_shaping_mode(
+        str(shaping_mode.get("tuning", "off"))
+    )
+    routing_mode_label = escape(str(shaping_mode.get("routing", "reporting_only")))
+    cache_reported_rate = shaping_cache.get("cache_counter_reported_rate")
+    cache_reported_label = (
+        _format_percent_unit(cache_reported_rate, digits=1)
+        if cache_reported_rate is not None
+        else "—"
+    )
+    stable_prefix_rate = shaping_guardrails.get("stable_prefix_preserved_rate")
+    stable_prefix_label = (
+        _format_percent_unit(stable_prefix_rate, digits=1)
+        if stable_prefix_rate is not None
+        else "—"
+    )
+    synthetic_candidate_count = format_int(shaping_synthetic.get("candidate_count", 0))
+    failed_fallback_count = format_int(
+        shaping_guardrails.get("failed_fallback_count", 0)
+    )
+    policy_warning_count = format_int(shaping_guardrails.get("policy_warning_count", 0))
+    recommendation_count = format_int(shaping_tuning.get("recommendation_count", 0))
+    tuning_override_count = format_int(shaping_tuning.get("override_count", 0))
+    requests_segmented_count = format_int(
+        shaping_segmentation.get("requests_segmented", 0)
+    )
+
+    if str(shaping_mode.get("compression", "off")) == "safe":
+        compression_sub = (
+            f"{format_int(shaping_compression.get('requests_compressed', 0))} "
+            "requests compressed · saved "
+            f"{format_int(shaping_compression.get('actual_savings_tokens', 0))} "
+            "tokens"
+        )
+    elif str(shaping_mode.get("compression", "off")) == "observe":
+        compression_sub = (
+            f"{format_int(shaping_compression.get('requests_analyzed', 0))} "
+            "requests analyzed · potential "
+            f"{format_int(shaping_compression.get('estimated_savings_tokens', 0))} "
+            "tokens"
+        )
+    else:
+        compression_sub = "disabled by config"
+
+    request_shaping_panel = f"""
+<section class="panel">
+  <h3>Request shaping ({escape(period)})</h3>
+  <p class="sub">
+    Operator summary for cache reporting, safe compression, synthetic cache
+    controls, advisory tuning, and routing guardrails. Routing stays
+    load-based and reporting-only metrics never enter the scorer.
+  </p>
+  <section class="cards">
+    {
+        "".join(
+            [
+                _render_metric_card(
+                    title="Compression",
+                    metric=compression_mode_label,
+                    sub=compression_sub,
+                    warning=int(
+                        shaping_compression.get("failed_fallback_count", 0) or 0
+                    )
+                    > 0,
+                ),
+                _render_metric_card(
+                    title="Cache controls",
+                    metric=cache_reported_label,
+                    sub=(
+                        "reported rows · "
+                        f"Synthetic {synthetic_mode_label} · "
+                        f"{synthetic_candidate_count} candidates"
+                    ),
+                ),
+                _render_metric_card(
+                    title="Safety",
+                    metric=stable_prefix_label,
+                    sub=(
+                        "stable prefix preserved · "
+                        f"{failed_fallback_count} fallbacks · "
+                        f"{policy_warning_count} policy warnings"
+                    ),
+                    warning=int(shaping_guardrails.get("failed_fallback_count", 0) or 0)
+                    > 0,
+                ),
+                _render_metric_card(
+                    title="Advisory tuning",
+                    metric=tuning_mode_label,
+                    sub=(
+                        f"{recommendation_count} recommendations · "
+                        f"{tuning_override_count} overrides"
+                    ),
+                ),
+                _render_metric_card(
+                    title="Routing",
+                    metric=routing_mode_label,
+                    sub=(
+                        f"segmented {requests_segmented_count} · "
+                        "cache/compression stay out of scorer"
+                    ),
+                ),
+            ]
+        )
+    }
+  </section>
+</section>
+"""
+    return request_shaping_panel
+
+
+def _render_cache_reporting_panel(
+    cache_observability: dict[str, Any] | None,
+    *,
+    period: str,
+) -> str:
+    if cache_observability is None:
+        return ""
+    co_by_status: Any = cache_observability.get("by_status", {}) or {}
+    co_reported = int(co_by_status.get("reported", 0))
+    co_not_reported = int(co_by_status.get("not_reported", 0))
+    co_unknown = int(co_by_status.get("unknown_format", 0))
+    co_total_cached = int(cache_observability.get("total_cached_input_tokens", 0))
+    co_total_read = int(cache_observability.get("total_cache_read_input_tokens", 0))
+    co_total_creation = int(
+        cache_observability.get("total_cache_creation_input_tokens", 0)
+    )
+    co_ratio = cache_observability.get("cache_hit_ratio_known_only")
+    co_ratio_str = f"{float(co_ratio):.1%}" if co_ratio is not None else "—"
+    co_total = int(cache_observability.get("total_requests", 0))
+    co_input_total = int(cache_observability.get("input_tokens_total", 0))
+    co_output_total = int(cache_observability.get("output_tokens_total", 0))
+
+    # Per-provider × protocol breakdown rows.
+    co_protocol: Any = cache_observability.get("per_protocol_status", {}) or {}
+    protocol_rows_html = ""
+    if co_protocol:
+        _protocol_cells: list[str] = []
+        for (pid, proto), counts in sorted(
+            co_protocol.items(), key=lambda kv: (-kv[1].get("reported", 0), kv[0])
+        ):
+            reported = int(counts.get("reported", 0))
+            not_reported = int(counts.get("not_reported", 0))
+            unknown = int(counts.get("unknown_format", 0))
+            total_p = reported + not_reported + unknown
+            _protocol_cells.append(
+                f"""<tr>
+        <td>{escape(str(pid))}</td>
+        <td>{escape(str(proto))}</td>
+        <td class='num'>{format_int(total_p)}</td>
+        <td class='num'>{format_int(reported)}</td>
+        <td class='num'>{format_int(not_reported)}</td>
+        <td class='num'>{format_int(unknown)}</td>
+      </tr>"""
+            )
+        protocol_rows_html = "\n".join(_protocol_cells)
+
+    # Per-account breakdown rows.
+    co_acct: Any = cache_observability.get("per_account_status", {}) or {}
+    account_rows_html = ""
+    if co_acct:
+        _acct_cells: list[str] = []
+        for acct_id, acct_data in sorted(
+            co_acct.items(), key=lambda kv: (-kv[1].get("total_requests", 0), kv[0])
+        ):
+            acct_total = int(acct_data.get("total_requests", 0))
+            acct_cached = int(acct_data.get("total_cached_input_tokens", 0))
+            _acct_cells.append(
+                f"""<tr>
+        <td>{escape(str(acct_id))}</td>
+        <td class='num'>{format_int(acct_total)}</td>
+        <td class='num'>{format_int(acct_cached)}</td>
+      </tr>"""
+            )
+        account_rows_html = "\n".join(_acct_cells)
+
+    # Per-model breakdown rows.
+    co_mdl: Any = cache_observability.get("per_model_status", {}) or {}
+    model_rows_html = ""
+    if co_mdl:
+        _mdl_cells: list[str] = []
+        for model_id, mdl_data in sorted(
+            co_mdl.items(),
+            key=lambda kv: (-kv[1].get("total_requests", 0), kv[0]),
+        ):
+            mdl_total = int(mdl_data.get("total_requests", 0))
+            mdl_cached = int(mdl_data.get("total_cached_input_tokens", 0))
+            _mdl_cells.append(
+                f"""<tr>
+        <td>{escape(str(model_id))}</td>
+        <td class='num'>{format_int(mdl_total)}</td>
+        <td class='num'>{format_int(mdl_cached)}</td>
+      </tr>"""
+            )
+        model_rows_html = "\n".join(_mdl_cells)
+
+    # Build the optional sub-tables only when data exists.
+    protocol_section = ""
+    if protocol_rows_html:
+        protocol_section = f"""
+  <h4>By provider &amp; protocol</h4>
+  <table class="data compact">
+    <thead><tr>
+      {_th("Provider")}
+      {_th("Protocol")}
+      {_th("Total", priority=2)}
+      {_th("Reported", priority=2)}
+      {_th("Not reported", priority=2)}
+      {_th("Unknown", priority=2)}
+    </tr></thead>
+    <tbody>
+      {protocol_rows_html}
+    </tbody>
+  </table>"""
+
+    account_section = ""
+    if account_rows_html:
+        account_section = f"""
+  <h4>By account</h4>
+  <table class="data compact">
+    <thead><tr>
+      {_th("Account ID")}
+      {_th("Total requests", priority=2)}
+      {_th("Cached tokens (REPORTED)", priority=2)}
+    </tr></thead>
+    <tbody>
+      {account_rows_html}
+    </tbody>
+  </table>"""
+
+    model_section = ""
+    if model_rows_html:
+        model_section = f"""
+  <h4>By model</h4>
+  <table class="data compact">
+    <thead><tr>
+      {_th("Model")}
+      {_th("Total requests", priority=2)}
+      {_th("Cached tokens (REPORTED)", priority=2)}
+    </tr></thead>
+    <tbody>
+      {model_rows_html}
+    </tbody>
+  </table>"""
+
+    cache_card = f"""
+<section class="panel">
+  <h3>Cache reporting ({escape(period)})</h3>
+  <p class="sub">
+    Provider-reported cache counters; the hit ratio only divides rows
+    whose upstream payload actually surfaced cache fields.
+  </p>
+  <section class="cards">
+    {
+        _render_metric_card(
+            title="Reported",
+            metric=format_int(co_reported),
+            sub="upstream returned cache fields",
+        )
+    }
+    {
+        _render_metric_card(
+            title="Not reported",
+            metric=format_int(co_not_reported),
+            sub="payload clean, no cache keys",
+        )
+    }
+    {
+        _render_metric_card(
+            title="Unknown shape",
+            metric=format_int(co_unknown),
+            sub="parse failure or unrecognized",
+        )
+    }
+    {
+        _render_metric_card(
+            title="Cache hit ratio",
+            metric=co_ratio_str,
+            sub="cached / input, REPORTED only",
+        )
+    }
+  </section>
+  <table class="data compact">
+    <thead><tr>{_th("Metric")}{_th("Value", priority=2)}</tr></thead>
+    <tbody>
+      <tr>
+        <td>Total finalized requests</td>
+        <td class='num'>{format_int(co_total)}</td>
+      </tr>
+      <tr>
+        <td>Input tokens (all requests)</td>
+        <td class='num'>{format_int(co_input_total)}</td>
+      </tr>
+      <tr>
+        <td>Output tokens (all requests)</td>
+        <td class='num'>{format_int(co_output_total)}</td>
+      </tr>
+      <tr>
+        <td>Cached input tokens (REPORTED)</td>
+        <td class='num'>{format_int(co_total_cached)}</td>
+      </tr>
+      <tr>
+        <td>Anthropic cache read</td>
+        <td class='num'>{format_int(co_total_read)}</td>
+      </tr>
+      <tr>
+        <td>Anthropic cache creation</td>
+        <td class='num'>{format_int(co_total_creation)}</td>
+      </tr>
+    </tbody>
+  </table>
+  {protocol_section}
+  {account_section}
+  {model_section}
+</section>
+"""
+    return cache_card
+
+
+def _render_request_segmentation_panel(
+    canonical_request_segmentation: dict[str, Any] | None,
+    *,
+    period: str,
+) -> str:
+    if canonical_request_segmentation is None:
+        return ""
+    seg_by_status: Any = canonical_request_segmentation.get("by_status", {}) or {}
+    seg_segmented = int(seg_by_status.get("segmented", 0))
+    seg_empty = int(seg_by_status.get("empty_request", 0))
+    seg_parse_fail = int(seg_by_status.get("parse_failure", 0))
+    seg_total = int(canonical_request_segmentation.get("total_requests", 0))
+    seg_token_totals: Any = canonical_request_segmentation.get("token_totals", {}) or {}
+    seg_byte_totals: Any = canonical_request_segmentation.get("byte_totals", {}) or {}
+    seg_compressible = int(
+        canonical_request_segmentation.get("compressible_candidate_requests", 0)
+    )
+    seg_protected = int(canonical_request_segmentation.get("protected_requests", 0))
+
+    # Per-model breakdown.
+    seg_mdl: Any = canonical_request_segmentation.get("per_model_status", {}) or {}
+    seg_model_rows_html = ""
+    if seg_mdl:
+        _mdl_cells: list[str] = []
+        for model_id, mdl_data in sorted(
+            seg_mdl.items(),
+            key=lambda kv: (-kv[1].get("total_requests", 0), kv[0]),
+        ):
+            mdl_total = int(mdl_data.get("total_requests", 0))
+            mdl_stable = int(mdl_data.get("stable_prefix_estimated_tokens", 0))
+            mdl_volatile = int(mdl_data.get("volatile_estimated_tokens", 0))
+            _mdl_cells.append(
+                f"""<tr>
+        <td>{escape(str(model_id))}</td>
+        <td class='num'>{format_int(mdl_total)}</td>
+        <td class='num'>{format_int(mdl_stable)}</td>
+        <td class='num'>{format_int(mdl_volatile)}</td>
+      </tr>"""
+            )
+        seg_model_rows_html = "\n".join(_mdl_cells)
+
+    seg_model_section = ""
+    if seg_model_rows_html:
+        seg_model_section = f"""
+  <h4>By model</h4>
+  <table class="data compact">
+    <thead><tr>
+      {_th("Model")}
+      {_th("Total requests", priority=2)}
+      {_th("Stable prefix tokens", priority=2)}
+      {_th("Volatile suffix tokens", priority=2)}
+    </tr></thead>
+    <tbody>
+      {seg_model_rows_html}
+    </tbody>
+  </table>"""
+
+    segmentation_card = f"""
+<section class="panel">
+  <h3>Request segmentation ({escape(period)})</h3>
+  <p class="sub">
+    Structural segmentation shows how much traffic lands in protected
+    prefixes versus volatile suffixes without mutating requests.
+  </p>
+  <section class="cards">
+    {
+        _render_metric_card(
+            title="Segmented",
+            metric=format_int(seg_segmented),
+            sub="produced a normal result",
+        )
+    }
+    {
+        _render_metric_card(
+            title="Empty request",
+            metric=format_int(seg_empty),
+            sub="no segmentable content",
+        )
+    }
+    {
+        _render_metric_card(
+            title="Parse failure",
+            metric=format_int(seg_parse_fail),
+            sub="non-mapping payload or unknown",
+        )
+    }
+    {
+        _render_metric_card(
+            title="With protected prefix",
+            metric=format_int(seg_protected),
+            sub="stable_prefix_bytes > 0",
+        )
+    }
+    {
+        _render_metric_card(
+            title="With volatile suffix",
+            metric=format_int(seg_compressible),
+            sub="volatile_bytes > 0",
+        )
+    }
+  </section>
+  <table class="data compact">
+    <thead><tr>{_th("Metric")}{_th("Value", priority=2)}</tr></thead>
+    <tbody>
+      <tr>
+        <td>Total finalized requests</td>
+        <td class='num'>{format_int(seg_total)}</td>
+      </tr>
+      <tr>
+        <td>Stable prefix tokens</td>
+        <td class='num'>{format_int(seg_token_totals.get("stable_prefix", 0))}</td>
+      </tr>
+      <tr>
+        <td>Semi-stable tokens</td>
+        <td class='num'>{format_int(seg_token_totals.get("semi_stable", 0))}</td>
+      </tr>
+      <tr>
+        <td>Volatile suffix tokens</td>
+        <td class='num'>{format_int(seg_token_totals.get("volatile", 0))}</td>
+      </tr>
+      <tr>
+        <td>Stable prefix bytes</td>
+        <td class='num'>{format_int(seg_byte_totals.get("stable_prefix", 0))}</td>
+      </tr>
+      <tr>
+        <td>Semi-stable bytes</td>
+        <td class='num'>{format_int(seg_byte_totals.get("semi_stable", 0))}</td>
+      </tr>
+      <tr>
+        <td>Volatile suffix bytes</td>
+        <td class='num'>{format_int(seg_byte_totals.get("volatile", 0))}</td>
+      </tr>
+    </tbody>
+  </table>
+  {seg_model_section}
+</section>
+"""
+    return segmentation_card
+
+
+def _render_compression_opportunities_panel(
+    compression_observability: dict[str, Any] | None,
+    *,
+    period: str,
+) -> str:
+    if compression_observability is None:
+        return ""
+
+    def _fmt_ms(value: Any) -> str:
+        if value is None:
+            return "—"
+        try:
+            return f"{float(value):.2f} ms"
+        except (TypeError, ValueError):
+            return str(value)
+
+    def _fmt_tokens(value: Any) -> str:
+        if value is None:
+            return "—"
+        try:
+            return format_int(int(value))
+        except (TypeError, ValueError):
+            return str(value)
+
+    co_by_status: Any = compression_observability.get("by_status", {}) or {}
+    co_total = int(compression_observability.get("total_requests", 0))
+    co_totals: Any = compression_observability.get("totals", {}) or {}
+    co_observed = int(co_totals.get("observed_requests", 0))
+    co_candidates = int(co_totals.get("candidate_count", 0))
+    co_eligible = int(co_totals.get("eligible_count", 0))
+    co_estimated_savings = int(co_totals.get("estimated_savings_tokens", 0))
+    co_observed_disabled = int(co_by_status.get("disabled", 0))
+    co_observed_active = int(co_by_status.get("observed", 0))
+    co_safe_active = int(co_by_status.get("safe", 0))
+
+    # Safe-mode applied fields (only present when safe-mode ran).
+    co_applied = int(
+        compression_observability.get("requests_with_compression_applied", 0)
+    )
+    co_applied_savings = int(
+        compression_observability.get("applied_total_savings_tokens", 0)
+    )
+    co_applied_fallback = int(
+        compression_observability.get("applied_failed_fallback_count", 0)
+    )
+    co_applied_preserved = int(
+        compression_observability.get("applied_stable_prefix_preserved_count", 0)
+    )
+    co_applied_p95_savings = compression_observability.get("applied_p95_savings_tokens")
+    co_applied_p95_latency = compression_observability.get("applied_p95_latency_ms")
+
+    # Analyzer latency stats.
+    co_analyzer_p95 = co_totals.get("analyzer_latency_ms_p95")
+    co_analyzer_median = co_totals.get("analyzer_latency_ms_median")
+
+    # Per-model compression breakdown (top-N by total_requests).
+    co_mdl: Any = compression_observability.get("per_model_status", {}) or {}
+    co_model_rows_html = ""
+    if co_mdl:
+        _co_mdl_cells: list[str] = []
+        for model_id, mdl_data in sorted(
+            co_mdl.items(),
+            key=lambda kv: (-kv[1].get("total_requests", 0), kv[0]),
+        )[:10]:
+            m_total = int(mdl_data.get("total_requests", 0))
+            m_candidates = int(mdl_data.get("candidate_count", 0))
+            m_eligible = int(mdl_data.get("eligible_count", 0))
+            m_savings = int(mdl_data.get("estimated_savings_tokens", 0))
+            _co_mdl_cells.append(
+                f"""<tr>
+        <td>{escape(str(model_id))}</td>
+        <td class='num'>{format_int(m_total)}</td>
+        <td class='num'>{format_int(m_candidates)}</td>
+        <td class='num'>{format_int(m_eligible)}</td>
+        <td class='num'>{format_int(m_savings)}</td>
+      </tr>"""
+            )
+        co_model_rows_html = "\n".join(_co_mdl_cells)
+
+    co_model_section = ""
+    if co_model_rows_html:
+        co_model_section = f"""
+  <h4>By model</h4>
+  <table class="data compact">
+    <thead><tr>
+      {_th("Model")}
+      {_th("Total requests", priority=2)}
+      {_th("Candidates", priority=2)}
+      {_th("Eligible", priority=2)}
+      {_th("Estimated savings", priority=2)}
+    </tr></thead>
+    <tbody>
+      {co_model_rows_html}
+    </tbody>
+  </table>"""
+
+    compression_card = f"""
+<section class="panel">
+  <h3>Compression opportunities ({escape(period)})</h3>
+  <p class="sub">
+    Opportunity analysis and safe-mode outcomes. These metrics stay
+    reporting-only and do not enter routing.
+  </p>
+  <section class="cards">
+    {
+        _render_metric_card(
+            title="Observed requests",
+            metric=format_int(co_observed),
+            sub="observe-mode ran",
+        )
+    }
+    {
+        _render_metric_card(
+            title="Applied (safe mode)",
+            metric=format_int(co_applied),
+            sub="payload actually compressed",
+        )
+    }
+    {
+        _render_metric_card(
+            title="Fail-closed fallbacks",
+            metric=format_int(co_applied_fallback),
+            sub="stable-prefix hash mismatch",
+            warning=co_applied_fallback > 0,
+        )
+    }
+    {
+        _render_metric_card(
+            title="Candidates",
+            metric=format_int(co_candidates),
+            sub=f"{format_int(co_eligible)} eligible",
+        )
+    }
+    {
+        _render_metric_card(
+            title="Actual savings",
+            metric=_fmt_tokens(co_applied_savings),
+            sub="tokens saved in safe mode",
+        )
+    }
+  </section>
+  <table class="data compact">
+    <thead><tr>{_th("Metric")}{_th("Value", priority=2)}</tr></thead>
+    <tbody>
+      <tr>
+        <td>Total finalized requests</td>
+        <td class='num'>{format_int(co_total)}</td>
+      </tr>
+      <tr>
+        <td>Disabled</td>
+        <td class='num'>{format_int(co_observed_disabled)}</td>
+      </tr>
+      <tr>
+        <td>Observed (analyzer ran)</td>
+        <td class='num'>{format_int(co_observed_active)}</td>
+      </tr>
+      <tr>
+        <td>Safe mode</td>
+        <td class='num'>{format_int(co_safe_active)}</td>
+      </tr>
+      <tr>
+        <td>Estimated savings (observe)</td>
+        <td class='num'>{format_int(co_estimated_savings)}</td>
+      </tr>
+      <tr>
+        <td>Analyzer latency median</td>
+        <td class='num'>{_fmt_ms(co_analyzer_median)}</td>
+      </tr>
+      <tr>
+        <td>Analyzer latency p95</td>
+        <td class='num'>{_fmt_ms(co_analyzer_p95)}</td>
+      </tr>
+      <tr>
+        <td>Applied p95 savings</td>
+        <td class='num'>{_fmt_tokens(co_applied_p95_savings)}</td>
+      </tr>
+      <tr>
+        <td>Applied p95 latency</td>
+        <td class='num'>{_fmt_ms(co_applied_p95_latency)}</td>
+      </tr>
+      <tr>
+        <td>Stable prefix preserved</td>
+        <td class='num'>{format_int(co_applied_preserved)}</td>
+      </tr>
+    </tbody>
+  </table>
+  {co_model_section}
+</section>
+"""
+    return compression_card
+
+
+def _render_compression_runtime_panel(
+    compression_runtime: dict[str, Any] | None,
+    *,
+    period: str,
+) -> str:
+    if compression_runtime is None:
+        return ""
+
+    def _cr_fmt_ms(value: Any) -> str:
+        if value is None:
+            return "—"
+        try:
+            return f"{float(value):.2f} ms"
+        except (TypeError, ValueError):
+            return str(value)
+
+    cr_window: Any = compression_runtime.get("window", {}) or {}
+    cr_modes: Any = compression_runtime.get("mode_counts", {}) or {}
+    cr_transforms: Any = compression_runtime.get("transforms", {}) or {}
+    cr_warnings: Any = compression_runtime.get("warnings", {}) or {}
+    cr_cache_safety: Any = compression_runtime.get("cache_safety", {}) or {}
+    cr_latency: Any = compression_runtime.get("latency_ms", {}) or {}
+    cr_request_count = int(cr_window.get("request_count", 0))
+    cr_disabled = int(cr_modes.get("disabled", 0))
+    cr_observe = int(cr_modes.get("observe", 0))
+    cr_safe = int(cr_modes.get("safe", 0))
+    cr_applied = int(compression_runtime.get("applied_count", 0))
+    cr_fallback = int(compression_runtime.get("failed_fallback_count", 0))
+    cr_candidate_count = int(compression_runtime.get("candidate_count", 0))
+    cr_estimated_savings = int(compression_runtime.get("estimated_savings_tokens", 0))
+    cr_actual_savings = int(compression_runtime.get("actual_savings_tokens", 0))
+    cr_preserved = int(cr_cache_safety.get("stable_prefix_preserved", 0))
+    cr_mismatch = int(cr_cache_safety.get("stable_prefix_mismatch", 0))
+
+    # Top-N transforms by applied count.
+    cr_transform_rows_html = ""
+    if cr_transforms:
+        _cr_tx_cells: list[str] = []
+        sorted_transforms = sorted(
+            cr_transforms.items(),
+            key=lambda kv: (-kv[1].get("applied", 0), kv[0]),
+        )[:10]
+        for code, data in sorted_transforms:
+            applied = int(data.get("applied", 0))
+            saved = int(data.get("tokens_saved", 0))
+            _cr_tx_cells.append(
+                f"""<tr>
+        <td>{escape(str(code))}</td>
+        <td class='num'>{format_int(applied)}</td>
+        <td class='num'>{format_int(saved)}</td>
+      </tr>"""
+            )
+        cr_transform_rows_html = "\n".join(_cr_tx_cells)
+
+    cr_transform_section = ""
+    if cr_transform_rows_html:
+        cr_transform_section = f"""
+  <h4>Transforms</h4>
+  <table class="data compact">
+    <thead><tr>
+      {_th("Reason code")}
+      {_th("Applied", priority=2)}
+      {_th("Tokens saved", priority=2)}
+    </tr></thead>
+    <tbody>
+      {cr_transform_rows_html}
+    </tbody>
+  </table>"""
+
+    # Top-N warnings by count.
+    cr_warnings_rows_html = ""
+    if cr_warnings:
+        _cr_w_cells: list[str] = []
+        for code, count in sorted(cr_warnings.items(), key=lambda kv: (-kv[1], kv[0]))[
+            :10
+        ]:
+            _cr_w_cells.append(
+                f"""<tr>
+        <td>{escape(str(code))}</td>
+        <td class='num'>{format_int(int(count))}</td>
+      </tr>"""
+            )
+        cr_warnings_rows_html = "\n".join(_cr_w_cells)
+
+    cr_warnings_section = ""
+    if cr_warnings_rows_html:
+        cr_warnings_section = f"""
+  <h4>Warnings rollup</h4>
+  <table class="data compact">
+    <thead><tr>
+      {_th("Warning")}
+      {_th("Count", priority=2)}
+    </tr></thead>
+    <tbody>
+      {cr_warnings_rows_html}
+    </tbody>
+  </table>"""
+
+    compression_runtime_card = f"""
+<section class="panel">
+  <h3>Safe compression ({escape(period)})</h3>
+  <p class="sub">
+    Runtime outcomes for observe and safe modes: mode counts,
+    applied/fallback totals, latency distribution, per-transform
+    outcomes, warnings rollup, and stable-prefix safety counters.
+  </p>
+  <section class="cards">
+    {
+        _render_metric_card(
+            title="Mode: observe",
+            metric=format_int(cr_observe),
+            sub="analyzer ran, no mutation",
+        )
+    }
+    {
+        _render_metric_card(
+            title="Mode: safe",
+            metric=format_int(cr_safe),
+            sub="payload compressed",
+        )
+    }
+    {
+        _render_metric_card(
+            title="Mode: disabled",
+            metric=format_int(cr_disabled),
+            sub="policy disabled",
+        )
+    }
+    {
+        _render_metric_card(
+            title="Applied",
+            metric=format_int(cr_applied),
+            sub="actual transformations",
+        )
+    }
+    {
+        _render_metric_card(
+            title="Fallback",
+            metric=format_int(cr_fallback),
+            sub="fail-closed triggered",
+            warning=cr_fallback > 0,
+        )
+    }
+  </section>
+  <table class="data compact">
+    <thead><tr>{_th("Metric")}{_th("Value", priority=2)}</tr></thead>
+    <tbody>
+      <tr>
+        <td>Total finalized requests</td>
+        <td class='num'>{format_int(cr_request_count)}</td>
+      </tr>
+      <tr>
+        <td>Candidate segments</td>
+        <td class='num'>{format_int(cr_candidate_count)}</td>
+      </tr>
+      <tr>
+        <td>Estimated savings (observe)</td>
+        <td class='num'>{format_int(cr_estimated_savings)}</td>
+      </tr>
+      <tr>
+        <td>Actual savings (safe)</td>
+        <td class='num'>{format_int(cr_actual_savings)}</td>
+      </tr>
+      <tr>
+        <td>Analyzer latency avg</td>
+        <td class='num'>{_cr_fmt_ms(cr_latency.get("avg"))}</td>
+      </tr>
+      <tr>
+        <td>Analyzer latency p50</td>
+        <td class='num'>{_cr_fmt_ms(cr_latency.get("p50"))}</td>
+      </tr>
+      <tr>
+        <td>Analyzer latency p95</td>
+        <td class='num'>{_cr_fmt_ms(cr_latency.get("p95"))}</td>
+      </tr>
+      <tr>
+        <td>Analyzer latency max</td>
+        <td class='num'>{_cr_fmt_ms(cr_latency.get("max"))}</td>
+      </tr>
+      <tr>
+        <td>Stable prefix preserved</td>
+        <td class='num'>{format_int(cr_preserved)}</td>
+      </tr>
+      <tr>
+        <td>Stable prefix mismatch</td>
+        <td class='num'>{format_int(cr_mismatch)}</td>
+      </tr>
+    </tbody>
+  </table>
+  {cr_transform_section}
+  {cr_warnings_section}
+</section>
+"""
+    return compression_runtime_card
+
+
+def _render_compression_policy_panel(
+    compression_policy_stats: dict[str, Any] | None,
+    *,
+    period: str,
+) -> str:
+    if compression_policy_stats is None:
+        return ""
+    cps_total = int(compression_policy_stats.get("total_requests", 0))
+    cps_total_policies = int(compression_policy_stats.get("total_policies", 0))
+    cps_policies: list[Any] = list(
+        compression_policy_stats.get("policy_counts", []) or []
+    )
+
+    _cps_rows: list[str] = []
+    for policy in cps_policies:
+        policy_name = str(policy.get("policy_name", "—"))
+        policy_source = str(policy.get("policy_source", "—"))
+        policy_requests = int(policy.get("requests", 0))
+        policy_applied = int(policy.get("applied", 0))
+        policy_fallback = int(policy.get("failed_fallback", 0))
+        policy_candidates = int(policy.get("candidate_count", 0))
+        policy_warnings = int(policy.get("warning_count", 0))
+        modes: Any = policy.get("mode_counts", {}) or {}
+        mode_observe = int(modes.get("observe", 0))
+        mode_safe = int(modes.get("safe", 0))
+        mode_disabled = int(modes.get("disabled", 0))
+        _cps_rows.append(
+            f"""<tr>
+        <td>{escape(policy_name)}</td>
+        <td>{escape(policy_source)}</td>
+        <td class='num'>{format_int(policy_requests)}</td>
+        <td class='num'>{format_int(mode_observe)}</td>
+        <td class='num'>{format_int(mode_safe)}</td>
+        <td class='num'>{format_int(mode_disabled)}</td>
+        <td class='num'>{format_int(policy_applied)}</td>
+        <td class='num'>{format_int(policy_fallback)}</td>
+        <td class='num'>{format_int(policy_candidates)}</td>
+        <td class='num'>{format_int(policy_warnings)}</td>
+      </tr>"""
+        )
+    cps_rows_html = "\n".join(_cps_rows)
+
+    compression_policy_card = f"""
+<section class="panel">
+  <h3>Policy overrides ({escape(period)})</h3>
+  <p class="sub">
+    One row per resolved policy. The
+    ``&lt;global&gt;`` sentinel is the no-override path; operator-chosen
+    names come from ``[[compression.policies]]``. Metrics are
+    reporting-only and are NOT consumed by the QuotaFairScorer.
+  </p>
+  <section class="cards">
+    {
+        _render_metric_card(
+            title="Tracked policies",
+            metric=format_int(cps_total_policies),
+            sub="distinct resolved names",
+        )
+    }
+    {
+        _render_metric_card(
+            title="Total requests",
+            metric=format_int(cps_total),
+            sub="across all policies",
+        )
+    }
+  </section>
+  <table class="data compact">
+    <thead><tr>
+      {_th("Policy name")}
+      {_th("Source")}
+      {_th("Requests", priority=2)}
+      {_th("Mode: observe", priority=2)}
+      {_th("Mode: safe", priority=2)}
+      {_th("Mode: disabled", priority=2)}
+      {_th("Applied", priority=2)}
+      {_th("Fallback", priority=2)}
+      {_th("Candidates", priority=2)}
+      {_th("Warnings", priority=2)}
+    </tr></thead>
+    <tbody>
+      {cps_rows_html}
+    </tbody>
+  </table>
+</section>
+"""
+    return compression_policy_card
+
+
+def _render_cache_stability_panel(
+    cache_stability: dict[str, Any] | None,
+    *,
+    period: str,
+) -> str:
+    if cache_stability is None:
+        return ""
+    cs_transcoded = int(cache_stability.get("transcoded_request_count", 0))
+    cs_notes = str(
+        cache_stability.get(
+            "notes",
+            "Boundary detail lives in per-request traces.",
+        )
+    )
+    if cs_notes.startswith("Phase 3 ") or "Phase 3 cache-stability" in cs_notes:
+        cs_notes = (
+            "Boundary detail lives in per-request traces; durable summaries "
+            "count transcoded requests only."
+        )
+    cache_stability_card = f"""
+<section class="panel">
+  <h3>Native cache preservation ({escape(period)})</h3>
+  <p class="sub">
+    Native cache annotations are tracked per request during transcoding.
+    The durable summary below confirms the tracker is wired and counts
+    transcoded requests in window; per-boundary detail is in the request
+    trace.
+  </p>
+  <section class="cards">
+    {
+        _render_metric_card(
+            title="Transcoded requests",
+            metric=format_int(cs_transcoded),
+            sub="boundary tracker active",
+        )
+    }
+  </section>
+  <p class="sub">{escape(cs_notes)}</p>
+</section>
+"""
+    return cache_stability_card
+
+
+def _render_synthetic_cache_controls_panel(
+    synthetic_cache_summary: dict[str, Any] | None,
+    *,
+    period: str,
+) -> str:
+    if synthetic_cache_summary is None:
+        return ""
+    sc_total = int(synthetic_cache_summary.get("total_requests", 0))
+    if sc_total == 0:
+        return ""
+    sc_status_counts: Any = synthetic_cache_summary.get("status_counts", {}) or {}
+    sc_dry_run = int(synthetic_cache_summary.get("dry_run_count", 0))
+    sc_applied = int(synthetic_cache_summary.get("applied_count", 0))
+    sc_candidate_total = int(synthetic_cache_summary.get("candidate_count_total", 0))
+    sc_warning_total = int(synthetic_cache_summary.get("warning_count_total", 0))
+    sc_warning_counts: Any = synthetic_cache_summary.get("warning_counts", {}) or {}
+    sc_by_policy: list[Any] = list(synthetic_cache_summary.get("by_policy", []) or [])
+
+    # Status table rows.
+    sc_status_rows_html = ""
+    _sc_s_cells: list[str] = []
+    for s_name in (
+        "disabled",
+        "dry_run",
+        "applied",
+        "no_candidates",
+        "policy_required",
+        "provider_unsupported",
+    ):
+        s_count = int(sc_status_counts.get(s_name, 0))
+        if s_count > 0:
+            _sc_s_cells.append(
+                f"""<tr>
+        <td>{escape(s_name)}</td>
+        <td class='num'>{format_int(s_count)}</td>
+      </tr>"""
+            )
+    sc_status_rows_html = "\n".join(_sc_s_cells)
+
+    sc_status_section = ""
+    if sc_status_rows_html:
+        sc_status_section = f"""
+  <h4>Status breakdown</h4>
+  <table class="data compact">
+    <thead><tr>
+      {_th("Status")}
+      {_th("Count", priority=2)}
+    </tr></thead>
+    <tbody>
+      {sc_status_rows_html}
+    </tbody>
+  </table>"""
+
+    # Warning codes top-N table.
+    sc_warnings_rows_html = ""
+    if sc_warning_counts:
+        _sc_w_cells: list[str] = []
+        for code, count in sorted(
+            sc_warning_counts.items(), key=lambda kv: (-kv[1], kv[0])
+        )[:10]:
+            _sc_w_cells.append(
+                f"""<tr>
+        <td>{escape(str(code))}</td>
+        <td class='num'>{format_int(int(count))}</td>
+      </tr>"""
+            )
+        sc_warnings_rows_html = "\n".join(_sc_w_cells)
+
+    sc_warnings_section = ""
+    if sc_warnings_rows_html:
+        sc_warnings_section = f"""
+  <h4>Warnings (top 10)</h4>
+  <table class="data compact">
+    <thead><tr>
+      {_th("Warning code")}
+      {_th("Count", priority=2)}
+    </tr></thead>
+    <tbody>
+      {sc_warnings_rows_html}
+    </tbody>
+  </table>"""
+
+    # By-policy table (top 5, <global> sentinel first).
+    sc_policy_rows_html = ""
+    if sc_by_policy:
+        _sc_p_cells: list[str] = []
+        sorted_policies = sorted(
+            sc_by_policy,
+            key=lambda p: (
+                0 if p.get("policy_name") == "<global>" else 1,
+                -int(p.get("request_count", 0)),
+            ),
+        )[:5]
+        for pol in sorted_policies:
+            pol_name = str(pol.get("policy_name", "—"))
+            pol_source = str(pol.get("policy_source", "—"))
+            pol_requests = int(pol.get("request_count", 0))
+            pol_applied = int(pol.get("applied_count", 0))
+            pol_candidates = int(pol.get("candidate_count", 0))
+            _sc_p_cells.append(
+                f"""<tr>
+        <td>{escape(pol_name)}</td>
+        <td>{escape(pol_source)}</td>
+        <td class='num'>{format_int(pol_requests)}</td>
+        <td class='num'>{format_int(pol_applied)}</td>
+        <td class='num'>{format_int(pol_candidates)}</td>
+      </tr>"""
+            )
+        sc_policy_rows_html = "\n".join(_sc_p_cells)
+
+    sc_policy_section = ""
+    if sc_policy_rows_html:
+        sc_policy_section = f"""
+  <h4>By policy (top 5)</h4>
+  <table class="data compact">
+    <thead><tr>
+      {_th("Policy name")}
+      {_th("Source")}
+      {_th("Requests", priority=2)}
+      {_th("Applied", priority=2)}
+      {_th("Candidates", priority=2)}
+    </tr></thead>
+    <tbody>
+      {sc_policy_rows_html}
+    </tbody>
+  </table>"""
+
+    synthetic_cache_card = f"""
+<section class="panel">
+  <h3>Synthetic cache controls ({escape(period)})</h3>
+  <p class="sub">
+    Opt-in provider-bound cache annotations on protected stable-prefix
+    segments. Disabled by default; dry-run is the safe rollout path.
+  </p>
+  <section class="cards">
+    {
+        _render_metric_card(
+            title="Total requests",
+            metric=format_int(sc_total),
+            sub="in window",
+        )
+    }
+    {
+        _render_metric_card(
+            title="Dry run",
+            metric=format_int(sc_dry_run),
+            sub="synthesis planned, not applied",
+        )
+    }
+    {
+        _render_metric_card(
+            title="Applied",
+            metric=format_int(sc_applied),
+            sub="payload mutated",
+        )
+    }
+    {
+        _render_metric_card(
+            title="Candidates",
+            metric=format_int(sc_candidate_total),
+            sub="eligible segments",
+        )
+    }
+    {
+        _render_metric_card(
+            title="Warnings",
+            metric=format_int(sc_warning_total),
+            sub="total warning events",
+            warning=sc_warning_total > 0,
+        )
+    }
+  </section>
+  {sc_status_section}
+  {sc_warnings_section}
+  {sc_policy_section}
+  <p class="sub">
+    Reporting only &mdash; synthetic cache signals do not enter
+    QuotaFairScorer.
+  </p>
+</section>
+"""
+    return synthetic_cache_card
+
+
+def _render_advisory_tuning_panel(
+    compression_tuning: dict[str, Any] | None,
+    *,
+    period: str,
+) -> str:
+    if compression_tuning is None:
+        return ""
+    ct_windows: dict[str, Any] = cast(
+        "dict[str, Any]",
+        compression_tuning.get("windows") or {},
+    )
+    ct_recommendations_raw: Any = compression_tuning.get("recommendations") or []
+    ct_recommendations: list[dict[str, Any]] = cast(
+        "list[dict[str, Any]]",
+        ct_recommendations_raw if isinstance(ct_recommendations_raw, list) else [],
+    )
+    ct_overrides_raw: Any = compression_tuning.get("overrides") or []
+    ct_overrides: list[dict[str, Any]] = cast(
+        "list[dict[str, Any]]",
+        ct_overrides_raw if isinstance(ct_overrides_raw, list) else [],
+    )
+
+    # Recommendations table rows.  Each persisted recommendation
+    # carries the engine's last output (status, current, recommended,
+    # reason_codes).  We display the policy name, status, the delta
+    # between current and recommended thresholds, and the primary
+    # reason codes.  No raw prompts or content.
+    ct_rec_rows_html = ""
+    for raw_entry in ct_recommendations:
+        entry = _as_dict(raw_entry)
+        if not entry:
+            continue
+        rec_obj = _as_dict(entry.get("recommendation"))
+        if not rec_obj:
+            continue
+        policy = escape(str(entry.get("policy_name", "")))
+        status = escape(str(entry.get("status", "")))
+        recommended: dict[str, Any] = _as_dict(rec_obj.get("recommended"))
+        current: dict[str, Any] = _as_dict(rec_obj.get("current"))
+        reason_obj: Any = rec_obj.get("reason_codes") or []
+        reason_codes_list: list[Any] = (
+            cast("list[Any]", reason_obj) if isinstance(reason_obj, list) else []
+        )
+        reasons_str = ", ".join(escape(str(c)) for c in reason_codes_list[:4])
+        if len(reason_codes_list) > 4:
+            reasons_str += ", ..."
+        deltas: list[str] = []
+        for key in ("min_candidate_tokens", "min_savings_tokens"):
+            try:
+                cur_v = int(current.get(key, 0) or 0)
+                rec_v = int(recommended.get(key, 0) or 0)
+                if rec_v != cur_v:
+                    deltas.append(
+                        f"{key}: {cur_v} → {rec_v}",
+                    )
+            except (TypeError, ValueError):
+                continue
+        try:
+            cur_lat = float(current.get("max_compression_latency_ms", 0) or 0)
+            rec_lat = float(
+                recommended.get("max_compression_latency_ms", 0) or 0,
+            )
+            if abs(rec_lat - cur_lat) > 1e-6:
+                deltas.append(
+                    f"max_compression_latency_ms: {cur_lat:.1f} → {rec_lat:.1f}",
+                )
+        except (TypeError, ValueError):
+            pass
+        delta_str = "<br>".join(escape(d) for d in deltas) if deltas else "—"
+        ct_rec_rows_html += f"""
+    <tr>
+      <td>{policy}</td>
+      <td>{status}</td>
+      <td>{delta_str}</td>
+      <td>{reasons_str or "—"}</td>
+    </tr>"""
+
+    if not ct_rec_rows_html:
+        ct_rec_rows_html = """
+    <tr><td colspan="4" class="empty">No recommendations persisted yet.</td></tr>"""
+
+    # Overrides table rows (last 5).  Rows are inert audit only;
+    # no production code path registers entries today, so this table
+    # is normally empty.
+    ct_ov_rows_html = ""
+    for raw_entry in ct_overrides[:5]:
+        entry = _as_dict(raw_entry)
+        if not entry:
+            continue
+        policy = escape(str(entry.get("policy_name", "")))
+        fields_dict: dict[str, Any] = _as_dict(entry.get("fields"))
+        if fields_dict:
+            fields_str = ", ".join(
+                f"{escape(str(k))}={escape(str(v))}" for k, v in fields_dict.items()
+            )
+        else:
+            fields_str = "—"
+        expires_obj: Any = entry.get("expires_at", "—")
+        expires_str = str(expires_obj) if expires_obj is not None else "—"
+        expires = escape(expires_str)
+        expired_label = (
+            '<span class="pill">expired</span>'
+            if bool(entry.get("is_expired"))
+            else '<span class="pill ok">active</span>'
+        )
+        ct_ov_rows_html += f"""
+    <tr>
+      <td>{policy}</td>
+      <td>{fields_str or "—"}</td>
+      <td>{expires}</td>
+      <td>{expired_label}</td>
+    </tr>"""
+
+    if not ct_ov_rows_html:
+        ct_ov_rows_html = """
+    <tr><td colspan="4" class="empty">
+        No runtime overrides applied (mode=recommend by default).
+    </td></tr>"""
+
+    # Window rollup (counts only) — operators see how many
+    # policies were observed.
+    ct_window_total = 0
+    for raw_entry in ct_windows.values():
+        entry = _as_dict(raw_entry)
+        if not entry:
+            continue
+        total_raw: Any = entry.get("total_requests", 0)
+        ct_window_total += int(total_raw or 0)
+    ct_window_count = len(ct_windows)
+    compression_tuning_card = f"""
+<section class="panel">
+  <h3>Advisory tuning ({escape(period)})</h3>
+  <p class="sub">
+    Recommend-only by default. <code>mode = "recommend"</code> surfaces
+    advisory suggestions without changing request behaviour.
+    <code>mode = "apply"</code> is accepted at config time for forward
+    compatibility but is dormant &mdash; no production code path
+    registers runtime overrides today.  Tuning never inspects raw
+    prompt content, never enables stable-prefix compression, and never
+    touches routing.
+  </p>
+  <section class="cards">
+    {
+        "".join(
+            [
+                _render_metric_card(
+                    title="Policies observed",
+                    metric=format_int(ct_window_count),
+                    sub="windows in last 24h",
+                ),
+                _render_metric_card(
+                    title="Requests analysed",
+                    metric=format_int(ct_window_total),
+                    sub="per-policy windows",
+                ),
+                _render_metric_card(
+                    title="Recommendations",
+                    metric=format_int(len(ct_recommendations)),
+                    sub="persisted rows",
+                ),
+                _render_metric_card(
+                    title="Runtime overrides",
+                    metric=format_int(len(ct_overrides)),
+                    sub="audit trail",
+                ),
+            ]
+        )
+    }
+  </section>
+  <h4>Recommendations</h4>
+  <table class="data compact">
+    <thead><tr>
+      <th>Policy</th>
+      <th>Status</th>
+      <th>Threshold change</th>
+      <th>Why</th>
+    </tr></thead>
+    <tbody>{ct_rec_rows_html}</tbody>
+  </table>
+  <h4>Runtime overrides (reserved, dormant)</h4>
+  <table class="data compact">
+    <thead><tr>
+      <th>Policy</th>
+      <th>Fields</th>
+      <th>Expires at</th>
+      <th>State</th>
+    </tr></thead>
+    <tbody>{ct_ov_rows_html}</tbody>
+  </table>
+  <p class="sub">
+    Reporting only and never consumed by QuotaFairScorer. Tunable fields
+    are limited to
+    <code>min_candidate_tokens</code>, <code>min_savings_tokens</code>,
+    and <code>max_compression_latency_ms</code>.
+  </p>
+</section>
+"""
+    return compression_tuning_card
+
+
+def _render_routing_guardrails_panel(routing: dict[str, Any]) -> str:
+    guardrails = _as_dict(routing.get("guardrails"))
+    guardrails_mode = escape(
+        str(guardrails.get("routing_cache_compression_mode", "reporting_only"))
+    )
+    guardrails_inputs_list = guardrails.get("route_scorer_inputs") or [
+        "health",
+        "quota",
+        "active_requests",
+        "model_eligibility",
+    ]
+    guardrails_inputs_str = ", ".join(
+        escape(str(item)) for item in guardrails_inputs_list
+    )
+
+    def _guardrails_yes_no(value: Any) -> str:
+        if value is True:
+            return "yes"
+        if value is False:
+            return "no"
+        return escape(str(value))
+
+    uses_cache = _guardrails_yes_no(guardrails.get("routing_uses_cache_metrics"))
+    uses_compression = _guardrails_yes_no(
+        guardrails.get("routing_uses_compression_metrics")
+    )
+    uses_stable_prefix = _guardrails_yes_no(
+        guardrails.get("routing_uses_stable_prefix_hash")
+    )
+    uses_policy = _guardrails_yes_no(guardrails.get("routing_uses_compression_policy"))
+
+    routing_guardrails_panel = f"""
+<section class="panel">
+  <h3>Routing guardrails</h3>
+  <p class="sub">
+    Cache and compression metrics are reporting-only. The
+    <code>QuotaFairScorer</code> does NOT consume cache, compression,
+    stable-prefix-hash, or compression-policy fields. Same-provider
+    account scoring stays load-based. These flags are hardcoded; they
+    reflect how the router is built, not the current request stream.
+  </p>
+  <section class="cards">
+    {
+        "".join(
+            [
+                _render_metric_card(
+                    title="Mode",
+                    metric=guardrails_mode,
+                    sub="cache/compression in routing",
+                ),
+                _render_metric_card(
+                    title="Cache metrics",
+                    metric=uses_cache,
+                    sub="in scorer inputs",
+                ),
+                _render_metric_card(
+                    title="Compression metrics",
+                    metric=uses_compression,
+                    sub="in scorer inputs",
+                ),
+                _render_metric_card(
+                    title="Stable-prefix hash",
+                    metric=uses_stable_prefix,
+                    sub="in scorer inputs",
+                ),
+                _render_metric_card(
+                    title="Compression policy",
+                    metric=uses_policy,
+                    sub="in scorer inputs",
+                ),
+            ]
+        )
+    }
+  </section>
+  <p class="sub">Scorer inputs (allowed): <code>{guardrails_inputs_str}</code></p>
+</section>
+"""
+    return routing_guardrails_panel
+
+
 def render_runtime(
     snapshot: dict[str, Any],
     theme_css: str = "",
@@ -3700,14 +5183,6 @@ def render_runtime(
     current_theme: str = "",
     update_info: Any | None = None,
     transcoding_stats: dict[str, Any] | None = None,
-    cache_observability: dict[str, Any] | None = None,
-    canonical_request_segmentation: dict[str, Any] | None = None,
-    compression_observability: dict[str, Any] | None = None,
-    compression_runtime: dict[str, Any] | None = None,
-    compression_policy_stats: dict[str, Any] | None = None,
-    cache_stability: dict[str, Any] | None = None,
-    synthetic_cache_summary: dict[str, Any] | None = None,
-    compression_tuning: dict[str, Any] | None = None,
     request_shaping_summary: dict[str, Any] | None = None,
     period: str = "24h",
 ) -> str:
@@ -4316,1561 +5791,12 @@ def render_runtime(
 </section>
 """
 
-    # Cache reporting card
-    cache_card = ""
-    if request_shaping_summary is None:
-        fallback_compression_runtime = compression_runtime or {}
-        fallback_compression_observability = compression_observability or {}
-        fallback_compression_totals = cast(
-            "dict[str, Any]",
-            fallback_compression_observability.get("totals") or {},
-        )
-        fallback_synthetic_cache_summary = synthetic_cache_summary or {}
-        request_shaping_summary = {
-            "mode": {
-                "compression": (
-                    "safe"
-                    if int(fallback_compression_runtime.get("applied_count", 0) or 0)
-                    > 0
-                    else (
-                        "observe"
-                        if int(
-                            fallback_compression_totals.get("observed_requests", 0) or 0
-                        )
-                        > 0
-                        else "off"
-                    )
-                ),
-                "synthetic_cache": (
-                    "apply"
-                    if int(
-                        fallback_synthetic_cache_summary.get("applied_count", 0) or 0
-                    )
-                    > 0
-                    else (
-                        "dry_run"
-                        if int(
-                            fallback_synthetic_cache_summary.get("dry_run_count", 0)
-                            or 0
-                        )
-                        > 0
-                        else "off"
-                    )
-                ),
-                "tuning": "off",
-                "routing": guardrails_mode,
-            },
-            "compression": {
-                "requests_analyzed": int(
-                    fallback_compression_totals.get("observed_requests", 0) or 0
-                ),
-                "requests_compressed": int(
-                    fallback_compression_runtime.get("applied_count", 0) or 0
-                ),
-                "estimated_savings_tokens": int(
-                    fallback_compression_runtime.get("estimated_savings_tokens", 0) or 0
-                ),
-                "actual_savings_tokens": int(
-                    fallback_compression_runtime.get("actual_savings_tokens", 0) or 0
-                ),
-                "failed_fallback_count": int(
-                    fallback_compression_runtime.get("failed_fallback_count", 0) or 0
-                ),
-            },
-            "cache": {
-                "cache_counter_reported_rate": None,
-                "native_cache_observed_requests": int(
-                    (cache_stability or {}).get("transcoded_request_count", 0) or 0
-                ),
-            },
-            "synthetic_cache": {
-                "dry_run_count": int(
-                    (synthetic_cache_summary or {}).get("dry_run_count", 0) or 0
-                ),
-                "applied_count": int(
-                    (synthetic_cache_summary or {}).get("applied_count", 0) or 0
-                ),
-                "candidate_count": int(
-                    (synthetic_cache_summary or {}).get("candidate_count_total", 0) or 0
-                ),
-                "warning_count": int(
-                    (synthetic_cache_summary or {}).get("warning_count_total", 0) or 0
-                ),
-            },
-            "tuning": {"recommendation_count": 0, "override_count": 0},
-            "guardrails": {
-                "routing_uses_cache_metrics": guardrails.get(
-                    "routing_uses_cache_metrics", False
-                ),
-                "routing_uses_compression_metrics": guardrails.get(
-                    "routing_uses_compression_metrics", False
-                ),
-                "routing_uses_stable_prefix_hash": guardrails.get(
-                    "routing_uses_stable_prefix_hash", False
-                ),
-                "routing_uses_compression_policy": guardrails.get(
-                    "routing_uses_compression_policy", False
-                ),
-                "stable_prefix_preserved_rate": None,
-                "failed_fallback_count": int(
-                    (compression_runtime or {}).get("failed_fallback_count", 0) or 0
-                ),
-                "policy_warning_count": 0,
-            },
-        }
-
-    def _display_request_shaping_mode(value: str) -> str:
-        return value.replace("_", " ").title()
-
-    shaping_mode = cast("dict[str, Any]", request_shaping_summary.get("mode") or {})
-    shaping_compression = cast(
-        "dict[str, Any]",
-        request_shaping_summary.get("compression") or {},
-    )
-    shaping_cache = cast("dict[str, Any]", request_shaping_summary.get("cache") or {})
-    shaping_synthetic = cast(
-        "dict[str, Any]",
-        request_shaping_summary.get("synthetic_cache") or {},
-    )
-    shaping_tuning = cast(
-        "dict[str, Any]",
-        request_shaping_summary.get("tuning") or {},
-    )
-    shaping_guardrails = cast(
-        "dict[str, Any]",
-        request_shaping_summary.get("guardrails") or {},
-    )
-    shaping_segmentation = cast(
-        "dict[str, Any]",
-        request_shaping_summary.get("segmentation") or {},
+    shaping_summary = request_shaping_summary or {}
+    request_shaping_panel = _render_request_shaping_summary_panel(
+        shaping_summary, period=period, guardrails_mode=guardrails_mode
     )
 
-    compression_mode_label = _display_request_shaping_mode(
-        str(shaping_mode.get("compression", "off"))
-    )
-    synthetic_mode_label = _display_request_shaping_mode(
-        str(shaping_mode.get("synthetic_cache", "off"))
-    )
-    tuning_mode_label = _display_request_shaping_mode(
-        str(shaping_mode.get("tuning", "off"))
-    )
-    routing_mode_label = escape(str(shaping_mode.get("routing", "reporting_only")))
-    cache_reported_rate = shaping_cache.get("cache_counter_reported_rate")
-    cache_reported_label = (
-        _format_percent_unit(cache_reported_rate, digits=1)
-        if cache_reported_rate is not None
-        else "—"
-    )
-    stable_prefix_rate = shaping_guardrails.get("stable_prefix_preserved_rate")
-    stable_prefix_label = (
-        _format_percent_unit(stable_prefix_rate, digits=1)
-        if stable_prefix_rate is not None
-        else "—"
-    )
-    synthetic_candidate_count = format_int(shaping_synthetic.get("candidate_count", 0))
-    failed_fallback_count = format_int(
-        shaping_guardrails.get("failed_fallback_count", 0)
-    )
-    policy_warning_count = format_int(shaping_guardrails.get("policy_warning_count", 0))
-    recommendation_count = format_int(shaping_tuning.get("recommendation_count", 0))
-    tuning_override_count = format_int(shaping_tuning.get("override_count", 0))
-    requests_segmented_count = format_int(
-        shaping_segmentation.get("requests_segmented", 0)
-    )
-
-    if str(shaping_mode.get("compression", "off")) == "safe":
-        compression_sub = (
-            f"{format_int(shaping_compression.get('requests_compressed', 0))} "
-            "requests compressed · saved "
-            f"{format_int(shaping_compression.get('actual_savings_tokens', 0))} "
-            "tokens"
-        )
-    elif str(shaping_mode.get("compression", "off")) == "observe":
-        compression_sub = (
-            f"{format_int(shaping_compression.get('requests_analyzed', 0))} "
-            "requests analyzed · potential "
-            f"{format_int(shaping_compression.get('estimated_savings_tokens', 0))} "
-            "tokens"
-        )
-    else:
-        compression_sub = "disabled by config"
-
-    request_shaping_panel = f"""
-<section class="panel">
-  <h3>Request shaping ({escape(period)})</h3>
-  <p class="sub">
-    Operator summary for cache reporting, safe compression, synthetic cache
-    controls, advisory tuning, and routing guardrails. Routing stays
-    load-based and reporting-only metrics never enter the scorer.
-  </p>
-  <section class="cards">
-    {
-        "".join(
-            [
-                _render_metric_card(
-                    title="Compression",
-                    metric=compression_mode_label,
-                    sub=compression_sub,
-                    warning=int(
-                        shaping_compression.get("failed_fallback_count", 0) or 0
-                    )
-                    > 0,
-                ),
-                _render_metric_card(
-                    title="Cache controls",
-                    metric=cache_reported_label,
-                    sub=(
-                        "reported rows · "
-                        f"Synthetic {synthetic_mode_label} · "
-                        f"{synthetic_candidate_count} candidates"
-                    ),
-                ),
-                _render_metric_card(
-                    title="Safety",
-                    metric=stable_prefix_label,
-                    sub=(
-                        "stable prefix preserved · "
-                        f"{failed_fallback_count} fallbacks · "
-                        f"{policy_warning_count} policy warnings"
-                    ),
-                    warning=int(shaping_guardrails.get("failed_fallback_count", 0) or 0)
-                    > 0,
-                ),
-                _render_metric_card(
-                    title="Advisory tuning",
-                    metric=tuning_mode_label,
-                    sub=(
-                        f"{recommendation_count} recommendations · "
-                        f"{tuning_override_count} overrides"
-                    ),
-                ),
-                _render_metric_card(
-                    title="Routing",
-                    metric=routing_mode_label,
-                    sub=(
-                        f"segmented {requests_segmented_count} · "
-                        "cache/compression stay out of scorer"
-                    ),
-                ),
-            ]
-        )
-    }
-  </section>
-</section>
-"""
-
-    cache_card = ""
-    if cache_observability is not None:
-        co_by_status: Any = cache_observability.get("by_status", {}) or {}
-        co_reported = int(co_by_status.get("reported", 0))
-        co_not_reported = int(co_by_status.get("not_reported", 0))
-        co_unknown = int(co_by_status.get("unknown_format", 0))
-        co_total_cached = int(cache_observability.get("total_cached_input_tokens", 0))
-        co_total_read = int(cache_observability.get("total_cache_read_input_tokens", 0))
-        co_total_creation = int(
-            cache_observability.get("total_cache_creation_input_tokens", 0)
-        )
-        co_ratio = cache_observability.get("cache_hit_ratio_known_only")
-        co_ratio_str = f"{float(co_ratio):.1%}" if co_ratio is not None else "—"
-        co_total = int(cache_observability.get("total_requests", 0))
-        co_input_total = int(cache_observability.get("input_tokens_total", 0))
-        co_output_total = int(cache_observability.get("output_tokens_total", 0))
-
-        # Per-provider × protocol breakdown rows.
-        co_protocol: Any = cache_observability.get("per_protocol_status", {}) or {}
-        protocol_rows_html = ""
-        if co_protocol:
-            _protocol_cells: list[str] = []
-            for (pid, proto), counts in sorted(
-                co_protocol.items(), key=lambda kv: (-kv[1].get("reported", 0), kv[0])
-            ):
-                reported = int(counts.get("reported", 0))
-                not_reported = int(counts.get("not_reported", 0))
-                unknown = int(counts.get("unknown_format", 0))
-                total_p = reported + not_reported + unknown
-                _protocol_cells.append(
-                    f"""<tr>
-        <td>{escape(str(pid))}</td>
-        <td>{escape(str(proto))}</td>
-        <td class='num'>{format_int(total_p)}</td>
-        <td class='num'>{format_int(reported)}</td>
-        <td class='num'>{format_int(not_reported)}</td>
-        <td class='num'>{format_int(unknown)}</td>
-      </tr>"""
-                )
-            protocol_rows_html = "\n".join(_protocol_cells)
-
-        # Per-account breakdown rows.
-        co_acct: Any = cache_observability.get("per_account_status", {}) or {}
-        account_rows_html = ""
-        if co_acct:
-            _acct_cells: list[str] = []
-            for acct_id, acct_data in sorted(
-                co_acct.items(), key=lambda kv: (-kv[1].get("total_requests", 0), kv[0])
-            ):
-                acct_total = int(acct_data.get("total_requests", 0))
-                acct_cached = int(acct_data.get("total_cached_input_tokens", 0))
-                _acct_cells.append(
-                    f"""<tr>
-        <td>{escape(str(acct_id))}</td>
-        <td class='num'>{format_int(acct_total)}</td>
-        <td class='num'>{format_int(acct_cached)}</td>
-      </tr>"""
-                )
-            account_rows_html = "\n".join(_acct_cells)
-
-        # Per-model breakdown rows.
-        co_mdl: Any = cache_observability.get("per_model_status", {}) or {}
-        model_rows_html = ""
-        if co_mdl:
-            _mdl_cells: list[str] = []
-            for model_id, mdl_data in sorted(
-                co_mdl.items(),
-                key=lambda kv: (-kv[1].get("total_requests", 0), kv[0]),
-            ):
-                mdl_total = int(mdl_data.get("total_requests", 0))
-                mdl_cached = int(mdl_data.get("total_cached_input_tokens", 0))
-                _mdl_cells.append(
-                    f"""<tr>
-        <td>{escape(str(model_id))}</td>
-        <td class='num'>{format_int(mdl_total)}</td>
-        <td class='num'>{format_int(mdl_cached)}</td>
-      </tr>"""
-                )
-            model_rows_html = "\n".join(_mdl_cells)
-
-        # Build the optional sub-tables only when data exists.
-        protocol_section = ""
-        if protocol_rows_html:
-            protocol_section = f"""
-  <h4>By provider &amp; protocol</h4>
-  <table class="data compact">
-    <thead><tr>
-      {_th("Provider")}
-      {_th("Protocol")}
-      {_th("Total", priority=2)}
-      {_th("Reported", priority=2)}
-      {_th("Not reported", priority=2)}
-      {_th("Unknown", priority=2)}
-    </tr></thead>
-    <tbody>
-      {protocol_rows_html}
-    </tbody>
-  </table>"""
-
-        account_section = ""
-        if account_rows_html:
-            account_section = f"""
-  <h4>By account</h4>
-  <table class="data compact">
-    <thead><tr>
-      {_th("Account ID")}
-      {_th("Total requests", priority=2)}
-      {_th("Cached tokens (REPORTED)", priority=2)}
-    </tr></thead>
-    <tbody>
-      {account_rows_html}
-    </tbody>
-  </table>"""
-
-        model_section = ""
-        if model_rows_html:
-            model_section = f"""
-  <h4>By model</h4>
-  <table class="data compact">
-    <thead><tr>
-      {_th("Model")}
-      {_th("Total requests", priority=2)}
-      {_th("Cached tokens (REPORTED)", priority=2)}
-    </tr></thead>
-    <tbody>
-      {model_rows_html}
-    </tbody>
-  </table>"""
-
-        cache_card = f"""
-<section class="panel">
-  <h3>Cache reporting ({escape(period)})</h3>
-  <p class="sub">
-    Provider-reported cache counters; the hit ratio only divides rows
-    whose upstream payload actually surfaced cache fields.
-  </p>
-  <section class="cards">
-    {
-            _render_metric_card(
-                title="Reported",
-                metric=format_int(co_reported),
-                sub="upstream returned cache fields",
-            )
-        }
-    {
-            _render_metric_card(
-                title="Not reported",
-                metric=format_int(co_not_reported),
-                sub="payload clean, no cache keys",
-            )
-        }
-    {
-            _render_metric_card(
-                title="Unknown shape",
-                metric=format_int(co_unknown),
-                sub="parse failure or unrecognized",
-            )
-        }
-    {
-            _render_metric_card(
-                title="Cache hit ratio",
-                metric=co_ratio_str,
-                sub="cached / input, REPORTED only",
-            )
-        }
-  </section>
-  <table class="data compact">
-    <thead><tr>{_th("Metric")}{_th("Value", priority=2)}</tr></thead>
-    <tbody>
-      <tr>
-        <td>Total finalized requests</td>
-        <td class='num'>{format_int(co_total)}</td>
-      </tr>
-      <tr>
-        <td>Input tokens (all requests)</td>
-        <td class='num'>{format_int(co_input_total)}</td>
-      </tr>
-      <tr>
-        <td>Output tokens (all requests)</td>
-        <td class='num'>{format_int(co_output_total)}</td>
-      </tr>
-      <tr>
-        <td>Cached input tokens (REPORTED)</td>
-        <td class='num'>{format_int(co_total_cached)}</td>
-      </tr>
-      <tr>
-        <td>Anthropic cache read</td>
-        <td class='num'>{format_int(co_total_read)}</td>
-      </tr>
-      <tr>
-        <td>Anthropic cache creation</td>
-        <td class='num'>{format_int(co_total_creation)}</td>
-      </tr>
-    </tbody>
-  </table>
-  {protocol_section}
-  {account_section}
-  {model_section}
-</section>
-"""
-
-    # Request segmentation card.  Mirrors the cache reporting card
-    # layout: status counts in a metric strip, totals table, and
-    # per-model breakdown table.
-    segmentation_card = ""
-    if canonical_request_segmentation is not None:
-        seg_by_status: Any = canonical_request_segmentation.get("by_status", {}) or {}
-        seg_segmented = int(seg_by_status.get("segmented", 0))
-        seg_empty = int(seg_by_status.get("empty_request", 0))
-        seg_parse_fail = int(seg_by_status.get("parse_failure", 0))
-        seg_total = int(canonical_request_segmentation.get("total_requests", 0))
-        seg_token_totals: Any = (
-            canonical_request_segmentation.get("token_totals", {}) or {}
-        )
-        seg_byte_totals: Any = (
-            canonical_request_segmentation.get("byte_totals", {}) or {}
-        )
-        seg_compressible = int(
-            canonical_request_segmentation.get("compressible_candidate_requests", 0)
-        )
-        seg_protected = int(canonical_request_segmentation.get("protected_requests", 0))
-
-        # Per-model breakdown.
-        seg_mdl: Any = canonical_request_segmentation.get("per_model_status", {}) or {}
-        seg_model_rows_html = ""
-        if seg_mdl:
-            _mdl_cells: list[str] = []
-            for model_id, mdl_data in sorted(
-                seg_mdl.items(),
-                key=lambda kv: (-kv[1].get("total_requests", 0), kv[0]),
-            ):
-                mdl_total = int(mdl_data.get("total_requests", 0))
-                mdl_stable = int(mdl_data.get("stable_prefix_estimated_tokens", 0))
-                mdl_volatile = int(mdl_data.get("volatile_estimated_tokens", 0))
-                _mdl_cells.append(
-                    f"""<tr>
-        <td>{escape(str(model_id))}</td>
-        <td class='num'>{format_int(mdl_total)}</td>
-        <td class='num'>{format_int(mdl_stable)}</td>
-        <td class='num'>{format_int(mdl_volatile)}</td>
-      </tr>"""
-                )
-            seg_model_rows_html = "\n".join(_mdl_cells)
-
-        seg_model_section = ""
-        if seg_model_rows_html:
-            seg_model_section = f"""
-  <h4>By model</h4>
-  <table class="data compact">
-    <thead><tr>
-      {_th("Model")}
-      {_th("Total requests", priority=2)}
-      {_th("Stable prefix tokens", priority=2)}
-      {_th("Volatile suffix tokens", priority=2)}
-    </tr></thead>
-    <tbody>
-      {seg_model_rows_html}
-    </tbody>
-  </table>"""
-
-        segmentation_card = f"""
-<section class="panel">
-  <h3>Request segmentation ({escape(period)})</h3>
-  <p class="sub">
-    Structural segmentation shows how much traffic lands in protected
-    prefixes versus volatile suffixes without mutating requests.
-  </p>
-  <section class="cards">
-    {
-            _render_metric_card(
-                title="Segmented",
-                metric=format_int(seg_segmented),
-                sub="produced a normal result",
-            )
-        }
-    {
-            _render_metric_card(
-                title="Empty request",
-                metric=format_int(seg_empty),
-                sub="no segmentable content",
-            )
-        }
-    {
-            _render_metric_card(
-                title="Parse failure",
-                metric=format_int(seg_parse_fail),
-                sub="non-mapping payload or unknown",
-            )
-        }
-    {
-            _render_metric_card(
-                title="With protected prefix",
-                metric=format_int(seg_protected),
-                sub="stable_prefix_bytes > 0",
-            )
-        }
-    {
-            _render_metric_card(
-                title="With volatile suffix",
-                metric=format_int(seg_compressible),
-                sub="volatile_bytes > 0",
-            )
-        }
-  </section>
-  <table class="data compact">
-    <thead><tr>{_th("Metric")}{_th("Value", priority=2)}</tr></thead>
-    <tbody>
-      <tr>
-        <td>Total finalized requests</td>
-        <td class='num'>{format_int(seg_total)}</td>
-      </tr>
-      <tr>
-        <td>Stable prefix tokens</td>
-        <td class='num'>{format_int(seg_token_totals.get("stable_prefix", 0))}</td>
-      </tr>
-      <tr>
-        <td>Semi-stable tokens</td>
-        <td class='num'>{format_int(seg_token_totals.get("semi_stable", 0))}</td>
-      </tr>
-      <tr>
-        <td>Volatile suffix tokens</td>
-        <td class='num'>{format_int(seg_token_totals.get("volatile", 0))}</td>
-      </tr>
-      <tr>
-        <td>Stable prefix bytes</td>
-        <td class='num'>{format_int(seg_byte_totals.get("stable_prefix", 0))}</td>
-      </tr>
-      <tr>
-        <td>Semi-stable bytes</td>
-        <td class='num'>{format_int(seg_byte_totals.get("semi_stable", 0))}</td>
-      </tr>
-      <tr>
-        <td>Volatile suffix bytes</td>
-        <td class='num'>{format_int(seg_byte_totals.get("volatile", 0))}</td>
-      </tr>
-    </tbody>
-  </table>
-  {seg_model_section}
-</section>
-"""
-
-    # Compression opportunities panel.  Aggregates analyzer observations,
-    # eligibility, and estimated savings into a single operator-facing
-    # summary.  Mirrors the cache reporting and segmentation card
-    # layout: status counts in a metric strip, totals table, and
-    # optional sub-tables for policy rollups, transform breakdown, and
-    # warning rollup.
-    compression_card = ""
-    if compression_observability is not None:
-        co_by_status: Any = compression_observability.get("by_status", {}) or {}
-        co_total = int(compression_observability.get("total_requests", 0))
-        co_totals: Any = compression_observability.get("totals", {}) or {}
-        co_observed = int(co_totals.get("observed_requests", 0))
-        co_candidates = int(co_totals.get("candidate_count", 0))
-        co_eligible = int(co_totals.get("eligible_count", 0))
-        co_estimated_savings = int(co_totals.get("estimated_savings_tokens", 0))
-        co_observed_disabled = int(co_by_status.get("disabled", 0))
-        co_observed_active = int(co_by_status.get("observed", 0))
-        co_safe_active = int(co_by_status.get("safe", 0))
-
-        # Safe-mode applied fields (only present when safe-mode ran).
-        co_applied = int(
-            compression_observability.get("requests_with_compression_applied", 0)
-        )
-        co_applied_savings = int(
-            compression_observability.get("applied_total_savings_tokens", 0)
-        )
-        co_applied_fallback = int(
-            compression_observability.get("applied_failed_fallback_count", 0)
-        )
-        co_applied_preserved = int(
-            compression_observability.get("applied_stable_prefix_preserved_count", 0)
-        )
-        co_applied_p95_savings = compression_observability.get(
-            "applied_p95_savings_tokens"
-        )
-        co_applied_p95_latency = compression_observability.get("applied_p95_latency_ms")
-
-        # Analyzer latency stats.
-        co_analyzer_p95 = co_totals.get("analyzer_latency_ms_p95")
-        co_analyzer_median = co_totals.get("analyzer_latency_ms_median")
-
-        # Per-model compression breakdown (top-N by total_requests).
-        co_mdl: Any = compression_observability.get("per_model_status", {}) or {}
-        co_model_rows_html = ""
-        if co_mdl:
-            _co_mdl_cells: list[str] = []
-            for model_id, mdl_data in sorted(
-                co_mdl.items(),
-                key=lambda kv: (-kv[1].get("total_requests", 0), kv[0]),
-            )[:10]:
-                m_total = int(mdl_data.get("total_requests", 0))
-                m_candidates = int(mdl_data.get("candidate_count", 0))
-                m_eligible = int(mdl_data.get("eligible_count", 0))
-                m_savings = int(mdl_data.get("estimated_savings_tokens", 0))
-                _co_mdl_cells.append(
-                    f"""<tr>
-        <td>{escape(str(model_id))}</td>
-        <td class='num'>{format_int(m_total)}</td>
-        <td class='num'>{format_int(m_candidates)}</td>
-        <td class='num'>{format_int(m_eligible)}</td>
-        <td class='num'>{format_int(m_savings)}</td>
-      </tr>"""
-                )
-            co_model_rows_html = "\n".join(_co_mdl_cells)
-
-        co_model_section = ""
-        if co_model_rows_html:
-            co_model_section = f"""
-  <h4>By model</h4>
-  <table class="data compact">
-    <thead><tr>
-      {_th("Model")}
-      {_th("Total requests", priority=2)}
-      {_th("Candidates", priority=2)}
-      {_th("Eligible", priority=2)}
-      {_th("Estimated savings", priority=2)}
-    </tr></thead>
-    <tbody>
-      {co_model_rows_html}
-    </tbody>
-  </table>"""
-
-        def _fmt_ms(value: Any) -> str:
-            if value is None:
-                return "—"
-            try:
-                return f"{float(value):.2f} ms"
-            except (TypeError, ValueError):
-                return str(value)
-
-        def _fmt_tokens(value: Any) -> str:
-            if value is None:
-                return "—"
-            try:
-                return format_int(int(value))
-            except (TypeError, ValueError):
-                return str(value)
-
-        compression_card = f"""
-<section class="panel">
-  <h3>Compression opportunities ({escape(period)})</h3>
-  <p class="sub">
-    Opportunity analysis and safe-mode outcomes. These metrics stay
-    reporting-only and do not enter routing.
-  </p>
-  <section class="cards">
-    {
-            _render_metric_card(
-                title="Observed requests",
-                metric=format_int(co_observed),
-                sub="observe-mode ran",
-            )
-        }
-    {
-            _render_metric_card(
-                title="Applied (safe mode)",
-                metric=format_int(co_applied),
-                sub="payload actually compressed",
-            )
-        }
-    {
-            _render_metric_card(
-                title="Fail-closed fallbacks",
-                metric=format_int(co_applied_fallback),
-                sub="stable-prefix hash mismatch",
-                warning=co_applied_fallback > 0,
-            )
-        }
-    {
-            _render_metric_card(
-                title="Candidates",
-                metric=format_int(co_candidates),
-                sub=f"{format_int(co_eligible)} eligible",
-            )
-        }
-    {
-            _render_metric_card(
-                title="Actual savings",
-                metric=_fmt_tokens(co_applied_savings),
-                sub="tokens saved in safe mode",
-            )
-        }
-  </section>
-  <table class="data compact">
-    <thead><tr>{_th("Metric")}{_th("Value", priority=2)}</tr></thead>
-    <tbody>
-      <tr>
-        <td>Total finalized requests</td>
-        <td class='num'>{format_int(co_total)}</td>
-      </tr>
-      <tr>
-        <td>Disabled</td>
-        <td class='num'>{format_int(co_observed_disabled)}</td>
-      </tr>
-      <tr>
-        <td>Observed (analyzer ran)</td>
-        <td class='num'>{format_int(co_observed_active)}</td>
-      </tr>
-      <tr>
-        <td>Safe mode</td>
-        <td class='num'>{format_int(co_safe_active)}</td>
-      </tr>
-      <tr>
-        <td>Estimated savings (observe)</td>
-        <td class='num'>{format_int(co_estimated_savings)}</td>
-      </tr>
-      <tr>
-        <td>Analyzer latency median</td>
-        <td class='num'>{_fmt_ms(co_analyzer_median)}</td>
-      </tr>
-      <tr>
-        <td>Analyzer latency p95</td>
-        <td class='num'>{_fmt_ms(co_analyzer_p95)}</td>
-      </tr>
-      <tr>
-        <td>Applied p95 savings</td>
-        <td class='num'>{_fmt_tokens(co_applied_p95_savings)}</td>
-      </tr>
-      <tr>
-        <td>Applied p95 latency</td>
-        <td class='num'>{_fmt_ms(co_applied_p95_latency)}</td>
-      </tr>
-      <tr>
-        <td>Stable prefix preserved</td>
-        <td class='num'>{format_int(co_applied_preserved)}</td>
-      </tr>
-    </tbody>
-  </table>
-  {co_model_section}
-</section>
-"""
-
-    # Safe compression runtime panel.  Surfaces mode counts, applied /
-    # fallback counts, latency stats, per-transform breakdown, warnings
-    # rollup, and cache-safety counters in one operator-facing summary.
-    compression_runtime_card = ""
-    if compression_runtime is not None:
-        cr_window: Any = compression_runtime.get("window", {}) or {}
-        cr_modes: Any = compression_runtime.get("mode_counts", {}) or {}
-        cr_transforms: Any = compression_runtime.get("transforms", {}) or {}
-        cr_warnings: Any = compression_runtime.get("warnings", {}) or {}
-        cr_cache_safety: Any = compression_runtime.get("cache_safety", {}) or {}
-        cr_latency: Any = compression_runtime.get("latency_ms", {}) or {}
-        cr_request_count = int(cr_window.get("request_count", 0))
-        cr_disabled = int(cr_modes.get("disabled", 0))
-        cr_observe = int(cr_modes.get("observe", 0))
-        cr_safe = int(cr_modes.get("safe", 0))
-        cr_applied = int(compression_runtime.get("applied_count", 0))
-        cr_fallback = int(compression_runtime.get("failed_fallback_count", 0))
-        cr_candidate_count = int(compression_runtime.get("candidate_count", 0))
-        cr_estimated_savings = int(
-            compression_runtime.get("estimated_savings_tokens", 0)
-        )
-        cr_actual_savings = int(compression_runtime.get("actual_savings_tokens", 0))
-        cr_preserved = int(cr_cache_safety.get("stable_prefix_preserved", 0))
-        cr_mismatch = int(cr_cache_safety.get("stable_prefix_mismatch", 0))
-
-        def _cr_fmt_ms(value: Any) -> str:
-            if value is None:
-                return "—"
-            try:
-                return f"{float(value):.2f} ms"
-            except (TypeError, ValueError):
-                return str(value)
-
-        # Top-N transforms by applied count.
-        cr_transform_rows_html = ""
-        if cr_transforms:
-            _cr_tx_cells: list[str] = []
-            sorted_transforms = sorted(
-                cr_transforms.items(),
-                key=lambda kv: (-kv[1].get("applied", 0), kv[0]),
-            )[:10]
-            for code, data in sorted_transforms:
-                applied = int(data.get("applied", 0))
-                saved = int(data.get("tokens_saved", 0))
-                _cr_tx_cells.append(
-                    f"""<tr>
-        <td>{escape(str(code))}</td>
-        <td class='num'>{format_int(applied)}</td>
-        <td class='num'>{format_int(saved)}</td>
-      </tr>"""
-                )
-            cr_transform_rows_html = "\n".join(_cr_tx_cells)
-
-        cr_transform_section = ""
-        if cr_transform_rows_html:
-            cr_transform_section = f"""
-  <h4>Transforms</h4>
-  <table class="data compact">
-    <thead><tr>
-      {_th("Reason code")}
-      {_th("Applied", priority=2)}
-      {_th("Tokens saved", priority=2)}
-    </tr></thead>
-    <tbody>
-      {cr_transform_rows_html}
-    </tbody>
-  </table>"""
-
-        # Top-N warnings by count.
-        cr_warnings_rows_html = ""
-        if cr_warnings:
-            _cr_w_cells: list[str] = []
-            for code, count in sorted(
-                cr_warnings.items(), key=lambda kv: (-kv[1], kv[0])
-            )[:10]:
-                _cr_w_cells.append(
-                    f"""<tr>
-        <td>{escape(str(code))}</td>
-        <td class='num'>{format_int(int(count))}</td>
-      </tr>"""
-                )
-            cr_warnings_rows_html = "\n".join(_cr_w_cells)
-
-        cr_warnings_section = ""
-        if cr_warnings_rows_html:
-            cr_warnings_section = f"""
-  <h4>Warnings rollup</h4>
-  <table class="data compact">
-    <thead><tr>
-      {_th("Warning")}
-      {_th("Count", priority=2)}
-    </tr></thead>
-    <tbody>
-      {cr_warnings_rows_html}
-    </tbody>
-  </table>"""
-
-        compression_runtime_card = f"""
-<section class="panel">
-  <h3>Safe compression ({escape(period)})</h3>
-  <p class="sub">
-    Runtime outcomes for observe and safe modes: mode counts,
-    applied/fallback totals, latency distribution, per-transform
-    outcomes, warnings rollup, and stable-prefix safety counters.
-  </p>
-  <section class="cards">
-    {
-            _render_metric_card(
-                title="Mode: observe",
-                metric=format_int(cr_observe),
-                sub="analyzer ran, no mutation",
-            )
-        }
-    {
-            _render_metric_card(
-                title="Mode: safe",
-                metric=format_int(cr_safe),
-                sub="payload compressed",
-            )
-        }
-    {
-            _render_metric_card(
-                title="Mode: disabled",
-                metric=format_int(cr_disabled),
-                sub="policy disabled",
-            )
-        }
-    {
-            _render_metric_card(
-                title="Applied",
-                metric=format_int(cr_applied),
-                sub="actual transformations",
-            )
-        }
-    {
-            _render_metric_card(
-                title="Fallback",
-                metric=format_int(cr_fallback),
-                sub="fail-closed triggered",
-                warning=cr_fallback > 0,
-            )
-        }
-  </section>
-  <table class="data compact">
-    <thead><tr>{_th("Metric")}{_th("Value", priority=2)}</tr></thead>
-    <tbody>
-      <tr>
-        <td>Total finalized requests</td>
-        <td class='num'>{format_int(cr_request_count)}</td>
-      </tr>
-      <tr>
-        <td>Candidate segments</td>
-        <td class='num'>{format_int(cr_candidate_count)}</td>
-      </tr>
-      <tr>
-        <td>Estimated savings (observe)</td>
-        <td class='num'>{format_int(cr_estimated_savings)}</td>
-      </tr>
-      <tr>
-        <td>Actual savings (safe)</td>
-        <td class='num'>{format_int(cr_actual_savings)}</td>
-      </tr>
-      <tr>
-        <td>Analyzer latency avg</td>
-        <td class='num'>{_cr_fmt_ms(cr_latency.get("avg"))}</td>
-      </tr>
-      <tr>
-        <td>Analyzer latency p50</td>
-        <td class='num'>{_cr_fmt_ms(cr_latency.get("p50"))}</td>
-      </tr>
-      <tr>
-        <td>Analyzer latency p95</td>
-        <td class='num'>{_cr_fmt_ms(cr_latency.get("p95"))}</td>
-      </tr>
-      <tr>
-        <td>Analyzer latency max</td>
-        <td class='num'>{_cr_fmt_ms(cr_latency.get("max"))}</td>
-      </tr>
-      <tr>
-        <td>Stable prefix preserved</td>
-        <td class='num'>{format_int(cr_preserved)}</td>
-      </tr>
-      <tr>
-        <td>Stable prefix mismatch</td>
-        <td class='num'>{format_int(cr_mismatch)}</td>
-      </tr>
-    </tbody>
-  </table>
-  {cr_transform_section}
-  {cr_warnings_section}
-</section>
-"""
-
-    # Policy overrides panel.
-    compression_policy_card = ""
-    if compression_policy_stats is not None:
-        cps_total = int(compression_policy_stats.get("total_requests", 0))
-        cps_total_policies = int(compression_policy_stats.get("total_policies", 0))
-        cps_policies: list[Any] = list(
-            compression_policy_stats.get("policy_counts", []) or []
-        )
-
-        _cps_rows: list[str] = []
-        for policy in cps_policies:
-            policy_name = str(policy.get("policy_name", "—"))
-            policy_source = str(policy.get("policy_source", "—"))
-            policy_requests = int(policy.get("requests", 0))
-            policy_applied = int(policy.get("applied", 0))
-            policy_fallback = int(policy.get("failed_fallback", 0))
-            policy_candidates = int(policy.get("candidate_count", 0))
-            policy_warnings = int(policy.get("warning_count", 0))
-            modes: Any = policy.get("mode_counts", {}) or {}
-            mode_observe = int(modes.get("observe", 0))
-            mode_safe = int(modes.get("safe", 0))
-            mode_disabled = int(modes.get("disabled", 0))
-            _cps_rows.append(
-                f"""<tr>
-        <td>{escape(policy_name)}</td>
-        <td>{escape(policy_source)}</td>
-        <td class='num'>{format_int(policy_requests)}</td>
-        <td class='num'>{format_int(mode_observe)}</td>
-        <td class='num'>{format_int(mode_safe)}</td>
-        <td class='num'>{format_int(mode_disabled)}</td>
-        <td class='num'>{format_int(policy_applied)}</td>
-        <td class='num'>{format_int(policy_fallback)}</td>
-        <td class='num'>{format_int(policy_candidates)}</td>
-        <td class='num'>{format_int(policy_warnings)}</td>
-      </tr>"""
-            )
-        cps_rows_html = "\n".join(_cps_rows)
-
-        compression_policy_card = f"""
-<section class="panel">
-  <h3>Policy overrides ({escape(period)})</h3>
-  <p class="sub">
-    One row per resolved policy. The
-    ``&lt;global&gt;`` sentinel is the no-override path; operator-chosen
-    names come from ``[[compression.policies]]``. Metrics are
-    reporting-only and are NOT consumed by the QuotaFairScorer.
-  </p>
-  <section class="cards">
-    {
-            _render_metric_card(
-                title="Tracked policies",
-                metric=format_int(cps_total_policies),
-                sub="distinct resolved names",
-            )
-        }
-    {
-            _render_metric_card(
-                title="Total requests",
-                metric=format_int(cps_total),
-                sub="across all policies",
-            )
-        }
-  </section>
-  <table class="data compact">
-    <thead><tr>
-      {_th("Policy name")}
-      {_th("Source")}
-      {_th("Requests", priority=2)}
-      {_th("Mode: observe", priority=2)}
-      {_th("Mode: safe", priority=2)}
-      {_th("Mode: disabled", priority=2)}
-      {_th("Applied", priority=2)}
-      {_th("Fallback", priority=2)}
-      {_th("Candidates", priority=2)}
-      {_th("Warnings", priority=2)}
-    </tr></thead>
-    <tbody>
-      {cps_rows_html}
-    </tbody>
-  </table>
-</section>
-"""
-
-    # Native cache preservation panel.  Boundary tracking is per-request
-    # and lives on TranscodeContext; the durable summary just confirms
-    # the tracker is wired.  This panel stays small on purpose so
-    # operators know to drill into the request trace for per-boundary
-    # detail.
-    cache_stability_card = ""
-    if cache_stability is not None:
-        cs_transcoded = int(cache_stability.get("transcoded_request_count", 0))
-        cs_notes = str(
-            cache_stability.get(
-                "notes",
-                "Boundary detail lives in per-request traces.",
-            )
-        )
-        if cs_notes.startswith("Phase 3 ") or "Phase 3 cache-stability" in cs_notes:
-            cs_notes = (
-                "Boundary detail lives in per-request traces; durable summaries "
-                "count transcoded requests only."
-            )
-        cache_stability_card = f"""
-<section class="panel">
-  <h3>Native cache preservation ({escape(period)})</h3>
-  <p class="sub">
-    Native cache annotations are tracked per request during transcoding.
-    The durable summary below confirms the tracker is wired and counts
-    transcoded requests in window; per-boundary detail is in the request
-    trace.
-  </p>
-  <section class="cards">
-    {
-            _render_metric_card(
-                title="Transcoded requests",
-                metric=format_int(cs_transcoded),
-                sub="boundary tracker active",
-            )
-        }
-  </section>
-  <p class="sub">{escape(cs_notes)}</p>
-</section>
-"""
-
-    # Synthetic cache controls panel.  Surfaces status counts, dry-run
-    # vs applied totals, warning codes, and per-policy rollup in one
-    # operator-facing summary.  The panel is hidden when there is no
-    # data (total_requests == 0).
-    synthetic_cache_card = ""
-    if synthetic_cache_summary is not None:
-        sc_total = int(synthetic_cache_summary.get("total_requests", 0))
-        sc_status_counts: Any = synthetic_cache_summary.get("status_counts", {}) or {}
-        sc_dry_run = int(synthetic_cache_summary.get("dry_run_count", 0))
-        sc_applied = int(synthetic_cache_summary.get("applied_count", 0))
-        sc_candidate_total = int(
-            synthetic_cache_summary.get("candidate_count_total", 0)
-        )
-        sc_warning_total = int(synthetic_cache_summary.get("warning_count_total", 0))
-        sc_warning_counts: Any = synthetic_cache_summary.get("warning_counts", {}) or {}
-        sc_by_policy: list[Any] = list(
-            synthetic_cache_summary.get("by_policy", []) or []
-        )
-
-        if sc_total > 0:
-            # Status table rows.
-            sc_status_rows_html = ""
-            _sc_s_cells: list[str] = []
-            for s_name in (
-                "disabled",
-                "dry_run",
-                "applied",
-                "no_candidates",
-                "policy_required",
-                "provider_unsupported",
-            ):
-                s_count = int(sc_status_counts.get(s_name, 0))
-                if s_count > 0:
-                    _sc_s_cells.append(
-                        f"""<tr>
-        <td>{escape(s_name)}</td>
-        <td class='num'>{format_int(s_count)}</td>
-      </tr>"""
-                    )
-            sc_status_rows_html = "\n".join(_sc_s_cells)
-
-            sc_status_section = ""
-            if sc_status_rows_html:
-                sc_status_section = f"""
-  <h4>Status breakdown</h4>
-  <table class="data compact">
-    <thead><tr>
-      {_th("Status")}
-      {_th("Count", priority=2)}
-    </tr></thead>
-    <tbody>
-      {sc_status_rows_html}
-    </tbody>
-  </table>"""
-
-            # Warning codes top-N table.
-            sc_warnings_rows_html = ""
-            if sc_warning_counts:
-                _sc_w_cells: list[str] = []
-                for code, count in sorted(
-                    sc_warning_counts.items(), key=lambda kv: (-kv[1], kv[0])
-                )[:10]:
-                    _sc_w_cells.append(
-                        f"""<tr>
-        <td>{escape(str(code))}</td>
-        <td class='num'>{format_int(int(count))}</td>
-      </tr>"""
-                    )
-                sc_warnings_rows_html = "\n".join(_sc_w_cells)
-
-            sc_warnings_section = ""
-            if sc_warnings_rows_html:
-                sc_warnings_section = f"""
-  <h4>Warnings (top 10)</h4>
-  <table class="data compact">
-    <thead><tr>
-      {_th("Warning code")}
-      {_th("Count", priority=2)}
-    </tr></thead>
-    <tbody>
-      {sc_warnings_rows_html}
-    </tbody>
-  </table>"""
-
-            # By-policy table (top 5, <global> sentinel first).
-            sc_policy_rows_html = ""
-            if sc_by_policy:
-                _sc_p_cells: list[str] = []
-                sorted_policies = sorted(
-                    sc_by_policy,
-                    key=lambda p: (
-                        0 if p.get("policy_name") == "<global>" else 1,
-                        -int(p.get("request_count", 0)),
-                    ),
-                )[:5]
-                for pol in sorted_policies:
-                    pol_name = str(pol.get("policy_name", "—"))
-                    pol_source = str(pol.get("policy_source", "—"))
-                    pol_requests = int(pol.get("request_count", 0))
-                    pol_applied = int(pol.get("applied_count", 0))
-                    pol_candidates = int(pol.get("candidate_count", 0))
-                    _sc_p_cells.append(
-                        f"""<tr>
-        <td>{escape(pol_name)}</td>
-        <td>{escape(pol_source)}</td>
-        <td class='num'>{format_int(pol_requests)}</td>
-        <td class='num'>{format_int(pol_applied)}</td>
-        <td class='num'>{format_int(pol_candidates)}</td>
-      </tr>"""
-                    )
-                sc_policy_rows_html = "\n".join(_sc_p_cells)
-
-            sc_policy_section = ""
-            if sc_policy_rows_html:
-                sc_policy_section = f"""
-  <h4>By policy (top 5)</h4>
-  <table class="data compact">
-    <thead><tr>
-      {_th("Policy name")}
-      {_th("Source")}
-      {_th("Requests", priority=2)}
-      {_th("Applied", priority=2)}
-      {_th("Candidates", priority=2)}
-    </tr></thead>
-    <tbody>
-      {sc_policy_rows_html}
-    </tbody>
-  </table>"""
-
-            synthetic_cache_card = f"""
-<section class="panel">
-  <h3>Synthetic cache controls ({escape(period)})</h3>
-  <p class="sub">
-    Opt-in provider-bound cache annotations on protected stable-prefix
-    segments. Disabled by default; dry-run is the safe rollout path.
-  </p>
-  <section class="cards">
-    {
-                _render_metric_card(
-                    title="Total requests",
-                    metric=format_int(sc_total),
-                    sub="in window",
-                )
-            }
-    {
-                _render_metric_card(
-                    title="Dry run",
-                    metric=format_int(sc_dry_run),
-                    sub="synthesis planned, not applied",
-                )
-            }
-    {
-                _render_metric_card(
-                    title="Applied",
-                    metric=format_int(sc_applied),
-                    sub="payload mutated",
-                )
-            }
-    {
-                _render_metric_card(
-                    title="Candidates",
-                    metric=format_int(sc_candidate_total),
-                    sub="eligible segments",
-                )
-            }
-    {
-                _render_metric_card(
-                    title="Warnings",
-                    metric=format_int(sc_warning_total),
-                    sub="total warning events",
-                    warning=sc_warning_total > 0,
-                )
-            }
-  </section>
-  {sc_status_section}
-  {sc_warnings_section}
-  {sc_policy_section}
-  <p class="sub">
-    Reporting only &mdash; synthetic cache signals do not enter
-    QuotaFairScorer.
-  </p>
-</section>
-"""
-
-    # Advisory tuning panel.  Surfaces persisted threshold recommendations
-    # and any audit-trail runtime override rows.  Apply mode is dormant
-    # today — see docs/cache-compression.md and the Runtime overrides
-    # table caption.
-    compression_tuning_card = ""
-    if compression_tuning is not None:
-        ct_windows: dict[str, Any] = cast(
-            "dict[str, Any]",
-            compression_tuning.get("windows") or {},
-        )
-        ct_recommendations_raw: Any = compression_tuning.get("recommendations") or []
-        ct_recommendations: list[dict[str, Any]] = cast(
-            "list[dict[str, Any]]",
-            ct_recommendations_raw if isinstance(ct_recommendations_raw, list) else [],
-        )
-        ct_overrides_raw: Any = compression_tuning.get("overrides") or []
-        ct_overrides: list[dict[str, Any]] = cast(
-            "list[dict[str, Any]]",
-            ct_overrides_raw if isinstance(ct_overrides_raw, list) else [],
-        )
-
-        # Recommendations table rows.  Each persisted recommendation
-        # carries the engine's last output (status, current, recommended,
-        # reason_codes).  We display the policy name, status, the delta
-        # between current and recommended thresholds, and the primary
-        # reason codes.  No raw prompts or content.
-        ct_rec_rows_html = ""
-        for raw_entry in ct_recommendations:
-            entry = _as_dict(raw_entry)
-            if not entry:
-                continue
-            rec_obj = _as_dict(entry.get("recommendation"))
-            if not rec_obj:
-                continue
-            policy = escape(str(entry.get("policy_name", "")))
-            status = escape(str(entry.get("status", "")))
-            recommended: dict[str, Any] = _as_dict(rec_obj.get("recommended"))
-            current: dict[str, Any] = _as_dict(rec_obj.get("current"))
-            reason_obj: Any = rec_obj.get("reason_codes") or []
-            reason_codes_list: list[Any] = (
-                cast("list[Any]", reason_obj) if isinstance(reason_obj, list) else []
-            )
-            reasons_str = ", ".join(escape(str(c)) for c in reason_codes_list[:4])
-            if len(reason_codes_list) > 4:
-                reasons_str += ", ..."
-            deltas: list[str] = []
-            for key in ("min_candidate_tokens", "min_savings_tokens"):
-                try:
-                    cur_v = int(current.get(key, 0) or 0)
-                    rec_v = int(recommended.get(key, 0) or 0)
-                    if rec_v != cur_v:
-                        deltas.append(
-                            f"{key}: {cur_v} → {rec_v}",
-                        )
-                except (TypeError, ValueError):
-                    continue
-            try:
-                cur_lat = float(current.get("max_compression_latency_ms", 0) or 0)
-                rec_lat = float(
-                    recommended.get("max_compression_latency_ms", 0) or 0,
-                )
-                if abs(rec_lat - cur_lat) > 1e-6:
-                    deltas.append(
-                        f"max_compression_latency_ms: {cur_lat:.1f} → {rec_lat:.1f}",
-                    )
-            except (TypeError, ValueError):
-                pass
-            delta_str = "<br>".join(escape(d) for d in deltas) if deltas else "—"
-            ct_rec_rows_html += f"""
-    <tr>
-      <td>{policy}</td>
-      <td>{status}</td>
-      <td>{delta_str}</td>
-      <td>{reasons_str or "—"}</td>
-    </tr>"""
-
-        if not ct_rec_rows_html:
-            ct_rec_rows_html = """
-    <tr><td colspan="4" class="empty">No recommendations persisted yet.</td></tr>"""
-
-        # Overrides table rows (last 5).  Rows are inert audit only;
-        # no production code path registers entries today, so this table
-        # is normally empty.
-        ct_ov_rows_html = ""
-        for raw_entry in ct_overrides[:5]:
-            entry = _as_dict(raw_entry)
-            if not entry:
-                continue
-            policy = escape(str(entry.get("policy_name", "")))
-            fields_dict: dict[str, Any] = _as_dict(entry.get("fields"))
-            if fields_dict:
-                fields_str = ", ".join(
-                    f"{escape(str(k))}={escape(str(v))}" for k, v in fields_dict.items()
-                )
-            else:
-                fields_str = "—"
-            expires_obj: Any = entry.get("expires_at", "—")
-            expires_str = str(expires_obj) if expires_obj is not None else "—"
-            expires = escape(expires_str)
-            expired_label = (
-                '<span class="pill">expired</span>'
-                if bool(entry.get("is_expired"))
-                else '<span class="pill ok">active</span>'
-            )
-            ct_ov_rows_html += f"""
-    <tr>
-      <td>{policy}</td>
-      <td>{fields_str or "—"}</td>
-      <td>{expires}</td>
-      <td>{expired_label}</td>
-    </tr>"""
-
-        if not ct_ov_rows_html:
-            ct_ov_rows_html = """
-    <tr><td colspan="4" class="empty">
-        No runtime overrides applied (mode=recommend by default).
-    </td></tr>"""
-
-        # Window rollup (counts only) — operators see how many
-        # policies were observed.
-        ct_window_total = 0
-        for raw_entry in ct_windows.values():
-            entry = _as_dict(raw_entry)
-            if not entry:
-                continue
-            total_raw: Any = entry.get("total_requests", 0)
-            ct_window_total += int(total_raw or 0)
-        ct_window_count = len(ct_windows)
-        compression_tuning_card = f"""
-<section class="panel">
-  <h3>Advisory tuning ({escape(period)})</h3>
-  <p class="sub">
-    Recommend-only by default. <code>mode = "recommend"</code> surfaces
-    advisory suggestions without changing request behaviour.
-    <code>mode = "apply"</code> is accepted at config time for forward
-    compatibility but is dormant &mdash; no production code path
-    registers runtime overrides today.  Tuning never inspects raw
-    prompt content, never enables stable-prefix compression, and never
-    touches routing.
-  </p>
-  <section class="cards">
-    {
-            "".join(
-                [
-                    _render_metric_card(
-                        title="Policies observed",
-                        metric=format_int(ct_window_count),
-                        sub="windows in last 24h",
-                    ),
-                    _render_metric_card(
-                        title="Requests analysed",
-                        metric=format_int(ct_window_total),
-                        sub="per-policy windows",
-                    ),
-                    _render_metric_card(
-                        title="Recommendations",
-                        metric=format_int(len(ct_recommendations)),
-                        sub="persisted rows",
-                    ),
-                    _render_metric_card(
-                        title="Runtime overrides",
-                        metric=format_int(len(ct_overrides)),
-                        sub="audit trail",
-                    ),
-                ]
-            )
-        }
-  </section>
-  <h4>Recommendations</h4>
-  <table class="data compact">
-    <thead><tr>
-      <th>Policy</th>
-      <th>Status</th>
-      <th>Threshold change</th>
-      <th>Why</th>
-    </tr></thead>
-    <tbody>{ct_rec_rows_html}</tbody>
-  </table>
-  <h4>Runtime overrides (reserved, dormant)</h4>
-  <table class="data compact">
-    <thead><tr>
-      <th>Policy</th>
-      <th>Fields</th>
-      <th>Expires at</th>
-      <th>State</th>
-    </tr></thead>
-    <tbody>{ct_ov_rows_html}</tbody>
-  </table>
-  <p class="sub">
-    Reporting only and never consumed by QuotaFairScorer. Tunable fields
-    are limited to
-    <code>min_candidate_tokens</code>, <code>min_savings_tokens</code>,
-    and <code>max_compression_latency_ms</code>.
-  </p>
-</section>
-"""
-
-    # Routing guardrails panel: hardcoded diagnostic from
-    # ``RuntimeMetricsService._snapshot_routing_runtime`` so operators
-    # can confirm the routing-input boundary is intact.  The fields
-    # are constant — never derived from request content.  Cache and
-    # compression metrics stay reporting-only.
-    guardrails = _as_dict(routing.get("guardrails"))
-    guardrails_mode = escape(
-        str(guardrails.get("routing_cache_compression_mode", "reporting_only"))
-    )
-    guardrails_inputs_list = guardrails.get("route_scorer_inputs") or [
-        "health",
-        "quota",
-        "active_requests",
-        "model_eligibility",
-    ]
-    guardrails_inputs_str = ", ".join(
-        escape(str(item)) for item in guardrails_inputs_list
-    )
-
-    def _guardrails_yes_no(value: Any) -> str:
-        if value is True:
-            return "yes"
-        if value is False:
-            return "no"
-        return escape(str(value))
-
-    uses_cache = _guardrails_yes_no(guardrails.get("routing_uses_cache_metrics"))
-    uses_compression = _guardrails_yes_no(
-        guardrails.get("routing_uses_compression_metrics")
-    )
-    uses_stable_prefix = _guardrails_yes_no(
-        guardrails.get("routing_uses_stable_prefix_hash")
-    )
-    uses_policy = _guardrails_yes_no(guardrails.get("routing_uses_compression_policy"))
-
-    routing_guardrails_panel = f"""
-<section class="panel">
-  <h3>Routing guardrails</h3>
-  <p class="sub">
-    Cache and compression metrics are reporting-only. The
-    <code>QuotaFairScorer</code> does NOT consume cache, compression,
-    stable-prefix-hash, or compression-policy fields. Same-provider
-    account scoring stays load-based. These flags are hardcoded; they
-    reflect how the router is built, not the current request stream.
-  </p>
-  <section class="cards">
-    {
-        "".join(
-            [
-                _render_metric_card(
-                    title="Mode",
-                    metric=guardrails_mode,
-                    sub="cache/compression in routing",
-                ),
-                _render_metric_card(
-                    title="Cache metrics",
-                    metric=uses_cache,
-                    sub="in scorer inputs",
-                ),
-                _render_metric_card(
-                    title="Compression metrics",
-                    metric=uses_compression,
-                    sub="in scorer inputs",
-                ),
-                _render_metric_card(
-                    title="Stable-prefix hash",
-                    metric=uses_stable_prefix,
-                    sub="in scorer inputs",
-                ),
-                _render_metric_card(
-                    title="Compression policy",
-                    metric=uses_policy,
-                    sub="in scorer inputs",
-                ),
-            ]
-        )
-    }
-  </section>
-  <p class="sub">Scorer inputs (allowed): <code>{guardrails_inputs_str}</code></p>
-</section>
-"""
+    routing_guardrails_panel = _render_routing_guardrails_panel(routing)
 
     body = f"""
 <h2>Runtime</h2>
@@ -5895,27 +5821,18 @@ def render_runtime(
 
 {tc_card}
 
-{request_shaping_panel}
-
-<details class="advanced-request-shaping">
-  <summary>Advanced request-shaping details</summary>
-{cache_card}
-
-{segmentation_card}
-
-{compression_card}
-
-{compression_runtime_card}
-
-{compression_policy_card}
-
-{cache_stability_card}
-
-{synthetic_cache_card}
-{compression_tuning_card}
+<section class="panel" id="request-shaping-summary">
+  <h3>Request shaping</h3>
+  {request_shaping_panel}
+  <p class="sub">
+    Cache reporting, request segmentation, native-cache preservation, compression
+    opportunities, compression runtime, policy overrides, synthetic-cache controls,
+    advisory tuning, and routing guardrails live on the
+    <a href="/cache?period={period}">Cache &amp; request shaping</a> page.
+  </p>
+</section>
 
 {routing_guardrails_panel}
-</details>
 
 <section class="panel">
   <h3>Health states</h3>
@@ -5935,6 +5852,336 @@ def render_runtime(
         auto_refresh=True,
         update_info=update_info,
     )
+
+
+def render_cache(
+    *,
+    period: str,
+    theme_css: str = "",
+    available_themes: list[str] | None = None,
+    current_theme: str = "",
+    update_info: Any | None = None,
+    routing_runtime: dict[str, Any] | None = None,
+    transcoding_stats: dict[str, Any] | None = None,
+    cache_observability: dict[str, Any] | None = None,
+    canonical_request_segmentation: dict[str, Any] | None = None,
+    compression_observability: dict[str, Any] | None = None,
+    compression_runtime: dict[str, Any] | None = None,
+    compression_policy_stats: dict[str, Any] | None = None,
+    cache_stability: dict[str, Any] | None = None,
+    synthetic_cache_summary: dict[str, Any] | None = None,
+    compression_tuning: dict[str, Any] | None = None,
+    request_shaping_summary: dict[str, Any] | None = None,
+) -> str:
+    """Render the Cache diagnostics page.
+
+    Cache / compression / synthetic cache / advisory tuning / request
+    segmentation / routing guardrails panels live here instead of being
+    hidden behind a non-persistent disclosure on /runtime.  This page
+    is bookmarkable, refresh-safe, and period-aware via the same
+    selector used elsewhere on the dashboard.
+    """
+    routing = _as_dict(routing_runtime or {})
+    guardrails = _as_dict(routing.get("guardrails"))
+    guardrails_mode = escape(
+        str(guardrails.get("routing_cache_compression_mode", "reporting_only"))
+    )
+
+    tc_card = ""
+    if transcoding_stats is not None:
+        tc_total: int = int(transcoding_stats.get("total", 0))
+        tc_native: int = int(transcoding_stats.get("native_count", 0))
+        tc_transcoded: int = int(transcoding_stats.get("transcoded_count", 0))
+        tc_per_direction: dict[tuple[str, str], int] = dict(
+            transcoding_stats.get("per_direction", {})
+        )
+        tc_direction_rows = ""
+        for (client, upstream), count in sorted(
+            tc_per_direction.items(), key=lambda x: x[1], reverse=True
+        ):
+            direction = f"{escape(client)} → {escape(upstream)}"
+            tc_direction_rows += (
+                f"<tr><td>{direction}</td><td class='num'>{format_int(count)}</td></tr>"
+            )
+        tc_direction_table = ""
+        if tc_direction_rows:
+            tc_direction_table = (
+                '<table class="data compact"><thead><tr>'
+                + _th("Direction")
+                + _th("Count", priority=2)
+                + "</tr></thead><tbody>"
+                + tc_direction_rows
+                + "</tbody></table>"
+            )
+        tc_loss_rows = ""
+        tc_loss_warning_items = cast(
+            "list[dict[str, object]]",
+            transcoding_stats.get("top_loss_warnings") or [],
+        )
+        for entry in tc_loss_warning_items:
+            direction_pair: object = entry.get("direction")
+            count_val: object = entry.get("count")
+            if (
+                isinstance(direction_pair, (list, tuple))
+                and len(cast("list[object] | tuple[object, ...]", direction_pair)) == 2
+            ):
+                client_proto = escape(str(cast("list[object]", direction_pair)[0]))
+                upstream_proto = escape(str(cast("list[object]", direction_pair)[1]))
+                direction = f"{client_proto} → {upstream_proto}"
+            else:
+                direction = "—"
+            count_int: int | None
+            if isinstance(count_val, int):
+                count_int = count_val
+            elif isinstance(count_val, float):
+                count_int = int(count_val)
+            else:
+                count_int = 0
+            tc_loss_rows += (
+                f"<tr><td>{direction}</td>"
+                f"<td class='num'>{format_int(count_int)}</td></tr>"
+            )
+        tc_loss_panel = ""
+        if tc_loss_rows:
+            tc_loss_panel = (
+                "<h4>Top loss warnings</h4>"
+                '<table class="data compact"><thead><tr>'
+                + _th("Direction")
+                + _th("Count", priority=2)
+                + "</tr></thead><tbody>"
+                + tc_loss_rows
+                + "</tbody></table>"
+            )
+        else:
+            tc_loss_panel = (
+                "<p class='empty-state'>No loss warnings recorded in this period.</p>"
+            )
+        tc_card = f"""
+<section class="panel">
+  <h3>Transcoding ({escape(period)})</h3>
+  <section class="cards">
+    {
+            _render_metric_card(
+                title="Total requests",
+                metric=format_int(tc_total),
+                sub="in period",
+            )
+        }
+    {
+            _render_metric_card(
+                title="Native",
+                metric=format_int(tc_native),
+                sub="no transcoding",
+            )
+        }
+    {
+            _render_metric_card(
+                title="Transcoded",
+                metric=format_int(tc_transcoded),
+                sub="cross-protocol",
+            )
+        }
+  </section>
+  {tc_direction_table}
+  {tc_loss_panel}
+</section>
+"""
+
+    request_shaping_panel = _render_request_shaping_summary_panel(
+        request_shaping_summary
+        or _render_cache_request_shaping_fallback(
+            cache_stability=cache_stability,
+            compression_observability=compression_observability,
+            compression_runtime=compression_runtime,
+            synthetic_cache_summary=synthetic_cache_summary,
+            guardrails=guardrails,
+        ),
+        period=period,
+        guardrails_mode=guardrails_mode,
+    )
+
+    cache_card = _render_cache_reporting_panel(cache_observability, period=period)
+    segmentation_card = _render_request_segmentation_panel(
+        canonical_request_segmentation, period=period
+    )
+    compression_card = _render_compression_opportunities_panel(
+        compression_observability, period=period
+    )
+    compression_runtime_card = _render_compression_runtime_panel(
+        compression_runtime, period=period
+    )
+    compression_policy_card = _render_compression_policy_panel(
+        compression_policy_stats, period=period
+    )
+    cache_stability_card = _render_cache_stability_panel(cache_stability, period=period)
+    synthetic_cache_card = _render_synthetic_cache_controls_panel(
+        synthetic_cache_summary, period=period
+    )
+    compression_tuning_card = _render_advisory_tuning_panel(
+        compression_tuning, period=period
+    )
+    routing_guardrails_panel = _render_routing_guardrails_panel(routing)
+
+    body = f"""
+<h2>Cache</h2>
+<p class="sub">Cache reporting, request shaping, compression, and safety guardrails.</p>
+{_render_period_selector(period, current_theme)}
+<nav class="page-index"><ul>
+  <li><a href="#cache-summary">Summary</a></li>
+  <li><a href="#cache-reporting">Cache reporting</a></li>
+  <li><a href="#cache-stability">Cache stability</a></li>
+  <li><a href="#synthetic-cache-controls">Synthetic cache controls</a></li>
+  <li><a href="#request-segmentation">Request segmentation</a></li>
+  <li><a href="#compression">Compression</a></li>
+  <li><a href="#advisory-tuning">Advisory tuning</a></li>
+  <li><a href="#routing-guardrails">Routing guardrails</a></li>
+  <li><a href="#transcoding">Transcoding</a></li>
+</ul></nav>
+
+<div id="cache-summary">{request_shaping_panel}</div>
+
+<div id="cache-reporting">{cache_card}</div>
+
+<div id="cache-stability">{cache_stability_card}</div>
+
+<div id="synthetic-cache-controls">{synthetic_cache_card}</div>
+
+<div id="request-segmentation">{segmentation_card}</div>
+
+<div id="compression">
+{compression_card}
+
+{compression_runtime_card}
+
+{compression_policy_card}
+</div>
+
+<div id="advisory-tuning">{compression_tuning_card}</div>
+
+<div id="routing-guardrails">{routing_guardrails_panel}</div>
+
+<div id="transcoding">{tc_card}</div>
+"""
+    return _render_layout(
+        title="Cache",
+        body=body,
+        active_nav="cache",
+        period=period,
+        theme_css=theme_css,
+        available_themes=available_themes,
+        current_theme=current_theme,
+        auto_refresh=True,
+        update_info=update_info,
+    )
+
+
+def _render_cache_request_shaping_fallback(
+    *,
+    cache_stability: dict[str, Any] | None,
+    compression_observability: dict[str, Any] | None,
+    compression_runtime: dict[str, Any] | None,
+    synthetic_cache_summary: dict[str, Any] | None,
+    guardrails: dict[str, Any],
+) -> dict[str, Any]:
+    """Mirror the runtime fallback summary so the /cache summary card stays useful
+    even when no upstream-built summary is supplied yet. Kept private to this module.
+    """
+
+    fallback_compression_runtime = compression_runtime or {}
+    fallback_compression_observability = compression_observability or {}
+    fallback_compression_totals = cast(
+        "dict[str, Any]",
+        fallback_compression_observability.get("totals") or {},
+    )
+    fallback_synthetic_cache_summary = synthetic_cache_summary or {}
+    return {
+        "mode": {
+            "compression": (
+                "safe"
+                if int(fallback_compression_runtime.get("applied_count", 0) or 0) > 0
+                else (
+                    "observe"
+                    if int(fallback_compression_totals.get("observed_requests", 0) or 0)
+                    > 0
+                    else "off"
+                )
+            ),
+            "synthetic_cache": (
+                "apply"
+                if int(fallback_synthetic_cache_summary.get("applied_count", 0) or 0)
+                > 0
+                else (
+                    "dry_run"
+                    if int(
+                        fallback_synthetic_cache_summary.get("dry_run_count", 0) or 0
+                    )
+                    > 0
+                    else "off"
+                )
+            ),
+            "tuning": "off",
+            "routing": str(
+                guardrails.get("routing_cache_compression_mode", "reporting_only")
+            ),
+        },
+        "compression": {
+            "requests_analyzed": int(
+                fallback_compression_totals.get("observed_requests", 0) or 0
+            ),
+            "requests_compressed": int(
+                fallback_compression_runtime.get("applied_count", 0) or 0
+            ),
+            "estimated_savings_tokens": int(
+                fallback_compression_runtime.get("estimated_savings_tokens", 0) or 0
+            ),
+            "actual_savings_tokens": int(
+                fallback_compression_runtime.get("actual_savings_tokens", 0) or 0
+            ),
+            "failed_fallback_count": int(
+                fallback_compression_runtime.get("failed_fallback_count", 0) or 0
+            ),
+        },
+        "cache": {
+            "cache_counter_reported_rate": None,
+            "native_cache_observed_requests": int(
+                (cache_stability or {}).get("transcoded_request_count", 0) or 0
+            ),
+        },
+        "synthetic_cache": {
+            "dry_run_count": int(
+                (synthetic_cache_summary or {}).get("dry_run_count", 0) or 0
+            ),
+            "applied_count": int(
+                (synthetic_cache_summary or {}).get("applied_count", 0) or 0
+            ),
+            "candidate_count": int(
+                (synthetic_cache_summary or {}).get("candidate_count_total", 0) or 0
+            ),
+            "warning_count": int(
+                (synthetic_cache_summary or {}).get("warning_count_total", 0) or 0
+            ),
+        },
+        "tuning": {"recommendation_count": 0, "override_count": 0},
+        "guardrails": {
+            "routing_uses_cache_metrics": guardrails.get(
+                "routing_uses_cache_metrics", False
+            ),
+            "routing_uses_compression_metrics": guardrails.get(
+                "routing_uses_compression_metrics", False
+            ),
+            "routing_uses_stable_prefix_hash": guardrails.get(
+                "routing_uses_stable_prefix_hash", False
+            ),
+            "routing_uses_compression_policy": guardrails.get(
+                "routing_uses_compression_policy", False
+            ),
+            "stable_prefix_preserved_rate": None,
+            "failed_fallback_count": int(
+                (compression_runtime or {}).get("failed_fallback_count", 0) or 0
+            ),
+            "policy_warning_count": 0,
+        },
+    }
 
 
 def _render_chart_canvas(
@@ -7048,6 +7295,7 @@ def _format_phase_cell(row: dict[str, Any]) -> str:
 __all__ = [
     "render_accounts",
     "render_bandwidth",
+    "render_cache",
     "render_events",
     "render_latency",
     "render_model_detail",

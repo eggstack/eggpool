@@ -294,7 +294,7 @@ A future cache-aware routing mode would require an explicit `routing.cache_aware
 
 ### Symptom: dashboard cards show no data
 
-Runtime cards under `/runtime` render but show empty / `0` counts.
+Cards under `/cache` render but show empty / `0` counts.
 
 **Check:**
 

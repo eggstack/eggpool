@@ -99,22 +99,22 @@ uv run pytest tests/unit/test_routing_priority.py -v
 ### Runtime visibility tests
 
 Cache/compression runtime visibility is covered by three focused unit
-test files:
+test files plus the cache-page acceptance test:
 
 - `tests/unit/test_compression_stats_phase7.py` — query-layer tests
   for `fetch_compression_runtime`, `fetch_compression_policy_stats`,
   `fetch_cache_stability_summary` in `src/eggpool/stats/queries.py`.
-- `tests/unit/test_dashboard_phase7.py` — render-layer tests for the
-  four new runtime cards (`compression`, `compression_runtime`,
+- `tests/unit/test_dashboard_cache_page.py` — render-layer tests for
+  the cache-page cards (`compression`, `compression_runtime`,
   `compression_policy`, `cache_stability`) and the routing-separation
   notice in `src/eggpool/dashboard/render.py`.
 - `tests/unit/test_api_phase7.py` — endpoint-layer tests for the six
   `/api/stats/...` JSON endpoints and auth gating.
 
-All three together are the runtime request-shaping acceptance set:
+The cache-page acceptance set:
 
 ```bash
-uv run pytest tests/unit/test_compression_stats_phase7.py tests/unit/test_dashboard_phase7.py tests/unit/test_api_phase7.py -v
+uv run pytest tests/unit/test_compression_stats_phase7.py tests/unit/test_dashboard_cache_page.py tests/unit/test_api_phase7.py -v
 ```
 
 **Critical rules**:

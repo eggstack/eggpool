@@ -1,8 +1,8 @@
-"""Tests for the runtime request-shaping dashboard surfaces.
+"""Tests for the /cache page request-shaping dashboard surfaces.
 
 These tests verify that the request-shaping summary plus the detailed
-compression/cache panels render correctly on the runtime page. The
-tests focus on operator-facing behaviour:
+compression/cache panels render correctly on the /cache page via
+``render_cache``.  The tests focus on operator-facing behaviour:
 
 - Empty data renders the panel header and metric strip without errors.
 - Non-empty data shows the headline metric counts.
@@ -13,42 +13,7 @@ tests focus on operator-facing behaviour:
 
 from __future__ import annotations
 
-from typing import Any
-
-from eggpool.dashboard.render import render_runtime
-
-
-def _base_snapshot() -> dict[str, Any]:
-    """Minimal snapshot so render_runtime doesn't blow up on missing keys."""
-    return {
-        "server": {"pid": 1, "uptime_seconds": 0, "configured_server_threads": 1},
-        "memory": {},
-        "processes": {},
-        "background_tasks": [],
-        "db": {},
-        "routing_runtime": {
-            "guardrails": {
-                "routing_cache_compression_mode": "reporting_only",
-                "routing_uses_cache_metrics": False,
-                "routing_uses_compression_metrics": False,
-                "routing_uses_stable_prefix_hash": False,
-                "routing_uses_compression_policy": False,
-                "route_scorer_inputs": [
-                    "health",
-                    "quota",
-                    "active_requests",
-                    "model_eligibility",
-                ],
-            },
-        },
-        "outbound_client": {
-            "build_count": 0,
-            "request_count": 0,
-            "error_count": 0,
-        },
-        "provider_client_pool": {"build_count": 0, "providers": {}},
-        "dns_cache": {"enabled": False},
-    }
+from eggpool.dashboard.render import render_cache
 
 
 class TestCompressionObservabilityCard:
@@ -56,8 +21,8 @@ class TestCompressionObservabilityCard:
 
     def test_empty_data_renders_panel(self) -> None:
         """An empty payload still produces the panel header and metric strip."""
-        html = render_runtime(
-            _base_snapshot(),
+        html = render_cache(
+            period="24h",
             compression_observability={
                 "total_requests": 0,
                 "by_status": {},
@@ -80,8 +45,8 @@ class TestCompressionObservabilityCard:
 
     def test_populated_data_renders_counts(self) -> None:
         """Populated counts surface in the metric cards."""
-        html = render_runtime(
-            _base_snapshot(),
+        html = render_cache(
+            period="24h",
             compression_observability={
                 "total_requests": 50,
                 "by_status": {"disabled": 10, "observed": 35, "safe": 5},
@@ -118,8 +83,8 @@ class TestCompressionObservabilityCard:
 
     def test_no_warning_class_when_no_fallback(self) -> None:
         """No 'warning' class when fallback count is zero."""
-        html = render_runtime(
-            _base_snapshot(),
+        html = render_cache(
+            period="24h",
             compression_observability={
                 "total_requests": 10,
                 "by_status": {},
@@ -143,8 +108,8 @@ class TestCompressionRuntimeCard:
 
     def test_empty_data_renders_panel(self) -> None:
         """Empty payload produces the panel header and metric strip."""
-        html = render_runtime(
-            _base_snapshot(),
+        html = render_cache(
+            period="24h",
             compression_runtime={
                 "window": {"seconds": 3600, "request_count": 0},
                 "mode_counts": {"disabled": 0, "observe": 0, "safe": 0},
@@ -169,8 +134,8 @@ class TestCompressionRuntimeCard:
 
     def test_populated_data_renders_counts_and_transforms(self) -> None:
         """Populated data shows mode counts and transform breakdown."""
-        html = render_runtime(
-            _base_snapshot(),
+        html = render_cache(
+            period="24h",
             compression_runtime={
                 "window": {"seconds": 86400, "request_count": 1000},
                 "mode_counts": {"disabled": 800, "observe": 150, "safe": 50},
@@ -206,8 +171,8 @@ class TestCompressionRuntimeCard:
 
     def test_warnings_table_renders(self) -> None:
         """Warnings rollup renders as a sub-table."""
-        html = render_runtime(
-            _base_snapshot(),
+        html = render_cache(
+            period="24h",
             compression_runtime={
                 "window": {"seconds": 3600, "request_count": 100},
                 "mode_counts": {"disabled": 80, "observe": 15, "safe": 5},
@@ -234,8 +199,8 @@ class TestCompressionPolicyCard:
 
     def test_empty_data_renders_panel(self) -> None:
         """Empty payload produces the panel header and metric strip."""
-        html = render_runtime(
-            _base_snapshot(),
+        html = render_cache(
+            period="24h",
             compression_policy_stats={
                 "policy_counts": [],
                 "total_requests": 0,
@@ -248,8 +213,8 @@ class TestCompressionPolicyCard:
 
     def test_populated_data_renders_policy_rows(self) -> None:
         """Populated policies render as table rows."""
-        html = render_runtime(
-            _base_snapshot(),
+        html = render_cache(
+            period="24h",
             compression_policy_stats={
                 "policy_counts": [
                     {
@@ -285,8 +250,8 @@ class TestCompressionPolicyCard:
 
     def test_global_sentinel_appears_first(self) -> None:
         """The <global> sentinel renders before override policies."""
-        html = render_runtime(
-            _base_snapshot(),
+        html = render_cache(
+            period="24h",
             compression_policy_stats={
                 "policy_counts": [
                     {
@@ -313,8 +278,8 @@ class TestCacheStabilityCard:
 
     def test_empty_data_renders_panel(self) -> None:
         """Empty payload produces the panel header and notes."""
-        html = render_runtime(
-            _base_snapshot(),
+        html = render_cache(
+            period="24h",
             cache_stability={
                 "transcoded_request_count": 0,
                 "notes": "Boundary detail lives in per-request traces.",
@@ -326,8 +291,8 @@ class TestCacheStabilityCard:
 
     def test_populated_data_renders_count(self) -> None:
         """Populated transcoded count surfaces."""
-        html = render_runtime(
-            _base_snapshot(),
+        html = render_cache(
+            period="24h",
             cache_stability={
                 "transcoded_request_count": 42,
                 "notes": "Boundary detail lives in per-request traces.",
@@ -341,8 +306,8 @@ class TestRequestShapingSummary:
 
     def test_summary_renders_when_compression_data_present(self) -> None:
         """Summary renders when compression data is provided."""
-        html = render_runtime(
-            _base_snapshot(),
+        html = render_cache(
+            period="24h",
             compression_observability={
                 "total_requests": 0,
                 "by_status": {},
@@ -358,20 +323,20 @@ class TestRequestShapingSummary:
         assert "QuotaFairScorer" in html
         assert "reporting-only" in html
 
-    def test_summary_renders_when_compression_data_absent(self) -> None:
-        """The runtime page always shows the summary even with no data."""
-        html = render_runtime(_base_snapshot())
+    def test_summary_renders_when_no_data_provided(self) -> None:
+        """The cache page always shows the summary even with no data."""
+        html = render_cache(period="24h")
         assert "Request shaping" in html
 
-    def test_runtime_avoids_phase_headings(self) -> None:
-        html = render_runtime(_base_snapshot())
+    def test_cache_page_avoids_phase_headings(self) -> None:
+        html = render_cache(period="24h")
         for needle in ("Phase 1", "Phase 2", "Phase 4", "Phase 9", "Phase 10"):
             assert needle not in html
 
-    def test_advanced_request_shaping_details_present(self) -> None:
-        """The runtime page wraps legacy detail panels in a collapsible."""
-        html = render_runtime(
-            _base_snapshot(),
+    def test_cache_page_renders_summary_panel(self) -> None:
+        """The /cache page renders the request-shaping summary panel."""
+        html = render_cache(
+            period="24h",
             cache_observability={
                 "total_requests": 1,
                 "by_status": {"reported": 1},
@@ -380,21 +345,15 @@ class TestRequestShapingSummary:
                 "per_model_status": {},
             },
         )
-        # Summary panel is visible.
         assert "Request shaping" in html
-        # Collapsible block exists.
-        assert '<details class="advanced-request-shaping">' in html
-        assert "Advanced request-shaping details" in html
-        # At least one legacy panel is inside the details block.
         assert "Cache reporting" in html
 
-    def test_runtime_disclosure_structure_pins_summary_first_layout(self) -> None:
-        """Runtime page renders a summary-first layout with detailed
-        request-shaping panels collapsed inside the advanced
-        disclosure.  This pins the final UI contract.
+    def test_cache_page_summary_and_detail_panels_render(self) -> None:
+        """The /cache page renders a summary panel plus all detail
+        panels for compression, cache, and guardrails.
         """
-        html = render_runtime(
-            _base_snapshot(),
+        html = render_cache(
+            period="24h",
             cache_observability={
                 "total_requests": 1,
                 "by_status": {"reported": 1},
@@ -443,17 +402,6 @@ class TestRequestShapingSummary:
             },
         )
 
-        # The summary heading must precede the advanced disclosure.
-        summary_idx = html.index("Request shaping")
-        details_idx = html.index('<details class="advanced-request-shaping">')
-        summary_text_idx = html.index("Advanced request-shaping details")
-        assert summary_idx < details_idx < summary_text_idx
-
-        # Slice the content inside the disclosure block and verify all
-        # detailed labels live inside it.
-        closing = "</details>"
-        end_idx = html.index(closing, details_idx)
-        details_body = html[details_idx:end_idx]
         for label in (
             "Cache reporting",
             "Compression opportunities",
@@ -462,14 +410,11 @@ class TestRequestShapingSummary:
             "Advisory tuning",
             "Routing guardrails",
         ):
-            assert label in details_body, (
-                f"detailed label {label!r} missing from advanced-request-shaping body"
-            )
+            assert label in html, f"expected label {label!r} missing from /cache page"
 
-        # Phase-era labels must not leak into operator-facing rendered HTML.
         for needle in ("Phase 1", "Phase 5", "Phase 7", "Phase 9", "Phase 10"):
             assert needle not in html, (
-                f"phase-era label {needle!r} leaked into runtime HTML"
+                f"phase-era label {needle!r} leaked into cache HTML"
             )
 
 
@@ -477,8 +422,8 @@ class TestAdvisoryTuningCard:
     """Advisory tuning panel renders concrete metrics."""
 
     def test_tuning_metric_cards_render_values_not_template_code(self) -> None:
-        html = render_runtime(
-            _base_snapshot(),
+        html = render_cache(
+            period="24h",
             compression_tuning={
                 "windows": {
                     "global": {
@@ -518,15 +463,31 @@ class TestAdvisoryTuningCard:
 
 
 class TestRoutingGuardrailsPanel:
-    """Routing-guardrails diagnostic panel renders on /runtime."""
+    """Routing-guardrails diagnostic panel renders on /cache."""
 
     def test_guardrails_panel_renders_with_default_data(self) -> None:
-        """The hardcoded guardrails diagnostic shows up on the runtime page."""
-        html = render_runtime(_base_snapshot())
+        """The hardcoded guardrails diagnostic shows up on the cache page."""
+        html = render_cache(
+            period="24h",
+            routing_runtime={
+                "guardrails": {
+                    "routing_cache_compression_mode": "reporting_only",
+                    "routing_uses_cache_metrics": False,
+                    "routing_uses_compression_metrics": False,
+                    "routing_uses_stable_prefix_hash": False,
+                    "routing_uses_compression_policy": False,
+                    "route_scorer_inputs": [
+                        "health",
+                        "quota",
+                        "active_requests",
+                        "model_eligibility",
+                    ],
+                },
+            },
+        )
         assert "Routing guardrails" in html
         assert "reporting_only" in html
         assert "Scorer inputs (allowed)" in html
-        # Sanity: every "no" metric should appear in the rendered cards.
         for label in (
             "Cache metrics",
             "Compression metrics",
@@ -536,14 +497,12 @@ class TestRoutingGuardrailsPanel:
             assert label in html, f"missing guardrail label {label!r}"
 
     def test_guardrails_panel_renders_without_guardrails_field(self) -> None:
-        """The panel falls back to defaults when the runtime snapshot
+        """The panel falls back to defaults when the routing_runtime
         omits the ``guardrails`` field.  This keeps the panel robust
         against older runtimes or test harnesses that bypass
         ``RuntimeMetricsService``.
         """
-        snapshot = _base_snapshot()
-        snapshot["routing_runtime"] = {}
-        html = render_runtime(snapshot)
+        html = render_cache(period="24h", routing_runtime={})
         assert "Routing guardrails" in html
         assert "reporting_only" in html
 
@@ -552,11 +511,19 @@ class TestRoutingGuardrailsPanel:
         metrics are NOT in scorer inputs.  Operators rely on this
         signal to confirm the routing invariant.
         """
-        html = render_runtime(_base_snapshot())
-        # The four boolean flags should each render as "no" inside a
-        # metric paragraph.  We assert the literal hardcoded labels are
-        # present so a regression that flips a flag to ``True`` would
-        # surface in the test.
+        html = render_cache(
+            period="24h",
+            routing_runtime={
+                "guardrails": {
+                    "routing_cache_compression_mode": "reporting_only",
+                    "routing_uses_cache_metrics": False,
+                    "routing_uses_compression_metrics": False,
+                    "routing_uses_stable_prefix_hash": False,
+                    "routing_uses_compression_policy": False,
+                    "route_scorer_inputs": [],
+                },
+            },
+        )
         assert '<p class="metric">no</p>' in html
         assert '<p class="metric">reporting_only</p>' in html
 
@@ -566,8 +533,8 @@ class TestNoRawPayloadLeakage:
 
     def test_no_prompt_substrings_in_html(self) -> None:
         """Common prompt substrings never appear in rendered HTML."""
-        html = render_runtime(
-            _base_snapshot(),
+        html = render_cache(
+            period="24h",
             compression_observability={
                 "total_requests": 1,
                 "by_status": {"disabled": 1},
@@ -610,7 +577,7 @@ class TestNoRawPayloadLeakage:
         ]
         for needle in forbidden:
             assert needle not in html, (
-                f"Forbidden substring {needle!r} leaked into runtime HTML"
+                f"Forbidden substring {needle!r} leaked into cache HTML"
             )
 
 
@@ -618,9 +585,9 @@ class TestSyntheticCacheCard:
     """Synthetic cache controls card renders with empty + populated data."""
 
     def test_empty_data_not_rendered(self) -> None:
-        """When total_requests is 0 the card is suppressed."""
-        html = render_runtime(
-            _base_snapshot(),
+        """When total_requests is 0 the panel is suppressed."""
+        html = render_cache(
+            period="24h",
             synthetic_cache_summary={
                 "total_requests": 0,
                 "status_counts": {},
@@ -633,17 +600,29 @@ class TestSyntheticCacheCard:
                 "by_policy": [],
             },
         )
-        assert "Synthetic cache controls" not in html
+        import re
+
+        m = re.search(
+            r'<div id="synthetic-cache-controls">(.*?)</div>', html, re.DOTALL
+        )
+        assert m is not None
+        assert m.group(1).strip() == ""
 
     def test_none_data_not_rendered(self) -> None:
-        """When synthetic_cache_summary is None the card is suppressed."""
-        html = render_runtime(_base_snapshot())
-        assert "Synthetic cache controls" not in html
+        """When synthetic_cache_summary is None the panel is suppressed."""
+        html = render_cache(period="24h")
+        import re
+
+        m = re.search(
+            r'<div id="synthetic-cache-controls">(.*?)</div>', html, re.DOTALL
+        )
+        assert m is not None
+        assert m.group(1).strip() == ""
 
     def test_populated_data_renders_card(self) -> None:
         """Populated data renders the card with status counts and policy table."""
-        html = render_runtime(
-            _base_snapshot(),
+        html = render_cache(
+            period="24h",
             synthetic_cache_summary={
                 "total_requests": 25,
                 "status_counts": {
@@ -695,8 +674,8 @@ class TestSyntheticCacheCard:
 
     def test_reporting_only_reminder_text_present(self) -> None:
         """The reporting-only reminder appears in the card."""
-        html = render_runtime(
-            _base_snapshot(),
+        html = render_cache(
+            period="24h",
             synthetic_cache_summary={
                 "total_requests": 1,
                 "status_counts": {"disabled": 1},
@@ -714,8 +693,8 @@ class TestSyntheticCacheCard:
 
     def test_global_sentinel_appears_before_overrides(self) -> None:
         """The <global> sentinel renders before override policies."""
-        html = render_runtime(
-            _base_snapshot(),
+        html = render_cache(
+            period="24h",
             synthetic_cache_summary={
                 "total_requests": 20,
                 "status_counts": {"disabled": 20},
@@ -753,8 +732,8 @@ class TestNoRawPayloadLeakageSyntheticCache:
 
     def test_no_prompt_substrings_in_synthetic_cache_card(self) -> None:
         """Common prompt substrings never appear in the synthetic cache card."""
-        html = render_runtime(
-            _base_snapshot(),
+        html = render_cache(
+            period="24h",
             synthetic_cache_summary={
                 "total_requests": 5,
                 "status_counts": {"applied": 5},
@@ -784,5 +763,5 @@ class TestNoRawPayloadLeakageSyntheticCache:
         ]
         for needle in forbidden:
             assert needle not in html, (
-                f"Forbidden substring {needle!r} leaked into runtime HTML"
+                f"Forbidden substring {needle!r} leaked into cache HTML"
             )

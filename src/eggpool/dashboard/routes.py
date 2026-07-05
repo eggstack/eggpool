@@ -20,6 +20,7 @@ from eggpool.dashboard.render import (
     get_theme,
     render_accounts,
     render_bandwidth,
+    render_cache,
     render_events,
     render_latency,
     render_model_detail,
@@ -1726,8 +1727,40 @@ async def handle_runtime(
     from eggpool.stats import StatsService
 
     stats_service = StatsService(db)
+    snapshot, transcoding_stats = cast(
+        "tuple[dict[str, Any], dict[str, Any] | None]",
+        await asyncio.gather(
+            runtime_metrics.snapshot(),
+            stats_service.get_transcoding_stats(period),
+        ),
+    )
+    theme_css, _, current_theme, available = _get_theme_data(request, theme)
+    return HTMLResponse(
+        content=render_runtime(
+            snapshot,
+            theme_css=theme_css,
+            available_themes=available,
+            current_theme=current_theme,
+            update_info=_get_update_info(request),
+            transcoding_stats=transcoding_stats,
+            period=period or "24h",
+        )
+    )
+
+
+async def handle_cache(
+    request: Request,
+    period: str | None = "24h",
+    theme: str | None = None,
+) -> Response:
+    """Render the cache / request-shaping diagnostics page."""
+    _get_dashboard_config(request)
+    runtime_metrics = request.app.state.runtime_metrics
+    db = request.app.state.db
+    from eggpool.stats import StatsService
+
+    stats_service = StatsService(db)
     (
-        transcoding_stats,
         cache_observability,
         canonical_request_segmentation,
         compression_observability,
@@ -1738,7 +1771,6 @@ async def handle_runtime(
         compression_tuning,
         snapshot,
     ) = await asyncio.gather(
-        stats_service.get_transcoding_stats(period),
         stats_service.get_cache_observability(period),
         stats_service.get_canonical_request_segmentation(period),
         stats_service.get_compression_observability(period),
@@ -1764,13 +1796,15 @@ async def handle_runtime(
     )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
     return HTMLResponse(
-        content=render_runtime(
-            snapshot,
+        content=render_cache(
+            period=period or "24h",
             theme_css=theme_css,
             available_themes=available,
             current_theme=current_theme,
             update_info=_get_update_info(request),
-            transcoding_stats=transcoding_stats,
+            routing_runtime=cast(
+                "dict[str, Any]", snapshot.get("routing_runtime") or {}
+            ),
             cache_observability=cache_observability,
             canonical_request_segmentation=canonical_request_segmentation,
             compression_observability=compression_observability,
@@ -1780,7 +1814,6 @@ async def handle_runtime(
             synthetic_cache_summary=synthetic_cache_summary,
             compression_tuning=compression_tuning,
             request_shaping_summary=request_shaping_summary,
-            period=period or "24h",
         )
     )
 
@@ -2026,6 +2059,7 @@ def register_dashboard_routes(app: Any, require_auth: bool = False) -> None:
         ("/routing", handle_routing, HTMLResponse),
         ("/traces", handle_traces, HTMLResponse),
         ("/runtime", handle_runtime, HTMLResponse),
+        ("/cache", handle_cache, HTMLResponse),
         ("/api/timeseries", handle_timeseries_json, JSONResponse),
         ("/api/timeseries/grouped", handle_grouped_timeseries_json, JSONResponse),
         ("/api/stats/transcoding", handle_transcoding_stats_json, JSONResponse),
@@ -2079,6 +2113,7 @@ def register_dashboard_routes(app: Any, require_auth: bool = False) -> None:
 __all__ = [
     "handle_accounts",
     "handle_bandwidth",
+    "handle_cache",
     "handle_cache_observability_json",
     "handle_cache_stability_json",
     "handle_canonical_request_segmentation_json",

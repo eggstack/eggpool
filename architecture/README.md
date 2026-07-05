@@ -1054,7 +1054,7 @@ new cards alongside the existing runtime content:
    per-boundary detail lives on the in-memory tracker.
 
 A static **routing-separation notice** card always renders on the
-runtime page with this exact text:
+/cache page with this exact text:
 
 > Cache and compression metrics are reporting-only. The
 > `QuotaFairScorer` routes on request count, token count, active
@@ -1099,7 +1099,7 @@ dict with constant flags:
 
 The flags are derived from how the router is built, not from the
 current request stream.  They are exposed via `GET /api/stats/runtime`
-and rendered as a **Routing guardrails (Phase 8)** card on the runtime
+and rendered as a **Routing guardrails (Phase 8)** card on the /cache
 dashboard next to the routing-separation notice.
 
 ### Routing input boundary
@@ -1535,7 +1535,7 @@ inputs.
 - `config.example.toml` § synthetic cache and advisory tuning commented blocks -- equivalent verbose config
 - `src/eggpool/_share/config.example.toml` -- pipx-install copy
 - `src/eggpool/api/stats.py` -- `/api/stats/cache-observability`, `/api/stats/canonical-request-segmentation`, `/api/stats/cache-stability`, `/api/stats/compression-observability`, `/api/stats/compression-runtime`, `/api/stats/compression-policies`, `/api/stats/synthetic-cache-observability`, `/api/stats/compression-tuning`
-- `src/eggpool/dashboard/render.py` -- request-shaping runtime cards (`compression`, `compression_runtime`, `compression_policy`, `cache_stability`) plus synthetic cache and tuning cards
+- `src/eggpool/dashboard/render.py` -- request-shaping cards on `/cache` page (`compression`, `compression_runtime`, `compression_policy`, `cache_stability`) plus synthetic cache and tuning cards
 - `plans/cache_compression_phase_12_operator_docs_profiles.md` -- design plan
 
 ## Database

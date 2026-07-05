@@ -29,6 +29,7 @@ from eggpool.dashboard.render import (
     _render_system_health,
     render_accounts,
     render_bandwidth,
+    render_cache,
     render_events,
     render_latency,
     render_models,
@@ -3784,6 +3785,11 @@ class TestDashboardScriptAlwaysLoaded:
 
     def test_dashboard_js_loads_on_runtime(self) -> None:
         html = render_runtime(snapshot={})
+        self._assert_dashboard_js_loaded(html)
+        assert '<script defer src="/static/chart.js"></script>' not in html
+
+    def test_dashboard_js_loads_on_cache(self) -> None:
+        html = render_cache(period="24h")
         self._assert_dashboard_js_loaded(html)
         assert '<script defer src="/static/chart.js"></script>' not in html
 

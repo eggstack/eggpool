@@ -152,7 +152,7 @@ EggPool’s request-shaping stack is opt-in and cache-preserving by default. Wit
 | Policy overrides | off (`[[compression.policies]] = []`) | scoped overlay only | `/api/stats/compression-policies` |
 | Synthetic cache controls | off (`enabled = false`, `dry_run = true`) | provider-bound stable prefix only | `/api/stats/synthetic-cache-observability` |
 | Advisory tuning | off (`enabled = false`) | no | `/api/stats/compression-tuning` |
-| Request-shaping summary | on with dashboard/runtime | no | `/api/stats/request-shaping` |
+| Request-shaping summary | on with dashboard | no | `/api/stats/request-shaping` |
 | Routing guardrails | always on | no | `/api/stats/runtime` |
 
 ### Stable config knobs

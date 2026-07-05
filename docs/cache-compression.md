@@ -65,7 +65,7 @@ These features ship behind explicit operator opt-in:
 
 It returns `RoutingScore` instances with no cache, compression, synthetic-cache, or tuning field. This is pinned by `tests/unit/test_routing_guardrails.py` (19 tests across 7 classes) and by `inspect.getsource` checks in `tests/unit/test_replay_fixtures_regression.py::TestRoutingNonInterference`.
 
-`GET /api/stats/runtime` exposes a `guardrails` dict with hardcoded constants, and `GET /api/stats/request-shaping` exposes the operator-facing summary that sits above the detailed per-surface endpoints:
+`GET /api/stats/runtime` exposes a `guardrails` dict with hardcoded constants. The `/cache` dashboard page renders the operator-facing summary and per-surface drill-down tables, backed by `GET /api/stats/request-shaping` and the per-surface endpoints:
 
 ```json
 {
