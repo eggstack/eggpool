@@ -51,7 +51,7 @@ uv run pyright src/ scripts/
 
 - **pytest** with pytest-asyncio (strict mode)
 - **respx** for HTTPX upstream mocking
-- Tests in `tests/unit/`, `tests/integration/`, `tests/contract/`
+- Tests in `tests/unit/`, `tests/integration/`, `tests/contract/`, `tests/perf/`
 
 ```bash
 # Run all tests

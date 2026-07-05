@@ -13,10 +13,8 @@ from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from starlette.responses import Response as StarletteResponse
 
 from eggpool.accounts.registry import AccountRegistry, account_config_rows
 from eggpool.api.backoff import register_backoff_routes
@@ -77,7 +75,6 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
     import httpcore
-    from starlette.requests import Request as StarletteRequest
 
     from eggpool.quota.estimation import QuotaEstimator
     from eggpool.update_checker import UpdateChecker
@@ -85,26 +82,36 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class _BodyLimitMiddleware(BaseHTTPMiddleware):
-    """Reject requests whose Content-Length exceeds the configured limit."""
+class _BodyLimitMiddleware:
+    """Reject requests whose Content-Length exceeds the configured limit.
+
+    Implemented as a raw ASGI middleware to avoid the body-buffering
+    overhead of ``BaseHTTPMiddleware``.
+    """
 
     def __init__(self, app: Any, max_bytes: int) -> None:  # noqa: ANN401
-        super().__init__(app)
+        self._app = app
         self._max_bytes = max_bytes
 
-    async def dispatch(
-        self,
-        request: StarletteRequest,
-        call_next: Any,  # noqa: ANN401
-    ) -> StarletteResponse:
-        content_length = request.headers.get("content-length")
-        if content_length:
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:  # noqa: ANN401
+        if scope.get("type") != "http":
+            await self._app(scope, receive, send)
+            return
+
+        content_length: str | None = None
+        for name, value in scope.get("headers", []):
+            if name == b"content-length":
+                content_length = value.decode("latin-1")
+                break
+
+        if content_length is not None:
             try:
                 declared_size = int(content_length)
             except (TypeError, ValueError):
                 declared_size = None
             if declared_size is not None and declared_size > self._max_bytes:
-                if request.url.path.endswith("/messages"):
+                path = scope.get("path", "")
+                if path.endswith("/messages"):
                     error_body = json.dumps(
                         {
                             "type": "error",
@@ -112,38 +119,61 @@ class _BodyLimitMiddleware(BaseHTTPMiddleware):
                                 "type": "invalid_request_error",
                                 "message": "Request body too large",
                             },
-                        }
-                    )
+                        },
+                        separators=(",", ":"),
+                    ).encode()
                 else:
                     error_body = (
-                        '{"error": {"message": "Request body too large",'
-                        ' "type": "invalid_request_error"}}'
+                        b'{"error":{"message":"Request body too large",'
+                        b'"type":"invalid_request_error"}}'
                     )
-                return StarletteResponse(
-                    status_code=413,
-                    content=error_body,
-                    media_type="application/json",
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 413,
+                        "headers": [
+                            [b"content-type", b"application/json"],
+                            [
+                                b"content-length",
+                                str(len(error_body)).encode("ascii"),
+                            ],
+                        ],
+                    }
                 )
-        return await call_next(request)
+                await send({"type": "http.response.body", "body": error_body})
+                return
+
+        await self._app(scope, receive, send)
 
 
-class _HeaderRedactionMiddleware(BaseHTTPMiddleware):
-    """Redact configured headers from upstream responses."""
+class _HeaderRedactionMiddleware:
+    """Redact configured headers from upstream responses.
+
+    Implemented as a raw ASGI middleware to avoid the body-buffering
+    overhead of ``BaseHTTPMiddleware`` and to work transparently with
+    streaming responses.
+    """
 
     def __init__(self, app: Any, headers_to_redact: list[str]) -> None:  # noqa: ANN401
-        super().__init__(app)
-        self._redact = {h.lower() for h in headers_to_redact}
+        self._app = app
+        self._redact = frozenset(h.lower().encode("ascii") for h in headers_to_redact)
 
-    async def dispatch(
-        self,
-        request: StarletteRequest,
-        call_next: Any,  # noqa: ANN401
-    ) -> StarletteResponse:
-        response = await call_next(request)
-        for header in self._redact:
-            if header in response.headers:
-                del response.headers[header]
-        return response
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:  # noqa: ANN401
+        if scope.get("type") != "http":
+            await self._app(scope, receive, send)
+            return
+
+        async def _filtered_send(message: dict[str, Any]) -> None:  # noqa: ANN401
+            if message.get("type") == "http.response.start":
+                headers = message.get("headers", [])
+                message["headers"] = [
+                    [name, value]
+                    for name, value in headers
+                    if name.lower() not in self._redact
+                ]
+            await send(message)
+
+        await self._app(scope, receive, _filtered_send)
 
 
 async def _crash_recovery(db: Database) -> None:

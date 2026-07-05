@@ -177,6 +177,21 @@ class RoutingDecisionTrace:
         return json.dumps(payload)
 
 
+@dataclass(frozen=True, slots=True)
+class RoutingPlan:
+    """Complete routing decision state, computed once per select-and-persist.
+
+    Combines eligibility filtering, tier grouping, per-tier scoring, and
+    fairness rotation into a single pass so the coordinator avoids
+    redundant ``get_eligible_accounts`` invocations.
+    """
+
+    eligible_names: list[str]
+    ranked_candidates: list[tuple[AccountRuntimeState, RoutingScore]]
+    fairness_decision: FairnessDecision | None
+    fairness_band_names: frozenset[str]
+
+
 class Router:
     """Selects an account for routing with quota-aware scoring."""
 
@@ -834,6 +849,152 @@ class Router:
             capability_policy=capability_policy,
         )
         return candidates.names
+
+    async def build_routing_plan(
+        self,
+        model_id: str,
+        *,
+        exclude_accounts: set[str] | None = None,
+        provider_id: str | None = None,
+        protocol: str | None = None,
+        transcode_eligibility: set[str] | None = None,
+        client_protocol: str | None = None,
+        thinking_requirement: ThinkingRequestRequirement | None = None,
+        capability_policy: dict[str, str] | None = None,
+        estimated_tokens: int | None = None,
+    ) -> RoutingPlan:
+        """Compute eligibility, scoring, and fairness in a single pass.
+
+        Returns a :class:`RoutingPlan` containing both the eligible
+        account names (for count/exhaustion checks) and the fully
+        ranked candidate list (for circuit-breaker probing).
+        """
+        candidates = self._selection_candidates(
+            model_id,
+            exclude_accounts,
+            provider_id,
+            protocol,
+            transcode_eligibility,
+            thinking_requirement=thinking_requirement,
+            capability_policy=capability_policy,
+        )
+        tiers = candidates.tiered()
+
+        request_estimates: dict[str, int] | None = None
+        if estimated_tokens is not None:
+            request_estimates = {name: estimated_tokens for name in candidates.names}
+
+        ranked: list[tuple[AccountRuntimeState, RoutingScore]] = []
+        fairness_decision: FairnessDecision | None = None
+        fairness_band_names: frozenset[str] = frozenset()
+
+        for _priority, tier_states in tiers:
+            tier_candidates = RoutingCandidates(
+                states=tier_states,
+                by_name={state.name: state for state in tier_states},
+            )
+            scores = await self._score_eligible_accounts(
+                tier_candidates,
+                model_id,
+                request_estimates,
+                client_protocol=client_protocol,
+                transcode_eligibility=transcode_eligibility,
+            )
+            ranked_scores = self._scorer.rank_accounts(scores)
+            ranked_pairs: list[tuple[AccountRuntimeState, RoutingScore]] = []
+            for score in ranked_scores:
+                state = tier_candidates.by_name.get(score.account_name)
+                if state is not None:
+                    ranked_pairs.append((state, score))
+
+            if self._fairness_mode != "off" and len(ranked_pairs) >= 2:
+                epsilon = self._fairness_effective_epsilon()
+                band, rest, band_reason = _fairness_band(
+                    ranked_pairs,
+                    epsilon=epsilon,
+                    prefer_native=self._scorer.prefer_native,
+                )
+                if band and self._fairness_mode == "round_robin":
+                    key = self._fairness_key(
+                        provider_id=provider_id,
+                        model_id=model_id,
+                        protocol=protocol,
+                        priority=_priority,
+                        client_protocol=client_protocol,
+                    )
+                    band, fairness_decision = await self._fairness_rotor.rotate(
+                        key, band, scope=self._fairness_scope
+                    )
+                elif band and self._fairness_mode == "random":
+                    import random as _random
+
+                    _random.shuffle(band)
+                    key = self._fairness_key(
+                        provider_id=provider_id,
+                        model_id=model_id,
+                        protocol=protocol,
+                        priority=_priority,
+                        client_protocol=client_protocol,
+                    )
+                    fairness_decision = FairnessDecision(
+                        mode="random",
+                        applied=True,
+                        key=key.to_key_string(),
+                        candidate_count=len(band),
+                        scope=self._fairness_scope,
+                        reason="ok",
+                    )
+                else:
+                    key = self._fairness_key(
+                        provider_id=provider_id,
+                        model_id=model_id,
+                        protocol=protocol,
+                        priority=_priority,
+                        client_protocol=client_protocol,
+                    )
+                    fairness_decision = FairnessDecision(
+                        mode=self._fairness_mode,
+                        applied=False,
+                        key=key.to_key_string(),
+                        candidate_count=len(ranked_pairs),
+                        scope=self._fairness_scope,
+                        reason=band_reason,
+                    )
+                fairness_band_names = (
+                    frozenset(s.name for s, _ in band) if band else frozenset()
+                )
+                ranked_pairs = band + rest
+            else:
+                key = self._fairness_key(
+                    provider_id=provider_id,
+                    model_id=model_id,
+                    protocol=protocol,
+                    priority=_priority,
+                    client_protocol=client_protocol,
+                )
+                fairness_decision = FairnessDecision(
+                    mode=self._fairness_mode,
+                    applied=False,
+                    key=key.to_key_string(),
+                    candidate_count=len(ranked_pairs),
+                    scope=self._fairness_scope,
+                    reason=(
+                        "disabled"
+                        if self._fairness_mode == "off"
+                        else "single_candidate"
+                    ),
+                )
+                fairness_band_names = frozenset()
+
+            for state, score in ranked_pairs:
+                ranked.append((state, score))
+
+        return RoutingPlan(
+            eligible_names=candidates.names,
+            ranked_candidates=ranked,
+            fairness_decision=fairness_decision,
+            fairness_band_names=fairness_band_names,
+        )
 
     async def select_accounts_for_failover(
         self,

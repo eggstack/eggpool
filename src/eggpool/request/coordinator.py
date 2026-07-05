@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -97,6 +98,7 @@ if TYPE_CHECKING:
     from eggpool.quota.estimation import QuotaEstimator
     from eggpool.routing.router import Router
     from eggpool.transcoder.policy import TranscoderPolicy
+    from eggpool.transcoder.prepared import PreparedTranscode
 
 logger = logging.getLogger(__name__)
 
@@ -403,6 +405,13 @@ class ProxyRequestContext:
     # table.  ``None`` for callers that did not run the segmenter
     # (legacy / error paths).
     segmentation: Any | None = None
+    # When ``True`` the segmentation phase was intentionally skipped
+    # (no consumer needed the output).  The finalizer stores
+    # ``segmentation_status = 'not_collected'`` instead of the
+    # default ``'empty_request'`` so the dashboard can distinguish
+    # "segmentation was not run" from "segmentation ran on an empty
+    # request".
+    segmentation_not_collected: bool = False
     # Phase 4: observe-mode compression observation.  Computed
     # observationally in :mod:`eggpool.api.proxy_request` when
     # ``[compression] enabled = true``; the finalizer reads it
@@ -459,6 +468,14 @@ class ProxyRequestContext:
     # processing; the original ``segmentation`` field (client-side)
     # is never replaced.
     synthetic_cache_segmentation: Any | None = None
+    # Cached preflight translation result.  Produced by
+    # :func:`eggpool.api.proxy_request._prepare_transcode_preflight`
+    # when the client protocol differs from the inferred upstream
+    # protocol.  The coordinator reuses this result instead of calling
+    # :meth:`encode_request` a second time, avoiding duplicate
+    # translation work.  ``None`` when no preflight ran (native
+    # request or transcoding disabled).
+    prepared_transcode: PreparedTranscode | None = None
 
     def __post_init__(self) -> None:
         if not self.upstream_protocol:
@@ -647,7 +664,7 @@ class RequestCoordinator:
             )
         # Phase 5: per-request structured log for every transcoded request
         if selected is not None:
-            logger.info(
+            logger.debug(
                 "transcoded_request request_id=%s client=%s upstream=%s "
                 "account=%s provider=%s native_match=%s "
                 "loss_warnings=%d bytes_in=%d bytes_out=%d",
@@ -690,152 +707,190 @@ class RequestCoordinator:
                 upstream_protocol=context.transcode_context.upstream_protocol,
             )
             if transcoder is not None:
-                try:
-                    payload = json.loads(context.body_for_upstream)
-                except (json.JSONDecodeError, ValueError):
-                    payload = None
-                if isinstance(payload, dict):
-                    _features = (
-                        self._transcoder_policy.features
-                        if self._transcoder_policy is not None
-                        else None
-                    )
-                    _thinking_cap: ThinkingCapability | None = None
-                    _budget_defaults: dict[str, int] | None = None
-                    _budget_policy = "lenient"
-                    _loss_policy = "warn"
-                    if self._transcoder_policy is not None:
-                        _budget_defaults = (
-                            self._transcoder_policy.thinking_budget_defaults.as_dict()
-                        )
-                        _budget_policy = (
-                            self._transcoder_policy.budget_resolution_policy
-                        )
-                        _loss_policy = self._transcoder_policy.loss_policy
-                    # Look up thinking capability from catalog cache for
-                    # budget resolution (best-effort; None is safe).
-                    try:
-                        from eggpool.catalog.capabilities import (
-                            dict_to_model_capabilities,
-                        )
-
-                        model_info = self._catalog.cache.get_model(
-                            context.model_id,
-                        )
-                        if model_info is not None:
-                            caps_raw: dict[str, Any] = model_info.get(
-                                "capabilities",
-                                {},
-                            )  # type: ignore[assignment]
-                            caps = dict_to_model_capabilities(caps_raw)
-                            _thinking_cap = caps.thinking
-                    except Exception:  # noqa: BLE001
-                        pass  # best-effort; resolver has its own fallbacks
-                    translated, warnings = transcoder.encode_request(
-                        cast("dict[str, Any]", payload),
-                        context.transcode_context,
+                # Phase 1 optimization: check if the preflight
+                # translation can be reused instead of recomputing.
+                # The prepared result is valid when the upstream
+                # protocol matches and no provider-specific thinking
+                # budget resolution is needed (thinking feature off,
+                # or no thinking controls in the client request).
+                _prepared = context.prepared_transcode
+                _features = (
+                    self._transcoder_policy.features
+                    if self._transcoder_policy is not None
+                    else None
+                )
+                _thinking_off = _features is None or not getattr(
+                    _features, "thinking", False
+                )
+                _client_has_thinking = self._client_has_thinking_controls(
+                    context.original_body,
+                    context.protocol,
+                )
+                if (
+                    _prepared is not None
+                    and _prepared.is_valid_for(
+                        upstream_protocol=context.transcode_context.upstream_protocol,
                         features=_features,
-                        thinking_capability=_thinking_cap,
-                        budget_defaults=_budget_defaults,
-                        budget_resolution_policy=_budget_policy,
-                        loss_policy=_loss_policy,
                     )
-                    context.upstream_body = encode_json_body(translated)
-                    context.transcode_context.loss_warnings.extend(warnings)
+                    and (_thinking_off or not _client_has_thinking)
+                ):
+                    # Reuse the cached preflight translation.
+                    context.upstream_body = _prepared.translated_body
+                    context.transcode_context.loss_warnings.extend(_prepared.warnings)
+                    logger.debug(
+                        "prepared_transcode_reused request_id=%s client=%s upstream=%s",
+                        context.request_id,
+                        context.protocol,
+                        context.upstream_protocol,
+                    )
+                else:
+                    try:
+                        payload = json.loads(context.body_for_upstream)
+                    except (json.JSONDecodeError, ValueError):
+                        payload = None
+                    if isinstance(payload, dict):
+                        _thinking_cap: ThinkingCapability | None = None
+                        _budget_defaults: dict[str, int] | None = None
+                        _budget_policy = "lenient"
+                        _loss_policy = "warn"
+                        if self._transcoder_policy is not None:
+                            _budget_cfg = (
+                                self._transcoder_policy.thinking_budget_defaults
+                            )
+                            _budget_defaults = _budget_cfg.as_dict()
+                            _budget_policy = (
+                                self._transcoder_policy.budget_resolution_policy
+                            )
+                            _loss_policy = self._transcoder_policy.loss_policy
+                        # Look up thinking capability from catalog cache for
+                        # budget resolution (best-effort; None is safe).
+                        try:
+                            from eggpool.catalog.capabilities import (
+                                dict_to_model_capabilities,
+                            )
 
-                    # Determine thinking decision from transcoder warnings
-                    # using the canonical kind-based classifier (Phase D).
-                    if context.thinking_trace is not None:
-                        from eggpool.catalog.capabilities import (
-                            classify_thinking_warning_decision,
-                            is_thinking_warning,
+                            model_info = self._catalog.cache.get_model(
+                                context.model_id,
+                            )
+                            if model_info is not None:
+                                caps_raw: dict[str, Any] = model_info.get(
+                                    "capabilities",
+                                    {},
+                                )  # type: ignore[assignment]
+                                caps = dict_to_model_capabilities(caps_raw)
+                                _thinking_cap = caps.thinking
+                        except Exception:  # noqa: BLE001
+                            pass  # best-effort; resolver has its own fallbacks
+                        translated, warnings = transcoder.encode_request(
+                            cast("dict[str, Any]", payload),
+                            context.transcode_context,
+                            features=_features,
+                            thinking_capability=_thinking_cap,
+                            budget_defaults=_budget_defaults,
+                            budget_resolution_policy=_budget_policy,
+                            loss_policy=_loss_policy,
                         )
+                        context.upstream_body = encode_json_body(translated)
+                        context.transcode_context.loss_warnings.extend(warnings)
 
-                        all_warnings = context.transcode_context.loss_warnings
-                        decision = classify_thinking_warning_decision(
-                            all_warnings,
-                        )
-                        context.thinking_trace["decision"] = decision
-                        thinking_warnings = [
-                            w for w in all_warnings if is_thinking_warning(w)
-                        ]
-                        if decision == "clamped" and any(
-                            w.get("kind") == "budget_clamped" for w in thinking_warnings
-                        ):
-                            context.thinking_trace["budget_clamped"] = True
+                        # Determine thinking decision from transcoder warnings
+                        # using the canonical kind-based classifier (Phase D).
+                        if context.thinking_trace is not None:
+                            from eggpool.catalog.capabilities import (
+                                classify_thinking_warning_decision,
+                                is_thinking_warning,
+                            )
 
-                        # Surface resolved budget + upstream field metadata
-                        # whenever the early translation has produced a
-                        # concrete ``thinking`` block.  Phase C
-                        # supplements this in the dispatch path with the
-                        # selected provider's override.
-                        thinking_block_obj: object = translated.get("thinking")  # pyright: ignore[reportUnknownMemberType, reportUnknownMemberType]
-                        if isinstance(thinking_block_obj, dict):
-                            thinking_block: dict[str, object] = thinking_block_obj  # pyright: ignore[reportUnknownVariableType]
-                            budget_value_obj: object = thinking_block.get(
-                                "budget_tokens"
-                            )  # pyright: ignore[reportUnknownMemberType]
-                            if isinstance(budget_value_obj, (int, float)):
-                                budget_value = budget_value_obj
-                                context.thinking_trace["resolved_budget_tokens"] = int(
-                                    budget_value,
+                            all_warnings = context.transcode_context.loss_warnings
+                            decision = classify_thinking_warning_decision(
+                                all_warnings,
+                            )
+                            context.thinking_trace["decision"] = decision
+                            thinking_warnings = [
+                                w for w in all_warnings if is_thinking_warning(w)
+                            ]
+                            if decision == "clamped" and any(
+                                w.get("kind") == "budget_clamped"
+                                for w in thinking_warnings
+                            ):
+                                context.thinking_trace["budget_clamped"] = True
+
+                            # Surface resolved budget + upstream field metadata
+                            # whenever the early translation has produced a
+                            # concrete ``thinking`` block.  Phase C
+                            # supplements this in the dispatch path with the
+                            # selected provider's override.
+                            thinking_block_obj: object = translated.get("thinking")  # pyright: ignore[reportUnknownMemberType, reportUnknownMemberType]
+                            if isinstance(thinking_block_obj, dict):
+                                thinking_block: dict[str, object] = thinking_block_obj  # pyright: ignore[reportUnknownVariableType]
+                                budget_value_obj: object = thinking_block.get(
+                                    "budget_tokens"
+                                )  # pyright: ignore[reportUnknownMemberType]
+                                if isinstance(budget_value_obj, (int, float)):
+                                    budget_value = budget_value_obj
+                                    context.thinking_trace["resolved_budget_tokens"] = (
+                                        int(
+                                            budget_value,
+                                        )
+                                    )
+                                    if not context.thinking_trace.get(
+                                        "upstream_fields"
+                                    ):
+                                        context.thinking_trace["upstream_fields"] = [
+                                            "thinking",
+                                        ]
+                            if context.upstream_protocol == "anthropic":
+                                context.thinking_trace["upstream_protocol"] = (
+                                    context.upstream_protocol
                                 )
-                                if not context.thinking_trace.get("upstream_fields"):
-                                    context.thinking_trace["upstream_fields"] = [
-                                        "thinking",
-                                    ]
-                        if context.upstream_protocol == "anthropic":
+
+                            # Record the final thinking decision. Strict
+                            # rejection is rare (it propagates as a
+                            # CapabilityError), but if it slips through as
+                            # a warning we still want a counter increment
+                            # for visibility.
+                            _thinking_counter = get_counter()
+                            client_proto = context.thinking_trace["client_protocol"]
+                            if decision == "transcoded":
+                                await _thinking_counter.increment_transcoded(
+                                    client_protocol=client_proto,
+                                    upstream_protocol=context.upstream_protocol
+                                    or "unknown",
+                                    provider_id="unknown",
+                                )
+                            elif decision == "dropped":
+                                await _thinking_counter.increment_dropped(
+                                    client_protocol=client_proto,
+                                    upstream_protocol=context.upstream_protocol
+                                    or "unknown",
+                                    reason="reasoning_content_dropped",
+                                )
+                            elif decision == "clamped":
+                                await _thinking_counter.increment_budget_clamped(
+                                    client_protocol=client_proto,
+                                    provider_id="unknown",
+                                )
+                            elif decision == "rejected":
+                                await _thinking_counter.increment_rejected(
+                                    client_protocol=client_proto,
+                                    capability_status="budget_rejected",
+                                )
+
+                    # Native path: thinking controls pass through unchanged.
+                    # Phase D: when transcoding is disabled but the client
+                    # still asked for thinking, mark the trace as
+                    # passthrough so observability surfaces the decision.
+                    if context.thinking_trace is not None:
+                        decision_value = context.thinking_trace.get("decision", "none")
+                        if decision_value == "none":
+                            context.thinking_trace["decision"] = "passthrough"
                             context.thinking_trace["upstream_protocol"] = (
                                 context.upstream_protocol
                             )
-
-                        # Record the final thinking decision. Strict
-                        # rejection is rare (it propagates as a
-                        # CapabilityError), but if it slips through as
-                        # a warning we still want a counter increment
-                        # for visibility.
-                        _thinking_counter = get_counter()
-                        client_proto = context.thinking_trace["client_protocol"]
-                        if decision == "transcoded":
-                            await _thinking_counter.increment_transcoded(
-                                client_protocol=client_proto,
-                                upstream_protocol=context.upstream_protocol
-                                or "unknown",
-                                provider_id="unknown",
+                        elif decision_value == "passthrough":
+                            context.thinking_trace["upstream_protocol"] = (
+                                context.upstream_protocol
                             )
-                        elif decision == "dropped":
-                            await _thinking_counter.increment_dropped(
-                                client_protocol=client_proto,
-                                upstream_protocol=context.upstream_protocol
-                                or "unknown",
-                                reason="reasoning_content_dropped",
-                            )
-                        elif decision == "clamped":
-                            await _thinking_counter.increment_budget_clamped(
-                                client_protocol=client_proto,
-                                provider_id="unknown",
-                            )
-                        elif decision == "rejected":
-                            await _thinking_counter.increment_rejected(
-                                client_protocol=client_proto,
-                                capability_status="budget_rejected",
-                            )
-
-                # Native path: thinking controls pass through unchanged.
-                # Phase D: when transcoding is disabled but the client
-                # still asked for thinking, mark the trace as
-                # passthrough so observability surfaces the decision.
-                if context.thinking_trace is not None:
-                    decision_value = context.thinking_trace.get("decision", "none")
-                    if decision_value == "none":
-                        context.thinking_trace["decision"] = "passthrough"
-                        context.thinking_trace["upstream_protocol"] = (
-                            context.upstream_protocol
-                        )
-                    elif decision_value == "passthrough":
-                        context.thinking_trace["upstream_protocol"] = (
-                            context.upstream_protocol
-                        )
 
         last_error: Exception | None = None
         last_upstream_response: tuple[int, list[tuple[str, str]], bytes] | None = None
@@ -1121,12 +1176,21 @@ class RequestCoordinator:
                         "mixed_collapsed_thinking": cp.mixed_collapsed_thinking,
                     }
 
-                # 1. Get eligible account names excluding attempted ones
-                eligible_account_names = self._router.get_eligible_account_names(
-                    context.model_id,
-                    exclude_accounts=context.attempted_accounts
+                # 1. Calculate projected request tokens once
+                estimated_tokens = estimate_reservation_tokens(context.original_body)
+
+                # 2. Build routing plan: eligibility + scoring + fairness
+                #    in a single pass.  This eliminates the former
+                #    get_eligible_account_names() + select_accounts_for_failover()
+                #    double-call that computed get_eligible_accounts() twice.
+                exclude: set[str] = (
+                    set(context.attempted_accounts)
                     if context.attempted_accounts
-                    else None,
+                    else set()
+                )
+                plan = await self._router.build_routing_plan(
+                    context.model_id,
+                    exclude_accounts=exclude if exclude else None,
                     provider_id=context.provider_id,
                     protocol=context.upstream_protocol,
                     transcode_eligibility=(
@@ -1134,15 +1198,19 @@ class RequestCoordinator:
                         if context.transcode_required
                         else None
                     ),
+                    client_protocol=context.protocol,
                     thinking_requirement=thinking_req
                     if thinking_req.required
                     else None,
                     capability_policy=_capability_policy,
+                    estimated_tokens=int(estimated_tokens),
                 )
+                eligible_account_names = plan.eligible_names
+                ranked_candidates = plan.ranked_candidates
 
                 if not eligible_account_names:
                     # Phase 5: distinguish pre-dispatch unavailability
-                    # from post-retry exhaustion. ``get_eligible_account_names``
+                    # from post-retry exhaustion. ``build_routing_plan``
                     # already excludes ``context.attempted_accounts``; an
                     # empty result on the first attempt means no enabled
                     # accounts at all (503). An empty result after at
@@ -1198,51 +1266,21 @@ class RequestCoordinator:
                         f"No accounts available for model {context.model_id!r}"
                     )
 
-                # 2. Calculate projected request tokens once
-                estimated_tokens = estimate_reservation_tokens(context.original_body)
-
                 # 3. Build per-account token estimate for scoring. The
-                #    scorer now folds the incoming request's projected
-                #    token count into each account's per-window token
-                #    utilization so the routing decision tracks actual
-                #    workload rather than a (frequently unreliable)
-                #    cost estimate. Every account is treated as
-                #    equally capable of the same incoming workload, so
-                #    the value is identical for all candidates.
+                #    scorer folds the incoming request's projected token
+                #    count into each account's per-window utilization.
+                #    Every account is treated as equally capable, so the
+                #    value is identical for all candidates.
                 request_estimates: dict[str, int] = {
                     acct_name: int(estimated_tokens)
                     for acct_name in eligible_account_names
                 }
 
-                # 4. Rank accounts once using projected estimates, then
-                #    acquire the circuit-breaker probe slot atomically.
-                exclude: set[str] = (
-                    set(context.attempted_accounts)
-                    if context.attempted_accounts
-                    else set()
-                )
+                # 4. Probe circuit-breaker slots on ranked candidates.
                 selected_state = None
                 selected_score: float | None = None
                 selected_tier: int | None = None
                 exclusions: list[RoutingExclusion] = []
-                ranked_candidates = await self._router.select_accounts_for_failover(
-                    context.model_id,
-                    max_accounts=len(eligible_account_names),
-                    request_estimates=request_estimates,
-                    exclude_accounts=exclude if exclude else None,
-                    provider_id=context.provider_id,
-                    protocol=context.upstream_protocol,
-                    transcode_eligibility=(
-                        {context.protocol, context.upstream_protocol}
-                        if context.transcode_required
-                        else None
-                    ),
-                    client_protocol=context.protocol,
-                    thinking_requirement=thinking_req
-                    if thinking_req.required
-                    else None,
-                    capability_policy=_capability_policy,
-                )
                 for candidate_state, score in ranked_candidates:
                     # Acquire the circuit-breaker probe slot. If the
                     # breaker rejects this account (half-open slot
@@ -1440,55 +1478,87 @@ class RequestCoordinator:
                     # 10a. Persist the routing-decision trace alongside the
                     # attempt so the dashboard can answer "why this account?"
                     # without rescoring from quota tables.
-                    top_score_value: float | None = None
-                    top_score_account_name: str | None = None
-                    if ranked_candidates:
-                        top_state, top_score_obj = ranked_candidates[0]
-                        top_score_value = float(top_score_obj.final_score)
-                        top_score_account_name = top_state.name
-                    score_components = self._build_score_components(
-                        ranked_candidates=ranked_candidates,
-                        selected_account_name=account_name,
-                        selected_state=selected_state,
-                        selected_score=selected_score,
-                        selected_tier=selected_tier,
-                        fairness_decision=self._router.last_fairness_decision,
-                        fairness_band_names=self._router.last_fairness_band_names,
+                    #
+                    # The routing.trace.mode config controls write pressure:
+                    #   all     – every attempt (current behavior)
+                    #   sampled – successful attempts at sample_rate + all errors
+                    #   errors  – same as all (can't determine outcome at
+                    #             selection time; future: defer to finalizer)
+                    #   off     – no routing trace rows
+                    trace_cfg = (
+                        self._config.routing.trace if self._config is not None else None
                     )
-                    trace = RoutingDecisionTrace(
-                        model_id=context.model_id,
-                        provider_id=resolved_provider_id,
-                        protocol=context.protocol,
-                        selected_account_name=account_name,
-                        selected_account_id=account_id,
-                        selected_tier=selected_tier,
-                        selected_score=selected_score,
-                        eligible_count=len(eligible_account_names),
-                        scored_count=len(ranked_candidates),
-                        attempted_excluded_count=len(exclude),
-                        top_score=top_score_value,
-                        top_score_account_name=top_score_account_name,
-                        exclusions=tuple(exclusions),
-                        score_components=score_components,
-                    )
-                    await self._routing_decision_repo.create(
-                        request_id=int(db_request_id),
-                        attempt_number=attempt_number,
-                        model_id=trace.model_id,
-                        provider_id=trace.provider_id,
-                        protocol=trace.protocol,
-                        selected_account_id=trace.selected_account_id,
-                        selected_account_name=trace.selected_account_name,
-                        selected_tier=trace.selected_tier,
-                        selected_score=trace.selected_score,
-                        eligible_count=trace.eligible_count,
-                        scored_count=trace.scored_count,
-                        attempted_excluded_count=trace.attempted_excluded_count,
-                        top_score=trace.top_score,
-                        top_score_account_name=trace.top_score_account_name,
-                        exclude_reasons_json=trace.to_exclude_reasons_json(),
-                        score_components_json=trace.to_score_components_json(),
-                    )
+                    trace_mode = trace_cfg.mode if trace_cfg is not None else "all"
+                    should_write_trace = trace_mode != "off"
+                    if should_write_trace and trace_mode == "sampled":
+                        h = hashlib.sha256(context.request_id.encode()).digest()
+                        should_write_trace = (
+                            int.from_bytes(h[:8], "big") / ((1 << 64) - 1)
+                        ) < trace_cfg.sample_rate  # type: ignore[union-attr]
+
+                    if should_write_trace:
+                        top_score_value: float | None = None
+                        top_score_account_name: str | None = None
+                        if ranked_candidates:
+                            top_state, top_score_obj = ranked_candidates[0]
+                            top_score_value = float(top_score_obj.final_score)
+                            top_score_account_name = top_state.name
+                        include_sc = (
+                            trace_cfg.include_score_components  # type: ignore[union-attr]
+                            if trace_cfg is not None
+                            else True
+                        )
+                        score_components = (
+                            self._build_score_components(
+                                ranked_candidates=ranked_candidates,
+                                selected_account_name=account_name,
+                                selected_state=selected_state,
+                                selected_score=selected_score,
+                                selected_tier=selected_tier,
+                                fairness_decision=plan.fairness_decision,
+                                fairness_band_names=plan.fairness_band_names,
+                            )
+                            if include_sc
+                            else None
+                        )
+                        trace = RoutingDecisionTrace(
+                            model_id=context.model_id,
+                            provider_id=resolved_provider_id,
+                            protocol=context.protocol,
+                            selected_account_name=account_name,
+                            selected_account_id=account_id,
+                            selected_tier=selected_tier,
+                            selected_score=selected_score,
+                            eligible_count=len(eligible_account_names),
+                            scored_count=len(ranked_candidates),
+                            attempted_excluded_count=len(exclude),
+                            top_score=top_score_value,
+                            top_score_account_name=top_score_account_name,
+                            exclusions=tuple(exclusions),
+                            score_components=score_components,
+                        )
+                        await self._routing_decision_repo.create(
+                            request_id=int(db_request_id),
+                            attempt_number=attempt_number,
+                            model_id=trace.model_id,
+                            provider_id=trace.provider_id,
+                            protocol=trace.protocol,
+                            selected_account_id=trace.selected_account_id,
+                            selected_account_name=trace.selected_account_name,
+                            selected_tier=trace.selected_tier,
+                            selected_score=trace.selected_score,
+                            eligible_count=trace.eligible_count,
+                            scored_count=trace.scored_count,
+                            attempted_excluded_count=trace.attempted_excluded_count,
+                            top_score=trace.top_score,
+                            top_score_account_name=trace.top_score_account_name,
+                            exclude_reasons_json=trace.to_exclude_reasons_json(),
+                            score_components_json=(
+                                trace.to_score_components_json()
+                                if score_components is not None
+                                else None
+                            ),
+                        )
 
                     # Retries select a new account and reservation estimate.
                     if not created_request:
@@ -1616,6 +1686,7 @@ class RequestCoordinator:
                         context.thinking_trace
                     ),
                     segmentation=context.segmentation,
+                    segmentation_not_collected=context.segmentation_not_collected,
                     compression_observation=context.compression_observation,
                     compression_result=context.compression_result,
                     resolved_compression_policy=context.resolved_compression_policy,
@@ -1843,6 +1914,7 @@ class RequestCoordinator:
                     normalized_usage=normalized_usage,
                     transcoded=context.transcode_context is not None,
                     segmentation=context.segmentation,
+                    segmentation_not_collected=context.segmentation_not_collected,
                     compression_observation=context.compression_observation,
                     compression_result=context.compression_result,
                     resolved_compression_policy=context.resolved_compression_policy,
@@ -2234,6 +2306,7 @@ class RequestCoordinator:
                         ),
                         normalized_usage=normalized_usage,
                         segmentation=context.segmentation,
+                        segmentation_not_collected=context.segmentation_not_collected,
                         compression_observation=context.compression_observation,
                         compression_result=context.compression_result,
                         resolved_compression_policy=context.resolved_compression_policy,
@@ -2333,6 +2406,7 @@ class RequestCoordinator:
                                             context.transcode_context is not None
                                         ),
                                         segmentation=context.segmentation,
+                                        segmentation_not_collected=context.segmentation_not_collected,
                                         compression_observation=context.compression_observation,
                                         compression_result=context.compression_result,
                                         resolved_compression_policy=context.resolved_compression_policy,
@@ -2405,6 +2479,7 @@ class RequestCoordinator:
                         ),
                         transcoded=context.transcode_context is not None,
                         segmentation=context.segmentation,
+                        segmentation_not_collected=context.segmentation_not_collected,
                         compression_observation=context.compression_observation,
                         compression_result=context.compression_result,
                         resolved_compression_policy=context.resolved_compression_policy,
@@ -2976,6 +3051,7 @@ class RequestCoordinator:
                         context.thinking_trace,
                     ),
                     segmentation=context.segmentation,
+                    segmentation_not_collected=context.segmentation_not_collected,
                     compression_observation=context.compression_observation,
                     compression_result=context.compression_result,
                     resolved_compression_policy=context.resolved_compression_policy,
@@ -3235,6 +3311,7 @@ class RequestCoordinator:
                 upstream_protocol=context.upstream_protocol,
                 thinking_trace_json=_serialize_thinking_trace(context.thinking_trace),
                 segmentation=context.segmentation,
+                segmentation_not_collected=context.segmentation_not_collected,
                 compression_observation=context.compression_observation,
                 compression_result=context.compression_result,
                 resolved_compression_policy=context.resolved_compression_policy,
@@ -3305,6 +3382,7 @@ class RequestCoordinator:
                         context.thinking_trace
                     ),
                     segmentation=context.segmentation,
+                    segmentation_not_collected=context.segmentation_not_collected,
                     compression_observation=context.compression_observation,
                     compression_result=context.compression_result,
                     resolved_compression_policy=context.resolved_compression_policy,
@@ -3352,6 +3430,7 @@ class RequestCoordinator:
                         context.thinking_trace
                     ),
                     segmentation=context.segmentation,
+                    segmentation_not_collected=context.segmentation_not_collected,
                     compression_observation=context.compression_observation,
                     compression_result=context.compression_result,
                     resolved_compression_policy=context.resolved_compression_policy,
@@ -3455,6 +3534,34 @@ class RequestCoordinator:
             latency_ms=elapsed_ms,
             attempt_count=attempt_num,
         )
+
+    def _client_has_thinking_controls(
+        self,
+        original_body: bytes,
+        protocol: str,
+    ) -> bool:
+        """Return True when the client request contains thinking/reasoning controls.
+
+        Checks for OpenAI-style ``reasoning_effort`` or Anthropic-style
+        ``thinking`` / ``thinking_budget`` fields.  Used by the prepared
+        transcode reuse logic to decide whether the cached preflight
+        translation is safe to skip — thinking budget resolution depends
+        on provider-specific capability lookup, which is not available
+        during preflight.
+        """
+        try:
+            body_obj: object = json.loads(original_body)
+        except (json.JSONDecodeError, ValueError):
+            return False
+        if not isinstance(body_obj, dict):
+            return False
+        body: dict[str, object] = body_obj  # pyright: ignore[reportUnknownVariableType]
+        if isinstance(body.get("reasoning_effort"), str):
+            return True
+        thinking_obj = body.get("thinking")
+        if isinstance(thinking_obj, dict) and "budget_tokens" in thinking_obj:
+            return True
+        return body.get("thinking_budget") is not None
 
     def _all_accounts_attempted(self, context: ProxyRequestContext) -> bool:
         """Return whether every enabled account has been attempted.

@@ -2440,6 +2440,49 @@ The runtime dashboard renders the periodic-task table from the supervisor-owned 
 
 The runtime API (`/api/stats/runtime`) also exposes `background_task_summary` (`registered`, `running`, `failed`, `overdue`, `last_error_count`) so dashboards / alerts can consume a coherent at-a-glance count without iterating every task.
 
+## Performance Optimization (Phases 0–5)
+
+Correctness-preserving performance pass that reduces redundant computation and DB write pressure on the hot path. All changes are backward-compatible; no defaults change behavior.
+
+### Phase 1 — Transcode Preflight Reuse
+
+`PreparedTranscode` (`src/eggpool/transcoder/prepared.py`) captures the transcoder, context, and features fingerprint from the preflight step. The coordinator checks `prepared.is_valid_for(transcoder, features)` before re-encoding — when valid, it reuses the already-encoded upstream body and preflight warnings, avoiding a redundant `encode_request()` call. Falls back to full recompute when thinking controls or feature mismatches are detected.
+
+### Phase 2 — Conditional Request Segmentation
+
+`should_segment_request()` (`src/eggpool/transcoder/segmentation_guard.py`) skips `segment_request()` when compression is disabled, synthetic cache is off, and `force_segmentation` is false. The coordinator tracks `segmentation_not_collected: bool` on `ProxyRequestContext` and passes it through to `RequestFinalizer`, which records `segmentation_status = 'not_collected'` instead of computing stable-prefix/volatile breakdowns.
+
+### Phase 3 — Single-Pass Routing Plan
+
+`RoutingPlan` (`src/eggpool/routing/router.py`) is a frozen dataclass carrying `eligible_names`, `ranked_candidates`, `fairness_decision`, and `fairness_band_names`. `Router.build_routing_plan()` computes eligibility, tier grouping, scoring, ranking, and fairness rotation in one pass. The coordinator calls it once instead of the previous double-call pattern (`get_eligible_account_names()` + `select_accounts_for_failover()`), eliminating redundant `get_eligible_accounts()`, `_filter_mixed_collapsed_thinking()`, and `_maybe_trigger_missing_account_recovery()` invocations.
+
+### Phase 4 — Configurable Routing Trace Write Pressure
+
+`RoutingTraceConfig` (`src/eggpool/models/config.py`) under `[routing.trace]` controls `routing_decisions` row persistence:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `mode` | `all` / `errors` / `sampled` / `off` | `all` | When to write routing traces |
+| `sample_rate` | `0.0–1.0` | `0.05` | Deterministic SHA-256 hash sampling in `sampled` mode |
+| `include_score_components` | `bool` | `True` | Whether to serialize the per-account scoring breakdown |
+
+Default `mode = "all"` preserves backward compatibility. `sampled` mode uses `hashlib.sha256(request_id.encode()).hexdigest()` for deterministic, reproducible sampling.
+
+### Phase 5 — Hot-Path Cleanup
+
+- **ASGI middleware**: `_BodyLimitMiddleware` and `_HeaderRedactionMiddleware` (`src/eggpool/app.py`) replaced `BaseHTTPMiddleware` wrappers with direct ASGI classes — avoids the per-request Starlette `request.receive()` / `call_next()` overhead of the deprecated `BaseHTTPMiddleware`.
+- **Log level**: `transcoded_request` log moved from `logger.info` to `logger.debug` (fires on every transcoded request — routine diagnostic data). Loss warnings remain at `logger.info`.
+- **JSON body encoding**: `encode_json_body()` (`src/eggpool/request/body.py`) is the single serialization point using compact separators.
+
+### Benchmark and Regression Harness
+
+`tests/perf/` contains baseline benchmarks and regression guards:
+
+- `test_perf_baseline.py` — 8 benchmarks: native OpenAI/Anthropic requests, transcode O2A/A2O, segmentation, routing eligibility, retry failover, thinking
+- `test_perf_regression.py` — 3 regression guards: segmentation bounded overhead, routing eligibility determinism, transcode body equivalence
+
+Run with: `pytest tests/perf/ -m perf_baseline -v`
+
 ## In-Memory Bounds and Memory Footprint
 
 Long-running deployments — especially Raspberry Pi / SBC nodes — must keep steady-state RSS bounded by workload throughput, not workload cardinality. Every growth axis in the hot path is capped by a hardcoded module constant or a per-catalog config knob; see `plans/memory.md` for the full design and the per-request regression test (`tests/integration/test_memory.py`, marked `pytest.mark.slow`).

@@ -143,6 +143,22 @@ fairness_mode = "round_robin"
 # "priority_model_protocol": co-balanced across providers sharing a model in the same priority tier.
 fairness_scope = "provider_model_protocol"
 
+# Routing trace write pressure.  Routing traces are diagnostic rows
+# written alongside every attempt; they answer "why this account?" on the
+# dashboard but have no effect on billing, retry, or crash-recovery.
+# Reducing write volume here is safe for high-throughput or SBC installs.
+[routing.trace]
+# "all"     – every attempt (default, current behavior)
+# "errors"  – same as all (can't determine outcome at selection time)
+# "sampled" – successful attempts at sample_rate + all errors
+# "off"     – no routing trace rows
+mode = "all"
+# Fraction of successful traces to persist in sampled mode (0.0–1.0).
+sample_rate = 0.05
+# Include score_components_json in persisted traces (larger rows).
+# Set to false to reduce per-row write size on high-throughput installs.
+include_score_components = true
+
 [limits]
 five_hour_microdollars = 12000000
 weekly_microdollars = 30000000

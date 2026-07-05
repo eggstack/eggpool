@@ -143,6 +143,38 @@ class ModelsConfig(BaseModel):
     ] = "preserve_until_health"
 
 
+class RoutingTraceConfig(BaseModel):
+    """Controls routing decision trace write pressure.
+
+    Routing traces are diagnostic rows written on every attempt inside
+    the same transaction as the request/reservation/attempt rows.
+    Reducing write volume here has no effect on billing, retry, or
+    crash-recovery semantics.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["all", "errors", "sampled", "off"] = Field(
+        default="all",
+        description=(
+            '"all" = current behavior (every attempt). '
+            '"errors" = only failed requests, retry exhaustion, or non-2xx upstream. '
+            '"sampled" = successful traces at sample_rate + all errors. '
+            '"off" = no routing trace rows.'
+        ),
+    )
+    sample_rate: float = Field(
+        default=0.05,
+        ge=0.0,
+        le=1.0,
+        description="Fraction of successful traces to persist in sampled mode.",
+    )
+    include_score_components: bool = Field(
+        default=True,
+        description="Include score_components_json in persisted traces (larger rows).",
+    )
+
+
 class RoutingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -172,6 +204,7 @@ class RoutingConfig(BaseModel):
         "provider_model",
         "priority_model_protocol",
     ] = "provider_model_protocol"
+    trace: RoutingTraceConfig = Field(default_factory=RoutingTraceConfig)
 
 
 class PricingCatalogEntry(BaseModel):
@@ -984,6 +1017,14 @@ class AppConfig(BaseModel):
     compression: CompressionConfig = Field(default_factory=CompressionConfig)
     cache: CacheConfig = Field(default_factory=CacheConfig)
     model_info: ModelInfoConfig = Field(default_factory=ModelInfoConfig)
+    force_segmentation: bool = Field(
+        default=False,
+        description=(
+            "When true, always run request segmentation regardless of "
+            "whether any consumer (compression, synthetic cache) is "
+            "active.  Useful for debugging or compatibility."
+        ),
+    )
 
     @model_validator(mode="after")
     def _normalize_providers(self) -> AppConfig:

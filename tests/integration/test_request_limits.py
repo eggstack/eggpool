@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 
 import pytest
-from starlette.responses import Response as StarletteResponse
 
 from eggpool.app import _BodyLimitMiddleware
 from eggpool.errors import RequestTooLargeError
@@ -85,24 +84,106 @@ class TestReadBodyLimited:
 
 
 class TestBodyLimitMiddleware:
-    """Tests for the request body size middleware."""
+    """Tests for the request body size middleware (raw ASGI)."""
 
     @pytest.mark.asyncio()
     async def test_invalid_content_length_falls_through(self) -> None:
-        middleware = _BodyLimitMiddleware(app=object(), max_bytes=100)
-        req = FakeRequest([b"hello"])
-        req.headers["content-length"] = "bogus"
-
+        """Invalid Content-Length passes through to the downstream app."""
         called = False
 
-        async def _call_next(_request: FakeRequest) -> StarletteResponse:
+        async def _app(scope: object, receive: object, send: object) -> None:
             nonlocal called
             called = True
-            return StarletteResponse(status_code=204)
 
-        response = await middleware.dispatch(req, _call_next)
+        middleware = _BodyLimitMiddleware(app=_app, max_bytes=100)
+        scope: dict[str, object] = {
+            "type": "http",
+            "path": "/v1/chat/completions",
+            "headers": [[b"content-length", b"bogus"]],
+        }
+        await middleware(scope, None, None)  # type: ignore[arg-type]
         assert called
-        assert response.status_code == 204
+
+    @pytest.mark.asyncio()
+    async def test_oversized_request_returns_413(self) -> None:
+        """Content-Length exceeding the limit returns a 413 response."""
+
+        async def _app(scope: object, receive: object, send: object) -> None:
+            raise AssertionError("downstream app should not be called")
+
+        middleware = _BodyLimitMiddleware(app=_app, max_bytes=100)
+        scope: dict[str, object] = {
+            "type": "http",
+            "path": "/v1/chat/completions",
+            "headers": [[b"content-length", b"200"]],
+        }
+        sent: list[dict[str, object]] = []
+
+        async def _send(message: dict[str, object]) -> None:
+            sent.append(message)
+
+        await middleware(scope, None, _send)  # type: ignore[arg-type]
+        assert len(sent) == 2
+        assert sent[0]["type"] == "http.response.start"
+        assert sent[0]["status"] == 413  # type: ignore[index]
+        assert sent[1]["type"] == "http.response.body"
+
+    @pytest.mark.asyncio()
+    async def test_oversized_messages_path_returns_anthropic_format(self) -> None:
+        """413 for /messages uses Anthropic error format."""
+        import json as _json
+
+        async def _app(scope: object, receive: object, send: object) -> None:
+            raise AssertionError("downstream app should not be called")
+
+        middleware = _BodyLimitMiddleware(app=_app, max_bytes=100)
+        scope: dict[str, object] = {
+            "type": "http",
+            "path": "/v1/messages",
+            "headers": [[b"content-length", b"200"]],
+        }
+        sent: list[dict[str, object]] = []
+
+        async def _send(message: dict[str, object]) -> None:
+            sent.append(message)
+
+        await middleware(scope, None, _send)  # type: ignore[arg-type]
+        body = sent[1]["body"]
+        assert isinstance(body, bytes)
+        parsed = _json.loads(body)
+        assert parsed["type"] == "error"
+        assert parsed["error"]["type"] == "invalid_request_error"
+
+    @pytest.mark.asyncio()
+    async def test_no_content_length_falls_through(self) -> None:
+        """Requests without Content-Length pass through."""
+        called = False
+
+        async def _app(scope: object, receive: object, send: object) -> None:
+            nonlocal called
+            called = True
+
+        middleware = _BodyLimitMiddleware(app=_app, max_bytes=100)
+        scope: dict[str, object] = {
+            "type": "http",
+            "path": "/v1/chat/completions",
+            "headers": [],
+        }
+        await middleware(scope, None, None)  # type: ignore[arg-type]
+        assert called
+
+    @pytest.mark.asyncio()
+    async def test_non_http_scope_passthrough(self) -> None:
+        """Non-HTTP scopes (websocket, lifespan) pass through unchanged."""
+        called = False
+
+        async def _app(scope: object, receive: object, send: object) -> None:
+            nonlocal called
+            called = True
+
+        middleware = _BodyLimitMiddleware(app=_app, max_bytes=100)
+        await middleware({"type": "lifespan"}, None, None)  # type: ignore[arg-type]
+        assert called
 
 
 class TestHasEligiblePairing:

@@ -50,7 +50,7 @@ CI sets `PYTHONHASHSEED=0` and `TZ=UTC`; reproduce locally for deterministic res
 
 - pytest with `asyncio_mode = "strict"` (from `pyproject.toml`)
 - respx for HTTPX upstream mocking
-- Tests in `tests/unit/`, `tests/integration/`, `tests/contract/`
+- Tests in `tests/unit/`, `tests/integration/`, `tests/contract/`, `tests/perf/`
 - Provider contract tests: `uv run pytest tests/unit/test_contract.py tests/unit/test_contract_urls.py -v`
 
 ## File Organization
@@ -88,6 +88,7 @@ CI sets `PYTHONHASHSEED=0` and `TZ=UTC`; reproduce locally for deterministic res
 - **Integrations**: `src/eggpool/integrations/` generates external tool configs (OpenCode, Claude Code, Aider, Codex, etc.).
 - **Safe compression and advanced overrides**: `src/eggpool/transcoder/compression/` implements observe/safe compression, policy resolution, advisory tuning, and the deterministic markers used for operator visibility.
 - **Replay fixtures**: `tests/fixtures/cache_compression/` holds sanitized JSON fixtures (content-private, never enter routing). `tests/helpers/cache_compression_replay.py` is the harness. Treat them as developer regression assets, not operator surfaces.
+- **Performance optimization (Phases 0–5)**: correctness-preserving hot-path pass. Phase 1 reuses transcode preflight via `PreparedTranscode` (`src/eggpool/transcoder/prepared.py`). Phase 2 skips segmentation when no compression/cache/observability features are active (`should_segment_request` in `src/eggpool/transcoder/segmentation_guard.py`). Phase 3 computes routing in a single `RoutingPlan` pass (`Router.build_routing_plan()` in `src/eggpool/routing/router.py`) instead of double-calling `get_eligible_account_names()` + `select_accounts_for_failover()`. Phase 4 adds configurable `[routing.trace]` mode (`all`/`errors`/`sampled`/`off`). Phase 5 replaces `BaseHTTPMiddleware` with direct ASGI classes and moves routine request logs to `DEBUG`. Benchmarks: `tests/perf/`.
 
 ## Gotchas
 

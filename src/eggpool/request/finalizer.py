@@ -110,6 +110,13 @@ class FinalizationData:
     # phases can drive observe-mode compression accounting without
     # reclassifying the request.
     segmentation: Any | None = None
+    # When ``True`` the segmentation phase was intentionally skipped
+    # (no consumer needed the output).  The finalizer stores
+    # ``segmentation_status = 'not_collected'`` instead of
+    # ``'empty_request'`` so the dashboard can distinguish
+    # "segmentation was not run" from "segmentation ran on an empty
+    # request".
+    segmentation_not_collected: bool = False
     # Phase 4 compression observation.  When ``None`` the database
     # renders ``compression_status = 'disabled'`` with all compression
     # columns left as ``None`` (preserving historical behaviour and
@@ -473,7 +480,10 @@ class RequestFinalizer:
             # callers that did not run the segmenter — historical
             # behaviour).  Field names mirror migration 0041.
             segmentation_obj = data.segmentation
-            segmentation_status_value = "empty_request"
+            if data.segmentation_not_collected:
+                segmentation_status_value = "not_collected"
+            else:
+                segmentation_status_value = "empty_request"
             stable_prefix_hash_value: str | None = None
             request_shape_hash_value: str | None = None
             stable_prefix_estimated_tokens_value: int | None = None
