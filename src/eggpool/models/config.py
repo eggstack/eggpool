@@ -74,13 +74,11 @@ class ServerConfig(BaseModel):
     api_key_env: str = "SERVER_API_KEY"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     access_log: bool = True
-    # Number of Granian runtime (event-loop) threads. Granian already
-    # defaults to 1 — keep the field explicit so single-board / SBC
-    # deployments have a documented, configurable knob for low-memory
-    # tuning. Increase on more capable hardware for higher request
-    # parallelism; Granian still keeps ``workers=1`` so the process
-    # count remains small.
-    threads: int = Field(default=1, ge=1, le=64)
+    # Number of Granian runtime (event-loop) threads. 2 is the recommended
+    # default for Raspberry Pi 4/5 and other SBC installs that serve dashboard
+    # traffic during active proxy use. 1 is minimum footprint. Granian keeps
+    # ``workers=1`` so the process count remains small.
+    threads: int = Field(default=2, ge=1, le=64)
 
     @property
     def resolved_api_key(self) -> str | None:
@@ -119,11 +117,11 @@ class DatabaseConfig(BaseModel):
     busy_timeout_ms: int = Field(default=5000, gt=0)
     wal: bool = True
     synchronous: Literal["OFF", "NORMAL", "FULL", "EXTRA"] = "NORMAL"
-    # aiosqlite uses one Python worker thread per connection. Keep the
-    # default at one for small-device deployments; setting this to 2
-    # opens a separate read-only stats connection so dashboard analytics
-    # do not share the data-plane connection lock.
-    worker_threads: int = Field(default=1, ge=1, le=2)
+    # aiosqlite uses one Python worker thread per connection. The default of 2
+    # opens a separate read-only stats connection so dashboard analytics do not
+    # share the data-plane connection lock. Set to 1 for minimum-footprint mode
+    # on extremely constrained devices or in-memory test databases.
+    worker_threads: int = Field(default=2, ge=1, le=2)
 
 
 class ModelsConfig(BaseModel):
@@ -155,10 +153,11 @@ class RoutingTraceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mode: Literal["all", "sampled", "off"] = Field(
-        default="all",
+        default="sampled",
         description=(
-            '"all" = current behavior (every attempt). '
-            '"sampled" = deterministic request-id sampling at write time. '
+            '"sampled" = deterministic request-id sampling '
+            "(default, low write pressure). "
+            '"all" = every attempt (full diagnostics). '
             '"off" = no routing trace rows.'
         ),
     )
@@ -169,7 +168,7 @@ class RoutingTraceConfig(BaseModel):
         description=("Fraction of selection-time traces to persist in sampled mode."),
     )
     include_score_components: bool = Field(
-        default=True,
+        default=False,
         description="Include score_components_json in persisted traces (larger rows).",
     )
 

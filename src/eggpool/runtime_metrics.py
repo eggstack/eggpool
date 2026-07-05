@@ -118,6 +118,7 @@ class RuntimeMetricsService:
         provider_client_pool: Any | None = None,  # noqa: ANN401
         dispatch_overhead_recorder: Any | None = None,  # noqa: ANN401
         model_info: Any | None = None,  # noqa: ANN401
+        dashboard_telemetry: Any | None = None,  # noqa: ANN401
     ) -> None:
         self._config = config
         self._db = db
@@ -134,6 +135,7 @@ class RuntimeMetricsService:
         self._provider_client_pool = provider_client_pool
         self._dispatch_overhead_recorder = dispatch_overhead_recorder
         self._model_info = model_info
+        self._dashboard_telemetry = dashboard_telemetry
 
     async def snapshot(self) -> dict[str, Any]:
         """Return a best-effort runtime snapshot.
@@ -198,6 +200,8 @@ class RuntimeMetricsService:
         result["thinking_metrics"] = await self._snapshot_thinking_metrics(probe_errors)
 
         result["model_info"] = await self._snapshot_model_info(probe_errors)
+
+        result["dashboard_telemetry"] = self._snapshot_dashboard_telemetry(probe_errors)
 
         return result
 
@@ -787,6 +791,36 @@ class RuntimeMetricsService:
         except Exception as exc:
             _append_probe_error(probe_errors, f"Rollup freshness probe failed: {exc}")
             return {"enabled": True, "error": str(exc)}
+
+    def _snapshot_dashboard_telemetry(self, probe_errors: list[str]) -> dict[str, Any]:
+        """Best-effort snapshot of dashboard render telemetry and profile."""
+        telemetry_snapshot: dict[str, Any] = {}
+        if self._dashboard_telemetry is not None:
+            try:
+                telemetry_snapshot = self._dashboard_telemetry.snapshot()
+            except Exception as exc:
+                _append_probe_error(
+                    probe_errors, f"Dashboard telemetry snapshot failed: {exc}"
+                )
+                telemetry_snapshot = {"error": str(exc)}
+
+        config_db = self._config.database
+        stats_db_separate = (
+            self._stats_db is not None and self._stats_db is not self._db
+        )
+
+        # Routing trace mode
+        trace_mode = "sampled"
+        with contextlib.suppress(AttributeError, TypeError):
+            trace_mode = self._config.routing.trace.mode
+
+        return {
+            **telemetry_snapshot,
+            "separate_stats_db": stats_db_separate,
+            "runtime_threads": self._config.server.threads,
+            "database_worker_threads": config_db.worker_threads,
+            "routing_trace_mode": trace_mode,
+        }
 
 
 # -- Helpers ----------------------------------------------------------------

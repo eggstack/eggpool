@@ -376,15 +376,16 @@ async def test_include_score_components_true_preserves_components() -> None:
 async def test_default_mode_is_all() -> None:
     """Default RoutingTraceConfig mode is 'all' (backward compatible)."""
     cfg = RoutingTraceConfig()
-    assert cfg.mode == "all"
+    assert cfg.mode == "sampled"
     assert cfg.sample_rate == 0.05
-    assert cfg.include_score_components is True
+    assert cfg.include_score_components is False
 
 
 @pytest.mark.asyncio()
 async def test_trace_mode_none_config_defaults_to_all() -> None:
-    """Coordinator with default RoutingTraceConfig writes traces (mode='all')."""
-    config = _build_config()  # default trace mode = "all"
+    """Coordinator with mode='all' writes traces for every request."""
+    config = _build_config()  # default trace mode = "sampled"; override to "all"
+    config.routing.trace.mode = "all"
     db = Database(path=":memory:")
     await db.connect()
     try:
@@ -397,7 +398,7 @@ async def test_trace_mode_none_config_defaults_to_all() -> None:
             await coordinator._select_and_persist_attempt(ctx, 1)
 
         count = await _count_routing_traces(db)
-        assert count == 3, f"Expected 3 traces with default config, got {count}"
+        assert count == 3, f"Expected 3 traces with mode='all', got {count}"
     finally:
         await db.disconnect()
 

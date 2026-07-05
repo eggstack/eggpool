@@ -4,6 +4,10 @@ port = 11300
 # api_key = "ep_..." # Auto-generated on first `configsetup`; use `eggpool newkey` to regenerate
 log_level = "INFO"
 access_log = true
+# Granian runtime threads inside the single worker process. Keep workers=1.
+# 1 is minimum footprint; 2 is usually a better default for Raspberry Pi 4/5
+# and other SBC installs that serve dashboard traffic during active proxy use.
+threads = 2
 
 [upstream]
 base_url = "https://opencode.ai/zen/go/v1"
@@ -19,9 +23,12 @@ path = "usage.sqlite3"
 busy_timeout_ms = 5000
 wal = true
 synchronous = "NORMAL"
-# aiosqlite uses one worker thread per SQLite connection. Default 1 keeps
-# the process small; set to 2 to add a read-only stats/dashboard connection.
-worker_threads = 1
+# aiosqlite uses one worker thread per connection. The default opens one
+# primary read/write connection plus one read-only stats/dashboard connection
+# for file-backed SQLite. This keeps dashboard analytics from queuing behind
+# request-path writes on Raspberry Pi-class installs. Set to 1 for
+# minimum-footprint mode on extremely constrained devices or in-memory tests.
+worker_threads = 2
 
 [models]
 # How often to refresh the model catalog from upstream providers (seconds).
@@ -148,17 +155,17 @@ fairness_scope = "provider_model_protocol"
 # dashboard but have no effect on billing, retry, or crash-recovery.
 # Reducing write volume here is safe for high-throughput or SBC installs.
 [routing.trace]
-# "all"     – every attempt (default, current behavior)
-# "sampled" – deterministic request-id sampling at write time
+# "sampled" – deterministic request-id sampling (default, low write pressure)
+# "all"     – every attempt (full diagnostics)
 # "off"     – no routing trace rows
 # Sampling is decided before upstream outcome is known, so sampled
 # does not force all errors to be traced.
-mode = "all"
+mode = "sampled"
 # Fraction of selection-time traces to persist in sampled mode (0.0–1.0).
 sample_rate = 0.05
 # Include score_components_json in persisted traces (larger rows).
 # Set to false to reduce per-row write size on high-throughput installs.
-include_score_components = true
+include_score_components = false
 
 [limits]
 five_hour_microdollars = 12000000

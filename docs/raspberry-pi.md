@@ -58,14 +58,53 @@ max_keepalive = 10
 refresh_interval_s = 7200
 ```
 
+## Recommended Performance Profile
+
+The default config is now tuned for Pi-class devices. If you need to
+explicitly set the recommended profile:
+
+```toml
+[server]
+threads = 2          # 2 runtime threads for dashboard responsiveness
+access_log = false   # optional: reduce I/O noise after initial setup
+
+[database]
+worker_threads = 2   # separate read-only stats connection (default)
+
+[metrics]
+write_mode = "balanced"
+flush_interval_s = 30
+
+[routing.trace]
+mode = "sampled"
+sample_rate = 0.05
+include_score_components = false
+```
+
+For minimum-footprint mode on very constrained devices:
+
+```toml
+[server]
+threads = 1
+access_log = false
+
+[database]
+worker_threads = 1
+
+[routing.trace]
+mode = "sampled"
+sample_rate = 0.05
+include_score_components = false
+```
+
 ## Process Model
 
 EggPool's default process model is Pi-friendly: one `eggpool serve`
-supervisor process plus one Granian worker, with a single event-loop
-thread in the worker. Both processes appear as `eggpool` in `ps` /
-`top` (no generic `python` entry), so the total footprint is two
-processes and one thread before considering any upstream outbound
-connections.
+supervisor process plus one Granian worker, with two event-loop
+threads in the worker (configurable via `[server].threads`). Both
+processes appear as `eggpool` in `ps` / `top` (no generic `python`
+entry), so the total footprint is two processes and two threads before
+considering any upstream outbound connections.
 
 The single tuning knob for per-worker concurrency is `[server].threads`
 (int, default `1`, max `64`), which maps to Granian `runtime_threads`.

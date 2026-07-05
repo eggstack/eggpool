@@ -289,6 +289,12 @@ def serve(
 
     log_level = config.server.log_level.lower()
     runtime.write_pid_file()
+    click.echo(
+        f"Granian profile: workers=1 runtime_threads={config.server.threads} "
+        f"database_worker_threads={config.database.worker_threads} "
+        f"access_log={config.server.access_log}",
+        err=True,
+    )
     try:
         Granian(
             config_path,

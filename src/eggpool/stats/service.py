@@ -1412,17 +1412,25 @@ class StatsService:
             self._set_dashboard_cache(key, result)
         return result
 
-    async def get_transcoding_stats(self, period: str | None = None) -> dict[str, Any]:
+    async def get_transcoding_stats(
+        self, period: str | None = None, *, use_cache: bool = False
+    ) -> dict[str, Any]:
         """Get protocol transcoding statistics for a time window."""
         time_range = resolve_time_range(period)
-        return await queries.fetch_transcoding_stats(
+        key = self._dashboard_cache_key("transcoding_stats", time_range)
+        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
+            return cast("dict[str, Any]", cached)
+        result = await queries.fetch_transcoding_stats(
             self._db,
             time_range.start_str(),
             time_range.end_str(),
         )
+        if use_cache:
+            self._set_dashboard_cache(key, result)
+        return result
 
     async def get_cache_observability(
-        self, period: str | None = None
+        self, period: str | None = None, *, use_cache: bool = False
     ) -> dict[str, Any]:
         """Phase 1 cache-counter observability aggregates.
 
@@ -1441,14 +1449,20 @@ class StatsService:
         silently mix zero with missing.
         """
         time_range = resolve_time_range(period)
-        return await queries.fetch_cache_observability(
+        key = self._dashboard_cache_key("cache_observability", time_range)
+        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
+            return cast("dict[str, Any]", cached)
+        result = await queries.fetch_cache_observability(
             self._db,
             time_range.start_str(),
             time_range.end_str(),
         )
+        if use_cache:
+            self._set_dashboard_cache(key, result)
+        return result
 
     async def get_canonical_request_segmentation(
-        self, period: str | None = None
+        self, period: str | None = None, *, use_cache: bool = False
     ) -> dict[str, Any]:
         """Phase 2 canonical request segmentation aggregates.
 
@@ -1465,14 +1479,20 @@ class StatsService:
         - ``compressible_candidate_requests`` / ``protected_requests``
         """
         time_range = resolve_time_range(period)
-        return await queries.fetch_canonical_request_segmentation(
+        key = self._dashboard_cache_key("canonical_request_segmentation", time_range)
+        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
+            return cast("dict[str, Any]", cached)
+        result = await queries.fetch_canonical_request_segmentation(
             self._db,
             time_range.start_str(),
             time_range.end_str(),
         )
+        if use_cache:
+            self._set_dashboard_cache(key, result)
+        return result
 
     async def get_compression_observability(
-        self, period: str | None = None
+        self, period: str | None = None, *, use_cache: bool = False
     ) -> dict[str, Any]:
         """Phase 4 observe-mode compression accounting aggregates.
 
@@ -1490,14 +1510,20 @@ class StatsService:
         - ``top_reason_codes`` (top 10 reason codes)
         """
         time_range = resolve_time_range(period)
-        return await queries.fetch_compression_observability(
+        key = self._dashboard_cache_key("compression_observability", time_range)
+        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
+            return cast("dict[str, Any]", cached)
+        result = await queries.fetch_compression_observability(
             self._db,
             time_range.start_str(),
             time_range.end_str(),
         )
+        if use_cache:
+            self._set_dashboard_cache(key, result)
+        return result
 
     async def get_compression_runtime(
-        self, period: str | None = None
+        self, period: str | None = None, *, use_cache: bool = False
     ) -> dict[str, Any]:
         """Phase 7 runtime compression aggregates for operator dashboards.
 
@@ -1508,14 +1534,20 @@ class StatsService:
         finalizers — never from in-memory caches or hot-path buffers.
         """
         time_range = resolve_time_range(period)
-        return await queries.fetch_compression_runtime(
+        key = self._dashboard_cache_key("compression_runtime", time_range)
+        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
+            return cast("dict[str, Any]", cached)
+        result = await queries.fetch_compression_runtime(
             self._db,
             time_range.start_str(),
             time_range.end_str(),
         )
+        if use_cache:
+            self._set_dashboard_cache(key, result)
+        return result
 
     async def get_compression_policy_stats(
-        self, period: str | None = None
+        self, period: str | None = None, *, use_cache: bool = False
     ) -> dict[str, Any]:
         """Phase 7 per-policy compression rollup.
 
@@ -1528,13 +1560,21 @@ class StatsService:
         consume policy fields.
         """
         time_range = resolve_time_range(period)
-        return await queries.fetch_compression_policy_stats(
+        key = self._dashboard_cache_key("compression_policy_stats", time_range)
+        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
+            return cast("dict[str, Any]", cached)
+        result = await queries.fetch_compression_policy_stats(
             self._db,
             time_range.start_str(),
             time_range.end_str(),
         )
+        if use_cache:
+            self._set_dashboard_cache(key, result)
+        return result
 
-    async def get_cache_stability(self, period: str | None = None) -> dict[str, Any]:
+    async def get_cache_stability(
+        self, period: str | None = None, *, use_cache: bool = False
+    ) -> dict[str, Any]:
         """Phase 7 cache-stability summary.
 
         Phase 3 transcoder cache stability is per-request and lives on
@@ -1545,14 +1585,20 @@ class StatsService:
         trace endpoint, not via this aggregate.
         """
         time_range = resolve_time_range(period)
-        return await queries.fetch_cache_stability_summary(
+        key = self._dashboard_cache_key("cache_stability", time_range)
+        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
+            return cast("dict[str, Any]", cached)
+        result = await queries.fetch_cache_stability_summary(
             self._db,
             time_range.start_str(),
             time_range.end_str(),
         )
+        if use_cache:
+            self._set_dashboard_cache(key, result)
+        return result
 
     async def get_synthetic_cache_summary(
-        self, period: str | None = None
+        self, period: str | None = None, *, use_cache: bool = False
     ) -> dict[str, Any]:
         """Phase 9 synthetic cache controls observability.
 
@@ -1570,17 +1616,24 @@ class StatsService:
         - ``by_policy`` (per resolved-policy rollup)
         """
         time_range = resolve_time_range(period)
-        return await queries.fetch_synthetic_cache_summary(
+        key = self._dashboard_cache_key("synthetic_cache_summary", time_range)
+        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
+            return cast("dict[str, Any]", cached)
+        result = await queries.fetch_synthetic_cache_summary(
             self._db,
             time_range.start_str(),
             time_range.end_str(),
         )
+        if use_cache:
+            self._set_dashboard_cache(key, result)
+        return result
 
     async def get_compression_tuning_window_metrics(
         self,
         period: str | None = None,
         *,
         window_requests: int = 500,
+        use_cache: bool = False,
     ) -> dict[str, Any]:
         """Phase 10 per-policy window metrics for the tuning engine.
 
@@ -1592,6 +1645,9 @@ class StatsService:
         read or persisted by this query path.
         """
         time_range = resolve_time_range(period)
+        key = self._dashboard_cache_key("compression_tuning_window_metrics", time_range)
+        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
+            return cast("dict[str, Any]", cached)
         windows = await queries.fetch_compression_tuning_window_metrics(
             self._db,
             time_range.start_str(),
@@ -1602,11 +1658,14 @@ class StatsService:
             self._db,
         )
         overrides = await queries.fetch_compression_tuning_overrides(self._db)
-        return {
+        result = {
             "windows": windows,
             "recommendations": recommendations,
             "overrides": overrides,
         }
+        if use_cache:
+            self._set_dashboard_cache(key, result)
+        return result
 
 
 _BUCKET_SIZES: dict[str, int] = {

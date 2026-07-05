@@ -26,6 +26,7 @@ from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
 from eggpool.models.config import AppConfig
 from eggpool.runtime_metrics import RuntimeMetricsService
+from eggpool.stats import StatsService
 
 pytestmark = pytest.mark.dashboard
 
@@ -91,6 +92,7 @@ async def app_with_key(db: Database, monkeypatch: pytest.MonkeyPatch) -> FastAPI
     app.state.db = db
     app.state.stats_db = db
     app.state.config = config
+    app.state.stats = StatsService(db)
     app.state.runtime_metrics = _make_runtime_metrics(db, config)
     register_dashboard_routes(app, require_auth=True)
     return app
@@ -104,6 +106,7 @@ async def app_public(db: Database) -> FastAPI:
     app.state.db = db
     app.state.stats_db = db
     app.state.config = config
+    app.state.stats = StatsService(db)
     app.state.runtime_metrics = _make_runtime_metrics(db, config)
     register_dashboard_routes(app, require_auth=False)
     return app
@@ -397,8 +400,9 @@ class TestCanonicalRequestSegmentationEndpoint:
     def test_json_serializes_provider_status_keys(
         self, app_with_key: FastAPI, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(
-            "eggpool.stats.StatsService", _FakeRequestShapingStatsService
+        # Replace the stats service on the app state with a mock
+        app_with_key.state.stats = _FakeRequestShapingStatsService(
+            app_with_key.state.db
         )
         app_with_key.state.runtime_metrics = _FakeRequestShapingRuntimeMetrics()
         client = TestClient(app_with_key)
@@ -529,8 +533,9 @@ class TestRequestShapingEndpoint:
     def test_summary_exposes_not_collected(
         self, app_with_key: FastAPI, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(
-            "eggpool.stats.StatsService", _FakeRequestShapingStatsService
+        # Replace the stats service on the app state with a mock
+        app_with_key.state.stats = _FakeRequestShapingStatsService(
+            app_with_key.state.db
         )
         app_with_key.state.runtime_metrics = _FakeRequestShapingRuntimeMetrics()
         client = TestClient(app_with_key)

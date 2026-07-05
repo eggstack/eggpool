@@ -1028,7 +1028,11 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     app.state.task_monitor = task_monitor
 
     # 20b. Runtime metrics service (for /api/stats/runtime)
+    # 20c. Dashboard performance telemetry (low-overhead render timing)
+    from eggpool.dashboard.telemetry import DashboardTelemetry
     from eggpool.runtime_metrics import RuntimeMetricsService
+
+    app.state.dashboard_telemetry = DashboardTelemetry()
 
     app.state.runtime_metrics = RuntimeMetricsService(
         config=config,
@@ -1046,6 +1050,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         provider_client_pool=client_pool,
         dispatch_overhead_recorder=dispatch_overhead_recorder,
         model_info=model_info,
+        dashboard_telemetry=app.state.dashboard_telemetry,
     )
 
     # Register catalog refresh task.  Supervisor owns the cadence so
@@ -1109,6 +1114,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             "model_info_canonical_backfill",
             _model_info_backfill_once,
             interval_s=60.0,
+            initial_delay_s=10.0,
         )
 
     # Register retention cleanup task (runs every hour).  Supervisor
@@ -1156,6 +1162,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         "usage_window_refresh",
         _refresh_usage_windows_once,
         interval_s=60.0,
+        initial_delay_s=15.0,
     )
 
     # Register stale request finalizer (runs every 60s).  Default
@@ -1176,6 +1183,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         "stale_request_finalizer",
         _stale_request_finalizer_once,
         interval_s=60.0,
+        initial_delay_s=25.0,
     )
 
     # Register periodic prune of stale per-account model state
@@ -1193,6 +1201,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             "health_disabled_models_prune",
             _health_disabled_models_prune_once,
             interval_s=60.0,
+            initial_delay_s=40.0,
         )
     except Exception:  # noqa: BLE001 - best-effort registration
         logger.exception(
@@ -1215,6 +1224,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             "metrics_flush",
             _metrics_flush_once,
             interval_s=float(config.metrics.flush_interval_s),
+            initial_delay_s=5.0,
         )
 
     # Periodic PyPI update check (default 24h). Drives the dashboard

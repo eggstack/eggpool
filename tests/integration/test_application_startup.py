@@ -96,7 +96,11 @@ class TestApplicationStartup:
                 assert db is not None
                 assert db._conn is not None  # noqa: SLF001
                 stats_db: Database = app.state.stats_db
-                assert stats_db is db
+                # With worker_threads > 1 (new default), stats_db is a
+                # separate read-only connection; with worker_threads=1
+                # they share the same connection.
+                assert stats_db is not None
+                assert stats_db._conn is not None  # noqa: SLF001
 
                 rows = await db.fetch_all("SELECT name FROM accounts ORDER BY name")
                 names = [row["name"] for row in rows]

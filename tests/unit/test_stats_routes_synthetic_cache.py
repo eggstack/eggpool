@@ -14,6 +14,7 @@ from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
 from eggpool.models.config import AppConfig
 from eggpool.runtime_metrics import RuntimeMetricsService
+from eggpool.stats import StatsService
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -79,6 +80,7 @@ async def app_with_key(db: Database, monkeypatch: pytest.MonkeyPatch) -> FastAPI
     app.state.db = db
     app.state.stats_db = db
     app.state.config = config
+    app.state.stats = StatsService(db)
     app.state.runtime_metrics = _make_runtime_metrics(db, config)
     register_dashboard_routes(app, require_auth=True)
     return app

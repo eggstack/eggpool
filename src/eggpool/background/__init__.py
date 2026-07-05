@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 import time
 from dataclasses import dataclass, field
@@ -15,6 +16,23 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 TaskMode = Literal["daemon", "periodic"]
+
+
+def periodic_initial_offset(
+    name: str, interval_s: float, *, max_fraction: float = 0.5
+) -> float:
+    """Return a deterministic initial delay for a periodic task.
+
+    The offset is in ``[0, interval_s * max_fraction]`` and is derived
+    from a stable hash of *name* so tests remain deterministic.  Use
+    this to stagger short-cadence tasks that would otherwise wake
+    together and briefly contend for the SQLite lock on low-power
+    devices.
+    """
+    digest = hashlib.sha256(name.encode()).digest()
+    # Use the first 8 bytes as a uint64, normalize to [0, 1).
+    bucket = int.from_bytes(digest[:8], "big") / (2**64)
+    return bucket * interval_s * max_fraction
 
 
 def _compute_overdue_seconds(

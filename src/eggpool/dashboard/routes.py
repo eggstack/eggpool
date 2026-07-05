@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
@@ -552,6 +553,7 @@ async def handle_overview(
     only enabled accounts are visible by default. Pass
     ``?show_disabled=1`` to opt in to the historical view.
     """
+    _start = time.perf_counter()
     dashboard_config = _get_dashboard_config(request)
     time_range = resolve_time_range(period)
     stats = request.app.state.stats
@@ -593,9 +595,9 @@ async def handle_overview(
         stats.get_attempt_stats(time_range),
         stats.get_operational_event_summary(time_range),
         stats.get_pending_health_snapshot(),
-        stats.get_cache_observability(time_range.label),
-        stats.get_compression_runtime(time_range.label),
-        stats.get_synthetic_cache_summary(time_range.label),
+        stats.get_cache_observability(time_range.label, use_cache=True),
+        stats.get_compression_runtime(time_range.label, use_cache=True),
+        stats.get_synthetic_cache_summary(time_range.label, use_cache=True),
     )
 
     # ``get_dashboard_overview`` is derived from ``accounts`` and the
@@ -645,6 +647,10 @@ async def handle_overview(
         thinking_stats=thinking_stats,
         request_shaping_summary=request_shaping_summary,
     )
+    _elapsed_ms = (time.perf_counter() - _start) * 1000
+    telemetry = getattr(request.app.state, "dashboard_telemetry", None)
+    if telemetry is not None:
+        telemetry.record_render("overview", _elapsed_ms)
     return HTMLResponse(content=html)
 
 
@@ -708,6 +714,7 @@ async def handle_models(
     merged onto the catalog rows so the operator sees activity
     columns alongside model-info pills for every model.
     """
+    _start = time.perf_counter()
     _get_dashboard_config(request)
     time_range = resolve_time_range(period)
     stats = request.app.state.stats
@@ -753,7 +760,7 @@ async def handle_models(
     )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
     account_options = _collect_account_options(request)
-    return HTMLResponse(
+    response = HTMLResponse(
         content=render_models(
             filtered_rows,
             account_filter=account or "",
@@ -771,6 +778,11 @@ async def handle_models(
             model_info_state=model_info_state,
         )
     )
+    _elapsed_ms = (time.perf_counter() - _start) * 1000
+    telemetry = getattr(request.app.state, "dashboard_telemetry", None)
+    if telemetry is not None:
+        telemetry.record_render("models", _elapsed_ms)
+    return response
 
 
 async def _get_catalog_rows(
@@ -1734,21 +1746,19 @@ async def handle_runtime(
     theme: str | None = None,
 ) -> Response:
     """Render the runtime metrics page."""
+    _start = time.perf_counter()
     _get_dashboard_config(request)
     runtime_metrics = request.app.state.runtime_metrics
-    db = request.app.state.db
-    from eggpool.stats import StatsService
-
-    stats_service = StatsService(db)
+    stats_service = request.app.state.stats
     snapshot, transcoding_stats = cast(
         "tuple[dict[str, Any], dict[str, Any] | None]",
         await asyncio.gather(
             runtime_metrics.snapshot(),
-            stats_service.get_transcoding_stats(period),
+            stats_service.get_transcoding_stats(period, use_cache=True),
         ),
     )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
-    return HTMLResponse(
+    response = HTMLResponse(
         content=render_runtime(
             snapshot,
             theme_css=theme_css,
@@ -1759,6 +1769,11 @@ async def handle_runtime(
             period=period or "24h",
         )
     )
+    _elapsed_ms = (time.perf_counter() - _start) * 1000
+    telemetry = getattr(request.app.state, "dashboard_telemetry", None)
+    if telemetry is not None:
+        telemetry.record_render("runtime", _elapsed_ms)
+    return response
 
 
 async def handle_cache(
@@ -1767,12 +1782,10 @@ async def handle_cache(
     theme: str | None = None,
 ) -> Response:
     """Render the cache / request-shaping diagnostics page."""
+    _start = time.perf_counter()
     _get_dashboard_config(request)
     runtime_metrics = request.app.state.runtime_metrics
-    db = request.app.state.db
-    from eggpool.stats import StatsService
-
-    stats_service = StatsService(db)
+    stats_service = request.app.state.stats
     (
         cache_observability,
         canonical_request_segmentation,
@@ -1784,14 +1797,14 @@ async def handle_cache(
         compression_tuning,
         snapshot,
     ) = await asyncio.gather(
-        stats_service.get_cache_observability(period),
-        stats_service.get_canonical_request_segmentation(period),
-        stats_service.get_compression_observability(period),
-        stats_service.get_compression_runtime(period),
-        stats_service.get_compression_policy_stats(period),
-        stats_service.get_cache_stability(period),
-        stats_service.get_synthetic_cache_summary(period),
-        stats_service.get_compression_tuning_window_metrics(period),
+        stats_service.get_cache_observability(period, use_cache=True),
+        stats_service.get_canonical_request_segmentation(period, use_cache=True),
+        stats_service.get_compression_observability(period, use_cache=True),
+        stats_service.get_compression_runtime(period, use_cache=True),
+        stats_service.get_compression_policy_stats(period, use_cache=True),
+        stats_service.get_cache_stability(period, use_cache=True),
+        stats_service.get_synthetic_cache_summary(period, use_cache=True),
+        stats_service.get_compression_tuning_window_metrics(period, use_cache=True),
         runtime_metrics.snapshot(),
     )
     request_shaping_summary = _build_request_shaping_summary(
@@ -1808,7 +1821,7 @@ async def handle_cache(
         period=period or "24h",
     )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
-    return HTMLResponse(
+    response = HTMLResponse(
         content=render_cache(
             period=period or "24h",
             theme_css=theme_css,
@@ -1829,16 +1842,20 @@ async def handle_cache(
             request_shaping_summary=request_shaping_summary,
         )
     )
+    _elapsed_ms = (time.perf_counter() - _start) * 1000
+    telemetry = getattr(request.app.state, "dashboard_telemetry", None)
+    if telemetry is not None:
+        telemetry.record_render("cache", _elapsed_ms)
+    return response
 
 
 async def handle_transcoding_stats_json(request: Request) -> Response:
     """Return transcoding statistics as JSON."""
     _get_dashboard_config(request)
-    db = request.app.state.db
-    from eggpool.stats import StatsService, serialize_transcoding_stats
+    from eggpool.stats import serialize_transcoding_stats
 
     period = request.query_params.get("period", "24h")
-    stats_service = StatsService(db)
+    stats_service = request.app.state.stats
     data = await stats_service.get_transcoding_stats(period)
     return JSONResponse(content=serialize_transcoding_stats(data))
 
@@ -1852,11 +1869,8 @@ async def handle_cache_observability_json(request: Request) -> Response:
     stable zero shape so dashboards never blow up on bad input.
     """
     _get_dashboard_config(request)
-    db = request.app.state.db
-    from eggpool.stats import StatsService
-
     period = request.query_params.get("period", "24h")
-    stats_service = StatsService(db)
+    stats_service = request.app.state.stats
     data = await stats_service.get_cache_observability(period)
     return JSONResponse(content=data)
 
@@ -1864,11 +1878,8 @@ async def handle_cache_observability_json(request: Request) -> Response:
 async def handle_canonical_request_segmentation_json(request: Request) -> Response:
     """Return canonical request segmentation aggregates as JSON."""
     _get_dashboard_config(request)
-    db = request.app.state.db
-    from eggpool.stats import StatsService
-
     period = request.query_params.get("period", "24h")
-    stats_service = StatsService(db)
+    stats_service = request.app.state.stats
     data = await stats_service.get_canonical_request_segmentation(period)
     return JSONResponse(content=serialize_canonical_request_segmentation(data))
 
@@ -1880,11 +1891,8 @@ async def handle_compression_observability_json(request: Request) -> Response:
     rollups, and policy source counts.
     """
     _get_dashboard_config(request)
-    db = request.app.state.db
-    from eggpool.stats import StatsService
-
     period = request.query_params.get("period", "24h")
-    stats_service = StatsService(db)
+    stats_service = request.app.state.stats
     data = await stats_service.get_compression_observability(period)
     return JSONResponse(content=data)
 
@@ -1897,11 +1905,8 @@ async def handle_synthetic_cache_observability_json(request: Request) -> Respons
     routing-separation notice.
     """
     _get_dashboard_config(request)
-    db = request.app.state.db
-    from eggpool.stats import StatsService
-
     period = request.query_params.get("period", "24h")
-    stats_service = StatsService(db)
+    stats_service = request.app.state.stats
     data = await stats_service.get_synthetic_cache_summary(period)
     return JSONResponse(
         content={
@@ -1923,11 +1928,8 @@ async def handle_compression_tuning_json(request: Request) -> Response:
     make the non-interference invariant obvious.
     """
     _get_dashboard_config(request)
-    db = request.app.state.db
-    from eggpool.stats import StatsService
-
     period = request.query_params.get("period", "24h")
-    stats_service = StatsService(db)
+    stats_service = request.app.state.stats
     data = await stats_service.get_compression_tuning_window_metrics(period)
     return JSONResponse(
         content={
@@ -1945,12 +1947,10 @@ async def handle_compression_tuning_json(request: Request) -> Response:
 async def handle_request_shaping_json(request: Request) -> Response:
     """Return the operator-facing request-shaping summary as JSON."""
     _get_dashboard_config(request)
-    db = request.app.state.db
     runtime_metrics = request.app.state.runtime_metrics
-    from eggpool.stats import StatsService
 
     period = request.query_params.get("period", "24h")
-    stats_service = StatsService(db)
+    stats_service = request.app.state.stats
     (
         cache_observability,
         canonical_request_segmentation,
@@ -2000,11 +2000,8 @@ async def handle_compression_runtime_json(request: Request) -> Response:
     columns populated by the observe-mode and safe-mode finalizers.
     """
     _get_dashboard_config(request)
-    db = request.app.state.db
-    from eggpool.stats import StatsService
-
     period = request.query_params.get("period", "24h")
-    stats_service = StatsService(db)
+    stats_service = request.app.state.stats
     data = await stats_service.get_compression_runtime(period)
     return JSONResponse(content=data)
 
@@ -2018,11 +2015,8 @@ async def handle_compression_policy_stats_json(request: Request) -> Response:
     only; the QuotaFairScorer does not consume policy fields.
     """
     _get_dashboard_config(request)
-    db = request.app.state.db
-    from eggpool.stats import StatsService
-
     period = request.query_params.get("period", "24h")
-    stats_service = StatsService(db)
+    stats_service = request.app.state.stats
     data = await stats_service.get_compression_policy_stats(period)
     return JSONResponse(content=data)
 
@@ -2037,11 +2031,8 @@ async def handle_cache_stability_json(request: Request) -> Response:
     the request trace endpoint, not via this aggregate.
     """
     _get_dashboard_config(request)
-    db = request.app.state.db
-    from eggpool.stats import StatsService
-
     period = request.query_params.get("period", "24h")
-    stats_service = StatsService(db)
+    stats_service = request.app.state.stats
     data = await stats_service.get_cache_stability(period)
     return JSONResponse(content=data)
 

@@ -241,7 +241,8 @@ class TestTranscodingJsonEndpoint:
                     "period_seen": period,
                 }
 
-        monkeypatch.setattr("eggpool.stats.StatsService", _StatsService)
+        # Replace the stats service on the app state with a mock
+        migrated_client.app.state.stats = _StatsService(migrated_client.app.state.db)
 
         response = migrated_client.get("/api/stats/transcoding?period=7d")
         assert response.status_code == 200

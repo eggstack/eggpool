@@ -303,6 +303,84 @@ production installation is documented below.
 
 ---
 
+## Performance Profiles
+
+EggPool ships with three documented performance profiles. The default
+install uses the **balanced** profile, which is tuned for Raspberry Pi
+4/5 and similar SBC hardware.
+
+### Balanced (default)
+
+Recommended for Raspberry Pi and low-power devices. Optimized for
+dashboard responsiveness under request load.
+
+```toml
+[server]
+threads = 2
+access_log = false
+
+[database]
+worker_threads = 2
+wal = true
+synchronous = "NORMAL"
+
+[metrics]
+write_mode = "balanced"
+flush_interval_s = 30
+
+[routing.trace]
+mode = "sampled"
+sample_rate = 0.05
+include_score_components = false
+```
+
+### Minimum-footprint
+
+For extremely constrained devices or in-memory test databases.
+
+```toml
+[server]
+threads = 1
+access_log = false
+
+[database]
+worker_threads = 1
+
+[routing.trace]
+mode = "sampled"
+sample_rate = 0.05
+include_score_components = false
+```
+
+### Full-diagnostics
+
+For development, debugging, or high-power hosts where maximum
+diagnostic visibility is needed.
+
+```toml
+[server]
+access_log = true
+
+[database]
+worker_threads = 1
+
+[routing.trace]
+mode = "all"
+include_score_components = true
+```
+
+### Symptoms and Knobs
+
+| Symptom | Likely cause | Knob to adjust |
+|---|---|---|
+| Dashboard loads slowly under request load | DB lock contention | Set `database.worker_threads = 2` |
+| Dashboard still slow | Runtime thread starvation | Set `server.threads = 2` |
+| High write volume / microSD wear | Routing trace writes | Set `routing.trace.mode = "sampled"` |
+| Background tasks cluster at minute boundaries | Task scheduling | Default is staggered; check `initial_delay_s` |
+| Stale dashboard data | Cache TTL | Wait 30s or check dashboard cache settings |
+
+---
+
 ## Production Deployment
 
 For public-facing or multi-user deployments. Uses a dedicated

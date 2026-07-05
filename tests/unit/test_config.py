@@ -67,7 +67,7 @@ def test_load_valid_config(valid_config: Path) -> None:
         all_accts = config.all_accounts()
         assert len(all_accts) == 2
         assert all_accts[0].name == "test_account"
-        assert config.database.worker_threads == 1
+        assert config.database.worker_threads == 2
     finally:
         del os.environ["TEST_KEY_1"]
         del os.environ["TEST_KEY_2"]
