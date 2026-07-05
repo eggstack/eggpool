@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from html import escape as _stdlib_escape
 from typing import TYPE_CHECKING, Any, cast
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from eggpool.model_info.presentation import display_model_info_status
 
@@ -1968,6 +1968,23 @@ def _build_href_with_state(
     )
 
 
+def _dashboard_query_href(
+    path: str,
+    *,
+    period: str | None = None,
+    theme: str | None = None,
+) -> str:
+    """Build a dashboard href with optional period/theme query params."""
+    params: list[tuple[str, str]] = []
+    if period:
+        params.append(("period", period))
+    if theme:
+        params.append(("theme", theme))
+    if not params:
+        return path
+    return f"{path}?{urlencode(params)}"
+
+
 def _coerce_int(value: Any, default: int = 0) -> int:
     """Coerce ``value`` to a non-negative ``int``.
 
@@ -3844,6 +3861,33 @@ def _render_request_shaping_summary_panel(
     return request_shaping_panel
 
 
+def _render_runtime_cache_diagnostics_link_panel(
+    *,
+    period: str,
+    current_theme: str,
+) -> str:
+    """Render the runtime relocation panel that points to Cache diagnostics."""
+    cache_href = _dashboard_query_href(
+        "/cache",
+        period=period or None,
+        theme=current_theme or None,
+    )
+    return f"""
+<section class="panel" id="cache-diagnostics-link">
+  <h3>Cache &amp; request shaping</h3>
+  <p class="sub">
+    Detailed cache reporting, request segmentation, native cache preservation,
+    compression opportunities, compression runtime, policy overrides,
+    synthetic cache controls, advisory tuning, and routing guardrails live on
+    the Cache page.
+  </p>
+  <p>
+    <a href="{escape_attr(cache_href)}">Open Cache diagnostics</a>
+  </p>
+</section>
+"""
+
+
 def _render_cache_reporting_panel(
     cache_observability: dict[str, Any] | None,
     *,
@@ -5309,10 +5353,6 @@ def render_runtime(
     active_requests = routing.get("active_requests_total")
     active_backoff_count = routing.get("active_backoff_count")
     health_states: dict[str, str] = routing.get("health_states_by_account") or {}
-    guardrails = _as_dict(routing.get("guardrails"))
-    guardrails_mode = escape(
-        str(guardrails.get("routing_cache_compression_mode", "reporting_only"))
-    )
 
     # Process count warning card
     process_count_display = (
@@ -5790,8 +5830,9 @@ def render_runtime(
 </section>
 """
 
-    request_shaping_panel = _render_request_shaping_summary_panel(
-        {}, period=period, guardrails_mode=guardrails_mode
+    runtime_cache_panel = _render_runtime_cache_diagnostics_link_panel(
+        period=period,
+        current_theme=current_theme,
     )
 
     routing_guardrails_panel = _render_routing_guardrails_panel(routing)
@@ -5819,16 +5860,7 @@ def render_runtime(
 
 {tc_card}
 
-<section class="panel" id="request-shaping-summary">
-  <h3>Request shaping</h3>
-  {request_shaping_panel}
-  <p class="sub">
-    Cache reporting, request segmentation, native-cache preservation, compression
-    opportunities, compression runtime, policy overrides, synthetic-cache controls,
-    advisory tuning, and routing guardrails live on the
-    <a href="/cache?period={period}">Cache &amp; request shaping</a> page.
-  </p>
-</section>
+{runtime_cache_panel}
 
 {routing_guardrails_panel}
 

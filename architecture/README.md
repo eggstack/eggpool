@@ -262,7 +262,8 @@ about when grouped by operator surface instead of implementation phase:
 
 The detailed phase sections below remain the implementation history and
 schema/audit reference. For current operator behaviour, prioritize the
-surface labels above and the `/api/stats/request-shaping` summary.
+surface labels above and the `/cache` request-shaping summary;
+`/runtime` only carries a compact relocation panel.
 
 ## Cache Token Observability (Phase 1)
 
@@ -1001,11 +1002,12 @@ combined roll-up.
 
 ## Dashboard and Runtime Views (Phase 7)
 
-The runtime/dashboard layer now presents these internals as one
-operator-facing **Request shaping** surface plus detailed drill-down
-cards. It is view-only: no new migrations, no new persisted columns,
-no changes to routing. The purpose is to let an operator answer
-questions like:
+The runtime/dashboard layer now presents these internals on `/cache`
+as one operator-facing **Request shaping** surface plus detailed
+drill-down cards. `/runtime` keeps the live telemetry and a compact
+link back to Cache. It is view-only: no new migrations, no new
+persisted columns, no changes to routing. The purpose is to let an
+operator answer questions like:
 
 - Are providers reporting cache counters, or are values unknown?
 - Are stable prefixes being preserved across transcoding and
@@ -1037,21 +1039,33 @@ Endpoints are added to `register_dashboard_routes` in
 dashboard auth gate. Empty-DB responses are stable zero shapes; bad
 window parameters return HTTP 400, not 500.
 
-### Runtime cards
+### Cache page cards
 
-`render_runtime` in `src/eggpool/dashboard/render.py` renders four
-new cards alongside the existing runtime content:
+`render_cache` in `src/eggpool/dashboard/render.py` renders the
+request-shaping summary plus the detailed drill-down cards on
+`/cache`:
 
-1. **Compression** — observe / apply / fallback / candidate counts;
-   estimated vs actual savings; suppression reasons.
-2. **Compression runtime** — mode strip (disabled / observe /
-   safe); latency avg/p50/p95/max; per-transform applied /
-   `tokens_saved`; warnings rollup; `cache_safety` stable-prefix
-   preserved/mismatch.
-3. **Compression policy** — per-policy rollup table with `<global>`
+1. **Request shaping** — operator summary of compression mode,
+   cache-reporting coverage, synthetic cache state, advisory tuning,
+   and routing guardrails.
+2. **Cache reporting** — provider-reported cache counters and
+   coverage.
+3. **Request segmentation** — stable-prefix, semi-stable, and
+   volatile suffix structure without payload mutation.
+4. **Compression opportunities** — observe-mode analysis only.
+5. **Compression runtime** — safe-mode outcomes, latency, and
+   `cache_safety` stable-prefix preservation.
+6. **Compression policy** — per-policy rollup table with `<global>`
    sentinel first.
-4. **Cache stability** — transcoded count + a note that Phase 3
-   per-boundary detail lives on the in-memory tracker.
+7. **Cache stability** — transcoded count plus the Phase 3 boundary
+   tracker note.
+8. **Synthetic cache controls** — optional provider-bound cache
+   annotations, disabled by default and dry-run first.
+9. **Advisory tuning** — bounded recommendation-only threshold
+   guidance.
+
+`render_runtime` keeps only a compact Cache & request shaping
+relocation panel that links operators back to `/cache`.
 
 A static **routing-separation notice** card always renders on the
 /cache page with this exact text:

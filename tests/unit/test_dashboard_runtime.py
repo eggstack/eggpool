@@ -58,17 +58,19 @@ class TestRenderRuntimeAbsentCachePanels:
 class TestRenderRuntimeCacheLink:
     """render_runtime includes a clear link to the Cache page."""
 
-    def test_cache_link_present(self) -> None:
+    def test_cache_diagnostics_panel_present(self) -> None:
         html = render_runtime(_MINIMAL_SNAPSHOT)
-        assert "/cache?period=" in html
+        assert 'id="cache-diagnostics-link"' in html
 
     def test_cache_link_text(self) -> None:
         html = render_runtime(_MINIMAL_SNAPSHOT)
-        assert "Cache" in html
+        assert "Cache &amp; request shaping" in html
 
-    def test_request_shaping_panel_present(self) -> None:
+    def test_cache_diagnostics_link_text_and_href(self) -> None:
         html = render_runtime(_MINIMAL_SNAPSHOT)
-        assert "Request shaping" in html
+        assert "Open Cache diagnostics" in html
+        assert "/cache?period=24h" in html
+        assert 'id="request-shaping-summary"' not in html
 
 
 class TestRenderRuntimePeriodAndTheme:
@@ -81,3 +83,19 @@ class TestRenderRuntimePeriodAndTheme:
     def test_custom_period_in_cache_link(self) -> None:
         html = render_runtime(_MINIMAL_SNAPSHOT, period="7d")
         assert "/cache?period=7d" in html
+
+    def test_theme_in_cache_link(self) -> None:
+        html = render_runtime(
+            _MINIMAL_SNAPSHOT,
+            period="7d",
+            current_theme="cyber-red",
+        )
+        assert "/cache?period=7d&amp;theme=cyber-red" in html
+
+    def test_theme_is_escaped_in_cache_link(self) -> None:
+        html = render_runtime(
+            _MINIMAL_SNAPSHOT,
+            current_theme='x" onclick="bad',
+        )
+        assert 'x" onclick="bad' not in html
+        assert "theme=x%22+onclick%3D%22bad" in html

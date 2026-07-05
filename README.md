@@ -140,6 +140,10 @@ See [docs/transcoding.md](docs/transcoding.md) for the full translation table an
 
 EggPool’s request-shaping stack is opt-in and cache-preserving by default. With the shipped config, the public surface stays in reporting mode: no route changes, no stable-prefix mutation, and no synthetic cache annotations on the wire. Routing remains load-based; cache, compression, synthetic-cache, and tuning fields never enter `QuotaFairScorer`.
 
+The detailed request-shaping summary and drill-down cards live on
+`/cache`; `/runtime` keeps a compact relocation panel that points back
+to that page.
+
 ### Operator surfaces
 
 | Surface | Default | Mutates requests? | Primary stats/API |

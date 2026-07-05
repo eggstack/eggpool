@@ -87,6 +87,7 @@ class TestRenderCacheNavLinks:
     def test_nav_page_index_present(self) -> None:
         html = render_cache(period="24h")
         assert '<nav class="page-index">' in html
+        assert '<a href="#cache-summary">Summary</a>' in html
         assert '<a href="#cache-reporting">Cache reporting</a>' in html
         assert '<a href="#cache-stability">' in html
         assert '<a href="#compression">Compression</a>' in html
@@ -110,6 +111,37 @@ class TestRenderCacheFallbackSummary:
     request_shaping_summary is None.
     """
 
+    def test_supplied_summary_is_rendered(self) -> None:
+        html = render_cache(
+            period="24h",
+            request_shaping_summary={
+                "mode": {
+                    "compression": "safe",
+                    "synthetic_cache": "apply",
+                    "tuning": "recommend",
+                    "routing": "custom-mode",
+                },
+                "compression": {
+                    "requests_compressed": 3,
+                    "actual_savings_tokens": 42,
+                },
+                "cache": {"cache_counter_reported_rate": 0.75},
+                "synthetic_cache": {"candidate_count": 7},
+                "guardrails": {
+                    "stable_prefix_preserved_rate": 0.9,
+                    "failed_fallback_count": 2,
+                    "policy_warning_count": 1,
+                },
+                "tuning": {"recommendation_count": 4, "override_count": 5},
+                "segmentation": {"requests_segmented": 6},
+            },
+        )
+        assert "custom-mode" in html
+        assert "3 requests compressed" in html
+        assert "7 candidates" in html
+        assert "4 recommendations" in html
+        assert "segmented 6" in html
+
     def test_fallback_produces_summary_panel(self) -> None:
         fallback = _render_cache_request_shaping_fallback(
             cache_stability=None,
@@ -121,6 +153,7 @@ class TestRenderCacheFallbackSummary:
         assert isinstance(fallback, dict)
         html = render_cache(period="24h", request_shaping_summary=fallback)
         assert "Request shaping" in html
+        assert 'id="cache-summary"' in html
 
     def test_fallback_exercised_when_none(self) -> None:
         html = render_cache(period="24h")
