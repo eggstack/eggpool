@@ -85,20 +85,6 @@ class TestRenderCacheSectionPanels:
             assert label in html, f"section panel {label!r} missing from /cache"
 
 
-class TestRenderCacheNavLinks:
-    """render_cache renders a local nav with anchor links to each section."""
-
-    def test_nav_page_index_present(self) -> None:
-        html = render_cache(period="24h")
-        assert '<nav class="page-index">' in html
-        assert '<a href="#cache-summary">Summary</a>' in html
-        assert '<a href="#cache-reporting">Cache reporting</a>' in html
-        assert '<a href="#cache-stability">' in html
-        assert '<a href="#compression">Compression</a>' in html
-        assert '<a href="#advisory-tuning">Advisory tuning</a>' in html
-        assert '<a href="#routing-guardrails">Routing guardrails</a>' in html
-
-
 class TestRenderCachePeriodAwareness:
     """render_cache passes the period string into the rendered page."""
 
@@ -271,26 +257,6 @@ class TestRenderCacheRoutingGuardrails:
         )
         assert "Routing guardrails" in html
         assert "reporting_only" in html
-
-
-class TestRenderCacheAnchorIntegrity:
-    """Every href="#..." in the local page-index resolves to a real element id."""
-
-    def test_all_index_anchors_resolve(self) -> None:
-        import re
-
-        html = render_cache(period="24h")
-        index_match = re.search(r'<nav class="page-index">(.*?)</nav>', html, re.DOTALL)
-        assert index_match is not None
-        index_html = index_match.group(1)
-        anchors = re.findall(r'href="#([^"]+)"', index_html)
-        assert len(anchors) > 0, "page-index should have at least one anchor link"
-        for anchor in anchors:
-            anchor_id = f'id="{anchor}"'
-            assert anchor_id in html, (
-                f"page-index links to #{anchor} but no element with "
-                f"{anchor_id} found in rendered HTML"
-            )
 
 
 class TestRenderCacheAdversarialEscaping:

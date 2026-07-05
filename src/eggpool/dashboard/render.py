@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from html import escape as _stdlib_escape
 from typing import TYPE_CHECKING, Any, cast
-from urllib.parse import quote, urlencode
+from urllib.parse import quote
 
 from eggpool.model_info.presentation import display_model_info_status
 
@@ -1968,23 +1968,6 @@ def _build_href_with_state(
     )
 
 
-def _dashboard_query_href(
-    path: str,
-    *,
-    period: str | None = None,
-    theme: str | None = None,
-) -> str:
-    """Build a dashboard href with optional period/theme query params."""
-    params: list[tuple[str, str]] = []
-    if period:
-        params.append(("period", period))
-    if theme:
-        params.append(("theme", theme))
-    if not params:
-        return path
-    return f"{path}?{urlencode(params)}"
-
-
 def _coerce_int(value: Any, default: int = 0) -> int:
     """Coerce ``value`` to a non-negative ``int``.
 
@@ -3892,33 +3875,6 @@ def _render_request_shaping_summary_panel(
 </section>
 """
     return request_shaping_panel
-
-
-def _render_runtime_cache_diagnostics_link_panel(
-    *,
-    period: str,
-    current_theme: str,
-) -> str:
-    """Render the runtime relocation panel that points to Cache diagnostics."""
-    cache_href = _dashboard_query_href(
-        "/cache",
-        period=period or None,
-        theme=current_theme or None,
-    )
-    return f"""
-<section class="panel" id="cache-diagnostics-link">
-  <h3>Cache &amp; request shaping</h3>
-  <p class="sub">
-    Detailed cache reporting, request segmentation, native cache preservation,
-    compression opportunities, compression runtime, policy overrides,
-    synthetic cache controls, advisory tuning, and routing guardrails live on
-    the Cache page.
-  </p>
-  <p>
-    <a href="{escape_attr(cache_href)}">Open Cache diagnostics</a>
-  </p>
-</section>
-"""
 
 
 def _render_cache_reporting_panel(
@@ -5872,13 +5828,6 @@ def render_runtime(
 </section>
 """
 
-    runtime_cache_panel = _render_runtime_cache_diagnostics_link_panel(
-        period=period,
-        current_theme=current_theme,
-    )
-
-    routing_guardrails_panel = _render_routing_guardrails_panel(routing)
-
     body = f"""
 <h2>Runtime</h2>
 <p class="sub">Process-level diagnostics for the running EggPool instance.</p>
@@ -5901,10 +5850,6 @@ def render_runtime(
 {network_cards}
 
 {tc_card}
-
-{runtime_cache_panel}
-
-{routing_guardrails_panel}
 
 <section class="panel">
   <h3>Health states</h3>
@@ -6112,17 +6057,6 @@ def render_cache(
 <h2>Cache</h2>
 <p class="sub">Cache reporting, request shaping, compression, and safety guardrails.</p>
 {_render_period_selector(period, current_theme)}
-<nav class="page-index"><ul>
-  <li><a href="#cache-summary">Summary</a></li>
-  <li><a href="#cache-reporting">Cache reporting</a></li>
-  <li><a href="#cache-stability">Cache stability</a></li>
-  <li><a href="#synthetic-cache-controls">Synthetic cache controls</a></li>
-  <li><a href="#request-segmentation">Request segmentation</a></li>
-  <li><a href="#compression">Compression</a></li>
-  <li><a href="#advisory-tuning">Advisory tuning</a></li>
-  <li><a href="#routing-guardrails">Routing guardrails</a></li>
-  <li><a href="#transcoding">Transcoding</a></li>
-</ul></nav>
 
 <div id="cache-summary">{request_shaping_panel}</div>
 

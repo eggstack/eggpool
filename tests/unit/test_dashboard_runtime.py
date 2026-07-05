@@ -58,48 +58,11 @@ class TestRenderRuntimeAbsentCachePanels:
         html = render_runtime(_MINIMAL_SNAPSHOT)
         assert "Advisory tuning (" not in html
 
-
-class TestRenderRuntimeCacheLink:
-    """render_runtime includes a clear link to the Cache page."""
-
-    def test_cache_diagnostics_panel_present(self) -> None:
+    def test_no_cache_diagnostics_link_panel(self) -> None:
         html = render_runtime(_MINIMAL_SNAPSHOT)
-        assert 'id="cache-diagnostics-link"' in html
+        assert 'id="cache-diagnostics-link"' not in html
+        assert "Cache &amp; request shaping" not in html
 
-    def test_cache_link_text(self) -> None:
+    def test_no_routing_guardrails_panel(self) -> None:
         html = render_runtime(_MINIMAL_SNAPSHOT)
-        assert "Cache &amp; request shaping" in html
-
-    def test_cache_diagnostics_link_text_and_href(self) -> None:
-        html = render_runtime(_MINIMAL_SNAPSHOT)
-        assert "Open Cache diagnostics" in html
-        assert "/cache?period=24h" in html
-        assert 'id="request-shaping-summary"' not in html
-
-
-class TestRenderRuntimePeriodAndTheme:
-    """render_runtime passes period through to the Cache link."""
-
-    def test_default_period_in_cache_link(self) -> None:
-        html = render_runtime(_MINIMAL_SNAPSHOT, period="24h")
-        assert "/cache?period=24h" in html
-
-    def test_custom_period_in_cache_link(self) -> None:
-        html = render_runtime(_MINIMAL_SNAPSHOT, period="7d")
-        assert "/cache?period=7d" in html
-
-    def test_theme_in_cache_link(self) -> None:
-        html = render_runtime(
-            _MINIMAL_SNAPSHOT,
-            period="7d",
-            current_theme="cyber-red",
-        )
-        assert "/cache?period=7d&amp;theme=cyber-red" in html
-
-    def test_theme_is_escaped_in_cache_link(self) -> None:
-        html = render_runtime(
-            _MINIMAL_SNAPSHOT,
-            current_theme='x" onclick="bad',
-        )
-        assert 'x" onclick="bad' not in html
-        assert "theme=x%22+onclick%3D%22bad" in html
+        assert "Routing guardrails" not in html
