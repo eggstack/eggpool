@@ -3716,6 +3716,35 @@ def _display_request_shaping_mode(value: str) -> str:
     return value.replace("_", " ").title()
 
 
+def _build_request_shaping_segmentation_summary(
+    canonical_request_segmentation: dict[str, Any] | None,
+) -> dict[str, int]:
+    canonical_request_segmentation = canonical_request_segmentation or {}
+    segmentation_by_status = cast(
+        "dict[str, Any]",
+        canonical_request_segmentation.get("by_status") or {},
+    )
+    return {
+        "requests_segmented": int(segmentation_by_status.get("segmented", 0) or 0),
+        "requests_not_collected": int(
+            segmentation_by_status.get("not_collected", 0) or 0
+        ),
+        "requests_empty_request": int(
+            segmentation_by_status.get("empty_request", 0) or 0
+        ),
+        "requests_parse_failure": int(
+            segmentation_by_status.get("parse_failure", 0) or 0
+        ),
+        "protected_requests": int(
+            canonical_request_segmentation.get("protected_requests", 0) or 0
+        ),
+        "compressible_candidate_requests": int(
+            canonical_request_segmentation.get("compressible_candidate_requests", 0)
+            or 0
+        ),
+    }
+
+
 def _render_request_shaping_summary_panel(
     request_shaping_summary: dict[str, Any],
     *,
@@ -3776,6 +3805,9 @@ def _render_request_shaping_summary_panel(
     tuning_override_count = format_int(shaping_tuning.get("override_count", 0))
     requests_segmented_count = format_int(
         shaping_segmentation.get("requests_segmented", 0)
+    )
+    requests_not_collected_count = format_int(
+        shaping_segmentation.get("requests_not_collected", 0)
     )
 
     if str(shaping_mode.get("compression", "off")) == "safe":
@@ -3849,6 +3881,7 @@ def _render_request_shaping_summary_panel(
                     metric=routing_mode_label,
                     sub=(
                         f"segmented {requests_segmented_count} · "
+                        f"not collected {requests_not_collected_count} · "
                         "cache/compression stay out of scorer"
                     ),
                 ),
@@ -4105,6 +4138,7 @@ def _render_request_segmentation_panel(
         return ""
     seg_by_status: Any = canonical_request_segmentation.get("by_status", {}) or {}
     seg_segmented = int(seg_by_status.get("segmented", 0))
+    seg_not_collected = int(seg_by_status.get("not_collected", 0))
     seg_empty = int(seg_by_status.get("empty_request", 0))
     seg_parse_fail = int(seg_by_status.get("parse_failure", 0))
     seg_total = int(canonical_request_segmentation.get("total_requests", 0))
@@ -4157,8 +4191,9 @@ def _render_request_segmentation_panel(
 <section class="panel">
   <h3>Request segmentation ({escape(period)})</h3>
   <p class="sub">
-    Structural segmentation shows how much traffic lands in protected
-    prefixes versus volatile suffixes without mutating requests.
+    Structural segmentation shows how much traffic was segmented,
+    intentionally skipped, or had no segmentable content without
+    mutating requests.
   </p>
   <section class="cards">
     {
@@ -4170,9 +4205,16 @@ def _render_request_segmentation_panel(
     }
     {
         _render_metric_card(
+            title="Not collected",
+            metric=format_int(seg_not_collected),
+            sub="segmentation intentionally skipped",
+        )
+    }
+    {
+        _render_metric_card(
             title="Empty request",
             metric=format_int(seg_empty),
-            sub="no segmentable content",
+            sub="segmentation ran but found no content",
         )
     }
     {
@@ -6017,7 +6059,7 @@ def render_cache(
 </section>
 """
 
-    request_shaping_panel = _render_request_shaping_summary_panel(
+    request_shaping_summary_effective = (
         request_shaping_summary
         or _render_cache_request_shaping_fallback(
             cache_stability=cache_stability,
@@ -6025,7 +6067,21 @@ def render_cache(
             compression_runtime=compression_runtime,
             synthetic_cache_summary=synthetic_cache_summary,
             guardrails=guardrails,
-        ),
+        )
+    )
+    if (
+        canonical_request_segmentation is not None
+        and not request_shaping_summary_effective.get("segmentation")
+    ):
+        request_shaping_summary_effective = {
+            **request_shaping_summary_effective,
+            "segmentation": _build_request_shaping_segmentation_summary(
+                canonical_request_segmentation
+            ),
+        }
+
+    request_shaping_panel = _render_request_shaping_summary_panel(
+        request_shaping_summary_effective,
         period=period,
         guardrails_mode=guardrails_mode,
     )

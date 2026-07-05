@@ -6,6 +6,8 @@ This plan scopes a correctness-preserving performance pass for EggPool. The goal
 
 This is not a rewrite plan. Each optimization must land behind tests and observable invariants. If an optimization cannot prove it preserves current behavior, it should remain disabled or be split into a narrower change.
 
+Closure note: the follow-up closure pass de-advertised `routing.trace.mode = "errors"`, kept routing traces on the request-selection hot path only, moved routine transcoded-request logging to DEBUG, and left this document as the historical safety plan for the performance line.
+
 ## Current repo observations motivating the work
 
 The current codebase already contains several performance-conscious choices:
@@ -21,7 +23,7 @@ The remaining obvious optimization opportunities are mostly hot-path duplication
 - Transcoding can run once during preflight and then again in `RequestCoordinator.execute()` for dispatch.
 - Canonical request segmentation runs for every request even when compression/synthetic-cache consumers are disabled.
 - Routing eligibility is computed once for names and again for ranked failover candidates in the selection path.
-- Detailed routing decision traces are persisted on every attempt, even when the operator may only need them for errors or sampled diagnostics.
+- Detailed routing decision traces are persisted on every attempt, even when the operator may only need them for sampled diagnostics or failure investigations.
 - SQLite writes for request/reservation/attempt/finalization are serialized through the primary aiosqlite connection; this is correct but can become the local bottleneck under high concurrency.
 - Simple request/response middleware uses Starlette `BaseHTTPMiddleware` even though direct ASGI middleware can do the same work with less overhead.
 - Routine request and transcode metadata logs run at INFO on the hot path.
@@ -120,7 +122,7 @@ Create an executable safety net before changing the hot path. This phase should 
    - Routing decision row when enabled.
    - Usage/cost rows and rollup deltas.
    - Capability warning/rejection counters.
-6. Add a small CLI or pytest marker for the benchmark subset, for example `pytest -m perf_baseline`, without making slow perf tests mandatory in every PR.
+6. Add a small CLI or pytest marker for the benchmark subset, for example `pytest -m performance`, without making slow perf tests mandatory in every PR.
 
 ### Acceptance criteria
 
@@ -279,17 +281,16 @@ Reduce per-request diagnostic database writes without weakening core accounting 
 1. Add config under a suitable section, for example:
 
    ```toml
-   [observability.routing_trace]
-   mode = "all"       # all | errors | sampled | off
-   sample_rate = 0.05
-   include_score_components = true
+[observability.routing_trace]
+mode = "all"       # all | sampled | off
+sample_rate = 0.05
+include_score_components = true
    ```
 
 2. Keep `mode = "all"` as the initial compatibility default unless maintainers explicitly choose a production/SBC default.
 3. Define semantics:
    - `all`: current behavior.
-   - `errors`: persist routing trace only for failed requests, retry exhaustion, capability rejection, or non-2xx upstream response classes.
-   - `sampled`: persist successful traces at `sample_rate` plus all errors.
+   - `sampled`: persist a deterministic request-id sample at write time using `sample_rate`.
    - `off`: do not persist routing traces except possibly critical safety/audit events.
 4. Avoid changing core request/reservation/attempt/finalization writes in this phase.
 5. Consider buffering only diagnostic trace writes after the core path is stable. If buffering lands, make it lossy and explicitly non-accounting.
@@ -299,8 +300,7 @@ Reduce per-request diagnostic database writes without weakening core accounting 
 ### Required tests
 
 - In `all` mode, current routing decision rows are still persisted.
-- In `errors` mode, successful requests skip trace rows but failures retain diagnostic rows.
-- In `sampled` mode, sample behavior is deterministic under seeded tests.
+- In `sampled` mode, sample behavior is deterministic under seeded tests and applies before the upstream outcome is known.
 - In `off` mode, request accounting and finalization still work.
 - Dashboard/API handles missing trace rows without treating them as missing requests.
 - Stale-request finalizer and crash recovery do not depend on routing trace rows.
@@ -328,7 +328,7 @@ Clean up smaller sources of per-request overhead after larger behavior-sensitive
    - Header-redaction middleware removes configured response headers after downstream response creation without interfering with streaming.
 2. Make routine request logs configurable:
    - Keep access logs under the server/access-log setting.
-   - Move routine `Proxying ...` logs to DEBUG or sampled INFO.
+   - Move routine `Proxying ...` logs to DEBUG, and keep sampled routing traces selection-time only.
    - Keep warnings/errors at current severity.
    - Keep transcode loss warnings at INFO/WARNING only when warnings exist; routine transcode metadata can move to DEBUG.
 3. Standardize JSON body generation:

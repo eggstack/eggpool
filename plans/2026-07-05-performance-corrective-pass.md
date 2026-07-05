@@ -17,10 +17,12 @@ The objective is not to broaden the feature set. The objective is to make the ex
 - `ProxyRequestContext.segmentation_not_collected` support for distinguishing skipped segmentation from an empty request.
 - New `RoutingPlan` and `Router.build_routing_plan()`.
 - Coordinator use of `build_routing_plan()` in the main selection path.
-- New `routing.trace` config with `all`, `errors`, `sampled`, and `off` modes.
+- New `routing.trace` config with `all`, `sampled`, and `off` modes.
 - Large dashboard/cache-page changes interleaved with the performance work.
 
 The implementation is directionally correct, but several areas need correction before this line of work should be considered closed.
+
+Closure note: the later 2026-07-05 closure pass de-advertised `routing.trace.mode = "errors"` rather than completing it. This plan is kept as historical corrective context; the live configuration surface is `all`, `sampled`, and `off`.
 
 ## Non-negotiable invariants for this pass
 
@@ -305,7 +307,7 @@ Run or add tests for the following before closing this pass.
 | Prepared transcode | Common non-thinking transcode reuses prepared body; thinking recomputes safely |
 | JSON encoding | Prepared body encoded once; padding never reaches upstream dispatch |
 | Routing plan | One authoritative selection path; fairness/provider/capability behavior unchanged |
-| Trace modes | `all`, `sampled`, `off`, and `errors` semantics match documentation/config |
+| Trace modes | `all`, `sampled`, and `off` semantics match documentation/config |
 | Dashboard | Missing/sampled trace and not-collected segmentation are displayed honestly |
 | Accounting | Request/reservation/attempt/finalization rows unchanged for core paths |
 | Recovery | Stale request finalizer and crash recovery remain independent of trace rows |

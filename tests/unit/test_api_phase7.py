@@ -109,6 +109,212 @@ async def app_public(db: Database) -> FastAPI:
     return app
 
 
+class _FakeCanonicalSegmentationDB:
+    async def fetch_all(
+        self, sql: str, params: tuple[Any, ...]
+    ) -> list[dict[str, Any]]:
+        del params
+        if "provider_id, upstream_protocol, segmentation_status" in sql:
+            return [
+                {
+                    "provider_id": "prov-a",
+                    "upstream_protocol": "openai",
+                    "segmentation_status": "segmented",
+                    "request_count": 4,
+                },
+                {
+                    "provider_id": "prov-a",
+                    "upstream_protocol": "openai",
+                    "segmentation_status": "not_collected",
+                    "request_count": 2,
+                },
+                {
+                    "provider_id": "prov-b",
+                    "upstream_protocol": "anthropic",
+                    "segmentation_status": "empty_request",
+                    "request_count": 1,
+                },
+                {
+                    "provider_id": "prov-b",
+                    "upstream_protocol": "anthropic",
+                    "segmentation_status": "parse_failure",
+                    "request_count": 3,
+                },
+            ]
+        if "model_id, segmentation_status" in sql:
+            return [
+                {
+                    "model_id": "gpt-4o",
+                    "segmentation_status": "segmented",
+                    "request_count": 4,
+                    "total_stable_prefix_estimated_tokens": 12,
+                    "total_volatile_estimated_tokens": 8,
+                },
+                {
+                    "model_id": "gpt-4o",
+                    "segmentation_status": "not_collected",
+                    "request_count": 2,
+                    "total_stable_prefix_estimated_tokens": 0,
+                    "total_volatile_estimated_tokens": 0,
+                },
+                {
+                    "model_id": "claude-3",
+                    "segmentation_status": "empty_request",
+                    "request_count": 1,
+                    "total_stable_prefix_estimated_tokens": 0,
+                    "total_volatile_estimated_tokens": 0,
+                },
+                {
+                    "model_id": "unknown",
+                    "segmentation_status": "parse_failure",
+                    "request_count": 3,
+                    "total_stable_prefix_estimated_tokens": 0,
+                    "total_volatile_estimated_tokens": 0,
+                },
+            ]
+        if "GROUP BY segmentation_status" in sql:
+            return [
+                {"segmentation_status": "segmented", "request_count": 4},
+                {"segmentation_status": "not_collected", "request_count": 2},
+                {"segmentation_status": "empty_request", "request_count": 1},
+                {"segmentation_status": "parse_failure", "request_count": 3},
+            ]
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+    async def fetch_one(
+        self, sql: str, params: tuple[Any, ...]
+    ) -> dict[str, Any] | None:
+        del params
+        if "total_stable_prefix_estimated_tokens" not in sql:
+            raise AssertionError(f"unexpected SQL: {sql}")
+        return {
+            "total_stable_prefix_estimated_tokens": 12,
+            "total_semi_stable_estimated_tokens": 4,
+            "total_volatile_estimated_tokens": 8,
+            "total_stable_prefix_bytes": 120,
+            "total_semi_stable_bytes": 40,
+            "total_volatile_bytes": 80,
+            "compressible_candidate_requests": 2,
+            "protected_requests": 3,
+        }
+
+
+class _FakeRequestShapingRuntimeMetrics:
+    async def snapshot(self) -> dict[str, Any]:
+        return {"routing_runtime": {"guardrails": {}}}
+
+
+class _FakeRequestShapingStatsService:
+    def __init__(self, db: Any) -> None:
+        self._db = db
+
+    async def get_cache_observability(
+        self, period: str | None = None
+    ) -> dict[str, Any]:
+        del period
+        return {
+            "by_status": {"reported": 0, "not_reported": 0, "unknown_format": 0},
+            "total_cached_input_tokens": 0,
+            "total_cache_read_input_tokens": 0,
+            "total_cache_creation_input_tokens": 0,
+        }
+
+    async def get_canonical_request_segmentation(
+        self, period: str | None = None
+    ) -> dict[str, Any]:
+        del period
+        return {
+            "total_requests": 6,
+            "by_status": {
+                "segmented": 3,
+                "not_collected": 2,
+                "empty_request": 1,
+                "parse_failure": 0,
+            },
+            "per_provider_status": {
+                ("prov-a", "openai"): {
+                    "segmented": 3,
+                    "not_collected": 2,
+                    "empty_request": 1,
+                    "parse_failure": 0,
+                }
+            },
+            "per_model_status": {
+                "gpt-4o": {
+                    "segmented": 3,
+                    "not_collected": 2,
+                    "empty_request": 1,
+                    "parse_failure": 0,
+                    "total_requests": 6,
+                    "stable_prefix_estimated_tokens": 0,
+                    "volatile_estimated_tokens": 0,
+                }
+            },
+            "token_totals": {
+                "stable_prefix": 0,
+                "semi_stable": 0,
+                "volatile": 0,
+                "all": 0,
+            },
+            "byte_totals": {
+                "stable_prefix": 0,
+                "semi_stable": 0,
+                "volatile": 0,
+                "all": 0,
+            },
+            "compressible_candidate_requests": 0,
+            "protected_requests": 0,
+        }
+
+    async def get_compression_observability(
+        self, period: str | None = None
+    ) -> dict[str, Any]:
+        del period
+        return {"totals": {"observed_requests": 0}}
+
+    async def get_compression_runtime(
+        self, period: str | None = None
+    ) -> dict[str, Any]:
+        del period
+        return {
+            "mode_counts": {},
+            "applied_count": 0,
+            "failed_fallback_count": 0,
+            "estimated_savings_tokens": 0,
+            "actual_savings_tokens": 0,
+            "latency_ms": {"p95": None},
+            "warnings": {},
+            "cache_safety": {},
+        }
+
+    async def get_compression_policy_stats(
+        self, period: str | None = None
+    ) -> dict[str, Any]:
+        del period
+        return {"policy_counts": []}
+
+    async def get_cache_stability(self, period: str | None = None) -> dict[str, Any]:
+        del period
+        return {"transcoded_request_count": 0}
+
+    async def get_synthetic_cache_summary(
+        self, period: str | None = None
+    ) -> dict[str, Any]:
+        del period
+        return {
+            "dry_run_count": 0,
+            "applied_count": 0,
+            "candidate_count_total": 0,
+            "warning_count_total": 0,
+        }
+
+    async def get_compression_tuning_window_metrics(
+        self, period: str | None = None
+    ) -> dict[str, Any]:
+        del period
+        return {"recommendations": [], "overrides": [], "windows": {}}
+
+
 # ---------------------------------------------------------------------------
 # Endpoint smoke tests
 # ---------------------------------------------------------------------------
@@ -153,6 +359,56 @@ class TestCanonicalRequestSegmentationEndpoint:
         data = response.json()
         assert "by_status" in data
         assert "token_totals" in data
+
+    def test_empty_db_has_stable_shape(self, app_with_key: FastAPI) -> None:
+        client = TestClient(app_with_key)
+        response = client.get(
+            "/api/stats/canonical-request-segmentation",
+            headers={"Authorization": "Bearer test-key-12345678"},
+        )
+        data = response.json()
+        assert data["by_status"] == {
+            "segmented": 0,
+            "not_collected": 0,
+            "empty_request": 0,
+            "parse_failure": 0,
+        }
+        assert data["per_provider_status"] == {}
+        assert data["per_model_status"] == {}
+
+    @pytest.mark.asyncio()
+    async def test_service_distinguishes_not_collected(
+        self,
+    ) -> None:
+        from eggpool.stats import StatsService
+
+        service = StatsService(_FakeCanonicalSegmentationDB())
+        data = await service.get_canonical_request_segmentation("24h")
+        assert data["total_requests"] == 10
+        assert data["by_status"] == {
+            "segmented": 4,
+            "not_collected": 2,
+            "empty_request": 1,
+            "parse_failure": 3,
+        }
+        assert data["per_provider_status"][("prov-a", "openai")]["not_collected"] == 2
+        assert data["per_model_status"]["gpt-4o"]["not_collected"] == 2
+
+    def test_json_serializes_provider_status_keys(
+        self, app_with_key: FastAPI, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "eggpool.stats.StatsService", _FakeRequestShapingStatsService
+        )
+        app_with_key.state.runtime_metrics = _FakeRequestShapingRuntimeMetrics()
+        client = TestClient(app_with_key)
+        response = client.get(
+            "/api/stats/canonical-request-segmentation",
+            headers={"Authorization": "Bearer test-key-12345678"},
+        )
+        data = response.json()
+        assert data["by_status"]["not_collected"] == 2
+        assert data["per_provider_status"]["prov-a->openai"]["not_collected"] == 2
 
 
 class TestCompressionObservabilityEndpoint:
@@ -269,6 +525,28 @@ class TestRequestShapingEndpoint:
         assert "cache" in data
         assert "synthetic_cache" in data
         assert "guardrails" in data
+
+    def test_summary_exposes_not_collected(
+        self, app_with_key: FastAPI, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "eggpool.stats.StatsService", _FakeRequestShapingStatsService
+        )
+        app_with_key.state.runtime_metrics = _FakeRequestShapingRuntimeMetrics()
+        client = TestClient(app_with_key)
+        response = client.get(
+            "/api/stats/request-shaping",
+            headers={"Authorization": "Bearer test-key-12345678"},
+        )
+        data = response.json()
+        assert data["segmentation"] == {
+            "requests_segmented": 3,
+            "requests_not_collected": 2,
+            "requests_empty_request": 1,
+            "requests_parse_failure": 0,
+            "protected_requests": 0,
+            "compressible_candidate_requests": 0,
+        }
 
 
 # ---------------------------------------------------------------------------

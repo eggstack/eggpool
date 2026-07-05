@@ -69,7 +69,7 @@ local_quota_mode = "score_only"
 
 # Routing trace write pressure (diagnostic rows, no billing impact).
 # [routing.trace]
-# mode = "all"       # all | errors | sampled | off
+# mode = "all"       # all | sampled | off
 # sample_rate = 0.05
 # include_score_components = true
 

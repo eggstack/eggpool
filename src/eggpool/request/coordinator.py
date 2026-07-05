@@ -736,17 +736,22 @@ class RequestCoordinator:
                 ):
                     # Reuse the cached preflight translation.
                     context.upstream_body = _prepared.translated_body
-                    context.transcode_context.loss_warnings.extend(_prepared.warnings)
-                    _prepared.reused = True
+                    context.transcode_context.loss_warnings.extend(
+                        dict(warning) for warning in _prepared.warnings
+                    )
+                    # Dispatch fields are frozen; only the diagnostics object
+                    # is updated here for observability.
+                    diagnostics = _prepared.diagnostics
+                    diagnostics.reused = True
                     logger.debug(
                         "prepared_transcode_reused request_id=%s client=%s upstream=%s "
                         "available=%s reused=%s recompute_reason=%s",
                         context.request_id,
                         context.protocol,
                         context.upstream_protocol,
-                        _prepared.available,
-                        _prepared.reused,
-                        _prepared.recompute_reason,
+                        diagnostics.available,
+                        diagnostics.reused,
+                        diagnostics.recompute_reason,
                     )
                 else:
                     # Determine the recompute reason for observability.
@@ -757,8 +762,10 @@ class RequestCoordinator:
                     else:
                         _recompute_reason = "protocol_or_features_mismatch"
                     if _prepared is not None:
-                        _prepared.reused = False
-                        _prepared.recompute_reason = _recompute_reason
+                        # Dispatch fields are frozen; only diagnostics mutate.
+                        diagnostics = _prepared.diagnostics
+                        diagnostics.reused = False
+                        diagnostics.recompute_reason = _recompute_reason
                     logger.debug(
                         "prepared_transcode_recompute request_id=%s reason=%s",
                         context.request_id,
@@ -913,11 +920,13 @@ class RequestCoordinator:
                             )
             else:
                 # Transcoder unavailable — mark any prepared transcode as
-                # not reused with a reason so operators can see why.
+                # not reused with a reason so operators can see why. The
+                # frozen dispatch payload stays untouched.
                 _prepared = context.prepared_transcode
                 if _prepared is not None:
-                    _prepared.reused = False
-                    _prepared.recompute_reason = "transcoder_missing"
+                    diagnostics = _prepared.diagnostics
+                    diagnostics.reused = False
+                    diagnostics.recompute_reason = "transcoder_missing"
 
         last_error: Exception | None = None
         last_upstream_response: tuple[int, list[tuple[str, str]], bytes] | None = None
@@ -1463,7 +1472,7 @@ class RequestCoordinator:
                     #
                     # The routing.trace.mode config controls write pressure:
                     #   all     – every attempt (current behavior)
-                    #   sampled – successful attempts at sample_rate + all errors
+                    #   sampled – deterministic request-id sampling at write time
                     #   off     – no routing trace rows
                     trace_cfg = (
                         self._config.routing.trace if self._config is not None else None

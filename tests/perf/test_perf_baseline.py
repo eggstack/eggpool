@@ -3,7 +3,7 @@
 Captures behavioral snapshots and timing metrics for core request-path
 components using mocked upstreams.  Run with::
 
-    pytest tests/perf/test_perf_baseline.py -m perf_baseline -v
+    pytest tests/perf/test_perf_baseline.py -m performance -v
 """
 
 from __future__ import annotations

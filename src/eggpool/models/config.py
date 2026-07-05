@@ -158,7 +158,7 @@ class RoutingTraceConfig(BaseModel):
         default="all",
         description=(
             '"all" = current behavior (every attempt). '
-            '"sampled" = successful traces at sample_rate + all errors. '
+            '"sampled" = deterministic request-id sampling at write time. '
             '"off" = no routing trace rows.'
         ),
     )
@@ -166,7 +166,7 @@ class RoutingTraceConfig(BaseModel):
         default=0.05,
         ge=0.0,
         le=1.0,
-        description="Fraction of successful traces to persist in sampled mode.",
+        description=("Fraction of selection-time traces to persist in sampled mode."),
     )
     include_score_components: bool = Field(
         default=True,

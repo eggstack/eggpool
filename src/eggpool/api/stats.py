@@ -34,6 +34,7 @@ from fastapi import Request  # noqa: TCH002 — FastAPI needs runtime access
 from fastapi.responses import JSONResponse
 
 from eggpool.stats import resolve_time_range
+from eggpool.stats.segmentation import serialize_canonical_request_segmentation
 
 if TYPE_CHECKING:
     from fastapi.responses import Response
@@ -512,17 +513,17 @@ async def handle_canonical_request_segmentation(
     """GET /api/stats/canonical-request-segmentation.
 
     Phase 2 canonical request segmentation observability.  Reports
-    counts of segmented / empty_request / parse_failure rows plus
-    per-segment-kind token and byte totals.  Used by the dashboard
-    panel under Runtime → Segmentation.
+    counts of segmented / not_collected / empty_request /
+    parse_failure rows plus per-segment-kind token and byte totals.
+    Used by the dashboard panel under Runtime → Segmentation.
 
     Output shape:
 
     - ``period``                              : resolved time-range label
     - ``total_requests``                      : finalized rows in window
     - ``by_status``                           : per-status request counts
-    - ``per_provider_status``                 : (provider_id,
-      upstream_protocol) -> per-status dict
+    - ``per_provider_status``                 : ``provider_id->upstream_protocol``
+      -> per-status dict in JSON output
     - ``per_model_status``                    : model_id -> per-status
       + totals dict
     - ``token_totals``                        : per-segment-kind sum of
@@ -534,12 +535,15 @@ async def handle_canonical_request_segmentation(
     - ``protected_requests``                  : rows with
       ``stable_prefix_bytes > 0`` segment
     """
-    from eggpool.stats import resolve_time_range
-
     time_range = resolve_time_range(period)
     stats = request.app.state.stats
     payload = await stats.get_canonical_request_segmentation(time_range)
-    return JSONResponse(content={"period": time_range.label, **payload})
+    return JSONResponse(
+        content={
+            "period": time_range.label,
+            **serialize_canonical_request_segmentation(payload),
+        }
+    )
 
 
 async def handle_compression_observability(

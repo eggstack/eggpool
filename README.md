@@ -234,7 +234,7 @@ Advanced knobs still exist for policy-scoped rollouts and advisory tuning, but t
 | `GET` | `/api/model-info/sources` | Model-info source health |
 | `POST` | `/api/model-info/refresh` | Trigger model-info refresh — `?model_id=<id>&source=<provider_catalog\|openrouter\|artificial_analysis\|huggingface>&force=1` for a single-model force refresh (auth-gated). `model_id` accepts provider-suffixed IDs (`gpt-4o/openai`); unknown source values return HTTP 400. The response carries `source_diagnostics` (`initialized`, `fetched`, `catalog_count`, `alias_candidates`, `matched_source_model_id`, `miss_reason`, `cache_retry`) so operators can see why a refresh matched or missed |
 | `GET` | `/api/stats/cache-observability` | Cache counter status coverage |
-| `GET` | `/api/stats/canonical-request-segmentation` | Segmentation status and per-region token estimates |
+| `GET` | `/api/stats/canonical-request-segmentation` | Segmentation status, not_collected / empty_request / parse_failure counts, and token estimates |
 | `GET` | `/api/stats/cache-stability` | Transcoder cache boundary tracker counters |
 | `GET` | `/api/stats/compression-observability` | Observe-mode opportunity, per-policy roll-ups |
 | `GET` | `/api/stats/compression-runtime` | Safe-mode applied/fallback counts and latency |

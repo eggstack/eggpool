@@ -3,7 +3,7 @@
 Verifies performance invariants and behavioral determinism for
 core request-path components.  Run with::
 
-    pytest tests/perf/test_perf_regression.py -m perf_regression -v
+    pytest tests/perf/test_perf_regression.py -m performance -v
 """
 
 from __future__ import annotations

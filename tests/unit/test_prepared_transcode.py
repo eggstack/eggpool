@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
+from types import MappingProxyType
 
 import pytest
 
@@ -24,6 +26,19 @@ def _make_preflight(
         warnings=warnings or [],
         tool_token_padding=tool_token_padding,
     )
+
+
+def _freeze_json_value(value: object) -> object:
+    """Recursively freeze a JSON-like value for equality checks."""
+    if isinstance(value, Mapping):
+        return MappingProxyType(
+            {key: _freeze_json_value(item) for key, item in value.items()}
+        )
+    if isinstance(value, list):
+        return tuple(_freeze_json_value(item) for item in value)
+    if isinstance(value, tuple):
+        return tuple(_freeze_json_value(item) for item in value)
+    return value
 
 
 class TestSingleEncode:
@@ -120,32 +135,6 @@ class TestToolTokenPaddingCompact:
         assert _tool_token_padding({"tools": tools}) == max(64, total // 4)
 
 
-class TestWarningsPreserved:
-    def test_warnings_copied_to_prepared(self):
-        warnings = [{"field": "tools", "kind": "unsupported"}]
-        preflight = _make_preflight(warnings=warnings)
-
-        prepared = PreparedTranscode.from_preflight_result(
-            result=preflight,
-            client_protocol="openai",
-            loss_policy="warn",
-            encoded_body=b"{}",
-        )
-
-        assert prepared.warnings == warnings
-        assert prepared.warnings is not preflight.warnings
-
-    def test_empty_warnings(self):
-        preflight = _make_preflight(warnings=[])
-        prepared = PreparedTranscode.from_preflight_result(
-            result=preflight,
-            client_protocol="openai",
-            loss_policy="warn",
-            encoded_body=b"{}",
-        )
-        assert prepared.warnings == []
-
-
 class TestRecomputeReasons:
     def test_constant_contains_expected_reasons(self):
         assert {
@@ -156,8 +145,8 @@ class TestRecomputeReasons:
         } == RECOMPUTE_REASONS
 
 
-class TestPreparedTranscodeDebugFields:
-    def test_defaults(self):
+class TestPreparedTranscodeDiagnostics:
+    def test_defaults_and_reuse_path(self):
         preflight = _make_preflight()
         prepared = PreparedTranscode.from_preflight_result(
             result=preflight,
@@ -165,11 +154,20 @@ class TestPreparedTranscodeDebugFields:
             loss_policy="warn",
             encoded_body=b"{}",
         )
-        assert prepared.available is True
-        assert prepared.reused is False
-        assert prepared.recompute_reason is None
 
-    def test_mutable_after_creation(self):
+        assert prepared.diagnostics.available is True
+        assert prepared.diagnostics.reused is False
+        assert prepared.diagnostics.recompute_reason is None
+
+        prepared.diagnostics.reused = True
+        prepared.diagnostics.recompute_reason = "thinking_controls_present"
+
+        assert prepared.diagnostics.available is True
+        assert prepared.diagnostics.reused is True
+        assert prepared.diagnostics.recompute_reason == "thinking_controls_present"
+
+    @pytest.mark.parametrize("reason", sorted(RECOMPUTE_REASONS))
+    def test_recompute_paths_record_stable_reason(self, reason: str):
         preflight = _make_preflight()
         prepared = PreparedTranscode.from_preflight_result(
             result=preflight,
@@ -177,16 +175,67 @@ class TestPreparedTranscodeDebugFields:
             loss_policy="warn",
             encoded_body=b"{}",
         )
-        prepared.reused = True
-        prepared.recompute_reason = "thinking_controls_present"
-        assert prepared.reused is True
-        assert prepared.recompute_reason == "thinking_controls_present"
+
+        prepared.diagnostics.reused = False
+        prepared.diagnostics.recompute_reason = reason
+
+        assert prepared.diagnostics.reused is False
+        assert prepared.diagnostics.recompute_reason == reason
 
 
-class TestPreparedTranscodeReused:
-    def test_reuse_sets_reused_and_extends_warnings(self):
+class TestPreparedTranscodeDispatchData:
+    def test_dispatch_data_is_frozen_and_detached_from_diagnostics(self):
+        payload = {"messages": [{"role": "user", "content": "hi"}]}
+        warnings = [{"field": "tools", "kind": "unsupported"}]
+        preflight = _make_preflight(
+            translated_payload=payload,
+            warnings=warnings,
+            tool_token_padding=100,
+        )
+
+        from eggpool.request.body import encode_json_body
+
+        encoded = encode_json_body(payload)
+        prepared = PreparedTranscode.from_preflight_result(
+            result=preflight,
+            client_protocol="openai",
+            loss_policy="warn",
+            encoded_body=encoded,
+        )
+        frozen_payload = _freeze_json_value(payload)
+        frozen_warnings = tuple(_freeze_json_value(warning) for warning in warnings)
+
+        payload["messages"][0]["content"] = "mutated source"
+        warnings[0]["kind"] = "mutated source"
+
+        prepared.diagnostics.reused = True
+        prepared.diagnostics.recompute_reason = "protocol_or_features_mismatch"
+
+        assert prepared.translated_body is encoded
+        assert prepared.translated_payload == frozen_payload
+        assert prepared.warnings == frozen_warnings
+        assert prepared.tool_token_padding == 100
+        assert prepared.loss_policy_used == "warn"
+        assert prepared.features_fingerprint == "none"
+        assert prepared.diagnostics.available is True
+        assert prepared.diagnostics.reused is True
+        assert prepared.diagnostics.recompute_reason == (
+            "protocol_or_features_mismatch"
+        )
+
+        with pytest.raises(TypeError):
+            prepared.translated_payload["messages"] = ()
+        with pytest.raises(TypeError):
+            prepared.translated_payload["messages"][0]["content"] = "changed"
+        with pytest.raises(TypeError):
+            prepared.warnings[0]["kind"] = "changed"
+
+
+class TestWarningPropagation:
+    def test_frozen_warnings_still_extend_context_loss_warnings(self):
         warnings = [{"field": "tools", "kind": "unsupported"}]
         preflight = _make_preflight(warnings=warnings)
+
         prepared = PreparedTranscode.from_preflight_result(
             result=preflight,
             client_protocol="openai",
@@ -202,18 +251,14 @@ class TestPreparedTranscodeReused:
             upstream_protocol="anthropic",
         )
 
-        # Simulate coordinator reuse path.
         ctx.loss_warnings.extend(prepared.warnings)
-        prepared.reused = True
 
-        assert prepared.reused is True
-        assert prepared.recompute_reason is None
         assert len(ctx.loss_warnings) == 1
-        assert ctx.loss_warnings[0] == warnings[0]
+        assert dict(ctx.loss_warnings[0]) == warnings[0]
 
 
-class TestPreparedTranscodeFallbackThinking:
-    def test_thinking_controls_sets_reason(self):
+class TestPreparedTranscodeValidity:
+    def test_protocol_mismatch_rejects_reuse(self):
         preflight = _make_preflight()
         prepared = PreparedTranscode.from_preflight_result(
             result=preflight,
@@ -222,57 +267,9 @@ class TestPreparedTranscodeFallbackThinking:
             encoded_body=b"{}",
         )
 
-        # Simulate coordinator fallback path for thinking controls.
-        prepared.reused = False
-        prepared.recompute_reason = "thinking_controls_present"
-
-        assert prepared.reused is False
-        assert prepared.recompute_reason == "thinking_controls_present"
-
-
-class TestPreparedTranscodeFallbackMissing:
-    def test_no_prepared_result_sets_reason(self):
-        # When no PreparedTranscode exists, the coordinator falls back.
-        # This tests the reason constant and the field behavior.
-        prepared = PreparedTranscode(
-            client_protocol="openai",
-            upstream_protocol="anthropic",
-            translated_payload={},
-            translated_body=b"{}",
-            warnings=[],
-            tool_token_padding=0,
-            loss_policy_used="warn",
-        )
-
-        # Simulate coordinator: no valid prepared result → recompute.
-        prepared.reused = False
-        prepared.recompute_reason = "no_prepared_result"
-
-        assert prepared.reused is False
-        assert prepared.recompute_reason == "no_prepared_result"
-
-
-class TestPreparedTranscodeFallbackMismatch:
-    def test_protocol_mismatch_sets_reason(self):
-        preflight = _make_preflight()
-        prepared = PreparedTranscode.from_preflight_result(
-            result=preflight,
-            client_protocol="openai",
-            loss_policy="warn",
-            encoded_body=b"{}",
-        )
-
-        # is_valid_for returns False when protocol mismatches.
         assert prepared.is_valid_for(upstream_protocol="openai") is False
 
-        # Simulate coordinator fallback.
-        prepared.reused = False
-        prepared.recompute_reason = "protocol_or_features_mismatch"
-
-        assert prepared.reused is False
-        assert prepared.recompute_reason == "protocol_or_features_mismatch"
-
-    def test_features_mismatch_sets_reason(self):
+    def test_features_mismatch_rejects_reuse(self):
         from eggpool.transcoder.policy import TranscoderFeatures
 
         features_v1 = TranscoderFeatures(
@@ -306,66 +303,3 @@ class TestPreparedTranscodeFallbackMismatch:
             )
             is False
         )
-
-
-class TestWarningNoDuplication:
-    def test_warnings_appended_exactly_once_on_reuse(self):
-        warnings = [{"field": "tools", "kind": "unsupported"}]
-        preflight = _make_preflight(warnings=warnings)
-        prepared = PreparedTranscode.from_preflight_result(
-            result=preflight,
-            client_protocol="openai",
-            loss_policy="warn",
-            encoded_body=b"{}",
-        )
-
-        from eggpool.transcoder.context import TranscodeContext
-
-        ctx = TranscodeContext(
-            request_id="r-1",
-            client_protocol="openai",
-            upstream_protocol="anthropic",
-        )
-
-        # Extend once (simulating coordinator reuse path).
-        ctx.loss_warnings.extend(prepared.warnings)
-        assert len(ctx.loss_warnings) == 1
-
-        # Extending again would duplicate — verify the list isn't mutated
-        # by the extend itself (i.e. extend is idempotent on empty).
-        ctx.loss_warnings.extend(prepared.warnings)
-        assert len(ctx.loss_warnings) == 2  # would be duplicated if called twice
-
-    def test_prepared_warnings_are_independent_copy(self):
-        warnings = [{"field": "tools", "kind": "unsupported"}]
-        preflight = _make_preflight(warnings=warnings)
-        prepared = PreparedTranscode.from_preflight_result(
-            result=preflight,
-            client_protocol="openai",
-            loss_policy="warn",
-            encoded_body=b"{}",
-        )
-
-        # Mutating original warnings doesn't affect prepared copy.
-        warnings.append({"field": "other", "kind": "dropped"})
-        assert len(prepared.warnings) == 1
-
-    def test_empty_prepared_warnings_extend_nothing(self):
-        preflight = _make_preflight(warnings=[])
-        prepared = PreparedTranscode.from_preflight_result(
-            result=preflight,
-            client_protocol="openai",
-            loss_policy="warn",
-            encoded_body=b"{}",
-        )
-
-        from eggpool.transcoder.context import TranscodeContext
-
-        ctx = TranscodeContext(
-            request_id="r-1",
-            client_protocol="openai",
-            upstream_protocol="anthropic",
-        )
-
-        ctx.loss_warnings.extend(prepared.warnings)
-        assert ctx.loss_warnings == []

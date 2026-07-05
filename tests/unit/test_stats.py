@@ -232,6 +232,54 @@ class TestFetchSummary:
         assert repaired_summary["reservation_fallback_excess_microdollars"] == 0
 
 
+class TestFetchCanonicalRequestSegmentation:
+    @pytest.mark.asyncio()
+    async def test_not_collected_is_counted_separately(self, db: Database) -> None:
+        async with db.transaction():
+            account_id = await db.execute_insert(
+                "INSERT INTO accounts (name, api_key_env, enabled, provider_id) "
+                "VALUES (?, ?, 1, ?)",
+                ("segmentation-acct", "SEGMENTATION_ENV", "opencode-go"),
+            )
+            await db.execute_write(
+                "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+                ("segmentation-model", "openai"),
+            )
+        request_repo = RequestRepository(db)
+        async with db.transaction():
+            request_row_id = await request_repo.create_pending(
+                request_id="segmentation-not-collected",
+                model_id="segmentation-model",
+                protocol="openai",
+                streamed=False,
+                account_id=account_id,
+                provider_id="opencode-go",
+            )
+            await request_repo.update_after_completion(
+                request_row_id,
+                status="completed",
+                input_tokens=11,
+                output_tokens=22,
+            )
+            await db.execute_write(
+                "UPDATE requests SET segmentation_status = ? WHERE id = ?",
+                ("not_collected", request_row_id),
+            )
+
+        result = await queries.fetch_canonical_request_segmentation(
+            db,
+            "2000-01-01 00:00:00",
+            "2099-12-31 23:59:59",
+        )
+        assert result["by_status"]["not_collected"] == 1
+        assert result["by_status"]["segmented"] == 0
+        provider_bucket = result["per_provider_status"][("opencode-go", "unknown")]
+        assert provider_bucket["not_collected"] == 1
+        model_bucket = result["per_model_status"]["segmentation-model"]
+        assert model_bucket["not_collected"] == 1
+        assert result["total_requests"] == 1
+
+
 class TestFetchAccountStats:
     """Tests for fetch_account_stats."""
 

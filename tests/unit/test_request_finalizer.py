@@ -411,3 +411,76 @@ class TestRequestFinalizerCostPrecedence:
             assert row["local_cost_exactness"] == "estimated"
         finally:
             await db.disconnect()
+
+
+class TestRequestFinalizerSegmentationStatus:
+    @pytest.mark.asyncio
+    async def test_not_collected_flag_persists_status(self) -> None:
+        db, request_repo, attempt_repo, reservation_repo = await _fresh_finalizer_db()
+        try:
+            selected, request_id = await _seed_request(
+                db,
+                request_repo,
+                attempt_repo,
+                reservation_repo,
+                proxy_request_id="finalizer-segmentation-not-collected-1",
+            )
+            finalizer = RequestFinalizer(
+                db=db,
+                request_repo=request_repo,
+                attempt_repo=attempt_repo,
+                reservation_repo=reservation_repo,
+            )
+
+            await finalizer.finalize(
+                selected,
+                FinalizationData(
+                    outcome=FinalizationOutcome.COMPLETED,
+                    status_code=200,
+                    segmentation_not_collected=True,
+                ),
+            )
+
+            row = await db.fetch_one(
+                "SELECT segmentation_status FROM requests WHERE id = ?",
+                (request_id,),
+            )
+            assert row is not None
+            assert row["segmentation_status"] == "not_collected"
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_missing_segmentation_defaults_to_empty_request(self) -> None:
+        db, request_repo, attempt_repo, reservation_repo = await _fresh_finalizer_db()
+        try:
+            selected, request_id = await _seed_request(
+                db,
+                request_repo,
+                attempt_repo,
+                reservation_repo,
+                proxy_request_id="finalizer-segmentation-empty-1",
+            )
+            finalizer = RequestFinalizer(
+                db=db,
+                request_repo=request_repo,
+                attempt_repo=attempt_repo,
+                reservation_repo=reservation_repo,
+            )
+
+            await finalizer.finalize(
+                selected,
+                FinalizationData(
+                    outcome=FinalizationOutcome.COMPLETED,
+                    status_code=200,
+                ),
+            )
+
+            row = await db.fetch_one(
+                "SELECT segmentation_status FROM requests WHERE id = ?",
+                (request_id,),
+            )
+            assert row is not None
+            assert row["segmentation_status"] == "empty_request"
+        finally:
+            await db.disconnect()

@@ -137,7 +137,12 @@ class TestRenderCacheFallbackSummary:
                     "policy_warning_count": 1,
                 },
                 "tuning": {"recommendation_count": 4, "override_count": 5},
-                "segmentation": {"requests_segmented": 6},
+                "segmentation": {
+                    "requests_segmented": 6,
+                    "requests_not_collected": 2,
+                    "requests_empty_request": 1,
+                    "requests_parse_failure": 0,
+                },
             },
         )
         assert "custom-mode" in html
@@ -145,8 +150,9 @@ class TestRenderCacheFallbackSummary:
         assert "7 candidates" in html
         assert "4 recommendations" in html
         assert "segmented 6" in html
+        assert "not collected 2" in html
 
-    def test_fallback_produces_summary_panel(self) -> None:
+    def test_fallback_uses_canonical_segmentation_counts(self) -> None:
         fallback = _render_cache_request_shaping_fallback(
             cache_stability=None,
             compression_observability=None,
@@ -155,9 +161,37 @@ class TestRenderCacheFallbackSummary:
             guardrails={},
         )
         assert isinstance(fallback, dict)
-        html = render_cache(period="24h", request_shaping_summary=fallback)
+        html = render_cache(
+            period="24h",
+            canonical_request_segmentation={
+                "by_status": {
+                    "segmented": 6,
+                    "not_collected": 2,
+                    "empty_request": 1,
+                    "parse_failure": 0,
+                },
+                "protected_requests": 3,
+                "compressible_candidate_requests": 1,
+                "token_totals": {
+                    "stable_prefix": 0,
+                    "semi_stable": 0,
+                    "volatile": 0,
+                    "all": 0,
+                },
+                "byte_totals": {
+                    "stable_prefix": 0,
+                    "semi_stable": 0,
+                    "volatile": 0,
+                    "all": 0,
+                },
+                "per_model_status": {},
+            },
+        )
         assert "Request shaping" in html
-        assert 'id="cache-summary"' in html
+        assert "segmented 6" in html
+        assert "not collected 2" in html
+        assert "Not collected" in html
+        assert "Empty request" in html
 
     def test_fallback_exercised_when_none(self) -> None:
         html = render_cache(period="24h")

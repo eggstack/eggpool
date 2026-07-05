@@ -12,9 +12,10 @@
 --
 --   * segmentation_status records whether the segmenter produced
 --     a normal result ('segmented'), saw a request with no
---     segmentable content ('empty_request'), or hit a parse
---     failure ('parse_failure').  Default 'empty_request' so
---     pre-Phase-2 rows render correctly without a backfill.
+--     segmentable content ('empty_request'), was intentionally not
+--     collected ('not_collected'), or hit a parse failure
+--     ('parse_failure').  Default 'empty_request' so pre-Phase-2
+--     rows render correctly without a backfill.
 --   * stable_prefix_estimated_tokens / semi_stable_estimated_tokens /
 --     volatile_estimated_tokens are coarse token estimates per
 --     segment kind.  Used for thresholds and aggregate metrics

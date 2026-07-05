@@ -1458,7 +1458,8 @@ class StatsService:
         same shape as
         :func:`eggpool.stats.queries.fetch_canonical_request_segmentation`:
 
-        - ``total_requests`` / ``by_status``
+        - ``total_requests`` / ``by_status`` (including
+          ``not_collected`` vs ``empty_request``)
         - ``per_provider_status`` / ``per_model_status``
         - ``token_totals`` / ``byte_totals`` (per-segment-kind aggregates)
         - ``compressible_candidate_requests`` / ``protected_requests``

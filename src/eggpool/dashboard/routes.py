@@ -41,6 +41,7 @@ from eggpool.model_info.presentation import (
 from eggpool.stats import TimeRange, resolve_time_range
 from eggpool.stats.grouped_timeseries import clamp_grouped_limit
 from eggpool.stats.queries import fetch_disabled_account_count
+from eggpool.stats.segmentation import serialize_canonical_request_segmentation
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -205,6 +206,15 @@ def _build_request_shaping_summary(
     policy_warning_count = sum(
         int(entry.get("warning_count", 0) or 0) for entry in policy_counts
     )
+    segmentation_not_collected = int(
+        segmentation_by_status.get("not_collected", 0) or 0
+    )
+    segmentation_empty_request = int(
+        segmentation_by_status.get("empty_request", 0) or 0
+    )
+    segmentation_parse_failure = int(
+        segmentation_by_status.get("parse_failure", 0) or 0
+    )
 
     return {
         "period": period,
@@ -270,6 +280,9 @@ def _build_request_shaping_summary(
         },
         "segmentation": {
             "requests_segmented": int(segmentation_by_status.get("segmented", 0) or 0),
+            "requests_not_collected": segmentation_not_collected,
+            "requests_empty_request": segmentation_empty_request,
+            "requests_parse_failure": segmentation_parse_failure,
             "protected_requests": int(
                 canonical_request_segmentation.get("protected_requests", 0) or 0
             ),
@@ -1857,7 +1870,7 @@ async def handle_canonical_request_segmentation_json(request: Request) -> Respon
     period = request.query_params.get("period", "24h")
     stats_service = StatsService(db)
     data = await stats_service.get_canonical_request_segmentation(period)
-    return JSONResponse(content=data)
+    return JSONResponse(content=serialize_canonical_request_segmentation(data))
 
 
 async def handle_compression_observability_json(request: Request) -> Response:

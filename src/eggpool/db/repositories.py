@@ -448,7 +448,9 @@ class RequestRepository:
         normalized usage record or a segmentation result continue to
         work and the database renders ``cache_counter_status =
         'not_reported'`` and ``segmentation_status = 'empty_request'``
-        as the safe defaults.
+        as the safe defaults.  Callers that intentionally skip
+        segmentation should set ``segmentation_status = 'not_collected'``
+        so the dashboard can distinguish it from an empty request.
         """
         rowcount = await self._db.execute_write(
             "UPDATE requests SET "

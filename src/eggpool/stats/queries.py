@@ -2253,12 +2253,13 @@ async def fetch_canonical_request_segmentation(
     and never changes routing.  This query surfaces:
 
     - ``total_requests``              : total finalized rows in the window.
-    - ``by_status``                   : ``{"segmented", "empty_request",
-      "parse_failure"} -> request_count``.
+    - ``by_status``                   : ``{"segmented", "not_collected",
+      "empty_request", "parse_failure"} -> request_count``.
     - ``per_provider_status``         : ``(provider_id, upstream_protocol) ->
-      {"segmented", "empty_request", "parse_failure"}``.
+      {"segmented", "not_collected", "empty_request",
+      "parse_failure"}``.
     - ``per_model_status``            : ``model_id -> {"segmented",
-      "empty_request", "parse_failure", "total_requests",
+      "not_collected", "empty_request", "parse_failure", "total_requests",
       "stable_prefix_estimated_tokens", "volatile_estimated_tokens"}``.
     - ``token_totals``                : ``{"stable_prefix",
       "semi_stable", "volatile", "all"} -> total_estimated_tokens`` across
@@ -2290,6 +2291,7 @@ async def fetch_canonical_request_segmentation(
     rows = await db.fetch_all(status_sql, (start_dt, end_dt))
     by_status = {
         "segmented": 0,
+        "not_collected": 0,
         "empty_request": 0,
         "parse_failure": 0,
     }
@@ -2319,7 +2321,12 @@ async def fetch_canonical_request_segmentation(
         key = (d["provider_id"], d["upstream_protocol"])
         bucket = per_provider_status.setdefault(
             key,
-            {"segmented": 0, "empty_request": 0, "parse_failure": 0},
+            {
+                "segmented": 0,
+                "not_collected": 0,
+                "empty_request": 0,
+                "parse_failure": 0,
+            },
         )
         status = d["segmentation_status"]
         if status not in bucket:
@@ -2352,6 +2359,7 @@ async def fetch_canonical_request_segmentation(
             mid,
             {
                 "segmented": 0,
+                "not_collected": 0,
                 "empty_request": 0,
                 "parse_failure": 0,
                 "total_requests": 0,
@@ -2360,7 +2368,12 @@ async def fetch_canonical_request_segmentation(
             },
         )
         status = d["segmentation_status"]
-        if status not in ("segmented", "empty_request", "parse_failure"):
+        if status not in (
+            "segmented",
+            "not_collected",
+            "empty_request",
+            "parse_failure",
+        ):
             status = "parse_failure"
         bucket[status] += int(d["request_count"])
         bucket["total_requests"] += int(d["request_count"])

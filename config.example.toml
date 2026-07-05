@@ -149,10 +149,12 @@ fairness_scope = "provider_model_protocol"
 # Reducing write volume here is safe for high-throughput or SBC installs.
 [routing.trace]
 # "all"     – every attempt (default, current behavior)
-# "sampled" – successful attempts at sample_rate + all errors
+# "sampled" – deterministic request-id sampling at write time
 # "off"     – no routing trace rows
+# Sampling is decided before upstream outcome is known, so sampled
+# does not force all errors to be traced.
 mode = "all"
-# Fraction of successful traces to persist in sampled mode (0.0–1.0).
+# Fraction of selection-time traces to persist in sampled mode (0.0–1.0).
 sample_rate = 0.05
 # Include score_components_json in persisted traces (larger rows).
 # Set to false to reduce per-row write size on high-throughput installs.

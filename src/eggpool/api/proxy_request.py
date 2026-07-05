@@ -645,7 +645,7 @@ async def handle_proxy_request(
             },
         )
 
-    logger.info(
+    logger.debug(
         "Proxying %s: model=%s proxy_request_id=%s streaming=%s",
         endpoint.request_label,
         model_value,

@@ -227,7 +227,7 @@ scope (phases 4–6).
 
 **Phase 4 — Routing eligibility widening**: transcoding is **on by default**. The routing layer widens the candidate set to include accounts whose `provider.protocols` includes the model's native protocol even if it does not include the client protocol. `_validate_endpoint` checks for transcodable routes before raising `ProtocolMismatchError`. The `_resolve_upstream_protocol` method determines which protocol to use upstream based on the largest eligible-account set. `prefer_native = true` (default) keeps native-protocol accounts ranked above transcodable ones via a secondary sort key in `QuotaFairScorer`. The two-pass context-limit check in `api/proxy_request.py` validates both client-side and upstream limits when transcoding is active. The `[transcoder] enabled = false` flag is a deprecated escape hatch that disables all translation and reverts to the pre-default protocol-exact routing.
 
-**Phase 5 — Operator controls and docs**: the default `[transcoder]` config block is documented in `config.example.toml`. `eggpool stats transcoding` reports transcoded request counts and loss-warning summaries. The dashboard `/runtime` page includes a "Transcoding" card showing real-time counters. Structured INFO logs are emitted for every transcoded request and a startup line announces transcoding state. See `docs/transcoding.md` for the full operator guide.
+**Phase 5 — Operator controls and docs**: the default `[transcoder]` config block is documented in `config.example.toml`. `eggpool stats transcoding` reports transcoded request counts and loss-warning summaries. The dashboard `/runtime` page includes a "Transcoding" card showing real-time counters. Structured DEBUG logs are emitted for every transcoded request and a startup line announces transcoding state. Loss warnings remain at INFO. See `docs/transcoding.md` for the full operator guide.
 
 **Phase 6.1 — Tool-use transcoding**: bidirectional tool calling translation in both directions for non-streaming and streaming requests. `OpenAIToAnthropic.encode_request` / `decode_response` and `AnthropicToOpenAI.encode_request` / `decode_response` translate `tools`, `tool_choice`, `parallel_tool_calls`, assistant `tool_calls` history, `role: "tool"` history, and `tool_use` / `tool_result` content blocks. A per-request `ToolCallIdMap` (on `TranscodeContext.id_map`) mints `call_<24 hex>` and `toolu_<24 hex>` ids so the two namespaces never collide. The streaming transcoders (`OpenAIToAnthropicStreaming`, `AnthropicToOpenAIStreaming`) extend their state machines to track `content_block_start` / `input_json_delta` / `content_block_stop` triples and emit OpenAI `tool_calls` deltas in insertion order; the reverse direction buffers OpenAI `tool_calls[*].function.arguments` chunks and flushes Anthropic `tool_use` blocks on `finish_reason: "tool_calls"`. Anthropic's `pause_turn` `stop_reason` maps to `finish_reason: "tool_calls"` plus a synthetic `__eggpool_pause_turn__` tool_call entry so OpenAI clients can detect pause-and-resume flows. `stream_options.include_usage` is lifted onto `TranscodeContext.request_include_usage` so the streaming transcoder can decide whether to forward upstream usage chunks. New loss-warning kinds (`tool_call_id_translated`, `tool_call_id_changed`, `parallel_tool_calls_collapsed`, `malformed_tool_arguments`, `invalid_tool_choice`, `unsupported_tool_type`, `empty_tool_use_block`, `tool_result_image_dropped`, `tool_result_error_passthrough`, `cache_control_feature_disabled`, `cache_control_unsupported_by_target_protocol`, `cache_control_invalid_shape`, `provider_extension_not_preserved`, `stable_prefix_preserved`, `stable_prefix_reordered_canonically`, `pause_turn`, `non_text_content_dropped`, `tool_result_inferred`) are added to `LOSS_WARNING_KINDS`. See `docs/transcoding.md` § Tool-Use Transcoding and `plans/tooltranscoding.md` for the full design.
 
@@ -2446,7 +2446,7 @@ Correctness-preserving performance pass that reduces redundant computation and D
 
 ### Phase 1 — Transcode Preflight Reuse
 
-`PreparedTranscode` (`src/eggpool/transcoder/prepared.py`) captures the transcoder, context, and features fingerprint from the preflight step. The coordinator checks `prepared.is_valid_for(transcoder, features)` before re-encoding — when valid, it reuses the already-encoded upstream body and preflight warnings, avoiding a redundant `encode_request()` call. Falls back to full recompute when thinking controls or feature mismatches are detected. Debug observability fields `available`, `reused`, and `recompute_reason` are set on each request so the coordinator can log why reuse succeeded or failed.
+`PreparedTranscode` (`src/eggpool/transcoder/prepared.py`) captures the transcoder, context, and features fingerprint from the preflight step while keeping the dispatch payload immutable. The coordinator checks `prepared.is_valid_for(transcoder, features)` before re-encoding — when valid, it reuses the already-encoded upstream body and preflight warnings, avoiding a redundant `encode_request()` call. Falls back to full recompute when thinking controls or feature mismatches are detected. Debug observability lives on `PreparedTranscodeDiagnostics` via `available`, `reused`, and `recompute_reason` so the coordinator can log why reuse succeeded or failed without mutating the prepared dispatch data.
 
 ### Phase 2 — Conditional Request Segmentation
 
@@ -2463,10 +2463,10 @@ Correctness-preserving performance pass that reduces redundant computation and D
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `mode` | `all` / `sampled` / `off` | `all` | When to write routing traces |
-| `sample_rate` | `0.0–1.0` | `0.05` | Deterministic SHA-256 hash sampling in `sampled` mode |
+| `sample_rate` | `0.0–1.0` | `0.05` | Deterministic request-id sampling in `sampled` mode |
 | `include_score_components` | `bool` | `True` | Whether to serialize the per-account scoring breakdown |
 
-Default `mode = "all"` preserves backward compatibility. `sampled` mode uses `hashlib.sha256(request_id.encode()).hexdigest()` for deterministic, reproducible sampling.
+Default `mode = "all"` preserves backward compatibility. `sampled` mode uses a deterministic request-id hash at trace-write time, before upstream outcome is known, so it samples selection attempts rather than forcing all errors.
 
 ### Phase 5 — Hot-Path Cleanup
 
@@ -2481,7 +2481,7 @@ Default `mode = "all"` preserves backward compatibility. `sampled` mode uses `ha
 - `test_perf_baseline.py` — 8 benchmarks: native OpenAI/Anthropic requests, transcode O2A/A2O, segmentation, routing eligibility, retry failover, thinking
 - `test_perf_regression.py` — 3 regression guards: segmentation bounded overhead, routing eligibility determinism, transcode body equivalence
 
-Run with: `pytest tests/perf/ -m perf_baseline -v`
+Run with: `pytest -m performance -v` or `pytest tests/perf/ -m perf_baseline -v` for the baseline subset.
 
 ## In-Memory Bounds and Memory Footprint
 
