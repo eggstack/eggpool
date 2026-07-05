@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import pytest
+
 from eggpool.dashboard.render import (
     _render_cache_request_shaping_fallback,
     render_cache,
 )
+
+pytestmark = pytest.mark.dashboard
 
 
 class TestRenderCacheBasic:

@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import pytest
+
 from eggpool.accounts.state import AccountRuntimeState
 from eggpool.catalog.cache import ModelCatalogCache
 from eggpool.models.config import AppConfig
 from eggpool.quota.scorer import QuotaFairScorer, RoutingScore
 from eggpool.routing.eligibility import get_eligible_accounts
+
+pytestmark = pytest.mark.request_path
 
 # ---------------------------------------------------------------------------
 # Fixtures

@@ -28,11 +28,29 @@ All four must pass with zero errors.
 
 ## Focused Verification
 
+Run specific test subsets without waiting for the full suite:
+
 ```bash
-uv run pytest tests/unit/test_contract.py -v            # single test file
-uv run pytest tests/unit/ -v                             # all unit tests
-uv run pytest -k "test_something" -v                     # single test by name
-uv run ruff check --fix src/                             # auto-fix lint in one dir
+# Request-path correctness only (routing, transcoding, finalization)
+uv run pytest -m request_path -v
+
+# Dashboard and cache-page tests only
+uv run pytest -m dashboard -v
+
+# Performance baseline tests only
+uv run pytest -m performance -v
+
+# Single test file
+uv run pytest tests/unit/test_contract.py -v
+
+# Single test by name
+uv run pytest -k "test_routing_plan_fallback" -v
+
+# Lint auto-fix
+uv run ruff check --fix src/
+
+# Type check with errors only
+uv run pyright src/ scripts/ 2>&1 | head -20
 ```
 
 CI sets `PYTHONHASHSEED=0` and `TZ=UTC`; reproduce locally for deterministic results.
@@ -88,7 +106,7 @@ CI sets `PYTHONHASHSEED=0` and `TZ=UTC`; reproduce locally for deterministic res
 - **Integrations**: `src/eggpool/integrations/` generates external tool configs (OpenCode, Claude Code, Aider, Codex, etc.).
 - **Safe compression and advanced overrides**: `src/eggpool/transcoder/compression/` implements observe/safe compression, policy resolution, advisory tuning, and the deterministic markers used for operator visibility.
 - **Replay fixtures**: `tests/fixtures/cache_compression/` holds sanitized JSON fixtures (content-private, never enter routing). `tests/helpers/cache_compression_replay.py` is the harness. Treat them as developer regression assets, not operator surfaces.
-- **Performance optimization (Phases 0–5)**: correctness-preserving hot-path pass. Phase 1 reuses transcode preflight via `PreparedTranscode` (`src/eggpool/transcoder/prepared.py`). Phase 2 skips segmentation when no compression/cache/observability features are active (`should_segment_request` in `src/eggpool/transcoder/segmentation_guard.py`). Phase 3 computes routing in a single `RoutingPlan` pass (`Router.build_routing_plan()` in `src/eggpool/routing/router.py`) instead of double-calling `get_eligible_account_names()` + `select_accounts_for_failover()`. Phase 4 adds configurable `[routing.trace]` mode (`all`/`errors`/`sampled`/`off`). Phase 5 replaces `BaseHTTPMiddleware` with direct ASGI classes and moves routine request logs to `DEBUG`. Benchmarks: `tests/perf/`.
+- **Performance optimization (Phases 0–5)**: correctness-preserving hot-path pass. Phase 1 reuses transcode preflight via `PreparedTranscode` (`src/eggpool/transcoder/prepared.py`) with debug observability fields (`available`, `reused`, `recompute_reason`). Phase 2 skips segmentation when no compression/cache/observability features are active (`should_segment_request` in `src/eggpool/transcoder/segmentation_guard.py`) — gating is driven by the resolved effective compression policy, not the raw global config. Phase 3 computes routing in a single `RoutingPlan` pass (`Router.build_routing_plan()` in `src/eggpool/routing/router.py`) instead of double-calling `get_eligible_account_names()` + `select_accounts_for_failover()` — this is the authoritative selection path with no fallback to the legacy `select_accounts()`. Phase 4 adds configurable `[routing.trace]` mode (`all`/`sampled`/`off`). Phase 5 replaces `BaseHTTPMiddleware` with direct ASGI classes and moves routine request logs to `DEBUG`. Benchmarks: `tests/perf/`.
 
 ## Gotchas
 

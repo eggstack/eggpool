@@ -20,6 +20,8 @@ from eggpool.transcoder.context import TranscodeContext
 from eggpool.transcoder.openai_to_anthropic import OpenAIToAnthropic
 from eggpool.transcoder.segmentation import segment_request
 
+pytestmark = pytest.mark.performance
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

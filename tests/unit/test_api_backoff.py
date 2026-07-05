@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, Any, cast
 
+import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -13,6 +14,8 @@ from eggpool.api.backoff import register_backoff_routes
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
 from eggpool.db.repositories import AccountBackoffRepository
+
+pytestmark = pytest.mark.dashboard
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator

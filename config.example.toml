@@ -149,7 +149,6 @@ fairness_scope = "provider_model_protocol"
 # Reducing write volume here is safe for high-throughput or SBC installs.
 [routing.trace]
 # "all"     – every attempt (default, current behavior)
-# "errors"  – same as all (can't determine outcome at selection time)
 # "sampled" – successful attempts at sample_rate + all errors
 # "off"     – no routing trace rows
 mode = "all"

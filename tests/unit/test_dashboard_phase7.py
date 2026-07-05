@@ -13,7 +13,11 @@ compression/cache panels render correctly on the /cache page via
 
 from __future__ import annotations
 
+import pytest
+
 from eggpool.dashboard.render import render_cache
+
+pytestmark = pytest.mark.dashboard
 
 
 class TestCompressionObservabilityCard:

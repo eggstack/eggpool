@@ -99,7 +99,7 @@ def _tool_token_padding(payload: dict[str, Any]) -> int:
     total_bytes = 0
     tool_list = cast("list[dict[str, Any]]", tools)
     for tool in tool_list:
-        total_bytes += len(json.dumps(tool))
+        total_bytes += len(json.dumps(tool, separators=(",", ":")))
     return max(64, total_bytes // 4)
 
 
@@ -341,16 +341,19 @@ async def handle_proxy_request(
                     error_type="invalid_request_error",
                 )
             try:
-                translated_body = json.dumps(preflight.translated_payload).encode()
+                encoded_translated_body = encode_json_body(
+                    preflight.translated_payload,
+                )
+                limit_check_body = encoded_translated_body
                 if preflight.tool_token_padding > 0:
-                    translated_body += b"\x00" * (
+                    limit_check_body += b"\x00" * (
                         preflight.tool_token_padding
                         * ESTIMATED_CONTEXT_BYTES_PER_TOKEN_FLOOR
                     )
                 _check_context_limits(
                     model_id=model_id,
                     provider_id=provider_id,
-                    body=translated_body,
+                    body=limit_check_body,
                     payload=preflight.translated_payload,
                     protocol=preflight.upstream_protocol,
                     catalog_cache=catalog.cache,
@@ -361,15 +364,13 @@ async def handle_proxy_request(
                     message=str(exc),
                     error_type="invalid_request_error",
                 )
-            # Build the reusable prepared transcode so the coordinator
-            # can skip the duplicate encode_request() call.
             _loss_policy = getattr(transcoder_policy, "loss_policy", "warn")
             _features = getattr(transcoder_policy, "features", None)
             prepared_transcode = PreparedTranscode.from_preflight_result(
                 result=preflight,
                 client_protocol=endpoint.protocol,
                 loss_policy=_loss_policy,
-                encoded_body=json.dumps(preflight.translated_payload).encode(),
+                encoded_body=encoded_translated_body,
                 features=_features,
             )
 
@@ -389,62 +390,6 @@ async def handle_proxy_request(
         upstream_protocol=endpoint.protocol,
     )
 
-    # Phase 2: run the canonical request segmenter.  The result is
-    # attached to the ProxyRequestContext so the finalizer can persist
-    # the segmentation summary, the deterministic stable_prefix_hash /
-    # request_shape_hash, and the segment-kind token / byte
-    # estimates.  The segmenter is observational: it never mutates the
-    # payload, never raises on malformed input, and is cheap enough
-    # to run on every request without blocking the request path.
-    #
-    # Phase 2.1 (performance optimization): segmentation is skipped
-    # when no consumer needs it — compression observe/safe, synthetic
-    # cache controls, or cache observability.  The guard checks the
-    # resolved compression policy (Phase 6) when available, falling
-    # back to the raw ``[compression]`` config from app state.
-    _comp_cfg = getattr(request.app.state, "compression_policy", None)
-    _cache_cfg = getattr(config, "cache", None) if config is not None else None
-    _synthetic_enabled = (
-        getattr(
-            getattr(_cache_cfg, "synthetic_cache_controls", None),
-            "enabled",
-            False,
-        )
-        if _cache_cfg is not None
-        else False
-    )
-    _segmentation_needed = should_segment_request(
-        config,
-        compression_enabled=getattr(_comp_cfg, "enabled", False)
-        if _comp_cfg is not None
-        else False,
-        compression_mode=str(getattr(_comp_cfg, "mode", "off"))
-        if _comp_cfg is not None
-        else "off",
-        synthetic_cache_enabled=_synthetic_enabled,
-        cache_observability_enabled=False,
-        force_segmentation=getattr(config, "force_segmentation", False)
-        if config is not None
-        else False,
-    )
-
-    segmentation_result: Any = None
-    if _segmentation_needed:
-        try:
-            from eggpool.transcoder.segmentation import segment_request
-
-            segmentation_result = segment_request(payload, protocol=endpoint.protocol)
-        except Exception:  # noqa: BLE001
-            # Segmentation is observational.  A failure here must never
-            # block the request path; the finalizer falls back to
-            # ``segmentation_status = 'empty_request'``.
-            logger.debug(
-                "segmentation_failed",
-                extra={"proxy_request_id": request_id},
-                exc_info=True,
-            )
-            segmentation_result = None
-
     # Phase 6: resolve the compression policy for this request.
     # Resolution merges the global ``[compression]`` config with any
     # matching ``[[compression.policies]]`` entries.  The resolver is
@@ -459,6 +404,10 @@ async def handle_proxy_request(
     # silently skipped pre-route; operators who need provider-
     # specific policy must do a second post-route pass (or rely on
     # the broader client / protocol / model match fields).
+    #
+    # This runs BEFORE the segmentation guard so the guard reads the
+    # effective (possibly policy-overridden) compression enabled/mode
+    # instead of the raw global config.
     compression_policy = getattr(request.app.state, "compression_policy", None)
     runtime_override_registry: Any = getattr(
         request.app.state,
@@ -506,6 +455,63 @@ async def handle_proxy_request(
         if resolved_compression_policy is not None
         else compression_policy
     )
+
+    # Phase 2.1 (performance optimization): segmentation is skipped
+    # when no consumer needs it — compression observe/safe, synthetic
+    # cache controls, or cache observability.  The guard checks the
+    # effective compression policy resolved above rather than the
+    # raw global config, so a scoped ``[[compression.policies]]``
+    # override that enables observe/safe is correctly detected.
+    _cache_cfg = getattr(config, "cache", None) if config is not None else None
+    _synthetic_enabled = (
+        getattr(
+            getattr(_cache_cfg, "synthetic_cache_controls", None),
+            "enabled",
+            False,
+        )
+        if _cache_cfg is not None
+        else False
+    )
+    _seg_compression_enabled = (
+        getattr(effective_compression_policy, "enabled", False)
+        if effective_compression_policy is not None
+        else False
+    )
+    _seg_compression_mode = (
+        str(getattr(effective_compression_policy, "mode", "off"))
+        if effective_compression_policy is not None
+        else "off"
+    )
+    _segmentation_needed = should_segment_request(
+        config,
+        compression_enabled=_seg_compression_enabled,
+        compression_mode=_seg_compression_mode,
+        synthetic_cache_enabled=_synthetic_enabled,
+        cache_observability_enabled=False,
+        force_segmentation=getattr(config, "force_segmentation", False)
+        if config is not None
+        else False,
+    )
+
+    segmentation_result: Any = None
+    segmentation_not_collected = False
+    if _segmentation_needed:
+        try:
+            from eggpool.transcoder.segmentation import segment_request
+
+            segmentation_result = segment_request(payload, protocol=endpoint.protocol)
+        except Exception:  # noqa: BLE001
+            # Segmentation is observational.  A failure here must never
+            # block the request path; the finalizer falls back to
+            # ``segmentation_status = 'empty_request'``.
+            logger.debug(
+                "segmentation_failed",
+                extra={"proxy_request_id": request_id},
+                exc_info=True,
+            )
+            segmentation_result = None
+    else:
+        segmentation_not_collected = True
 
     # Phase 4: run the observe-mode compression analyzer.  The
     # analyzer is observational and never mutates the request
@@ -592,6 +598,7 @@ async def handle_proxy_request(
         transcode_required=False,
         transcode_context=transcode_ctx,
         segmentation=segmentation_result,
+        segmentation_not_collected=segmentation_not_collected,
         compression_observation=compression_observation,
         compression_result=compression_result,
         resolved_compression_policy=resolved_compression_policy,

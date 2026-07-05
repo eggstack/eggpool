@@ -23,6 +23,8 @@ from eggpool.dashboard.routes import (
 )
 from eggpool.model_info.types import CanonicalModelInfo
 
+pytestmark = pytest.mark.dashboard
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

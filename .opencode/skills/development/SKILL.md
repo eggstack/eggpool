@@ -16,6 +16,33 @@ uv run pyright src/ scripts/
 uv run pytest
 ```
 
+## Focused Verification
+
+Run specific test subsets without waiting for the full suite:
+
+```bash
+# Request-path correctness only (routing, transcoding, finalization)
+uv run pytest -m request_path -v
+
+# Dashboard and cache-page tests only
+uv run pytest -m dashboard -v
+
+# Performance baseline tests only
+uv run pytest -m performance -v
+
+# Single test file
+uv run pytest tests/unit/test_contract.py -v
+
+# Single test by name
+uv run pytest -k "test_routing_plan_fallback" -v
+
+# Lint auto-fix
+uv run ruff check --fix src/
+
+# Type check with errors only
+uv run pyright src/ scripts/ 2>&1 | head -20
+```
+
 ## Linting
 
 - **Ruff** for linting and formatting
@@ -60,6 +87,23 @@ uv run pytest
 # Run with coverage
 uv run coverage run -m pytest
 uv run coverage report
+```
+
+### Test Markers
+
+Defined in `pyproject.toml` and applied at the module level via `pytestmark`:
+
+- **`request_path`** — routing, transcoding, finalization, and provider contract tests. Covers `tests/unit/test_routing*.py`, `tests/unit/test_contract*.py`, and `tests/unit/test_request_finalizer.py`.
+- **`dashboard`** — dashboard rendering, cache-page, and API endpoint tests. Covers `tests/unit/test_dashboard*.py`, `tests/unit/test_api*.py`, and `tests/unit/test_compression_stats_phase7.py`.
+- **`performance`** — performance baseline and regression guards. Covers `tests/perf/test_perf_baseline.py` and `tests/perf/test_perf_regression.py`.
+- **`slow`** — marks tests as slow (run in nightly CI, deselect in PR CI).
+- **`cache_compression_replay_full`** — full matrix replay for cache/compression fixtures.
+
+```bash
+uv run pytest -m request_path -v     # routing/transcoding/finalization only
+uv run pytest -m dashboard -v        # dashboard and cache-page only
+uv run pytest -m performance -v      # performance baseline only
+uv run pytest -m "not slow" -v       # skip slow tests
 ```
 
 ### Provider Contract Tests

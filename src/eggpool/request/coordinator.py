@@ -737,13 +737,33 @@ class RequestCoordinator:
                     # Reuse the cached preflight translation.
                     context.upstream_body = _prepared.translated_body
                     context.transcode_context.loss_warnings.extend(_prepared.warnings)
+                    _prepared.reused = True
                     logger.debug(
-                        "prepared_transcode_reused request_id=%s client=%s upstream=%s",
+                        "prepared_transcode_reused request_id=%s client=%s upstream=%s "
+                        "available=%s reused=%s recompute_reason=%s",
                         context.request_id,
                         context.protocol,
                         context.upstream_protocol,
+                        _prepared.available,
+                        _prepared.reused,
+                        _prepared.recompute_reason,
                     )
                 else:
+                    # Determine the recompute reason for observability.
+                    if _prepared is None:
+                        _recompute_reason = "no_prepared_result"
+                    elif _client_has_thinking:
+                        _recompute_reason = "thinking_controls_present"
+                    else:
+                        _recompute_reason = "protocol_or_features_mismatch"
+                    if _prepared is not None:
+                        _prepared.reused = False
+                        _prepared.recompute_reason = _recompute_reason
+                    logger.debug(
+                        "prepared_transcode_recompute request_id=%s reason=%s",
+                        context.request_id,
+                        _recompute_reason,
+                    )
                     try:
                         payload = json.loads(context.body_for_upstream)
                     except (json.JSONDecodeError, ValueError):
@@ -891,6 +911,13 @@ class RequestCoordinator:
                             context.thinking_trace["upstream_protocol"] = (
                                 context.upstream_protocol
                             )
+            else:
+                # Transcoder unavailable — mark any prepared transcode as
+                # not reused with a reason so operators can see why.
+                _prepared = context.prepared_transcode
+                if _prepared is not None:
+                    _prepared.reused = False
+                    _prepared.recompute_reason = "transcoder_missing"
 
         last_error: Exception | None = None
         last_upstream_response: tuple[int, list[tuple[str, str]], bytes] | None = None
@@ -1266,17 +1293,7 @@ class RequestCoordinator:
                         f"No accounts available for model {context.model_id!r}"
                     )
 
-                # 3. Build per-account token estimate for scoring. The
-                #    scorer folds the incoming request's projected token
-                #    count into each account's per-window utilization.
-                #    Every account is treated as equally capable, so the
-                #    value is identical for all candidates.
-                request_estimates: dict[str, int] = {
-                    acct_name: int(estimated_tokens)
-                    for acct_name in eligible_account_names
-                }
-
-                # 4. Probe circuit-breaker slots on ranked candidates.
+                # 3. Probe circuit-breaker slots on ranked candidates.
                 selected_state = None
                 selected_score: float | None = None
                 selected_tier: int | None = None
@@ -1304,39 +1321,6 @@ class RequestCoordinator:
                     selected_score = float(score.final_score)
                     selected_tier = score.tier
                     break
-
-                if selected_state is None and not ranked_candidates:
-                    selected_state = await self._router.select_account(
-                        model_id=context.model_id,
-                        request_estimates=request_estimates,
-                        exclude_accounts=exclude if exclude else None,
-                        provider_id=context.provider_id,
-                        protocol=context.upstream_protocol,
-                        transcode_eligibility=(
-                            {context.protocol, context.upstream_protocol}
-                            if context.transcode_required
-                            else None
-                        ),
-                        client_protocol=context.protocol,
-                        thinking_requirement=thinking_req
-                        if thinking_req.required
-                        else None,
-                        capability_policy=_capability_policy,
-                    )
-                    if (
-                        selected_state is not None
-                        and self._health_manager is not None
-                        and not self._health_manager.try_acquire_request(
-                            selected_state.name, context.model_id
-                        )
-                    ):
-                        exclusions.append(
-                            RoutingExclusion(
-                                account_name=selected_state.name,
-                                reason="circuit_breaker",
-                            )
-                        )
-                        selected_state = None
 
                 if selected_state is None:
                     # Distinguish "all enabled accounts already attempted in
@@ -1425,11 +1409,9 @@ class RequestCoordinator:
                         or DEFAULT_PROVIDER_ID
                     )
 
-                    # 7. Compute the reservation size (cost microdollars) for
-                    #    the selected account. ``request_estimates`` is now
-                    #    an account-name to projected *token count* map for
-                    #    routing scoring; reservation sizing is a separate
-                    #    concern and goes through the cost-estimator.
+                    # 5. Compute the reservation size (cost microdollars) for
+                    #    the selected account. Reservation sizing goes
+                    #    through the cost-estimator.
                     estimated_microdollars = 0
                     if self._quota_estimator is not None:
                         estimated_microdollars = self._quota_estimator.estimate_cost(
@@ -1482,8 +1464,6 @@ class RequestCoordinator:
                     # The routing.trace.mode config controls write pressure:
                     #   all     – every attempt (current behavior)
                     #   sampled – successful attempts at sample_rate + all errors
-                    #   errors  – same as all (can't determine outcome at
-                    #             selection time; future: defer to finalizer)
                     #   off     – no routing trace rows
                     trace_cfg = (
                         self._config.routing.trace if self._config is not None else None

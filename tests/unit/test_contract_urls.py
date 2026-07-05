@@ -9,6 +9,8 @@ import pytest
 from eggpool.models.config import ProviderConfig
 from eggpool.providers.contract import compose_provider_url
 
+pytestmark = pytest.mark.request_path
+
 
 class TestProviderUrlComposition:
     def test_preserves_endpoint_trailing_slash(self):

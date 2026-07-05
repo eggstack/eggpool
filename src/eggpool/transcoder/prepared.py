@@ -11,8 +11,15 @@ if TYPE_CHECKING:
     from eggpool.api.proxy_request import TranscodePreflightResult
     from eggpool.transcoder.policy import TranscoderFeatures
 
+RECOMPUTE_REASONS: set[str] = {
+    "no_prepared_result",
+    "protocol_or_features_mismatch",
+    "thinking_controls_present",
+    "transcoder_missing",
+}
 
-@dataclass(frozen=True, slots=True)
+
+@dataclass(slots=True)
 class PreparedTranscode:
     """Cached result of transcode preflight, reusable in coordinator dispatch.
 
@@ -22,6 +29,11 @@ class PreparedTranscode:
     The prepared result is only reused when the upstream protocol and
     transcoder features match what the coordinator would use; provider-
     specific thinking budget overrides still require a recompute.
+
+    Debug fields (set by coordinator):
+        available: whether a prepared result existed for this request.
+        reused: whether the prepared body was actually reused.
+        recompute_reason: reason when fallback recompute was triggered.
     """
 
     client_protocol: str
@@ -32,6 +44,9 @@ class PreparedTranscode:
     tool_token_padding: int
     loss_policy_used: str
     features_fingerprint: str = ""
+    available: bool = True
+    reused: bool = False
+    recompute_reason: str | None = None
 
     @classmethod
     def from_preflight_result(

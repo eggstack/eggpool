@@ -280,12 +280,14 @@ When `[dashboard].enabled = true`, a multi-page dashboard is served at `/` with 
 ## Development
 
 ```bash
-uv sync --extra dev
+uv sync --extra dev      # install dependencies
+uv run pytest            # run all tests
+uv run ruff format --check src/ tests/ scripts/
 uv run ruff check src/ tests/ scripts/
-uv run ruff format src/ tests/ scripts/
 uv run pyright src/ scripts/
-uv run pytest
 ```
+
+See `AGENTS.md` for focused test subset commands.
 
 ## Agent Configuration
 

@@ -8,6 +8,8 @@ import time
 from html.parser import HTMLParser
 from typing import Any
 
+import pytest
+
 from eggpool.dashboard.escape import (
     escape,
     escape_attr,
@@ -41,6 +43,8 @@ from eggpool.dashboard.render import (
     render_timeseries,
     render_traces,
 )
+
+pytestmark = pytest.mark.dashboard
 
 
 class _HTMLTextExtractor(HTMLParser):

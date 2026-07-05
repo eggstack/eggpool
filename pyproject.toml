@@ -114,7 +114,11 @@ exclude = ["tests"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
+# Run subsets: pytest -m request_path, pytest -m dashboard, pytest -m performance
 markers = [
-    "slow: marks tests as slow (run in nightly CI, deselect in PR CI)",
-    "cache_compression_replay_full: full matrix replay for cache/compression fixtures (select with -m cache_compression_replay_full)",
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "cache_compression_replay_full: full cache compression replay matrix",
+    "request_path: request-path correctness tests (routing, transcoding, finalization)",
+    "dashboard: dashboard and cache-page rendering tests",
+    "performance: performance baseline and regression tests",
 ]

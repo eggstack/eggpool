@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import pytest
+
 from eggpool.routing.provider import format_model_provider, parse_model_provider
+
+pytestmark = pytest.mark.request_path
 
 
 class TestParseModelProvider:

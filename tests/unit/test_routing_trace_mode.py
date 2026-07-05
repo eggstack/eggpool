@@ -26,6 +26,8 @@ from eggpool.models.config import AppConfig, RoutingTraceConfig
 from eggpool.request.coordinator import ProxyRequestContext, RequestCoordinator
 from eggpool.routing.router import Router
 
+pytestmark = pytest.mark.request_path
+
 if TYPE_CHECKING:
     from eggpool.health.health_manager import HealthManager
 
@@ -309,30 +311,12 @@ async def test_sampled_mode_rate_1_writes_all() -> None:
         await db.disconnect()
 
 
-@pytest.mark.asyncio()
-async def test_errors_mode_writes_traces() -> None:
-    """In 'errors' mode, traces are written (same as 'all' currently).
+def test_errors_mode_rejected_by_config() -> None:
+    """Config parser rejects 'errors' mode (removed in corrective pass)."""
+    import pydantic
 
-    The 'errors' mode can't determine request outcome at selection time,
-    so it behaves identically to 'all' for now.  A future iteration may
-    defer trace writes to finalization.
-    """
-    config = _build_config(trace_mode="errors")
-    db = Database(path=":memory:")
-    await db.connect()
-    try:
-        await MigrationRunner(db).run()
-        await _seed_accounts(db, ["trace-acct-a", "trace-acct-b"])
-        coordinator = await _build_coordinator(config, db)
-
-        for i in range(5):
-            ctx = _make_context(f"req-err-{i}")
-            await coordinator._select_and_persist_attempt(ctx, 1)
-
-        count = await _count_routing_traces(db)
-        assert count == 5, f"Expected 5 traces in errors mode, got {count}"
-    finally:
-        await db.disconnect()
+    with pytest.raises(pydantic.ValidationError, match="literal_error"):
+        RoutingTraceConfig(mode="errors")
 
 
 @pytest.mark.asyncio()

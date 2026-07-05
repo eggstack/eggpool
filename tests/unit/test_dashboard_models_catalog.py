@@ -24,6 +24,8 @@ import pytest
 
 from eggpool.catalog.cache import ModelCatalogCache
 
+pytestmark = pytest.mark.dashboard
+
 
 def _make_cache() -> ModelCatalogCache:
     cache = ModelCatalogCache()

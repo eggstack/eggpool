@@ -19,6 +19,8 @@ import json
 import re
 from typing import TYPE_CHECKING, Any
 
+import pytest
+
 from eggpool.transcoder.segmentation import (
     RequestSegment,
     SegmentationResult,
@@ -39,6 +41,8 @@ from eggpool.transcoder.segmentation import (
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
+pytestmark = pytest.mark.request_path
 
 OPENAI_PROTOCOL = "openai"
 ANTHROPIC_PROTOCOL = "anthropic"

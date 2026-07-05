@@ -27,6 +27,8 @@ from eggpool.db.migrations import MigrationRunner
 from eggpool.models.config import AppConfig
 from eggpool.runtime_metrics import RuntimeMetricsService
 
+pytestmark = pytest.mark.dashboard
+
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 

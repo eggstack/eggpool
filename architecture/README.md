@@ -2446,15 +2446,15 @@ Correctness-preserving performance pass that reduces redundant computation and D
 
 ### Phase 1 — Transcode Preflight Reuse
 
-`PreparedTranscode` (`src/eggpool/transcoder/prepared.py`) captures the transcoder, context, and features fingerprint from the preflight step. The coordinator checks `prepared.is_valid_for(transcoder, features)` before re-encoding — when valid, it reuses the already-encoded upstream body and preflight warnings, avoiding a redundant `encode_request()` call. Falls back to full recompute when thinking controls or feature mismatches are detected.
+`PreparedTranscode` (`src/eggpool/transcoder/prepared.py`) captures the transcoder, context, and features fingerprint from the preflight step. The coordinator checks `prepared.is_valid_for(transcoder, features)` before re-encoding — when valid, it reuses the already-encoded upstream body and preflight warnings, avoiding a redundant `encode_request()` call. Falls back to full recompute when thinking controls or feature mismatches are detected. Debug observability fields `available`, `reused`, and `recompute_reason` are set on each request so the coordinator can log why reuse succeeded or failed.
 
 ### Phase 2 — Conditional Request Segmentation
 
-`should_segment_request()` (`src/eggpool/transcoder/segmentation_guard.py`) skips `segment_request()` when compression is disabled, synthetic cache is off, and `force_segmentation` is false. The coordinator tracks `segmentation_not_collected: bool` on `ProxyRequestContext` and passes it through to `RequestFinalizer`, which records `segmentation_status = 'not_collected'` instead of computing stable-prefix/volatile breakdowns.
+`should_segment_request()` (`src/eggpool/transcoder/segmentation_guard.py`) skips `segment_request()` when compression is disabled, synthetic cache is off, and `force_segmentation` is false. The gating decision is driven by the **resolved effective compression policy**, not the raw global config — per-client/per-protocol overrides are already folded in at this point. The coordinator tracks `segmentation_not_collected: bool` on `ProxyRequestContext` and passes it through to `RequestFinalizer`, which records `segmentation_status = 'not_collected'` instead of computing stable-prefix/volatile breakdowns.
 
 ### Phase 3 — Single-Pass Routing Plan
 
-`RoutingPlan` (`src/eggpool/routing/router.py`) is a frozen dataclass carrying `eligible_names`, `ranked_candidates`, `fairness_decision`, and `fairness_band_names`. `Router.build_routing_plan()` computes eligibility, tier grouping, scoring, ranking, and fairness rotation in one pass. The coordinator calls it once instead of the previous double-call pattern (`get_eligible_account_names()` + `select_accounts_for_failover()`), eliminating redundant `get_eligible_accounts()`, `_filter_mixed_collapsed_thinking()`, and `_maybe_trigger_missing_account_recovery()` invocations.
+`RoutingPlan` (`src/eggpool/routing/router.py`) is a frozen dataclass carrying `eligible_names`, `ranked_candidates`, `fairness_decision`, and `fairness_band_names`. `Router.build_routing_plan()` computes eligibility, tier grouping, scoring, ranking, and fairness rotation in one pass. The coordinator calls it once instead of the previous double-call pattern (`get_eligible_account_names()` + `select_accounts_for_failover()`), eliminating redundant `get_eligible_accounts()`, `_filter_mixed_collapsed_thinking()`, and `_maybe_trigger_missing_account_recovery()` invocations. This is the authoritative selection path — there is no fallback to the legacy `select_accounts()` path.
 
 ### Phase 4 — Configurable Routing Trace Write Pressure
 
@@ -2462,7 +2462,7 @@ Correctness-preserving performance pass that reduces redundant computation and D
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `mode` | `all` / `errors` / `sampled` / `off` | `all` | When to write routing traces |
+| `mode` | `all` / `sampled` / `off` | `all` | When to write routing traces |
 | `sample_rate` | `0.0–1.0` | `0.05` | Deterministic SHA-256 hash sampling in `sampled` mode |
 | `include_score_components` | `bool` | `True` | Whether to serialize the per-account scoring breakdown |
 

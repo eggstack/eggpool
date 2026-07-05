@@ -154,11 +154,10 @@ class RoutingTraceConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    mode: Literal["all", "errors", "sampled", "off"] = Field(
+    mode: Literal["all", "sampled", "off"] = Field(
         default="all",
         description=(
             '"all" = current behavior (every attempt). '
-            '"errors" = only failed requests, retry exhaustion, or non-2xx upstream. '
             '"sampled" = successful traces at sample_rate + all errors. '
             '"off" = no routing trace rows.'
         ),
