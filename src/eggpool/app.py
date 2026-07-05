@@ -1270,11 +1270,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     finally:
         logger.info("Application shutting down")
 
-        # Flush buffered metrics before stopping the supervisor.  The
-        # periodic ``metrics_flush`` task is no longer a long-running
-        # coalescer loop; the supervisor's stop is what cancels any
-        # in-flight tick, so we explicitly flush here so a clean
-        # shutdown still drains buffered analytics to disk.
+        # Stop background tasks first so no new ticks are scheduled
+        # while we flush.  The periodic ``metrics_flush`` task is
+        # supervisor-owned; stopping the supervisor cancels any
+        # in-flight tick before we drain buffered analytics.
+        supervisor: TaskSupervisor | None = getattr(app.state, "supervisor", None)
+        if supervisor is not None:
+            try:
+                await supervisor.stop_all()
+            except Exception:
+                logger.exception("Error stopping background tasks during shutdown")
+
+        # Now flush buffered metrics — no new ticks can arrive.
         metrics_coalescer: MetricsWriteCoalescer | None = getattr(
             app.state, "metrics_coalescer", None
         )
@@ -1285,13 +1292,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
                 )
             except Exception:
                 logger.exception("Error flushing metrics buffer during shutdown")
-
-        supervisor: TaskSupervisor | None = getattr(app.state, "supervisor", None)
-        if supervisor is not None:
-            try:
-                await supervisor.stop_all()
-            except Exception:
-                logger.exception("Error stopping background tasks during shutdown")
 
         client_pool: ProviderClientPool | None = getattr(app.state, "client_pool", None)
         if client_pool is not None:

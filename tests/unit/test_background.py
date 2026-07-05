@@ -271,3 +271,154 @@ async def test_supervisor_snapshot_exposes_periodic_fields() -> None:
     assert by_name["periodic"]["mode"] == "periodic"
     assert by_name["periodic"]["interval_s"] == 30.0
     assert by_name["periodic"]["next_run_at"] is not None
+
+
+# ---------------------------------------------------------------------------
+# initial_delay_s wiring (background-task-overdue-followup)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_initial_delay_s_delays_first_tick() -> None:
+    """When ``initial_delay_s`` is set, the first tick fires after that
+    delay rather than after ``interval_s``."""
+    tick_count = 0
+    tick_times: list[float] = []
+
+    async def tick() -> None:
+        nonlocal tick_count
+        tick_count += 1
+        tick_times.append(time.time())
+
+    supervisor = TaskSupervisor()
+    supervisor.register_periodic(
+        "delayed_first",
+        tick,
+        interval_s=0.5,
+        initial_delay_s=0.1,
+    )
+
+    start = time.time()
+    await supervisor.start_all()
+
+    # Wait for the first tick to land.
+    for _ in range(30):
+        if tick_count >= 1:
+            break
+        await asyncio.sleep(0.02)
+
+    await supervisor.stop_all()
+
+    assert tick_count >= 1
+    # First tick should have fired after ~0.1s (initial_delay_s), not
+    # after 0.5s (interval_s).
+    first_delay = tick_times[0] - start
+    assert first_delay < 0.3, f"first tick too late: {first_delay:.3f}s"
+
+
+@pytest.mark.asyncio
+async def test_initial_delay_s_none_defaults_to_interval() -> None:
+    """When ``initial_delay_s`` is omitted, the first sleep uses
+    ``interval_s`` (sleep-first semantics)."""
+    tick_count = 0
+    tick_times: list[float] = []
+
+    async def tick() -> None:
+        nonlocal tick_count
+        tick_count += 1
+        tick_times.append(time.time())
+
+    supervisor = TaskSupervisor()
+    supervisor.register_periodic(
+        "no_delay",
+        tick,
+        interval_s=0.1,
+    )
+
+    start = time.time()
+    await supervisor.start_all()
+
+    for _ in range(30):
+        if tick_count >= 1:
+            break
+        await asyncio.sleep(0.02)
+
+    await supervisor.stop_all()
+
+    assert tick_count >= 1
+    first_delay = tick_times[0] - start
+    # Should be close to interval_s (0.1), not zero.
+    assert first_delay >= 0.05, f"first tick too early: {first_delay:.3f}s"
+
+
+def test_register_periodic_rejects_negative_initial_delay() -> None:
+    supervisor = TaskSupervisor()
+
+    async def tick() -> None:
+        return None
+
+    with pytest.raises(ValueError, match="initial_delay_s >= 0"):
+        supervisor.register_periodic(
+            "neg_delay", tick, interval_s=10.0, initial_delay_s=-1.0
+        )
+
+
+def test_register_periodic_allows_zero_initial_delay() -> None:
+    """``initial_delay_s=0.0`` means 'use interval_s as initial delay'
+    (sleep-first semantics)."""
+    supervisor = TaskSupervisor()
+
+    async def tick() -> None:
+        return None
+
+    task = supervisor.register_periodic(
+        "zero_delay", tick, interval_s=10.0, initial_delay_s=0.0
+    )
+    assert task._initial_delay_s == 0.0
+
+
+@pytest.mark.asyncio
+async def test_last_tick_duration_ms_populated() -> None:
+    """``last_tick_duration_ms`` is populated after each tick and
+    included in the snapshot."""
+    tick_count = 0
+
+    async def tick() -> None:
+        nonlocal tick_count
+        tick_count += 1
+        await asyncio.sleep(0.01)
+
+    supervisor = TaskSupervisor()
+    task = supervisor.register_periodic(
+        "duration_test",
+        tick,
+        interval_s=0.05,
+    )
+
+    await supervisor.start_all()
+    for _ in range(40):
+        if tick_count >= 1:
+            break
+        await asyncio.sleep(0.02)
+
+    snap = task.snapshot()
+    await supervisor.stop_all()
+
+    assert snap["last_tick_duration_ms"] is not None
+    assert snap["last_tick_duration_ms"] >= 0
+
+
+def test_snapshot_before_start_shows_next_run_at() -> None:
+    """Before start, the snapshot still shows ``next_run_at`` from the
+    initial prime so the dashboard can display the countdown."""
+    supervisor = TaskSupervisor()
+
+    async def tick() -> None:
+        return None
+
+    task = supervisor.register_periodic("pre_start", tick, interval_s=60.0)
+    snap = task.snapshot()
+
+    assert snap["next_run_at"] is not None
+    assert snap["next_run_at"] > time.time()
+    assert snap["running"] is False

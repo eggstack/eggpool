@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
@@ -460,3 +461,67 @@ class TestRunShutdownFlush:
         stop_event.set()
         await coalescer.run(stop_event)
         assert mock_repo.upsert_many.await_count == 1
+
+
+class TestFlushCancellationSafety:
+    @pytest.mark.asyncio()
+    async def test_flush_restores_buffer_on_cancel(self) -> None:
+        """When a flush is cancelled mid-DB-write, the snapshot is merged
+        back into the buffer so no events are silently dropped."""
+        config = _make_config(flush_interval_s=30)
+        mock_repo = AsyncMock(spec=UsageRollupRepository)
+
+        # Make upsert_many hang so we can cancel it mid-flight.
+        write_done = asyncio.Event()
+
+        async def slow_upsert(*args: object, **kwargs: object) -> None:
+            await write_done.wait()
+
+        mock_repo.upsert_many.side_effect = slow_upsert
+
+        coalescer = MetricsWriteCoalescer(
+            config=config,
+            db=AsyncMock(spec=Database),
+            rollup_repo=mock_repo,
+        )
+        coalescer.record_usage(_make_event(input_tokens=10, output_tokens=20))
+
+        # Start the flush in a task so we can cancel it.
+        flush_task = asyncio.create_task(coalescer.flush(reason="test"))
+
+        # Give the flush time to snapshot the buffer and start DB I/O.
+        await asyncio.sleep(0.05)
+
+        # Cancel the flush while it's waiting on the slow upsert.
+        flush_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await flush_task
+
+        # Release the hanging upsert.
+        write_done.set()
+
+        # The buffer should have the events restored.
+        snap = coalescer.snapshot()
+        assert snap["buffered_events"] >= 1
+        assert snap["buffered_keys"] >= 1
+
+    @pytest.mark.asyncio()
+    async def test_flush_error_does_not_restore_buffer(self) -> None:
+        """A DB error (not cancellation) still clears the buffer — errors
+        are lossy by design; only cancellation is safe to restore."""
+        config = _make_config(flush_interval_s=30)
+        mock_repo = AsyncMock(spec=UsageRollupRepository)
+        mock_repo.upsert_many.side_effect = RuntimeError("db boom")
+
+        coalescer = MetricsWriteCoalescer(
+            config=config,
+            db=AsyncMock(spec=Database),
+            rollup_repo=mock_repo,
+        )
+        coalescer.record_usage(_make_event())
+
+        result = await coalescer.flush(reason="test")
+
+        assert result.error_class == "RuntimeError"
+        snap = coalescer.snapshot()
+        assert snap["buffered_events"] == 0

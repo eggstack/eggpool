@@ -2395,7 +2395,7 @@ Production (`eggpool deploy systemd --install --production`):
 `TaskSupervisor` (`background/__init__.py`) manages two flavors of background work with restart-on-failure and exponential backoff:
 
 - **daemon tasks** registered via `TaskSupervisor.register(...)` — long-lived coroutines the supervisor owns end-to-end (e.g. update checker and automatic backup, when they are not yet converted). These report `mode = "daemon"` and `next_run_at = None`.
-- **periodic tasks** registered via `TaskSupervisor.register_periodic(...)` — the supervisor owns the cadence and a one-shot tick factory, recording per-tick heartbeat fields (`last_tick_started_at`, `last_tick_completed_at`, `next_run_at`, `overdue_seconds`, `success_count`, `failure_count`, `consecutive_failure_count`). The runtime dashboard consumes `next_run_at` / `overdue_seconds` directly instead of inferring from outer-coroutine lifecycle timestamps (which previously produced false ``overdue`` warnings for healthy periodic loops).
+- **periodic tasks** registered via `TaskSupervisor.register_periodic(...)` — the supervisor owns the cadence and a one-shot tick factory, recording per-tick heartbeat fields (`last_tick_started_at`, `last_tick_completed_at`, `last_tick_duration_ms`, `next_run_at`, `overdue_seconds`, `success_count`, `failure_count`, `consecutive_failure_count`). The runtime dashboard consumes `next_run_at` / `overdue_seconds` directly instead of inferring from outer-coroutine lifecycle timestamps (which previously produced false ``overdue`` warnings for healthy periodic loops). The `initial_delay_s` parameter controls the first-tick delay independently of `interval_s`.
 
 Overdue detection uses a 25%-of-interval (capped at 60s, minimum 5s) grace band so transient scheduler jitter does not trip the alert.
 
@@ -2409,7 +2409,7 @@ All tasks are registered in `app.py` during lifespan setup. Periodic registratio
 | `usage_window_refresh` | 60s | periodic | Reload persisted quota windows into memory |
 | `stale_request_finalizer` | 60s | periodic | Safety net for leaked streaming requests |
 | `health_disabled_models_prune` | 60s | periodic | Drop stale `model_availability` and `disabled_models` rows |
-| `metrics_flush` | `config.metrics.flush_interval_s` | periodic | Buffered analytics flush to `usage_rollups` (lifespan shutdown path still issues a final `flush(reason="shutdown")` after `stop_all()`) |
+| `metrics_flush` | `config.metrics.flush_interval_s` | periodic | Buffered analytics flush to `usage_rollups` (lifespan shutdown path stops the supervisor first, then issues a final `flush(reason="shutdown")` to drain without race) |
 | `retention_cleanup` | 1h | periodic | Cleanup of old requests, events, pings, rollups, expired reservations |
 | `checkpoint` | 4h | periodic | SQLite WAL checkpoint |
 | `update_checker` | 24h | periodic | PyPI update check; per-tick probe reuses the shared outbound client |

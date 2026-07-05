@@ -322,6 +322,7 @@ async def test_background_tasks_with_supervisor(db: Database) -> None:
     assert task["last_failure_at"] is None
     assert task["last_error_at"] is None
     assert task["last_error_class"] is None
+    assert task["last_tick_duration_ms"] is None
     # interval_s is plumbed through to the runtime-metrics snapshot so
     # the dashboard can show "how often" each task runs. None means
     # the cadence is unknown.

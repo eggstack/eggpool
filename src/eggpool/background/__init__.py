@@ -83,6 +83,8 @@ class SupervisedTask:
     _success_count: int = 0
     _failure_count: int = 0
     _consecutive_failure_count: int = 0
+    _initial_delay_s: float | None = None
+    _last_tick_duration_ms: float | None = None
 
     async def start(self) -> None:
         """Start the supervised task."""
@@ -175,19 +177,31 @@ class SupervisedTask:
         one-shot coroutine factory; the supervisor owns the wait loop
         so dashboards stop confusing outer-coroutine startup time
         with tick completion time.
+
+        When ``_initial_delay_s`` is set, the first sleep uses that
+        value instead of ``_interval_s`` so that startup-delayed
+        periodic tasks (e.g. automatic backups) honour their
+        configured delay before the first tick fires.
         """
         assert self._tick_factory is not None
         interval_s = float(self._interval_s) if self._interval_s else 0.0
+        first_sleep = (
+            float(self._initial_delay_s)
+            if self._initial_delay_s is not None
+            else interval_s
+        )
         self._last_started_at = time.time()
         try:
             while self._running:
                 try:
-                    await asyncio.sleep(interval_s)
+                    await asyncio.sleep(first_sleep)
                 except asyncio.CancelledError:
                     break
+                first_sleep = interval_s  # subsequent sleeps use the regular interval
                 self._tick_in_progress = True
                 tick_started = time.time()
                 self._last_tick_started_at = tick_started
+                tick_duration_ms: float | None = None
                 try:
                     await self._tick_factory()
                 except asyncio.CancelledError:
@@ -195,7 +209,9 @@ class SupervisedTask:
                     break
                 except Exception as exc:  # noqa: BLE001
                     tick_completed = time.time()
+                    tick_duration_ms = (tick_completed - tick_started) * 1000
                     self._last_tick_completed_at = tick_completed
+                    self._last_tick_duration_ms = tick_duration_ms
                     self._tick_in_progress = False
                     self._iteration_count += 1
                     self._failure_count += 1
@@ -218,7 +234,9 @@ class SupervisedTask:
                         break
                 else:
                     tick_completed = time.time()
+                    tick_duration_ms = (tick_completed - tick_started) * 1000
                     self._last_tick_completed_at = tick_completed
+                    self._last_tick_duration_ms = tick_duration_ms
                     self._tick_in_progress = False
                     self._iteration_count += 1
                     self._success_count += 1
@@ -266,6 +284,7 @@ class SupervisedTask:
             "last_failure_at": self._last_failure or None,
             "last_tick_started_at": self._last_tick_started_at or None,
             "last_tick_completed_at": self._last_tick_completed_at or None,
+            "last_tick_duration_ms": self._last_tick_duration_ms,
             "next_run_at": next_run_at,
             "overdue_seconds": overdue_seconds,
             "last_error_at": self._last_error_at or None,
@@ -368,6 +387,11 @@ class TaskSupervisor:
                 f"Periodic task {name!r} requires interval_s > 0 (got {interval_s!r})"
             )
         delay_s = float(interval_s if initial_delay_s is None else initial_delay_s)
+        if delay_s < 0:
+            raise ValueError(
+                f"Periodic task {name!r} requires initial_delay_s >= 0"
+                f" (got {delay_s!r})"
+            )
         task = SupervisedTask(
             name=name,
             _coro_factory=tick_factory,
@@ -375,6 +399,7 @@ class TaskSupervisor:
             _tick_factory=tick_factory,
             _max_restarts=max_restarts,
             _interval_s=float(interval_s),
+            _initial_delay_s=delay_s,
         )
         # Prime the first next-run window so the dashboard can show
         # "in <interval>" before the very first tick lands.  Same
