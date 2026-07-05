@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.5.3] - 2026-07-05
+
+### Fixed
+
+- Installer Python selection now applies the documented 3.11-3.14 support
+  window to both version-suffixed probes and the bare `python3` fallback, so
+  Python 3.15+ is rejected until the Granian/PyO3 dependency stack supports it.
+
 ## [0.5.0] - 2026-07-01
 
 ### Changed

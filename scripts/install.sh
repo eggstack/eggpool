@@ -78,16 +78,21 @@ SCRIPTS_DIR="$PROJECT_DIR/scripts"
 # Probes version-suffixed binaries (python3.14, python3.13, ...) for systems
 # where the default `python3` is an older system version.
 # Max is 3.14 because Pyo3 (used by Granian) does not yet support 3.15.
+python_version_supported() {
+    local ver="$1"
+    local maj min
+    maj=$(echo "$ver" | cut -d. -f1)
+    min=$(echo "$ver" | cut -d. -f2)
+    [ "$maj" -eq 3 ] && [ "$min" -ge 11 ] && [ "$min" -le 14 ]
+}
+
 find_python() {
     for minor in 14 13 12 11; do
         local candidate="python3.${minor}"
         if command -v "$candidate" &> /dev/null; then
             local ver
             ver=$(PYTHONPATH= PYTHONNOUSERSITE=1 "$candidate" -S -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null) || continue
-            local maj min
-            maj=$(echo "$ver" | cut -d. -f1)
-            min=$(echo "$ver" | cut -d. -f2)
-            if [ "$maj" -ge 3 ] && [ "$min" -ge 11 ]; then
+            if python_version_supported "$ver"; then
                 PYTHON="$candidate"
                 PYTHON_VERSION="$ver"
                 return 0
@@ -98,10 +103,7 @@ find_python() {
     if command -v python3 &> /dev/null; then
         local ver
         ver=$(PYTHONPATH= PYTHONNOUSERSITE=1 python3 -S -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null) || true
-        local maj min
-        maj=$(echo "$ver" | cut -d. -f1)
-        min=$(echo "$ver" | cut -d. -f2)
-        if [ "$maj" -ge 3 ] && [ "$min" -ge 11 ]; then
+        if python_version_supported "$ver"; then
             PYTHON="python3"
             PYTHON_VERSION="$ver"
             return 0
@@ -112,7 +114,7 @@ find_python() {
 
 echo "Checking Python version..."
 if ! find_python; then
-    echo "Error: Python 3.11 or later required."
+    echo "Error: Python 3.11 through 3.14 required."
     echo "Install Python from https://www.python.org/downloads/ or your package manager."
     exit 1
 fi

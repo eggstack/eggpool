@@ -481,6 +481,16 @@ class TestInstallPromptBehavior:
             f"install.sh has bash syntax errors:\n{result.stderr}"
         )
 
+    def test_install_script_rejects_unsupported_python_fallback(self) -> None:
+        """The bare ``python3`` fallback must honor the 3.11-3.14 range."""
+        install_path = Path(__file__).parent.parent.parent / "scripts" / "install.sh"
+        source = install_path.read_text(encoding="utf-8")
+
+        assert "python_version_supported()" in source
+        assert source.count('python_version_supported "$ver"') == 2
+        assert '[ "$min" -le 14 ]' in source
+        assert "Error: Python 3.11 through 3.14 required." in source
+
     def test_install_prompt_py_syntax(self) -> None:
         """install_prompt.py parses without Python syntax errors."""
         import subprocess
