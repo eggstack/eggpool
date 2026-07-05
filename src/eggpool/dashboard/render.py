@@ -5183,7 +5183,6 @@ def render_runtime(
     current_theme: str = "",
     update_info: Any | None = None,
     transcoding_stats: dict[str, Any] | None = None,
-    request_shaping_summary: dict[str, Any] | None = None,
     period: str = "24h",
 ) -> str:
     """Render the runtime metrics page."""
@@ -5791,9 +5790,8 @@ def render_runtime(
 </section>
 """
 
-    shaping_summary = request_shaping_summary or {}
     request_shaping_panel = _render_request_shaping_summary_panel(
-        shaping_summary, period=period, guardrails_mode=guardrails_mode
+        {}, period=period, guardrails_mode=guardrails_mode
     )
 
     routing_guardrails_panel = _render_routing_guardrails_panel(routing)

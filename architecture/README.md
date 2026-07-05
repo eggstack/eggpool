@@ -294,7 +294,7 @@ Status semantics:
 
 `QuotaFairScorer` does NOT consume cache fields; it is asserted by
 `tests/unit/test_routing.py::test_scorer_does_not_consume_cache_counter_status`.
-Dashboard coverage is rendered under Runtime → Cache observability and
+Dashboard coverage is rendered under `/cache` (Cache → Cache observability) and
 the JSON API exposes the breakdown at `GET /api/stats/cache-observability`.
 
 ## Canonical Request Segmentation (Phase 2)
@@ -371,7 +371,7 @@ The stats layer exposes
 `fetch_canonical_request_segmentation(db, start, end)` and the
 service-layer method
 `StatsService.get_canonical_request_segmentation(period)`. The
-dashboard panel under Runtime → Segmentation renders per-status
+`/cache` dashboard page (Cache → Segmentation) renders per-status
 counts, per-segment-kind token and byte totals, and a per-model
 breakdown. The JSON endpoint `GET /api/stats/canonical-request-segmentation`
 returns the same data for tooling.

@@ -352,25 +352,6 @@ h3 {
   overflow-x: auto;
 }
 
-/* Collapsible advanced request-shaping details on the Runtime page. */
-details.advanced-request-shaping > summary {
-  cursor: pointer;
-  padding: 0.6em 0.9em;
-  font-weight: 600;
-  border: 1px solid var(--card-border);
-  border-radius: 6px;
-  background: var(--card-bg);
-  list-style: revert;
-}
-details.advanced-request-shaping[open] > summary {
-  border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0;
-}
-details.advanced-request-shaping > .panel {
-  margin-top: 0;
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
-}
 
 /* Inline heading + filter layout for panels that combine a heading
    with a right-aligned filter control (currently the Account

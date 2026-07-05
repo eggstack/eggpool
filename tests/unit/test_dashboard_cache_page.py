@@ -200,3 +200,56 @@ class TestRenderCacheRoutingGuardrails:
         )
         assert "Routing guardrails" in html
         assert "reporting_only" in html
+
+
+class TestRenderCacheAnchorIntegrity:
+    """Every href="#..." in the local page-index resolves to a real element id."""
+
+    def test_all_index_anchors_resolve(self) -> None:
+        import re
+
+        html = render_cache(period="24h")
+        index_match = re.search(r'<nav class="page-index">(.*?)</nav>', html, re.DOTALL)
+        assert index_match is not None
+        index_html = index_match.group(1)
+        anchors = re.findall(r'href="#([^"]+)"', index_html)
+        assert len(anchors) > 0, "page-index should have at least one anchor link"
+        for anchor in anchors:
+            anchor_id = f'id="{anchor}"'
+            assert anchor_id in html, (
+                f"page-index links to #{anchor} but no element with "
+                f"{anchor_id} found in rendered HTML"
+            )
+
+
+class TestRenderCacheAdversarialEscaping:
+    """Dynamic provider/account/model/policy strings are HTML-escaped."""
+
+    def test_account_name_escaped(self) -> None:
+        html = render_cache(
+            period="24h",
+            cache_observability={
+                "total_requests": 1,
+                "by_status": {"reported": 1},
+                "per_protocol_status": {},
+                "per_account_status": {'acct"onclick="x': {"reported": 1}},
+                "per_model_status": {},
+            },
+        )
+        assert 'acct"onclick="x' not in html
+
+    def test_model_id_escaped(self) -> None:
+        html = render_cache(
+            period="24h",
+            cache_observability={
+                "total_requests": 1,
+                "by_status": {"reported": 1},
+                "per_protocol_status": {},
+                "per_account_status": {},
+                "per_model_status": {"<script>alert(1)</script>": {"reported": 1}},
+            },
+        )
+        # The model ID itself must be escaped; other <script> tags
+        # (e.g. dashboard.js) are expected
+        assert "<script>alert(1)</script>" not in html
+        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
