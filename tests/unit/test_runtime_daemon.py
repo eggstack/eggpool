@@ -4,7 +4,7 @@
 Covers three areas:
 
 - :func:`eggpool.runtime.start_server` / :func:`eggpool.runtime.restart_server`
-  helpers introduced for the ``--daemon`` spawn path.
+  helpers introduced for the daemon spawn path (the default for ``eggpool serve``).
 - :func:`eggpool.cli_full._serve_daemon` Click-command behavior (root
   refusal, ``--log-file`` plumbing, second-instance detection).
 - :data:`eggpool.constants.PID_FILE` lazy proxy.
@@ -77,7 +77,7 @@ class TestStartServerDaemonSpawn:
             runtime_module.start_server(str(config_path), daemon=True)
 
         argv = mock_popen.call_args[0][0]
-        assert "--daemon" not in argv
+        assert "--daemon" not in argv  # noqa: S105
 
     def test_start_server_daemon_passes_serve_command(self, tmp_path: Path) -> None:
         """``serve`` is the last positional argument in the child argv."""
@@ -395,19 +395,22 @@ def _write_minimal_config(tmp_path: Path, *, with_account: bool = False) -> Path
 
 
 class TestServeDaemonCli:
-    """Behavior of :func:`cli_full._serve_daemon` invoked via the ``serve`` command."""
+    """Behavior of :func:`cli_full._serve_daemon` invoked via the ``serve`` command.
+
+    Daemon mode is the default for ``eggpool serve``; no flags needed.
+    """
 
     def test_serve_daemon_refuses_as_root(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``eggpool serve --daemon`` exits 1 with a root-refusal message."""
+        """``eggpool serve`` (daemon mode) exits 1 with a root-refusal message."""
         config_path = _write_minimal_config(tmp_path)
         monkeypatch.setattr(os, "geteuid", lambda: 0)
 
         runner = CliRunner()
         result = runner.invoke(
             cli_module.cli,
-            ["--config", str(config_path), "serve", "--daemon"],
+            ["--config", str(config_path), "serve"],
         )
 
         assert result.exit_code == 1
@@ -416,7 +419,7 @@ class TestServeDaemonCli:
     def test_serve_daemon_allows_as_root_with_flag(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """With ``--as-root``, ``eggpool serve --daemon`` does not refuse.
+        """With ``--as-root``, ``eggpool serve`` (daemon mode) does not refuse.
 
         The parent proceeds to :func:`_serve_daemon`, which in turn
         calls :func:`runtime.start_server` (mocked here).
@@ -448,7 +451,6 @@ class TestServeDaemonCli:
                     "--config",
                     str(config_path),
                     "serve",
-                    "--daemon",
                     "--as-root",
                 ],
             )
@@ -491,7 +493,6 @@ class TestServeDaemonCli:
                     "--config",
                     str(config_path),
                     "serve",
-                    "--daemon",
                     "--log-file",
                     str(explicit_log),
                 ],
@@ -521,7 +522,7 @@ class TestServeDaemonCli:
             runner = CliRunner()
             result = runner.invoke(
                 cli_module.cli,
-                ["--config", str(config_path), "serve", "--daemon"],
+                ["--config", str(config_path), "serve"],
             )
 
         assert result.exit_code == 1
@@ -547,7 +548,7 @@ class TestServeDaemonCli:
             runner = CliRunner()
             result = runner.invoke(
                 cli_module.cli,
-                ["--config", str(config_path), "serve", "--daemon"],
+                ["--config", str(config_path), "serve"],
             )
 
         assert result.exit_code == 1
@@ -577,7 +578,7 @@ class TestServeDaemonCli:
             runner = CliRunner()
             result = runner.invoke(
                 cli_module.cli,
-                ["--config", str(config_path), "serve", "--daemon"],
+                ["--config", str(config_path), "serve"],
             )
 
         assert result.exit_code == 0, result.output
@@ -603,7 +604,7 @@ class TestServeDaemonCli:
         with patch.object(runtime_module, "start_server", side_effect=_raise):
             ctx = cli_module.cli.make_context(
                 "cli",
-                ["--config", str(config_path), "serve", "--daemon"],
+                ["--config", str(config_path), "serve"],
                 resilient_parsing=True,
             )
             with pytest.raises(SystemExit) as exc_info:

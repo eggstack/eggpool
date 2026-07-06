@@ -29,7 +29,7 @@ runs the normal foreground ``serve`` command. The child's stdin is
 closed (``/dev/null``) and stdout/stderr are appended to a log file
 under the operator's state directory, so the spawning shell is not
 tied to the new process and Granian logs survive a closed terminal.
-The child command is **not** passed any ``--daemon`` flag; the
+The child command is **not** passed any flag; the
 detachment is purely a parent-side concern.
 """
 
@@ -265,7 +265,7 @@ def start_server(  # noqa: PLR0913 - daemon options are explicit by design
     When ``daemon=True`` (the default), the child is launched with
     stdin closed and stdout/stderr redirected away from the parent
     terminal. The child command itself is **always** the normal
-    foreground ``serve`` invocation; the ``--daemon`` flag is never
+    foreground ``serve`` invocation; no daemon flag is ever
     forwarded to the child. Log destination precedence:
 
     1. ``log_path`` argument
@@ -364,7 +364,7 @@ def restart_server(
     the restart is clean.
 
     The new supervisor is launched with the same daemon/log options
-    the operator would have used for ``eggpool serve --daemon``; the
+    used for ``eggpool serve``; the
     restart is always detached. Pass ``daemon=False`` only for tests
     that need to drive the supervisor synchronously.
     """

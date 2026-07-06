@@ -153,16 +153,15 @@ def _app_loader(target: str) -> Any:
 
 @cli.command()
 @click.option(
-    "--daemon",
-    "daemon",
+    "--verbose",
+    "verbose",
     is_flag=True,
     help=(
-        "Spawn a detached supervisor in the background and return the "
-        "shell promptly. The child runs the normal foreground `serve` "
-        "command; stdin is closed and stdout/stderr are redirected to "
-        "the daemon log file (see --log-file). Use this for personal / "
-        "SBC deployments. Systemd units should NOT use --daemon; run "
-        "foreground `serve` and let systemd manage the process."
+        "Run the Granian supervisor in the foreground instead of "
+        "daemon mode. The operator sees Granian's output directly on "
+        "the terminal. Use this for debugging or when systemd manages "
+        "the process. Systemd units should use --verbose and let "
+        "systemd handle the process lifecycle."
     ),
 )
 @click.option(
@@ -171,10 +170,10 @@ def _app_loader(target: str) -> Any:
     default=None,
     type=click.Path(dir_okay=False, writable=True),
     help=(
-        "Log destination for the detached supervisor when --daemon is "
-        "set. Defaults to $EGGPOOL_LOG_FILE, otherwise the resolver's "
-        "state-dir log (~/.local/state/eggpool/eggpool.log). Ignored "
-        "without --daemon; the foreground command always logs to the "
+        "Log destination for the detached supervisor in daemon mode "
+        "(the default). Defaults to $EGGPOOL_LOG_FILE, otherwise the "
+        "resolver's state-dir log (~/.local/state/eggpool/eggpool.log). "
+        "Ignored with --verbose; foreground mode always logs to the "
         "calling terminal."
     ),
 )
@@ -183,9 +182,9 @@ def _app_loader(target: str) -> Any:
     "quiet",
     is_flag=True,
     help=(
-        "With --daemon, send the supervisor's stdout/stderr to "
+        "In daemon mode, send the supervisor's stdout/stderr to "
         "/dev/null when no log file is configured. Has no effect "
-        "without --daemon; foreground `serve` always streams to the "
+        "with --verbose; foreground mode always streams to the "
         "terminal so the operator can see Granian's output."
     ),
 )
@@ -194,8 +193,8 @@ def _app_loader(target: str) -> Any:
     "as_root",
     is_flag=True,
     help=(
-        "Allow --daemon to start when the current effective UID is 0. "
-        "Refused by default to prevent accidentally daemonizing a "
+        "Allow daemon mode to start when the current effective UID is "
+        "0. Refused by default to prevent accidentally running a "
         "personal deployment as root; use this flag for intentional "
         "system-wide installs."
     ),
@@ -203,42 +202,44 @@ def _app_loader(target: str) -> Any:
 @click.pass_context
 def serve(
     ctx: click.Context,
-    daemon: bool,
+    verbose: bool,
     log_file: str | None,
     quiet: bool,
     as_root: bool,
 ) -> None:
     """Start the aggregation proxy server.
 
-    Foreground mode (the default) is the Granian supervisor. Granian
-    keeps ``workers=1`` so the total process count is two (supervisor
-    + one worker) plus a small thread pool sized by ``[server].threads``.
-    The supervisor owns the PID file: it writes ``os.getpid()`` before
-    ``Granian.serve()`` and clears the file when Granian returns. The
-    ASGI worker is a child of the supervisor and never touches the
-    PID file, so ``eggpool stop`` always signals the right process.
-
-    Daemon mode (``--daemon``) is a one-shot detach: this process
+    Daemon mode (the default) is a one-shot detach: this process
     validates the config, refuses to start a second instance, and
-    spawns a detached child that runs the normal foreground
-    supervisor. The child writes its own PID file and clears it on
-    exit. The parent returns promptly with a short success message
-    pointing at the log file. The child is **not** passed any
-    ``--daemon`` flag; detachment is purely a parent-side concern.
+    spawns a detached child that runs the foreground supervisor. The
+    child writes its own PID file and clears it on exit. The parent
+    returns promptly with a short success message pointing at the log
+    file. The child is **not** passed any daemon flag; detachment is
+    purely a parent-side concern.
+
+    Verbose mode (``--verbose``) runs the Granian supervisor in the
+    foreground. Granian keeps ``workers=1`` so the total process count
+    is two (supervisor + one worker) plus a small thread pool sized by
+    ``[server].threads``. The supervisor owns the PID file: it writes
+    ``os.getpid()`` before ``Granian.serve()`` and clears the file when
+    Granian returns. The ASGI worker is a child of the supervisor and
+    never touches the PID file, so ``eggpool stop`` always signals the
+    right process. Use this for debugging or when systemd manages the
+    process lifecycle.
     """
     from eggpool import runtime
 
     config_path: str = ctx.obj["config_path"]
 
-    if daemon and os.geteuid() == 0 and not as_root:
+    if os.geteuid() == 0 and not as_root:
         click.echo(
-            "Error: refusing to daemonize as root for personal deployment.\n"
+            "Error: refusing to run as root for personal deployment.\n"
             "  Run as your normal user, or pass --as-root if this is intentional.",
             err=True,
         )
         sys.exit(1)
 
-    if daemon:
+    if not verbose:
         _serve_daemon(ctx, config_path, log_file=log_file, quiet=quiet)
         return
 
