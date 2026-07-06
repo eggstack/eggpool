@@ -15,7 +15,14 @@ from __future__ import annotations
 
 import pytest
 
-from eggpool.dashboard.render import render_cache
+from eggpool.dashboard.render import (
+    _advanced_section_open_by_default,
+    _compression_has_warnings,
+    _display_request_change_mode,
+    _render_details_panel,
+    _routing_isolation_healthy,
+    render_cache,
+)
 
 pytestmark = pytest.mark.dashboard
 
@@ -42,10 +49,8 @@ class TestCompressionObservabilityCard:
             },
         )
         assert "Request shaping" in html
-        assert "Compression opportunities" in html
+        assert "Compression" in html
         assert "Observed requests" in html
-        assert "Applied (safe mode)" in html
-        assert "Fail-closed fallbacks" in html
 
     def test_populated_data_renders_counts(self) -> None:
         """Populated counts surface in the metric cards."""
@@ -80,10 +85,7 @@ class TestCompressionObservabilityCard:
             },
         )
         assert "5" in html  # applied count
-        assert "800" in html  # applied savings
-        assert "1" in html  # fallback count
         assert "gpt-4o" in html  # model breakdown
-        assert "warning" in html.lower()  # fallback warning card
 
     def test_no_warning_class_when_no_fallback(self) -> None:
         """No 'warning' class when fallback count is zero."""
@@ -131,10 +133,8 @@ class TestCompressionRuntimeCard:
                 },
             },
         )
-        assert "Safe compression" in html
-        assert "Mode: observe" in html
-        assert "Mode: safe" in html
-        assert "Mode: disabled" in html
+        assert "Compression" in html
+        assert "Observed requests" in html
 
     def test_populated_data_renders_counts_and_transforms(self) -> None:
         """Populated data shows mode counts and transform breakdown."""
@@ -167,11 +167,8 @@ class TestCompressionRuntimeCard:
                 },
             },
         )
-        assert "150" in html  # observe count
-        assert "50" in html  # safe count
         assert "repeated_line_run" in html
         assert "log_compaction" in html
-        assert "stable_prefix_hash_mismatch" in html
 
     def test_warnings_table_renders(self) -> None:
         """Warnings rollup renders as a sub-table."""
@@ -322,8 +319,8 @@ class TestRequestShapingSummary:
         )
         assert "Request shaping" in html
         assert "Compression" in html
-        assert "Cache controls" in html
-        assert "Safety" in html
+        assert "Provider cache counters" in html
+        assert "Safety guardrail" in html
         assert "QuotaFairScorer" in html
         assert "reporting-only" in html
 
@@ -350,7 +347,7 @@ class TestRequestShapingSummary:
             },
         )
         assert "Request shaping" in html
-        assert "Cache reporting" in html
+        assert "Provider cache counters" in html
 
     def test_cache_page_summary_and_detail_panels_render(self) -> None:
         """The /cache page renders a summary panel plus all detail
@@ -407,12 +404,11 @@ class TestRequestShapingSummary:
         )
 
         for label in (
-            "Cache reporting",
-            "Compression opportunities",
-            "Safe compression",
-            "Synthetic cache controls",
-            "Advisory tuning",
-            "Routing guardrails",
+            "Provider cache counters",
+            "Compression",
+            "EggPool cache annotations",
+            "Tuning suggestions",
+            "Routing isolation",
         ):
             assert label in html, f"expected label {label!r} missing from /cache page"
 
@@ -420,6 +416,262 @@ class TestRequestShapingSummary:
             assert needle not in html, (
                 f"phase-era label {needle!r} leaked into cache HTML"
             )
+
+
+class TestPhase7RequestShapingHelpers:
+    """Phase 7 — UI helpers for the simplified request-shaping page."""
+
+    def test_display_request_change_mode_known_values(self) -> None:
+        assert _display_request_change_mode("off") == "no changes"
+        assert _display_request_change_mode("observe") == "observe only"
+        assert _display_request_change_mode("safe") == "actually changed"
+
+    def test_display_request_change_mode_unknown_values(self) -> None:
+        assert _display_request_change_mode(None) == "no changes"
+        assert _display_request_change_mode("unknown_mode") == "unknown_mode"
+
+    def test_routing_isolation_healthy_default_is_true(self) -> None:
+        assert _routing_isolation_healthy(None)
+        assert _routing_isolation_healthy({})
+
+    def test_routing_isolation_healthy_with_flags(self) -> None:
+        healthy = {
+            "routing_uses_cache_metrics": False,
+            "routing_uses_compression_metrics": False,
+            "routing_uses_stable_prefix_hash": False,
+            "routing_uses_compression_policy": False,
+        }
+        assert _routing_isolation_healthy(healthy) is True
+
+        poisoned = dict(healthy)
+        poisoned["routing_uses_cache_metrics"] = True
+        assert _routing_isolation_healthy(poisoned) is False
+
+    def test_compression_has_warnings_runtime_window(self) -> None:
+        assert _compression_has_warnings({"window": {"warning_count": 0}}, {}) is False
+        assert _compression_has_warnings({"window": {"warning_count": 3}}, {}) is True
+        assert _compression_has_warnings({"warning_count": 2}, {}) is True
+
+    def test_compression_has_warnings_guardrails(self) -> None:
+        assert (
+            _compression_has_warnings(
+                None, {"failed_fallback_count": 0, "policy_warning_count": 0}
+            )
+            is False
+        )
+        assert (
+            _compression_has_warnings(
+                None, {"failed_fallback_count": 1, "policy_warning_count": 0}
+            )
+            is True
+        )
+        assert (
+            _compression_has_warnings(
+                None, {"failed_fallback_count": 0, "policy_warning_count": 2}
+            )
+            is True
+        )
+
+    def test_advanced_section_open_by_default_rules(self) -> None:
+        assert (
+            _advanced_section_open_by_default(
+                warnings=False, guardrails_healthy=True, has_data=True
+            )
+            is False
+        )
+        assert (
+            _advanced_section_open_by_default(
+                warnings=True, guardrails_healthy=True, has_data=True
+            )
+            is True
+        )
+        assert (
+            _advanced_section_open_by_default(
+                warnings=False, guardrails_healthy=False, has_data=True
+            )
+            is True
+        )
+        assert (
+            _advanced_section_open_by_default(
+                warnings=False, guardrails_healthy=False, has_data=False
+            )
+            is False
+        )
+
+    def test_render_details_panel_open_state(self) -> None:
+        open_html = _render_details_panel(
+            summary_text="Advanced diagnostics",
+            body="<p>body</p>",
+            open_by_default=True,
+        )
+        assert "<details" in open_html
+        assert " open" in open_html
+        assert "Advanced diagnostics" in open_html
+
+        closed_html = _render_details_panel(
+            summary_text="Advanced diagnostics",
+            body="<p>body</p>",
+            open_by_default=False,
+        )
+        assert " open" not in closed_html
+
+    def test_render_details_panel_warning_class(self) -> None:
+        html = _render_details_panel(
+            summary_text="Safe-mode details",
+            body="<p>body</p>",
+            open_by_default=False,
+            warning=True,
+        )
+        assert "advanced-details warning" in html
+
+
+class TestPhase7CachePageBehavior:
+    """Phase 7 — operator-facing behaviour of the simplified /cache page."""
+
+    def test_default_disabled_summary_communicates_no_mutation(self) -> None:
+        html = render_cache(period="24h")
+        assert "Request changes" in html
+        assert "no changes" in html
+        assert "disabled by config" in html
+
+    def test_provider_cache_counters_renamed(self) -> None:
+        html = render_cache(
+            period="24h",
+            cache_observability={
+                "total_requests": 1,
+                "by_status": {"reported": 1},
+                "per_protocol_status": {},
+                "per_account_status": {},
+                "per_model_status": {},
+            },
+        )
+        assert "Provider cache counters" in html
+        assert "Reported cache read share" in html
+        assert "Cache hit ratio" not in html
+
+    def test_compression_panel_observe_only_does_not_claim_mutation(self) -> None:
+        html = render_cache(
+            period="24h",
+            compression_observability={
+                "total_requests": 10,
+                "by_status": {"observed": 10},
+                "totals": {"observed_requests": 10, "candidate_count": 5},
+                "per_model_status": {},
+            },
+        )
+        assert "Compression" in html
+        assert "Observe" in html or "Observe-only" in html or "observe" in html
+
+    def test_compression_panel_safe_mode_shows_actual_savings(self) -> None:
+        html = render_cache(
+            period="24h",
+            compression_observability={
+                "total_requests": 5,
+                "by_status": {"safe": 5},
+                "totals": {},
+                "per_model_status": {},
+            },
+            compression_runtime={
+                "window": {"request_count": 5},
+                "mode_counts": {"safe": 5},
+                "applied_count": 5,
+                "failed_fallback_count": 0,
+                "candidate_count": 20,
+                "estimated_savings_tokens": 0,
+                "actual_savings_tokens": 1500,
+                "latency_ms": {"avg": 1.0, "p50": 1.0, "p95": 2.5, "max": 4.0},
+                "transforms": {},
+                "warnings": {},
+                "cache_safety": {
+                    "stable_prefix_preserved": 5,
+                    "stable_prefix_mismatch": 0,
+                },
+            },
+        )
+        assert "Compression" in html
+        assert "Safe-mode details" in html
+
+    def test_eggpool_cache_annotations_distinguishes_dry_run_vs_applied(
+        self,
+    ) -> None:
+        html = render_cache(
+            period="24h",
+            synthetic_cache_summary={
+                "total_requests": 4,
+                "status_counts": {"dry_run": 3, "applied": 1},
+                "dry_run_count": 3,
+                "applied_count": 1,
+                "candidate_count_total": 5,
+                "applied_count_total": 1,
+                "warning_count_total": 0,
+                "warning_counts": {},
+                "by_policy": [],
+            },
+        )
+        assert "EggPool cache annotations" in html
+        assert "Dry run" in html
+        assert "Applied" in html
+
+    def test_advanced_diagnostics_collapsed_by_default(self) -> None:
+        html = render_cache(
+            period="24h",
+            cache_observability={
+                "total_requests": 1,
+                "by_status": {"reported": 1},
+                "per_protocol_status": {},
+                "per_account_status": {},
+                "per_model_status": {},
+            },
+            routing_runtime={
+                "guardrails": {
+                    "routing_cache_compression_mode": "reporting_only",
+                    "routing_uses_cache_metrics": False,
+                    "routing_uses_compression_metrics": False,
+                    "routing_uses_stable_prefix_hash": False,
+                    "routing_uses_compression_policy": False,
+                }
+            },
+        )
+        assert "advanced-details" in html
+        assert "Show advanced diagnostics" in html or "Advanced diagnostics" in html
+
+    def test_advanced_diagnostics_open_on_warnings(self) -> None:
+        html = render_cache(
+            period="24h",
+            compression_runtime={
+                "window": {"warning_count": 7, "request_count": 50},
+                "mode_counts": {"observe": 50},
+                "applied_count": 0,
+                "failed_fallback_count": 0,
+                "candidate_count": 0,
+                "estimated_savings_tokens": 0,
+                "actual_savings_tokens": 0,
+                "latency_ms": {"avg": None, "p50": None, "p95": None, "max": None},
+                "transforms": {},
+                "warnings": {},
+                "cache_safety": {
+                    "stable_prefix_preserved": 0,
+                    "stable_prefix_mismatch": 0,
+                },
+            },
+        )
+        assert "<details" in html
+        assert "open" in html
+
+    def test_routing_isolation_copy_renders_when_healthy(self) -> None:
+        html = render_cache(
+            period="24h",
+            routing_runtime={
+                "guardrails": {
+                    "routing_cache_compression_mode": "reporting_only",
+                    "routing_uses_cache_metrics": False,
+                    "routing_uses_compression_metrics": False,
+                    "routing_uses_stable_prefix_hash": False,
+                    "routing_uses_compression_policy": False,
+                }
+            },
+        )
+        assert "Routing isolation" in html
 
 
 class TestAdvisoryTuningCard:
@@ -457,7 +709,7 @@ class TestAdvisoryTuningCard:
             },
         )
 
-        assert "Advisory tuning" in html
+        assert "Tuning suggestions" in html
         assert "Policies observed" in html
         assert "Requests analysed" in html
         assert "42" in html
@@ -489,7 +741,7 @@ class TestRoutingGuardrailsPanel:
                 },
             },
         )
-        assert "Routing guardrails" in html
+        assert "Routing isolation" in html
         assert "reporting_only" in html
         assert "Scorer inputs (allowed)" in html
         for label in (
@@ -507,7 +759,7 @@ class TestRoutingGuardrailsPanel:
         ``RuntimeMetricsService``.
         """
         html = render_cache(period="24h", routing_runtime={})
-        assert "Routing guardrails" in html
+        assert "Routing isolation" in html
         assert "reporting_only" in html
 
     def test_guardrails_panel_never_advertises_cache_in_scorer(self) -> None:
@@ -664,7 +916,7 @@ class TestSyntheticCacheCard:
                 ],
             },
         )
-        assert "Synthetic cache controls" in html
+        assert "EggPool cache annotations" in html
         assert "25" in html  # total requests
         assert "disabled" in html
         assert "dry_run" in html

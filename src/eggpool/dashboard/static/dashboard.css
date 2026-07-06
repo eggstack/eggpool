@@ -1189,6 +1189,32 @@ nav.topnav [data-tooltip]::before {
   }
 }
 
+/* Advanced diagnostics disclosure */
+.advanced-details {
+  border: 1px solid var(--card-border);
+  border-radius: 2px;
+  padding: 0;
+  margin-bottom: 1.5rem;
+  background: var(--card-bg);
+}
+.advanced-details > summary {
+  padding: 0.75rem 1.25rem;
+  cursor: pointer;
+  font-weight: 500;
+  list-style: disclosure-closed;
+  color: var(--page-text);
+}
+.advanced-details[open] > summary {
+  border-bottom: 1px solid var(--card-border);
+  list-style: disclosure-open;
+}
+.advanced-details > .advanced-body {
+  padding: 1rem 1.25rem;
+}
+.advanced-details.warning {
+  border-color: var(--color-warning);
+}
+
 /* Model-info status pills */
 .pill {
   display: inline-block;

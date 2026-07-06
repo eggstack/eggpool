@@ -74,13 +74,11 @@ class TestRenderCacheSectionPanels:
         )
         for label in (
             "Request shaping",
-            "Cache reporting",
+            "Provider cache counters",
             "Native cache preservation",
-            "Compression opportunities",
-            "Safe compression",
+            "Compression",
             "Policy overrides",
-            "Advisory tuning",
-            "Routing guardrails",
+            "Routing isolation",
         ):
             assert label in html, f"section panel {label!r} missing from /cache"
 
@@ -132,11 +130,9 @@ class TestRenderCacheFallbackSummary:
             },
         )
         assert "custom-mode" in html
-        assert "3 requests compressed" in html
-        assert "7 candidates" in html
+        assert "3 requests" in html
+        assert "42 tokens saved" in html
         assert "4 recommendations" in html
-        assert "segmented 6" in html
-        assert "not collected 2" in html
 
     def test_fallback_uses_canonical_segmentation_counts(self) -> None:
         fallback = _render_cache_request_shaping_fallback(
@@ -174,8 +170,6 @@ class TestRenderCacheFallbackSummary:
             },
         )
         assert "Request shaping" in html
-        assert "segmented 6" in html
-        assert "not collected 2" in html
         assert "Not collected" in html
         assert "Empty request" in html
 
@@ -198,7 +192,7 @@ class TestRenderCacheCacheReporting:
                 "per_model_status": {},
             },
         )
-        assert "Cache reporting" in html
+        assert "Provider cache counters" in html
 
 
 class TestRenderCacheSyntheticControls:
@@ -255,7 +249,7 @@ class TestRenderCacheRoutingGuardrails:
                 },
             },
         )
-        assert "Routing guardrails" in html
+        assert "Routing isolation" in html
         assert "reporting_only" in html
 
 

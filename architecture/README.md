@@ -1046,22 +1046,22 @@ request-shaping summary plus the detailed drill-down cards on
 `/cache`:
 
 1. **Request shaping** — operator summary of compression mode,
-   cache-reporting coverage, synthetic cache state, advisory tuning,
-   and routing guardrails.
-2. **Cache reporting** — provider-reported cache counters and
+   cache-reporting coverage, EggPool cache annotation state, tuning
+   suggestions, and routing isolation.
+2. **Provider cache counters** — provider-reported cache counters and
    coverage.
 3. **Request segmentation** — stable-prefix, semi-stable, and
    volatile suffix structure without payload mutation.
-4. **Compression opportunities** — observe-mode analysis only.
-5. **Compression runtime** — safe-mode outcomes, latency, and
-   `cache_safety` stable-prefix preservation.
-6. **Compression policy** — per-policy rollup table with `<global>`
+4. **Compression** — observe-mode analysis and safe-mode outcomes,
+   latency, and `cache_safety` stable-prefix preservation. Advanced
+   diagnostics are collapsed by default.
+5. **Compression policy** — per-policy rollup table with `<global>`
    sentinel first.
-7. **Cache stability** — transcoded count plus the Phase 3 boundary
+6. **Cache stability** — transcoded count plus the Phase 3 boundary
    tracker note.
-8. **Synthetic cache controls** — optional provider-bound cache
+7. **EggPool cache annotations** — optional provider-bound cache
    annotations, disabled by default and dry-run first.
-9. **Advisory tuning** — bounded recommendation-only threshold
+8. **Tuning suggestions** — bounded recommendation-only threshold
    guidance.
 
 `render_runtime` keeps only a compact Cache & request shaping
@@ -1442,7 +1442,7 @@ No production request-shaping behavior changes. The `QuotaFairScorer` does not c
 
 ## Operator Documentation, Profiles, and Rollout (Phase 12)
 
-Phase 12 closes the gap between the cache-preserving deterministic compression primitives and operator usability. The runtime surface is unchanged; this phase ships documentation, six copy-pasteable config profiles, a dashboard interpretation reference, a symptom-to-cause troubleshooting guide, and a conservative rollout plan.
+Phase 12 closes the gap between the cache-preserving deterministic compression primitives and operator usability. The runtime surface is unchanged; this phase ships documentation, six copy-pasteable config profiles, a dashboard interpretation reference, a symptom-to-cause troubleshooting guide, and a conservative rollout plan. Phase 6 (UI copy pass) standardized dashboard labels: "Provider cache counters", "Compression", "Compression — safe-mode details", "EggPool cache annotations", "Tuning suggestions", and "Routing isolation". Config keys and API field names are unchanged.
 
 ### Documentation surface
 

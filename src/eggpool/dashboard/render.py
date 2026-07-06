@@ -3699,6 +3699,87 @@ def _display_request_shaping_mode(value: str) -> str:
     return value.replace("_", " ").title()
 
 
+def _display_request_change_mode(mode: str | None) -> str:
+    """Return human-readable label for compression mode."""
+    mapping = {
+        "off": "no changes",
+        "observe": "observe only",
+        "safe": "actually changed",
+    }
+    if not mode:
+        return "no changes"
+    return mapping.get(mode, mode)
+
+
+def _routing_isolation_healthy(guardrails: dict[str, Any] | None) -> bool:
+    """Return True when routing guardrails are healthy."""
+    if not isinstance(guardrails, dict):
+        return True
+    return not any(
+        guardrails.get(key)
+        for key in (
+            "routing_uses_cache_metrics",
+            "routing_uses_compression_metrics",
+            "routing_uses_stable_prefix_hash",
+            "routing_uses_compression_policy",
+        )
+    )
+
+
+def _compression_has_warnings(
+    compression_runtime: dict[str, Any] | None,
+    guardrails: dict[str, Any] | None,
+) -> bool:
+    """Return True when there are compression warnings to surface."""
+    warning_count = 0
+    if isinstance(compression_runtime, dict):
+        runtime_window = compression_runtime.get("window")
+        if isinstance(runtime_window, dict):
+            raw_wc = cast("dict[str, Any]", runtime_window).get("warning_count", 0)
+            warning_count = int(raw_wc or 0)
+        if warning_count == 0:
+            warning_count = int(compression_runtime.get("warning_count", 0) or 0)
+    if warning_count > 0:
+        return True
+    if isinstance(guardrails, dict):
+        fallback = int(guardrails.get("failed_fallback_count", 0) or 0)
+        policy_warn = int(guardrails.get("policy_warning_count", 0) or 0)
+        return fallback > 0 or policy_warn > 0
+    return False
+
+
+def _advanced_section_open_by_default(
+    *,
+    warnings: bool,
+    guardrails_healthy: bool,
+    has_data: bool,
+) -> bool:
+    """Server-side decision whether advanced diagnostics should be auto-opened."""
+    return warnings or (not guardrails_healthy and has_data)
+
+
+def _render_details_panel(
+    *,
+    summary_text: str,
+    body: str,
+    open_by_default: bool,
+    warning: bool = False,
+    panel_id: str | None = None,
+) -> str:
+    """Render a `<details>` disclosure with server-decided default-open state."""
+    classes = ["advanced-details"]
+    if warning:
+        classes.append("warning")
+    panel_attr = f' id="{escape(panel_id)}"' if panel_id else ""
+    open_attr = " open" if open_by_default else ""
+    return (
+        f'<details class="{" ".join(classes)}"{panel_attr}{open_attr}>'
+        f"<summary>{summary_text}</summary>"
+        f'<div class="advanced-body">{body}</div>'
+        f"</details>"
+    )
+
+
 def _build_request_shaping_segmentation_summary(
     canonical_request_segmentation: dict[str, Any] | None,
 ) -> dict[str, int]:
@@ -3740,10 +3821,6 @@ def _render_request_shaping_summary_panel(
         request_shaping_summary.get("compression") or {},
     )
     shaping_cache = cast("dict[str, Any]", request_shaping_summary.get("cache") or {})
-    shaping_synthetic = cast(
-        "dict[str, Any]",
-        request_shaping_summary.get("synthetic_cache") or {},
-    )
     shaping_tuning = cast(
         "dict[str, Any]",
         request_shaping_summary.get("tuning") or {},
@@ -3752,16 +3829,8 @@ def _render_request_shaping_summary_panel(
         "dict[str, Any]",
         request_shaping_summary.get("guardrails") or {},
     )
-    shaping_segmentation = cast(
-        "dict[str, Any]",
-        request_shaping_summary.get("segmentation") or {},
-    )
-
-    compression_mode_label = _display_request_shaping_mode(
+    compression_mode_label = _display_request_change_mode(
         str(shaping_mode.get("compression", "off"))
-    )
-    synthetic_mode_label = _display_request_shaping_mode(
-        str(shaping_mode.get("synthetic_cache", "off"))
     )
     tuning_mode_label = _display_request_shaping_mode(
         str(shaping_mode.get("tuning", "off"))
@@ -3779,43 +3848,59 @@ def _render_request_shaping_summary_panel(
         if stable_prefix_rate is not None
         else "—"
     )
-    synthetic_candidate_count = format_int(shaping_synthetic.get("candidate_count", 0))
-    failed_fallback_count = format_int(
-        shaping_guardrails.get("failed_fallback_count", 0)
-    )
-    policy_warning_count = format_int(shaping_guardrails.get("policy_warning_count", 0))
-    recommendation_count = format_int(shaping_tuning.get("recommendation_count", 0))
-    tuning_override_count = format_int(shaping_tuning.get("override_count", 0))
-    requests_segmented_count = format_int(
-        shaping_segmentation.get("requests_segmented", 0)
-    )
-    requests_not_collected_count = format_int(
-        shaping_segmentation.get("requests_not_collected", 0)
-    )
+    failed_fallback_count = int(shaping_guardrails.get("failed_fallback_count", 0) or 0)
+    failed_fallback_label = format_int(failed_fallback_count)
+    policy_warning_count = int(shaping_guardrails.get("policy_warning_count", 0) or 0)
+    policy_warning_label = format_int(policy_warning_count)
+    recommendation_count = int(shaping_tuning.get("recommendation_count", 0) or 0)
+    recommendation_label = format_int(recommendation_count)
+    tuning_override_count = int(shaping_tuning.get("override_count", 0) or 0)
+    tuning_override_label = format_int(tuning_override_count)
 
-    if str(shaping_mode.get("compression", "off")) == "safe":
+    raw_compression_mode = str(shaping_mode.get("compression", "off"))
+    if raw_compression_mode == "safe":
         compression_sub = (
             f"{format_int(shaping_compression.get('requests_compressed', 0))} "
-            "requests compressed · saved "
+            "requests · "
             f"{format_int(shaping_compression.get('actual_savings_tokens', 0))} "
-            "tokens"
+            "tokens saved"
         )
-    elif str(shaping_mode.get("compression", "off")) == "observe":
+    elif raw_compression_mode == "observe":
         compression_sub = (
             f"{format_int(shaping_compression.get('requests_analyzed', 0))} "
-            "requests analyzed · potential "
+            "requests analyzed · "
             f"{format_int(shaping_compression.get('estimated_savings_tokens', 0))} "
-            "tokens"
+            "tokens potential savings"
         )
     else:
         compression_sub = "disabled by config"
+
+    cache_reported_rows = format_int(shaping_cache.get("reported_rows", 0))
+    cache_candidates = format_int(shaping_cache.get("candidate_count", 0))
+    cache_sub = f"{cache_reported_rows} reported rows · {cache_candidates} candidates"
+
+    if failed_fallback_count > 0 or policy_warning_count > 0:
+        safety_sub = (
+            f"{failed_fallback_label} fallbacks · "
+            f"{policy_warning_label} policy warnings"
+        )
+    else:
+        safety_sub = f"Clean · {format_int(0)} warnings"
+    safety_has_warning = failed_fallback_count > 0
+
+    tuning_sub = (
+        f"{recommendation_label} recommendations · "
+        f"{tuning_override_label} runtime overrides (dormant)"
+    )
+
+    routing_sub = "isolation healthy · cache/compression stay out of scorer"
 
     request_shaping_panel = f"""
 <section class="panel">
   <h3>Request shaping ({escape(period)})</h3>
   <p class="sub">
-    Operator summary for cache reporting, safe compression, synthetic cache
-    controls, advisory tuning, and routing guardrails. Routing stays
+    Operator summary for request changes, cache reporting, safety
+    guardrails, tuning suggestions, and routing isolation. Routing stays
     load-based and reporting-only metrics never enter the scorer.
   </p>
   <section class="cards">
@@ -3823,50 +3908,31 @@ def _render_request_shaping_summary_panel(
         "".join(
             [
                 _render_metric_card(
-                    title="Compression",
+                    title="Request changes",
                     metric=compression_mode_label,
                     sub=compression_sub,
-                    warning=int(
-                        shaping_compression.get("failed_fallback_count", 0) or 0
-                    )
-                    > 0,
+                    warning=failed_fallback_count > 0,
                 ),
                 _render_metric_card(
-                    title="Cache controls",
+                    title="Provider cache counters",
                     metric=cache_reported_label,
-                    sub=(
-                        "reported rows · "
-                        f"Synthetic {synthetic_mode_label} · "
-                        f"{synthetic_candidate_count} candidates"
-                    ),
+                    sub=cache_sub,
                 ),
                 _render_metric_card(
-                    title="Safety",
+                    title="Safety guardrail",
                     metric=stable_prefix_label,
-                    sub=(
-                        "stable prefix preserved · "
-                        f"{failed_fallback_count} fallbacks · "
-                        f"{policy_warning_count} policy warnings"
-                    ),
-                    warning=int(shaping_guardrails.get("failed_fallback_count", 0) or 0)
-                    > 0,
+                    sub=safety_sub,
+                    warning=safety_has_warning,
                 ),
                 _render_metric_card(
-                    title="Advisory tuning",
+                    title="Tuning suggestions",
                     metric=tuning_mode_label,
-                    sub=(
-                        f"{recommendation_count} recommendations · "
-                        f"{tuning_override_count} overrides"
-                    ),
+                    sub=tuning_sub,
                 ),
                 _render_metric_card(
-                    title="Routing",
+                    title="Routing isolation",
                     metric=routing_mode_label,
-                    sub=(
-                        f"segmented {requests_segmented_count} · "
-                        f"not collected {requests_not_collected_count} · "
-                        "cache/compression stay out of scorer"
-                    ),
+                    sub=routing_sub,
                 ),
             ]
         )
@@ -3989,7 +4055,7 @@ def _render_cache_reporting_panel(
     <thead><tr>
       {_th("Account ID")}
       {_th("Total requests", priority=2)}
-      {_th("Cached tokens (REPORTED)", priority=2)}
+      {_th("Cached tokens (Reported)", priority=2)}
     </tr></thead>
     <tbody>
       {account_rows_html}
@@ -4004,7 +4070,7 @@ def _render_cache_reporting_panel(
     <thead><tr>
       {_th("Model")}
       {_th("Total requests", priority=2)}
-      {_th("Cached tokens (REPORTED)", priority=2)}
+      {_th("Cached tokens (Reported)", priority=2)}
     </tr></thead>
     <tbody>
       {model_rows_html}
@@ -4013,10 +4079,11 @@ def _render_cache_reporting_panel(
 
     cache_card = f"""
 <section class="panel">
-  <h3>Cache reporting ({escape(period)})</h3>
+  <h3>Provider cache counters ({escape(period)})</h3>
   <p class="sub">
-    Provider-reported cache counters; the hit ratio only divides rows
-    whose upstream payload actually surfaced cache fields.
+    Provider-reported cache counters from upstream payloads. Missing cache
+    fields mean the upstream did not surface them — EggPool never disables
+    provider-side caching.
   </p>
   <section class="cards">
     {
@@ -4040,11 +4107,11 @@ def _render_cache_reporting_panel(
             sub="parse failure or unrecognized",
         )
     }
-    {
+        {
         _render_metric_card(
-            title="Cache hit ratio",
+            title="Reported cache read share",
             metric=co_ratio_str,
-            sub="cached / input, REPORTED only",
+            sub="cache_read / (input + cache_read + cache_write)",
         )
     }
   </section>
@@ -4064,7 +4131,7 @@ def _render_cache_reporting_panel(
         <td class='num'>{format_int(co_output_total)}</td>
       </tr>
       <tr>
-        <td>Cached input tokens (REPORTED)</td>
+        <td>Cached input tokens (Reported)</td>
         <td class='num'>{format_int(co_total_cached)}</td>
       </tr>
       <tr>
@@ -4234,12 +4301,15 @@ def _render_request_segmentation_panel(
     return segmentation_card
 
 
-def _render_compression_opportunities_panel(
-    compression_observability: dict[str, Any] | None,
+def _render_merged_compression_panel(
     *,
+    compression_observability: dict[str, Any] | None,
+    compression_runtime: dict[str, Any] | None,
+    compression_policy_stats: dict[str, Any] | None,
     period: str,
 ) -> str:
-    if compression_observability is None:
+    """Render a single merged Compression panel combining observe and safe-mode data."""
+    if compression_observability is None and compression_runtime is None:
         return ""
 
     def _fmt_ms(value: Any) -> str:
@@ -4258,46 +4328,33 @@ def _render_compression_opportunities_panel(
         except (TypeError, ValueError):
             return str(value)
 
-    co_by_status: Any = compression_observability.get("by_status", {}) or {}
-    co_total = int(compression_observability.get("total_requests", 0))
-    co_totals: Any = compression_observability.get("totals", {}) or {}
+    # Observe-mode data from compression_observability.
+    co = compression_observability or {}
+    co_totals: Any = co.get("totals") or {}
     co_observed = int(co_totals.get("observed_requests", 0))
     co_candidates = int(co_totals.get("candidate_count", 0))
     co_eligible = int(co_totals.get("eligible_count", 0))
     co_estimated_savings = int(co_totals.get("estimated_savings_tokens", 0))
+    co_analyzer_p95 = co_totals.get("analyzer_latency_ms_p95")
+    co_total = int(co.get("total_requests", 0))
+    co_by_status: Any = co.get("by_status", {}) or {}
     co_observed_disabled = int(co_by_status.get("disabled", 0))
     co_observed_active = int(co_by_status.get("observed", 0))
     co_safe_active = int(co_by_status.get("safe", 0))
-
-    # Safe-mode applied fields (only present when safe-mode ran).
-    co_applied = int(
-        compression_observability.get("requests_with_compression_applied", 0)
-    )
-    co_applied_savings = int(
-        compression_observability.get("applied_total_savings_tokens", 0)
-    )
-    co_applied_fallback = int(
-        compression_observability.get("applied_failed_fallback_count", 0)
-    )
-    co_applied_preserved = int(
-        compression_observability.get("applied_stable_prefix_preserved_count", 0)
-    )
-    co_applied_p95_savings = compression_observability.get("applied_p95_savings_tokens")
-    co_applied_p95_latency = compression_observability.get("applied_p95_latency_ms")
-
-    # Analyzer latency stats.
-    co_analyzer_p95 = co_totals.get("analyzer_latency_ms_p95")
+    co_applied_preserved = int(co.get("applied_stable_prefix_preserved_count", 0))
+    co_applied_p95_savings = co.get("applied_p95_savings_tokens")
+    co_applied_p95_latency = co.get("applied_p95_latency_ms")
     co_analyzer_median = co_totals.get("analyzer_latency_ms_median")
 
-    # Per-model compression breakdown (top-N by total_requests).
-    co_mdl: Any = compression_observability.get("per_model_status", {}) or {}
+    # Per-model breakdown (top 5).
+    co_mdl: Any = co.get("per_model_status", {}) or {}
     co_model_rows_html = ""
     if co_mdl:
         _co_mdl_cells: list[str] = []
         for model_id, mdl_data in sorted(
             co_mdl.items(),
             key=lambda kv: (-kv[1].get("total_requests", 0), kv[0]),
-        )[:10]:
+        )[:5]:
             m_total = int(mdl_data.get("total_requests", 0))
             m_candidates = int(mdl_data.get("candidate_count", 0))
             m_eligible = int(mdl_data.get("eligible_count", 0))
@@ -4316,7 +4373,7 @@ def _render_compression_opportunities_panel(
     co_model_section = ""
     if co_model_rows_html:
         co_model_section = f"""
-  <h4>By model</h4>
+  <h4>By model (top 5)</h4>
   <table class="data compact">
     <thead><tr>
       {_th("Model")}
@@ -4330,12 +4387,180 @@ def _render_compression_opportunities_panel(
     </tbody>
   </table>"""
 
-    compression_card = f"""
+    # Safe-mode details section (only when runtime data exists).
+    safe_mode_body = ""
+    cr = compression_runtime or {}
+    cr_window: Any = cr.get("window", {}) or {}
+    cr_transforms: Any = cr.get("transforms", {}) or {}
+    cr_warnings: Any = cr.get("warnings", {}) or {}
+    cr_cache_safety: Any = cr.get("cache_safety", {}) or {}
+    cr_latency: Any = cr.get("latency_ms", {}) or {}
+    cr_request_count = int(cr_window.get("request_count", 0))
+    cr_applied_rt = int(cr.get("applied_count", 0))
+    cr_fallback = int(cr.get("failed_fallback_count", 0))
+    cr_candidate_count_rt = int(cr.get("candidate_count", 0))
+    cr_estimated_savings_rt = int(cr.get("estimated_savings_tokens", 0))
+    cr_actual_savings = int(cr.get("actual_savings_tokens", 0))
+    cr_preserved = int(cr_cache_safety.get("stable_prefix_preserved", 0))
+    cr_mismatch = int(cr_cache_safety.get("stable_prefix_mismatch", 0))
+    cr_has_data = cr_request_count > 0
+
+    if cr_has_data:
+        # Top-N transforms by applied count.
+        cr_transform_rows_html = ""
+        if cr_transforms:
+            _cr_tx_cells: list[str] = []
+            sorted_transforms = sorted(
+                cr_transforms.items(),
+                key=lambda kv: (-kv[1].get("applied", 0), kv[0]),
+            )[:10]
+            for code, data in sorted_transforms:
+                applied = int(data.get("applied", 0))
+                saved = int(data.get("tokens_saved", 0))
+                _cr_tx_cells.append(
+                    f"""<tr>
+        <td>{escape(str(code))}</td>
+        <td class='num'>{format_int(applied)}</td>
+        <td class='num'>{format_int(saved)}</td>
+      </tr>"""
+                )
+            cr_transform_rows_html = "\n".join(_cr_tx_cells)
+
+        cr_transform_section = ""
+        if cr_transform_rows_html:
+            cr_transform_section = f"""
+  <h4>Transforms</h4>
+  <table class="data compact">
+    <thead><tr>
+      {_th("Reason code")}
+      {_th("Applied", priority=2)}
+      {_th("Tokens saved", priority=2)}
+    </tr></thead>
+    <tbody>
+      {cr_transform_rows_html}
+    </tbody>
+  </table>"""
+
+        # Top-N warnings by count.
+        cr_warnings_rows_html = ""
+        if cr_warnings:
+            _cr_w_cells: list[str] = []
+            for code, count in sorted(
+                cr_warnings.items(), key=lambda kv: (-kv[1], kv[0])
+            )[:10]:
+                _cr_w_cells.append(
+                    f"""<tr>
+        <td>{escape(str(code))}</td>
+        <td class='num'>{format_int(int(count))}</td>
+      </tr>"""
+                )
+            cr_warnings_rows_html = "\n".join(_cr_w_cells)
+
+        cr_warnings_section = ""
+        if cr_warnings_rows_html:
+            cr_warnings_section = f"""
+  <h4>Warnings rollup</h4>
+  <table class="data compact">
+    <thead><tr>
+      {_th("Warning")}
+      {_th("Count", priority=2)}
+    </tr></thead>
+    <tbody>
+      {cr_warnings_rows_html}
+    </tbody>
+  </table>"""
+
+        safe_mode_body = f"""
+  <section class="cards">
+    {
+            _render_metric_card(
+                title="Applied",
+                metric=format_int(cr_applied_rt),
+                sub="actual transformations",
+            )
+        }
+    {
+            _render_metric_card(
+                title="Fallback",
+                metric=format_int(cr_fallback),
+                sub="fail-closed triggered",
+                warning=cr_fallback > 0,
+            )
+        }
+    {
+            _render_metric_card(
+                title="Stable prefix preserved",
+                metric=format_int(cr_preserved),
+                sub="content hash matched",
+            )
+        }
+    {
+            _render_metric_card(
+                title="Stable prefix mismatch",
+                metric=format_int(cr_mismatch),
+                sub="fail-closed triggered",
+                warning=cr_mismatch > 0,
+            )
+        }
+  </section>
+  <table class="data compact">
+    <thead><tr>{_th("Metric")}{_th("Value", priority=2)}</tr></thead>
+    <tbody>
+      <tr>
+        <td>Total finalized requests</td>
+        <td class='num'>{format_int(cr_request_count)}</td>
+      </tr>
+      <tr>
+        <td>Candidate segments</td>
+        <td class='num'>{format_int(cr_candidate_count_rt)}</td>
+      </tr>
+      <tr>
+        <td>Estimated savings (observe)</td>
+        <td class='num'>{format_int(cr_estimated_savings_rt)}</td>
+      </tr>
+      <tr>
+        <td>Actual savings (safe)</td>
+        <td class='num'>{format_int(cr_actual_savings)}</td>
+      </tr>
+      <tr>
+        <td>Analyzer latency avg</td>
+        <td class='num'>{_fmt_ms(cr_latency.get("avg"))}</td>
+      </tr>
+      <tr>
+        <td>Analyzer latency p50</td>
+        <td class='num'>{_fmt_ms(cr_latency.get("p50"))}</td>
+      </tr>
+      <tr>
+        <td>Analyzer latency p95</td>
+        <td class='num'>{_fmt_ms(cr_latency.get("p95"))}</td>
+      </tr>
+      <tr>
+        <td>Analyzer latency max</td>
+        <td class='num'>{_fmt_ms(cr_latency.get("max"))}</td>
+      </tr>
+    </tbody>
+  </table>
+  {cr_transform_section}
+  {cr_warnings_section}"""
+
+    safe_mode_open = cr_applied_rt > 0 or cr_fallback > 0 or cr_mismatch > 0
+    safe_mode_section = ""
+    if safe_mode_body:
+        safe_mode_section = _render_details_panel(
+            summary_text="Safe-mode details",
+            body=safe_mode_body,
+            open_by_default=safe_mode_open,
+            warning=cr_fallback > 0,
+            panel_id="compression-safe-mode",
+        )
+
+    merged_panel = f"""
 <section class="panel">
-  <h3>Compression opportunities ({escape(period)})</h3>
+  <h3>Compression ({escape(period)})</h3>
   <p class="sub">
-    Opportunity analysis and safe-mode outcomes. These metrics stay
-    reporting-only and do not enter routing.
+    Observe-only mode analyzes without mutating. Safe mode compresses
+    the volatile suffix while preserving stable prefixes and provider
+    cache. These metrics stay reporting-only and do not enter routing.
   </p>
   <section class="cards">
     {
@@ -4347,21 +4572,6 @@ def _render_compression_opportunities_panel(
     }
     {
         _render_metric_card(
-            title="Applied (safe mode)",
-            metric=format_int(co_applied),
-            sub="payload actually compressed",
-        )
-    }
-    {
-        _render_metric_card(
-            title="Fail-closed fallbacks",
-            metric=format_int(co_applied_fallback),
-            sub="stable-prefix hash mismatch",
-            warning=co_applied_fallback > 0,
-        )
-    }
-    {
-        _render_metric_card(
             title="Candidates",
             metric=format_int(co_candidates),
             sub=f"{format_int(co_eligible)} eligible",
@@ -4369,9 +4579,16 @@ def _render_compression_opportunities_panel(
     }
     {
         _render_metric_card(
-            title="Actual savings",
-            metric=_fmt_tokens(co_applied_savings),
-            sub="tokens saved in safe mode",
+            title="Estimated savings",
+            metric=_fmt_tokens(co_estimated_savings),
+            sub="observe-mode potential",
+        )
+    }
+    {
+        _render_metric_card(
+            title="Analyzer latency p95",
+            metric=_fmt_ms(co_analyzer_p95),
+            sub="observe-mode overhead",
         )
     }
   </section>
@@ -4421,205 +4638,10 @@ def _render_compression_opportunities_panel(
     </tbody>
   </table>
   {co_model_section}
+  {safe_mode_section}
 </section>
 """
-    return compression_card
-
-
-def _render_compression_runtime_panel(
-    compression_runtime: dict[str, Any] | None,
-    *,
-    period: str,
-) -> str:
-    if compression_runtime is None:
-        return ""
-
-    def _cr_fmt_ms(value: Any) -> str:
-        if value is None:
-            return "—"
-        try:
-            return f"{float(value):.2f} ms"
-        except (TypeError, ValueError):
-            return str(value)
-
-    cr_window: Any = compression_runtime.get("window", {}) or {}
-    cr_modes: Any = compression_runtime.get("mode_counts", {}) or {}
-    cr_transforms: Any = compression_runtime.get("transforms", {}) or {}
-    cr_warnings: Any = compression_runtime.get("warnings", {}) or {}
-    cr_cache_safety: Any = compression_runtime.get("cache_safety", {}) or {}
-    cr_latency: Any = compression_runtime.get("latency_ms", {}) or {}
-    cr_request_count = int(cr_window.get("request_count", 0))
-    cr_disabled = int(cr_modes.get("disabled", 0))
-    cr_observe = int(cr_modes.get("observe", 0))
-    cr_safe = int(cr_modes.get("safe", 0))
-    cr_applied = int(compression_runtime.get("applied_count", 0))
-    cr_fallback = int(compression_runtime.get("failed_fallback_count", 0))
-    cr_candidate_count = int(compression_runtime.get("candidate_count", 0))
-    cr_estimated_savings = int(compression_runtime.get("estimated_savings_tokens", 0))
-    cr_actual_savings = int(compression_runtime.get("actual_savings_tokens", 0))
-    cr_preserved = int(cr_cache_safety.get("stable_prefix_preserved", 0))
-    cr_mismatch = int(cr_cache_safety.get("stable_prefix_mismatch", 0))
-
-    # Top-N transforms by applied count.
-    cr_transform_rows_html = ""
-    if cr_transforms:
-        _cr_tx_cells: list[str] = []
-        sorted_transforms = sorted(
-            cr_transforms.items(),
-            key=lambda kv: (-kv[1].get("applied", 0), kv[0]),
-        )[:10]
-        for code, data in sorted_transforms:
-            applied = int(data.get("applied", 0))
-            saved = int(data.get("tokens_saved", 0))
-            _cr_tx_cells.append(
-                f"""<tr>
-        <td>{escape(str(code))}</td>
-        <td class='num'>{format_int(applied)}</td>
-        <td class='num'>{format_int(saved)}</td>
-      </tr>"""
-            )
-        cr_transform_rows_html = "\n".join(_cr_tx_cells)
-
-    cr_transform_section = ""
-    if cr_transform_rows_html:
-        cr_transform_section = f"""
-  <h4>Transforms</h4>
-  <table class="data compact">
-    <thead><tr>
-      {_th("Reason code")}
-      {_th("Applied", priority=2)}
-      {_th("Tokens saved", priority=2)}
-    </tr></thead>
-    <tbody>
-      {cr_transform_rows_html}
-    </tbody>
-  </table>"""
-
-    # Top-N warnings by count.
-    cr_warnings_rows_html = ""
-    if cr_warnings:
-        _cr_w_cells: list[str] = []
-        for code, count in sorted(cr_warnings.items(), key=lambda kv: (-kv[1], kv[0]))[
-            :10
-        ]:
-            _cr_w_cells.append(
-                f"""<tr>
-        <td>{escape(str(code))}</td>
-        <td class='num'>{format_int(int(count))}</td>
-      </tr>"""
-            )
-        cr_warnings_rows_html = "\n".join(_cr_w_cells)
-
-    cr_warnings_section = ""
-    if cr_warnings_rows_html:
-        cr_warnings_section = f"""
-  <h4>Warnings rollup</h4>
-  <table class="data compact">
-    <thead><tr>
-      {_th("Warning")}
-      {_th("Count", priority=2)}
-    </tr></thead>
-    <tbody>
-      {cr_warnings_rows_html}
-    </tbody>
-  </table>"""
-
-    compression_runtime_card = f"""
-<section class="panel">
-  <h3>Safe compression ({escape(period)})</h3>
-  <p class="sub">
-    Runtime outcomes for observe and safe modes: mode counts,
-    applied/fallback totals, latency distribution, per-transform
-    outcomes, warnings rollup, and stable-prefix safety counters.
-  </p>
-  <section class="cards">
-    {
-        _render_metric_card(
-            title="Mode: observe",
-            metric=format_int(cr_observe),
-            sub="analyzer ran, no mutation",
-        )
-    }
-    {
-        _render_metric_card(
-            title="Mode: safe",
-            metric=format_int(cr_safe),
-            sub="payload compressed",
-        )
-    }
-    {
-        _render_metric_card(
-            title="Mode: disabled",
-            metric=format_int(cr_disabled),
-            sub="policy disabled",
-        )
-    }
-    {
-        _render_metric_card(
-            title="Applied",
-            metric=format_int(cr_applied),
-            sub="actual transformations",
-        )
-    }
-    {
-        _render_metric_card(
-            title="Fallback",
-            metric=format_int(cr_fallback),
-            sub="fail-closed triggered",
-            warning=cr_fallback > 0,
-        )
-    }
-  </section>
-  <table class="data compact">
-    <thead><tr>{_th("Metric")}{_th("Value", priority=2)}</tr></thead>
-    <tbody>
-      <tr>
-        <td>Total finalized requests</td>
-        <td class='num'>{format_int(cr_request_count)}</td>
-      </tr>
-      <tr>
-        <td>Candidate segments</td>
-        <td class='num'>{format_int(cr_candidate_count)}</td>
-      </tr>
-      <tr>
-        <td>Estimated savings (observe)</td>
-        <td class='num'>{format_int(cr_estimated_savings)}</td>
-      </tr>
-      <tr>
-        <td>Actual savings (safe)</td>
-        <td class='num'>{format_int(cr_actual_savings)}</td>
-      </tr>
-      <tr>
-        <td>Analyzer latency avg</td>
-        <td class='num'>{_cr_fmt_ms(cr_latency.get("avg"))}</td>
-      </tr>
-      <tr>
-        <td>Analyzer latency p50</td>
-        <td class='num'>{_cr_fmt_ms(cr_latency.get("p50"))}</td>
-      </tr>
-      <tr>
-        <td>Analyzer latency p95</td>
-        <td class='num'>{_cr_fmt_ms(cr_latency.get("p95"))}</td>
-      </tr>
-      <tr>
-        <td>Analyzer latency max</td>
-        <td class='num'>{_cr_fmt_ms(cr_latency.get("max"))}</td>
-      </tr>
-      <tr>
-        <td>Stable prefix preserved</td>
-        <td class='num'>{format_int(cr_preserved)}</td>
-      </tr>
-      <tr>
-        <td>Stable prefix mismatch</td>
-        <td class='num'>{format_int(cr_mismatch)}</td>
-      </tr>
-    </tbody>
-  </table>
-  {cr_transform_section}
-  {cr_warnings_section}
-</section>
-"""
-    return compression_runtime_card
+    return merged_panel
 
 
 def _render_compression_policy_panel(
@@ -4883,10 +4905,12 @@ def _render_synthetic_cache_controls_panel(
 
     synthetic_cache_card = f"""
 <section class="panel">
-  <h3>Synthetic cache controls ({escape(period)})</h3>
+  <h3>EggPool cache annotations ({escape(period)})</h3>
   <p class="sub">
-    Opt-in provider-bound cache annotations on protected stable-prefix
-    segments. Disabled by default; dry-run is the safe rollout path.
+    Optional provider-bound cache annotations added by EggPool on protected
+    stable-prefix segments. Disabled by default; dry-run is the safe
+    rollout path. This is EggPool-added annotations, NOT provider-reported
+    cache.
   </p>
   <section class="cards">
     {
@@ -5069,15 +5093,14 @@ def _render_advisory_tuning_panel(
     ct_window_count = len(ct_windows)
     compression_tuning_card = f"""
 <section class="panel">
-  <h3>Advisory tuning ({escape(period)})</h3>
+  <h3>Tuning suggestions ({escape(period)})</h3>
   <p class="sub">
-    Recommend-only by default. <code>mode = "recommend"</code> surfaces
-    advisory suggestions without changing request behaviour.
-    <code>mode = "apply"</code> is accepted at config time for forward
-    compatibility but is dormant &mdash; no production code path
-    registers runtime overrides today.  Tuning never inspects raw
-    prompt content, never enables stable-prefix compression, and never
-    touches routing.
+    Recommend-only by default. Advisory suggestions for
+    <code>min_candidate_tokens</code>, <code>min_savings_tokens</code>,
+    and <code>max_compression_latency_ms</code> without changing request
+    behaviour. <code>mode = "apply"</code> is accepted at config time but
+    is dormant — no production code path registers runtime overrides today.
+    Tuning never inspects raw prompt content and never touches routing.
   </p>
   <section class="cards">
     {
@@ -5171,7 +5194,7 @@ def _render_routing_guardrails_panel(routing: dict[str, Any]) -> str:
 
     routing_guardrails_panel = f"""
 <section class="panel">
-  <h3>Routing guardrails</h3>
+  <h3>Routing isolation</h3>
   <p class="sub">
     Cache and compression metrics are reporting-only. The
     <code>QuotaFairScorer</code> does NOT consume cache, compression,
@@ -6035,11 +6058,11 @@ def render_cache(
     segmentation_card = _render_request_segmentation_panel(
         canonical_request_segmentation, period=period
     )
-    compression_card = _render_compression_opportunities_panel(
-        compression_observability, period=period
-    )
-    compression_runtime_card = _render_compression_runtime_panel(
-        compression_runtime, period=period
+    merged_compression_card = _render_merged_compression_panel(
+        compression_observability=compression_observability,
+        compression_runtime=compression_runtime,
+        compression_policy_stats=compression_policy_stats,
+        period=period,
     )
     compression_policy_card = _render_compression_policy_panel(
         compression_policy_stats, period=period
@@ -6053,6 +6076,61 @@ def render_cache(
     )
     routing_guardrails_panel = _render_routing_guardrails_panel(routing)
 
+    # Determine advanced-section state.
+    shaping_guardrails_data = _as_dict(
+        (request_shaping_summary_effective or {}).get("guardrails")
+    )
+    has_warnings = _compression_has_warnings(
+        compression_runtime, shaping_guardrails_data
+    )
+    guardrails_healthy = _routing_isolation_healthy(guardrails)
+    any_data = bool(
+        cache_observability
+        or canonical_request_segmentation
+        or compression_observability
+        or compression_runtime
+        or compression_policy_stats
+        or cache_stability
+        or synthetic_cache_summary
+        or compression_tuning
+        or routing_runtime
+    )
+    advanced_open = _advanced_section_open_by_default(
+        warnings=has_warnings,
+        guardrails_healthy=guardrails_healthy,
+        has_data=any_data,
+    )
+
+    # Count open sections for the advanced summary text.
+    open_count = int(has_warnings) + int(not guardrails_healthy and any_data)
+    advanced_summary = (
+        f"Advanced diagnostics ({open_count} open)"
+        if open_count > 0
+        else "Show advanced diagnostics"
+    )
+
+    # Build the advanced diagnostics body (previously-flat panels).
+    advanced_body = "".join(
+        filter(
+            None,
+            [
+                cache_stability_card,
+                segmentation_card,
+                compression_policy_card,
+                compression_tuning_card,
+                routing_guardrails_panel,
+                tc_card,
+            ],
+        )
+    )
+    advanced_section = _render_details_panel(
+        summary_text=advanced_summary,
+        body=advanced_body,
+        open_by_default=advanced_open,
+        warning=has_warnings,
+        panel_id="advanced-diagnostics",
+    )
+
     body = f"""
 <h2>Cache</h2>
 <p class="sub">Cache reporting, request shaping, compression, and safety guardrails.</p>
@@ -6062,25 +6140,13 @@ def render_cache(
 
 <div id="cache-reporting">{cache_card}</div>
 
-<div id="cache-stability">{cache_stability_card}</div>
+<div id="compression">
+{merged_compression_card}
+</div>
 
 <div id="synthetic-cache-controls">{synthetic_cache_card}</div>
 
-<div id="request-segmentation">{segmentation_card}</div>
-
-<div id="compression">
-{compression_card}
-
-{compression_runtime_card}
-
-{compression_policy_card}
-</div>
-
-<div id="advisory-tuning">{compression_tuning_card}</div>
-
-<div id="routing-guardrails">{routing_guardrails_panel}</div>
-
-<div id="transcoding">{tc_card}</div>
+{advanced_section}
 """
     return _render_layout(
         title="Cache",

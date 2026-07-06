@@ -857,12 +857,10 @@ protocol = "anthropic"
 # consumes these metrics. Stable operator knobs are documented below;
 # keep advanced overrides in the playbook until you need them.
 #
-# ----------------------------------------------------------------------
-# Request shaping: cache-preserving compression
-# ----------------------------------------------------------------------
-# Disabled by default. "observe" records opportunities without changing
-# requests. "safe" compresses only volatile suffix content and fails
-# closed if a stable prefix would change.
+# --- Compression (safe suffix only) ---
+# Drives the **Request changes** and **Compression** panels on `/cache`.
+# Observe mode is reporting-only; safe mode actually compresses the
+# volatile suffix while preserving stable prefixes and provider cache.
 # [compression]
 # enabled = false
 # mode = "observe"                 # "observe" or "safe"
@@ -870,7 +868,6 @@ protocol = "anthropic"
 # min_savings_tokens = 1024
 # max_compression_latency_ms = 25.0
 #
-# Optional: disable individual deterministic transforms if one is noisy.
 # [compression.transforms]
 # fold_repeated_lines = true
 # compact_logs = true
@@ -878,24 +875,6 @@ protocol = "anthropic"
 # elide_base64_blobs = true
 # minify_machine_json = true
 # compact_stack_traces = true
-#
-# ----------------------------------------------------------------------
-# Synthetic cache controls
-# ----------------------------------------------------------------------
-# Optional provider-bound cache annotations for supported upstreams.
-# Leave disabled unless you are validating Anthropic-style cache_control
-# behavior; dry-run records candidates without mutating requests.
-# [cache.synthetic_cache_controls]
-# enabled = false
-# dry_run = true
-# min_stable_tokens = 1024
-#
-# ----------------------------------------------------------------------
-# Advanced request-shaping overrides
-# ----------------------------------------------------------------------
-# Use policy overrides for scoped rollouts. Most operators should leave
-# placement, static-prefix, header, and provider-specific knobs at their
-# defaults and manage them from docs-driven playbooks instead.
 #
 # [[compression.policies]]
 # name = "opencode-safe-suffix"
@@ -912,13 +891,20 @@ protocol = "anthropic"
 # synthetic_cache_dry_run = true
 # synthetic_cache_min_stable_tokens = 1024
 # synthetic_cache_max_breakpoints = 4
-#
-# ----------------------------------------------------------------------
-# Advisory threshold tuning
-# ----------------------------------------------------------------------
-# Recommendation-only by default. Keep this in docs-driven rollout space
-# until you need automated threshold suggestions.
-#
+
+# --- EggPool cache annotations (provider-bound, opt-in) ---
+# Drives the **EggPool cache annotations** panel on `/cache`. Disabled
+# by default and dry-run is the safe rollout path. These are annotations
+# added by EggPool — provider-reported cache counters are surfaced
+# separately in Provider cache counters.
+# [cache.synthetic_cache_controls]
+# enabled = false
+# dry_run = true
+# min_stable_tokens = 1024
+
+# --- Tuning suggestions (advisory only) ---
+# Drives the **Tuning suggestions** panel on `/cache`. Recommend-only
+# by default; runtime overrides remain dormant.
 # [compression.tuning]
 # enabled = false
 # mode = "recommend"

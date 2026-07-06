@@ -7,29 +7,29 @@ EggPool ships an opt-in, cache-preserving request-shaping stack. This guide expl
 
 ## Operator model
 
-1. **Cache reporting** records whether upstreams surfaced cache counters.
+1. **Provider cache counters** records whether upstreams surfaced cache counters.
 2. **Request segmentation** classifies stable prefix, semi-stable context, and volatile suffix without mutating payloads.
 3. **Native cache preservation** records how transcoding handled provider-native cache annotations.
-4. **Compression opportunities** estimate savings in `observe` mode.
-5. **Safe compression** mutates only eligible volatile suffix string leaves and fails closed if the stable prefix changes.
-6. **Policy overrides** scope compression or synthetic cache behavior by client, protocol, model, provider, or policy name.
-7. **Synthetic cache controls** add provider-bound cache annotations only after a dry-run-first rollout.
-8. **Advisory tuning** surfaces bounded threshold suggestions without changing live behavior by default.
+4. **Compression** estimates savings in `observe` mode.
+5. **Compression — safe-mode details** mutates only eligible volatile suffix string leaves and fails closed if the stable prefix changes.
+6. **Policy overrides** scope compression or EggPool cache annotation behavior by client, protocol, model, provider, or policy name.
+7. **EggPool cache annotations** add provider-bound cache annotations only after a dry-run-first rollout.
+8. **Tuning suggestions** surfaces bounded threshold suggestions without changing live behavior by default.
 9. **Runtime visibility** exposes summary cards and drill-down tables without raw prompt content.
-10. **Routing guardrails** ensure request-shaping metrics never affect same-provider routing.
+10. **Routing isolation** ensure request-shaping metrics never affect same-provider routing.
 
 ## Public surfaces
 
 | Surface | Default | Mutates requests? | Normal operator use |
 |---------|---------|-------------------|---------------------|
-| Cache reporting | on | no | yes |
+| Provider cache counters | on | no | yes |
 | Request segmentation | on | no | yes |
 | Native cache preservation | on with transcoding | no | yes |
-| Compression opportunities | off unless `[compression].enabled = true` | no | yes |
-| Safe compression | off (`mode = "observe"`) | volatile suffix only, fail-closed | yes |
+| Compression | off unless `[compression].enabled = true` | no | yes |
+| Compression — safe-mode details | off (`mode = "observe"`) | volatile suffix only, fail-closed | yes |
 | Policy overrides | off | scoped overlay only | sometimes |
-| Synthetic cache controls | off (`enabled = false`, `dry_run = true`) | provider-bound stable prefix only | maybe |
-| Advisory tuning | off | no | rarely |
+| EggPool cache annotations | off (`enabled = false`, `dry_run = true`) | provider-bound stable prefix only | maybe |
+| Tuning suggestions | off | no | rarely |
 | Replay fixtures | test-only | no | developer-only |
 
 ## What is safe by default
@@ -45,6 +45,22 @@ With the shipped defaults, the entire stack is reporting-only. No request body, 
 - Synthetic cache controls default to `enabled = false`.
 - Advisory tuning defaults to `enabled = false`.
 - Replay fixtures stay in test-only paths.
+
+## UI terminology
+
+The dashboard `/cache` page uses these operator-facing labels. If you have bookmarked or are accustomed to older labels, use this mapping:
+
+| Dashboard label | Previous name | Config surface |
+|----------------|---------------|----------------|
+| Provider cache counters | Cache reporting | `[cache]` (upstream-provided counters) |
+| Compression | Compression opportunities | `[compression]` |
+| Compression — safe-mode details | Safe compression | `[compression]` (mode = "safe") |
+| EggPool cache annotations | Synthetic cache controls | `[cache.synthetic_cache_controls]` |
+| Tuning suggestions | Advisory tuning | `[compression.tuning]` |
+| Routing isolation | Routing guardrails | `[routing]` (always-on) |
+| Request changes | Request shaping summary | `/api/stats/request-shaping` |
+
+Config keys and API field names are unchanged. Only the dashboard labels and operator-facing prose were updated.
 
 ## What is experimental
 

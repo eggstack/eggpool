@@ -148,16 +148,16 @@ to that page.
 
 | Surface | Default | Mutates requests? | Primary stats/API |
 |---------|---------|-------------------|-------------------|
-| Cache reporting | on | no | `/api/stats/cache-observability` |
+| Provider cache counters | on | no | `/api/stats/cache-observability` |
 | Request segmentation | on | no | `/api/stats/canonical-request-segmentation` |
 | Native cache preservation | on when transcoding | no | `/api/stats/cache-stability` |
-| Compression opportunities | off unless `[compression].enabled = true` | no | `/api/stats/compression-observability` |
-| Safe compression | off (`mode = "observe"`) | volatile suffix only, fail-closed | `/api/stats/compression-runtime` |
+| Compression | off unless `[compression].enabled = true` | no | `/api/stats/compression-observability` |
+| Compression — safe-mode details | off (`mode = "observe"`) | volatile suffix only, fail-closed | `/api/stats/compression-runtime` |
 | Policy overrides | off (`[[compression.policies]] = []`) | scoped overlay only | `/api/stats/compression-policies` |
-| Synthetic cache controls | off (`enabled = false`, `dry_run = true`) | provider-bound stable prefix only | `/api/stats/synthetic-cache-observability` |
-| Advisory tuning | off (`enabled = false`) | no | `/api/stats/compression-tuning` |
+| EggPool cache annotations | off (`enabled = false`, `dry_run = true`) | provider-bound stable prefix only | `/api/stats/synthetic-cache-observability` |
+| Tuning suggestions | off (`enabled = false`) | no | `/api/stats/compression-tuning` |
 | Request-shaping summary | on with dashboard | no | `/api/stats/request-shaping` |
-| Routing guardrails | always on | no | `/api/stats/runtime` |
+| Routing isolation | always on | no | `/api/stats/runtime` |
 
 ### Stable config knobs
 
@@ -212,6 +212,8 @@ Advanced knobs still exist for policy-scoped rollouts and advisory tuning, but t
 7. Enable advisory tuning only if you want threshold suggestions.
 
 ### Further reading
+
+See `/cache` for the operator workflow: requests being changed, provider cache counters, compression outcomes, safety guardrails, routing isolation. Advanced diagnostics stay collapsed unless warnings are present.
 
 - Operator guide: [docs/cache-compression.md](docs/cache-compression.md)
 - Copy-pasteable profiles: [docs/cache-compression-profiles.md](docs/cache-compression-profiles.md)

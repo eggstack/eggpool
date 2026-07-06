@@ -37,7 +37,7 @@ Before troubleshooting, confirm you are reading the right endpoint:
 | `/api/stats/synthetic-cache-observability` | Synthetic cache plan / apply results: status counts (disabled / dry_run / applied / no_candidates / policy_required / provider_unsupported), warning counts, per-policy roll-up. |
 | `/api/stats/compression-tuning` | Recommendation status, deltas, reason codes. `overrides` is empty in `recommend` mode today. |
 
-### Cache observability
+### Provider cache counters
 
 | Field | Meaning |
 |-------|---------|
@@ -63,7 +63,7 @@ Two hashes coexist:
 - `stable_prefix_shape_hash` (a.k.a. the legacy `stable_prefix_hash`) — structural descriptor hash.
 - `stable_prefix_content_hash` — exact SHA-256 of canonical stable-prefix content, re-extracted from the payload via stable-prefix segment paths. Safe compression recomputes this on the transformed payload before sending upstream.
 
-### Compression opportunities
+### Compression
 
 | Field | Meaning |
 |-------|---------|
@@ -87,7 +87,7 @@ Top reason codes:
 | `transform_disabled` | The transform that would apply to this segment is disabled. |
 | `empty_segment` | Segment contained no text. |
 
-### Safe compression
+### Compression — safe-mode details
 
 | Field | Meaning |
 |-------|---------|
@@ -121,7 +121,7 @@ Top runtime warnings:
 
 Match semantics: union OR across match fields; matched overrides are merged in file order; last-match-wins for scalars; field-by-field merge for `transforms`.
 
-### Synthetic cache controls
+### EggPool cache annotations
 
 Status codes:
 
@@ -150,7 +150,7 @@ Warning codes:
 | `synthetic_cache_control_safety_diff_failed` | Structural-diff safety rejected an unexpected mutation. |
 | `synthetic_cache_control_payload_not_mapping` | Payload was not a mapping; selector skipped. |
 
-### Tuning recommendations
+### Tuning suggestions
 
 | Field | Meaning |
 |-------|---------|
@@ -271,7 +271,7 @@ One account or one provider is getting a disproportionate share of requests.
 
 **What is NOT a routing cause:**
 
-- Cache hit ratio, even on a per-account basis.
+- Reported cache read share, even on a per-account basis.
 - Compression savings, even on a per-account basis.
 - Synthetic-cache apply rate.
 - Tuning recommendation state.
