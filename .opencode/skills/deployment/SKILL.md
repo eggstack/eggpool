@@ -238,7 +238,7 @@ corrupted.
 
 - Default: two processes — the `eggpool serve` supervisor plus one Granian worker. Both appear as `eggpool` in `ps` / `top` / `pgrep` (Granian is launched with `process_name="eggpool"`, not a generic `python` entry)
 - The Granian worker is launched with `workers=1`. Multi-worker scaling is intentionally not exposed; per-worker concurrency is the knob operators tune
-- `[server].threads` (int, default `1`, min `1`, max `64`) sets Granian `runtime_threads` — the number of event-loop threads in the worker. Default `1` is for SBC / Raspberry Pi; raise on capable hardware
+- `[server].threads` (int, default `2`, min `1`, max `64`) sets Granian `runtime_threads` — the number of event-loop threads in the worker. Default `2` is recommended for Raspberry Pi 4/5 so the single Granian worker can multiplex streaming proxy traffic + dashboard requests; `1` is the documented minimum-footprint override for extremely constrained devices. Raise on capable hardware for higher concurrency.
 - PID file path is resolved by `eggpool.runtime_paths.default_pid_file()` in this precedence: `$EGGPOOL_PID_FILE` → `$XDG_RUNTIME_DIR/eggpool.pid` → `~/.local/state/eggpool/eggpool.pid` → `/tmp/eggpool-<UID>.pid`. The PID file is owned by the **supervisor**, not the FastAPI lifespan
 - `eggpool serve` refuses to start a second instance: it checks the PID file via `runtime.read_pid()` + `runtime.is_process_running()`, then probes `GET /v1/healthz` over `127.0.0.1` via stdlib `urllib.request`. A live PID or a 200 from the probe exits `1`; stale PID files are cleared before starting
 - `eggpool restart` delegates to `runtime.restart_server`, which calls `runtime.send_sigterm` and `runtime.start_server` (a `subprocess.Popen` of a new supervisor). There is no inline subprocess logic in the CLI command itself
@@ -317,6 +317,15 @@ eggpool runtime-status          # compact runtime health from running server
 - On systemd, `Restart=on-failure` in `deploy/eggpool.service` causes systemd to restart the supervisor automatically; nothing extra is required.
 - On cron-driven deployments, the `*/N * * * *` line in the user's crontab should call `eggpool ensure-running`, which both checks and restarts atomically without ever spawning duplicates.
 - The fast-path keeps this cheap enough to run every 5 minutes even on Raspberry Pi-class hardware — `ensure-running` exits almost immediately when the server is already alive.
+
+### Dashboard slow under request load
+
+- Confirm `database.worker_threads = 2` (default). When `> 1` on a file-backed SQLite database, `app.py:_lifespan_runtime` opens a separate read-only `stats_db` connection so dashboard analytics do not queue behind request-path writes on the primary connection lock.
+- Confirm `server.threads = 2` (default) so the single Granian worker can multiplex streaming proxy traffic + dashboard requests without single-event-loop starvation.
+- `routing.trace.mode = "sampled"` (default) keeps routing-decision inserts off the hot path. Set `mode = "all"` only when actively debugging routing.
+- `/api/stats/runtime` → `dashboard_telemetry.recent_render_ms_p95` and `dashboard_telemetry.slowest_recent_route` are the operator-facing render duration signals; `dashboard_telemetry.separate_stats_db` confirms the stats connection is wired.
+- Startup logs `Granian profile: workers=1 runtime_threads=N database_worker_threads=M access_log=...` so the effective profile is visible at every `eggpool serve` start.
+- See `docs/deployment.md` Performance Profiles for the balanced / minimum-footprint / full-diagnostics profile set.
 
 ---
 

@@ -2462,17 +2462,87 @@ Correctness-preserving performance pass that reduces redundant computation and D
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `mode` | `all` / `sampled` / `off` | `all` | When to write routing traces |
+| `mode` | `all` / `sampled` / `off` | `sampled` | When to write routing traces |
 | `sample_rate` | `0.0–1.0` | `0.05` | Deterministic request-id sampling in `sampled` mode |
-| `include_score_components` | `bool` | `True` | Whether to serialize the per-account scoring breakdown |
+| `include_score_components` | `bool` | `False` | Whether to serialize the per-account scoring breakdown |
 
-Default `mode = "all"` preserves backward compatibility. `sampled` mode uses a deterministic request-id hash at trace-write time, before upstream outcome is known, so it samples selection attempts rather than forcing all errors.
+Default `mode = "sampled"` keeps write pressure low on default installs (Raspberry Pi / SBC) where every microSD write costs latency. `sampled` mode uses a deterministic request-id hash at trace-write time, before upstream outcome is known, so it samples selection attempts rather than forcing all errors. Operators who want full diagnostic visibility for debugging should set `mode = "all"` and `include_score_components = true`. Routing trace rows are purely diagnostic — they have no effect on billing, retry, crash recovery, or routing outcomes.
 
 ### Phase 5 — Hot-Path Cleanup
 
 - **ASGI middleware**: `_BodyLimitMiddleware` and `_HeaderRedactionMiddleware` (`src/eggpool/app.py`) replaced `BaseHTTPMiddleware` wrappers with direct ASGI classes — avoids the per-request Starlette `request.receive()` / `call_next()` overhead of the deprecated `BaseHTTPMiddleware`.
 - **Log level**: `transcoded_request` log moved from `logger.info` to `logger.debug` (fires on every transcoded request — routine diagnostic data). Loss warnings remain at `logger.info`.
 - **JSON body encoding**: `encode_json_body()` (`src/eggpool/request/body.py`) is the single serialization point using compact separators.
+
+### Phase 6 — Low-Power Dashboard Performance Optimization
+
+Default installs target Raspberry Pi and other SBC hardware where dashboard responsiveness under request load is a real operator pain point. The optimization is deliberately constrained: process workers stay at exactly one (multi-worker mode would duplicate FastAPI app state, background task supervisors, catalog refresh, provider client pools, in-memory health/routing state, and model-info services). Only intra-worker knobs and write-pressure defaults change.
+
+#### Stats Connection Isolation
+
+`Database` serializes all SQL operations through a single connection lock. On file-backed SQLite, dashboard analytics that share the primary connection queue behind request-path writes. The fix:
+
+- `DatabaseConfig.worker_threads` defaults to `2` (was `1`). When `worker_threads > 1` and the database path is not `:memory:`, `app.py:_lifespan_runtime` opens a separate read-only `stats_db` connection. WAL readers see a consistent snapshot, so dashboard queries tolerate sub-second isolation.
+- `StatsService(db)` is no longer constructed inside dashboard handlers. All cache, request-shaping, compression, transcoding, segmentation, tuning, and runtime routes use the lifespan-wired `app.state.stats` instance, which also owns the long-lived 30s in-memory dashboard cache.
+- The CLI command `eggpool stats transcoding` still constructs a fresh short-lived `StatsService(db)` because it runs out-of-process and is bounded to a single query.
+
+Granular dashboard handlers touched: `handle_runtime`, `handle_cache`, `handle_transcoding_stats_json`, `handle_cache_observability_json`, `handle_canonical_request_segmentation_json`, `handle_compression_observability_json`, `handle_synthetic_cache_observability_json`, `handle_compression_tuning_json`, `handle_request_shaping_json`, `handle_compression_runtime_json`, `handle_compression_policy_stats_json`, `handle_cache_stability_json`. Each now passes `use_cache=True` so repeated renders within the 30s TTL stay on the cache.
+
+`use_cache` was added to `StatsService.get_transcoding_stats`, `get_cache_observability`, `get_canonical_request_segmentation`, `get_compression_observability`, `get_compression_runtime`, `get_compression_policy_stats`, `get_cache_stability`, `get_synthetic_cache_summary`, `get_compression_tuning_window_metrics`. API endpoints that are documented as exact remain exact — they do not pass `use_cache=True`.
+
+#### Granian Runtime Threads
+
+`ServerConfig.threads` defaults to `2` (was `1`). The default config example now exposes the knob:
+
+```toml
+[server]
+threads = 2
+```
+
+Granian still passes `workers=1`. Two runtime threads let a single worker multiplex streaming proxy traffic, dashboard requests, and lightweight background work without the single-event-loop starvation that becomes visible when long-lived SSE streams block the loop. `1` remains the documented minimum-footprint override for extremely constrained devices. Startup logs the effective profile:
+
+```text
+Granian profile: workers=1 runtime_threads=N database_worker_threads=M access_log=...
+```
+
+#### Background Task Staggering
+
+Multiple periodic tasks run at 30s or 60s cadences (`metrics_flush`, `usage_window_refresh`, `stale_request_finalizer`, `health_disabled_models_prune`, `model_info_canonical_backfill`). Each registration in `app.py:_lifespan_runtime` supplies an explicit `initial_delay_s` (5s, 10s, 15s, 25s, 40s) so first ticks do not cluster on the same wall-clock second. `background/periodic_initial_offset(name, interval_s, *, max_fraction=0.5)` is the deterministic-from-name helper for future additions; tests remain stable because the offset is `sha256(name)`-derived, not random.
+
+Startup crash recovery (`_crash_recovery`) and the initial catalog load are NOT staggered — those run unconditionally before periodic registration, and safety-critical recovery must not be delayed.
+
+#### Routing Trace Write Pressure
+
+`RoutingTraceConfig.mode` defaults to `"sampled"` with `sample_rate = 0.05` and `include_score_components = False`. The default install therefore writes routing decision rows for ~5% of selection attempts instead of every attempt — a ~20x reduction in routing-decision insert volume. The deterministic request-id hash means operators still get a representative sample of traces across all accounts and tiers.
+
+The dashboard degrades gracefully when trace data is sampled: `routing_decisions` lookups return bounded results, and `eggpool accounts explain` is unaffected. `routing.trace.mode = "all"` plus `include_score_components = true` is the documented full-diagnostics profile for operators who want every trace.
+
+#### Dashboard Render Telemetry
+
+`DashboardTelemetry` (`src/eggpool/dashboard/telemetry.py`) is a fixed-size (100-sample) rolling buffer per route. `record_render(route, duration_ms)` appends in O(1); `snapshot()` returns `{recent_render_ms_p50, recent_render_ms_p95, slowest_recent_route}`. Wired into `handle_overview`, `handle_models`, `handle_runtime`, `handle_cache` via `time.perf_counter()` deltas around the existing `HTMLResponse(...)` construction. No new dependencies, no per-request persistence.
+
+The runtime snapshot (`/api/stats/runtime` → `dashboard_telemetry`) also exposes:
+
+- `separate_stats_db`: whether the stats connection is distinct from the data-plane connection
+- `runtime_threads`: effective `[server].threads` value
+- `database_worker_threads`: effective `[database].worker_threads` value
+- `routing_trace_mode`: effective `[routing.trace].mode` value
+
+Operators can tell at a glance whether the install is on the recommended profile.
+
+#### Performance Profiles
+
+`docs/deployment.md` documents three profiles (balanced, minimum-footprint, full-diagnostics) with a symptom-to-knob troubleshooting table. The balanced profile matches the new defaults and is recommended for Raspberry Pi 4/5.
+
+#### Tests
+
+- `tests/integration/test_application_startup.py::test_worker_threads_two_opens_separate_stats_connection` pins the stats connection separation invariant.
+- `tests/unit/test_runtime_metrics.py::test_db_stats_connection_separate` and `test_db_stats_connection_separate_true` pin the runtime-snapshot shape.
+- `tests/unit/test_background.py` pins `initial_delay_s` semantics including `run_immediately` mutual exclusion and the 25%-of-interval overdue grace band.
+- `tests/unit/test_routing_trace_mode.py` pins the new sampled-default and `include_score_components = false` defaults.
+- `tests/unit/test_config.py::test_database_worker_threads_two_allowed` and `test_database_worker_threads_above_two_rejected` pin the `[1, 2]` range.
+
+See `plans/2026-07-05-dashboard-low-power-performance-optimization-plan.md` for the full design.
 
 ### Benchmark and Regression Harness
 

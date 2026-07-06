@@ -537,10 +537,13 @@ address for the probe). Either a live PID or a 200 from the probe
 causes the new `serve` to exit non-zero so a stale PID file is
 never silently overwritten.
 
-The primary tuning knob is `[server].threads` (int, default `1`,
+The primary tuning knob is `[server].threads` (int, default `2`,
 min `1`, max `64`), which sets Granian `runtime_threads` — the
-number of event-loop threads in the worker. The default of one
-thread is intentional; raise it on capable hardware:
+number of event-loop threads in the worker. The default of two
+threads is recommended for Raspberry Pi 4/5 so the single Granian
+worker can multiplex streaming proxy traffic + dashboard requests
+without single-event-loop starvation. Set `threads = 1` for
+extremely constrained devices, or raise it on capable hardware:
 
 ```toml
 [server]

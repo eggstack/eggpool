@@ -107,9 +107,9 @@ entry), so the total footprint is two processes and two threads before
 considering any upstream outbound connections.
 
 The single tuning knob for per-worker concurrency is `[server].threads`
-(int, default `1`, max `64`), which maps to Granian `runtime_threads`.
+(int, default `2`, max `64`), which maps to Granian `runtime_threads`.
 The default is correct for Pi 4 / Pi 5; raise it only if your workload
-genuinely needs more concurrency than a single event loop can deliver:
+genuinely needs more concurrency than two event loops can deliver:
 
 ```toml
 [server]

@@ -1595,7 +1595,9 @@ class TestGranianServe:
         monkeypatch.setattr(runtime_module, "probe_healthz", lambda *_a, **_k: False)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.cli, ["--config", str(config_path), "serve"])
+        result = runner.invoke(
+            cli_module.cli, ["--config", str(config_path), "serve", "--verbose"]
+        )
 
         assert result.exit_code == 0, result.output
         kwargs = observed["kwargs"]
@@ -1721,7 +1723,9 @@ class TestGranianServe:
         monkeypatch.setattr("granian.Granian", FakeGranian)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.cli, ["--config", str(config_path), "serve"])
+        result = runner.invoke(
+            cli_module.cli, ["--config", str(config_path), "serve", "--verbose"]
+        )
 
         assert result.exit_code == 0, result.output
         assert captured.get("runtime_threads") == 4
