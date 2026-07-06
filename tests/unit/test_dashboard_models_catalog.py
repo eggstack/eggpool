@@ -251,6 +251,50 @@ class TestMergeModelsWithCatalog:
         # Stats row's _sparse marker was popped during merge.
         assert "_sparse" not in merged[0]
 
+    def test_does_not_mutate_input_rows(self) -> None:
+        """The merge must not write diagnostic fields onto the input rows.
+
+        ``StatsService._get_dashboard_cache`` returns cached rows by
+        reference and documents that renderer code must treat them as
+        read-only.  ``_merge_models_with_catalog`` is therefore
+        expected to copy rows before popping diagnostic keys or
+        writing catalog fields, otherwise the dashboard cache
+        contaminates the next request within the 30s TTL.
+        """
+        from eggpool.dashboard.routes import _merge_models_with_catalog
+
+        stats_rows = [
+            {
+                "model_id": "m",
+                "provider_id": "p",
+                "request_count": 1,
+                "_sparse": True,
+            },
+        ]
+        catalog_rows = [
+            {
+                "model_id": "m",
+                "provider_id": "p",
+                "request_count": 0,
+                "base_model_id": "m",
+                "routing_priority": 9,
+            },
+        ]
+        original_stats = {k: v for k, v in stats_rows[0].items()}
+        original_catalog = {k: v for k, v in catalog_rows[0].items()}
+        merged = _merge_models_with_catalog(stats_rows, catalog_rows)
+        # Inputs are untouched: no diagnostic writes, no ``_sparse`` pops.
+        assert stats_rows[0] == original_stats
+        assert catalog_rows[0] == original_catalog
+        assert "_in_catalog" not in stats_rows[0]
+        assert "_in_catalog" not in catalog_rows[0]
+        # Merged rows carry the lifted fields but are distinct dict objects.
+        assert merged[0]["_in_catalog"] is True
+        assert merged[0]["base_model_id"] == "m"
+        assert merged[0]["routing_priority"] == 9
+        assert merged[0] is not stats_rows[0]
+        assert merged[0] is not catalog_rows[0]
+
 
 class TestMergeProviderScopedClosure:
     """Plan §Defect 1 — provider-scoped merge must dedupe by

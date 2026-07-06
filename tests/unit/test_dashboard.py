@@ -24,6 +24,7 @@ from eggpool.dashboard.escape import (
 )
 from eggpool.dashboard.render import (
     _format_tooltip_date,
+    _render_auto_refresh_script,
     _render_bandwidth_heatmap,
     _render_nav,
     _render_period_selector,
@@ -848,6 +849,32 @@ class TestRenderOverview:
         assert "show them" not in html
 
 
+class TestAutoRefreshBootstrap:
+    """The auto-refresh script re-wires content-scoped handlers after innerHTML swap.
+
+    Replacement of ``#dashboard-content`` blows away event handlers on
+    every child node, so the post-refresh hook must invoke the
+    idempotent ``EggPoolDashboard.bootstrap()`` to re-bind timeseries
+    controls, static charts, number steppers, copy buttons, and the
+    nav toggle — not just the grouped timeseries charts.
+    """
+
+    def test_auto_refresh_calls_idempotent_bootstrap(self) -> None:
+        script = _render_auto_refresh_script(15)
+        assert "dash.bootstrap()" in script
+
+    def test_auto_refresh_preserves_legacy_chart_fallback(self) -> None:
+        """Older builds of ``dashboard.js`` may not expose ``bootstrap``.
+
+        The renderer keeps the direct ``initGroupedTimeseriesCharts``
+        and ``reinitTimeseriesChart`` calls as a fallback so older
+        bundles keep working.
+        """
+        script = _render_auto_refresh_script(15)
+        assert "initGroupedTimeseriesCharts" in script
+        assert "reinitTimeseriesChart" in script
+
+
 class TestRenderAccounts:
     """Tests for the accounts page renderer."""
 
@@ -1276,6 +1303,23 @@ class TestRenderTimeseries:
         assert 'data-metric="tokens"' in html
         assert 'value="tokens" selected' in html
         assert 'value="requests" selected' not in html
+
+    def test_metric_dropdown_excludes_average_metrics(self) -> None:
+        """Latency/TTFT are not additive, so the grouped dropdown must hide them.
+
+        Averages across series mislead stacked bars — operators can
+        still see latency/TTFT in tooltips and detail rows.  The
+        dropdown must only expose additive counts.
+        """
+        html = render_timeseries(series=[], bucket="hour", period="24h")
+        controls_start = html.index('class="filter-form timeseries-controls"')
+        controls_end = html.index("</form>", controls_start)
+        controls_section = html[controls_start:controls_end]
+        assert 'value="latency"' not in controls_section
+        assert 'value="ttft"' not in controls_section
+        # Sanity: the additive metrics are still present.
+        for value in ("tokens", "requests", "cost", "errors", "bytes"):
+            assert f'value="{value}"' in controls_section
 
     def test_controls_form_has_no_period_dropdown(self) -> None:
         """The canonical period selector lives outside the controls form.

@@ -552,11 +552,15 @@ def _render_auto_refresh_script(refresh_interval_s: int) -> str:
         updated.textContent = new Date().toLocaleTimeString();
         if (window.EggPoolDashboard) {{
           const dash = window.EggPoolDashboard;
-          if (typeof dash.initGroupedTimeseriesCharts === "function") {{
-            dash.initGroupedTimeseriesCharts();
-          }}
-          if (typeof dash.reinitTimeseriesChart === "function") {{
-            dash.reinitTimeseriesChart();
+          if (typeof dash.bootstrap === "function") {{
+            dash.bootstrap();
+          }} else {{
+            if (typeof dash.initGroupedTimeseriesCharts === "function") {{
+              dash.initGroupedTimeseriesCharts();
+            }}
+            if (typeof dash.reinitTimeseriesChart === "function") {{
+              dash.reinitTimeseriesChart();
+            }}
           }}
         }}
       }}
@@ -3428,8 +3432,6 @@ def _render_timeseries_controls(
         ("cost", "Cost"),
         ("errors", "Errors"),
         ("bytes", "Bandwidth"),
-        ("latency", "Avg latency"),
-        ("ttft", "Avg TTFT"),
     ]
     limit_options: list[tuple[str, str]] = [
         (str(n), f"Top {n}") for n in (6, 8, 12, 16, 20, 25)

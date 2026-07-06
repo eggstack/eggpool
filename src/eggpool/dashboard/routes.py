@@ -1261,12 +1261,13 @@ def _merge_models_with_catalog(
     )
     merged: list[dict[str, Any]] = []
     seen_keys: set[tuple[str, str]] = set()
-    for row in stats_rows:
-        key = _model_row_key(row, collapse_models=collapse_models)
+    for raw_row in stats_rows:
+        key = _model_row_key(raw_row, collapse_models=collapse_models)
         mid, pid = key
         if not mid:
             continue
         seen_keys.add(key)
+        row = dict(raw_row)
         row.pop("_sparse", None)
         row.pop("_display_name", None)
         row.pop("_providers", None)
@@ -1282,11 +1283,12 @@ def _merge_models_with_catalog(
                 if k in catalog_row and k not in row:
                     row[k] = catalog_row[k]
         merged.append(row)
-    for row in catalog_rows:
-        key = _model_row_key(row, collapse_models=collapse_models)
+    for raw_row in catalog_rows:
+        key = _model_row_key(raw_row, collapse_models=collapse_models)
         if not key[0] or key in seen_keys:
             continue
         seen_keys.add(key)
+        row = dict(raw_row)
         row["_in_catalog"] = True
         merged.append(row)
     merged.sort(

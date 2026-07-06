@@ -704,7 +704,14 @@ async def test_overview_loads_dashboard_js_with_defer(
 async def test_overview_auto_refresh_reinitializes_charts(
     migrated_app: FastAPI,
 ) -> None:
-    """The auto-refresh hook re-initializes charts after innerHTML swap."""
+    """The auto-refresh hook re-initializes charts after innerHTML swap.
+
+    It calls the idempotent ``EggPoolDashboard.bootstrap()`` so all
+    content-scoped handlers (timeseries controls, static charts,
+    number steppers, copy buttons, nav toggle) get re-wired after
+    every ``#dashboard-content`` innerHTML replacement — not just the
+    grouped timeseries charts.
+    """
     from fastapi.testclient import TestClient
 
     client = TestClient(migrated_app)
@@ -712,6 +719,7 @@ async def test_overview_auto_refresh_reinitializes_charts(
     assert response.status_code == 200
     body = response.text
     # The auto-refresh hook should call into dashboard.js for reinit.
+    assert "dash.bootstrap()" in body
     assert "initGroupedTimeseriesCharts" in body
     assert "reinitTimeseriesChart" in body
 

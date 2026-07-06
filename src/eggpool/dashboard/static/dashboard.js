@@ -580,7 +580,7 @@
     }
   };
 
-  function bootstrap() {
+  namespace.bootstrap = function bootstrap() {
     try {
       namespace.initStaticCharts();
     } catch (err) {
