@@ -4,9 +4,14 @@ Phase 5 of the cache-preserving deterministic compression roadmap
 introduces the first request-mutating deterministic compressor.  Given
 the :class:`SegmentationResult` produced by Phase 2, the compressor
 walks volatile-suffix segments, identifies eligible compressible
-candidates (matching the analyzer's eligibility rules), applies
-deterministic transforms in-place on a deep-copied payload, and
-returns a :class:`CompressionResult` describing the outcome.
+candidates (matching the analyzer's eligibility rules), discovers
+planned deterministic replacements, and applies them through
+path-level copy-on-write *only* when at least one mutation is
+needed.  The input payload is never mutated; no-op requests return
+the original payload object unchanged; applied requests copy only the
+dict/list ancestors on each mutated replacement path and share
+untouched subtrees by reference (this is **not** a full deep copy).
+A :class:`CompressionResult` describing the outcome is returned.
 
 Key design choices:
 

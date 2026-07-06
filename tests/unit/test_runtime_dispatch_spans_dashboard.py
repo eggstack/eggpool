@@ -2,15 +2,27 @@
 
 from __future__ import annotations
 
-from typing import Any
+import time
+from typing import TYPE_CHECKING, Any
 
 import pytest
+import pytest_asyncio
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
+from eggpool.api.runtime import register_runtime_routes
 from eggpool.dashboard.render import (
     _DISPATCH_SPAN_LABELS,
     _render_dispatch_spans_panel,
     render_runtime,
 )
+from eggpool.db.connection import Database
+from eggpool.db.migrations import MigrationRunner
+from eggpool.models.config import AppConfig
+from eggpool.runtime_metrics import RuntimeMetricsService
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
 
 pytestmark = pytest.mark.dashboard
 
@@ -269,3 +281,225 @@ class TestDispatchSpansPanelIncludesActionableSpans:
         assert "0 ms" not in html
         for label in _DISPATCH_SPAN_LABELS.values():
             assert label in html
+
+
+# ---------------------------------------------------------------------------
+# End-to-end API + dashboard-rendering integration
+# ---------------------------------------------------------------------------
+
+
+def _build_runtime_config() -> AppConfig:
+    config = AppConfig.from_dict(
+        {
+            "server": {
+                "api_key_env": "OPENCODE_TEST_KEY",
+                "host": "127.0.0.1",
+                "port": 0,
+            },
+            "database": {"path": ":memory:"},
+            "upstream": {"base_url": "http://localhost:19999"},
+            "models": {"startup_refresh": False, "refresh_interval_s": 0},
+            "accounts": [{"name": "test-acct", "api_key_env": "OPENCODE_TEST_KEY"}],
+            "dashboard": {"enabled": False},
+        }
+    )
+    config.server.api_key = "test-key-12345678"
+    return config
+
+
+@pytest_asyncio.fixture()
+async def runtime_db(tmp_path: Any) -> AsyncGenerator[Database, None]:
+    database = Database(path=str(tmp_path / "test.sqlite3"))
+    await database.connect()
+    runner = MigrationRunner(database)
+    await runner.run()
+    yield database
+    await database.disconnect()
+
+
+def _make_runtime_app(db: Database, *, dispatch_span_recorder: Any = None) -> FastAPI:
+    config = _build_runtime_config()
+    app = FastAPI()
+    app.state.db = db
+    app.state.stats_db = db
+    app.state.config = config
+    app.state.runtime_metrics = RuntimeMetricsService(
+        config=config,
+        db=db,
+        stats_db=db,
+        supervisor=None,
+        task_monitor=None,
+        router=None,
+        health_manager=None,
+        started_monotonic=time.monotonic() - 60.0,
+        started_epoch=time.time() - 60.0,
+        dispatch_span_recorder=dispatch_span_recorder,
+    )
+    register_runtime_routes(app)
+    return app
+
+
+class TestDispatchSpansApiEndToEnd:
+    """Pins the ``dispatch_spans`` JSON shape via ``GET /api/stats/runtime``.
+
+    The endpoint is always auth-gated, so the test supplies the
+    ``Bearer`` header explicitly.
+    """
+
+    def _auth_headers(self) -> dict[str, str]:
+        return {"Authorization": "Bearer test-key-12345678"}
+
+    def test_runtime_api_returns_dispatch_spans(self, runtime_db: Database) -> None:
+        """The runtime API must include the full ``dispatch_spans`` payload."""
+        from eggpool.runtime_dispatch import (
+            SPAN_COMPRESSION_APPLY,
+            SPAN_COORDINATOR_PRE_UPSTREAM,
+            SPAN_SEGMENTATION,
+            DispatchSpanRecorder,
+        )
+
+        recorder = DispatchSpanRecorder(window_size=200)
+        recorder.record_ns(SPAN_COORDINATOR_PRE_UPSTREAM, 12_000_000)  # 12 ms
+        recorder.record_ns(SPAN_COORDINATOR_PRE_UPSTREAM, 14_000_000)  # 14 ms
+        recorder.record_ns(SPAN_SEGMENTATION, 8_000_000)  # 8 ms
+        recorder.record_ns(SPAN_COMPRESSION_APPLY, 22_000_000)  # 22 ms
+
+        app = _make_runtime_app(runtime_db, dispatch_span_recorder=recorder)
+        client = TestClient(app)
+        response = client.get("/api/stats/runtime", headers=self._auth_headers())
+        assert response.status_code == 200
+        body = response.json()
+        dispatch_spans = body["dispatch_spans"]
+        assert dispatch_spans["window_size"] == 200
+        spans_by_key = {row["span"]: row for row in dispatch_spans["spans"]}
+
+        # Recorded spans retain duration fields.
+        cpu = spans_by_key[SPAN_COORDINATOR_PRE_UPSTREAM]
+        assert cpu["sample_count"] == 2
+        assert cpu["min_ms"] == pytest.approx(12.0)
+        assert cpu["max_ms"] == pytest.approx(14.0)
+        assert cpu["p50_ms"] is not None
+        assert cpu["p95_ms"] is not None
+
+        seg = spans_by_key[SPAN_SEGMENTATION]
+        assert seg["sample_count"] == 1
+        assert seg["avg_ms"] == pytest.approx(8.0)
+
+        apply = spans_by_key[SPAN_COMPRESSION_APPLY]
+        assert apply["sample_count"] == 1
+        assert apply["avg_ms"] == pytest.approx(22.0)
+
+    def test_runtime_api_marks_absent_spans_with_zero_count(
+        self, runtime_db: Database
+    ) -> None:
+        """Spans with no recorded samples must appear with sample_count == 0
+        and ``None`` numeric fields, **not** zero-valued samples."""
+        from eggpool.runtime_dispatch import (
+            SPAN_COMPRESSION_ANALYZE,
+            SPAN_COMPRESSION_APPLY,
+            DispatchSpanRecorder,
+        )
+
+        recorder = DispatchSpanRecorder(window_size=200)
+        recorder.record_ns(SPAN_COMPRESSION_APPLY, 5_000_000)
+        app = _make_runtime_app(runtime_db, dispatch_span_recorder=recorder)
+        client = TestClient(app)
+        response = client.get("/api/stats/runtime", headers=self._auth_headers())
+        assert response.status_code == 200
+        body = response.json()
+        spans_by_key = {row["span"]: row for row in body["dispatch_spans"]["spans"]}
+        analyze = spans_by_key[SPAN_COMPRESSION_ANALYZE]
+        assert analyze["sample_count"] == 0
+        assert analyze["avg_ms"] is None
+        assert analyze["p50_ms"] is None
+        assert analyze["p95_ms"] is None
+        assert analyze["max_ms"] is None
+        apply = spans_by_key[SPAN_COMPRESSION_APPLY]
+        assert apply["sample_count"] == 1
+        assert apply["avg_ms"] is not None
+
+
+class TestDispatchSpansDashboardEndToEnd:
+    """Pins the dashboard HTML for a snapshot produced from the API."""
+
+    def _auth_headers(self) -> dict[str, str]:
+        return {"Authorization": "Bearer test-key-12345678"}
+
+    def test_api_snapshot_renders_dashboard_with_empty_state(
+        self, runtime_db: Database
+    ) -> None:
+        """Snapshot returned by ``/api/stats/runtime`` with apply only
+        should render the Dispatch spans panel with one populated span
+        and the missing analyze span rendered as "not observed in
+        recent window", not as ``0 ms``."""
+        from eggpool.runtime_dispatch import (
+            SPAN_COMPRESSION_APPLY,
+            SPAN_SEGMENTATION,
+            DispatchSpanRecorder,
+        )
+
+        recorder = DispatchSpanRecorder(window_size=200)
+        recorder.record_ns(SPAN_SEGMENTATION, 6_000_000)
+        recorder.record_ns(SPAN_COMPRESSION_APPLY, 10_000_000)
+        app = _make_runtime_app(runtime_db, dispatch_span_recorder=recorder)
+        client = TestClient(app)
+        response = client.get("/api/stats/runtime", headers=self._auth_headers())
+        assert response.status_code == 200
+        snapshot = response.json()
+        html = render_runtime(snapshot)
+
+        assert "Dispatch spans" in html
+        # Compression apply is populated.
+        assert "Compression apply" in html
+        # Compression analyze absent → "not observed in recent window".
+        assert "not observed in recent window" in html
+        # The duration columns for any zero-sample span must NOT contain a
+        # "0 ms" (or "0.0 ms") render.  The formatter emits "—" for None
+        # and "<n>.<frac> ms" for finite numbers.  We assert on the panel
+        # substring (between the section anchors) to avoid unrelated
+        # cells elsewhere in the page.
+        panel_start = html.find("<h3>Dispatch spans</h3>")
+        panel_end = html.find("</section>", panel_start)
+        assert panel_start > 0 and panel_end > panel_start
+        panel_html = html[panel_start:panel_end]
+        # No naked `0 ms` or `0.0 ms` in the panel.
+        assert ">0 ms<" not in panel_html
+        assert ">0.0 ms<" not in panel_html
+        # Apply span row has a real numeric ms value.
+        apply_row_idx = panel_html.find("Compression apply")
+        assert apply_row_idx >= 0
+        apply_row_end = panel_html.find("</tr>", apply_row_idx)
+        apply_row = panel_html[apply_row_idx:apply_row_end]
+        assert "10" in apply_row and "ms" in apply_row
+
+    def test_api_snapshot_renders_dashboard_with_populated_spans(
+        self, runtime_db: Database
+    ) -> None:
+        """When multiple spans have samples, every actionable span label
+        is rendered, and the populated rows show numeric ms while
+        zero-sample actionable spans show ``not observed in recent
+        window``."""
+        from eggpool.runtime_dispatch import (
+            SPAN_COMPRESSION_APPLY,
+            SPAN_COORDINATOR_PRE_UPSTREAM,
+            SPAN_SEGMENTATION,
+            DispatchSpanRecorder,
+        )
+
+        recorder = DispatchSpanRecorder(window_size=200)
+        recorder.record_ns(SPAN_COORDINATOR_PRE_UPSTREAM, 4_000_000)
+        recorder.record_ns(SPAN_SEGMENTATION, 6_000_000)
+        recorder.record_ns(SPAN_COMPRESSION_APPLY, 9_000_000)
+        app = _make_runtime_app(runtime_db, dispatch_span_recorder=recorder)
+        client = TestClient(app)
+        response = client.get("/api/stats/runtime", headers=self._auth_headers())
+        snapshot = response.json()
+        html = render_runtime(snapshot)
+
+        assert "Dispatch spans" in html
+        for label in _DISPATCH_SPAN_LABELS.values():
+            assert label in html, f"Missing actionable span label: {label}"
+        # The three populated spans show numeric ms; the four zero-sample
+        # actionable spans (``compression_analyze``, ``selection_lock_wait``,
+        # ``selection_locked``, ``routing_trace_write``) show ``not observed``.
+        assert html.count("not observed in recent window") == 4
