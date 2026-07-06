@@ -711,8 +711,6 @@ def _analyze_segment_for_transforms(
         ("minify_machine_json", policy.transforms.minify_machine_json),
         ("compact_stack_traces", policy.transforms.compact_stack_traces),
     ]
-    if not text_hint:
-        text_hint = _segment_text(segment)
     has_signal = bool(text_hint) or (
         (segment.estimated_tokens or 0) > 0 or segment.byte_length > 0
     )
@@ -729,9 +727,8 @@ def _analyze_segment_for_transforms(
             elif eligible:
                 state.bump(REASON_EMPTY_SEGMENT)
         return
-    # Order matters: each transform consumes a budget slice.
-    # The latency budget is generous; we still cap iterations so
-    # a future regression cannot stall the request path.
+    if not text_hint and has_signal:
+        text_hint = _segment_text(segment)
     for transform, enabled in transforms_enabled:
         if not _within_budget(state.deadline):
             state.warnings.append(REASON_LATENCY_BUDGET)
@@ -747,9 +744,6 @@ def _analyze_segment_for_transforms(
         if not eligible:
             if suppressed is not None:
                 state.bump(suppressed)
-            # Skip detection for suppressed segments: even if a
-            # transform would save tokens, the policy forbids the
-            # candidate.  We still record the suppression above.
             continue
         saved_tokens = _run_transform(transform, segment, text_hint)
         original_tokens = _segment_tokens(segment, text_hint)

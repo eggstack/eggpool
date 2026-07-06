@@ -69,6 +69,7 @@ def _make_service(
     started_monotonic: float | None = None,
     started_epoch: float | None = None,
     dispatch_overhead_recorder: Any | None = None,
+    dispatch_span_recorder: Any | None = None,
 ) -> RuntimeMetricsService:
     if config is None:
         config = _build_config()
@@ -87,6 +88,7 @@ def _make_service(
         started_monotonic=started_monotonic,
         started_epoch=started_epoch,
         dispatch_overhead_recorder=dispatch_overhead_recorder,
+        dispatch_span_recorder=dispatch_span_recorder,
     )
 
 
@@ -896,6 +898,43 @@ async def test_snapshot_dispatch_overhead_aggregates(db: Database) -> None:
     assert dispatch["p50_ms"] is not None
     assert dispatch["p95_ms"] is not None
     assert dispatch["p99_ms"] is not None
+
+
+@pytest.mark.asyncio
+async def test_snapshot_dispatch_spans_with_recorder(db: Database) -> None:
+    from eggpool.runtime_dispatch import ALL_SPAN_KEYS, DispatchSpanRecorder
+
+    recorder = DispatchSpanRecorder(window_size=10)
+    recorder.record_ns("json_parse", 1_000_000)
+    recorder.record_ns("compression_apply", 7_000_000)
+    service = _make_service(db, dispatch_span_recorder=recorder)
+    snapshot = await service.snapshot()
+    assert "dispatch_spans" in snapshot
+    dispatch_spans = snapshot["dispatch_spans"]
+    assert dispatch_spans["window_size"] == 10
+    spans = {row["span"]: row for row in dispatch_spans["spans"]}
+    # Recorder keys must appear with their recorded values.
+    assert spans["json_parse"]["sample_count"] == 1
+    assert spans["json_parse"]["avg_ms"] == 1.0
+    assert spans["compression_apply"]["sample_count"] == 1
+    assert spans["compression_apply"]["avg_ms"] == 7.0
+    # Every known span key must be present even with no samples.
+    for key in ALL_SPAN_KEYS:
+        assert key in spans
+        if key not in {"json_parse", "compression_apply"}:
+            assert spans[key]["sample_count"] == 0
+            assert spans[key]["avg_ms"] is None
+
+
+@pytest.mark.asyncio
+async def test_snapshot_dispatch_spans_no_recorder(db: Database) -> None:
+    from eggpool.runtime_dispatch import ALL_SPAN_KEYS
+
+    service = _make_service(db)
+    snapshot = await service.snapshot()
+    dispatch_spans = snapshot["dispatch_spans"]
+    keys = {row["span"] for row in dispatch_spans["spans"]}
+    assert set(ALL_SPAN_KEYS) == keys
 
 
 @pytest.mark.asyncio

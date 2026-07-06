@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import sys
 import time
+import typing
 import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -41,6 +44,19 @@ from eggpool.request.limits import (
     check_context_limits as _check_context_limits,
 )
 from eggpool.routing.provider import parse_model_provider
+from eggpool.runtime_dispatch import (
+    SPAN_BODY_READ,
+    SPAN_COMPRESSION_ANALYZE,
+    SPAN_COMPRESSION_APPLY,
+    SPAN_COMPRESSION_POLICY,
+    SPAN_CONTEXT_BUILD,
+    SPAN_CONTEXT_LIMIT,
+    SPAN_JSON_PARSE,
+    SPAN_MODEL_PARSE,
+    SPAN_SEGMENTATION,
+    SPAN_TRANSCODE_PREFLIGHT,
+    DispatchSpanRecorder,
+)
 from eggpool.transcoder.context import TranscodeContext
 from eggpool.transcoder.errors import TranscodeLossError
 from eggpool.transcoder.prepared import PreparedTranscode
@@ -260,8 +276,14 @@ async def handle_proxy_request(
     await require_auth(request)
 
     coordinator = cast("RequestCoordinator", request.app.state.coordinator)
+    span_recorder = cast(
+        "DispatchSpanRecorder | None",
+        getattr(request.app.state, "dispatch_span_recorder", None),
+    )
+
     try:
-        body = await read_body_limited(request, MAX_REQUEST_BODY_BYTES)
+        with _span(span_recorder, SPAN_BODY_READ):
+            body = await read_body_limited(request, MAX_REQUEST_BODY_BYTES)
     except RequestTooLargeError:
         return endpoint.error_response(
             status_code=413,
@@ -269,21 +291,22 @@ async def handle_proxy_request(
             error_type="invalid_request_error",
         )
 
-    payload_obj: object
-    try:
-        payload_obj = json.loads(body)
-    except (json.JSONDecodeError, ValueError):
-        return endpoint.error_response(
-            status_code=400,
-            message="Invalid JSON",
-            error_type="invalid_request_error",
-        )
-    if not isinstance(payload_obj, dict):
-        return endpoint.error_response(
-            status_code=400,
-            message="Invalid JSON",
-            error_type="invalid_request_error",
-        )
+    with _span(span_recorder, SPAN_JSON_PARSE):
+        payload_obj: object
+        try:
+            payload_obj = json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            return endpoint.error_response(
+                status_code=400,
+                message="Invalid JSON",
+                error_type="invalid_request_error",
+            )
+        if not isinstance(payload_obj, dict):
+            return endpoint.error_response(
+                status_code=400,
+                message="Invalid JSON",
+                error_type="invalid_request_error",
+            )
     payload = cast("dict[str, Any]", payload_obj)
 
     model_value = payload.get("model")
@@ -296,7 +319,8 @@ async def handle_proxy_request(
 
     config = cast("AppConfig | None", getattr(request.app.state, "config", None))
     known_providers = set(config.providers) if config is not None else None
-    model_id, provider_id = parse_model_provider(model_value, known_providers)
+    with _span(span_recorder, SPAN_MODEL_PARSE):
+        model_id, provider_id = parse_model_provider(model_value, known_providers)
 
     # Preflight context limit check (guardrail, not primary enforcement).
     catalog = getattr(request.app.state, "catalog", None)
@@ -304,58 +328,14 @@ async def handle_proxy_request(
     prepared_transcode: PreparedTranscode | None = None
     transcoder_policy = getattr(request.app.state, "transcoder_policy", None)
     if catalog is not None:
-        try:
-            _check_context_limits(
-                model_id=model_id,
-                provider_id=provider_id,
-                body=body,
-                payload=payload,
-                protocol=endpoint.protocol,
-                catalog_cache=catalog.cache,
-            )
-        except ContextLimitExceededError as exc:
-            return endpoint.error_response(
-                status_code=400,
-                message=str(exc),
-                error_type="invalid_request_error",
-            )
-
-        # Second pass: when transcoding is active, also validate
-        # the translated payload against upstream limits.
-        preflight = _prepare_transcode_preflight(
-            catalog=catalog,
-            model_id=model_id,
-            provider_id=provider_id,
-            client_protocol=endpoint.protocol,
-            payload=payload,
-            transcoder_policy=transcoder_policy,
-        )
-        if preflight is not None:
-            if (
-                getattr(transcoder_policy, "loss_policy", "warn") == "reject"
-                and preflight.warnings
-            ):
-                return endpoint.error_response(
-                    status_code=400,
-                    message=_format_loss_policy_rejection(preflight.warnings),
-                    error_type="invalid_request_error",
-                )
+        with _span(span_recorder, SPAN_CONTEXT_LIMIT):
             try:
-                encoded_translated_body = encode_json_body(
-                    preflight.translated_payload,
-                )
-                limit_check_body = encoded_translated_body
-                if preflight.tool_token_padding > 0:
-                    limit_check_body += b"\x00" * (
-                        preflight.tool_token_padding
-                        * ESTIMATED_CONTEXT_BYTES_PER_TOKEN_FLOOR
-                    )
                 _check_context_limits(
                     model_id=model_id,
                     provider_id=provider_id,
-                    body=limit_check_body,
-                    payload=preflight.translated_payload,
-                    protocol=preflight.upstream_protocol,
+                    body=body,
+                    payload=payload,
+                    protocol=endpoint.protocol,
                     catalog_cache=catalog.cache,
                 )
             except ContextLimitExceededError as exc:
@@ -364,15 +344,61 @@ async def handle_proxy_request(
                     message=str(exc),
                     error_type="invalid_request_error",
                 )
-            _loss_policy = getattr(transcoder_policy, "loss_policy", "warn")
-            _features = getattr(transcoder_policy, "features", None)
-            prepared_transcode = PreparedTranscode.from_preflight_result(
-                result=preflight,
+
+        # Second pass: when transcoding is active, also validate
+        # the translated payload against upstream limits.
+        with _span(span_recorder, SPAN_TRANSCODE_PREFLIGHT):
+            preflight = _prepare_transcode_preflight(
+                catalog=catalog,
+                model_id=model_id,
+                provider_id=provider_id,
                 client_protocol=endpoint.protocol,
-                loss_policy=_loss_policy,
-                encoded_body=encoded_translated_body,
-                features=_features,
+                payload=payload,
+                transcoder_policy=transcoder_policy,
             )
+            if preflight is not None:
+                if (
+                    getattr(transcoder_policy, "loss_policy", "warn") == "reject"
+                    and preflight.warnings
+                ):
+                    return endpoint.error_response(
+                        status_code=400,
+                        message=_format_loss_policy_rejection(preflight.warnings),
+                        error_type="invalid_request_error",
+                    )
+                try:
+                    encoded_translated_body = encode_json_body(
+                        preflight.translated_payload,
+                    )
+                    limit_check_body = encoded_translated_body
+                    if preflight.tool_token_padding > 0:
+                        limit_check_body += b"\x00" * (
+                            preflight.tool_token_padding
+                            * ESTIMATED_CONTEXT_BYTES_PER_TOKEN_FLOOR
+                        )
+                    _check_context_limits(
+                        model_id=model_id,
+                        provider_id=provider_id,
+                        body=limit_check_body,
+                        payload=preflight.translated_payload,
+                        protocol=preflight.upstream_protocol,
+                        catalog_cache=catalog.cache,
+                    )
+                except ContextLimitExceededError as exc:
+                    return endpoint.error_response(
+                        status_code=400,
+                        message=str(exc),
+                        error_type="invalid_request_error",
+                    )
+                _loss_policy = getattr(transcoder_policy, "loss_policy", "warn")
+                _features = getattr(transcoder_policy, "features", None)
+                prepared_transcode = PreparedTranscode.from_preflight_result(
+                    result=preflight,
+                    client_protocol=endpoint.protocol,
+                    loss_policy=_loss_policy,
+                    encoded_body=encoded_translated_body,
+                    features=_features,
+                )
 
     stream_value = payload.get("stream", False)
     if stream_value is not None and not isinstance(stream_value, bool):
@@ -414,37 +440,38 @@ async def handle_proxy_request(
         "compression_tuning_registry",
         None,
     )
-    resolved_compression_policy: Any = None
-    if compression_policy is not None:
-        try:
-            from eggpool.transcoder.compression import (
-                CompressionPolicyContext,
-                resolve_compression_policy,
-            )
+    with _span(span_recorder, SPAN_COMPRESSION_POLICY):
+        resolved_compression_policy: Any = None
+        if compression_policy is not None:
+            try:
+                from eggpool.transcoder.compression import (
+                    CompressionPolicyContext,
+                    resolve_compression_policy,
+                )
 
-            policy_ctx = CompressionPolicyContext(
-                client_id=request.headers.get("x-eggpool-client"),
-                client_name=request.headers.get("user-agent"),
-                source_protocol=endpoint.protocol,
-                target_protocol=endpoint.protocol,
-                requested_model=model_value,
-                resolved_model=None,
-                provider_id=None,
-                provider_kind=None,
-                transcoded=False,
-            )
-            resolved_compression_policy = resolve_compression_policy(
-                compression_policy,
-                policy_ctx,
-                runtime_override_registry=runtime_override_registry,
-            )
-        except Exception:  # noqa: BLE001
-            logger.debug(
-                "compression_policy_resolution_failed",
-                extra={"proxy_request_id": request_id},
-                exc_info=True,
-            )
-            resolved_compression_policy = None
+                policy_ctx = CompressionPolicyContext(
+                    client_id=request.headers.get("x-eggpool-client"),
+                    client_name=request.headers.get("user-agent"),
+                    source_protocol=endpoint.protocol,
+                    target_protocol=endpoint.protocol,
+                    requested_model=model_value,
+                    resolved_model=None,
+                    provider_id=None,
+                    provider_kind=None,
+                    transcoded=False,
+                )
+                resolved_compression_policy = resolve_compression_policy(
+                    compression_policy,
+                    policy_ctx,
+                    runtime_override_registry=runtime_override_registry,
+                )
+            except Exception:  # noqa: BLE001
+                logger.debug(
+                    "compression_policy_resolution_failed",
+                    extra={"proxy_request_id": request_id},
+                    exc_info=True,
+                )
+                resolved_compression_policy = None
 
     # The analyzer and applier read the resolved config when
     # available; fall back to the global config when resolution
@@ -496,20 +523,23 @@ async def handle_proxy_request(
     segmentation_result: Any = None
     segmentation_not_collected = False
     if _segmentation_needed:
-        try:
-            from eggpool.transcoder.segmentation import segment_request
+        with _span(span_recorder, SPAN_SEGMENTATION):
+            try:
+                from eggpool.transcoder.segmentation import segment_request
 
-            segmentation_result = segment_request(payload, protocol=endpoint.protocol)
-        except Exception:  # noqa: BLE001
-            # Segmentation is observational.  A failure here must never
-            # block the request path; the finalizer falls back to
-            # ``segmentation_status = 'empty_request'``.
-            logger.debug(
-                "segmentation_failed",
-                extra={"proxy_request_id": request_id},
-                exc_info=True,
-            )
-            segmentation_result = None
+                segmentation_result = segment_request(
+                    payload, protocol=endpoint.protocol
+                )
+            except Exception:  # noqa: BLE001
+                # Segmentation is observational.  A failure here must never
+                # block the request path; the finalizer falls back to
+                # ``segmentation_status = 'empty_request'``.
+                logger.debug(
+                    "segmentation_failed",
+                    extra={"proxy_request_id": request_id},
+                    exc_info=True,
+                )
+                segmentation_result = None
     else:
         segmentation_not_collected = True
 
@@ -519,24 +549,35 @@ async def handle_proxy_request(
     # otherwise it short-circuits to ``None`` and the finalizer
     # records no compression fields.  Failure here must never
     # block the request path.
+    #
+    # When ``mode == "safe"`` the analyzer is skipped entirely; the
+    # safe-mode applier builds an equivalent observation from its
+    # own pass so we don't run two full compression walks for the
+    # same request.  The finalizer duck-types against the
+    # ``CompressionObservation`` shape, so the safe-mode adapter
+    # exposed by ``build_safe_mode_observation`` covers the same
+    # fields without requiring an independent analyzer call.
     compression_observation: Any = None
-    if effective_compression_policy is not None and getattr(
-        effective_compression_policy, "enabled", False
+    if (
+        effective_compression_policy is not None
+        and getattr(effective_compression_policy, "enabled", False)
+        and getattr(effective_compression_policy, "mode", None) == "observe"
     ):
-        try:
-            from eggpool.transcoder.compression import analyze_compression
+        with _span(span_recorder, SPAN_COMPRESSION_ANALYZE):
+            try:
+                from eggpool.transcoder.compression import analyze_compression
 
-            compression_observation = analyze_compression(
-                segmentation_result,
-                policy=effective_compression_policy,
-            )
-        except Exception:  # noqa: BLE001
-            logger.debug(
-                "compression_analysis_failed",
-                extra={"proxy_request_id": request_id},
-                exc_info=True,
-            )
-            compression_observation = None
+                compression_observation = analyze_compression(
+                    segmentation_result,
+                    policy=effective_compression_policy,
+                )
+            except Exception:  # noqa: BLE001
+                logger.debug(
+                    "compression_analysis_failed",
+                    extra={"proxy_request_id": request_id},
+                    exc_info=True,
+                )
+                compression_observation = None
 
     # Phase 5: run the safe-mode deterministic compressor.  The
     # applier mutates only eligible volatile_suffix segments on a
@@ -552,22 +593,36 @@ async def handle_proxy_request(
         and getattr(effective_compression_policy, "mode", None) == "safe"
         and segmentation_result is not None
     ):
-        try:
-            from eggpool.transcoder.compression.apply import apply_safe_compression
+        with _span(span_recorder, SPAN_COMPRESSION_APPLY):
+            try:
+                from eggpool.transcoder.compression.apply import (
+                    apply_safe_compression,
+                    build_safe_mode_observation,
+                )
 
-            compression_result = apply_safe_compression(
-                payload=payload,
-                segmentation=segmentation_result,
-                policy=effective_compression_policy,
-                text_hints=None,  # production is content-private
-            )
-        except Exception:  # noqa: BLE001
-            logger.debug(
-                "compression_apply_failed",
-                extra={"proxy_request_id": request_id},
-                exc_info=True,
-            )
-            compression_result = None
+                compression_result = apply_safe_compression(
+                    payload=payload,
+                    segmentation=segmentation_result,
+                    policy=effective_compression_policy,
+                    text_hints=None,  # production is content-private
+                )
+                # Derive the observation from a single safe-mode pass
+                # rather than running the analyzer separately (Phase 2
+                # dispatch optimization).  ``compression_observation``
+                # stays ``None`` when the applier fails so we don't
+                # synthesize an observation that disagrees with the
+                # request path's actual behavior.
+                compression_observation = build_safe_mode_observation(
+                    compression_result
+                )
+            except Exception:  # noqa: BLE001
+                logger.debug(
+                    "compression_apply_failed",
+                    extra={"proxy_request_id": request_id},
+                    exc_info=True,
+                )
+                compression_result = None
+                compression_observation = None
 
     # Determine the input payload for model rewrite: when Phase 5
     # compression applied transforms, use the mutated payload;
@@ -583,28 +638,29 @@ async def handle_proxy_request(
     # the provider-bound payload with full upstream protocol context.
     synthetic_cache_result: Any = None
 
-    context = ProxyRequestContext(
-        request_id=request_id,
-        protocol=endpoint.protocol,
-        model_id=model_id,
-        streaming=is_stream,
-        original_body=body,
-        incoming_headers=dict(request.headers),
-        started_at=time.time(),
-        provider_id=provider_id,
-        client_ip=get_client_ip(request),
-        upstream_body=_rewrite_upstream_model(payload_for_rewrite, model_id),
-        upstream_protocol=endpoint.protocol,
-        transcode_required=False,
-        transcode_context=transcode_ctx,
-        segmentation=segmentation_result,
-        segmentation_not_collected=segmentation_not_collected,
-        compression_observation=compression_observation,
-        compression_result=compression_result,
-        resolved_compression_policy=resolved_compression_policy,
-        synthetic_cache_result=synthetic_cache_result,
-        prepared_transcode=prepared_transcode,
-    )
+    with _span(span_recorder, SPAN_CONTEXT_BUILD):
+        context = ProxyRequestContext(
+            request_id=request_id,
+            protocol=endpoint.protocol,
+            model_id=model_id,
+            streaming=is_stream,
+            original_body=body,
+            incoming_headers=dict(request.headers),
+            started_at=time.time(),
+            provider_id=provider_id,
+            client_ip=get_client_ip(request),
+            upstream_body=_rewrite_upstream_model(payload_for_rewrite, model_id),
+            upstream_protocol=endpoint.protocol,
+            transcode_required=False,
+            transcode_context=transcode_ctx,
+            segmentation=segmentation_result,
+            segmentation_not_collected=segmentation_not_collected,
+            compression_observation=compression_observation,
+            compression_result=compression_result,
+            resolved_compression_policy=resolved_compression_policy,
+            synthetic_cache_result=synthetic_cache_result,
+            prepared_transcode=prepared_transcode,
+        )
 
     if segmentation_result is not None:
         logger.debug(
@@ -704,6 +760,31 @@ async def handle_proxy_request(
         )
 
     return render_proxy_response(result)
+
+
+@contextlib.contextmanager
+def _span(
+    recorder: DispatchSpanRecorder | None,
+    name: str,
+) -> typing.Generator[None, None, None]:
+    """No-op context manager when no recorder is registered.
+
+    Keeps the hot path branch-free so callers can wrap suspect
+    regions without measuring span scaffolding cost; the cost of a
+    missing recorder collapses to ``None.__enter__`` which is a
+    no-op.
+    """
+    if recorder is None:
+        yield
+        return
+    timer = recorder.measure(name)
+    timer.__enter__()
+    try:
+        yield
+    except BaseException:
+        timer.__exit__(*sys.exc_info())
+        raise
+    timer.__exit__(None, None, None)
 
 
 def _rewrite_upstream_model(

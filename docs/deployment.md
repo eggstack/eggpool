@@ -370,6 +370,34 @@ mode = "all"
 include_score_components = true
 ```
 
+### Low-power routing trace defaults
+
+The `[routing.trace]` section controls per-request routing decision
+persistence. Full traces write a `routing_decisions` row for every
+attempt, which increases SQLite write volume on low-power hardware.
+
+The balanced and minimum-footprint profiles use conservative defaults:
+
+```toml
+[routing.trace]
+mode = "sampled"
+sample_rate = 0.05
+include_score_components = false
+```
+
+| Mode | Behavior |
+|------|----------|
+| `"off"` | No routing decision rows are written. Lowest write pressure. |
+| `"sampled"` | Rows are written for a fraction of requests (controlled by `sample_rate`). The default 0.05 writes roughly 1 in 20 traces. |
+| `"all"` | Rows are written for every request. Use for diagnostics or debugging only. |
+
+`include_score_components` adds per-account score breakdown JSON to
+each trace row. Keep it `false` on low-power installs to reduce row
+size.
+
+To temporarily enable full traces for diagnostics, set `mode = "all"`
+and restart. Revert to `"sampled"` or `"off"` when done.
+
 ### Symptoms and Knobs
 
 | Symptom | Likely cause | Knob to adjust |

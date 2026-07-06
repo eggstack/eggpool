@@ -597,7 +597,9 @@ def test_failed_fallback_on_prefix_hash_mismatch() -> None:
     """Different pre/post prefix hashes trigger fail-closed."""
     from unittest.mock import patch
 
-    payload = {"messages": [{"role": "tool", "content": "hello"}]}
+    repeated_line = "A" * 80
+    tool_content = (repeated_line + "\n") * 50 + "DONE\n"
+    payload = {"messages": [{"role": "tool", "content": tool_content}]}
     call_count = 0
 
     def _fake_content_hash(
@@ -616,7 +618,9 @@ def test_failed_fallback_on_prefix_hash_mismatch() -> None:
     ):
         result = apply_safe_compression(
             payload,
-            _segmentation([_vol_seg(byte_length=5, estimated_tokens=2)]),
+            _segmentation([
+                _vol_seg(byte_length=len(tool_content), estimated_tokens=500)
+            ]),
             policy=_enabled_safe_policy(),
         )
     assert result.failed_fallback is True

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
 import time
+import typing
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
@@ -81,6 +83,13 @@ from eggpool.request.finalizer import (
 from eggpool.request.limits import estimate_reservation_tokens
 from eggpool.retry.classification import RetryCategory, RetryClassifier
 from eggpool.routing.router import RoutingDecisionTrace, RoutingExclusion
+from eggpool.runtime_dispatch import (
+    SPAN_RESERVATION_ESTIMATE,
+    SPAN_ROUTING_PLAN,
+    SPAN_THINKING_CLASSIFICATION,
+    DispatchSpanRecorder,
+    DispatchSpanTimer,
+)
 from eggpool.security.redaction import redact_error_detail
 from eggpool.transcoder.context import TranscodeContext
 from eggpool.transcoder.protocol import BodyTranscoder, select_transcoder
@@ -148,6 +157,26 @@ def _prepare_error_detail(value: object | None, persist: bool) -> str | None:
 def _serialize_thinking_trace(trace: dict[str, Any] | None) -> str | None:
     """Serialize thinking trace to JSON for persistence."""
     return json.dumps(trace) if trace else None
+
+
+@contextlib.contextmanager
+def _maybe_span(
+    recorder: DispatchSpanRecorder | None,
+    name: str,
+) -> typing.Generator[None, None, None]:
+    """Record a named span only when ``recorder`` is present.
+
+    Falls back to a no-op context manager when the recorder is missing
+    so callers can wrap suspect regions unconditionally without
+    measuring span scaffolding cost.  Errors inside the body are
+    propagated so the lock / transaction semantics are unaffected.
+    """
+    if recorder is None:
+        yield
+        return
+    timer: DispatchSpanTimer = recorder.measure(name)
+    with timer:
+        yield
 
 
 def resolve_selected_provider_kind(
@@ -397,85 +426,19 @@ class ProxyRequestContext:
     transcode_required: bool = False
     transcode_context: TranscodeContext | None = None
     thinking_trace: dict[str, Any] | None = None
-    # Phase 2: canonical request segmentation summary.  Computed
-    # observationally in :mod:`eggpool.api.proxy_request` immediately
-    # after the body is parsed and read by
-    # :meth:`RequestFinalizer.finalize` so the finalizer can persist
-    # the hashes / token estimates / JSON summary to the requests
-    # table.  ``None`` for callers that did not run the segmenter
-    # (legacy / error paths).
     segmentation: Any | None = None
-    # When ``True`` the segmentation phase was intentionally skipped
-    # (no consumer needed the output).  The finalizer stores
-    # ``segmentation_status = 'not_collected'`` instead of the
-    # default ``'empty_request'`` so the dashboard can distinguish
-    # "segmentation was not run" from "segmentation ran on an empty
-    # request".
     segmentation_not_collected: bool = False
-    # Phase 4: observe-mode compression observation.  Computed
-    # observationally in :mod:`eggpool.api.proxy_request` when
-    # ``[compression] enabled = true``; the finalizer reads it
-    # via ``FinalizationData.compression_observation`` to persist
-    # the per-request candidate counts, eligible vs suppressed
-    # token totals, analyzer latency, warning list, reason-code
-    # tallies, and a compact JSON summary.  ``None`` when the
-    # operator has not enabled compression, when the request was
-    # not segmented, or on error paths.
     compression_observation: Any | None = None
-    # Phase 5: safe-suffix compression result.  Computed in
-    # :mod:`eggpool.api.proxy_request` when ``[compression] enabled
-    # = true`` and ``[compression] mode = 'safe'``; the finalizer
-    # reads it via ``FinalizationData.compression_result`` to persist
-    # the per-request applied flag, transform counts, token savings,
-    # stable-prefix hash comparison, warnings, and a compact JSON
-    # summary.  ``None`` when compression is disabled or on error
-    # paths.
     compression_result: Any | None = None
-    # Phase 6: resolved compression policy.  Computed in
-    # :mod:`eggpool.api.proxy_request` via
-    # :func:`eggpool.transcoder.compression.resolve_compression_policy`
-    # using the global ``[compression]`` config plus any matching
-    # ``[[compression.policies]]`` entries.  Carries the resolved
-    # :class:`CompressionConfig`, the audit name / source, the
-    # list of matched override names (file order), and any
-    # resolution warnings.  The finalizer reads it via
-    # ``FinalizationData.resolved_compression_policy`` to persist
-    # the ``compression_policy_name`` / ``compression_policy_source``
-    # / ``compression_policy_warnings_json`` columns.  ``None`` when
-    # compression is disabled, when the resolver import / call
-    # failed, or on legacy / error paths.
     resolved_compression_policy: Any | None = None
-    # Phase 9: synthetic provider cache-controls result.  Computed
-    # in :mod:`eggpool.api.proxy_request` via
-    # :func:`eggpool.transcoder.cache_synthesis.run_synthetic_cache_synthesis`
-    # after segmentation and compression policy resolution but
-    # before upstream dispatch.  Carries the selector plan (status,
-    # dry_run, candidate/applied/warning counts, audit policy
-    # name/source), the mutated payload when apply mode ran, and
-    # the synthetic boundary annotations recorded against the
-    # :class:`CacheBoundaryTracker`.  The finalizer reads it via
-    # ``FinalizationData.synthetic_cache_result`` to persist the
-    # ``synthetic_cache_*`` columns.  ``None`` when synthetic cache
-    # controls are disabled, when the resolver import / call
-    # failed, or on legacy / error paths.  Observational only:
-    # never feeds into the :class:`QuotaFairScorer`.
     synthetic_cache_result: Any | None = None
-    # Post-route segmentation of the provider-bound payload used
-    # exclusively by Phase 9 synthetic cache synthesis.  Computed in
-    # ``_apply_synthetic_cache_controls`` after provider selection and
-    # transcoding so the selector sees Anthropic-style paths even when
-    # the client sent an OpenAI payload.  ``None`` before post-route
-    # processing; the original ``segmentation`` field (client-side)
-    # is never replaced.
     synthetic_cache_segmentation: Any | None = None
-    # Cached preflight translation result.  Produced by
-    # :func:`eggpool.api.proxy_request._prepare_transcode_preflight`
-    # when the client protocol differs from the inferred upstream
-    # protocol.  The coordinator reuses this result instead of calling
-    # :meth:`encode_request` a second time, avoiding duplicate
-    # translation work.  ``None`` when no preflight ran (native
-    # request or transcoding disabled).
     prepared_transcode: PreparedTranscode | None = None
+    # Phase 4.4: precomputed values computed once in handle_proxy_request()
+    # so _select_and_persist_attempt() does not reparse original_body.
+    estimated_reservation_tokens: int | None = None
+    thinking_requirement: Any | None = None  # ThinkingRequestRequirement | None
+    estimated_context_input_tokens: int | None = None
 
     def __post_init__(self) -> None:
         if not self.upstream_protocol:
@@ -562,6 +525,7 @@ class RequestCoordinator:
         routing_decision_repo: RoutingDecisionRepository | None = None,
         metrics_coalescer: Any | None = None,  # noqa: ANN401
         dispatch_overhead_recorder: Any | None = None,  # noqa: ANN401
+        dispatch_span_recorder: Any | None = None,  # noqa: ANN401
         transcoder_policy: TranscoderPolicy | None = None,
         cache_config: Any | None = None,  # noqa: ANN401
         compression_tuning_registry: Any | None = None,  # noqa: ANN401
@@ -599,6 +563,7 @@ class RequestCoordinator:
         )
         self._metrics_coalescer = metrics_coalescer
         self._dispatch_overhead_recorder = dispatch_overhead_recorder
+        self._dispatch_span_recorder = dispatch_span_recorder
         self._transcoder_policy = transcoder_policy
         self._cache_config = cache_config
         self._compression_tuning_registry = compression_tuning_registry
@@ -1173,47 +1138,65 @@ class RequestCoordinator:
                 # 0. Classify thinking requirement from request body
                 from eggpool.catalog.capabilities import classify_thinking_request
 
-                body_dict: dict[str, object] = {}
-                if context.original_body:
-                    try:
-                        parsed: object = json.loads(context.original_body)
-                        if isinstance(parsed, dict):
-                            body_dict = parsed  # type: ignore[assignment]
-                    except (json.JSONDecodeError, ValueError):
-                        pass
-                thinking_req = classify_thinking_request(body_dict, context.protocol)
-                # Record thinking observability trace
-                if thinking_req.required:
-                    _thinking_counter = get_counter()
-                    await _thinking_counter.increment_requested(
-                        client_protocol=thinking_req.client_protocol,
-                    )
-                    context.thinking_trace = {
-                        "requested": True,
-                        "client_protocol": thinking_req.client_protocol,
-                        "request_fields": list(thinking_req.fields),
-                        "requested_effort": thinking_req.requested_effort,
-                        "resolved_budget_tokens": None,
-                        "budget_clamped": False,
-                        "capability_status": None,
-                        "capability_source": None,
-                        "upstream_protocol": None,
-                        "upstream_fields": [],
-                        "decision": "none",
-                    }
-                _capability_policy: dict[str, str] | None = None
-                if self._transcoder_policy is not None and hasattr(
-                    self._transcoder_policy, "capability_policy"
+                with _maybe_span(
+                    self._dispatch_span_recorder, SPAN_THINKING_CLASSIFICATION
                 ):
-                    cp = self._transcoder_policy.capability_policy
-                    _capability_policy = {
-                        "unsupported_thinking": cp.unsupported_thinking,
-                        "unknown_thinking": cp.unknown_thinking,
-                        "mixed_collapsed_thinking": cp.mixed_collapsed_thinking,
-                    }
+                    if context.thinking_requirement is not None:
+                        thinking_req = context.thinking_requirement
+                    else:
+                        body_dict: dict[str, object] = {}
+                        if context.original_body:
+                            try:
+                                parsed: object = json.loads(context.original_body)
+                                if isinstance(parsed, dict):
+                                    body_dict = parsed  # type: ignore[assignment]
+                            except (json.JSONDecodeError, ValueError):
+                                pass
+                        thinking_req = classify_thinking_request(
+                            body_dict, context.protocol
+                        )
+                        context.thinking_requirement = thinking_req
+                    # Record thinking observability trace
+                    if thinking_req.required:
+                        _thinking_counter = get_counter()
+                        await _thinking_counter.increment_requested(
+                            client_protocol=thinking_req.client_protocol,
+                        )
+                        context.thinking_trace = {
+                            "requested": True,
+                            "client_protocol": thinking_req.client_protocol,
+                            "request_fields": list(thinking_req.fields),
+                            "requested_effort": thinking_req.requested_effort,
+                            "resolved_budget_tokens": None,
+                            "budget_clamped": False,
+                            "capability_status": None,
+                            "capability_source": None,
+                            "upstream_protocol": None,
+                            "upstream_fields": [],
+                            "decision": "none",
+                        }
+                    _capability_policy: dict[str, str] | None = None
+                    if self._transcoder_policy is not None and hasattr(
+                        self._transcoder_policy, "capability_policy"
+                    ):
+                        cp = self._transcoder_policy.capability_policy
+                        _capability_policy = {
+                            "unsupported_thinking": cp.unsupported_thinking,
+                            "unknown_thinking": cp.unknown_thinking,
+                            "mixed_collapsed_thinking": cp.mixed_collapsed_thinking,
+                        }
 
                 # 1. Calculate projected request tokens once
-                estimated_tokens = estimate_reservation_tokens(context.original_body)
+                with _maybe_span(
+                    self._dispatch_span_recorder, SPAN_RESERVATION_ESTIMATE
+                ):
+                    if context.estimated_reservation_tokens is not None:
+                        estimated_tokens = context.estimated_reservation_tokens
+                    else:
+                        estimated_tokens = estimate_reservation_tokens(
+                            context.original_body
+                        )
+                        context.estimated_reservation_tokens = estimated_tokens
 
                 # 2. Build routing plan: eligibility + scoring + fairness
                 #    in a single pass.  This eliminates the former
@@ -1224,23 +1207,24 @@ class RequestCoordinator:
                     if context.attempted_accounts
                     else set()
                 )
-                plan = await self._router.build_routing_plan(
-                    context.model_id,
-                    exclude_accounts=exclude if exclude else None,
-                    provider_id=context.provider_id,
-                    protocol=context.upstream_protocol,
-                    transcode_eligibility=(
-                        {context.protocol, context.upstream_protocol}
-                        if context.transcode_required
-                        else None
-                    ),
-                    client_protocol=context.protocol,
-                    thinking_requirement=thinking_req
-                    if thinking_req.required
-                    else None,
-                    capability_policy=_capability_policy,
-                    estimated_tokens=int(estimated_tokens),
-                )
+                with _maybe_span(self._dispatch_span_recorder, SPAN_ROUTING_PLAN):
+                    plan = await self._router.build_routing_plan(
+                        context.model_id,
+                        exclude_accounts=exclude if exclude else None,
+                        provider_id=context.provider_id,
+                        protocol=context.upstream_protocol,
+                        transcode_eligibility=(
+                            {context.protocol, context.upstream_protocol}
+                            if context.transcode_required
+                            else None
+                        ),
+                        client_protocol=context.protocol,
+                        thinking_requirement=thinking_req
+                        if thinking_req.required
+                        else None,
+                        capability_policy=_capability_policy,
+                        estimated_tokens=int(estimated_tokens),
+                    )
                 eligible_account_names = plan.eligible_names
                 ranked_candidates = plan.ranked_candidates
 

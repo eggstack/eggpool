@@ -68,7 +68,10 @@ from eggpool.providers.outbound import OutboundClientManager, default_network_ba
 from eggpool.request.coordinator import RequestCoordinator
 from eggpool.routing.config import routing_stale_after_s
 from eggpool.routing.router import Router
-from eggpool.runtime_dispatch import DispatchOverheadRecorder
+from eggpool.runtime_dispatch import (
+    DispatchOverheadRecorder,
+    DispatchSpanRecorder,
+)
 from eggpool.stats import StatsService
 
 if TYPE_CHECKING:
@@ -981,6 +984,14 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     dispatch_overhead_recorder = DispatchOverheadRecorder(window_size=100)
     app.state.dispatch_overhead_recorder = dispatch_overhead_recorder
 
+    # 18c.1. Dispatch-span recorder for fine-grained per-region latency
+    # (Phase 1 hot-path dispatch optimization).  Tracks named spans
+    # such as ``body_read``, ``json_parse``, ``routing_plan``,
+    # ``selection_lock_wait`` and ``compression_apply`` so operators
+    # can identify dispatch hotspots without re-reading source code.
+    dispatch_span_recorder = DispatchSpanRecorder(window_size=200)
+    app.state.dispatch_span_recorder = dispatch_span_recorder
+
     # 18d. Request coordinator
     coordinator = RequestCoordinator(
         registry=registry,
@@ -1002,6 +1013,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         account_backoff_repo=account_backoff_repo,
         metrics_coalescer=metrics_coalescer,
         dispatch_overhead_recorder=dispatch_overhead_recorder,
+        dispatch_span_recorder=dispatch_span_recorder,
         transcoder_policy=config.transcoder,
         cache_config=config.cache,
         compression_tuning_registry=app.state.compression_tuning_registry,
@@ -1049,6 +1061,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         dns_backend=dns_backend,
         provider_client_pool=client_pool,
         dispatch_overhead_recorder=dispatch_overhead_recorder,
+        dispatch_span_recorder=dispatch_span_recorder,
         model_info=model_info,
         dashboard_telemetry=app.state.dashboard_telemetry,
     )

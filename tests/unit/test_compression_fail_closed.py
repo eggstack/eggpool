@@ -38,12 +38,14 @@ def _safe_policy(**overrides: object) -> object:
 
 def _make_payload() -> dict[str, object]:
     """Build an OpenAI payload with a system message (stable prefix)
-    and a tool message (volatile suffix)."""
+    and a large tool message (volatile suffix) where fold_repeated_lines
+    produces net savings despite marker overhead."""
+    repeated_line = "A" * 80
     return {
         "model": "gpt-4",
         "messages": [
             {"role": "system", "content": "You are helpful."},
-            {"role": "tool", "content": "ERR\n" * 10 + "OK\n"},
+            {"role": "tool", "content": (repeated_line + "\n") * 50 + "DONE\n"},
         ],
     }
 

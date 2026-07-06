@@ -117,6 +117,7 @@ class RuntimeMetricsService:
         dns_backend: Any | None = None,  # noqa: ANN401
         provider_client_pool: Any | None = None,  # noqa: ANN401
         dispatch_overhead_recorder: Any | None = None,  # noqa: ANN401
+        dispatch_span_recorder: Any | None = None,  # noqa: ANN401
         model_info: Any | None = None,  # noqa: ANN401
         dashboard_telemetry: Any | None = None,  # noqa: ANN401
     ) -> None:
@@ -134,6 +135,7 @@ class RuntimeMetricsService:
         self._dns_backend = dns_backend
         self._provider_client_pool = provider_client_pool
         self._dispatch_overhead_recorder = dispatch_overhead_recorder
+        self._dispatch_span_recorder = dispatch_span_recorder
         self._model_info = model_info
         self._dashboard_telemetry = dashboard_telemetry
 
@@ -164,6 +166,12 @@ class RuntimeMetricsService:
 
         # Dispatch-overhead recorder (in-memory rolling window)
         result["dispatch_overhead"] = self._snapshot_dispatch_overhead(probe_errors)
+
+        # Phase 6 fine-grained dispatch spans (Phase 1 hot-path optimization).
+        # Per-span latency (avg / p50 / p95 / p99) for the named proxy
+        # and coordinator regions so operators can read where time is
+        # spent at a glance without re-reading source.
+        result["dispatch_spans"] = self._snapshot_dispatch_spans(probe_errors)
 
         # Background tasks
         background_tasks = self._snapshot_background_tasks(probe_errors)
@@ -720,6 +728,47 @@ class RuntimeMetricsService:
         except Exception as exc:
             _append_probe_error(
                 probe_errors, f"Dispatch overhead snapshot failed: {exc}"
+            )
+            return {"error": str(exc)}
+
+    def _snapshot_dispatch_spans(self, probe_errors: list[str]) -> dict[str, Any]:
+        """Best-effort snapshot of the named-span dispatch recorder.
+
+        Always returns the full key list (so dashboard consumers can rely
+        on every span key being represented) even when no samples were
+        recorded yet for a given span.  When the recorder is missing the
+        whole section returns an empty list so older callers can still
+        probe ``response["dispatch_spans"]``.
+        """
+        try:
+            from eggpool.runtime_dispatch import ALL_SPAN_KEYS
+        except Exception:  # noqa: BLE001
+            return {"window_size": 200, "spans": []}
+        if self._dispatch_span_recorder is None:
+            return {
+                "window_size": 200,
+                "spans": [
+                    {
+                        "span": key,
+                        "window_size": 200,
+                        "sample_count": 0,
+                        "avg_ms": None,
+                        "min_ms": None,
+                        "max_ms": None,
+                        "p50_ms": None,
+                        "p95_ms": None,
+                        "p99_ms": None,
+                    }
+                    for key in ALL_SPAN_KEYS
+                ],
+            }
+        try:
+            return self._dispatch_span_recorder.snapshot_for_spans(
+                list(ALL_SPAN_KEYS)
+            )
+        except Exception as exc:
+            _append_probe_error(
+                probe_errors, f"Dispatch span snapshot failed: {exc}"
             )
             return {"error": str(exc)}
 

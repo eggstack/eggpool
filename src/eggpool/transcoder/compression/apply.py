@@ -30,7 +30,6 @@ Key design choices:
 
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
 import logging
@@ -146,6 +145,103 @@ _NO_OP_RESULT: CompressionResult = CompressionResult(
 )
 
 
+@dataclass(frozen=True, slots=True)
+class SafeModeObservation:
+    """Adapter that exposes a safe-applied run as a CompressionObservation.
+
+    The dashboard / finalizer pair duck-types against the original
+    ``CompressionObservation`` shape; we don't need to instantiate one
+    because the finalizer only reads documented attributes.  This
+    class is what :func:`build_safe_mode_observation` returns when the
+    safe-mode applier is run as the single observation source.
+    """
+
+    mode: str
+    candidate_count: int
+    eligible_candidate_count: int
+    suppressed_candidate_count: int
+    estimated_original_tokens: int | None
+    estimated_compressed_tokens: int | None
+    estimated_savings_tokens: int | None
+    analyzer_latency_ms: float
+    warnings: tuple[str, ...]
+    reason_code_counts: dict[str, int]
+    transform_counts: dict[str, int]
+    candidates: tuple[()]
+
+    def to_summary_json(self) -> str:
+        """Compact JSON summary for storage and dashboard drill-in."""
+        payload = {
+            "mode": self.mode,
+            "candidate_count": self.candidate_count,
+            "eligible_candidate_count": self.eligible_candidate_count,
+            "suppressed_candidate_count": self.suppressed_candidate_count,
+            "estimated_original_tokens": self.estimated_original_tokens,
+            "estimated_compressed_tokens": self.estimated_compressed_tokens,
+            "estimated_savings_tokens": self.estimated_savings_tokens,
+            "analyzer_latency_ms": self.analyzer_latency_ms,
+            "warnings": list(self.warnings),
+            "reason_code_counts": dict(self.reason_code_counts),
+            "transform_counts": dict(self.transform_counts),
+            "candidates": [],
+            "source": "safe_apply",
+        }
+        return json.dumps(payload, sort_keys=True, default=str, ensure_ascii=False)
+
+
+def build_safe_mode_observation(result: CompressionResult) -> SafeModeObservation:
+    """Build a :class:`SafeModeObservation` from an applied :class:`CompressionResult`.
+
+    The finalizer and dashboard already duck-type against the
+    observe-mode ``CompressionObservation`` shape, so this adapter
+    fills the same fields from a single safe-mode run.  When no
+    transforms were applied the adapter reports zero eligible
+    candidates but preserves the suppression / reason-code counts
+    so operators can distinguish "no transforms" from "transforms
+    ran and applied".
+    """
+    if not result.applied:
+        return SafeModeObservation(
+            mode="safe",
+            candidate_count=0,
+            eligible_candidate_count=0,
+            suppressed_candidate_count=0,
+            estimated_original_tokens=None,
+            estimated_compressed_tokens=None,
+            estimated_savings_tokens=None,
+            analyzer_latency_ms=result.latency_ms,
+            warnings=result.warnings,
+            reason_code_counts=dict(result.reason_code_counts),
+            transform_counts=dict(result.transforms_by_reason),
+            candidates=(),
+        )
+    return SafeModeObservation(
+        mode="safe",
+        candidate_count=result.transform_count,
+        eligible_candidate_count=result.transform_count,
+        suppressed_candidate_count=0,
+        estimated_original_tokens=result.original_tokens or None,
+        estimated_compressed_tokens=result.compressed_tokens or None,
+        estimated_savings_tokens=result.savings_tokens or None,
+        analyzer_latency_ms=result.latency_ms,
+        warnings=result.warnings,
+        reason_code_counts=dict(result.reason_code_counts),
+        transform_counts=dict(result.transforms_by_reason),
+        candidates=(),
+    )
+
+
+__all__ = [  # noqa: F822  (extended below)
+    "CompressionResult",
+    "REASON_PREFIX_HASH_MISMATCH",
+    "SafeModeObservation",
+    "apply_safe_compression",
+    "build_safe_mode_observation",
+    "result_to_summary",
+]
+
+
+
 def _noop_result(payload: Any) -> CompressionResult:
     """Return a no-op result with the original payload."""
     return CompressionResult(
@@ -223,42 +319,6 @@ def _collect_text(payload: Any, content_path: tuple[Any, ...]) -> str | None:
         return None
     except (KeyError, IndexError, TypeError):
         return None
-
-
-def _replace_path(
-    payload: Any,
-    content_path: tuple[Any, ...],
-    new_text: str,
-) -> bool:
-    """Walk into payload using content_path; replace the leaf string with new_text.
-
-    Returns True if mutation succeeded, False if path doesn't resolve
-    to a string.  Supports dict keys and list indices; raises nothing.
-    """
-    try:
-        if not content_path:
-            return False
-        parent: Any = payload
-        for key in content_path[:-1]:
-            if isinstance(parent, (Mapping, list)):
-                parent = parent[key]  # type: ignore[reportUnknownVariableType]
-            else:
-                return False
-        last_key = content_path[-1]
-        if isinstance(parent, Mapping):
-            parent_map = cast("dict[Any, Any]", parent)
-            if not isinstance(parent_map.get(last_key), str):
-                return False
-            parent_map[last_key] = new_text
-            return True
-        if isinstance(parent, list):
-            if not isinstance(parent[last_key], str):
-                return False
-            parent[last_key] = new_text
-            return True
-        return False
-    except (KeyError, IndexError, TypeError):
-        return False
 
 
 def _within_budget(deadline: float | None) -> bool:
@@ -750,6 +810,86 @@ def apply_safe_compression(
         )
 
 
+@dataclass(frozen=True, slots=True)
+class _PlannedReplacement:
+    """A single planned mutation from the discovery stage."""
+
+    content_path: tuple[Any, ...]
+    new_text: str
+    orig_tokens: int
+    comp_tokens: int
+    reason_code: str
+    segment_id: str
+
+
+def _copy_with_replacements(
+    payload: Any,
+    replacements: list[_PlannedReplacement],
+) -> Any:
+    """Path-level copy-on-write: copy only dicts/lists on paths to mutated leaves.
+
+    Unchanged subtrees are preserved by reference.  Multiple replacements
+    sharing path prefixes copy each prefix dict/list exactly once.
+    """
+    if not replacements:
+        return payload
+
+    path_to_replacement: dict[tuple[Any, ...], _PlannedReplacement] = {}
+    for repl in replacements:
+        path_to_replacement[repl.content_path] = repl
+
+    sorted_paths = sorted(path_to_replacement.keys(), key=len)
+    copied: dict[int, Any] = {}
+
+    def _shallow_copy(node: Any) -> Any:
+        node_id = id(node)
+        if node_id in copied:
+            return copied[node_id]
+        if isinstance(node, Mapping):
+            result_node: Any = dict(node)  # type: ignore[assignment]
+        elif isinstance(node, list):
+            result_node = list(node)  # type: ignore[assignment]
+        else:
+            return node
+        copied[node_id] = result_node
+        return result_node
+
+    result: Any = payload
+    for path in sorted_paths:
+        if not path:
+            continue
+        current: Any = result
+        ancestors: list[Any] = []
+        for key in path[:-1]:
+            ancestors.append(current)
+            if isinstance(current, (Mapping, list)):
+                current = _shallow_copy(current[key])
+
+        last_key = path[-1]
+        if isinstance(current, (Mapping, list)):
+            mutable_current: dict[str, Any] = current  # type: ignore[assignment]
+            mutable_current[last_key] = path_to_replacement[path].new_text
+
+        for i in range(len(ancestors) - 1, -1, -1):
+            parent = _shallow_copy(ancestors[i])
+            if isinstance(parent, (Mapping, list)):
+                mutable_parent: dict[str, Any] = parent  # type: ignore[assignment]
+                mutable_parent[path[i]] = current
+            current = parent  # pyright: ignore[reportUnknownVariableType]
+
+        if not ancestors:
+            current = _shallow_copy(payload)
+            if isinstance(current, (Mapping, list)):
+                mutable_current2: dict[str, Any] = current  # type: ignore[assignment]
+                mutable_current2[last_key] = path_to_replacement[path].new_text
+            result = current  # pyright: ignore[reportUnknownVariableType]
+        else:
+            result = current  # pyright: ignore[reportUnknownVariableType]
+
+    final_result: Any = result
+    return final_result
+
+
 def _apply_safe_compression_impl(
     payload: Any,
     segmentation: SegmentationResult,
@@ -767,20 +907,11 @@ def _apply_safe_compression_impl(
         REASON_LATENCY_BUDGET,
     )
 
-    # Pre-hash stable prefix content from the ORIGINAL payload.  This
-    # is the exact, canonical content hash that drives fail-closed
-    # verification: if the post-mutation hash differs from this one,
-    # we discard the mutated payload and return the original.
     pre_content_hash = stable_prefix_content_hash(
         cast("Mapping[str, Any]", payload),
         segmentation,
     )
-    # The shape hash is a coarse structural descriptor (segment counts,
-    # byte totals, sources).  It is surfaced on the result for
-    # dashboard grouping only; it is NOT used for fail-closed checks.
     pre_shape_hash = segmentation.stable_prefix_hash
-
-    mutated = copy.deepcopy(payload)
 
     all_reason_counts: dict[str, int] = {}
     transforms_by_reason: dict[str, int] = {}
@@ -802,6 +933,8 @@ def _apply_safe_compression_impl(
     def _bump(code: str) -> None:
         all_reason_counts[code] = all_reason_counts.get(code, 0) + 1
 
+    planned: list[_PlannedReplacement] = []
+
     segments = segmentation.all_segments()
     for index, segment in enumerate(segments):
         if not _within_budget(deadline):
@@ -810,6 +943,7 @@ def _apply_safe_compression_impl(
             break
 
         segment_id = _segment_id_for(segment, index)
+        current_text: str | None = _collect_text(payload, segment.content_path)
 
         for transform_name, transform_enabled in transforms_enabled:
             if not _within_budget(deadline):
@@ -828,14 +962,11 @@ def _apply_safe_compression_impl(
                     _bump(suppressed)
                 continue
 
-            # Collect the actual text from the deep-copied payload
-            actual_text = _collect_text(mutated, segment.content_path)
-            if actual_text is None or not actual_text:
+            if current_text is None or not current_text:
                 _bump(REASON_EMPTY_SEGMENT)
                 continue
 
-            # Run the transform
-            result = _run_transform(transform_name, actual_text, segment_id)
+            result = _run_transform(transform_name, current_text, segment_id)
             if result is None:
                 continue
 
@@ -847,7 +978,6 @@ def _apply_safe_compression_impl(
             if savings <= 0:
                 continue
 
-            # Apply threshold checks
             if orig_tokens < policy.min_candidate_tokens:
                 _bump(REASON_BELOW_MIN_CANDIDATE_TOKENS)
                 continue
@@ -855,11 +985,6 @@ def _apply_safe_compression_impl(
                 _bump(REASON_BELOW_MIN_SAVINGS_TOKENS)
                 continue
 
-            # Apply the mutation
-            if not _replace_path(mutated, segment.content_path, new_text):
-                continue
-
-            # Bump reason code for the transform that was applied
             reason_code = _TRANSFORM_REASON.get(transform_name, transform_name)
             _bump(reason_code)
             transforms_by_reason[reason_code] = (
@@ -871,16 +996,49 @@ def _apply_safe_compression_impl(
             total_savings_tokens += savings
             transform_count += 1
 
+            planned.append(
+                _PlannedReplacement(
+                    content_path=segment.content_path,
+                    new_text=new_text,
+                    orig_tokens=orig_tokens,
+                    comp_tokens=comp_tokens,
+                    reason_code=reason_code,
+                    segment_id=segment_id,
+                )
+            )
+            current_text = new_text
+
     elapsed_ms = (time.perf_counter() - start) * 1000.0
 
-    # Post-hash stable prefix content from the MUTATED payload
+    if not planned:
+        return CompressionResult(
+            applied=False,
+            mode="safe",
+            transformed_payload=payload,
+            transform_count=0,
+            transforms_by_reason={},
+            original_tokens=0,
+            compressed_tokens=0,
+            savings_tokens=0,
+            pre_stable_prefix_hash=pre_content_hash,
+            post_stable_prefix_hash=pre_content_hash,
+            stable_prefix_preserved=True,
+            stable_prefix_shape_hash=pre_shape_hash,
+            stable_prefix_content_hash=pre_content_hash,
+            warnings=tuple(warnings),
+            latency_ms=elapsed_ms,
+            reason_code_counts=dict(all_reason_counts),
+            failed_fallback=False,
+        )
+
+    mutated = _copy_with_replacements(payload, planned)
+
     post_content_hash = stable_prefix_content_hash(
         cast("Mapping[str, Any]", mutated),
         segmentation,
     )
     stable_prefix_content_preserved = post_content_hash == pre_content_hash
 
-    # Fail-closed: prefix hash mismatch when static prefix is not allowed
     if not stable_prefix_content_preserved and not policy.compress_static_prefix:
         warnings.append(REASON_PREFIX_HASH_MISMATCH)
         _bump(REASON_PREFIX_HASH_MISMATCH)
@@ -906,6 +1064,27 @@ def _apply_safe_compression_impl(
             latency_ms=elapsed_ms,
             reason_code_counts=dict(all_reason_counts),
             failed_fallback=True,
+        )
+
+    if not planned:
+        return CompressionResult(
+            applied=False,
+            mode="safe",
+            transformed_payload=payload,
+            transform_count=0,
+            transforms_by_reason={},
+            original_tokens=0,
+            compressed_tokens=0,
+            savings_tokens=0,
+            pre_stable_prefix_hash=pre_content_hash,
+            post_stable_prefix_hash=pre_content_hash,
+            stable_prefix_preserved=True,
+            stable_prefix_shape_hash=pre_shape_hash,
+            stable_prefix_content_hash=pre_content_hash,
+            warnings=tuple(warnings),
+            latency_ms=elapsed_ms,
+            reason_code_counts=dict(all_reason_counts),
+            failed_fallback=False,
         )
 
     return CompressionResult(

@@ -78,6 +78,33 @@ are explicitly NOT conflated: missing provider cache counters are not
 cache misses and do not prove the upstream is uncached. EggPool never
 disables provider-side caching.
 
+## Safe-mode single-pass observation
+
+When `mode = "safe"`, the compression pipeline runs a single
+`apply_safe_compression()` pass that derives observation metrics directly
+from the applier. The observe-mode `analyze_compression()` is no longer
+called as a separate pre-apply step. This avoids redundant segment
+walking, duplicate transform eligibility checks, and double
+serialization of the same payload.
+
+The dashboard can distinguish observe mode from safe mode via the
+observation's `mode` and `source` fields:
+
+| Mode | `mode` | `source` |
+|------|--------|----------|
+| Observe-only | `"observe"` | `"analyzer"` |
+| Safe, derived from apply | `"safe"` | `"safe_apply"` |
+
+### Path-level copy-on-write
+
+Safe compression uses path-level copy-on-write instead of deep-copying
+the entire payload. Requests where no transform applies do not copy the
+payload at all -- the original object is forwarded unchanged. When
+transforms do apply, only the dictionaries and lists on the paths to
+mutated leaves are copied; unchanged subtrees are preserved by
+reference. Stable-prefix content hash verification remains exact and
+unchanged.
+
 ## What is experimental
 
 These features ship behind explicit operator opt-in:

@@ -1761,40 +1761,6 @@ def _count_by_kind(
     return counts
 
 
-def _stable_prefix_descriptor(
-    segments: tuple[RequestSegment, ...],
-) -> dict[str, Any]:
-    """Build a content-private descriptor of the stable prefix.
-
-    The descriptor captures only structural information (sources,
-    byte sizes, message indices, content paths) so the resulting
-    stable_prefix_hash is identical for structurally-equivalent
-    stable prefixes — even when the actual prompt text differs in
-    insignificant ways (whitespace, minor wording).
-
-    Note: this descriptor is **not sufficient** to decide whether the
-    provider-visible stable prefix is identical.  Two requests can
-    share this descriptor but differ in actual prompt text, so they
-    would still defeat provider cache locality.  For exact cache
-    equality verification use :func:`stable_prefix_content_hash`.
-    """
-    stable_segments = [s for s in segments if s.kind is SegmentKind.STABLE_PREFIX]
-    return {
-        "segment_count": len(stable_segments),
-        "byte_total": sum(s.byte_length for s in stable_segments),
-        "token_total": sum(s.estimated_tokens or 0 for s in stable_segments),
-        "sources": sorted({s.source.value for s in stable_segments}),
-        "path_signatures": [
-            {
-                "source": s.source.value,
-                "path": [str(p) for p in s.content_path],
-                "message_index": s.message_index,
-            }
-            for s in stable_segments
-        ],
-    }
-
-
 def _build_result(
     payload: Mapping[str, Any],
     *,
@@ -1803,44 +1769,65 @@ def _build_result(
 ) -> SegmentationResult:
     """Aggregate ``segments`` into a :class:`SegmentationResult`."""
     segment_tuple = tuple(segments)
-    counts = _count_by_kind(segment_tuple)
-    stable_bytes = sum(
-        s.byte_length for s in segment_tuple if s.kind is SegmentKind.STABLE_PREFIX
-    )
-    semi_bytes = sum(
-        s.byte_length
-        for s in segment_tuple
-        if s.kind is SegmentKind.SEMI_STABLE_CONTEXT
-    )
-    volatile_bytes = sum(
-        s.byte_length for s in segment_tuple if s.kind is SegmentKind.VOLATILE_SUFFIX
-    )
-    stable_tokens = sum(
-        s.estimated_tokens or 0
-        for s in segment_tuple
-        if s.kind is SegmentKind.STABLE_PREFIX
-    )
-    semi_tokens = sum(
-        s.estimated_tokens or 0
-        for s in segment_tuple
-        if s.kind is SegmentKind.SEMI_STABLE_CONTEXT
-    )
-    volatile_tokens = sum(
-        s.estimated_tokens or 0
-        for s in segment_tuple
-        if s.kind is SegmentKind.VOLATILE_SUFFIX
-    )
+
+    counts: dict[SegmentKind, int] = {
+        SegmentKind.STABLE_PREFIX: 0,
+        SegmentKind.SEMI_STABLE_CONTEXT: 0,
+        SegmentKind.VOLATILE_SUFFIX: 0,
+    }
+    stable_bytes = 0
+    semi_bytes = 0
+    volatile_bytes = 0
+    stable_tokens_acc = 0
+    semi_tokens_acc = 0
+    volatile_tokens_acc = 0
+    cache_control_present = False
+    stable_prefix_source_set: set[str] = set()
+    volatile_source_set: set[str] = set()
+    stable_prefix_path_sigs: list[dict[str, Any]] = []
+
+    for s in segment_tuple:
+        counts[s.kind] += 1
+        tokens = s.estimated_tokens or 0
+        if s.kind is SegmentKind.STABLE_PREFIX:
+            stable_bytes += s.byte_length
+            stable_tokens_acc += tokens
+            stable_prefix_source_set.add(s.source.value)
+            stable_prefix_path_sigs.append(
+                {
+                    "source": s.source.value,
+                    "path": [str(p) for p in s.content_path],
+                    "message_index": s.message_index,
+                }
+            )
+        elif s.kind is SegmentKind.SEMI_STABLE_CONTEXT:
+            semi_bytes += s.byte_length
+            semi_tokens_acc += tokens
+        else:
+            volatile_bytes += s.byte_length
+            volatile_tokens_acc += tokens
+            volatile_source_set.add(s.source.value)
+        if s.source is SegmentSource.CACHE_CONTROL:
+            cache_control_present = True
+
     status = (
         SegmentationStatus.SEGMENTED
         if segment_tuple
         else SegmentationStatus.EMPTY_REQUEST
     )
+
+    stable_prefix_descriptor: dict[str, Any] = {
+        "segment_count": counts[SegmentKind.STABLE_PREFIX],
+        "byte_total": stable_bytes,
+        "token_total": stable_tokens_acc,
+        "sources": sorted(stable_prefix_source_set),
+        "path_signatures": stable_prefix_path_sigs,
+    }
+    stable_prefix_hash = _hash_payload(stable_prefix_descriptor)
+
     shape = _shape_descriptor(payload, protocol=protocol, segments=segment_tuple)
     shape_hash = _hash_payload(shape)
-    stable_prefix_hash = _hash_payload(_stable_prefix_descriptor(segment_tuple))
-    cache_control_present = any(
-        s.source is SegmentSource.CACHE_CONTROL for s in segment_tuple
-    )
+
     return SegmentationResult(
         status=status,
         segments=segment_tuple,
@@ -1848,9 +1835,9 @@ def _build_result(
         stable_prefix_bytes=stable_bytes,
         semi_stable_bytes=semi_bytes,
         volatile_bytes=volatile_bytes,
-        stable_prefix_estimated_tokens=stable_tokens,
-        semi_stable_estimated_tokens=semi_tokens,
-        volatile_estimated_tokens=volatile_tokens,
+        stable_prefix_estimated_tokens=stable_tokens_acc,
+        semi_stable_estimated_tokens=semi_tokens_acc,
+        volatile_estimated_tokens=volatile_tokens_acc,
         stable_prefix_hash=stable_prefix_hash,
         request_shape_hash=shape_hash,
         cache_control_present=cache_control_present,

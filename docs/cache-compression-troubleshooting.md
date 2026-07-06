@@ -165,6 +165,63 @@ Warning codes:
 | `recommendations[i].reason_codes` | Why this recommendation was issued (see `docs/cache-compression-profiles.md` § Profile 6). |
 | `overrides` | Always empty in `recommend` mode today. `apply_runtime_override()` is reserved for a future lifecycle task. |
 
+## Dispatch timing fields
+
+Fine-grained timing spans are recorded per-request and exposed via
+`/api/stats/runtime` under `dispatch_spans`. Each span reports
+p50/p95/max in milliseconds over a rolling 200-sample window. Spans
+are sparse: if a phase did not run, the span is absent from the
+snapshot.
+
+### Request-path spans
+
+| Span key | What it measures |
+|----------|-----------------|
+| `body_read_ms` | `read_body_limited()` -- reading the raw request body |
+| `json_parse_ms` | `json.loads(body)` -- JSON deserialization |
+| `model_parse_ms` | Provider-suffix parsing and known-provider lookup |
+| `context_limit_ms` | Original body context-limit enforcement |
+| `transcode_preflight_ms` | `_prepare_transcode_preflight()` and translated context-limit checks |
+| `compression_policy_ms` | `resolve_compression_policy()` |
+| `segmentation_ms` | `segment_request()` |
+| `compression_analyze_ms` | `analyze_compression()` (observe mode only) |
+| `compression_apply_ms` | `apply_safe_compression()` (safe mode only) |
+| `context_build_ms` | `ProxyRequestContext` construction and model rewrite |
+| `coordinator_pre_upstream_ms` | Full coordinator pre-upstream work (routing, persistence, dispatch) |
+
+### Coordinator-internal spans
+
+These spans measure work inside `RequestCoordinator._select_and_persist_attempt()`:
+
+| Span key | What it measures |
+|----------|-----------------|
+| `selection_lock_wait_ms` | Time waiting to acquire `_select_lock` |
+| `selection_locked_ms` | Total time while `_select_lock` is held |
+| `thinking_classification_ms` | Thinking/reasoning requirement classification |
+| `reservation_estimate_ms` | Token reservation estimation |
+| `routing_plan_ms` | `Router.build_routing_plan()` |
+| `account_lookup_ms` | Account ID resolution |
+| `db_write_request_ms` | `INSERT INTO requests` |
+| `db_write_reservation_ms` | `INSERT INTO reservations` |
+| `db_write_attempt_ms` | `INSERT INTO request_attempts` |
+| `routing_trace_build_ms` | Routing decision trace construction |
+| `routing_trace_write_ms` | Routing decision trace persistence |
+| `runtime_publication_ms` | Active request count and reservation publication |
+
+### Interpreting compression spans
+
+- **Observe mode**: `compression_analyze_ms` is populated; `compression_apply_ms` is absent or zero. The analyzer walks segments and estimates savings without mutating the payload.
+- **Safe mode, no transform**: `compression_apply_ms` is populated (but typically small). The applier discovers no eligible transforms, skips copy-on-write, and returns the original payload. `compression_analyze_ms` is absent because the separate observe analyzer is not called.
+- **Safe mode, transform applied**: `compression_apply_ms` is populated and includes discovery, path-level copy, and apply stages.
+- **Compression disabled**: neither `compression_analyze_ms` nor `compression_apply_ms` appear. `segmentation_ms` may also be absent if no compression or observability feature requires segmentation.
+
+### Interpreting coordinator spans
+
+- `selection_lock_wait_ms` near zero means no contention. High values indicate concurrent requests serializing on the same lock.
+- `selection_locked_ms` includes all correctness-critical work: final selection, circuit probe, request/reservation/attempt creation, and runtime publication. Pure computation (thinking classification, reservation estimation, routing plan) runs outside the lock.
+- `routing_plan_ms` reflects the cost of `Router.build_routing_plan()`. This runs outside the lock on the precomputed `ProxyRequestContext`.
+- `routing_trace_build_ms` and `routing_trace_write_ms` are absent when `[routing.trace].mode = "off"` or the sample was not selected.
+
 ---
 
 ## Common symptoms
