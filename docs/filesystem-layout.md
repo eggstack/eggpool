@@ -23,7 +23,7 @@ defaults are resolved by `eggpool.deploy_user.default_config_dir`,
 
 ~/.local/state/eggpool/
 ├── eggpool.pid          # Supervisor PID file
-├── eggpool.log          # Daemon log (when run via `serve --daemon`)
+├── eggpool.log          # Daemon log (serve default)
 └── cron.log             # Watchdog cron output (when using `deploy cron`)
 ```
 

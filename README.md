@@ -39,7 +39,7 @@ See [Deployment](docs/deployment.md) for alternative install methods (pipx, manu
 
 | Command | Description |
 |---------|-------------|
-| `eggpool serve` | Start the proxy server (`--daemon` to detach) |
+| `eggpool serve` | Start the proxy server (daemon mode; `--verbose` for foreground) |
 | `eggpool stop` | Stop the running server |
 | `eggpool restart` | Fully restart the server (stop then start) |
 | `eggpool rehash` | Restart to apply config changes |

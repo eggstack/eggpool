@@ -61,14 +61,14 @@ See `architecture/README.md` for the full design overview.
 
 ### Daemon Mode
 
-- `eggpool serve --daemon` is the operator-facing detach helper for personal / SBC deployments. It validates the config, refuses to start a second instance, then spawns a detached child and returns promptly with a short success message pointing at the log file
-- The detached child runs the normal foreground `serve` command (Granian supervisor + worker). `--daemon` is **never** forwarded to the child; detachment is purely a parent-side concern
+- `eggpool serve` runs in daemon mode by default: it validates the config, refuses to start a second instance, then spawns a detached child and returns promptly with a short success message pointing at the log file
+- The detached child runs the normal foreground `serve` command (Granian supervisor + worker). No daemon flag is forwarded to the child; detachment is purely a parent-side concern
 - stdin/stdout/stderr are detached from the calling terminal: `stdin=subprocess.DEVNULL`, `stdout`/`stderr` → log file (or `/dev/null` when `--quiet` is set without `--log-file`). The child is launched with `start_new_session=True` so it survives shell exit and signals to the parent CLI do not propagate
 - Default log destination is `~/.local/state/eggpool/eggpool.log`, resolvable via `eggpool.runtime_paths.default_log_file()`. Override with `--log-file PATH` or `$EGGPOOL_LOG_FILE`. A log file beats `/dev/null` by default because a silent background failure is hard to diagnose
 - The detached child is the supervisor; it owns its own PID file lifecycle via `runtime.write_pid_file()` / `runtime.clear_pid_file()`. The `Popen` handle from `start_server()` is intentionally not awaited; the parent returns as soon as the child is spawned
-- `serve --daemon` refuses to run as root unless `--as-root` is passed (prevents accidental root personal deployment)
-- Systemd should **not** use `--daemon`. The systemd unit already owns the process lifecycle; run foreground `serve` and let systemd manage the PID, journal logs, and restart policy
-- `runtime.start_server()` signature: `start_server(config_path, *, cwd=None, daemon=True, log_path=None, quiet=True, verify=False, verify_timeout_s=3.0)`. `runtime.restart_server()` accepts the same `daemon`, `log_path`, and `quiet` options. The CLI flags `eggpool serve --daemon`, `--log-file PATH`, `--quiet`, and `--as-root` map directly to these parameters
+- `eggpool serve` refuses to run as root unless `--as-root` is passed (prevents accidental root personal deployment)
+- Systemd should **not** use daemon mode. The systemd unit already owns the process lifecycle; run foreground `serve --verbose` and let systemd manage the PID, journal logs, and restart policy
+- `runtime.start_server()` signature: `start_server(config_path, *, cwd=None, daemon=True, log_path=None, quiet=True, verify=False, verify_timeout_s=3.0)`. `runtime.restart_server()` accepts the same `daemon`, `log_path`, and `quiet` options. The CLI flags `--log-file PATH`, `--quiet`, and `--as-root` map directly to these parameters
 ## Installation and Deployment
 
 - `eggpool.deploy_user` — `DeployUser`, `resolve_deploy_user()` (handles normal, `SUDO_USER`, and direct-root cases), `resolve_config_path()` (single source of truth for `--config` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`), `resolve_env_path()`, and XDG default helpers (`default_config_dir()` / `default_data_dir()` / `default_state_dir()` / `default_config_path()` / `default_env_path()`)

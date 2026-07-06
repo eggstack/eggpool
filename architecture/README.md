@@ -2267,17 +2267,17 @@ Models whose `capabilities.thinking.status` is `"supported"` receive a `"thinkin
 
 ## Daemon Mode
 
-`eggpool serve --daemon` is a one-shot detach helper for personal / SBC
-deployments. It validates the configuration, refuses to start a second
-instance, spawns a detached child running the normal foreground `serve`
-command, and returns promptly with a short success message pointing at
-the log file.
+`eggpool serve` runs in daemon mode by default. It is a one-shot detach
+helper for personal / SBC deployments. It validates the configuration,
+refuses to start a second instance, spawns a detached child running the
+normal foreground `serve` command, and returns promptly with a short
+success message pointing at the log file.
 
 The parent only validates the config and refuses to start a second
 instance. The detached child runs the foreground supervisor (Granian +
-worker) unchanged. The `--daemon` flag is **never** forwarded to the
-child; detachment is purely a parent-side concern. The child owns its
-own PID file lifecycle via `runtime.write_pid_file()` /
+worker) unchanged. No daemon flag is forwarded to the child; detachment
+is purely a parent-side concern. The child owns its own PID file
+lifecycle via `runtime.write_pid_file()` /
 `runtime.clear_pid_file()`.
 
 ### Detach mechanics
@@ -2290,7 +2290,7 @@ own PID file lifecycle via `runtime.write_pid_file()` /
 
 ### PID file resolution
 
-PID file path resolution lives in `eggpool.runtime_paths.default_pid_file()` and is the single source of truth shared by `serve`, `serve --daemon`, `croncheck`, `ensure-running`, `stop`, `restart`, systemd, and the cron watchdog. Precedence:
+PID file path resolution lives in `eggpool.runtime_paths.default_pid_file()` and is the single source of truth shared by `serve`, `croncheck`, `ensure-running`, `stop`, `restart`, systemd, and the cron watchdog. Precedence:
 
 1. `$EGGPOOL_PID_FILE` (if set)
 2. `$XDG_RUNTIME_DIR/eggpool.pid` (if `XDG_RUNTIME_DIR` is set)
@@ -2304,11 +2304,11 @@ imports it directly.
 
 ### Root-user guard
 
-`serve --daemon` refuses to daemonize when the effective UID is 0 unless
+`eggpool serve` refuses to run when the effective UID is 0 unless
 `--as-root` is passed. This prevents accidentally starting a personal
 deployment as root; the explicit flag exists for intentional system-wide
-installs. systemd production deployments should run foreground `serve`
-under the systemd unit (with `User=` set) and must not use `--daemon`.
+installs. systemd production deployments should run foreground `serve --verbose`
+under the systemd unit (with `User=` set) and must not use daemon mode.
 
 ### `runtime.start_server()` signature
 
@@ -2329,7 +2329,7 @@ def start_server(
 ```
 
 `runtime.restart_server()` accepts the same `daemon`, `log_path`, and
-`quiet` options. The CLI flags `eggpool serve --daemon`, `--log-file`,
+`quiet` options. The CLI flags `--log-file`,
 `--quiet`, and `--as-root` map directly to these parameters.
 
 ### Installation and Deployment

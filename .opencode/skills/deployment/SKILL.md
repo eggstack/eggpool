@@ -43,18 +43,19 @@ is bracketed by `# BEGIN EggPool watchdog` / `# END EggPool watchdog`
 so uninstall only strips the eggpool-owned lines. Backups live under
 `eggpool deploy backup-cron`.
 
-### Manual daemon mode
+### Daemon mode (default)
 
 ```bash
-eggpool serve --daemon        # detached supervisor; logs to ~/.local/state/eggpool/eggpool.log
-eggpool serve                 # foreground (Granian logs to terminal)
+eggpool serve                 # daemon mode (default); logs to ~/.local/state/eggpool/eggpool.log
+eggpool serve --verbose       # foreground (Granian logs to terminal)
 ```
 
-`serve --daemon` is the one-shot detach helper. It validates the
+`eggpool serve` runs in daemon mode by default. It validates the
 config, refuses to start a second instance, spawns a detached child,
 and returns. The child runs the normal foreground `serve` command;
-the `--daemon` flag is never forwarded. systemd should **not** use
-`--daemon` — the unit already owns the process lifecycle.
+no daemon flag is forwarded. systemd should **not** use daemon mode
+— the unit already owns the process lifecycle. Use `--verbose` for
+foreground mode when systemd manages the process.
 
 ---
 
@@ -138,7 +139,7 @@ cron):
 
 ```bash
 pkill -TERM -f "$(command -v eggpool) serve"  # graceful stop via PID file
-eggpool serve --daemon                       # or: detached restart
+eggpool serve                                # or: detached restart (daemon mode)
 ```
 
 ---
@@ -246,17 +247,16 @@ corrupted.
 ### Daemon Mode for Personal Use
 
 For personal / SBC deployments that are not managed by systemd,
-`eggpool serve --daemon` spawns a detached supervisor and returns
-the shell promptly. The detached child runs the normal foreground
-`serve` command (Granian supervisor + worker); the `--daemon` flag
-is never forwarded to the child. Default log destination is
-`~/.local/state/eggpool/eggpool.log` (override with
-`--log-file PATH` or `$EGGPOOL_LOG_FILE`; `--quiet` sends the
+`eggpool serve` runs in daemon mode by default and returns the shell
+promptly. The detached child runs the normal foreground `serve` command
+(Granian supervisor + worker); no daemon flag is forwarded to the child.
+Default log destination is `~/.local/state/eggpool/eggpool.log` (override
+with `--log-file PATH` or `$EGGPOOL_LOG_FILE`; `--quiet` sends the
 daemon's stdout/stderr to `/dev/null` instead).
 
-`serve --daemon` refuses to run as root unless `--as-root` is
+`eggpool serve` refuses to run as root unless `--as-root` is
 passed (prevents accidentally starting a personal deployment as
-root). Systemd should **not** use `--daemon` — the unit already
+root). Systemd should **not** use daemon mode — the unit already
 owns the process lifecycle.
 
 ---
