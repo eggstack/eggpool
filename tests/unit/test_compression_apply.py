@@ -618,9 +618,9 @@ def test_failed_fallback_on_prefix_hash_mismatch() -> None:
     ):
         result = apply_safe_compression(
             payload,
-            _segmentation([
-                _vol_seg(byte_length=len(tool_content), estimated_tokens=500)
-            ]),
+            _segmentation(
+                [_vol_seg(byte_length=len(tool_content), estimated_tokens=500)]
+            ),
             policy=_enabled_safe_policy(),
         )
     assert result.failed_fallback is True

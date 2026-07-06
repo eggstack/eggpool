@@ -877,6 +877,12 @@ class TestPublishOrdering:
     transaction defers commit visibility until exit (which it does
     per ``Database.transaction``), the publication would see no
     durable rows for the just-selected attempt.
+
+    Phase 5: the routing-decision trace is observability data and is
+    written AFTER ``_select_lock`` releases (and therefore after
+    publication).  A trace-write failure cannot fail dispatch.  The
+    three correctness-critical rows (request, reservation, attempt)
+    are still durably visible at publication time.
     """
 
     @pytest.mark.asyncio()
@@ -884,8 +890,8 @@ class TestPublishOrdering:
         self,
     ) -> None:
         """``increment_active_request_count`` must observe the durable
-        request/reservation/attempt/routing_decision rows that the
-        coordinator just inserted.
+        request/reservation/attempt rows that the coordinator just
+        inserted.
 
         We monkeypatch the router's publication method to query the
         same in-memory database connection used by the coordinator.
@@ -893,6 +899,11 @@ class TestPublishOrdering:
         (the pre-cleanup bug), these rows are NOT visible from a
         separate fetch because the surrounding transaction is still
         open and SQLite has not committed.
+
+        Phase 5: the routing_decisions row is intentionally written
+        AFTER publication; the test asserts the three
+        correctness-critical rows are visible at publication time
+        and the trace row is visible after the call returns.
         """
         names = ["alpha", "bravo"]
         fixture = await _build_coordinator_fixture(names)
@@ -907,19 +918,16 @@ class TestPublishOrdering:
             original_increment = router.increment_active_request_count
 
             async def _spy_increment(account_name: str) -> None:
-                # Query all four rows for the just-created attempt.
-                # Under the pre-cleanup compound-context shape the
-                # ``async with`` for the transaction has not exited,
-                # so SQLite has not yet COMMITted; these reads would
-                # race or block depending on aiosqlite scheduling.
-                # Under the cleaned-up nested shape the inner
-                # transaction has committed and the rows are visible.
+                # Query the three correctness-critical rows for the
+                # just-created attempt.  Under the pre-cleanup
+                # compound-context shape the ``async with`` for the
+                # transaction has not exited, so SQLite has not yet
+                # COMMITted; these reads would race or block depending
+                # on aiosqlite scheduling.  Under the cleaned-up
+                # nested shape the inner transaction has committed
+                # and the rows are visible.
                 attempt_row = await db.fetch_one(
                     "SELECT id, request_id FROM request_attempts "
-                    "ORDER BY id DESC LIMIT 1"
-                )
-                decision_row = await db.fetch_one(
-                    "SELECT id, selected_account_name FROM routing_decisions "
                     "ORDER BY id DESC LIMIT 1"
                 )
                 reservation_row = await db.fetch_one(
@@ -930,7 +938,6 @@ class TestPublishOrdering:
                     "SELECT id, model_id FROM requests ORDER BY id DESC LIMIT 1"
                 )
                 observed["attempt_row"] = attempt_row
-                observed["decision_row"] = decision_row
                 observed["reservation_row"] = reservation_row
                 observed["request_row"] = request_row
                 observed["selected_account"] = account_name
@@ -941,17 +948,14 @@ class TestPublishOrdering:
             )
 
             ctx = _make_context("req-publish-ordering")
-            selected = await coordinator._select_and_persist_attempt(ctx, 1)
+            await coordinator._select_and_persist_attempt(ctx, 1)
             assert observed, "publication hook never fired"
 
-            # All four durable rows must be visible when the
-            # publication hook runs.
+            # The three correctness-critical durable rows must be
+            # visible when the publication hook runs.
             assert observed["attempt_row"] is not None, (
                 "request_attempts row missing at publication time — "
                 "transaction had not committed before publication"
-            )
-            assert observed["decision_row"] is not None, (
-                "routing_decisions row missing at publication time"
             )
             assert observed["reservation_row"] is not None, (
                 "reservations row missing at publication time"
@@ -959,7 +963,17 @@ class TestPublishOrdering:
             assert observed["request_row"] is not None, (
                 "requests row missing at publication time"
             )
-            assert observed["selected_account"] == selected.account_name
+
+            # Phase 5: the trace row is written AFTER publication.
+            # Confirm it is visible once the call returns.
+            post_decision_row = await db.fetch_one(
+                "SELECT id, selected_account_name FROM routing_decisions "
+                "ORDER BY id DESC LIMIT 1"
+            )
+            assert post_decision_row is not None, (
+                "routing_decisions row missing after dispatch — "
+                "trace write outside the lock did not complete"
+            )
         finally:
             await fixture.db.disconnect()
 

@@ -241,7 +241,6 @@ __all__ = [  # noqa: F822  (extended below)
 ]
 
 
-
 def _noop_result(payload: Any) -> CompressionResult:
     """Return a no-op result with the original payload."""
     return CompressionResult(

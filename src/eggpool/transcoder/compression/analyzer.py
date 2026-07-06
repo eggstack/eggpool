@@ -275,32 +275,6 @@ def _cheap_tokens(text: str) -> int:
     ) // _NON_ASCII_FLOOR
 
 
-def _segment_text(segment: RequestSegment) -> str:
-    """Best-effort text extraction from a segmentation source.
-
-    Phase 2 does not embed raw text in :class:`RequestSegment`
-    (the segmenter is content-private).  The analyzer therefore
-    derives a representative string from the segment metadata
-    when possible; for segments with ``estimated_tokens`` set we
-    can use that value as a coarse length hint.  This keeps the
-    analyzer cheap and never exposes the raw prompt.
-
-    For volatile tool outputs / command output the segmenter
-    attaches ``estimated_tokens`` so the analyzer can estimate
-    savings without re-parsing the payload.  The same approach
-    means the analyzer can never block on a large request body.
-    """
-    if segment.estimated_tokens is not None and segment.estimated_tokens > 0:
-        # Coarse representative text sized to match the segment's
-        # token estimate.  We only need the analyzer's token math
-        # to be roughly proportional to the segment's size, and
-        # ``_cheap_tokens`` is monotonic in length.
-        return "x" * (segment.estimated_tokens * _ASCII_FLOOR)
-    if segment.byte_length > 0:
-        return "x" * segment.byte_length
-    return ""
-
-
 def _segment_id(segment: RequestSegment, index: int) -> str:
     """Stable, content-private identifier for a segment."""
     path = ".".join(str(p) for p in segment.content_path) or f"seg{index}"
@@ -727,8 +701,13 @@ def _analyze_segment_for_transforms(
             elif eligible:
                 state.bump(REASON_EMPTY_SEGMENT)
         return
-    if not text_hint and has_signal:
-        text_hint = _segment_text(segment)
+    # Phase 4.3: when no text hint is provided, the detectors fall
+    # back to source-aware structural signals.  ``_segment_tokens``
+    # uses ``segment.estimated_tokens`` (or ``byte_length``) directly,
+    # so we do not need to allocate a synthetic representative
+    # string.  This avoids the large ``"x" * N`` allocation that the
+    # old ``_segment_text`` did for big volatile segments and is the
+    # content-private path used in production.
     for transform, enabled in transforms_enabled:
         if not _within_budget(state.deadline):
             state.warnings.append(REASON_LATENCY_BUDGET)

@@ -16,10 +16,12 @@ from eggpool.request.coordinator import (
 
 
 def test_precomputed_reservation_tokens_used() -> None:
-    body = json.dumps({
-        "model": "gpt-4",
-        "messages": [{"role": "user", "content": "hi"}],
-    }).encode()
+    body = json.dumps(
+        {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+    ).encode()
     expected = estimate_reservation_tokens(body)
     ctx = ProxyRequestContext(
         request_id="test-1",
@@ -34,11 +36,13 @@ def test_precomputed_reservation_tokens_used() -> None:
 
 
 def test_thinking_requirement_stored() -> None:
-    body = json.dumps({
-        "model": "gpt-4",
-        "messages": [{"role": "user", "content": "hi"}],
-        "reasoning_effort": "high",
-    }).encode()
+    body = json.dumps(
+        {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}],
+            "reasoning_effort": "high",
+        }
+    ).encode()
     ctx = ProxyRequestContext(
         request_id="test-2",
         protocol="openai",

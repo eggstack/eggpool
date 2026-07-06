@@ -19,6 +19,7 @@ from eggpool.api.errors import (
     openai_capability_error_response,
 )
 from eggpool.auth import require_auth
+from eggpool.catalog.capabilities import classify_thinking_request
 from eggpool.catalog.protocols import ProtocolMismatchError, ProtocolName
 from eggpool.constants import MAX_REQUEST_BODY_BYTES
 from eggpool.errors import (
@@ -39,12 +40,15 @@ from eggpool.request.coordinator import (
 )
 from eggpool.request.limits import (
     ESTIMATED_CONTEXT_BYTES_PER_TOKEN_FLOOR,
+    estimate_context_input_tokens,
+    estimate_reservation_tokens,
 )
 from eggpool.request.limits import (
     check_context_limits as _check_context_limits,
 )
 from eggpool.routing.provider import parse_model_provider
 from eggpool.runtime_dispatch import (
+    SPAN_AUTH,
     SPAN_BODY_READ,
     SPAN_COMPRESSION_ANALYZE,
     SPAN_COMPRESSION_APPLY,
@@ -273,13 +277,14 @@ async def handle_proxy_request(
     endpoint: ProxyEndpointConfig,
 ) -> Response:
     """Validate and dispatch one OpenAI- or Anthropic-compatible request."""
-    await require_auth(request)
-
     coordinator = cast("RequestCoordinator", request.app.state.coordinator)
     span_recorder = cast(
         "DispatchSpanRecorder | None",
         getattr(request.app.state, "dispatch_span_recorder", None),
     )
+
+    with _span(span_recorder, SPAN_AUTH):
+        await require_auth(request)
 
     try:
         with _span(span_recorder, SPAN_BODY_READ):
@@ -638,6 +643,22 @@ async def handle_proxy_request(
     # the provider-bound payload with full upstream protocol context.
     synthetic_cache_result: Any = None
 
+    # Phase 5: precompute thinking requirement, reservation tokens, and
+    # context-input tokens once here so the coordinator does not have to
+    # reparse ``original_body`` (and re-classify) inside ``_select_lock``.
+    # These computations are pure functions of the body and the client
+    # protocol — they read no mutable runtime state and therefore do not
+    # need to be serialized against other concurrent requests.
+    precomputed_thinking_req: Any = None
+    precomputed_reservation_tokens: int | None = None
+    precomputed_context_input_tokens: int | None = None
+    precomputed_thinking_req = classify_thinking_request(
+        cast("dict[str, object]", payload),
+        endpoint.protocol,
+    )
+    precomputed_reservation_tokens = estimate_reservation_tokens(body)
+    precomputed_context_input_tokens = estimate_context_input_tokens(body, payload)
+
     with _span(span_recorder, SPAN_CONTEXT_BUILD):
         context = ProxyRequestContext(
             request_id=request_id,
@@ -660,6 +681,9 @@ async def handle_proxy_request(
             resolved_compression_policy=resolved_compression_policy,
             synthetic_cache_result=synthetic_cache_result,
             prepared_transcode=prepared_transcode,
+            estimated_reservation_tokens=precomputed_reservation_tokens,
+            thinking_requirement=precomputed_thinking_req,
+            estimated_context_input_tokens=precomputed_context_input_tokens,
         )
 
     if segmentation_result is not None:

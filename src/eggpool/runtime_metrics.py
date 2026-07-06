@@ -763,13 +763,9 @@ class RuntimeMetricsService:
                 ],
             }
         try:
-            return self._dispatch_span_recorder.snapshot_for_spans(
-                list(ALL_SPAN_KEYS)
-            )
+            return self._dispatch_span_recorder.snapshot_for_spans(list(ALL_SPAN_KEYS))
         except Exception as exc:
-            _append_probe_error(
-                probe_errors, f"Dispatch span snapshot failed: {exc}"
-            )
+            _append_probe_error(probe_errors, f"Dispatch span snapshot failed: {exc}")
             return {"error": str(exc)}
 
     def _snapshot_metrics_buffer(self, probe_errors: list[str]) -> dict[str, Any]:

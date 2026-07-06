@@ -278,17 +278,25 @@ def test_savings_below_threshold_suppressed() -> None:
         min_candidate_tokens=0,
         min_savings_tokens=10_000_000,
     )
-    segmentation = _segmentation(
-        [
-            _seg(
-                kind=SegmentKind.VOLATILE_SUFFIX,
-                source=SegmentSource.TOOL_RESULT,
-                byte_length=128,
-                estimated_tokens=64,
-            )
-        ]
+    # Use a real base64-shaped text hint so the detector actually
+    # produces a positive (but tiny) savings estimate.  Phase 4.3
+    # removed the synthetic text allocation in production; the test
+    # must pass an explicit text hint to exercise the detector path.
+    base64_text = "A" * 600
+    segments = [
+        _seg(
+            kind=SegmentKind.VOLATILE_SUFFIX,
+            source=SegmentSource.TOOL_RESULT,
+            byte_length=len(base64_text),
+            estimated_tokens=len(base64_text) // 4,
+        )
+    ]
+    segmentation = _segmentation(segments)
+    observation = analyze_compression(
+        segmentation,
+        policy=policy,
+        text_hints=_hints_for(segments, {0: base64_text}),
     )
-    observation = analyze_compression(segmentation, policy=policy)
     assert observation is not None
     assert observation.eligible_candidate_count == 0
     assert observation.suppressed_candidate_count > 0
@@ -305,17 +313,20 @@ def test_min_candidate_tokens_threshold() -> None:
     )
     repeated_line = "the same line over and over"
     text = "\n".join([repeated_line] * 16)
-    segmentation = _segmentation(
-        [
-            _seg(
-                kind=SegmentKind.VOLATILE_SUFFIX,
-                source=SegmentSource.TOOL_RESULT,
-                byte_length=len(text),
-                estimated_tokens=len(text) // 4,
-            )
-        ]
+    segments = [
+        _seg(
+            kind=SegmentKind.VOLATILE_SUFFIX,
+            source=SegmentSource.TOOL_RESULT,
+            byte_length=len(text),
+            estimated_tokens=len(text) // 4,
+        )
+    ]
+    segmentation = _segmentation(segments)
+    observation = analyze_compression(
+        segmentation,
+        policy=policy,
+        text_hints=_hints_for(segments, {0: text}),
     )
-    observation = analyze_compression(segmentation, policy=policy)
     assert observation is not None
     assert observation.eligible_candidate_count == 0
     assert observation.reason_code_counts.get(REASON_BELOW_MIN_CANDIDATE_TOKENS, 0) > 0

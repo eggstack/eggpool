@@ -9,8 +9,19 @@ from __future__ import annotations
 from eggpool.request.coordinator import ProxyRequestContext, RequestCoordinator
 from eggpool.runtime_dispatch import (
     ALL_SPAN_KEYS,
+    SPAN_ACCOUNT_LOOKUP,
+    SPAN_AUTH,
+    SPAN_CIRCUIT_PROBE,
+    SPAN_DB_WRITE_ATTEMPT,
+    SPAN_DB_WRITE_REQUEST,
+    SPAN_DB_WRITE_RESERVATION,
     SPAN_RESERVATION_ESTIMATE,
     SPAN_ROUTING_PLAN,
+    SPAN_ROUTING_TRACE_BUILD,
+    SPAN_ROUTING_TRACE_WRITE,
+    SPAN_RUNTIME_PUBLICATION,
+    SPAN_SELECTION_LOCK_WAIT,
+    SPAN_SELECTION_LOCKED,
     SPAN_THINKING_CLASSIFICATION,
     DispatchSpanRecorder,
 )
@@ -21,6 +32,8 @@ def test_dispatch_span_recorder_has_lock_spans() -> None:
         SPAN_THINKING_CLASSIFICATION,
         SPAN_RESERVATION_ESTIMATE,
         SPAN_ROUTING_PLAN,
+        SPAN_SELECTION_LOCK_WAIT,
+        SPAN_SELECTION_LOCKED,
     }
     assert expected_spans.issubset(set(ALL_SPAN_KEYS))
 
@@ -43,13 +56,30 @@ def test_proxy_request_context_precomputed_fields() -> None:
 
 
 def test_dispatch_span_recorder_records_all_coordinator_spans() -> None:
+    """Phase 5: every coordinator-internal span is registered."""
     all_span_names = set(ALL_SPAN_KEYS)
     coordinator_spans = {
         SPAN_THINKING_CLASSIFICATION,
         SPAN_RESERVATION_ESTIMATE,
         SPAN_ROUTING_PLAN,
+        SPAN_SELECTION_LOCK_WAIT,
+        SPAN_SELECTION_LOCKED,
+        SPAN_CIRCUIT_PROBE,
+        SPAN_ACCOUNT_LOOKUP,
+        SPAN_DB_WRITE_REQUEST,
+        SPAN_DB_WRITE_RESERVATION,
+        SPAN_DB_WRITE_ATTEMPT,
+        SPAN_ROUTING_TRACE_BUILD,
+        SPAN_ROUTING_TRACE_WRITE,
+        SPAN_RUNTIME_PUBLICATION,
     }
-    assert coordinator_spans.issubset(all_span_names)
+    missing = coordinator_spans - all_span_names
+    assert not missing, f"Missing spans: {missing}"
+
+
+def test_auth_span_key_registered() -> None:
+    """Phase 1: SPAN_AUTH is a registered span key."""
+    assert SPAN_AUTH in set(ALL_SPAN_KEYS)
 
 
 def test_request_coordinator_accepts_span_recorder() -> None:
@@ -79,10 +109,20 @@ def test_request_coordinator_accepts_span_recorder() -> None:
 
 def test_all_span_keys_complete() -> None:
     required = {
+        "auth",
         "thinking_classification",
         "reservation_estimate",
         "routing_plan",
         "selection_lock_wait",
         "selection_locked",
+        "circuit_probe",
+        "account_lookup",
+        "db_write_request",
+        "db_write_reservation",
+        "db_write_attempt",
+        "routing_trace_build",
+        "routing_trace_write",
+        "runtime_publication",
     }
-    assert required.issubset(set(ALL_SPAN_KEYS))
+    missing = required - set(ALL_SPAN_KEYS)
+    assert not missing, f"Missing required span keys: {missing}"

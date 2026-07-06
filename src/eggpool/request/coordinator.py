@@ -84,8 +84,18 @@ from eggpool.request.limits import estimate_reservation_tokens
 from eggpool.retry.classification import RetryCategory, RetryClassifier
 from eggpool.routing.router import RoutingDecisionTrace, RoutingExclusion
 from eggpool.runtime_dispatch import (
+    SPAN_ACCOUNT_LOOKUP,
+    SPAN_CIRCUIT_PROBE,
+    SPAN_DB_WRITE_ATTEMPT,
+    SPAN_DB_WRITE_REQUEST,
+    SPAN_DB_WRITE_RESERVATION,
     SPAN_RESERVATION_ESTIMATE,
     SPAN_ROUTING_PLAN,
+    SPAN_ROUTING_TRACE_BUILD,
+    SPAN_ROUTING_TRACE_WRITE,
+    SPAN_RUNTIME_PUBLICATION,
+    SPAN_SELECTION_LOCK_WAIT,
+    SPAN_SELECTION_LOCKED,
     SPAN_THINKING_CLASSIFICATION,
     DispatchSpanRecorder,
     DispatchSpanTimer,
@@ -1107,13 +1117,21 @@ class RequestCoordinator:
            transaction AND the runtime publication step.
         2. The inner ``db.transaction()`` context manager EXITS before
            publication runs so SQLite has committed the request /
-           reservation / attempt / routing_decision rows. Nested
-           ``async with`` blocks guarantee this; the prior
-           ``async with self._select_lock, self._db.transaction()``
-           shape only released the lock AFTER the transaction, which
-           meant the transaction was still open while publication ran.
+           reservation / attempt rows.  The routing-decision trace
+           write is best-effort and runs AFTER the lock releases; a
+           trace-write failure cannot fail the dispatch.
         3. ``_execute_upstream`` and all upstream I/O happen OUTSIDE
            ``_select_lock``.
+
+        Phase 5: thinking classification, reservation-token estimate,
+        capability policy resolution, and routing-plan construction
+        are pure computations that read no mutable runtime state.
+        They run OUTSIDE ``_select_lock`` so the lock only holds the
+        correctness-critical work (circuit probe, account-ID lookup,
+        DB writes, runtime publication).  The plan invariants are
+        preserved: the in-process active counter and circuit-breaker
+        state are the only mutable runtime inputs to selection, and
+        those remain serialized under the lock.
 
         Compensation: if publication fails after the durable commit,
         active count is decremented, the reservation is removed, the
@@ -1130,386 +1148,492 @@ class RequestCoordinator:
         ):
             raise DatabaseError("Cannot persist: database repositories unavailable")
 
-        async with self._select_lock:
-            # Inner transaction MUST close before publication runs so
-            # SQLite has committed the durable rows.  See the docstring
-            # above for the ordering invariant.
-            async with self._db.transaction():
-                # 0. Classify thinking requirement from request body
-                from eggpool.catalog.capabilities import classify_thinking_request
+        # 0. Pre-lock computation: classify thinking requirement, estimate
+        # reservation tokens, and build the routing plan.  These are pure
+        # functions of the request body and the static registry/catalog
+        # state — moving them outside the lock removes the biggest
+        # non-correctness contributor to lock hold time.
+        from eggpool.catalog.capabilities import classify_thinking_request
 
-                with _maybe_span(
-                    self._dispatch_span_recorder, SPAN_THINKING_CLASSIFICATION
-                ):
-                    if context.thinking_requirement is not None:
-                        thinking_req = context.thinking_requirement
-                    else:
-                        body_dict: dict[str, object] = {}
-                        if context.original_body:
-                            try:
-                                parsed: object = json.loads(context.original_body)
-                                if isinstance(parsed, dict):
-                                    body_dict = parsed  # type: ignore[assignment]
-                            except (json.JSONDecodeError, ValueError):
-                                pass
-                        thinking_req = classify_thinking_request(
-                            body_dict, context.protocol
-                        )
-                        context.thinking_requirement = thinking_req
-                    # Record thinking observability trace
-                    if thinking_req.required:
-                        _thinking_counter = get_counter()
-                        await _thinking_counter.increment_requested(
-                            client_protocol=thinking_req.client_protocol,
-                        )
-                        context.thinking_trace = {
-                            "requested": True,
-                            "client_protocol": thinking_req.client_protocol,
-                            "request_fields": list(thinking_req.fields),
-                            "requested_effort": thinking_req.requested_effort,
-                            "resolved_budget_tokens": None,
-                            "budget_clamped": False,
-                            "capability_status": None,
-                            "capability_source": None,
-                            "upstream_protocol": None,
-                            "upstream_fields": [],
-                            "decision": "none",
-                        }
-                    _capability_policy: dict[str, str] | None = None
-                    if self._transcoder_policy is not None and hasattr(
-                        self._transcoder_policy, "capability_policy"
-                    ):
-                        cp = self._transcoder_policy.capability_policy
-                        _capability_policy = {
-                            "unsupported_thinking": cp.unsupported_thinking,
-                            "unknown_thinking": cp.unknown_thinking,
-                            "mixed_collapsed_thinking": cp.mixed_collapsed_thinking,
-                        }
-
-                # 1. Calculate projected request tokens once
-                with _maybe_span(
-                    self._dispatch_span_recorder, SPAN_RESERVATION_ESTIMATE
-                ):
-                    if context.estimated_reservation_tokens is not None:
-                        estimated_tokens = context.estimated_reservation_tokens
-                    else:
-                        estimated_tokens = estimate_reservation_tokens(
-                            context.original_body
-                        )
-                        context.estimated_reservation_tokens = estimated_tokens
-
-                # 2. Build routing plan: eligibility + scoring + fairness
-                #    in a single pass.  This eliminates the former
-                #    get_eligible_account_names() + select_accounts_for_failover()
-                #    double-call that computed get_eligible_accounts() twice.
-                exclude: set[str] = (
-                    set(context.attempted_accounts)
-                    if context.attempted_accounts
-                    else set()
+        with _maybe_span(self._dispatch_span_recorder, SPAN_THINKING_CLASSIFICATION):
+            if context.thinking_requirement is not None:
+                thinking_req = context.thinking_requirement
+            else:
+                # Fallback for tests/legacy callers that bypass
+                # handle_proxy_request precomputation.
+                body_dict: dict[str, object] = {}
+                if context.original_body:
+                    try:
+                        parsed: object = json.loads(context.original_body)
+                        if isinstance(parsed, dict):
+                            body_dict = parsed  # type: ignore[assignment]
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+                thinking_req = classify_thinking_request(body_dict, context.protocol)
+                context.thinking_requirement = thinking_req
+            # Record thinking observability trace
+            if thinking_req.required:
+                _thinking_counter = get_counter()
+                await _thinking_counter.increment_requested(
+                    client_protocol=thinking_req.client_protocol,
                 )
-                with _maybe_span(self._dispatch_span_recorder, SPAN_ROUTING_PLAN):
-                    plan = await self._router.build_routing_plan(
-                        context.model_id,
-                        exclude_accounts=exclude if exclude else None,
-                        provider_id=context.provider_id,
-                        protocol=context.upstream_protocol,
-                        transcode_eligibility=(
-                            {context.protocol, context.upstream_protocol}
-                            if context.transcode_required
-                            else None
-                        ),
-                        client_protocol=context.protocol,
-                        thinking_requirement=thinking_req
-                        if thinking_req.required
-                        else None,
-                        capability_policy=_capability_policy,
-                        estimated_tokens=int(estimated_tokens),
+                context.thinking_trace = {
+                    "requested": True,
+                    "client_protocol": thinking_req.client_protocol,
+                    "request_fields": list(thinking_req.fields),
+                    "requested_effort": thinking_req.requested_effort,
+                    "resolved_budget_tokens": None,
+                    "budget_clamped": False,
+                    "capability_status": None,
+                    "capability_source": None,
+                    "upstream_protocol": None,
+                    "upstream_fields": [],
+                    "decision": "none",
+                }
+            _capability_policy: dict[str, str] | None = None
+            if self._transcoder_policy is not None and hasattr(
+                self._transcoder_policy, "capability_policy"
+            ):
+                cp = self._transcoder_policy.capability_policy
+                _capability_policy = {
+                    "unsupported_thinking": cp.unsupported_thinking,
+                    "unknown_thinking": cp.unknown_thinking,
+                    "mixed_collapsed_thinking": cp.mixed_collapsed_thinking,
+                }
+
+        with _maybe_span(self._dispatch_span_recorder, SPAN_RESERVATION_ESTIMATE):
+            if context.estimated_reservation_tokens is not None:
+                estimated_tokens = context.estimated_reservation_tokens
+            else:
+                estimated_tokens = estimate_reservation_tokens(context.original_body)
+                context.estimated_reservation_tokens = estimated_tokens
+
+        exclude: set[str] = (
+            set(context.attempted_accounts) if context.attempted_accounts else set()
+        )
+        with _maybe_span(self._dispatch_span_recorder, SPAN_ROUTING_PLAN):
+            plan = await self._router.build_routing_plan(
+                context.model_id,
+                exclude_accounts=exclude if exclude else None,
+                provider_id=context.provider_id,
+                protocol=context.upstream_protocol,
+                transcode_eligibility=(
+                    {context.protocol, context.upstream_protocol}
+                    if context.transcode_required
+                    else None
+                ),
+                client_protocol=context.protocol,
+                thinking_requirement=thinking_req if thinking_req.required else None,
+                capability_policy=_capability_policy,
+                estimated_tokens=int(estimated_tokens),
+            )
+        eligible_account_names = plan.eligible_names
+        ranked_candidates = plan.ranked_candidates
+
+        if not eligible_account_names:
+            # Phase 5: distinguish pre-dispatch unavailability
+            # from post-retry exhaustion. ``build_routing_plan``
+            # already excludes ``context.attempted_accounts``; an
+            # empty result on the first attempt means no enabled
+            # accounts at all (503). An empty result after at
+            # least one attempt means every eligible candidate has
+            # been tried in this request (502).
+            if thinking_req.required:
+                # Record thinking rejection. Phase D: also
+                # bump capability-specific counters when the
+                # collapsed model status explains the
+                # rejection.
+                _thinking_counter = get_counter()
+                rejected_status = await self._determine_thinking_rejection_status(
+                    context=context,
+                    thinking_req=thinking_req,
+                )
+                if rejected_status == "unknown":
+                    await _thinking_counter.increment_unknown_capability(
+                        client_protocol=thinking_req.client_protocol,
                     )
-                eligible_account_names = plan.eligible_names
-                ranked_candidates = plan.ranked_candidates
-
-                if not eligible_account_names:
-                    # Phase 5: distinguish pre-dispatch unavailability
-                    # from post-retry exhaustion. ``build_routing_plan``
-                    # already excludes ``context.attempted_accounts``; an
-                    # empty result on the first attempt means no enabled
-                    # accounts at all (503). An empty result after at
-                    # least one attempt means every eligible candidate has
-                    # been tried in this request (502).
-                    if thinking_req.required:
-                        # Record thinking rejection. Phase D: also
-                        # bump capability-specific counters when the
-                        # collapsed model status explains the
-                        # rejection.
-                        _thinking_counter = get_counter()
-                        rejected_status = (
-                            await self._determine_thinking_rejection_status(
-                                context=context,
-                                thinking_req=thinking_req,
-                            )
-                        )
-                        if rejected_status == "unknown":
-                            await _thinking_counter.increment_unknown_capability(
-                                client_protocol=thinking_req.client_protocol,
-                            )
-                        elif rejected_status == "unsupported":
-                            await _thinking_counter.increment_unsupported_capability(
-                                client_protocol=thinking_req.client_protocol,
-                            )
-                        await _thinking_counter.increment_rejected(
-                            client_protocol=thinking_req.client_protocol,
-                            capability_status="no_eligible_providers",
-                        )
-                        if context.thinking_trace is not None:
-                            context.thinking_trace["decision"] = "rejected"
-                            context.thinking_trace["capability_status"] = (
-                                rejected_status or "no_eligible_providers"
-                            )
-                        raise CapabilityError(
-                            model_id=context.model_id,
-                            capability="thinking",
-                            requested_fields=thinking_req.fields,
-                            message=(
-                                f"Model {context.model_id!r} is available, "
-                                f"but no eligible provider is known to "
-                                f"support requested thinking controls "
-                                f"(thinking capability status: "
-                                f"{rejected_status or 'unknown'})."
-                            ),
-                        )
-                    if context.attempted_accounts:
-                        raise UpstreamExhaustedError(
-                            f"All eligible accounts attempted for model "
-                            f"{context.model_id!r}"
-                        )
-                    raise ModelUnavailableError(
-                        f"No accounts available for model {context.model_id!r}"
+                elif rejected_status == "unsupported":
+                    await _thinking_counter.increment_unsupported_capability(
+                        client_protocol=thinking_req.client_protocol,
                     )
-
-                # 3. Probe circuit-breaker slots on ranked candidates.
-                selected_state = None
-                selected_score: float | None = None
-                selected_tier: int | None = None
-                exclusions: list[RoutingExclusion] = []
-                for candidate_state, score in ranked_candidates:
-                    # Acquire the circuit-breaker probe slot. If the
-                    # breaker rejects this account (half-open slot
-                    # consumed or still open), try the next ranked
-                    # account without rebuilding and rescoring the
-                    # whole candidate list.
-                    if (
-                        self._health_manager is not None
-                        and not self._health_manager.try_acquire_request(
-                            candidate_state.name, context.model_id
-                        )
-                    ):
-                        exclusions.append(
-                            RoutingExclusion(
-                                account_name=candidate_state.name,
-                                reason="circuit_breaker",
-                            )
-                        )
-                        continue
-                    selected_state = candidate_state
-                    selected_score = float(score.final_score)
-                    selected_tier = score.tier
-                    break
-
-                if selected_state is None:
-                    # Distinguish "all enabled accounts already attempted in
-                    # this request" (502 UpstreamExhaustedError) from "no
-                    # enabled accounts at all" (503 ModelUnavailableError).
-                    # The retry loop only reaches this point after at
-                    # least one attempt has been recorded in
-                    # ``context.attempted_accounts``; an empty candidate
-                    # list while the registry still has enabled states
-                    # means the eligible subset was exhausted mid-request.
-                    if thinking_req.required:
-                        # Record thinking rejection with capability
-                        # status (Phase D).
-                        _thinking_counter = get_counter()
-                        rejected_status = (
-                            await self._determine_thinking_rejection_status(
-                                context=context,
-                                thinking_req=thinking_req,
-                            )
-                        )
-                        if rejected_status == "unknown":
-                            await _thinking_counter.increment_unknown_capability(
-                                client_protocol=thinking_req.client_protocol,
-                            )
-                        elif rejected_status == "unsupported":
-                            await _thinking_counter.increment_unsupported_capability(
-                                client_protocol=thinking_req.client_protocol,
-                            )
-                        await _thinking_counter.increment_rejected(
-                            client_protocol=thinking_req.client_protocol,
-                            capability_status="no_eligible_providers",
-                        )
-                        if context.thinking_trace is not None:
-                            context.thinking_trace["decision"] = "rejected"
-                            context.thinking_trace["capability_status"] = (
-                                rejected_status or "no_eligible_providers"
-                            )
-                        raise CapabilityError(
-                            model_id=context.model_id,
-                            capability="thinking",
-                            requested_fields=thinking_req.fields,
-                            message=(
-                                f"Model {context.model_id!r} is available, "
-                                f"but no eligible provider is known to "
-                                f"support requested thinking controls "
-                                f"(thinking capability status: "
-                                f"{rejected_status or 'unknown'})."
-                            ),
-                        )
-                    if self._all_accounts_attempted(context):
-                        raise UpstreamExhaustedError(
-                            f"All eligible accounts attempted for model "
-                            f"{context.model_id!r}"
-                        )
-                    raise ModelUnavailableError(
-                        f"No accounts available for model {context.model_id!r}"
+                await _thinking_counter.increment_rejected(
+                    client_protocol=thinking_req.client_protocol,
+                    capability_status="no_eligible_providers",
+                )
+                if context.thinking_trace is not None:
+                    context.thinking_trace["decision"] = "rejected"
+                    context.thinking_trace["capability_status"] = (
+                        rejected_status or "no_eligible_providers"
                     )
+                raise CapabilityError(
+                    model_id=context.model_id,
+                    capability="thinking",
+                    requested_fields=thinking_req.fields,
+                    message=(
+                        f"Model {context.model_id!r} is available, "
+                        f"but no eligible provider is known to "
+                        f"support requested thinking controls "
+                        f"(thinking capability status: "
+                        f"{rejected_status or 'unknown'})."
+                    ),
+                )
+            if context.attempted_accounts:
+                raise UpstreamExhaustedError(
+                    f"All eligible accounts attempted for model {context.model_id!r}"
+                )
+            raise ModelUnavailableError(
+                f"No accounts available for model {context.model_id!r}"
+            )
 
-                account_name = selected_state.name
+        # Phase 5: select candidate using the precomputed plan BEFORE
+        # acquiring the lock.  The selection step only reads
+        # ``ranked_candidates`` (an in-memory list) and writes
+        # ``selected_state`` / ``exclusions`` on this call's stack.
+        # The locked region later probes the circuit breaker and
+        # claims the account slot atomically; if the breaker
+        # rejects the chosen account, the lock-region loop walks
+        # down the same plan until it finds an open slot.
+        selected_state = None
+        selected_score: float | None = None
+        selected_tier: int | None = None
+        exclusions: list[RoutingExclusion] = []
+        # The first attempt of each request enters the lock; the
+        # breaker may have changed state since the plan was built.
+        # The locked loop below re-validates the chosen candidate
+        # against the live breaker state.
+
+        # 1. Acquire _select_lock for correctness-critical work only:
+        # circuit probe, account-ID resolution, request/reservation/
+        # attempt creation, and runtime publication.
+        lock_wait_ns = time.perf_counter_ns()
+        async with self._select_lock:
+            lock_held_ns = time.perf_counter_ns()
+            # Record lock timing spans.
+            with _maybe_span(self._dispatch_span_recorder, SPAN_SELECTION_LOCK_WAIT):
+                pass  # placeholder; the wait is the time before the lock
+            with _maybe_span(self._dispatch_span_recorder, SPAN_SELECTION_LOCKED):
+                # Inner transaction MUST close before publication runs so
+                # SQLite has committed the durable rows.
+                async with self._db.transaction():
+                    # 2. Probe circuit-breaker slots on ranked candidates
+                    #    (the breaker state is the only mutable runtime
+                    #    input that depends on the lock).
+                    with _maybe_span(self._dispatch_span_recorder, SPAN_CIRCUIT_PROBE):
+                        for candidate_state, score in ranked_candidates:
+                            # Acquire the circuit-breaker probe slot. If the
+                            # breaker rejects this account (half-open slot
+                            # consumed or still open), try the next ranked
+                            # account without rebuilding and rescoring the
+                            # whole candidate list.
+                            if (
+                                self._health_manager is not None
+                                and not self._health_manager.try_acquire_request(
+                                    candidate_state.name, context.model_id
+                                )
+                            ):
+                                exclusions.append(
+                                    RoutingExclusion(
+                                        account_name=candidate_state.name,
+                                        reason="circuit_breaker",
+                                    )
+                                )
+                                continue
+                            selected_state = candidate_state
+                            selected_score = float(score.final_score)
+                            selected_tier = score.tier
+                            break
+
+                    if selected_state is None:
+                        # Distinguish "all enabled accounts already
+                        # attempted in this request" (502
+                        # UpstreamExhaustedError) from "no enabled
+                        # accounts at all" (503 ModelUnavailableError).
+                        if thinking_req.required:
+                            _thinking_counter = get_counter()
+                            rejected_status = (
+                                await self._determine_thinking_rejection_status(
+                                    context=context,
+                                    thinking_req=thinking_req,
+                                )
+                            )
+                            if rejected_status == "unknown":
+                                await _thinking_counter.increment_unknown_capability(
+                                    client_protocol=thinking_req.client_protocol,
+                                )
+                            elif rejected_status == "unsupported":
+                                _cp = thinking_req.client_protocol
+                                await (
+                                    _thinking_counter.increment_unsupported_capability(
+                                        client_protocol=_cp,
+                                    )
+                                )
+                            await _thinking_counter.increment_rejected(
+                                client_protocol=thinking_req.client_protocol,
+                                capability_status="no_eligible_providers",
+                            )
+                            if context.thinking_trace is not None:
+                                context.thinking_trace["decision"] = "rejected"
+                                context.thinking_trace["capability_status"] = (
+                                    rejected_status or "no_eligible_providers"
+                                )
+                            raise CapabilityError(
+                                model_id=context.model_id,
+                                capability="thinking",
+                                requested_fields=thinking_req.fields,
+                                message=(
+                                    f"Model {context.model_id!r} is available, "
+                                    f"but no eligible provider is known to "
+                                    f"support requested thinking controls "
+                                    f"(thinking capability status: "
+                                    f"{rejected_status or 'unknown'})."
+                                ),
+                            )
+                        if self._all_accounts_attempted(context):
+                            raise UpstreamExhaustedError(
+                                f"All eligible accounts attempted for model "
+                                f"{context.model_id!r}"
+                            )
+                        raise ModelUnavailableError(
+                            f"No accounts available for model {context.model_id!r}"
+                        )
+
+                    account_name = selected_state.name
+                    try:
+                        with _maybe_span(
+                            self._dispatch_span_recorder, SPAN_ACCOUNT_LOOKUP
+                        ):
+                            api_key = self._registry.get_api_key(account_name)
+                            has_creds = self._registry.has_usable_credentials(
+                                account_name
+                            )
+                            if api_key is None or not has_creds:
+                                raise AuthenticationError(
+                                    f"API key not available for account "
+                                    f"{account_name!r}"
+                                )
+
+                            # 5. Resolve the immutable account ID once per process.
+                            account_id = self._account_id_cache.get(account_name)
+                            if account_id is None:
+                                account_repo = AccountRepository(self._db)
+                                account_id = await account_repo.get_id_by_name(
+                                    account_name
+                                )
+                                if account_id is not None:
+                                    self._account_id_cache[account_name] = account_id
+                            if account_id is None:
+                                raise DatabaseError(
+                                    f"Account {account_name!r} not found in database"
+                                )
+
+                            # 6. Resolve the selected account's provider
+                            resolved_provider_id = (
+                                self._catalog.cache.get_provider_for_account(
+                                    account_name
+                                )
+                                or self._registry.get_provider_for_account(account_name)
+                                or context.provider_id
+                                or DEFAULT_PROVIDER_ID
+                            )
+
+                            # Compute the reservation size (cost microdollars).
+                            estimated_microdollars = 0
+                            if self._quota_estimator is not None:
+                                estimated_microdollars = (
+                                    self._quota_estimator.estimate_cost(
+                                        account_name,
+                                        context.model_id,
+                                        estimated_tokens,
+                                    )
+                                )
+
+                        # 8. Create pending request if first attempt.
+                        created_request = "db_request_id" not in context.client_metadata
+                        if created_request:
+                            with _maybe_span(
+                                self._dispatch_span_recorder, SPAN_DB_WRITE_REQUEST
+                            ):
+                                db_request_id = await self._request_repo.create_pending(
+                                    request_id=context.request_id,
+                                    model_id=context.model_id,
+                                    protocol=context.protocol,
+                                    streamed=context.streaming,
+                                    account_id=account_id,
+                                    reserved_microdollars=estimated_microdollars,
+                                    started_at=context.started_at,
+                                    provider_id=resolved_provider_id,
+                                    client_ip=context.client_ip,
+                                )
+                            context.client_metadata["db_request_id"] = db_request_id
+                        db_request_id = context.client_metadata["db_request_id"]
+
+                        # 9. Create reservation
+                        with _maybe_span(
+                            self._dispatch_span_recorder, SPAN_DB_WRITE_RESERVATION
+                        ):
+                            reservation_id = await self._reservation_repo.create(
+                                request_id=db_request_id,
+                                account_id=account_id,
+                                model_id=context.model_id,
+                                estimated_tokens=estimated_tokens,
+                                estimated_microdollars=estimated_microdollars,
+                            )
+
+                        # 10. Create attempt row
+                        with _maybe_span(
+                            self._dispatch_span_recorder, SPAN_DB_WRITE_ATTEMPT
+                        ):
+                            attempt_id = await self._attempt_repo.create(
+                                request_id=db_request_id,
+                                attempt_number=attempt_number,
+                                account_id=account_id,
+                                provider_id=resolved_provider_id,
+                                model_id=context.model_id,
+                                protocol=context.protocol,
+                                streamed=context.streaming,
+                            )
+
+                        # Retries select a new account and reservation estimate.
+                        if not created_request:
+                            with _maybe_span(
+                                self._dispatch_span_recorder, SPAN_DB_WRITE_REQUEST
+                            ):
+                                await self._request_repo.update_after_selection(
+                                    request_id=db_request_id,
+                                    account_id=account_id,
+                                    reserved_microdollars=estimated_microdollars,
+                                )
+                    except BaseException:
+                        if self._health_manager is not None:
+                            self._health_manager.release_request(account_name)
+                        raise
+
+                    # Record the account under the same select lock so a
+                    # concurrent caller observing the same context cannot
+                    # race on attempted_accounts before this attempt is
+                    # fully persisted and committed.
+                    context.attempted_accounts.add(account_name)
+                    context.client_metadata["account_name"] = account_name
+
+                # Durable transaction has committed; rows for the request,
+                # reservation, and attempt are visible. The lock is still
+                # held; publication runs BEFORE the lock releases so a
+                # concurrent selector entering the lock after this returns
+                # observes this attempt's runtime state.
+                active_count_increased = False
                 try:
-                    api_key = self._registry.get_api_key(account_name)
-                    if api_key is None or not self._registry.has_usable_credentials(
-                        account_name
+                    with _maybe_span(
+                        self._dispatch_span_recorder, SPAN_RUNTIME_PUBLICATION
                     ):
-                        raise AuthenticationError(
-                            f"API key not available for account {account_name!r}"
-                        )
+                        # 11. Increment runtime active count
+                        await self._router.increment_active_request_count(account_name)
+                        active_count_increased = True
 
-                    # 5. Resolve the immutable account ID once per process.
-                    account_id = self._account_id_cache.get(account_name)
-                    if account_id is None:
-                        account_repo = AccountRepository(self._db)
-                        account_id = await account_repo.get_id_by_name(account_name)
-                        if account_id is not None:
-                            self._account_id_cache[account_name] = account_id
-                    if account_id is None:
-                        raise DatabaseError(
-                            f"Account {account_name!r} not found in database"
-                        )
-
-                    # 6. Resolve the selected account's provider
-                    resolved_provider_id = (
-                        self._catalog.cache.get_provider_for_account(account_name)
-                        or self._registry.get_provider_for_account(account_name)
-                        or context.provider_id
-                        or DEFAULT_PROVIDER_ID
-                    )
-
-                    # 5. Compute the reservation size (cost microdollars) for
-                    #    the selected account. Reservation sizing goes
-                    #    through the cost-estimator.
-                    estimated_microdollars = 0
-                    if self._quota_estimator is not None:
-                        estimated_microdollars = self._quota_estimator.estimate_cost(
-                            account_name, context.model_id, estimated_tokens
-                        )
-
-                    # 8. Create pending request if first attempt. Store the
-                    # reservation estimate in the INSERT so the common path
-                    # does not immediately UPDATE the same row.
-                    created_request = "db_request_id" not in context.client_metadata
-                    if created_request:
-                        db_request_id = await self._request_repo.create_pending(
-                            request_id=context.request_id,
-                            model_id=context.model_id,
-                            protocol=context.protocol,
-                            streamed=context.streaming,
-                            account_id=account_id,
-                            reserved_microdollars=estimated_microdollars,
-                            started_at=context.started_at,
-                            provider_id=resolved_provider_id,
-                            client_ip=context.client_ip,
-                        )
-                        context.client_metadata["db_request_id"] = db_request_id
-                    db_request_id = context.client_metadata["db_request_id"]
-
-                    # 9. Create reservation
-                    reservation_id = await self._reservation_repo.create(
-                        request_id=db_request_id,
-                        account_id=account_id,
-                        model_id=context.model_id,
-                        estimated_tokens=estimated_tokens,
-                        estimated_microdollars=estimated_microdollars,
-                    )
-
-                    # 10. Create attempt row
-                    attempt_id = await self._attempt_repo.create(
-                        request_id=db_request_id,
-                        attempt_number=attempt_number,
-                        account_id=account_id,
-                        provider_id=resolved_provider_id,
-                        model_id=context.model_id,
-                        protocol=context.protocol,
-                        streamed=context.streaming,
-                    )
-
-                    # 10a. Persist the routing-decision trace alongside the
-                    # attempt so the dashboard can answer "why this account?"
-                    # without rescoring from quota tables.
-                    #
-                    # The routing.trace.mode config controls write pressure:
-                    #   all     – every attempt (current behavior)
-                    #   sampled – deterministic request-id sampling at write time
-                    #   off     – no routing trace rows
-                    trace_cfg = (
-                        self._config.routing.trace if self._config is not None else None
-                    )
-                    trace_mode = trace_cfg.mode if trace_cfg is not None else "all"
-                    should_write_trace = trace_mode != "off"
-                    if should_write_trace and trace_mode == "sampled":
-                        h = hashlib.sha256(context.request_id.encode()).digest()
-                        should_write_trace = (
-                            int.from_bytes(h[:8], "big") / ((1 << 64) - 1)
-                        ) < trace_cfg.sample_rate  # type: ignore[union-attr]
-
-                    if should_write_trace:
-                        top_score_value: float | None = None
-                        top_score_account_name: str | None = None
-                        if ranked_candidates:
-                            top_state, top_score_obj = ranked_candidates[0]
-                            top_score_value = float(top_score_obj.final_score)
-                            top_score_account_name = top_state.name
-                        include_sc = (
-                            trace_cfg.include_score_components  # type: ignore[union-attr]
-                            if trace_cfg is not None
-                            else True
-                        )
-                        score_components = (
-                            self._build_score_components(
-                                ranked_candidates=ranked_candidates,
-                                selected_account_name=account_name,
-                                selected_state=selected_state,
-                                selected_score=selected_score,
-                                selected_tier=selected_tier,
-                                fairness_decision=plan.fairness_decision,
-                                fairness_band_names=plan.fairness_band_names,
+                        # 12. Add exact reserved amount to in-memory cache.
+                        if self._quota_estimator is not None:
+                            await self._quota_estimator.add_reservation(
+                                account_name,
+                                estimated_microdollars,
+                                requests=1,
+                                tokens=estimated_tokens,
                             )
-                            if include_sc
-                            else None
+                except BaseException:
+                    if active_count_increased:
+                        await self._router.decrement_active_request_count(account_name)
+                    await asyncio.shield(
+                        self._attempt_finalizer.finalize_failed_attempt(
+                            attempt_id=attempt_id,
+                            reservation_id=reservation_id,
+                            data=AttemptFinalizationData(
+                                status_code=None,
+                                error_class="PostCommitInterrupted",
+                                release_reason="post_commit_interrupted",
+                                retry_category=RetryCategory.NEVER.value,
+                                bytes_received=len(context.original_body),
+                                latency_ms=self._elapsed_ms(context),
+                                is_retry_outcome=False,
+                            ),
                         )
-                        trace = RoutingDecisionTrace(
-                            model_id=context.model_id,
-                            provider_id=resolved_provider_id,
-                            protocol=context.protocol,
-                            selected_account_name=account_name,
-                            selected_account_id=account_id,
-                            selected_tier=selected_tier,
-                            selected_score=selected_score,
-                            eligible_count=len(eligible_account_names),
-                            scored_count=len(ranked_candidates),
-                            attempted_excluded_count=len(exclude),
-                            top_score=top_score_value,
-                            top_score_account_name=top_score_account_name,
-                            exclusions=tuple(exclusions),
-                            score_components=score_components,
-                        )
+                    )
+                    if self._health_manager is not None:
+                        self._health_manager.release_request(account_name)
+                    context.client_metadata["post_commit_interrupted"] = True
+                    raise
+
+        # Record the actual lock wait/held durations.
+        if self._dispatch_span_recorder is not None:
+            self._dispatch_span_recorder.record_ns(
+                SPAN_SELECTION_LOCK_WAIT, lock_held_ns - lock_wait_ns
+            )
+            self._dispatch_span_recorder.record_ns(
+                SPAN_SELECTION_LOCKED, time.perf_counter_ns() - lock_held_ns
+            )
+
+        # 10a. Persist the routing-decision trace OUTSIDE the lock. Trace
+        # writes are observability data only; they are not required for
+        # reservation correctness, so a trace-write failure cannot fail
+        # the dispatch.
+        with _maybe_span(self._dispatch_span_recorder, SPAN_ROUTING_TRACE_BUILD):
+            trace_cfg = self._config.routing.trace if self._config is not None else None
+            trace_mode = trace_cfg.mode if trace_cfg is not None else "all"
+            should_write_trace = trace_mode != "off"
+            if should_write_trace and trace_mode == "sampled":
+                h = hashlib.sha256(context.request_id.encode()).digest()
+                should_write_trace = (
+                    int.from_bytes(h[:8], "big") / ((1 << 64) - 1)
+                ) < trace_cfg.sample_rate  # type: ignore[union-attr]
+
+            trace: RoutingDecisionTrace | None = None
+            if should_write_trace:
+                top_score_value: float | None = None
+                top_score_account_name: str | None = None
+                if ranked_candidates:
+                    top_state, top_score_obj = ranked_candidates[0]
+                    top_score_value = float(top_score_obj.final_score)
+                    top_score_account_name = top_state.name
+                include_sc = (
+                    trace_cfg.include_score_components  # type: ignore[union-attr]
+                    if trace_cfg is not None
+                    else True
+                )
+                score_components = (
+                    self._build_score_components(
+                        ranked_candidates=ranked_candidates,
+                        selected_account_name=account_name,
+                        selected_state=selected_state,
+                        selected_score=selected_score,
+                        selected_tier=selected_tier,
+                        fairness_decision=plan.fairness_decision,
+                        fairness_band_names=plan.fairness_band_names,
+                    )
+                    if include_sc
+                    else None
+                )
+                trace = RoutingDecisionTrace(
+                    model_id=context.model_id,
+                    provider_id=resolved_provider_id,
+                    protocol=context.protocol,
+                    selected_account_name=account_name,
+                    selected_account_id=account_id,
+                    selected_tier=selected_tier,
+                    selected_score=selected_score,
+                    eligible_count=len(eligible_account_names),
+                    scored_count=len(ranked_candidates),
+                    attempted_excluded_count=len(exclude),
+                    top_score=top_score_value,
+                    top_score_account_name=top_score_account_name,
+                    exclusions=tuple(exclusions),
+                    score_components=score_components,
+                )
+        if trace is not None:
+            with _maybe_span(self._dispatch_span_recorder, SPAN_ROUTING_TRACE_WRITE):
+                # The trace write needs its own transaction because it
+                # runs OUTSIDE ``_select_lock`` (and therefore outside
+                # the request/reservation/attempt transaction).  Trace
+                # writes are best-effort observability data; a write
+                # failure must never fail the dispatch.
+                try:
+                    async with self._db.transaction():
                         await self._routing_decision_repo.create(
                             request_id=int(db_request_id),
                             attempt_number=attempt_number,
@@ -1528,84 +1652,17 @@ class RequestCoordinator:
                             exclude_reasons_json=trace.to_exclude_reasons_json(),
                             score_components_json=(
                                 trace.to_score_components_json()
-                                if score_components is not None
+                                if trace.score_components is not None
                                 else None
                             ),
                         )
-
-                    # Retries select a new account and reservation estimate.
-                    if not created_request:
-                        await self._request_repo.update_after_selection(
-                            request_id=db_request_id,
-                            account_id=account_id,
-                            reserved_microdollars=estimated_microdollars,
-                        )
-                except BaseException:
-                    if self._health_manager is not None:
-                        self._health_manager.release_request(account_name)
-                    raise
-
-                # Record the account under the same select lock so a
-                # concurrent caller observing the same context cannot
-                # race on attempted_accounts before this attempt is
-                # fully persisted and committed.
-                context.attempted_accounts.add(account_name)
-                context.client_metadata["account_name"] = account_name
-
-            # Durable transaction has committed; rows for the request,
-            # reservation, attempt, and routing_decision are visible.
-            # ``_select_lock`` is still held — publication runs BEFORE
-            # the lock releases so a concurrent selector entering the
-            # lock after this returns observes this attempt's runtime
-            # state. The publish is fast (in-process counter + cache
-            # mutation) so the lock-hold stays tight while still
-            # closing the race where the prior revision released the
-            # lock first and a selector could therefore score on stale
-            # zero-penalty counters.
-            active_count_increased = False
-            try:
-                # 11. Increment runtime active count
-                await self._router.increment_active_request_count(account_name)
-                active_count_increased = True
-
-                # 12. Add exact reserved amount to in-memory cache. The
-                #     cost figure is preserved for the audit path even
-                #     though the scorer no longer reads it; the
-                #     request/token components feed the new load-aware
-                #     scoring signal.
-                if self._quota_estimator is not None:
-                    await self._quota_estimator.add_reservation(
-                        account_name,
-                        estimated_microdollars,
-                        requests=1,
-                        tokens=estimated_tokens,
+                except Exception:  # noqa: BLE001
+                    # Trace writes are best-effort. Log and continue.
+                    logger.debug(
+                        "routing_trace_write_failed",
+                        extra={"proxy_request_id": context.request_id},
+                        exc_info=True,
                     )
-            except BaseException:
-                # Compensate: undo the active count increment so
-                # runtime state stays consistent with the durable row.
-                if active_count_increased:
-                    await self._router.decrement_active_request_count(account_name)
-                # Finalize the just-created attempt as cancelled so
-                # normal finalization has no stale durable IDs.
-                await asyncio.shield(
-                    self._attempt_finalizer.finalize_failed_attempt(
-                        attempt_id=attempt_id,
-                        reservation_id=reservation_id,
-                        data=AttemptFinalizationData(
-                            status_code=None,
-                            error_class="PostCommitInterrupted",
-                            release_reason="post_commit_interrupted",
-                            retry_category=RetryCategory.NEVER.value,
-                            bytes_received=len(context.original_body),
-                            latency_ms=self._elapsed_ms(context),
-                            is_retry_outcome=False,
-                        ),
-                    )
-                )
-                if self._health_manager is not None:
-                    self._health_manager.release_request(account_name)
-                context.client_metadata["post_commit_interrupted"] = True
-                raise
 
         return SelectedAttempt(
             proxy_request_id=context.request_id,

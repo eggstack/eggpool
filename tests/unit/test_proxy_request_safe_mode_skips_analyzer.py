@@ -64,8 +64,11 @@ def _endpoint() -> ProxyEndpointConfig:
         request_label="openai",
         not_found_error_type="model_not_found",
         service_error_type="service_unavailable",
-        error_response=lambda *, status_code, message, error_type:
-        ("err", status_code, message),
+        error_response=lambda *, status_code, message, error_type: (
+            "err",
+            status_code,
+            message,
+        ),
     )
 
 
@@ -138,9 +141,7 @@ async def _invoke_analyzer_skip_for_mode(
     # import-uses the symbol lazily, so patching either the package or
     # the analyzer module itself is enough.
     monkeypatch.setattr(compression_pkg, "analyze_compression", _spy_analyze)
-    monkeypatch.setattr(
-        apply_mod, "apply_safe_compression", _spy_apply
-    )
+    monkeypatch.setattr(apply_mod, "apply_safe_compression", _spy_apply)
 
     coordinator = _FakeCoordinator()
     state = type(
@@ -179,9 +180,7 @@ async def _invoke_analyzer_skip_for_mode(
             "messages": [
                 {
                     "role": "user",
-                    "content": (
-                        "hi with text to make sure observation has a payload"
-                    ),
+                    "content": ("hi with text to make sure observation has a payload"),
                 }
             ],
             "stream": False,

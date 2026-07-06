@@ -294,6 +294,7 @@ class DispatchSpanTimer:
 
 
 # Span keys used by the proxy request and selection paths.
+SPAN_AUTH = "auth"
 SPAN_BODY_READ = "body_read"
 SPAN_JSON_PARSE = "json_parse"
 SPAN_MODEL_PARSE = "model_parse"
@@ -310,6 +311,7 @@ SPAN_SELECTION_LOCKED = "selection_locked"
 SPAN_THINKING_CLASSIFICATION = "thinking_classification"
 SPAN_RESERVATION_ESTIMATE = "reservation_estimate"
 SPAN_ROUTING_PLAN = "routing_plan"
+SPAN_CIRCUIT_PROBE = "circuit_probe"
 SPAN_ACCOUNT_LOOKUP = "account_lookup"
 SPAN_DB_WRITE_REQUEST = "db_write_request"
 SPAN_DB_WRITE_RESERVATION = "db_write_reservation"
@@ -320,6 +322,7 @@ SPAN_RUNTIME_PUBLICATION = "runtime_publication"
 
 
 ALL_SPAN_KEYS: tuple[str, ...] = (
+    SPAN_AUTH,
     SPAN_BODY_READ,
     SPAN_JSON_PARSE,
     SPAN_MODEL_PARSE,
@@ -336,6 +339,7 @@ ALL_SPAN_KEYS: tuple[str, ...] = (
     SPAN_THINKING_CLASSIFICATION,
     SPAN_RESERVATION_ESTIMATE,
     SPAN_ROUTING_PLAN,
+    SPAN_CIRCUIT_PROBE,
     SPAN_ACCOUNT_LOOKUP,
     SPAN_DB_WRITE_REQUEST,
     SPAN_DB_WRITE_RESERVATION,
@@ -353,7 +357,9 @@ __all__ = [
     "DispatchSpanRecorder",
     "DispatchSpanTimer",
     "SPAN_ACCOUNT_LOOKUP",
+    "SPAN_AUTH",
     "SPAN_BODY_READ",
+    "SPAN_CIRCUIT_PROBE",
     "SPAN_COMPRESSION_ANALYZE",
     "SPAN_COMPRESSION_APPLY",
     "SPAN_COMPRESSION_POLICY",
