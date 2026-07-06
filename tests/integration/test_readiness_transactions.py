@@ -140,3 +140,142 @@ async def test_child_task_does_not_inherit_ownership() -> None:
     await parent_task()
     assert child_saw_nested == [False]
     await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_unrelated_task_waits_for_outer_transaction() -> None:
+    """Task B must not piggyback on task A's transaction.
+
+    Regression for the bug where ``db.transaction()`` used
+    ``conn.in_transaction`` as a global nesting signal: any
+    unrelated coroutine that entered ``db.transaction()`` while
+    task A held the lock would silently execute inside A's
+    transaction. The fix is to require per-task
+    ``_in_transaction_context`` inheritance, so unrelated tasks
+    acquire ``_connection_lock`` and wait for A to commit.
+    """
+    db = Database(path=":memory:")
+    await db.connect()
+    runner = MigrationRunner(db)
+    await runner.run()
+    await _seed_db(db)
+
+    request_repo = RequestRepository(db)
+    task_a_started = asyncio.Event()
+    a_executions: list[bool] = []
+    b_executions: list[bool] = []
+    b_order: list[int] = []
+    counter = 0
+
+    async def task_a() -> None:
+        nonlocal counter
+        async with db.transaction():
+            await request_repo.create_pending(
+                request_id="tx-isolation-a",
+                model_id="gpt-4",
+                protocol="openai",
+                streamed=False,
+                account_id=1,
+            )
+            task_a_started.set()
+            # Hold the transaction open briefly so task B is forced
+            # to serialize behind it.
+            await asyncio.sleep(0.2)
+            a_executions.append(True)
+
+    async def task_b() -> None:
+        nonlocal counter
+        await task_a_started.wait()
+        # Task B enters db.transaction() while task A still holds it.
+        # It MUST wait for task A to commit; the writes inside B must
+        # land in a separate transaction.
+        async with db.transaction():
+            counter += 1
+            b_order.append(counter)
+            await request_repo.create_pending(
+                request_id="tx-isolation-b",
+                model_id="gpt-4",
+                protocol="openai",
+                streamed=False,
+                account_id=1,
+            )
+            b_executions.append(True)
+
+    a = asyncio.create_task(task_a())
+    b = asyncio.create_task(task_b())
+
+    # Wait until task A is inside its transaction, then confirm
+    # task B has not yet entered its own.
+    await task_a_started.wait()
+    await asyncio.sleep(0.05)
+    assert not b.done()
+    assert b_executions == []
+
+    await asyncio.gather(a, b)
+
+    assert b_executions == [True]
+    assert a_executions == [True]
+
+    # Both rows committed, in task A then task B order.
+    rows = await db.fetch_all("SELECT proxy_request_id FROM requests ORDER BY id")
+    assert [row["proxy_request_id"] for row in rows] == [
+        "tx-isolation-a",
+        "tx-isolation-b",
+    ]
+    await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_probe_writable_does_not_leak_into_outer_transaction() -> None:
+    """``probe_writable()`` must not leave a ``health_probe`` row behind.
+
+    Regression for the bug where ``probe_writable()`` silently
+    piggybacked on an unrelated request's transaction via the
+    ``conn.in_transaction`` fast path. The probe's sentinel
+    rollback was swallowed by the nested caller and the probe
+    row ended up in the outer transaction's commit.
+    """
+    db = Database(path=":memory:")
+    await db.connect()
+    runner = MigrationRunner(db)
+    await runner.run()
+    await _seed_db(db)
+
+    request_repo = RequestRepository(db)
+    holder_started = asyncio.Event()
+
+    async def holder() -> None:
+        async with db.transaction():
+            await request_repo.create_pending(
+                request_id="probe-isolation",
+                model_id="gpt-4",
+                protocol="openai",
+                streamed=False,
+                account_id=1,
+            )
+            holder_started.set()
+            # Hold the transaction open briefly while the probe
+            # serializes behind us on the connection lock.
+            await asyncio.sleep(0.2)
+
+    async def prober() -> None:
+        await holder_started.wait()
+        # The probe runs only after the holder releases the lock
+        # (it cannot piggyback on the holder's transaction).
+        assert await db.probe_writable() is True
+
+    holder_task = asyncio.create_task(holder())
+    probe_task = asyncio.create_task(prober())
+    await asyncio.gather(holder_task, probe_task)
+
+    # No probe row should have committed (the probe is rolled back).
+    rows = await db.fetch_all("SELECT * FROM health_probe")
+    assert rows == []
+
+    # The request row from the holder is committed.
+    row = await db.fetch_one(
+        "SELECT * FROM requests WHERE proxy_request_id = ?",
+        ("probe-isolation",),
+    )
+    assert row is not None
+    await db.disconnect()

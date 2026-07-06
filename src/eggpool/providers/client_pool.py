@@ -69,12 +69,29 @@ class ProviderClientPool:
         """Return a metrics snapshot for runtime diagnostics.
 
         Each provider gets exactly one client at startup, so per-provider
-        build counts are always 1.  This exposes the total count and a
-        per-provider breakdown for the diagnostics endpoint.
+        build counts are always 1.  Account-specific clients registered
+        via :meth:`register_account` (e.g. when an account has a
+        configured proxy) are counted separately so runtime and dashboard
+        network diagnostics do not underreport total client construction.
         """
+        per_provider_accounts: dict[str, int] = {}
+        for provider_id, _account_name in self._account_clients:
+            per_provider_accounts[provider_id] = (
+                per_provider_accounts.get(provider_id, 0) + 1
+            )
+        provider_ids = set(self._clients) | set(per_provider_accounts)
+        providers: dict[str, int] = {
+            pid: (1 if pid in self._clients else 0) + per_provider_accounts.get(pid, 0)
+            for pid in sorted(provider_ids)
+        }
         return {
-            "build_count": len(self._clients),
-            "providers": {pid: 1 for pid in self._clients},
+            "build_count": len(self._clients) + len(self._account_clients),
+            "providers": providers,
+            "account_client_count": len(self._account_clients),
+            "account_clients": [
+                {"provider_id": pid, "account_name": acct}
+                for pid, acct in sorted(self._account_clients)
+            ],
         }
 
     async def close(self) -> None:

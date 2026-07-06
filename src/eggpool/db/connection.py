@@ -25,11 +25,16 @@ class Database:
     """Async wrapper around aiosqlite with pragma configuration.
 
     All SQL operations are serialized through a single connection lock.
-    Nesting is detected via SQLite's own connection state
-    (``conn.in_transaction``), not task identity, so calls inside
-    ``asyncio.shield()`` or ``asyncio.create_task()`` correctly
-    piggyback on the outer transaction without issuing a second
-    ``BEGIN`` against the single SQLite connection.
+    Nesting is detected via the per-task ``_in_transaction_context``
+    ContextVar, not via SQLite's connection-wide ``in_transaction``
+    state. ContextVars are inherited at task creation, so calls
+    inside ``asyncio.shield()`` or ``asyncio.create_task()`` from a
+    parent already inside ``transaction()`` correctly piggyback on
+    the outer transaction without issuing a second ``BEGIN`` against
+    the single SQLite connection. Unrelated concurrent tasks (probe
+    workers, healthcheck tasks, sibling requests) do not inherit
+    that flag and therefore acquire the lock directly so they
+    cannot piggyback on each other's transactions.
     """
 
     def __init__(
@@ -77,8 +82,8 @@ class Database:
         # the active outermost transaction on this connection.
         # Used by ``vacuum()`` to refuse to run when the *current*
         # task is the lock holder (which would deadlock). Nested
-        # detection in ``transaction()`` itself uses SQLite's
-        # ``conn.in_transaction``, NOT this attribute.
+        # detection in ``transaction()`` itself uses the per-task
+        # ``_in_transaction_context`` ContextVar, NOT this attribute.
         self._transaction_owner: ContextVar[asyncio.Task[object] | None] = ContextVar(
             "database_transaction_owner",
             default=None,
@@ -161,10 +166,12 @@ class Database:
         (and therefore cannot acquire ``_connection_lock``
         without deadlocking) from "some other task holds the
         transaction lock". Nesting detection inside
-        ``transaction()`` itself uses ``conn.in_transaction``,
-        NOT this helper, because ``_transaction_owner`` is a
-        per-task ContextVar and would misidentify shielded or
-        ``create_task`` children as non-owners.
+        ``transaction()`` itself uses the per-task
+        ``_in_transaction_context`` ContextVar, NOT this helper,
+        because ``_transaction_owner`` is task-scoped and would
+        misidentify shielded or ``create_task`` children (which
+        inherit ``_in_transaction_context`` but not
+        ``_transaction_owner``) as non-owners.
         """
         owner = self._transaction_owner.get()
         return owner is not None and owner is asyncio.current_task()
@@ -482,16 +489,21 @@ class Database:
         Repository methods must NOT call commit inside this context;
         the caller owns commit boundaries.
 
-        Nesting semantics use SQLite's connection state
-        (``conn.in_transaction``), NOT ``asyncio.current_task()``
-        identity. This matters across ``asyncio.shield()`` and
-        ``asyncio.create_task()`` boundaries: a wrapped coroutine
-        entering ``transaction()`` while an outer caller already
-        issued ``BEGIN IMMEDIATE`` will see ``in_transaction=True``
-        and piggyback on the outer transaction's commit boundary,
-        instead of failing with
+        Nesting semantics are gated on the per-task
+        ``_in_transaction_context`` ContextVar, NOT on SQLite's
+        per-connection ``conn.in_transaction``. ContextVars are
+        inherited at task creation, so ``asyncio.shield()`` and
+        ``asyncio.create_task()`` children of an outer caller that
+        already entered ``transaction()`` see ``True`` and piggyback
+        on the outer's commit boundary -- which avoids
         ``OperationalError: cannot start a transaction within
-        a transaction`` or deadlocking on ``_connection_lock``.
+        a transaction`` and ``_connection_lock`` deadlocks.
+
+        Tasks that did not inherit ``_in_transaction_context=True``
+        (probe workers, healthcheck tasks, unrelated concurrent
+        requests) fall through to acquire ``_connection_lock``
+        directly. This keeps separate operations from piggybacking
+        on each other's transactions.
 
         The outermost ``transaction()`` caller is the only one
         that acquires ``_connection_lock`` and issues
@@ -502,12 +514,14 @@ class Database:
         if self._conn is None:
             raise DatabaseError("Database not connected")
 
-        # Fast path: piggyback on an existing transaction.
-        # Reading conn.in_transaction does not require the lock --
-        # it reflects SQLite's authoritative per-connection state,
-        # which aiosqlite mutates only inside the worker thread
-        # that serializes our SQL.
-        if self._conn.in_transaction:
+        # Fast path: piggyback on an existing transaction only when
+        # the current task inherited the transaction context (via
+        # ``asyncio.shield()`` / ``asyncio.create_task()`` from a
+        # parent already inside ``transaction()``) or is the same
+        # task that opened it. Unrelated tasks that lack that
+        # inheritance must acquire the lock instead, so two
+        # concurrent requests cannot piggyback on each other.
+        if self._in_transaction_context.get():
             self._total_nested_transactions += 1
             ctx_token = self._in_transaction_context.set(True)
             try:
@@ -528,7 +542,7 @@ class Database:
         async with self._connection_lock:
             # Re-check under the lock. Another task may have raced
             # between our initial check and acquiring the lock.
-            if self._conn.in_transaction:
+            if self._in_transaction_context.get():
                 self._total_nested_transactions += 1
                 ctx_token = self._in_transaction_context.set(True)
                 try:

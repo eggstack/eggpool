@@ -103,7 +103,12 @@ class TestProviderClientPool:
     def test_snapshot_empty_pool(self) -> None:
         pool = ProviderClientPool()
         snap = pool.snapshot()
-        assert snap == {"build_count": 0, "providers": {}}
+        assert snap == {
+            "build_count": 0,
+            "providers": {},
+            "account_client_count": 0,
+            "account_clients": [],
+        }
 
     def test_snapshot_with_providers(self) -> None:
         pool = ProviderClientPool()
@@ -112,6 +117,37 @@ class TestProviderClientPool:
         snap = pool.snapshot()
         assert snap["build_count"] == 2
         assert snap["providers"] == {"alpha": 1, "beta": 1}
+        assert snap["account_client_count"] == 0
+        assert snap["account_clients"] == []
+
+    def test_snapshot_counts_account_proxy_clients(self) -> None:
+        pool = ProviderClientPool()
+        pool.register("alpha", httpx.AsyncClient(base_url="https://alpha.example.com"))
+        pool.register("beta", httpx.AsyncClient(base_url="https://beta.example.com"))
+        pool.register_account(
+            "alpha",
+            "proxied-a",
+            httpx.AsyncClient(base_url="https://alpha.example.com"),
+        )
+        pool.register_account(
+            "alpha",
+            "proxied-b",
+            httpx.AsyncClient(base_url="https://alpha.example.com"),
+        )
+        pool.register_account(
+            "beta",
+            "proxied-c",
+            httpx.AsyncClient(base_url="https://beta.example.com"),
+        )
+        snap = pool.snapshot()
+        assert snap["build_count"] == 5
+        assert snap["providers"] == {"alpha": 3, "beta": 2}
+        assert snap["account_client_count"] == 3
+        assert snap["account_clients"] == [
+            {"provider_id": "alpha", "account_name": "proxied-a"},
+            {"provider_id": "alpha", "account_name": "proxied-b"},
+            {"provider_id": "beta", "account_name": "proxied-c"},
+        ]
 
     def test_from_app_config_uses_account_proxy_clients(self) -> None:
         config = AppConfig(
@@ -139,3 +175,11 @@ class TestProviderClientPool:
         assert pool.get_client("alpha", "direct") is provider_client
         assert proxied_client is not provider_client
         assert isinstance(proxied_client._transport, AsyncPProxyTransport)
+
+        snap = pool.snapshot()
+        assert snap["build_count"] == 2
+        assert snap["providers"] == {"alpha": 2}
+        assert snap["account_client_count"] == 1
+        assert snap["account_clients"] == [
+            {"provider_id": "alpha", "account_name": "proxied"}
+        ]
