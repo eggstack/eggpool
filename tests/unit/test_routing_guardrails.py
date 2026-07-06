@@ -622,9 +622,9 @@ class TestRuntimeDiagnosticSurface:
         mock_config.database.synchronous = "full"
         mock_config.database.busy_timeout_ms = 5000
         mock_config.database.worker_threads = 0
-        mock_db = AsyncMock()
+        mock_db = MagicMock()
         mock_db._conn = True
-        mock_db.contention_snapshot.return_value = {}
+        mock_db.contention_snapshot = MagicMock(return_value={})
         mock_db.fetch_one = AsyncMock(return_value=None)
         mock_db.execute_pragma = AsyncMock(return_value=[])
 
