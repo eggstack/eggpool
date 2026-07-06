@@ -144,6 +144,24 @@ The detailed request-shaping summary and drill-down cards live on
 `/cache`; `/runtime` keeps a compact relocation panel that points back
 to that page.
 
+The `/cache` page opens with six top-level operator summary cards:
+
+| Summary card | Quiet default | Lights up when |
+|--------------|---------------|----------------|
+| Request changes | no changes | compression failed fallback > 0 |
+| Provider cache counters | `—` | rows reported / classified ratio |
+| EggPool cache annotations | `Off` | dry-run or applied counts or warning code count |
+| Safety guardrail | `Clean` | compression/policy/annotation warnings or fallbacks |
+| Tuning suggestions | `Off` | recommendation or override count > 0 |
+| Routing isolation | `Isolated` | routing guardrail violation |
+
+Raw `reporting_only` and other internal modes survive in the subtext,
+not the primary metric. Advanced diagnostics stay collapsed unless a
+warning or non-default state is present (segmentation parse failures,
+synthetic-cache warnings or applied count, tuning recommendations,
+routing guardrail violation, transcoding loss warnings, compression
+warnings or policy warnings).
+
 ### Operator surfaces
 
 | Surface | Default | Mutates requests? | Primary stats/API |

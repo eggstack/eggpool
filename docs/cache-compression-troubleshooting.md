@@ -45,6 +45,12 @@ Before troubleshooting, confirm you are reading the right endpoint:
 | `cache_counter_unknown_requests` | Payload could not be parsed, or returned a shape EggPool does not recognize. The cache state is ambiguous; do NOT assume zero. |
 | `cache_hit_ratio_known_only` | Cache hit ratio computed only over rows with `cache_counter_status == "reported"`. Excludes `not_reported` and `unknown_format` so a non-reporting provider does not artificially deflate the hit ratio. |
 
+The `/cache` summary surfaces provider cache counters and EggPool cache
+annotations on separate cards. Missing provider cache counters are
+**not** cache misses and do not prove the upstream is uncached; they
+just mean the upstream did not surface them. EggPool never disables
+provider-side caching.
+
 ### Segmentation
 
 | Field | Meaning |

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from html import escape as _stdlib_escape
 from typing import TYPE_CHECKING, Any, cast
@@ -3711,6 +3712,27 @@ def _display_request_change_mode(mode: str | None) -> str:
     return mapping.get(mode, mode)
 
 
+@dataclass(frozen=True, slots=True)
+class CacheAdvancedState:
+    """Server-decided open/closed state for the /cache advanced diagnostics panel.
+
+    Operators see a single `<details>` disclosure whose default-open state
+    is decided here. ``warning`` indicates the disclosure should be
+    styled as a warning; ``open_by_default`` indicates it should be
+    rendered with the ``open`` attribute. ``reasons`` is a tuple of
+    human-readable triggers so the dashboard can surface a count and let
+    the operator inspect the disclosure on demand.
+    """
+
+    open_by_default: bool
+    warning: bool
+    reasons: tuple[str, ...]
+
+    @property
+    def reason_count(self) -> int:
+        return len(self.reasons)
+
+
 def _routing_isolation_healthy(guardrails: dict[str, Any] | None) -> bool:
     """Return True when routing guardrails are healthy."""
     if not isinstance(guardrails, dict):
@@ -3726,36 +3748,131 @@ def _routing_isolation_healthy(guardrails: dict[str, Any] | None) -> bool:
     )
 
 
-def _compression_has_warnings(
+def _cache_safety_warning_count(
     compression_runtime: dict[str, Any] | None,
     guardrails: dict[str, Any] | None,
-) -> bool:
-    """Return True when there are compression warnings to surface."""
+) -> int:
+    """Count compression warnings from runtime windows and guardrails."""
     warning_count = 0
     if isinstance(compression_runtime, dict):
         runtime_window = compression_runtime.get("window")
         if isinstance(runtime_window, dict):
             raw_wc = cast("dict[str, Any]", runtime_window).get("warning_count", 0)
-            warning_count = int(raw_wc or 0)
-        if warning_count == 0:
-            warning_count = int(compression_runtime.get("warning_count", 0) or 0)
-    if warning_count > 0:
-        return True
+            warning_count += int(raw_wc or 0)
+        warning_count += int(compression_runtime.get("warning_count", 0) or 0)
     if isinstance(guardrails, dict):
-        fallback = int(guardrails.get("failed_fallback_count", 0) or 0)
-        policy_warn = int(guardrails.get("policy_warning_count", 0) or 0)
-        return fallback > 0 or policy_warn > 0
-    return False
+        warning_count += int(guardrails.get("failed_fallback_count", 0) or 0)
+        warning_count += int(guardrails.get("policy_warning_count", 0) or 0)
+    return warning_count
 
 
-def _advanced_section_open_by_default(
+def _stable_prefix_mismatch_count(
+    compression_runtime: dict[str, Any] | None,
+) -> int:
+    """Return the count of stable-prefix mismatches from cache_safety."""
+    if not isinstance(compression_runtime, dict):
+        return 0
+    cache_safety: Any = compression_runtime.get("cache_safety") or {}
+    if not isinstance(cache_safety, dict):
+        return 0
+    cache_safety_dict = cast("dict[str, Any]", cache_safety)
+    return int(cache_safety_dict.get("stable_prefix_mismatch", 0) or 0)
+
+
+def _build_cache_advanced_state(
     *,
-    warnings: bool,
-    guardrails_healthy: bool,
-    has_data: bool,
-) -> bool:
-    """Server-side decision whether advanced diagnostics should be auto-opened."""
-    return warnings or (not guardrails_healthy and has_data)
+    compression_runtime: dict[str, Any] | None,
+    guardrails: dict[str, Any] | None,
+    request_shaping_summary: dict[str, Any] | None,
+    transcoding_loss_warnings: int,
+    has_any_data: bool,
+) -> CacheAdvancedState:
+    """Compute the open/closed state of the advanced diagnostics disclosure.
+
+    The disclosure auto-opens whenever any actionable warning or
+    non-default runtime state is present. Quiet installs (zero warnings
+    everywhere, healthy routing, no synthetic-cache mutation, no
+    tuning activity) keep the disclosure collapsed.
+    """
+    summary: dict[str, Any] = request_shaping_summary or {}
+    shaping_guardrails = cast("dict[str, Any]", summary.get("guardrails") or {})
+    shaping_compression = cast("dict[str, Any]", summary.get("compression") or {})
+    shaping_segmentation = cast("dict[str, Any]", summary.get("segmentation") or {})
+    shaping_synthetic = cast("dict[str, Any]", summary.get("synthetic_cache") or {})
+    shaping_tuning = cast("dict[str, Any]", summary.get("tuning") or {})
+
+    effective_guardrails: dict[str, Any] | None
+    if guardrails:
+        effective_guardrails = guardrails
+    elif shaping_guardrails:
+        effective_guardrails = shaping_guardrails
+    else:
+        effective_guardrails = None
+
+    reasons: list[str] = []
+    warning = False
+
+    if _cache_safety_warning_count(compression_runtime, shaping_guardrails) > 0:
+        reasons.append("compression warnings")
+        warning = True
+
+    stable_prefix_mismatch = _stable_prefix_mismatch_count(compression_runtime)
+    if stable_prefix_mismatch > 0:
+        reasons.append("stable-prefix mismatches")
+        warning = True
+
+    if int(shaping_compression.get("failed_fallback_count", 0) or 0) > 0:
+        reasons.append("compression failed fallbacks")
+        warning = True
+
+    if int(shaping_compression.get("warning_count", 0) or 0) > 0:
+        reasons.append("compression warnings")
+        warning = True
+
+    if int(shaping_guardrails.get("policy_warning_count", 0) or 0) > 0:
+        reasons.append("compression policy warnings")
+        warning = True
+
+    if int(shaping_synthetic.get("warning_count", 0) or 0) > 0:
+        reasons.append("EggPool annotation warnings")
+        warning = True
+
+    if int(shaping_synthetic.get("applied_count", 0) or 0) > 0:
+        reasons.append("EggPool annotation applied")
+
+    if int(shaping_segmentation.get("requests_parse_failure", 0) or 0) > 0:
+        reasons.append("segmentation parse failures")
+        warning = True
+
+    if int(shaping_tuning.get("recommendation_count", 0) or 0) > 0:
+        reasons.append("tuning recommendations")
+
+    if int(shaping_tuning.get("override_count", 0) or 0) > 0:
+        reasons.append("tuning overrides")
+
+    if not _routing_isolation_healthy(effective_guardrails):
+        reasons.append("routing guardrail violation")
+        warning = True
+
+    if transcoding_loss_warnings > 0:
+        reasons.append("transcoding loss warnings")
+        warning = True
+
+    open_by_default = bool(reasons)
+    return CacheAdvancedState(
+        open_by_default=open_by_default,
+        warning=warning,
+        reasons=tuple(reasons),
+    )
+
+
+def _cache_advanced_state_label(state: CacheAdvancedState) -> str:
+    """Return the disclosure summary text for the given advanced state."""
+    if not state.reasons:
+        return "Show advanced diagnostics"
+    if state.warning:
+        return f"Advanced diagnostics ({state.reason_count} needs review)"
+    return f"Advanced diagnostics ({state.reason_count} active)"
 
 
 def _render_details_panel(
@@ -3809,6 +3926,19 @@ def _build_request_shaping_segmentation_summary(
     }
 
 
+def _display_synthetic_cache_state(mode: str | None) -> str:
+    """Return a short operator label for the EggPool annotation state."""
+    mapping = {
+        "off": "Off",
+        "dry_run": "Dry run",
+        "apply": "Apply",
+        "mixed": "Mixed",
+    }
+    if not mode:
+        return "Off"
+    return mapping.get(mode, mode)
+
+
 def _render_request_shaping_summary_panel(
     request_shaping_summary: dict[str, Any],
     *,
@@ -3821,6 +3951,10 @@ def _render_request_shaping_summary_panel(
         request_shaping_summary.get("compression") or {},
     )
     shaping_cache = cast("dict[str, Any]", request_shaping_summary.get("cache") or {})
+    shaping_synthetic = cast(
+        "dict[str, Any]",
+        request_shaping_summary.get("synthetic_cache") or {},
+    )
     shaping_tuning = cast(
         "dict[str, Any]",
         request_shaping_summary.get("tuning") or {},
@@ -3832,26 +3966,24 @@ def _render_request_shaping_summary_panel(
     compression_mode_label = _display_request_change_mode(
         str(shaping_mode.get("compression", "off"))
     )
+    synthetic_mode_label = _display_synthetic_cache_state(
+        str(shaping_mode.get("synthetic_cache", "off"))
+    )
     tuning_mode_label = _display_request_shaping_mode(
         str(shaping_mode.get("tuning", "off"))
     )
-    routing_mode_label = escape(str(shaping_mode.get("routing", "reporting_only")))
     cache_reported_rate = shaping_cache.get("cache_counter_reported_rate")
     cache_reported_label = (
         _format_percent_unit(cache_reported_rate, digits=1)
         if cache_reported_rate is not None
         else "—"
     )
-    stable_prefix_rate = shaping_guardrails.get("stable_prefix_preserved_rate")
-    stable_prefix_label = (
-        _format_percent_unit(stable_prefix_rate, digits=1)
-        if stable_prefix_rate is not None
-        else "—"
-    )
     failed_fallback_count = int(shaping_guardrails.get("failed_fallback_count", 0) or 0)
     failed_fallback_label = format_int(failed_fallback_count)
     policy_warning_count = int(shaping_guardrails.get("policy_warning_count", 0) or 0)
     policy_warning_label = format_int(policy_warning_count)
+    synthetic_warning_count = int(shaping_synthetic.get("warning_count", 0) or 0)
+    synthetic_warning_label = format_int(synthetic_warning_count)
     recommendation_count = int(shaping_tuning.get("recommendation_count", 0) or 0)
     recommendation_label = format_int(recommendation_count)
     tuning_override_count = int(shaping_tuning.get("override_count", 0) or 0)
@@ -3875,33 +4007,59 @@ def _render_request_shaping_summary_panel(
     else:
         compression_sub = "disabled by config"
 
-    cache_reported_rows = format_int(shaping_cache.get("reported_rows", 0))
-    cache_candidates = format_int(shaping_cache.get("candidate_count", 0))
-    cache_sub = f"{cache_reported_rows} reported rows · {cache_candidates} candidates"
+    cache_reported_rows = int(shaping_cache.get("cache_counter_reported_rows", 0) or 0)
+    cache_known_rows = int(shaping_cache.get("cache_counter_known_rows", 0) or 0)
+    cache_reported_rows_label = format_int(cache_reported_rows)
+    cache_known_rows_label = format_int(cache_known_rows)
+    cache_sub = (
+        f"{cache_reported_rows_label} provider-reported rows · "
+        f"{cache_known_rows_label} classified rows"
+    )
 
-    if failed_fallback_count > 0 or policy_warning_count > 0:
-        safety_sub = (
-            f"{failed_fallback_label} fallbacks · "
-            f"{policy_warning_label} policy warnings"
-        )
-    else:
-        safety_sub = f"Clean · {format_int(0)} warnings"
-    safety_has_warning = failed_fallback_count > 0
+    safety_has_warning = (
+        failed_fallback_count > 0
+        or policy_warning_count > 0
+        or synthetic_warning_count > 0
+    )
+    safety_metric = "Warnings" if safety_has_warning else "Clean"
+    safety_sub = (
+        f"{failed_fallback_label} fallbacks · "
+        f"{policy_warning_label} policy warnings · "
+        f"{synthetic_warning_label} annotation warnings"
+    )
+
+    synthetic_candidate_count = int(shaping_synthetic.get("candidate_count", 0) or 0)
+    synthetic_dry_run_count = int(shaping_synthetic.get("dry_run_count", 0) or 0)
+    synthetic_applied_count = int(shaping_synthetic.get("applied_count", 0) or 0)
+    synthetic_sub = (
+        f"{format_int(synthetic_candidate_count)} candidates · "
+        f"{format_int(synthetic_dry_run_count)} dry run · "
+        f"{format_int(synthetic_applied_count)} applied"
+    )
+    synthetic_has_warning = synthetic_warning_count > 0
 
     tuning_sub = (
         f"{recommendation_label} recommendations · "
         f"{tuning_override_label} runtime overrides (dormant)"
     )
 
-    routing_sub = "isolation healthy · cache/compression stay out of scorer"
+    routing_metric = (
+        "Unexpected"
+        if not _routing_isolation_healthy(shaping_guardrails)
+        else "Isolated"
+    )
+    routing_sub = (
+        f"mode {escape(guardrails_mode)} · cache/compression stay out of scorer"
+    )
 
     request_shaping_panel = f"""
 <section class="panel">
   <h3>Request shaping ({escape(period)})</h3>
   <p class="sub">
-    Operator summary for request changes, cache reporting, safety
-    guardrails, tuning suggestions, and routing isolation. Routing stays
-    load-based and reporting-only metrics never enter the scorer.
+    Operator summary for request changes, provider cache counter
+    coverage, EggPool cache annotation state, safety guardrails, tuning
+    suggestions, and routing isolation. Routing stays load-based and
+    reporting-only metrics never enter the scorer.
   </p>
   <section class="cards">
     {
@@ -3919,8 +4077,14 @@ def _render_request_shaping_summary_panel(
                     sub=cache_sub,
                 ),
                 _render_metric_card(
+                    title="EggPool cache annotations",
+                    metric=synthetic_mode_label,
+                    sub=synthetic_sub,
+                    warning=synthetic_has_warning,
+                ),
+                _render_metric_card(
                     title="Safety guardrail",
-                    metric=stable_prefix_label,
+                    metric=safety_metric,
                     sub=safety_sub,
                     warning=safety_has_warning,
                 ),
@@ -3931,8 +4095,9 @@ def _render_request_shaping_summary_panel(
                 ),
                 _render_metric_card(
                     title="Routing isolation",
-                    metric=routing_mode_label,
+                    metric=routing_metric,
                     sub=routing_sub,
+                    warning=routing_metric == "Unexpected",
                 ),
             ]
         )
@@ -4038,9 +4203,9 @@ def _render_cache_reporting_panel(
       {_th("Provider")}
       {_th("Protocol")}
       {_th("Total", priority=2)}
-      {_th("Reported", priority=2)}
-      {_th("Not reported", priority=2)}
-      {_th("Unknown", priority=2)}
+      {_th("With counters", priority=2)}
+      {_th("Without counters", priority=2)}
+      {_th("Unrecognized", priority=2)}
     </tr></thead>
     <tbody>
       {protocol_rows_html}
@@ -4055,7 +4220,7 @@ def _render_cache_reporting_panel(
     <thead><tr>
       {_th("Account ID")}
       {_th("Total requests", priority=2)}
-      {_th("Cached tokens (Reported)", priority=2)}
+      {_th("Provider-reported cached tokens", priority=2)}
     </tr></thead>
     <tbody>
       {account_rows_html}
@@ -4070,7 +4235,7 @@ def _render_cache_reporting_panel(
     <thead><tr>
       {_th("Model")}
       {_th("Total requests", priority=2)}
-      {_th("Cached tokens (Reported)", priority=2)}
+      {_th("Provider-reported cached tokens", priority=2)}
     </tr></thead>
     <tbody>
       {model_rows_html}
@@ -4081,28 +4246,29 @@ def _render_cache_reporting_panel(
 <section class="panel">
   <h3>Provider cache counters ({escape(period)})</h3>
   <p class="sub">
-    Provider-reported cache counters from upstream payloads. Missing cache
-    fields mean the upstream did not surface them — EggPool never disables
-    provider-side caching.
+    Provider-reported cache counters from upstream payloads. Missing
+    cache fields mean the upstream did not surface them. They are not
+    cache misses and do not prove the upstream is uncached. EggPool
+    never disables provider-side caching.
   </p>
   <section class="cards">
     {
         _render_metric_card(
-            title="Reported",
+            title="Rows with cache counters",
             metric=format_int(co_reported),
             sub="upstream returned cache fields",
         )
     }
     {
         _render_metric_card(
-            title="Not reported",
+            title="Rows without cache counters",
             metric=format_int(co_not_reported),
             sub="payload clean, no cache keys",
         )
     }
     {
         _render_metric_card(
-            title="Unknown shape",
+            title="Unrecognized payload shape",
             metric=format_int(co_unknown),
             sub="parse failure or unrecognized",
         )
@@ -4131,7 +4297,7 @@ def _render_cache_reporting_panel(
         <td class='num'>{format_int(co_output_total)}</td>
       </tr>
       <tr>
-        <td>Cached input tokens (Reported)</td>
+        <td>Provider-reported cached input tokens</td>
         <td class='num'>{format_int(co_total_cached)}</td>
       </tr>
       <tr>
@@ -6035,6 +6201,7 @@ def render_cache(
             compression_runtime=compression_runtime,
             synthetic_cache_summary=synthetic_cache_summary,
             guardrails=guardrails,
+            cache_observability=cache_observability,
         )
     )
     if (
@@ -6076,14 +6243,18 @@ def render_cache(
     )
     routing_guardrails_panel = _render_routing_guardrails_panel(routing)
 
-    # Determine advanced-section state.
-    shaping_guardrails_data = _as_dict(
-        (request_shaping_summary_effective or {}).get("guardrails")
-    )
-    has_warnings = _compression_has_warnings(
-        compression_runtime, shaping_guardrails_data
-    )
-    guardrails_healthy = _routing_isolation_healthy(guardrails)
+    # Determine advanced-section state from a single structured helper.
+    transcoding_loss_warnings = 0
+    if transcoding_stats is not None:
+        tc_loss_items: Any = transcoding_stats.get("top_loss_warnings") or []
+        for entry in tc_loss_items:
+            if isinstance(entry, dict):
+                entry_dict = cast("dict[str, Any]", entry)
+                entry_count: Any = entry_dict.get("count", 0)
+                if isinstance(entry_count, int):
+                    transcoding_loss_warnings += entry_count
+                elif isinstance(entry_count, float):
+                    transcoding_loss_warnings += int(entry_count)
     any_data = bool(
         cache_observability
         or canonical_request_segmentation
@@ -6095,19 +6266,14 @@ def render_cache(
         or compression_tuning
         or routing_runtime
     )
-    advanced_open = _advanced_section_open_by_default(
-        warnings=has_warnings,
-        guardrails_healthy=guardrails_healthy,
-        has_data=any_data,
+    advanced_state = _build_cache_advanced_state(
+        compression_runtime=compression_runtime,
+        guardrails=guardrails,
+        request_shaping_summary=request_shaping_summary_effective,
+        transcoding_loss_warnings=transcoding_loss_warnings,
+        has_any_data=any_data,
     )
-
-    # Count open sections for the advanced summary text.
-    open_count = int(has_warnings) + int(not guardrails_healthy and any_data)
-    advanced_summary = (
-        f"Advanced diagnostics ({open_count} open)"
-        if open_count > 0
-        else "Show advanced diagnostics"
-    )
+    advanced_summary = _cache_advanced_state_label(advanced_state)
 
     # Build the advanced diagnostics body (previously-flat panels).
     advanced_body = "".join(
@@ -6126,8 +6292,8 @@ def render_cache(
     advanced_section = _render_details_panel(
         summary_text=advanced_summary,
         body=advanced_body,
-        open_by_default=advanced_open,
-        warning=has_warnings,
+        open_by_default=advanced_state.open_by_default,
+        warning=advanced_state.warning,
         panel_id="advanced-diagnostics",
     )
 
@@ -6168,6 +6334,7 @@ def _render_cache_request_shaping_fallback(
     compression_runtime: dict[str, Any] | None,
     synthetic_cache_summary: dict[str, Any] | None,
     guardrails: dict[str, Any],
+    cache_observability: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Mirror the runtime fallback summary so the /cache summary card stays useful
     even when no upstream-built summary is supplied yet. Kept private to this module.
@@ -6180,6 +6347,18 @@ def _render_cache_request_shaping_fallback(
         fallback_compression_observability.get("totals") or {},
     )
     fallback_synthetic_cache_summary = synthetic_cache_summary or {}
+    fallback_cache_observability = cache_observability or {}
+    fallback_cache_status = cast(
+        "dict[str, Any]",
+        fallback_cache_observability.get("by_status") or {},
+    )
+    fallback_reported = int(fallback_cache_status.get("reported", 0) or 0)
+    fallback_not_reported = int(fallback_cache_status.get("not_reported", 0) or 0)
+    fallback_unknown = int(fallback_cache_status.get("unknown_format", 0) or 0)
+    fallback_known_total = fallback_reported + fallback_not_reported + fallback_unknown
+    fallback_cache_rate = (
+        fallback_reported / fallback_known_total if fallback_known_total > 0 else None
+    )
     return {
         "mode": {
             "compression": (
@@ -6228,7 +6407,9 @@ def _render_cache_request_shaping_fallback(
             ),
         },
         "cache": {
-            "cache_counter_reported_rate": None,
+            "cache_counter_reported_rate": fallback_cache_rate,
+            "cache_counter_reported_rows": fallback_reported,
+            "cache_counter_known_rows": fallback_known_total,
             "native_cache_observed_requests": int(
                 (cache_stability or {}).get("transcoded_request_count", 0) or 0
             ),

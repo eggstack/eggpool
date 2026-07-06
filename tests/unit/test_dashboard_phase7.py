@@ -16,8 +16,8 @@ from __future__ import annotations
 import pytest
 
 from eggpool.dashboard.render import (
-    _advanced_section_open_by_default,
-    _compression_has_warnings,
+    _build_cache_advanced_state,
+    _cache_safety_warning_count,
     _display_request_change_mode,
     _render_details_panel,
     _routing_isolation_healthy,
@@ -448,55 +448,63 @@ class TestPhase7RequestShapingHelpers:
         assert _routing_isolation_healthy(poisoned) is False
 
     def test_compression_has_warnings_runtime_window(self) -> None:
-        assert _compression_has_warnings({"window": {"warning_count": 0}}, {}) is False
-        assert _compression_has_warnings({"window": {"warning_count": 3}}, {}) is True
-        assert _compression_has_warnings({"warning_count": 2}, {}) is True
+        assert _cache_safety_warning_count({"window": {"warning_count": 0}}, {}) == 0
+        assert _cache_safety_warning_count({"window": {"warning_count": 3}}, {}) == 3
+        assert _cache_safety_warning_count({"warning_count": 2}, {}) == 2
 
     def test_compression_has_warnings_guardrails(self) -> None:
         assert (
-            _compression_has_warnings(
+            _cache_safety_warning_count(
                 None, {"failed_fallback_count": 0, "policy_warning_count": 0}
             )
-            is False
+            == 0
         )
         assert (
-            _compression_has_warnings(
+            _cache_safety_warning_count(
                 None, {"failed_fallback_count": 1, "policy_warning_count": 0}
             )
-            is True
+            == 1
         )
         assert (
-            _compression_has_warnings(
+            _cache_safety_warning_count(
                 None, {"failed_fallback_count": 0, "policy_warning_count": 2}
             )
-            is True
+            == 2
         )
 
     def test_advanced_section_open_by_default_rules(self) -> None:
-        assert (
-            _advanced_section_open_by_default(
-                warnings=False, guardrails_healthy=True, has_data=True
-            )
-            is False
+        # Quiet install: no reasons, no warning.
+        quiet = _build_cache_advanced_state(
+            compression_runtime=None,
+            guardrails={},
+            request_shaping_summary={},
+            transcoding_loss_warnings=0,
+            has_any_data=True,
         )
-        assert (
-            _advanced_section_open_by_default(
-                warnings=True, guardrails_healthy=True, has_data=True
-            )
-            is True
+        assert quiet.open_by_default is False
+        assert quiet.warning is False
+
+        # Compression warnings present: warning + open.
+        warn = _build_cache_advanced_state(
+            compression_runtime={"warning_count": 3},
+            guardrails={},
+            request_shaping_summary={},
+            transcoding_loss_warnings=0,
+            has_any_data=True,
         )
-        assert (
-            _advanced_section_open_by_default(
-                warnings=False, guardrails_healthy=False, has_data=True
-            )
-            is True
+        assert warn.warning is True
+        assert warn.open_by_default is True
+
+        # Routing guardrail violation: warning + open.
+        poisoned = _build_cache_advanced_state(
+            compression_runtime=None,
+            guardrails={"routing_uses_cache_metrics": True},
+            request_shaping_summary={},
+            transcoding_loss_warnings=0,
+            has_any_data=True,
         )
-        assert (
-            _advanced_section_open_by_default(
-                warnings=False, guardrails_healthy=False, has_data=False
-            )
-            is False
-        )
+        assert poisoned.warning is True
+        assert poisoned.open_by_default is True
 
     def test_render_details_panel_open_state(self) -> None:
         open_html = _render_details_panel(

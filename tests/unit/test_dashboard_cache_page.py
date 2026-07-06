@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from eggpool.dashboard.render import (
+    CacheAdvancedState,
+    _build_cache_advanced_state,
+    _cache_advanced_state_label,
     _render_cache_request_shaping_fallback,
+    _render_request_shaping_summary_panel,
     render_cache,
 )
 
@@ -102,6 +108,15 @@ class TestRenderCacheFallbackSummary:
     def test_supplied_summary_is_rendered(self) -> None:
         html = render_cache(
             period="24h",
+            routing_runtime={
+                "guardrails": {
+                    "routing_cache_compression_mode": "custom-mode",
+                    "routing_uses_cache_metrics": False,
+                    "routing_uses_compression_metrics": False,
+                    "routing_uses_stable_prefix_hash": False,
+                    "routing_uses_compression_policy": False,
+                },
+            },
             request_shaping_summary={
                 "mode": {
                     "compression": "safe",
@@ -129,10 +144,12 @@ class TestRenderCacheFallbackSummary:
                 },
             },
         )
-        assert "custom-mode" in html
+        assert "mode custom-mode" in html
         assert "3 requests" in html
         assert "42 tokens saved" in html
         assert "4 recommendations" in html
+        assert "Warnings" in html
+        assert "Routing isolation" in html
 
     def test_fallback_uses_canonical_segmentation_counts(self) -> None:
         fallback = _render_cache_request_shaping_fallback(
@@ -284,3 +301,567 @@ class TestRenderCacheAdversarialEscaping:
         # (e.g. dashboard.js) are expected
         assert "<script>alert(1)</script>" not in html
         assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+
+
+def _base_summary(**overrides: object) -> dict[str, object]:
+    """Return a quiet / clean request-shaping summary for /cache tests."""
+    base: dict[str, object] = {
+        "mode": {
+            "compression": "off",
+            "synthetic_cache": "off",
+            "tuning": "off",
+            "routing": "reporting_only",
+        },
+        "compression": {
+            "requests_analyzed": 0,
+            "requests_compressed": 0,
+            "estimated_savings_tokens": 0,
+            "actual_savings_tokens": 0,
+            "failed_fallback_count": 0,
+            "warning_count": 0,
+        },
+        "cache": {
+            "cache_counter_reported_rate": 0.5,
+            "cache_counter_reported_rows": 12,
+            "cache_counter_known_rows": 20,
+            "cached_input_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "native_cache_observed_requests": 0,
+        },
+        "segmentation": {
+            "requests_segmented": 0,
+            "requests_not_collected": 0,
+            "requests_empty_request": 0,
+            "requests_parse_failure": 0,
+            "protected_requests": 0,
+            "compressible_candidate_requests": 0,
+        },
+        "synthetic_cache": {
+            "dry_run_count": 0,
+            "applied_count": 0,
+            "candidate_count": 0,
+            "warning_count": 0,
+        },
+        "tuning": {
+            "recommendation_count": 0,
+            "override_count": 0,
+        },
+        "guardrails": {
+            "routing_uses_cache_metrics": False,
+            "routing_uses_compression_metrics": False,
+            "routing_uses_stable_prefix_hash": False,
+            "routing_uses_compression_policy": False,
+            "stable_prefix_preserved_rate": 1.0,
+            "failed_fallback_count": 0,
+            "policy_warning_count": 0,
+        },
+    }
+    for key, value in overrides.items():
+        base[key] = value
+    return base
+
+
+class TestRenderCacheSummaryCanonicalKeys:
+    """Provider cache counters use canonical payload keys from the summary builder."""
+
+    def test_provider_cache_subtext_uses_canonical_rows(self) -> None:
+        html = render_cache(
+            period="24h",
+            request_shaping_summary=_base_summary(),
+        )
+        assert "12 provider-reported rows" in html
+        assert "20 classified rows" in html
+
+    def test_synthetic_candidate_count_not_under_provider_cache(self) -> None:
+        """Synthetic candidate count must not appear in the provider cache card."""
+        html = render_cache(
+            period="24h",
+            request_shaping_summary=_base_summary(
+                synthetic_cache={
+                    "dry_run_count": 3,
+                    "applied_count": 0,
+                    "candidate_count": 7,
+                    "warning_count": 0,
+                },
+            ),
+        )
+        provider_idx = html.find("Provider cache counters")
+        annotation_idx = html.find("EggPool cache annotations")
+        assert provider_idx != -1
+        assert annotation_idx != -1
+        provider_block = html[provider_idx:annotation_idx]
+        # Synthetic candidate count is rendered only under the annotation card.
+        assert "7 candidates" not in provider_block
+
+    def test_synthetic_candidate_count_renders_under_annotation_card(self) -> None:
+        html = render_cache(
+            period="24h",
+            request_shaping_summary=_base_summary(
+                synthetic_cache={
+                    "dry_run_count": 3,
+                    "applied_count": 0,
+                    "candidate_count": 7,
+                    "warning_count": 0,
+                },
+            ),
+        )
+        annotation_idx = html.find("EggPool cache annotations")
+        assert annotation_idx != -1
+        annotation_block = html[annotation_idx : annotation_idx + 1500]
+        assert "7 candidates" in annotation_block
+        assert "3 dry run" in annotation_block
+        assert "0 applied" in annotation_block
+
+
+class TestRenderCacheSummaryEggPoolAnnotationCard:
+    """The summary includes a distinct EggPool cache annotations card."""
+
+    def test_eggpool_card_present(self) -> None:
+        html = render_cache(
+            period="24h",
+            request_shaping_summary=_base_summary(),
+        )
+        assert "EggPool cache annotations" in html
+
+    def test_dry_run_distinct_from_apply(self) -> None:
+        dry_run_html = render_cache(
+            period="24h",
+            request_shaping_summary=_base_summary(
+                mode={
+                    "compression": "off",
+                    "synthetic_cache": "dry_run",
+                    "tuning": "off",
+                    "routing": "reporting_only",
+                },
+            ),
+        )
+        apply_html = render_cache(
+            period="24h",
+            request_shaping_summary=_base_summary(
+                mode={
+                    "compression": "off",
+                    "synthetic_cache": "apply",
+                    "tuning": "off",
+                    "routing": "reporting_only",
+                },
+            ),
+        )
+        # The card metric label differs between dry-run and apply.
+        dry_idx = dry_run_html.find("EggPool cache annotations")
+        apply_idx = apply_html.find("EggPool cache annotations")
+        assert dry_idx != -1
+        assert apply_idx != -1
+        # Probe a slice after the card title for the metric text.
+        assert "Dry run" in dry_run_html[dry_idx : dry_idx + 800]
+        assert "Apply" in apply_html[apply_idx : apply_idx + 800]
+
+    def test_synthetic_warning_marks_card_warning(self) -> None:
+        html = render_cache(
+            period="24h",
+            request_shaping_summary=_base_summary(
+                synthetic_cache={
+                    "dry_run_count": 0,
+                    "applied_count": 0,
+                    "candidate_count": 0,
+                    "warning_count": 2,
+                },
+            ),
+        )
+        # The annotation card should be present; the safety card also lights up.
+        assert "EggPool cache annotations" in html
+        assert "Warnings" in html
+
+
+class TestRenderCacheSummaryQuietStates:
+    """Safety quiet state renders Clean, routing quiet state renders Isolated."""
+
+    def test_quiet_safety_is_clean(self) -> None:
+        html = render_cache(
+            period="24h",
+            request_shaping_summary=_base_summary(),
+        )
+        # Safety card must show Clean in the quiet state.
+        assert "Clean" in html
+
+    def test_quiet_routing_is_isolated(self) -> None:
+        html = render_cache(
+            period="24h",
+            request_shaping_summary=_base_summary(),
+        )
+        # Routing card must show Isolated in the quiet state.
+        assert "Isolated" in html
+
+    def test_safety_warnings_trigger_warning_metric(self) -> None:
+        html = render_cache(
+            period="24h",
+            request_shaping_summary=_base_summary(
+                guardrails={
+                    "routing_uses_cache_metrics": False,
+                    "routing_uses_compression_metrics": False,
+                    "routing_uses_stable_prefix_hash": False,
+                    "routing_uses_compression_policy": False,
+                    "stable_prefix_preserved_rate": 1.0,
+                    "failed_fallback_count": 2,
+                    "policy_warning_count": 1,
+                },
+            ),
+        )
+        # Failed fallback + policy warning both light up the safety card.
+        assert "Warnings" in html
+        # Routing still isolated because routing guardrails are healthy.
+        assert "Isolated" in html
+
+    def test_routing_unhealthy_metric_is_unexpected(self) -> None:
+        html = render_cache(
+            period="24h",
+            request_shaping_summary=_base_summary(
+                guardrails={
+                    "routing_uses_cache_metrics": True,
+                    "routing_uses_compression_metrics": False,
+                    "routing_uses_stable_prefix_hash": False,
+                    "routing_uses_compression_policy": False,
+                    "stable_prefix_preserved_rate": 1.0,
+                    "failed_fallback_count": 0,
+                    "policy_warning_count": 0,
+                },
+            ),
+        )
+        assert "Unexpected" in html
+
+    def test_routing_subtext_includes_raw_mode(self) -> None:
+        html = render_cache(
+            period="24h",
+            request_shaping_summary=_base_summary(
+                mode={
+                    "compression": "off",
+                    "synthetic_cache": "off",
+                    "tuning": "off",
+                    "routing": "reporting_only",
+                },
+            ),
+        )
+        # Raw mode survives in the subtext.
+        assert "mode reporting_only" in html
+
+
+class TestRenderCacheAdvancedDiagnosticsState:
+    """Advanced diagnostics open/closed decisions are server-decided."""
+
+    def test_quiet_payload_keeps_details_collapsed(self) -> None:
+        html = render_cache(period="24h")
+        m = re.search(
+            r'<details[^>]*id="advanced-diagnostics"[^>]*>',
+            html,
+        )
+        assert m is not None
+        assert " open" not in m.group(0)
+
+    def test_quiet_payload_shows_show_label(self) -> None:
+        html = render_cache(period="24h")
+        assert "Show advanced diagnostics" in html
+
+    def test_segmentation_parse_failure_opens_advanced(self) -> None:
+        html = render_cache(
+            period="24h",
+            request_shaping_summary=_base_summary(
+                segmentation={
+                    "requests_segmented": 0,
+                    "requests_not_collected": 0,
+                    "requests_empty_request": 0,
+                    "requests_parse_failure": 3,
+                    "protected_requests": 0,
+                    "compressible_candidate_requests": 0,
+                },
+            ),
+        )
+        m = re.search(
+            r'<details[^>]*id="advanced-diagnostics"[^>]*>',
+            html,
+        )
+        assert m is not None
+        assert " open" in m.group(0)
+
+    def test_synthetic_warning_opens_advanced(self) -> None:
+        html = render_cache(
+            period="24h",
+            request_shaping_summary=_base_summary(
+                synthetic_cache={
+                    "dry_run_count": 0,
+                    "applied_count": 0,
+                    "candidate_count": 0,
+                    "warning_count": 1,
+                },
+            ),
+        )
+        m = re.search(
+            r'<details[^>]*id="advanced-diagnostics"[^>]*>',
+            html,
+        )
+        assert m is not None
+        assert " open" in m.group(0)
+
+    def test_synthetic_applied_count_opens_advanced(self) -> None:
+        html = render_cache(
+            period="24h",
+            request_shaping_summary=_base_summary(
+                synthetic_cache={
+                    "dry_run_count": 0,
+                    "applied_count": 4,
+                    "candidate_count": 4,
+                    "warning_count": 0,
+                },
+            ),
+        )
+        m = re.search(
+            r'<details[^>]*id="advanced-diagnostics"[^>]*>',
+            html,
+        )
+        assert m is not None
+        assert " open" in m.group(0)
+
+    def test_tuning_recommendations_open_advanced(self) -> None:
+        html = render_cache(
+            period="24h",
+            request_shaping_summary=_base_summary(
+                tuning={
+                    "recommendation_count": 3,
+                    "override_count": 0,
+                },
+            ),
+        )
+        m = re.search(
+            r'<details[^>]*id="advanced-diagnostics"[^>]*>',
+            html,
+        )
+        assert m is not None
+        assert " open" in m.group(0)
+
+    def test_routing_guardrail_violation_opens_advanced(self) -> None:
+        html = render_cache(
+            period="24h",
+            request_shaping_summary=_base_summary(
+                guardrails={
+                    "routing_uses_cache_metrics": True,
+                    "routing_uses_compression_metrics": False,
+                    "routing_uses_stable_prefix_hash": False,
+                    "routing_uses_compression_policy": False,
+                    "stable_prefix_preserved_rate": 1.0,
+                    "failed_fallback_count": 0,
+                    "policy_warning_count": 0,
+                },
+            ),
+        )
+        m = re.search(
+            r'<details[^>]*id="advanced-diagnostics"[^>]*>',
+            html,
+        )
+        assert m is not None
+        assert " open" in m.group(0)
+
+    def test_compression_warning_opens_advanced(self) -> None:
+        html = render_cache(
+            period="24h",
+            request_shaping_summary=_base_summary(
+                compression={
+                    "requests_analyzed": 0,
+                    "requests_compressed": 0,
+                    "estimated_savings_tokens": 0,
+                    "actual_savings_tokens": 0,
+                    "failed_fallback_count": 0,
+                    "warning_count": 5,
+                },
+            ),
+        )
+        m = re.search(
+            r'<details[^>]*id="advanced-diagnostics"[^>]*>',
+            html,
+        )
+        assert m is not None
+        assert " open" in m.group(0)
+
+    def test_advanced_label_includes_needs_review_when_warnings(self) -> None:
+        html = render_cache(
+            period="24h",
+            request_shaping_summary=_base_summary(
+                segmentation={
+                    "requests_segmented": 0,
+                    "requests_not_collected": 0,
+                    "requests_empty_request": 0,
+                    "requests_parse_failure": 1,
+                    "protected_requests": 0,
+                    "compressible_candidate_requests": 0,
+                },
+            ),
+        )
+        assert "needs review" in html
+
+
+class TestCacheAdvancedStateBuilder:
+    """_build_cache_advanced_state produces structured open/closed state."""
+
+    def test_quiet_state_is_collapsed(self) -> None:
+        state = _build_cache_advanced_state(
+            compression_runtime=None,
+            guardrails={},
+            request_shaping_summary=_base_summary(),
+            transcoding_loss_warnings=0,
+            has_any_data=False,
+        )
+        assert isinstance(state, CacheAdvancedState)
+        assert state.open_by_default is False
+        assert state.warning is False
+        assert state.reasons == ()
+        assert _cache_advanced_state_label(state) == "Show advanced diagnostics"
+
+    def test_segmentation_parse_failure_adds_reason(self) -> None:
+        state = _build_cache_advanced_state(
+            compression_runtime=None,
+            guardrails={},
+            request_shaping_summary=_base_summary(
+                segmentation={
+                    "requests_segmented": 0,
+                    "requests_not_collected": 0,
+                    "requests_empty_request": 0,
+                    "requests_parse_failure": 1,
+                    "protected_requests": 0,
+                    "compressible_candidate_requests": 0,
+                },
+            ),
+            transcoding_loss_warnings=0,
+            has_any_data=True,
+        )
+        assert "segmentation parse failures" in state.reasons
+        assert state.open_by_default is True
+        assert state.warning is True
+
+    def test_synthetic_applied_is_active_not_warning(self) -> None:
+        state = _build_cache_advanced_state(
+            compression_runtime=None,
+            guardrails={},
+            request_shaping_summary=_base_summary(
+                synthetic_cache={
+                    "dry_run_count": 0,
+                    "applied_count": 1,
+                    "candidate_count": 1,
+                    "warning_count": 0,
+                },
+            ),
+            transcoding_loss_warnings=0,
+            has_any_data=True,
+        )
+        assert "EggPool annotation applied" in state.reasons
+        assert state.warning is False
+        assert state.open_by_default is True
+        assert _cache_advanced_state_label(state) == "Advanced diagnostics (1 active)"
+
+
+class TestRenderCacheProviderCacheLabels:
+    """Provider cache counter labels are operator-facing."""
+
+    def test_renamed_card_titles_present(self) -> None:
+        html = render_cache(
+            period="24h",
+            cache_observability={
+                "total_requests": 10,
+                "by_status": {"reported": 4, "not_reported": 6},
+                "per_protocol_status": {},
+                "per_account_status": {
+                    "acct-1": {
+                        "total_requests": 5,
+                        "total_cached_input_tokens": 100,
+                    },
+                },
+                "per_model_status": {},
+            },
+        )
+        assert "Rows with cache counters" in html
+        assert "Rows without cache counters" in html
+        assert "Unrecognized payload shape" in html
+        assert "Provider-reported cached tokens" in html
+
+    def test_protocol_table_uses_renamed_columns(self) -> None:
+        html = render_cache(
+            period="24h",
+            cache_observability={
+                "total_requests": 10,
+                "by_status": {"reported": 4, "not_reported": 6},
+                "per_protocol_status": {
+                    ("prov-a", "openai"): {
+                        "reported": 3,
+                        "not_reported": 0,
+                        "unknown_format": 0,
+                    },
+                },
+                "per_account_status": {},
+                "per_model_status": {},
+            },
+        )
+        assert "With counters" in html
+        assert "Without counters" in html
+        assert "Unrecognized" in html
+
+    def test_summary_table_uses_provider_reported_label(self) -> None:
+        html = render_cache(
+            period="24h",
+            cache_observability={
+                "total_requests": 10,
+                "by_status": {"reported": 4},
+                "per_protocol_status": {},
+                "per_account_status": {},
+                "per_model_status": {},
+            },
+        )
+        assert "Provider-reported cached input tokens" in html
+
+    def test_old_short_labels_absent(self) -> None:
+        html = render_cache(
+            period="24h",
+            cache_observability={
+                "total_requests": 10,
+                "by_status": {"reported": 4, "not_reported": 6},
+                "per_protocol_status": {},
+                "per_account_status": {},
+                "per_model_status": {},
+            },
+        )
+        # Old short labels are gone from the rendered output.
+        assert ">Reported<" not in html
+        assert ">Not reported<" not in html
+        assert ">Unknown shape<" not in html
+        assert "Cached input tokens (Reported)" not in html
+        assert "Cached tokens (Reported)" not in html
+
+    def test_panel_explains_missing_is_not_cache_miss(self) -> None:
+        html = render_cache(
+            period="24h",
+            cache_observability={
+                "total_requests": 10,
+                "by_status": {"reported": 4, "not_reported": 6},
+            },
+        )
+        # Panel copy must explain that missing counters are not cache misses.
+        # The copy may wrap across whitespace so we collapse it before matching.
+        collapsed = re.sub(r"\s+", " ", html)
+        assert "are not cache misses" in collapsed
+
+
+class TestRenderCachePanelIsolation:
+    """Summary panel helper accepts structured input and renders cards."""
+
+    def test_summary_panel_renders_eggpool_card(self) -> None:
+        html = _render_request_shaping_summary_panel(
+            _base_summary(),
+            period="24h",
+            guardrails_mode="reporting_only",
+        )
+        assert "EggPool cache annotations" in html
+
+    def test_summary_panel_quiet_safety_clean(self) -> None:
+        html = _render_request_shaping_summary_panel(
+            _base_summary(),
+            period="24h",
+            guardrails_mode="reporting_only",
+        )
+        assert "Clean" in html
+        assert "Isolated" in html

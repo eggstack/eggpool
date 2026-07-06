@@ -1046,10 +1046,14 @@ request-shaping summary plus the detailed drill-down cards on
 `/cache`:
 
 1. **Request shaping** — operator summary of compression mode,
-   cache-reporting coverage, EggPool cache annotation state, tuning
-   suggestions, and routing isolation.
+   provider cache counter coverage, EggPool cache annotation state,
+   safety guardrail, tuning suggestions, and routing isolation. The
+   summary reads `Clean` / `Isolated` on a quiet default install
+   instead of raw `reporting_only` or `—`. Raw modes survive in
+   subtext/details, not the primary metric.
 2. **Provider cache counters** — provider-reported cache counters and
-   coverage.
+   coverage. Provider cache counters and EggPool cache annotations
+   are reported on separate cards and never conflated.
 3. **Request segmentation** — stable-prefix, semi-stable, and
    volatile suffix structure without payload mutation.
 4. **Compression** — observe-mode analysis and safe-mode outcomes,
@@ -1066,6 +1070,46 @@ request-shaping summary plus the detailed drill-down cards on
 
 `render_runtime` keeps only a compact Cache & request shaping
 relocation panel that links operators back to `/cache`.
+
+#### Cache page summary cards
+
+The top summary on `/cache` renders six operator-facing cards in this
+order:
+
+| Card | Source | Quiet default |
+|------|--------|---------------|
+| Request changes | `mode.compression` + `compression.*` | `no changes` |
+| Provider cache counters | `cache.cache_counter_reported_rate` + `cache_counter_reported_rows` + `cache_counter_known_rows` | `—` / `N provider-reported rows · M classified rows` |
+| EggPool cache annotations | `mode.synthetic_cache` + `synthetic_cache.*` | `Off` |
+| Safety guardrail | `guardrails.failed_fallback_count` + `policy_warning_count` + `synthetic_cache.warning_count` | `Clean` |
+| Tuning suggestions | `mode.tuning` + `tuning.recommendation_count` + `tuning.override_count` | `Off` |
+| Routing isolation | `mode.routing` + `guardrails.routing_uses_*` | `Isolated` (raw mode survives in subtext) |
+
+#### Cache page advanced diagnostics disclosure
+
+The advanced diagnostics `<details>` disclosure on `/cache` is
+server-decided. `CacheAdvancedState` (`src/eggpool/dashboard/render.py`)
+is the single source of truth: it carries `open_by_default`, `warning`,
+and a `reasons` tuple. The disclosure auto-opens whenever any of the
+following is true:
+
+- compression warnings (runtime window count or guardrails-derived) > 0
+- compression failed fallback count > 0
+- compression stable-prefix mismatch > 0
+- compression policy warning count > 0
+- EggPool annotation warnings > 0
+- EggPool annotation applied count > 0 (mutates requests — must surface)
+- segmentation parse failures > 0
+- tuning recommendation count > 0
+- tuning override count > 0
+- routing isolation unhealthy (`routing_uses_*` flags non-empty)
+- transcoding loss warnings > 0
+
+Quiet installs (zero everywhere, healthy routing, no synthetic-cache
+mutation, no tuning activity) keep the disclosure collapsed. The
+disclosure summary text reads `Advanced diagnostics (N active)` for
+non-warning triggers and `Advanced diagnostics (N needs review)` for
+warning-class triggers.
 
 A static **routing-separation notice** card always renders on the
 /cache page with this exact text:

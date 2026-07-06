@@ -62,6 +62,22 @@ The dashboard `/cache` page uses these operator-facing labels. If you have bookm
 
 Config keys and API field names are unchanged. Only the dashboard labels and operator-facing prose were updated.
 
+The `/cache` summary cards now read `Clean` / `Isolated` on a quiet
+default install instead of raw `reporting_only` or `—`. The advanced
+diagnostics disclosure stays collapsed unless a warning or non-default
+runtime state is present (segmentation parse failures, synthetic-cache
+warnings or applied count, tuning recommendations, routing guardrail
+violation, transcoding loss warnings, compression warnings or policy
+warnings). See `architecture/README.md` § Cache page cards for the
+structured `CacheAdvancedState` helper that drives the open/closed
+decision.
+
+Provider cache counter coverage is reported on its own card; EggPool
+cache annotations are reported on a separate card. The two concepts
+are explicitly NOT conflated: missing provider cache counters are not
+cache misses and do not prove the upstream is uncached. EggPool never
+disables provider-side caching.
+
 ## What is experimental
 
 These features ship behind explicit operator opt-in:
