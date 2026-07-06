@@ -835,6 +835,87 @@ def _td_priority(content: str, priority: int, *, class_: str | None = None) -> s
     return f'<td data-priority="{priority}">{content}</td>'
 
 
+_DISPATCH_SPAN_LABELS: dict[str, str] = {
+    "coordinator_pre_upstream": "Coordinator pre-upstream",
+    "segmentation": "Segmentation",
+    "compression_analyze": "Compression analyze",
+    "compression_apply": "Compression apply",
+    "selection_lock_wait": "Selection lock wait",
+    "selection_locked": "Selection locked",
+    "routing_trace_write": "Routing trace write",
+}
+
+
+def _render_dispatch_spans_panel(
+    spans: list[dict[str, Any]],
+) -> str:
+    """Render a compact 'Dispatch spans' panel from the dispatch_spans payload."""
+    if not spans:
+        return ""
+
+    span_map: dict[str, dict[str, Any]] = {str(s.get("span", "")): s for s in spans}
+
+    rows: list[str] = []
+    for span_key, label in _DISPATCH_SPAN_LABELS.items():
+        entry = span_map.get(span_key)
+        sample_count = int(entry.get("sample_count", 0) or 0) if entry else 0
+        p50_ms = entry.get("p50_ms") if entry else None
+        p95_ms = entry.get("p95_ms") if entry else None
+        max_ms = entry.get("max_ms") if entry else None
+        if sample_count == 0:
+            duration_cols = (
+                '<td class="num" colspan="3">not observed in recent window</td>'
+            )
+        else:
+            duration_cols = (
+                f'<td class="num">'
+                f"{escape(_format_small_ms(p50_ms))}</td>"
+                f'<td class="num">'
+                f"{escape(_format_small_ms(p95_ms))}</td>"
+                f'<td class="num">'
+                f"{escape(_format_small_ms(max_ms))}</td>"
+            )
+        rows.append(
+            f"<tr>"
+            f"<td>{escape(label)}</td>"
+            f"{duration_cols}"
+            f'<td class="num">{escape(format_int(sample_count))}</td>'
+            f"</tr>"
+        )
+
+    return f"""
+<section class="panel">
+  <h3>Dispatch spans</h3>
+  <table class="data compact">
+    <thead><tr>
+      {_th("Span")}
+      {_th("p50", priority=2)}
+      {_th("p95", priority=2)}
+      {_th("max", priority=2)}
+      {_th("samples", priority=2)}
+    </tr></thead>
+    <tbody>
+      {"".join(rows)}
+    </tbody>
+  </table>
+</section>
+"""
+
+
+def _format_small_ms(value: Any) -> str:
+    if value is None:
+        return "—"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if number < 1:
+        return f"{number:.2f} ms"
+    if number < 10:
+        return f"{number:.1f} ms"
+    return f"{number:.0f} ms"
+
+
 def _render_metric_card(
     *,
     title: str,
@@ -5429,6 +5510,8 @@ def render_runtime(
     dns_cache = _as_dict(snapshot.get("dns_cache"))
     load = _as_dict(snapshot.get("load"))
     dispatch = _as_dict(snapshot.get("dispatch_overhead"))
+    dispatch_spans_payload = _as_dict(snapshot.get("dispatch_spans"))
+    dispatch_spans: list[dict[str, Any]] = dispatch_spans_payload.get("spans") or []
 
     # Transcoding stats
     tc_total: int = int(transcoding_stats.get("total", 0)) if transcoding_stats else 0
@@ -5493,19 +5576,6 @@ def render_runtime(
     max_dispatch_ms = dispatch.get("max_ms")
     sample_count = dispatch.get("sample_count", 0)
     window_size = dispatch.get("window_size", 100)
-
-    def _format_small_ms(value: Any) -> str:
-        if value is None:
-            return "—"
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            return str(value)
-        if number < 1:
-            return f"{number:.2f} ms"
-        if number < 10:
-            return f"{number:.1f} ms"
-        return f"{number:.0f} ms"
 
     if avg_dispatch_ms is None:
         dispatch_metric = "—"
@@ -6017,6 +6087,8 @@ def render_runtime(
 </section>
 """
 
+    dispatch_spans_panel = _render_dispatch_spans_panel(dispatch_spans)
+
     body = f"""
 <h2>Runtime</h2>
 <p class="sub">Process-level diagnostics for the running EggPool instance.</p>
@@ -6039,6 +6111,8 @@ def render_runtime(
 {network_cards}
 
 {tc_card}
+
+{dispatch_spans_panel}
 
 <section class="panel">
   <h3>Health states</h3>

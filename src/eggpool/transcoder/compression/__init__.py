@@ -27,8 +27,11 @@ The analyzer is observational: it records what a future phase
 would compress but never mutates the request body, never
 changes routing, and never synthesises provider cache controls.
 The safe-mode applier mutates only eligible volatile_suffix
-segments on a deep-copied payload and never touches stable
-prefixes or cache-protected blocks.  The Phase 6 resolver is
+segments, applying transforms through path-level copy-on-write
+(no-op runs return the original payload by identity, applied
+runs copy only the dict/list ancestors on mutated paths and
+preserve unchanged subtrees by reference) and never touches
+stable prefixes or cache-protected blocks.  The Phase 6 resolver is
 content-private: it never inspects prompt bodies, model output,
 or any other request payload fields; it only matches on the
 client identity, source/target protocol, requested/resolved

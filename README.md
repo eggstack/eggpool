@@ -212,7 +212,7 @@ Advanced knobs still exist for policy-scoped rollouts and advisory tuning, but t
 
 ### Safety rules
 
-- Safe compression mutates only eligible `volatile_suffix` string leaves.
+- Safe compression mutates only eligible `volatile_suffix` string leaves; no-op runs return the original payload by identity and applied runs use path-level copy-on-write (not a deep copy).
 - Stable-prefix preservation is verified with `stable_prefix_content_hash`; any mismatch falls back to the original payload.
 - Native provider cache annotations are preserved byte-for-byte.
 - Synthetic cache controls are disabled by default and dry-run first when enabled.

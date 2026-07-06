@@ -585,12 +585,16 @@ async def handle_proxy_request(
                 compression_observation = None
 
     # Phase 5: run the safe-mode deterministic compressor.  The
-    # applier mutates only eligible volatile_suffix segments on a
-    # deep-copied payload; stable prefixes and cache-protected blocks
-    # are never touched.  Runs only when ``[compression] enabled =
-    # true`` AND ``[compression] mode = 'safe'``; otherwise
-    # ``compression_result`` stays ``None`` and the finalizer records
-    # safe defaults.  Failure here must never block the request path.
+    # applier mutates only eligible volatile_suffix segments,
+    # applying transforms through path-level copy-on-write (no-op
+    # runs return the original payload by identity, applied runs
+    # copy only the dict/list ancestors on mutated paths and
+    # preserve unchanged subtrees by reference); stable prefixes
+    # and cache-protected blocks are never touched.  Runs only when
+    # ``[compression] enabled = true`` AND ``[compression] mode =
+    # 'safe'``; otherwise ``compression_result`` stays ``None`` and
+    # the finalizer records safe defaults.  Failure here must never
+    # block the request path.
     compression_result: Any = None
     if (
         effective_compression_policy is not None

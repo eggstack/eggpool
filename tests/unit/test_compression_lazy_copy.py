@@ -10,6 +10,8 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import patch
 
+import pytest
+
 from eggpool.transcoder.compression.apply import (
     _copy_with_replacements,
     _PlannedReplacement,
@@ -404,3 +406,146 @@ def test_copy_with_replacements_list_index() -> None:
     result = _copy_with_replacements(payload, [repl])
     assert result["items"] == ["old0", "new1", "old2"]
     assert payload["items"] == ["old0", "old1", "old2"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 corrective polish: pins for path-level copy-on-write invariants.
+# ---------------------------------------------------------------------------
+
+
+def test_copy_with_replacements_disjoint_branches_preserve_identity() -> None:
+    """Unchanged subtrees on separate branches must remain equal, and where
+    structurally safe, identical by object identity to the input.
+
+    Note: only the dict/list nodes *on* the mutated path are shallow-copied.
+    Sibling branches whose dict objects are not visited by the path walk
+    are preserved by reference, even when the parent list is rebuilt.
+    """
+    inner = {"keep": "this-branch-untouched"}
+    untouched_branch = {"role": "assistant", "content": inner}
+    sibling_branch = {"role": "user", "content": "old_c"}
+    payload = {
+        "messages": [
+            {"role": "user", "content": "old_a"},
+            untouched_branch,
+            sibling_branch,
+        ]
+    }
+    repl = _PlannedReplacement(
+        content_path=("messages", 0, "content"),
+        new_text="new_a",
+        orig_tokens=4,
+        comp_tokens=2,
+        reason_code="fold",
+        segment_id="s0",
+    )
+    result = _copy_with_replacements(payload, [repl])
+    assert result["messages"][0]["content"] == "new_a"
+    # Sibling branches survive by reference (Phase 3 invariant).
+    assert result["messages"][1] is untouched_branch
+    assert result["messages"][1]["content"] is inner
+    assert result["messages"][2] is sibling_branch
+    # The list itself was rebuilt because one child mutated.
+    assert result["messages"] is not payload["messages"]
+
+
+def test_copy_with_replacements_duplicate_path_last_wins() -> None:
+    """Duplicate replacement paths coalesce by insertion order; the
+    helper's ``path_to_replacement`` dict keeps the LAST entry, which is
+    the correct semantics for the safe-mode discovery loop because
+    chained transforms update ``current_text = new_text`` so the final
+    planned replacement reflects the fully chained final text.
+    """
+    payload = {"a": {"b": "original"}}
+    repl_old = _PlannedReplacement(
+        content_path=("a", "b"),
+        new_text="intermediate",
+        orig_tokens=10,
+        comp_tokens=7,
+        reason_code="fold",
+        segment_id="s0",
+    )
+    repl_final = _PlannedReplacement(
+        content_path=("a", "b"),
+        new_text="final",
+        orig_tokens=7,
+        comp_tokens=3,
+        reason_code="compact",
+        segment_id="s0",
+    )
+    result = _copy_with_replacements(payload, [repl_old, repl_final])
+    assert result["a"]["b"] == "final"
+    assert payload["a"]["b"] == "original"
+
+
+def test_copy_with_replacements_invalid_path_does_not_mutate_input() -> None:
+    """An invalid path (numeric index out of range) must NOT mutate the
+    original payload. ``_copy_with_replacements`` is documented as
+    fail-loud at the helper level; the public ``apply_safe_compression``
+    boundary catches and degrades to a no-op. This test pins the helper
+    contract: index errors propagate, identity of the input is preserved.
+    """
+    payload = {"items": ["only_one"]}
+    repl = _PlannedReplacement(
+        content_path=("items", 5),
+        new_text="nope",
+        orig_tokens=1,
+        comp_tokens=1,
+        reason_code="fold",
+        segment_id="s0",
+    )
+    with pytest.raises((IndexError, KeyError, TypeError)):
+        _copy_with_replacements(payload, [repl])
+    assert payload == {"items": ["only_one"]}
+
+
+def test_copy_with_replacements_unchanged_subtree_strict_identity() -> None:
+    """Inner dicts on a path that is not mutated must remain identical
+    by ``is`` to the input.  This is the structural-sharing contract.
+    """
+    inner = {"value": 1}
+    payload = {
+        "messages": [
+            {"role": "user", "content": inner},
+            {"role": "user", "content": {"value": 2}},
+        ]
+    }
+    repl = _PlannedReplacement(
+        content_path=("messages", 1, "content", "value"),
+        new_text=99,
+        orig_tokens=1,
+        comp_tokens=1,
+        reason_code="fold",
+        segment_id="s0",
+    )
+    result = _copy_with_replacements(payload, [repl])
+    assert result["messages"][0]["content"] is inner
+    assert result["messages"][1]["content"]["value"] == 99
+
+
+def test_copy_with_replacements_chained_text_last_wins() -> None:
+    """When two transforms chain on the same segment the discovery loop
+    updates ``current_text = new_text`` after each pass and records only
+    one ``_PlannedReplacement`` for that ``content_path``. The helper
+    must reflect the chained final text, not an intermediate value.
+    """
+    payload = {"a": {"b": "original"}}
+    repl_intermediate = _PlannedReplacement(
+        content_path=("a", "b"),
+        new_text="intermediate_text",
+        orig_tokens=10,
+        comp_tokens=7,
+        reason_code="fold_repeated_lines",
+        segment_id="s0",
+    )
+    repl_final = _PlannedReplacement(
+        content_path=("a", "b"),
+        new_text="final_chained_text",
+        orig_tokens=7,
+        comp_tokens=3,
+        reason_code="compact_logs",
+        segment_id="s0",
+    )
+    direct = _copy_with_replacements(payload, [repl_intermediate, repl_final])
+    assert direct["a"]["b"] == "final_chained_text"
+    assert payload["a"]["b"] == "original"

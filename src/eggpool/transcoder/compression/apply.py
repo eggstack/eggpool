@@ -18,8 +18,16 @@ Key design choices:
   changes unexpectedly, the original payload is returned unchanged
   with ``failed_fallback = True``.
 - **Observational**: the compressor never mutates the input payload
-  or segmentation result; it deep-copies the payload before any
-  mutation and never touches ``segmentation``.
+  or segmentation result.  It discovers planned replacements first,
+  then applies them through path-level copy-on-write *only* when at
+  least one mutation is needed.  No-op requests return the original
+  payload object unchanged; applied requests copy only the mutated
+  leaves and the dict/list ancestors on each replacement path,
+  sharing unchanged subtrees by reference.  This is not a deep
+  copy: it is a selective structural copy that preserves the
+  ``input is never mutated`` invariant without paying for a full
+  payload clone when no transform fires.  Segmentation is never
+  touched.
 - **Latency-bounded**: the compressor runs under a per-request
   latency budget.  On exceed it stops cleanly and returns a
   partial result.
@@ -70,6 +78,22 @@ class CompressionResult:
     The finalizer persists a compact summary; the dashboard API can
     return the full structure for drill-in.  Raw request content is
     never stored.
+
+    Candidate counting invariants:
+
+    * ``candidate_count`` counts every (segment, transform) pair the
+      applier actually walked past the segment/text fetch guards.
+    * ``eligible_candidate_count`` counts the subset that survived
+      :func:`_filter_segment` policy filters.
+    * ``suppressed_candidate_count`` counts the candidates rejected
+      by ``_filter_segment`` (transform disabled, protected cache
+      boundary, static prefix without opt-in, placement mismatch) or
+      by per-segment guards (empty text, below ``min_candidate_tokens``,
+      below ``min_savings_tokens``, latency budget).
+    * ``applied_transform_count`` is the count of candidates that
+      actually produced a planned replacement and survived fail-closed
+      stable-prefix verification.  When ``applied is True`` this
+      equals the number of planned replacements that landed.
     """
 
     applied: bool
@@ -89,6 +113,10 @@ class CompressionResult:
     latency_ms: float
     reason_code_counts: Mapping[str, int]
     failed_fallback: bool
+    candidate_count: int = 0
+    eligible_candidate_count: int = 0
+    suppressed_candidate_count: int = 0
+    applied_transform_count: int = 0
 
     @property
     def summary_json(self) -> str:
@@ -110,6 +138,10 @@ class CompressionResult:
             "latency_ms": self.latency_ms,
             "reason_code_counts": dict(self.reason_code_counts),
             "failed_fallback": self.failed_fallback,
+            "candidate_count": self.candidate_count,
+            "eligible_candidate_count": self.eligible_candidate_count,
+            "suppressed_candidate_count": self.suppressed_candidate_count,
+            "applied_transform_count": self.applied_transform_count,
         }
         return json.dumps(payload, sort_keys=True, default=str, ensure_ascii=False)
 
@@ -142,6 +174,10 @@ _NO_OP_RESULT: CompressionResult = CompressionResult(
     latency_ms=0.0,
     reason_code_counts={},
     failed_fallback=False,
+    candidate_count=0,
+    eligible_candidate_count=0,
+    suppressed_candidate_count=0,
+    applied_transform_count=0,
 )
 
 
@@ -188,41 +224,55 @@ class SafeModeObservation:
         }
         return json.dumps(payload, sort_keys=True, default=str, ensure_ascii=False)
 
+    def candidate_summary(self) -> dict[str, int]:
+        """Return applier-derived candidate counts for dashboards / tests.
+
+        Keys are stable and always present (zero when no candidates
+        were considered).  Compare against the observe-mode
+        :class:`CompressionObservation` for consistency.
+        """
+        return {
+            "candidate_count": self.candidate_count,
+            "eligible_candidate_count": self.eligible_candidate_count,
+            "suppressed_candidate_count": self.suppressed_candidate_count,
+        }
+
 
 def build_safe_mode_observation(result: CompressionResult) -> SafeModeObservation:
     """Build a :class:`SafeModeObservation` from an applied :class:`CompressionResult`.
 
     The finalizer and dashboard already duck-type against the
     observe-mode ``CompressionObservation`` shape, so this adapter
-    fills the same fields from a single safe-mode run.  When no
-    transforms were applied the adapter reports zero eligible
-    candidates but preserves the suppression / reason-code counts
-    so operators can distinguish "no transforms" from "transforms
-    ran and applied".
+    fills the same fields from a single safe-mode run.  Candidate,
+    eligible, suppressed, and applied counts are taken directly from
+    the applier-derived :class:`CompressionResult` fields populated
+    during the single safe-mode pass; the observation therefore
+    reflects the *real* suppression decisions (transform disabled,
+    protected cache boundary, static-prefix without opt-in,
+    placement mismatch, empty segment, below min_candidate_tokens,
+    below min_savings_tokens, latency budget, fail-closed) without
+    paying for a second observe analyzer pass and without silently
+    under-reporting opportunities.
     """
-    if not result.applied:
-        return SafeModeObservation(
-            mode="safe",
-            candidate_count=0,
-            eligible_candidate_count=0,
-            suppressed_candidate_count=0,
-            estimated_original_tokens=None,
-            estimated_compressed_tokens=None,
-            estimated_savings_tokens=None,
-            analyzer_latency_ms=result.latency_ms,
-            warnings=result.warnings,
-            reason_code_counts=dict(result.reason_code_counts),
-            transform_counts=dict(result.transforms_by_reason),
-            candidates=(),
-        )
+    if result.applied:
+        estimated_original = result.original_tokens or None
+        estimated_compressed = result.compressed_tokens or None
+        estimated_savings = result.savings_tokens or None
+    else:
+        # On no-op or fail-closed paths the applier does not have
+        # settled token totals; surface them only when transforms ran.
+        estimated_original = None
+        estimated_compressed = None
+        estimated_savings = None
+
     return SafeModeObservation(
         mode="safe",
-        candidate_count=result.transform_count,
-        eligible_candidate_count=result.transform_count,
-        suppressed_candidate_count=0,
-        estimated_original_tokens=result.original_tokens or None,
-        estimated_compressed_tokens=result.compressed_tokens or None,
-        estimated_savings_tokens=result.savings_tokens or None,
+        candidate_count=result.candidate_count,
+        eligible_candidate_count=result.eligible_candidate_count,
+        suppressed_candidate_count=result.suppressed_candidate_count,
+        estimated_original_tokens=estimated_original,
+        estimated_compressed_tokens=estimated_compressed,
+        estimated_savings_tokens=estimated_savings,
         analyzer_latency_ms=result.latency_ms,
         warnings=result.warnings,
         reason_code_counts=dict(result.reason_code_counts),
@@ -261,6 +311,10 @@ def _noop_result(payload: Any) -> CompressionResult:
         latency_ms=0.0,
         reason_code_counts={},
         failed_fallback=False,
+        candidate_count=0,
+        eligible_candidate_count=0,
+        suppressed_candidate_count=0,
+        applied_transform_count=0,
     )
 
 
@@ -762,8 +816,15 @@ def apply_safe_compression(
     useful for dashboard grouping, but it is not sufficient to detect
     an accidental stable-prefix mutation; only the content hash can.
 
-    Never mutates ``payload`` in place; always deep-copies.  Never
-    mutates ``segmentation``.  Never raises.
+    Never mutates the input ``payload`` or ``segmentation``.  When
+    no replacement is needed the *same* payload object is returned
+    by identity; when a replacement fires a path-level
+    copy-on-write payload is returned that copies only the dict/list
+    ancestors on each mutated path and leaves unchanged subtrees
+    shared by reference.  This is **not** a deep copy: it is a
+    selective structural copy that preserves the ``input is never
+    mutated`` invariant while avoiding the cost of cloning the full
+    payload on no-op runs.  Never raises.
     """
     if (
         not policy.enabled or policy.mode != "safe" or segmentation is None  # type: ignore[reportUnnecessaryComparison]
@@ -806,6 +867,10 @@ def apply_safe_compression(
             latency_ms=elapsed_ms,
             reason_code_counts={},
             failed_fallback=True,
+            candidate_count=0,
+            eligible_candidate_count=0,
+            suppressed_candidate_count=0,
+            applied_transform_count=0,
         )
 
 
@@ -919,6 +984,10 @@ def _apply_safe_compression_impl(
     total_compressed_tokens = 0
     total_savings_tokens = 0
     transform_count = 0
+    candidate_count = 0
+    eligible_candidate_count = 0
+    suppressed_candidate_count = 0
+    applied_transform_count = 0
 
     transforms_enabled: list[tuple[str, bool]] = [
         ("fold_repeated_lines", policy.transforms.fold_repeated_lines),
@@ -950,6 +1019,11 @@ def _apply_safe_compression_impl(
                 _bump(REASON_LATENCY_BUDGET)
                 break
 
+            # Each (segment, transform) pair is exactly one candidate so
+            # the applier-derived counts stay meaningful without a second
+            # observe pass.
+            candidate_count += 1
+
             eligible, suppressed, _reasons = _filter_segment(
                 segment,
                 policy=policy,
@@ -957,16 +1031,24 @@ def _apply_safe_compression_impl(
                 transform_enabled=transform_enabled,
             )
             if not eligible:
+                suppressed_candidate_count += 1
                 if suppressed is not None:
                     _bump(suppressed)
                 continue
 
+            eligible_candidate_count += 1
+
             if current_text is None or not current_text:
+                suppressed_candidate_count += 1
                 _bump(REASON_EMPTY_SEGMENT)
                 continue
 
             result = _run_transform(transform_name, current_text, segment_id)
             if result is None:
+                # No-op transform execution (e.g. pattern did not match)
+                # is recorded as a suppressed candidate so dashboard
+                # metrics do not silently under-report.
+                suppressed_candidate_count += 1
                 continue
 
             new_text = result[0]
@@ -975,12 +1057,15 @@ def _apply_safe_compression_impl(
             savings = orig_tokens - comp_tokens
 
             if savings <= 0:
+                suppressed_candidate_count += 1
                 continue
 
             if orig_tokens < policy.min_candidate_tokens:
+                suppressed_candidate_count += 1
                 _bump(REASON_BELOW_MIN_CANDIDATE_TOKENS)
                 continue
             if savings < policy.min_savings_tokens:
+                suppressed_candidate_count += 1
                 _bump(REASON_BELOW_MIN_SAVINGS_TOKENS)
                 continue
 
@@ -994,6 +1079,7 @@ def _apply_safe_compression_impl(
             total_compressed_tokens += comp_tokens
             total_savings_tokens += savings
             transform_count += 1
+            applied_transform_count += 1
 
             planned.append(
                 _PlannedReplacement(
@@ -1028,6 +1114,10 @@ def _apply_safe_compression_impl(
             latency_ms=elapsed_ms,
             reason_code_counts=dict(all_reason_counts),
             failed_fallback=False,
+            candidate_count=candidate_count,
+            eligible_candidate_count=eligible_candidate_count,
+            suppressed_candidate_count=suppressed_candidate_count,
+            applied_transform_count=0,
         )
 
     mutated = _copy_with_replacements(payload, planned)
@@ -1063,6 +1153,10 @@ def _apply_safe_compression_impl(
             latency_ms=elapsed_ms,
             reason_code_counts=dict(all_reason_counts),
             failed_fallback=True,
+            candidate_count=candidate_count,
+            eligible_candidate_count=eligible_candidate_count,
+            suppressed_candidate_count=suppressed_candidate_count,
+            applied_transform_count=0,
         )
 
     if not planned:
@@ -1084,6 +1178,10 @@ def _apply_safe_compression_impl(
             latency_ms=elapsed_ms,
             reason_code_counts=dict(all_reason_counts),
             failed_fallback=False,
+            candidate_count=candidate_count,
+            eligible_candidate_count=eligible_candidate_count,
+            suppressed_candidate_count=suppressed_candidate_count,
+            applied_transform_count=0,
         )
 
     return CompressionResult(
@@ -1104,6 +1202,10 @@ def _apply_safe_compression_impl(
         latency_ms=elapsed_ms,
         reason_code_counts=dict(all_reason_counts),
         failed_fallback=False,
+        candidate_count=candidate_count,
+        eligible_candidate_count=eligible_candidate_count,
+        suppressed_candidate_count=suppressed_candidate_count,
+        applied_transform_count=applied_transform_count,
     )
 
 

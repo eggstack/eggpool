@@ -42,7 +42,7 @@
     "0040_cache_token_observability.sql": "f87581ed3d99a7ebfc6e046017aa5b6b857aefd80e4f19f110712f3d64f20e8d",
     "0041_canonical_request_segmentation.sql": "9c2ec4fc503eae2d72930d1c8b9eccf6e9886ef8c351bdfc4b10ca7203b79834",
     "0042_observe_mode_compression_accounting.sql": "3564910b5b285af73c1580f886039216e59a79f0d51339754c441ea4dffe1af5",
-    "0043_safe_suffix_compression.sql": "c3015fad218e2b48c0747db3170f2c7fff65e0bf753ecf16675c9ff19ac758d7",
+    "0043_safe_suffix_compression.sql": "ee9d6c8d670c073aa1c9f42a749b3772358bb9c46d0ce9bbb148483c70605975",
     "0044_compression_policy_resolver.sql": "36af8a24eb395c11c645c3eb5f6228a2ebd02f40b4cb0f63b5936fad742a684f",
     "0045_synthetic_cache_controls.sql": "c454e3462549cdf38fd5e8a5ec30bd2a52dcee97a4a09211d068f18efdd240fc",
     "0046_closed_loop_threshold_tuning.sql": "5912c17e86ef1657cf7f7e7aec3efa2feaa7bfc37185b21f22e0026fec0d8aff",

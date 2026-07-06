@@ -4,9 +4,12 @@
 -- adds the first request-mutating deterministic compressor.  Given
 -- the :class:`SegmentationResult` produced by Phase 2, the compressor
 -- walks volatile-suffix segments, identifies eligible compressible
--- candidates (matching the analyzer's eligibility rules), applies
--- deterministic transforms in-place on a deep-copied payload, and
--- returns a :class:`CompressionResult` describing the outcome.
+-- candidates (matching the analyzer's eligibility rules), and applies
+-- deterministic transforms through path-level copy-on-write (no-op
+-- runs return the original payload by identity, applied runs copy
+-- only the dict/list ancestors on mutated paths and preserve
+-- unchanged subtrees by reference), then returns a
+-- :class:`CompressionResult` describing the outcome.
 --
 -- These columns persist the Phase 5 applier's per-request roll-up
 -- alongside the Phase 4 observe-mode columns.  Both phases share

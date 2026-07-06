@@ -693,9 +693,17 @@ The applier:
 2. Recomputes the pre-mutation `stable_prefix_content_hash` by
    re-extracting canonical stable-prefix content from the original
    payload via stable-prefix segment paths and hashing it.
-3. Deep-copies the payload and walks every volatile-suffix segment,
-   applying each enabled transform whose estimated savings clear
-   the eligibility thresholds. Each segment's `content_path` is a
+3. Discovers planned replacements by walking every volatile-suffix
+   segment, applying each enabled transform whose estimated savings
+   clear the eligibility thresholds. Once a replacement is
+   planned, the applier applies it through path-level copy-on-write:
+   only the dict/list ancestors on each mutated path are copied,
+   and unchanged subtrees are preserved by reference. If no
+   replacement is planned, the original payload object is returned
+   unchanged. This is *not* a full deep copy: it is a selective
+   structural copy that preserves the "input is never mutated"
+   invariant without paying for a full payload clone on no-op runs.
+   Each segment's `content_path` is a
    concrete JSON path resolving to an actual string leaf of the
    request payload (e.g. `("messages", i, "content")` for OpenAI
    string content, `("messages", i, "content", j, "text")` for
@@ -719,8 +727,10 @@ The applier:
    rollback. The fail-closed verification re-hashes the mutated
    payload content, not just immutable segment metadata, so it
    catches real path bugs that mutate stable-prefix content.
-6. Never mutates the input payload or segmentation in place;
-   always deep-copies first.
+6. Never mutates the input payload or segmentation in place.
+   No-op runs return the original payload object by identity;
+   applied runs return a path-level copy-on-write payload that
+   shares unchanged subtrees with the input.
 7. Never raises on malformed input; all exceptions are caught
    and rendered as fail-closed results with `failed_fallback=True`.
 

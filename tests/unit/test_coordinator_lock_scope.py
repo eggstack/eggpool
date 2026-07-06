@@ -255,3 +255,51 @@ async def test_precomputed_context_fields_short_circuit_coordinator() -> None:
         assert ctx.estimated_context_input_tokens == 21
     finally:
         await fixture["db"].disconnect()
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 corrective polish: exactly-one-sample-per-attempt invariants.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio()
+async def test_lock_spans_record_exactly_one_sample_per_attempt() -> None:
+    """Each selection attempt must record *exactly one* sample for
+    ``selection_lock_wait`` and ``selection_locked``.
+
+    Phase 5 polish removed the placeholder ``_maybe_span`` blocks
+    inside the lock that previously double-sampled these metrics.
+    """
+    fixture = await _build_fixture(["alpha", "bravo"])
+    try:
+        ctx = _make_context("req-lock-one-sample")
+        await fixture["coordinator"]._select_and_persist_attempt(ctx, 1)
+        recorder = fixture["recorder"]
+        snap = recorder.snapshot_for_spans(
+            [SPAN_SELECTION_LOCK_WAIT, SPAN_SELECTION_LOCKED]
+        )
+        rows = {row["span"]: row for row in snap["spans"]}
+        assert rows[SPAN_SELECTION_LOCK_WAIT]["sample_count"] == 1
+        assert rows[SPAN_SELECTION_LOCKED]["sample_count"] == 1
+    finally:
+        await fixture["db"].disconnect()
+
+
+@pytest.mark.asyncio()
+async def test_two_attempts_record_two_samples_per_lock_span() -> None:
+    """Each successive selection attempt must append exactly one
+    additional sample so historical metrics reflect *real* attempts."""
+    fixture = await _build_fixture(["alpha", "bravo"])
+    try:
+        for i in range(2):
+            ctx = _make_context(f"req-lock-twice-{i}")
+            await fixture["coordinator"]._select_and_persist_attempt(ctx, i + 1)
+        recorder = fixture["recorder"]
+        snap = recorder.snapshot_for_spans(
+            [SPAN_SELECTION_LOCK_WAIT, SPAN_SELECTION_LOCKED]
+        )
+        rows = {row["span"]: row for row in snap["spans"]}
+        assert rows[SPAN_SELECTION_LOCK_WAIT]["sample_count"] == 2
+        assert rows[SPAN_SELECTION_LOCKED]["sample_count"] == 2
+    finally:
+        await fixture["db"].disconnect()

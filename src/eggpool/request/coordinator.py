@@ -1308,257 +1308,247 @@ class RequestCoordinator:
         lock_wait_ns = time.perf_counter_ns()
         async with self._select_lock:
             lock_held_ns = time.perf_counter_ns()
-            # Record lock timing spans.
-            with _maybe_span(self._dispatch_span_recorder, SPAN_SELECTION_LOCK_WAIT):
-                pass  # placeholder; the wait is the time before the lock
-            with _maybe_span(self._dispatch_span_recorder, SPAN_SELECTION_LOCKED):
-                # Inner transaction MUST close before publication runs so
-                # SQLite has committed the durable rows.
-                async with self._db.transaction():
-                    # 2. Probe circuit-breaker slots on ranked candidates
-                    #    (the breaker state is the only mutable runtime
-                    #    input that depends on the lock).
-                    with _maybe_span(self._dispatch_span_recorder, SPAN_CIRCUIT_PROBE):
-                        for candidate_state, score in ranked_candidates:
-                            # Acquire the circuit-breaker probe slot. If the
-                            # breaker rejects this account (half-open slot
-                            # consumed or still open), try the next ranked
-                            # account without rebuilding and rescoring the
-                            # whole candidate list.
-                            if (
-                                self._health_manager is not None
-                                and not self._health_manager.try_acquire_request(
-                                    candidate_state.name, context.model_id
+            # Lock wait/held timing is recorded exactly once via the explicit
+            # ``record_ns`` calls after the lock exits.  We deliberately do not
+            # wrap the lock in ``_maybe_span`` placeholders: the placeholder
+            # would record a near-zero sample for the wait span and a second
+            # lock-held sample, polluting p50/p95 and double-counting.
+            # Inner transaction MUST close before publication runs so
+            # SQLite has committed the durable rows.
+            async with self._db.transaction():
+                # 2. Probe circuit-breaker slots on ranked candidates
+                #    (the breaker state is the only mutable runtime
+                #    input that depends on the lock).
+                with _maybe_span(self._dispatch_span_recorder, SPAN_CIRCUIT_PROBE):
+                    for candidate_state, score in ranked_candidates:
+                        # Acquire the circuit-breaker probe slot. If the
+                        # breaker rejects this account (half-open slot
+                        # consumed or still open), try the next ranked
+                        # account without rebuilding and rescoring the
+                        # whole candidate list.
+                        if (
+                            self._health_manager is not None
+                            and not self._health_manager.try_acquire_request(
+                                candidate_state.name, context.model_id
+                            )
+                        ):
+                            exclusions.append(
+                                RoutingExclusion(
+                                    account_name=candidate_state.name,
+                                    reason="circuit_breaker",
                                 )
-                            ):
-                                exclusions.append(
-                                    RoutingExclusion(
-                                        account_name=candidate_state.name,
-                                        reason="circuit_breaker",
-                                    )
-                                )
-                                continue
-                            selected_state = candidate_state
-                            selected_score = float(score.final_score)
-                            selected_tier = score.tier
-                            break
+                            )
+                            continue
+                        selected_state = candidate_state
+                        selected_score = float(score.final_score)
+                        selected_tier = score.tier
+                        break
 
-                    if selected_state is None:
-                        # Distinguish "all enabled accounts already
-                        # attempted in this request" (502
-                        # UpstreamExhaustedError) from "no enabled
-                        # accounts at all" (503 ModelUnavailableError).
-                        if thinking_req.required:
-                            _thinking_counter = get_counter()
-                            rejected_status = (
-                                await self._determine_thinking_rejection_status(
-                                    context=context,
-                                    thinking_req=thinking_req,
-                                )
+                if selected_state is None:
+                    # Distinguish "all enabled accounts already
+                    # attempted in this request" (502
+                    # UpstreamExhaustedError) from "no enabled
+                    # accounts at all" (503 ModelUnavailableError).
+                    if thinking_req.required:
+                        _thinking_counter = get_counter()
+                        rejected_status = (
+                            await self._determine_thinking_rejection_status(
+                                context=context,
+                                thinking_req=thinking_req,
                             )
-                            if rejected_status == "unknown":
-                                await _thinking_counter.increment_unknown_capability(
-                                    client_protocol=thinking_req.client_protocol,
-                                )
-                            elif rejected_status == "unsupported":
-                                _cp = thinking_req.client_protocol
-                                await (
-                                    _thinking_counter.increment_unsupported_capability(
-                                        client_protocol=_cp,
-                                    )
-                                )
-                            await _thinking_counter.increment_rejected(
+                        )
+                        if rejected_status == "unknown":
+                            await _thinking_counter.increment_unknown_capability(
                                 client_protocol=thinking_req.client_protocol,
-                                capability_status="no_eligible_providers",
                             )
-                            if context.thinking_trace is not None:
-                                context.thinking_trace["decision"] = "rejected"
-                                context.thinking_trace["capability_status"] = (
-                                    rejected_status or "no_eligible_providers"
-                                )
-                            raise CapabilityError(
-                                model_id=context.model_id,
-                                capability="thinking",
-                                requested_fields=thinking_req.fields,
-                                message=(
-                                    f"Model {context.model_id!r} is available, "
-                                    f"but no eligible provider is known to "
-                                    f"support requested thinking controls "
-                                    f"(thinking capability status: "
-                                    f"{rejected_status or 'unknown'})."
-                                ),
+                        elif rejected_status == "unsupported":
+                            _cp = thinking_req.client_protocol
+                            await _thinking_counter.increment_unsupported_capability(
+                                client_protocol=_cp,
                             )
-                        if self._all_accounts_attempted(context):
-                            raise UpstreamExhaustedError(
-                                f"All eligible accounts attempted for model "
-                                f"{context.model_id!r}"
+                        await _thinking_counter.increment_rejected(
+                            client_protocol=thinking_req.client_protocol,
+                            capability_status="no_eligible_providers",
+                        )
+                        if context.thinking_trace is not None:
+                            context.thinking_trace["decision"] = "rejected"
+                            context.thinking_trace["capability_status"] = (
+                                rejected_status or "no_eligible_providers"
                             )
-                        raise ModelUnavailableError(
-                            f"No accounts available for model {context.model_id!r}"
+                        raise CapabilityError(
+                            model_id=context.model_id,
+                            capability="thinking",
+                            requested_fields=thinking_req.fields,
+                            message=(
+                                f"Model {context.model_id!r} is available, "
+                                f"but no eligible provider is known to "
+                                f"support requested thinking controls "
+                                f"(thinking capability status: "
+                                f"{rejected_status or 'unknown'})."
+                            ),
+                        )
+                    if self._all_accounts_attempted(context):
+                        raise UpstreamExhaustedError(
+                            f"All eligible accounts attempted for model "
+                            f"{context.model_id!r}"
+                        )
+                    raise ModelUnavailableError(
+                        f"No accounts available for model {context.model_id!r}"
+                    )
+
+                account_name = selected_state.name
+                try:
+                    with _maybe_span(self._dispatch_span_recorder, SPAN_ACCOUNT_LOOKUP):
+                        api_key = self._registry.get_api_key(account_name)
+                        has_creds = self._registry.has_usable_credentials(account_name)
+                        if api_key is None or not has_creds:
+                            raise AuthenticationError(
+                                f"API key not available for account {account_name!r}"
+                            )
+
+                        # 5. Resolve the immutable account ID once per process.
+                        account_id = self._account_id_cache.get(account_name)
+                        if account_id is None:
+                            account_repo = AccountRepository(self._db)
+                            account_id = await account_repo.get_id_by_name(account_name)
+                            if account_id is not None:
+                                self._account_id_cache[account_name] = account_id
+                        if account_id is None:
+                            raise DatabaseError(
+                                f"Account {account_name!r} not found in database"
+                            )
+
+                        # 6. Resolve the selected account's provider
+                        resolved_provider_id = (
+                            self._catalog.cache.get_provider_for_account(account_name)
+                            or self._registry.get_provider_for_account(account_name)
+                            or context.provider_id
+                            or DEFAULT_PROVIDER_ID
                         )
 
-                    account_name = selected_state.name
-                    try:
-                        with _maybe_span(
-                            self._dispatch_span_recorder, SPAN_ACCOUNT_LOOKUP
-                        ):
-                            api_key = self._registry.get_api_key(account_name)
-                            has_creds = self._registry.has_usable_credentials(
-                                account_name
-                            )
-                            if api_key is None or not has_creds:
-                                raise AuthenticationError(
-                                    f"API key not available for account "
-                                    f"{account_name!r}"
+                        # Compute the reservation size (cost microdollars).
+                        estimated_microdollars = 0
+                        if self._quota_estimator is not None:
+                            estimated_microdollars = (
+                                self._quota_estimator.estimate_cost(
+                                    account_name,
+                                    context.model_id,
+                                    estimated_tokens,
                                 )
-
-                            # 5. Resolve the immutable account ID once per process.
-                            account_id = self._account_id_cache.get(account_name)
-                            if account_id is None:
-                                account_repo = AccountRepository(self._db)
-                                account_id = await account_repo.get_id_by_name(
-                                    account_name
-                                )
-                                if account_id is not None:
-                                    self._account_id_cache[account_name] = account_id
-                            if account_id is None:
-                                raise DatabaseError(
-                                    f"Account {account_name!r} not found in database"
-                                )
-
-                            # 6. Resolve the selected account's provider
-                            resolved_provider_id = (
-                                self._catalog.cache.get_provider_for_account(
-                                    account_name
-                                )
-                                or self._registry.get_provider_for_account(account_name)
-                                or context.provider_id
-                                or DEFAULT_PROVIDER_ID
                             )
 
-                            # Compute the reservation size (cost microdollars).
-                            estimated_microdollars = 0
-                            if self._quota_estimator is not None:
-                                estimated_microdollars = (
-                                    self._quota_estimator.estimate_cost(
-                                        account_name,
-                                        context.model_id,
-                                        estimated_tokens,
-                                    )
-                                )
-
-                        # 8. Create pending request if first attempt.
-                        created_request = "db_request_id" not in context.client_metadata
-                        if created_request:
-                            with _maybe_span(
-                                self._dispatch_span_recorder, SPAN_DB_WRITE_REQUEST
-                            ):
-                                db_request_id = await self._request_repo.create_pending(
-                                    request_id=context.request_id,
-                                    model_id=context.model_id,
-                                    protocol=context.protocol,
-                                    streamed=context.streaming,
-                                    account_id=account_id,
-                                    reserved_microdollars=estimated_microdollars,
-                                    started_at=context.started_at,
-                                    provider_id=resolved_provider_id,
-                                    client_ip=context.client_ip,
-                                )
-                            context.client_metadata["db_request_id"] = db_request_id
-                        db_request_id = context.client_metadata["db_request_id"]
-
-                        # 9. Create reservation
+                    # 8. Create pending request if first attempt.
+                    created_request = "db_request_id" not in context.client_metadata
+                    if created_request:
                         with _maybe_span(
-                            self._dispatch_span_recorder, SPAN_DB_WRITE_RESERVATION
+                            self._dispatch_span_recorder, SPAN_DB_WRITE_REQUEST
                         ):
-                            reservation_id = await self._reservation_repo.create(
-                                request_id=db_request_id,
-                                account_id=account_id,
-                                model_id=context.model_id,
-                                estimated_tokens=estimated_tokens,
-                                estimated_microdollars=estimated_microdollars,
-                            )
-
-                        # 10. Create attempt row
-                        with _maybe_span(
-                            self._dispatch_span_recorder, SPAN_DB_WRITE_ATTEMPT
-                        ):
-                            attempt_id = await self._attempt_repo.create(
-                                request_id=db_request_id,
-                                attempt_number=attempt_number,
-                                account_id=account_id,
-                                provider_id=resolved_provider_id,
+                            db_request_id = await self._request_repo.create_pending(
+                                request_id=context.request_id,
                                 model_id=context.model_id,
                                 protocol=context.protocol,
                                 streamed=context.streaming,
+                                account_id=account_id,
+                                reserved_microdollars=estimated_microdollars,
+                                started_at=context.started_at,
+                                provider_id=resolved_provider_id,
+                                client_ip=context.client_ip,
                             )
+                        context.client_metadata["db_request_id"] = db_request_id
+                    db_request_id = context.client_metadata["db_request_id"]
 
-                        # Retries select a new account and reservation estimate.
-                        if not created_request:
-                            with _maybe_span(
-                                self._dispatch_span_recorder, SPAN_DB_WRITE_REQUEST
-                            ):
-                                await self._request_repo.update_after_selection(
-                                    request_id=db_request_id,
-                                    account_id=account_id,
-                                    reserved_microdollars=estimated_microdollars,
-                                )
-                    except BaseException:
-                        if self._health_manager is not None:
-                            self._health_manager.release_request(account_name)
-                        raise
-
-                    # Record the account under the same select lock so a
-                    # concurrent caller observing the same context cannot
-                    # race on attempted_accounts before this attempt is
-                    # fully persisted and committed.
-                    context.attempted_accounts.add(account_name)
-                    context.client_metadata["account_name"] = account_name
-
-                # Durable transaction has committed; rows for the request,
-                # reservation, and attempt are visible. The lock is still
-                # held; publication runs BEFORE the lock releases so a
-                # concurrent selector entering the lock after this returns
-                # observes this attempt's runtime state.
-                active_count_increased = False
-                try:
+                    # 9. Create reservation
                     with _maybe_span(
-                        self._dispatch_span_recorder, SPAN_RUNTIME_PUBLICATION
+                        self._dispatch_span_recorder, SPAN_DB_WRITE_RESERVATION
                     ):
-                        # 11. Increment runtime active count
-                        await self._router.increment_active_request_count(account_name)
-                        active_count_increased = True
+                        reservation_id = await self._reservation_repo.create(
+                            request_id=db_request_id,
+                            account_id=account_id,
+                            model_id=context.model_id,
+                            estimated_tokens=estimated_tokens,
+                            estimated_microdollars=estimated_microdollars,
+                        )
 
-                        # 12. Add exact reserved amount to in-memory cache.
-                        if self._quota_estimator is not None:
-                            await self._quota_estimator.add_reservation(
-                                account_name,
-                                estimated_microdollars,
-                                requests=1,
-                                tokens=estimated_tokens,
+                    # 10. Create attempt row
+                    with _maybe_span(
+                        self._dispatch_span_recorder, SPAN_DB_WRITE_ATTEMPT
+                    ):
+                        attempt_id = await self._attempt_repo.create(
+                            request_id=db_request_id,
+                            attempt_number=attempt_number,
+                            account_id=account_id,
+                            provider_id=resolved_provider_id,
+                            model_id=context.model_id,
+                            protocol=context.protocol,
+                            streamed=context.streaming,
+                        )
+
+                    # Retries select a new account and reservation estimate.
+                    if not created_request:
+                        with _maybe_span(
+                            self._dispatch_span_recorder, SPAN_DB_WRITE_REQUEST
+                        ):
+                            await self._request_repo.update_after_selection(
+                                request_id=db_request_id,
+                                account_id=account_id,
+                                reserved_microdollars=estimated_microdollars,
                             )
                 except BaseException:
-                    if active_count_increased:
-                        await self._router.decrement_active_request_count(account_name)
-                    await asyncio.shield(
-                        self._attempt_finalizer.finalize_failed_attempt(
-                            attempt_id=attempt_id,
-                            reservation_id=reservation_id,
-                            data=AttemptFinalizationData(
-                                status_code=None,
-                                error_class="PostCommitInterrupted",
-                                release_reason="post_commit_interrupted",
-                                retry_category=RetryCategory.NEVER.value,
-                                bytes_received=len(context.original_body),
-                                latency_ms=self._elapsed_ms(context),
-                                is_retry_outcome=False,
-                            ),
-                        )
-                    )
                     if self._health_manager is not None:
                         self._health_manager.release_request(account_name)
-                    context.client_metadata["post_commit_interrupted"] = True
                     raise
+
+                # Record the account under the same select lock so a
+                # concurrent caller observing the same context cannot
+                # race on attempted_accounts before this attempt is
+                # fully persisted and committed.
+                context.attempted_accounts.add(account_name)
+                context.client_metadata["account_name"] = account_name
+
+            # Durable transaction has committed; rows for the request,
+            # reservation, and attempt are visible. The lock is still
+            # held; publication runs BEFORE the lock releases so a
+            # concurrent selector entering the lock after this returns
+            # observes this attempt's runtime state.
+            active_count_increased = False
+            try:
+                with _maybe_span(
+                    self._dispatch_span_recorder, SPAN_RUNTIME_PUBLICATION
+                ):
+                    # 11. Increment runtime active count
+                    await self._router.increment_active_request_count(account_name)
+                    active_count_increased = True
+
+                    # 12. Add exact reserved amount to in-memory cache.
+                    if self._quota_estimator is not None:
+                        await self._quota_estimator.add_reservation(
+                            account_name,
+                            estimated_microdollars,
+                            requests=1,
+                            tokens=estimated_tokens,
+                        )
+            except BaseException:
+                if active_count_increased:
+                    await self._router.decrement_active_request_count(account_name)
+                await asyncio.shield(
+                    self._attempt_finalizer.finalize_failed_attempt(
+                        attempt_id=attempt_id,
+                        reservation_id=reservation_id,
+                        data=AttemptFinalizationData(
+                            status_code=None,
+                            error_class="PostCommitInterrupted",
+                            release_reason="post_commit_interrupted",
+                            retry_category=RetryCategory.NEVER.value,
+                            bytes_received=len(context.original_body),
+                            latency_ms=self._elapsed_ms(context),
+                            is_retry_outcome=False,
+                        ),
+                    )
+                )
+                if self._health_manager is not None:
+                    self._health_manager.release_request(account_name)
+                context.client_metadata["post_commit_interrupted"] = True
+                raise
 
         # Record the actual lock wait/held durations.
         if self._dispatch_span_recorder is not None:
