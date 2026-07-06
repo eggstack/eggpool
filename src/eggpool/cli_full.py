@@ -1084,23 +1084,26 @@ def configsetup_opencode(ctx: click.Context) -> None:
 @click.pass_context
 def configsetup_claude_code(ctx: click.Context) -> None:
     """Print Claude Code config snippet for connecting to this router."""
+    from eggpool.config_utils import resolve_server_api_key
+
     config_path: str = ctx.obj["config_path"]
 
-    # Auto-generate API key if not present. See configsetup opencode
-    # above for why the write must succeed before we proceed.
-    key = _read_server_api_key(config_path)
-    if not key:
-        try:
-            key = generate_api_key()
-            write_server_api_key(config_path, key)
-            click.echo("Generated new server API key.", err=True)
-        except OSError as exc:
-            click.echo(
-                f"Error: cannot persist new API key to {config_path}: {exc}. "
-                "Refusing to print a key that would not survive a restart.",
-                err=True,
-            )
-            sys.exit(1)
+    # Resolve the effective server API key (inline / env / generated).
+    # ``resolve_server_api_key`` raises SystemExit when ``api_key_env`` is
+    # set but the env var is missing, so an env-backed auth can't silently
+    # fall through to a generated key here.
+    try:
+        key_resolution = resolve_server_api_key(config_path)
+    except OSError as exc:
+        click.echo(
+            f"Error: cannot persist new API key to {config_path}: {exc}. "
+            "Refusing to print a key that would not survive a restart.",
+            err=True,
+        )
+        sys.exit(1)
+    key = key_resolution.api_key
+    if key_resolution.config_mutated:
+        click.echo("Generated new server API key.", err=True)
 
     port = _read_server_port(config_path)
     lan_ip = _detect_lan_ip()

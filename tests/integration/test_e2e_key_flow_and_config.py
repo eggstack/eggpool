@@ -898,6 +898,81 @@ class TestConfigSetup:
         assert snippet["api_key"] == "ep_claude_key"
         assert "11300" in snippet["base_url"]
 
+    def test_configsetup_claude_code_uses_api_key_env(self, tmp_path, monkeypatch):
+        """configsetup claude-code honors [server].api_key_env.
+
+        Regression: when the server is configured with ``api_key_env``, the
+        Claude Code snippet must use the env var's value — not silently
+        generate and report a non-durable key.
+        """
+        import json
+        from unittest.mock import patch
+
+        monkeypatch.setenv("TEST_EGGPOOL_KEY", "ep_env_real")
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            '[server]\napi_key_env = "TEST_EGGPOOL_KEY"\nport = 9090\n'
+        )
+
+        captured: dict[str, str] = {}
+
+        def fake_copy(text: str) -> bool:
+            captured["text"] = text
+            return True
+
+        from click.testing import CliRunner
+
+        runner = CliRunner()
+        with patch("eggpool.cli_full._copy_to_clipboard", side_effect=fake_copy):
+            result = runner.invoke(
+                cli,
+                ["--config", str(config_path), "configsetup", "claude-code"],
+            )
+
+        assert result.exit_code == 0
+        # Env value drives the snippet; no synthetic key was generated.
+        assert "ep_env_real" not in result.output
+        assert "text" in captured
+        snippet = json.loads(captured["text"])
+        assert snippet["api_key"] == "ep_env_real"
+        assert "9090" in snippet["base_url"]
+        # Config was NOT mutated (no inline key was written).
+        config_after = config_path.read_text()
+        assert "ep_" not in config_after
+        assert "Generated new server API key" not in result.output
+
+    def test_configsetup_claude_code_api_key_env_missing_aborts(
+        self, tmp_path, monkeypatch
+    ):
+        """configsetup claude-code aborts when api_key_env is unset.
+
+        Regression: with ``api_key_env`` configured but the env var missing,
+        the command must exit non-zero instead of generating a key that
+        does not match the running server's auth.
+        """
+        from unittest.mock import patch
+
+        monkeypatch.delenv("TEST_EGGPOOL_MISSING", raising=False)
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            '[server]\napi_key_env = "TEST_EGGPOOL_MISSING"\nport = 9090\n'
+        )
+
+        from click.testing import CliRunner
+
+        runner = CliRunner()
+        with patch("eggpool.cli_full._copy_to_clipboard", return_value=True):
+            result = runner.invoke(
+                cli,
+                ["--config", str(config_path), "configsetup", "claude-code"],
+            )
+
+        assert result.exit_code != 0
+        config_after = config_path.read_text()
+        assert "ep_" not in config_after
+
     def test_configsetup_works_with_duplicate_accounts(self, tmp_path):
         """configsetup works even if config has duplicate account names."""
         config_path = tmp_path / "config.toml"

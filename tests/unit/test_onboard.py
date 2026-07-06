@@ -161,6 +161,25 @@ class TestOnboardFreshInstall:
         content = Path(config_path).read_text()
         assert "[server]" in content
 
+    def test_ensure_config_creates_missing_parent_directory(
+        self, tmp_path: Path
+    ) -> None:
+        """ensure_config creates intermediate parent directories.
+
+        Regression: ``eggpool --config /new/dir/config.toml`` previously
+        raised ``RuntimeError: Cannot create config file ... [Errno 2]
+        No such file or directory`` because the parent directory was not
+        created.
+        """
+        from eggpool.config import ensure_config
+
+        config_path = tmp_path / "new" / "nested" / "config.toml"
+        ensure_config(str(config_path))
+
+        assert config_path.exists()
+        assert config_path.parent.is_dir()
+        assert "[server]" in config_path.read_text()
+
     def test_ensure_config_generates_api_key(self, tmp_path: Path) -> None:
         """_ensure_config_with_api_key generates server API key if missing."""
         from eggpool.config import ensure_config

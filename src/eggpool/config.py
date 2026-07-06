@@ -34,6 +34,8 @@ def ensure_config(config_path: str) -> None:
     if path.exists():
         return
 
+    path.parent.mkdir(parents=True, exist_ok=True)
+
     try:
         from importlib.resources import as_file, files
 
