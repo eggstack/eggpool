@@ -68,10 +68,11 @@ class TestRestartServer:
             (42, 0),
             (42, runtime_module.signal.SIGTERM),
         ]
-        assert popen_calls[0][-3:] == [
+        assert popen_calls[0][-4:] == [
             "--config",
             str(config_path.resolve()),
             "serve",
+            "--verbose",
         ]
         assert not pid_file.exists()
 

@@ -79,8 +79,15 @@ class TestStartServerDaemonSpawn:
         argv = mock_popen.call_args[0][0]
         assert "--daemon" not in argv  # noqa: S105
 
-    def test_start_server_daemon_passes_serve_command(self, tmp_path: Path) -> None:
-        """``serve`` is the last positional argument in the child argv."""
+    def test_start_server_daemon_passes_verbose_serve_command(
+        self, tmp_path: Path
+    ) -> None:
+        """The child runs foreground ``serve --verbose``.
+
+        The public ``serve`` command defaults to daemon mode, so a
+        detached child must pass ``--verbose`` to become the Granian
+        supervisor instead of spawning another daemon child.
+        """
         config_path = tmp_path / "config.toml"
         config_path.write_text("[server]\n", encoding="utf-8")
 
@@ -91,7 +98,7 @@ class TestStartServerDaemonSpawn:
             runtime_module.start_server(str(config_path), daemon=True)
 
         argv = mock_popen.call_args[0][0]
-        assert argv[-1] == "serve"
+        assert argv[-2:] == ["serve", "--verbose"]
 
     def test_start_server_daemon_opens_stdin_devnull(self, tmp_path: Path) -> None:
         """The child's stdin is ``subprocess.DEVNULL``."""
@@ -363,6 +370,34 @@ class TestRestartServerDaemonDefault:
         kwargs = mock_popen.call_args[1]
         assert kwargs["start_new_session"] is True
         assert kwargs["stdin"] == subprocess.DEVNULL
+
+
+class TestFastCliDaemonSpawn:
+    """Behavior of the stdlib-only ``ensure-running`` spawn path."""
+
+    def test_fastcli_spawn_daemon_runs_verbose_supervisor(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Fast-path daemon spawn must also use ``serve --verbose``."""
+        from eggpool import fastcli as fastcli_module
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("[server]\n", encoding="utf-8")
+        log_path = tmp_path / "eggpool.log"
+
+        monkeypatch.setattr(fastcli_module, "default_log_file", lambda: log_path)
+
+        popen_calls: list[list[str]] = []
+
+        def _fake_popen(command: list[str], **_kwargs: object) -> object:
+            popen_calls.append(command)
+            return object()
+
+        monkeypatch.setattr(fastcli_module.subprocess, "Popen", _fake_popen)
+
+        assert fastcli_module._spawn_daemon(str(config_path)) == 0
+        assert popen_calls
+        assert popen_calls[0][-2:] == ["serve", "--verbose"]
 
 
 # ---------------------------------------------------------------------------

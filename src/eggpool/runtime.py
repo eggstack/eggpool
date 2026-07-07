@@ -25,12 +25,13 @@ accumulated in the old inline implementations.
 Daemon mode
 -----------
 ``start_server(..., daemon=True)`` spawns a detached supervisor that
-runs the normal foreground ``serve`` command. The child's stdin is
+runs the foreground ``serve --verbose`` command. The child's stdin is
 closed (``/dev/null``) and stdout/stderr are appended to a log file
 under the operator's state directory, so the spawning shell is not
 tied to the new process and Granian logs survive a closed terminal.
-The child command is **not** passed any flag; the
-detachment is purely a parent-side concern.
+The child command is passed ``serve --verbose`` so it runs the
+foreground Granian supervisor. Detachment is purely a parent-side
+concern.
 """
 
 from __future__ import annotations
@@ -264,9 +265,11 @@ def start_server(  # noqa: PLR0913 - daemon options are explicit by design
     ---------------
     When ``daemon=True`` (the default), the child is launched with
     stdin closed and stdout/stderr redirected away from the parent
-    terminal. The child command itself is **always** the normal
-    foreground ``serve`` invocation; no daemon flag is ever
-    forwarded to the child. Log destination precedence:
+    terminal. The child command itself is **always** the foreground
+    ``serve --verbose`` invocation; no daemon flag is ever forwarded
+    to the child. The explicit ``--verbose`` prevents the child from
+    re-entering the public daemon-mode default. Log destination
+    precedence:
 
     1. ``log_path`` argument
     2. ``$EGGPOOL_LOG_FILE`` (via :func:`runtime_paths.default_log_file`)
@@ -290,7 +293,15 @@ def start_server(  # noqa: PLR0913 - daemon options are explicit by design
     and are not caught here.
     """
     resolved = str(Path(config_path).resolve())
-    argv = [sys.executable, "-m", "eggpool", "--config", resolved, "serve"]
+    argv = [
+        sys.executable,
+        "-m",
+        "eggpool",
+        "--config",
+        resolved,
+        "serve",
+        "--verbose",
+    ]
 
     if not daemon:
         return subprocess.Popen(  # noqa: S602,S603 - intentional spawn

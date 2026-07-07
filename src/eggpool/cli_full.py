@@ -211,7 +211,8 @@ def serve(
 
     Daemon mode (the default) is a one-shot detach: this process
     validates the config, refuses to start a second instance, and
-    spawns a detached child that runs the foreground supervisor. The
+    spawns a detached child that runs ``serve --verbose`` as the
+    foreground supervisor. The
     child writes its own PID file and clears it on exit. The parent
     returns promptly with a short success message pointing at the log
     file. The child is **not** passed any daemon flag; detachment is
@@ -322,8 +323,8 @@ def _serve_daemon(
     """Spawn a detached ``serve`` supervisor and report success.
 
     The parent only validates the config and refuses to start a second
-    instance. The child is the normal foreground ``serve`` command; it
-    owns its own PID file lifecycle and log destination. The parent
+    instance. The child is the foreground ``serve --verbose`` command;
+    it owns its own PID file lifecycle and log destination. The parent
     does **not** wait for the child to come up before returning -- the
     operator can ``eggpool croncheck`` (or read the log) to confirm.
     """

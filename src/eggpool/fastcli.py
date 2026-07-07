@@ -105,14 +105,15 @@ def _run_croncheck(config_path: str | None) -> int:
 def _spawn_daemon(config_path: str | None) -> int:
     """Spawn the server in the background.
 
-    The child runs the normal foreground ``serve`` command so it can
-    write its own PID file through the existing supervisor path; it
-    does not re-enter this fast-path module.
+    The child runs ``serve --verbose`` so it becomes the foreground
+    Granian supervisor and writes its own PID file through the existing
+    supervisor path. The public ``serve`` command defaults to daemon
+    mode, so the explicit flag prevents recursive daemon spawning.
     """
     argv: list[str] = [sys.executable, "-m", "eggpool"]
     if config_path:
         argv.extend(["--config", str(Path(config_path).resolve())])
-    argv.append("serve")
+    argv.extend(["serve", "--verbose"])
 
     log_path = default_log_file()
     try:
