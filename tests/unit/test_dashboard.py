@@ -895,6 +895,91 @@ class TestAutoRefreshBootstrap:
         assert "reinitTimeseriesChart" in script
 
 
+class TestDashboardJS:
+    """Static assertions against ``dashboard.js`` source.
+
+    The project does not run a JS runtime in CI, so these tests guard
+    load-bearing JS contracts (interval handle scoping, period selector
+    wiring on the timeseries page, and silent behaviour on non-chart
+    pages) by inspecting the source string directly.
+    """
+
+    @staticmethod
+    def _load_js() -> str:
+        from pathlib import Path
+
+        js_path = (
+            Path(__file__).parent.parent.parent
+            / "src"
+            / "eggpool"
+            / "dashboard"
+            / "static"
+            / "dashboard.js"
+        )
+        return js_path.read_text(encoding="utf-8")
+
+    def test_timeseries_refresh_handle_is_namespace_scoped(self) -> None:
+        """Regression for Bug 1: the 60s refresh interval must be stored
+        at namespace scope, not on the canvas.
+
+        ``#dashboard-content`` is replaced on every auto-refresh tick,
+        so a handle attached to the old canvas becomes unreachable
+        from the new canvas. A namespace-level property keeps a live
+        reference across the innerHTML swap so the prior interval can
+        be cleared before a new one is registered.
+        """
+        js = self._load_js()
+        assert "namespace.__timeseriesRefreshHandle" in js
+        assert "canvas.__eggpoolRefreshHandle" not in js
+
+    def test_timeseries_period_selector_submits_the_page(self) -> None:
+        """Regression for Bug 2: the timeseries page renders three
+        period-dependent surfaces (grouped chart, grouped detail table,
+        aggregate per-bucket table) plus heading/footer. The dedicated
+        timeseries filter form's AJAX refresh only updates the grouped
+        chart, so the top period selector must submit the page on the
+        timeseries route to keep every surface in sync.
+        """
+        js = self._load_js()
+        # The branch must execute ``periodForm.submit()`` when the
+        # selector carries the ``timeseries-period-selector`` class,
+        # not the AJAX refresh path.
+        timeseries_marker = (
+            "periodForm.classList.contains(\n        "
+            '"timeseries-period-selector"\n      )'
+        )
+        assert timeseries_marker in js
+        # And the matching submit-branch must exist with a positive
+        # ``onTimeseriesPage`` guard before the AJAX path.
+        assert "if (onTimeseriesPage) {" in js
+        assert "periodForm.submit();" in js
+
+    def test_chart_initialisers_skip_silently_on_non_chart_pages(self) -> None:
+        """Regression for Bug 3: missing-Chart.js warnings must only
+        fire when the page actually requests a chart. Both initialisers
+        query the DOM first and return silently when no chart elements
+        are present.
+        """
+        js = self._load_js()
+        # ``initStaticCharts`` checks for ``script.static-chart-data``
+        # elements before warning.
+        static_start = js.index("namespace.initStaticCharts")
+        static_block = js[static_start : static_start + 600]
+        assert "script.static-chart-data[data-chart-id]" in static_block
+        # The query must precede the Chart.js guard.
+        assert static_block.index(
+            "script.static-chart-data[data-chart-id]"
+        ) < static_block.index('typeof window.Chart === "undefined"')
+        # ``initGroupedTimeseriesCharts`` checks for grouped chart
+        # canvases before warning.
+        grouped_start = js.index("namespace.initGroupedTimeseriesCharts")
+        grouped_block = js[grouped_start : grouped_start + 600]
+        assert "canvas.grouped-timeseries-chart" in grouped_block
+        assert grouped_block.index(
+            "canvas.grouped-timeseries-chart"
+        ) < grouped_block.index('typeof window.Chart === "undefined"')
+
+
 class TestRenderAccounts:
     """Tests for the accounts page renderer."""
 

@@ -226,13 +226,14 @@
   }
 
   namespace.initGroupedTimeseriesCharts = function initGroupedTimeseriesCharts() {
+    const canvases = document.querySelectorAll(
+      "canvas.grouped-timeseries-chart"
+    );
+    if (canvases.length === 0) return;
     if (typeof window.Chart === "undefined") {
       console.warn("EggPoolDashboard: Chart.js not loaded");
       return;
     }
-    const canvases = document.querySelectorAll(
-      "canvas.grouped-timeseries-chart"
-    );
     for (let i = 0; i < canvases.length; i++) {
       const canvas = canvases[i];
       const chartId = canvas.getAttribute("data-chart-id");
@@ -494,11 +495,15 @@
     // Re-arm the in-place 60s refresh that the original inline IIFE
     // registered. Cleared and re-registered on each reinit so successive
     // auto-refresh ticks do not stack intervals on the same canvas.
-    if (canvas.__eggpoolRefreshHandle) {
-      window.clearInterval(canvas.__eggpoolRefreshHandle);
-      canvas.__eggpoolRefreshHandle = null;
+    // Storing the handle at the namespace scope (not on the canvas) is
+    // load-bearing: when ``#dashboard-content`` is replaced, the old
+    // canvas is detached from the DOM, so a handle attached to it is
+    // unreachable from the new canvas and the previous interval leaks.
+    if (namespace.__timeseriesRefreshHandle) {
+      window.clearInterval(namespace.__timeseriesRefreshHandle);
+      namespace.__timeseriesRefreshHandle = null;
     }
-    canvas.__eggpoolRefreshHandle = window.setInterval(function () {
+    namespace.__timeseriesRefreshHandle = window.setInterval(function () {
       const period = periodForFetch();
       fetch("/api/timeseries?period=" + encodeURIComponent(period), {
         cache: "no-store",
@@ -534,13 +539,14 @@
   };
 
   namespace.initStaticCharts = function initStaticCharts() {
+    const dataScripts = document.querySelectorAll(
+      "script.static-chart-data[data-chart-id]"
+    );
+    if (dataScripts.length === 0) return;
     if (typeof window.Chart === "undefined") {
       console.warn("EggPoolDashboard: Chart.js not loaded");
       return;
     }
-    const dataScripts = document.querySelectorAll(
-      "script.static-chart-data[data-chart-id]"
-    );
     for (let i = 0; i < dataScripts.length; i++) {
       const script = dataScripts[i];
       const chartId = script.getAttribute("data-chart-id");
@@ -794,10 +800,25 @@
       const periodForm = periodForms[p];
       if (periodForm.__eggpoolPeriodWired) continue;
       periodForm.__eggpoolPeriodWired = true;
+      // The timeseries page renders three period-dependent surfaces
+      // (grouped chart, grouped detail table, aggregate per-bucket
+      // table) plus the page heading/footer period label. The dedi-
+      // cated timeseries filter form's AJAX path only refreshes the
+      // grouped chart, so on this page the top period selector must
+      // submit the form to keep every surface and the URL in sync.
+      // Sibling auxiliary GET forms that just toggle ``data-auto-submit``
+      // filters continue to use the AJAX refresh when a timeseries
+      // filter form is present (e.g. Bandwidth page) and submit the
+      // page otherwise (e.g. Accounts page).
+      const onTimeseriesPage = periodForm.classList.contains(
+        "timeseries-period-selector"
+      );
       const select = periodForm.querySelector('select[name="period"]');
       if (select) {
         select.addEventListener("change", function () {
-          if (
+          if (onTimeseriesPage) {
+            periodForm.submit();
+          } else if (
             timeseriesForm
             && typeof namespace.refreshGroupedTimeseriesChart === "function"
           ) {
@@ -820,7 +841,9 @@
         const autoSelect = autoSubmits[s];
         if (autoSelect === select) continue;
         autoSelect.addEventListener("change", function () {
-          if (
+          if (onTimeseriesPage) {
+            periodForm.submit();
+          } else if (
             timeseriesForm
             && typeof namespace.refreshGroupedTimeseriesChart === "function"
           ) {
