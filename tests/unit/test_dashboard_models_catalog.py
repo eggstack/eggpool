@@ -116,7 +116,8 @@ class TestGetCatalogRows:
         from eggpool.dashboard.routes import _get_catalog_rows
 
         catalog = _FakeCatalogService(_make_cache())
-        rows = await _get_catalog_rows(catalog)
+        state = await _get_catalog_rows(catalog)
+        rows = state.rows
         # gpt-4o appears on two providers → two rows.
         ids = sorted((r["model_id"], r["provider_id"]) for r in rows)
         assert ids == [
@@ -131,7 +132,8 @@ class TestGetCatalogRows:
         from eggpool.dashboard.routes import _get_catalog_rows
 
         catalog = _FakeCatalogService(_make_cache())
-        rows = await _get_catalog_rows(catalog)
+        state = await _get_catalog_rows(catalog)
+        rows = state.rows
         for row in rows:
             assert row["request_count"] == 0
             assert row["cost_microdollars"] == 0
@@ -144,7 +146,8 @@ class TestGetCatalogRows:
         from eggpool.dashboard.routes import _get_catalog_rows
 
         catalog = _FakeCatalogService(_make_cache())
-        rows = await _get_catalog_rows(catalog, account="acct-a")
+        state = await _get_catalog_rows(catalog, account="acct-a")
+        rows = state.rows
         ids = sorted((r["model_id"], r["provider_id"]) for r in rows)
         # acct-a supports gpt-4o through its own provider only.
         assert ids == [
@@ -155,7 +158,8 @@ class TestGetCatalogRows:
     async def test_none_catalog_returns_empty_list(self) -> None:
         from eggpool.dashboard.routes import _get_catalog_rows
 
-        rows = await _get_catalog_rows(None)
+        state = await _get_catalog_rows(None)
+        rows = state.rows
         assert rows == []
 
 
@@ -1183,7 +1187,8 @@ class TestCatalogRowsDiagnostics:
             "anthropic": ProviderConfig.model_construct(routing_priority=7),
         }
         app_config = AppConfig.model_construct(providers=providers_cfg)
-        rows = await _get_catalog_rows(catalog, config=app_config)
+        state = await _get_catalog_rows(catalog, config=app_config)
+        rows = state.rows
         by_id = {(r["model_id"], r["provider_id"]): r for r in rows}
         gpt = by_id[("gpt-4o", "openai")]
         assert gpt["base_model_id"] == "gpt-4o"
@@ -1217,7 +1222,8 @@ class TestCatalogRowsDiagnostics:
         }
         cache._provider_models[("gpt-4o", "openai")] = entry
         catalog = _FakeCatalogService(cache)
-        rows = await _get_catalog_rows(catalog)
+        state = await _get_catalog_rows(catalog)
+        rows = state.rows
         assert len(rows) == 1
         assert rows[0]["available"] is False
         assert rows[0]["catalog_status"] == "unavailable"
@@ -1398,7 +1404,7 @@ class TestCollapseModelsRouting:
         app_config = AppConfig.model_construct(
             models=ModelsConfig.model_construct(collapse_models=False)
         )
-        rows = await _get_catalog_rows(catalog, config=app_config)
+        rows = (await _get_catalog_rows(catalog, config=app_config)).rows
         # Each (model_id, provider_id) pair becomes its own row.
         ids = sorted((r["model_id"], r["provider_id"]) for r in rows)
         assert ids == [
@@ -1435,7 +1441,7 @@ class TestCollapseModelsRouting:
             models=ModelsConfig.model_construct(collapse_models=True),
             providers=providers_cfg,
         )
-        rows = await _get_catalog_rows(catalog, config=app_config)
+        rows = (await _get_catalog_rows(catalog, config=app_config)).rows
         # gpt-4o is shared by openai + azure; it must collapse to a
         # single row with both providers listed.
         ids = sorted(r["model_id"] for r in rows)
@@ -1553,7 +1559,7 @@ class TestCollapseModelsRouting:
         models_cfg = ModelsConfig.model_construct()
         assert models_cfg.collapse_models is False
         app_config = AppConfig.model_construct(models=models_cfg)
-        rows = await _get_catalog_rows(catalog, config=app_config)
+        rows = (await _get_catalog_rows(catalog, config=app_config)).rows
         ids = sorted((r["model_id"], r["provider_id"]) for r in rows)
         assert ids == [
             ("claude-opus-4", "anthropic"),

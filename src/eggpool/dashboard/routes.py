@@ -84,6 +84,93 @@ class ModelInfoDashboardState:
     degraded_reason: str | None = None
     error_class: str | None = None
     summary_count: int = 0
+    matched_row_count: int = 0
+    unmatched_row_count: int = 0
+    unmatched_sample: tuple[dict[str, Any], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogRowsState:
+    """Compact diagnostic bundle for the dashboard's catalog-row build.
+
+    Carries both the produced rows and a ``degraded_reason`` /
+    ``error_class`` pair so the route can surface a dashboard-level
+    diagnostic when the catalog service is attached but produced no
+    rows (or failed entirely).
+    """
+
+    rows: list[dict[str, Any]]
+    available: bool
+    degraded_reason: str | None = None
+    error_class: str | None = None
+    row_count: int = 0
+
+
+def _known_provider_ids_from_config(config: Any | None) -> set[str] | None:
+    """Collect configured provider ids as a set for suffix parsing.
+
+    Returns ``None`` when the config is unavailable or malformed; a
+    ``None`` return signals that the suffix parser should not strip
+    anything (matching the ``parse_model_provider`` contract).
+    """
+    if config is None:
+        return None
+    providers_cfg_raw = getattr(config, "providers", None)
+    providers_cfg = cast("dict[str, Any] | None", providers_cfg_raw)
+    if not isinstance(providers_cfg, dict) or not providers_cfg:
+        return None
+    return {str(pid) for pid in providers_cfg}
+
+
+def _normalize_dashboard_model_row(
+    row: dict[str, Any],
+    *,
+    known_providers: set[str] | None,
+) -> dict[str, Any]:
+    """Normalize a model row so dashboard joins use canonical unsuffixed IDs.
+
+    Provider-suffixed public ids (``minimax-m3/opencode-go``) get
+    decomposed into ``base_model_id`` + ``provider_id``; ``model_id``
+    stays the public literal because that is what operators see and
+    what the detail-page URL points at.  Rows already carrying a
+    ``base_model_id`` keep it when it differs from the literal
+    ``model_id`` (i.e. it's an unsuffixed canonical id); otherwise the
+    helper falls back to parsing ``model_id`` itself.
+
+    Always returns a shallow copy so the caller can rely on the row
+    being safe to mutate.  Writes:
+
+    * ``base_model_id`` — canonical unsuffixed id
+    * ``provider_id`` — explicit provider id or empty string
+    * ``_model_info_lookup_id`` — string the renderer should use when
+      looking up canonical model-info summaries
+    * ``_model_id_was_suffixed`` — ``True`` when the input
+      ``model_id`` carried a provider suffix we had to split
+    """
+    from eggpool.routing.provider import parse_model_provider  # local import
+
+    out = dict(row)
+    raw_model_id = str(out.get("model_id") or "")
+    raw_base_id = str(out.get("base_model_id") or "")
+    raw_provider_id = str(out.get("provider_id") or "")
+    parsed_base, parsed_provider = parse_model_provider(
+        raw_model_id, known_providers=known_providers
+    )
+    has_parsed_suffix = parsed_provider is not None and parsed_provider != ""
+    if raw_base_id and (
+        not raw_model_id or raw_base_id != raw_model_id or not has_parsed_suffix
+    ):
+        canonical_base = raw_base_id
+    elif has_parsed_suffix:
+        canonical_base = parsed_base
+    else:
+        canonical_base = raw_base_id or raw_model_id
+    provider_id = raw_provider_id or parsed_provider or ""
+    out["base_model_id"] = canonical_base
+    out["provider_id"] = provider_id
+    out["_model_info_lookup_id"] = canonical_base
+    out["_model_id_was_suffixed"] = bool(has_parsed_suffix)
+    return out
 
 
 def _configured_compression_mode(config: AppConfig) -> str:
@@ -722,17 +809,29 @@ async def handle_models(
     catalog = getattr(request.app.state, "catalog", None)
     app_config = getattr(request.app.state, "config", None)
     collapse_models = _read_collapse_models(app_config)
+    known_providers = _known_provider_ids_from_config(app_config)
 
-    catalog_rows = await _get_catalog_rows(
+    catalog_state = await _get_catalog_rows(
         catalog, account=account or None, config=app_config
     )
-    requested_ids: set[str] = set()
-    for row in catalog_rows:
-        base_id = row.get("base_model_id")
-        if base_id:
-            requested_ids.add(str(base_id))
-        elif row.get("model_id"):
-            requested_ids.add(str(row["model_id"]))
+    # Normalize rows eagerly so the canonical lookup key
+    # (``_model_info_lookup_id``) is set before any join work happens.
+    catalog_rows: list[dict[str, Any]] = [
+        _normalize_dashboard_model_row(row, known_providers=known_providers)
+        for row in catalog_state.rows
+    ]
+    if (
+        catalog_state.available
+        and catalog_state.degraded_reason is None
+        and not catalog_rows
+        and catalog is not None
+    ):
+        # Catalog was reachable but produced no rows.  This is a
+        # likely join-failure signal: surface it as a diagnostic.
+        logger.warning(
+            "Dashboard catalog returned no rows despite an attached catalog "
+            "service — model-info join cannot match."
+        )
 
     models, model_info_state = cast(
         "tuple[list[dict[str, Any]] | None, ModelInfoDashboardState]",
@@ -741,13 +840,24 @@ async def handle_models(
                 time_range, account_name=account or None, use_cache=True
             ),
             _get_model_info_summary_state(
-                model_info_service, model_ids=requested_ids or None
+                model_info_service,
+                # Pass ``None`` so the canonical-table summary fetch
+                # returns every available summary; the join side then
+                # matches against the rendered dashboard rows.  The
+                # canonical table is small enough (tens/hundreds of
+                # rows) that this avoids under-requesting.
+                model_ids=None,
             ),
         ),
     )
+    normalized_stats_rows: list[dict[str, Any]] = []
+    for raw_row in models or []:
+        normalized_stats_rows.append(
+            _normalize_dashboard_model_row(raw_row, known_providers=known_providers)
+        )
     model_info_summary_map = model_info_state.summaries
     merged_rows = _merge_models_with_catalog(
-        models if models is not None else [],
+        normalized_stats_rows,
         catalog_rows,
         collapse_models=collapse_models,
     )
@@ -757,6 +867,23 @@ async def handle_models(
         availability=availability,
         used=used,
         model_info_map=model_info_summary_map,
+    )
+    # Compute join diagnostics over the post-filter rows.  The
+    # renderer uses these to surface a degraded-state notice when
+    # the model-info summaries exist but none of the rendered rows
+    # matched them.
+    matched, unmatched_sample = _compute_model_info_join_stats(
+        filtered_rows, model_info_summary_map
+    )
+    model_info_state = ModelInfoDashboardState(
+        summaries=model_info_state.summaries,
+        available=model_info_state.available,
+        degraded_reason=model_info_state.degraded_reason,
+        error_class=model_info_state.error_class,
+        summary_count=model_info_state.summary_count,
+        matched_row_count=matched,
+        unmatched_row_count=max(0, len(filtered_rows) - matched),
+        unmatched_sample=unmatched_sample,
     )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
     account_options = _collect_account_options(request)
@@ -790,7 +917,7 @@ async def _get_catalog_rows(
     *,
     account: str | None = None,
     config: Any | None = None,
-) -> list[dict[str, Any]]:
+) -> CatalogRowsState:
     """Build sparse rows for every catalog model so the page is
     catalog-complete.
 
@@ -805,8 +932,13 @@ async def _get_catalog_rows(
       contributing provider id.  This mirrors what
       ``/v1/models`` exposes in collapsed mode.
 
-    Returns an empty list when the catalog is unavailable — the page
-    must still render with whatever stats rows the caller already has.
+    Returns a :class:`CatalogRowsState`.  When the catalog is
+    unavailable the state carries ``available=False`` and zero rows;
+    the page must still render with whatever stats rows the caller
+    already has.  When the catalog service is attached but row
+    construction raises, the helper logs and surfaces
+    ``degraded_reason="fetch_error"`` so the route can render a
+    diagnostic instead of silently dropping rows.
 
     Each row carries:
 
@@ -829,24 +961,27 @@ async def _get_catalog_rows(
       entry so the dashboard can render provider-specific facts.
     """
     if catalog is None:
-        return []
+        return CatalogRowsState(
+            rows=[],
+            available=False,
+            degraded_reason="service_unattached",
+            row_count=0,
+        )
     # Build a provider_id → routing_priority map once when the config
     # is available so per-row lookup is a cheap dict read.
     priority_by_provider = _build_provider_priority_map(config)
     collapse_models = _read_collapse_models(config)
     if collapse_models:
-        rows = _get_collapsed_catalog_rows(
+        return _get_collapsed_catalog_rows(
             catalog,
             priority_by_provider=priority_by_provider,
             account=account,
         )
-    else:
-        rows = _get_provider_scoped_catalog_rows(
-            catalog,
-            priority_by_provider=priority_by_provider,
-            account=account,
-        )
-    return rows  # type: ignore[no-any-return]
+    return _get_provider_scoped_catalog_rows(
+        catalog,
+        priority_by_provider=priority_by_provider,
+        account=account,
+    )
 
 
 def _sparse_row_template(
@@ -981,17 +1116,32 @@ def _get_provider_scoped_catalog_rows(
     *,
     priority_by_provider: dict[str, int],
     account: str | None,
-) -> list[dict[str, Any]]:
+) -> CatalogRowsState:
     """One row per ``(model_id, provider_id)`` pair.
 
     Used when ``collapse_models`` is false (the default). Iterates
     ``catalog.cache.get_provider_model_entries()`` so each suffixed
     catalog exposure becomes a distinct dashboard row.
+
+    Returns a :class:`CatalogRowsState`.  When ``get_provider_model_entries``
+    raises, the exception is logged with its full traceback and the
+    state carries ``degraded_reason="fetch_error"`` so the route can
+    surface a diagnostic instead of silently emitting an empty table.
     """
     try:
         provider_entries = catalog.cache.get_provider_model_entries()
-    except Exception:
-        return []
+    except Exception as exc:
+        logger.exception(
+            "Failed to enumerate provider-scoped catalog rows: %s",
+            type(exc).__name__,
+        )
+        return CatalogRowsState(
+            rows=[],
+            available=True,
+            degraded_reason="fetch_error",
+            error_class=type(exc).__name__,
+            row_count=0,
+        )
     rows: list[dict[str, Any]] = []
     for (model_id, provider_id), entry in provider_entries.items():
         if account:
@@ -1020,7 +1170,11 @@ def _get_provider_scoped_catalog_rows(
                 display_name=display_name,
             )
         )
-    return rows
+    return CatalogRowsState(
+        rows=rows,
+        available=True,
+        row_count=len(rows),
+    )
 
 
 def _get_collapsed_catalog_rows(
@@ -1028,7 +1182,7 @@ def _get_collapsed_catalog_rows(
     *,
     priority_by_provider: dict[str, int],
     account: str | None,
-) -> list[dict[str, Any]]:
+) -> CatalogRowsState:
     """One row per unsuffixed model with contributing ``providers``.
 
     Used when ``collapse_models`` is true. Calls
@@ -1043,11 +1197,27 @@ def _get_collapsed_catalog_rows(
     operator can see collapsed entries that exist in the catalog but
     cannot currently route.  When the catalog layer excludes them
     entirely, this helper naturally inherits that filter.
+
+    Returns a :class:`CatalogRowsState`.  When
+    ``catalog.get_models_for_exposure`` raises, the exception is
+    logged with its full traceback and the state carries
+    ``degraded_reason="fetch_error"`` so the route can surface a
+    diagnostic instead of silently emitting an empty table.
     """
     try:
         entries = catalog.get_models_for_exposure()
-    except Exception:
-        return []
+    except Exception as exc:
+        logger.exception(
+            "Failed to enumerate collapsed catalog rows: %s",
+            type(exc).__name__,
+        )
+        return CatalogRowsState(
+            rows=[],
+            available=True,
+            degraded_reason="fetch_error",
+            error_class=type(exc).__name__,
+            row_count=0,
+        )
     rows: list[dict[str, Any]] = []
     for entry in entries:
         entry_dict = cast("dict[str, Any] | None", entry)
@@ -1118,7 +1288,11 @@ def _get_collapsed_catalog_rows(
                 display_name=display_name,
             )
         )
-    return rows
+    return CatalogRowsState(
+        rows=rows,
+        available=True,
+        row_count=len(rows),
+    )
 
 
 def _entry_protocol_and_name(
@@ -1176,9 +1350,12 @@ def _apply_model_filters(
         normalized = normalize_model_info_status_filter(info_status)
 
         def _matches(row: dict[str, Any]) -> bool:
+            lookup_id = str(row.get("_model_info_lookup_id") or "")
             base_id = str(row.get("base_model_id") or "")
             literal = str(row.get("model_id") or "")
-            mi_entry = mi_map.get(base_id) or mi_map.get(literal)
+            mi_entry = (
+                mi_map.get(lookup_id) or mi_map.get(base_id) or mi_map.get(literal)
+            )
             if mi_entry is None:
                 return False
             entry_status = str(mi_entry.get("status") or "")
@@ -1190,6 +1367,46 @@ def _apply_model_filters(
     elif availability == "unavailable":
         result = [r for r in result if not r.get("_in_catalog")]
     return result
+
+
+def _model_info_lookup_keys(row: dict[str, Any]) -> tuple[str, ...]:
+    """Return the ordered lookup keys to try against the summary map."""
+    return (
+        str(row.get("_model_info_lookup_id") or ""),
+        str(row.get("base_model_id") or ""),
+        str(row.get("model_id") or ""),
+    )
+
+
+def _compute_model_info_join_stats(
+    rows: list[dict[str, Any]],
+    summary_map: dict[str, Any],
+) -> tuple[int, tuple[dict[str, Any], ...]]:
+    """Count rows that match the canonical summary map.
+
+    Returns ``(matched_count, unmatched_sample)`` where
+    ``unmatched_sample`` carries at most five rows of diagnostic
+    info (``model_id``, ``base_model_id``, ``_model_info_lookup_id``,
+    ``provider_id``) for the operator to inspect.
+    """
+    if not rows:
+        return 0, ()
+    matched = 0
+    unmatched: list[dict[str, Any]] = []
+    for row in rows:
+        keys = _model_info_lookup_keys(row)
+        if any(key and key in summary_map for key in keys):
+            matched += 1
+            continue
+        unmatched.append(
+            {
+                "model_id": str(row.get("model_id") or ""),
+                "base_model_id": str(row.get("base_model_id") or ""),
+                "lookup_id": str(row.get("_model_info_lookup_id") or ""),
+                "provider_id": str(row.get("provider_id") or ""),
+            }
+        )
+    return matched, tuple(unmatched[:5])
 
 
 def _model_row_key(row: dict[str, Any], *, collapse_models: bool) -> tuple[str, str]:

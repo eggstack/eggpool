@@ -2161,6 +2161,24 @@ The plan in `plans/model_info_openrouter_polish_closeout_plan.md` closes the rem
 - `TestDetailEndpointObservations` — API endpoint returns DB rows; synthesised fallback only fires when caller passes `observations=None`.
 - `TestParseEntryToRecord` — `OpenRouterModelInfoSource` parsing produces the canonical `MiniMax-M3` shape from the documented OpenRouter payload.
 
+### Dashboard Model-Info Join Corrective Plan
+
+The plan in `plans/model_info_dashboard_join_corrective_plan.md` closes the gap where the API reports canonical model-info rows but the `/models` dashboard page renders unknown pills. The failure modes it addresses:
+
+* Catalog row construction silently swallowed exceptions, dropping the entire table when `catalog.cache.get_provider_model_entries()` (or `catalog.get_models_for_exposure()`) raised.
+* Provider-suffixed dashboard rows (`minimax-m3/opencode-go`) needed a deterministic normalization step before the join so the renderer looked up the canonical `minimax-m3` row.
+* `ModelInfoDashboardState` only covered `service_unattached` and `fetch_error`; there was no diagnostic for "API has summaries but the dashboard rows did not match any of them".
+
+What changed:
+
+- **`CatalogRowsState` dataclass** (`src/eggpool/dashboard/routes.py`): mirrors `ModelInfoDashboardState` for the catalog row builder. `_get_catalog_rows()`, `_get_provider_scoped_catalog_rows()`, and `_get_collapsed_catalog_rows()` now return `CatalogRowsState(rows, available, degraded_reason, error_class, row_count)` instead of a raw list. The two previously-silent `except Exception: return []` blocks now log via `logger.exception(...)` (full traceback) and surface `degraded_reason="fetch_error"` so the route can render a diagnostic.
+- **`_normalize_dashboard_model_row()`** (`src/eggpool/dashboard/routes.py`): splits provider-suffixed `model_id` values using `parse_model_provider(known_providers=...)` derived from `config.providers`. Every catalog and stats row gets `base_model_id`, `provider_id`, `_model_info_lookup_id`, and `_model_id_was_suffixed` populated before the join. Rows with an existing `base_model_id` that differs from the literal `model_id` are preserved unchanged.
+- **`_compute_model_info_join_stats()`** (`src/eggpool/dashboard/routes.py`): walks the post-filter dashboard rows and counts how many matched the canonical summary map using `_model_info_lookup_id` → `base_model_id` → `model_id`. Carries a five-row unmatched sample so operators can see exactly which rows failed the join.
+- **`ModelInfoDashboardState` extensions** (`src/eggpool/dashboard/routes.py`): now carries `matched_row_count`, `unmatched_row_count`, and `unmatched_sample`. `render_models()` emits a visible join-failure diagnostic when `summary_count > 0`, dashboard rows exist, and `matched_row_count == 0`. The diagnostic includes the unmatched sample so operators can grep the canonical keys live.
+- **Renderer lookup fallback hardening** (`src/eggpool/dashboard/render.py`): `render_models()` now consults `_model_info_lookup_id` first, then `base_model_id`, then `model_id`. Each rendered row carries `data-model-id`, `data-model-info-key`, and `data-provider-id` attributes so operators can verify the join keys via `curl ... | grep`.
+- **Catalog-attached-but-empty warning** (`src/eggpool/dashboard/routes.py`): when the catalog is reachable but produces zero rows, the route logs a `WARNING` under `eggpool.dashboard.routes` so operators see "API correct / dashboard empty" as a diagnostic, not a silent failure.
+- **Tests** (`tests/unit/test_dashboard_model_info_join.py`): 13 tests pin the renderer join, route normalization, silent-failure removal, and join-diagnostics behavior. The `test_handle_models_normalizes_suffixed_stats_rows_*` cases reproduce the exact "API correct / dashboard empty" regression that prompted this plan.
+
 ## Model Capabilities
 
 Protocol-neutral capability schema in `src/eggpool/catalog/capabilities.py` provides a structured representation for model capabilities, currently focused on thinking/reasoning. The schema decouples capability knowledge from any specific transcoder implementation so catalog, routing, serialization, and config code can import it without circular dependencies. See `docs/thinking.md` for the full operator guide.

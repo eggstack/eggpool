@@ -2506,13 +2506,20 @@ def render_models(
             err_count = int(row.get("error_count", 0))
 
             # Model-info pill. Provider-suffixed rows store the
-            # canonical lookup key under ``base_model_id`` so the
-            # dashboard looks up by the unsuffixed ID first and falls
-            # back to the literal row model_id when the catalog
-            # entry has no provider suffix.
+            # canonical lookup key under ``base_model_id`` (and the
+            # route also sets ``_model_info_lookup_id`` explicitly
+            # after splitting the provider suffix).  The dashboard
+            # looks up by the unsuffixed ID first and falls back to
+            # the literal row ``model_id`` when the catalog entry
+            # has no provider suffix.
             model_id = row.get("model_id", "")
+            lookup_id = row.get("_model_info_lookup_id") or ""
             base_id = row.get("base_model_id", "") or model_id
-            mi_info = mi_map.get(base_id) or mi_map.get(model_id)
+            mi_info = (
+                mi_map.get(str(lookup_id))
+                or mi_map.get(str(base_id))
+                or mi_map.get(str(model_id))
+            )
             info_pill = _render_model_info_pill(mi_info)
 
             # URL path-encode the model id so provider suffixes
@@ -2525,12 +2532,16 @@ def render_models(
             quoted_model_id = quote(str(model_id or ""), safe="")
             model_link = (
                 f'<a href="/models/{quoted_model_id}'
-                f'?theme={escape_attr(quote(current_theme, safe=""))}">'
+                f'?theme={escape_attr(quote(current_theme, safe=""))}"'
+                f' data-model-id="{escape_attr(str(model_id))}"'
+                f' data-model-info-key="{escape_attr(str(lookup_id or base_id))}">'
                 f"{escape(model_id)}</a>"
             )
 
             parts.append(
-                f"<tr>"
+                f'<tr data-model-id="{escape_attr(str(model_id))}"'
+                f' data-model-info-key="{escape_attr(str(lookup_id or base_id))}"'
+                f' data-provider-id="{escape_attr(str(row.get("provider_id", "")))}">'
                 f"{_td_priority(model_link, 1)}"
                 f"{_td_priority(provider, 1)}"
                 f"{_td_priority(avail_html, 1)}"
@@ -2639,6 +2650,40 @@ def render_models(
             "Model info unavailable: summary map fetch failed; "
             "see server logs for traceback."
             "</p>"
+        )
+    elif (
+        model_info_state is not None
+        and getattr(model_info_state, "degraded_reason", None) is None
+        and getattr(model_info_state, "summary_count", 0) > 0
+        and len(models) > 0
+        and getattr(model_info_state, "matched_row_count", 0) == 0
+    ):
+        sample_raw = getattr(model_info_state, "unmatched_sample", ()) or ()
+        sample = list(sample_raw)[:5]
+        if sample:
+            items = "".join(
+                "<li>"
+                + escape(str(entry.get("model_id", "")))
+                + " (lookup: "
+                + escape(str(entry.get("lookup_id", "")))
+                + ", base: "
+                + escape(str(entry.get("base_model_id", "")))
+                + ", provider: "
+                + escape(str(entry.get("provider_id", "")))
+                + ")"
+                + "</li>"
+                for entry in sample
+            )
+            sample_html = f'<ul class="empty-list" role="list">{items}</ul>'
+        else:
+            sample_html = ""
+        model_info_warning = (
+            '<p class="empty" role="status">'
+            "Model info is loaded but did not match any dashboard "
+            "rows. Provider-suffixed model IDs may not be "
+            "normalized to canonical IDs before the join. "
+            "Sample unmatched rows:"
+            f"</p>{sample_html}"
         )
 
     body = f"""
