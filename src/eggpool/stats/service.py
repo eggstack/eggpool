@@ -1029,18 +1029,29 @@ class StatsService:
         std_dev = math.sqrt(variance)
         cv = std_dev / mean_val
 
-        most = max(active, key=lambda a: float(a.get("cost_microdollars", 0)))
-        least = min(active, key=lambda a: float(a.get("cost_microdollars", 0)))
+        def _pick(metric_key: str) -> tuple[dict[str, Any], dict[str, Any]]:
+            most_row = max(active, key=lambda a: int(a.get(metric_key, 0) or 0))
+            least_row = min(active, key=lambda a: int(a.get(metric_key, 0) or 0))
+            return most_row, least_row
+
+        most_cost, least_cost = _pick("cost_microdollars")
+        most_tokens, least_tokens = _pick("total_tokens")
+        most_requests, least_requests = _pick("request_count")
+
         return {
             "imbalance_ratio": cv,
             "active_accounts": len(active),
             "most_used": {
-                "name": str(most.get("account_name", "")),
-                "cost_microdollars": int(most.get("cost_microdollars", 0)),
+                "name": str(most_cost.get("account_name", "")),
+                "cost_microdollars": int(most_cost.get("cost_microdollars", 0)),
+                "total_tokens": int(most_tokens.get("total_tokens", 0)),
+                "request_count": int(most_requests.get("request_count", 0)),
             },
             "least_used": {
-                "name": str(least.get("account_name", "")),
-                "cost_microdollars": int(least.get("cost_microdollars", 0)),
+                "name": str(least_cost.get("account_name", "")),
+                "cost_microdollars": int(least_cost.get("cost_microdollars", 0)),
+                "total_tokens": int(least_tokens.get("total_tokens", 0)),
+                "request_count": int(least_requests.get("request_count", 0)),
             },
         }
 

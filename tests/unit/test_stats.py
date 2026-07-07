@@ -995,6 +995,42 @@ class TestStatsService:
         )
         assert "imbalance_ratio" in imb
         assert imb["active_accounts"] == 2
+        assert imb["most_used"]["name"] == "acct_a"
+        assert imb["least_used"]["name"] == "acct_b"
+        assert imb["most_used"]["cost_microdollars"] == 3_000_000
+        assert imb["most_used"]["request_count"] == 3
+        assert imb["most_used"]["total_tokens"] == 3 * (100 + 200)
+        assert imb["least_used"]["request_count"] == 2
+        assert imb["least_used"]["total_tokens"] == 2 * (50 + 75)
+
+    @pytest.mark.asyncio()
+    async def test_get_utilization_imbalance_includes_tokens_and_requests(
+        self, seeded_db: Database
+    ) -> None:
+        """The selected accounts also expose total_tokens and request_count."""
+        service = StatsService(seeded_db)
+        imb = await service.get_utilization_imbalance(
+            TimeRange(
+                start=__import__("datetime").datetime.fromisoformat("2000-01-01"),
+                end=__import__("datetime").datetime.fromisoformat("2099-12-31"),
+                label="custom",
+            )
+        )
+        # Both named pairs must surface total_tokens and request_count so the
+        # dashboard "Utilization range" panel can render all three metrics
+        # (cost, tokens, requests) for the most/least used accounts.
+        for key in ("most_used", "least_used"):
+            row = imb[key]
+            assert isinstance(row["total_tokens"], int)
+            assert isinstance(row["request_count"], int)
+        # acct_a is heaviest by every metric in the seeded fixture.
+        assert imb["most_used"]["name"] == "acct_a"
+        assert imb["most_used"]["total_tokens"] == 3 * 300
+        assert imb["most_used"]["request_count"] == 3
+        # acct_b is the lightest active account on every metric.
+        assert imb["least_used"]["name"] == "acct_b"
+        assert imb["least_used"]["total_tokens"] == 2 * 125
+        assert imb["least_used"]["request_count"] == 2
 
     @pytest.mark.asyncio()
     async def test_get_utilization_imbalance_single_active(self, db: Database) -> None:

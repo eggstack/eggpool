@@ -1799,6 +1799,10 @@ def render_overview(
 
     most: dict[str, Any] = imbalance.get("most_used") or {}
     least: dict[str, Any] = imbalance.get("least_used") or {}
+    most_tokens_str = format_tokens(most.get("total_tokens", 0))
+    least_tokens_str = format_tokens(least.get("total_tokens", 0))
+    most_requests_str = format_int(most.get("request_count", 0))
+    least_requests_str = format_int(least.get("request_count", 0))
 
     request_shaping_card = ""
     if request_shaping_summary is not None:
@@ -1993,11 +1997,33 @@ def render_overview(
   <h3>Utilization range</h3>
   <p>
     Most used: <strong>{_stdlib_escape(str(most.get("name", "—")))}</strong>
-    ({format_microdollars(most.get("cost_microdollars", 0))})
     &mdash; Least used:
     <strong>{_stdlib_escape(str(least.get("name", "—")))}</strong>
-    ({format_microdollars(least.get("cost_microdollars", 0))})
   </p>
+  <ul class="util-range-list">
+    <li>
+      <span class="util-range-label">Cost</span>
+      <span class="util-range-most">
+        {format_microdollars(most.get("cost_microdollars", 0))}
+      </span>
+      <span class="util-range-sep">&mdash;</span>
+      <span class="util-range-least">
+        {format_microdollars(least.get("cost_microdollars", 0))}
+      </span>
+    </li>
+    <li>
+      <span class="util-range-label">Tokens</span>
+      <span class="util-range-most">{most_tokens_str}</span>
+      <span class="util-range-sep">&mdash;</span>
+      <span class="util-range-least">{least_tokens_str}</span>
+    </li>
+    <li>
+      <span class="util-range-label">Requests</span>
+      <span class="util-range-most">{most_requests_str}</span>
+      <span class="util-range-sep">&mdash;</span>
+      <span class="util-range-least">{least_requests_str}</span>
+    </li>
+  </ul>
 </section>
 
 {_render_ip_stats(ip_stats or [])}
