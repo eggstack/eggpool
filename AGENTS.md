@@ -49,6 +49,22 @@ uv run pytest -k "test_routing_plan_fallback" -v
 # Hot-path request-path closure tests (Phases 1–5 + corrective polish + final polish)
 uv run pytest tests/unit/test_proxy_request_hotpath_modes.py tests/unit/test_hotpath_corrective_polish.py tests/unit/test_runtime_dispatch_spans_dashboard.py -v
 
+# Model-info identity subset (tiered matching, fresh-DB service, evidence API,
+# safety, migration 0049, OpenRouter contract).  Use the repo-relative script
+# when running from outside the repo root to avoid ModuleNotFoundError.
+scripts/test_model_info_identity.sh
+uv run pytest \
+    tests/unit/test_model_info_fresh_db_service.py \
+    tests/unit/test_model_info_match_evidence_api.py \
+    tests/unit/test_model_info_matching_safety.py \
+    tests/unit/test_model_info_migration_0049.py \
+    tests/unit/test_model_info_tiered_matching.py \
+    tests/unit/test_model_info_openrouter_contract.py -v
+
+# Model-info FastAPI route registration order (suites /aliases and /matches
+# are pinned before the greedy detail route)
+uv run pytest tests/unit/test_model_info_route_registration.py -v
+
 # Lint auto-fix
 uv run ruff check --fix src/
 
@@ -57,6 +73,15 @@ uv run pyright src/ scripts/ 2>&1 | head -20
 ```
 
 CI sets `PYTHONHASHSEED=0` and `TZ=UTC`; reproduce locally for deterministic results.
+
+> All `uv run pytest` commands above assume the Eggpool repo root as the
+> working directory.  When invoking from a sibling project root, use the
+> repo-relative script instead, which always ``cd``s into the repo root
+> before running pytest:
+>
+> ```bash
+> EGGPOOL_REPO=/path/to/eggpool "$EGGPOOL_REPO/scripts/test_model_info_identity.sh"
+> ```
 
 ## Code Style
 

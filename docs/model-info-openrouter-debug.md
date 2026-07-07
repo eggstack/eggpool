@@ -108,6 +108,7 @@ acceptance criteria in the polish closeout plan:
 | `detail.pricing.openrouter` | present with advisory per-1k pricing |
 | `detail.match_evidence[]` | non-empty list with `match_method`, `confidence`, `source` |
 | `/api/model-info/{id}/matches` | returns match evidence (capped at 50 entries) |
+| `/api/model-info/{id}/aliases` | returns both `aliases[]` and `aliases_by_source[]` (NOT shadowed by greedy detail route — registration order is pinned by `tests/unit/test_model_info_route_registration.py`) |
 | `observations[].source_model_id` | real OpenRouter id (`minimax/minimax-m3`), not local id |
 | `observations[]._synthetic` | not present in production handler path |
 | `model_info_source_health.openrouter.last_payload_count` | `> 0` after a successful fetch |

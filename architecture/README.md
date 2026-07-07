@@ -2079,8 +2079,10 @@ AggregatorError (base)
 - **Error hierarchy**: `ModelInfoSourceFetchError` (subclasses `AggregatorError`) raised by source adapters on network/HTTP/parse failures; caught by `ModelInfoService` and recorded as source-health errors
 - **CLI**: `eggpool modelinfo show/list/refresh` commands for inspection and manual refresh
 - **Config**: `[model_info]` section in `config.toml` with TTL controls, refresh intervals, and source enablement (`[model_info.sources.openrouter]` for OpenRouter)
-- **JSON API endpoints** (phase 4): `src/eggpool/api/model_info.py` registers four endpoints:
+- **JSON API endpoints** (phase 4): `src/eggpool/api/model_info.py` registers the following endpoints. The specific suffix routes (`/matches`, `/aliases`) are registered BEFORE the greedy `/{model_id:path}` detail route so FastAPI's path matcher cannot capture `<model_id>/aliases` or `<model_id>/matches` as the `model_id` parameter. The order is pinned by `tests/unit/test_model_info_route_registration.py`:
   - `GET /api/model-info` — summary list of all models (status, sparse, summary, sources, timestamps)
+  - `GET /api/model-info/{model_id:path}/matches` — match evidence diagnostics for one model (capped at 50 entries)
+  - `GET /api/model-info/{model_id:path}/aliases` — alias list + source-keyed alias rows for one model
   - `GET /api/model-info/{model_id:path}` — per-model detail (limits, modalities, external IDs, provenance, observations, conflicts)
   - `GET /api/model-info/sources` — source health snapshot (redacts secrets and raw error messages)
   - `POST /api/model-info/refresh` — manual refresh (always auth-gated; accepts `?model_id=<id>`, `?source=`, `?force=1`)

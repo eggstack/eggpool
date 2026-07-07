@@ -244,3 +244,66 @@ class TestFreshDBMinimaxM3ServiceChain:
             assert result.get("openrouter_matched", 0) >= 1
         finally:
             await db.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# Provider namespace accessor wiring (tiered OpenRouter matching)
+# ---------------------------------------------------------------------------
+
+
+class TestKnownProviderNamespacesAccessor:
+    """Pin the contract between ``ModelCatalogCache.known_provider_ids`` and
+    ``ModelInfoService._known_provider_namespaces``.
+
+    Without this accessor the tiered OpenRouter resolver falls back to legacy
+    exact-alias matching and silently loses the fresh-DB normalization fix.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_service_known_provider_namespaces_uses_catalog_accessor(
+        self,
+    ) -> None:
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await _run_migrations(db)
+            cache = _make_cache("minimax-m3", provider_id="opencode-go")
+            config = ModelInfoConfig(
+                sources=ModelInfoSourcesConfig(
+                    openrouter=ModelInfoSourceConfig(enabled=True),
+                )
+            )
+            service = ModelInfoService(config, db, cache, outbound_client=None)
+            assert service._known_provider_namespaces() == {"opencode-go"}
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio()
+    async def test_service_known_provider_namespaces_none_when_no_rows(
+        self,
+    ) -> None:
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await _run_migrations(db)
+            cache = ModelCatalogCache()
+            config = ModelInfoConfig(
+                sources=ModelInfoSourcesConfig(
+                    openrouter=ModelInfoSourceConfig(enabled=True),
+                )
+            )
+            service = ModelInfoService(config, db, cache, outbound_client=None)
+            assert service._known_provider_namespaces() is None
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio()
+    async def test_cache_exposes_known_provider_ids(self) -> None:
+        cache = ModelCatalogCache()
+        assert hasattr(cache, "known_provider_ids")
+        assert callable(cache.known_provider_ids)
+        cache._provider_models[("minimax-m3", "opencode-go")] = {
+            "model_id": "minimax-m3",
+            "protocol": "openai",
+        }
+        assert cache.known_provider_ids() == {"opencode-go"}

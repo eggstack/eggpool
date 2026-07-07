@@ -602,15 +602,18 @@ def register_model_info_routes(app: Any, require_auth: bool = False) -> None:
         methods=["GET"],
         dependencies=dependencies,
     )
+    # ``/aliases`` MUST come before the greedy detail route below, otherwise
+    # FastAPI's path matcher captures ``<model_id>/aliases`` as the model_id
+    # and dispatches to the detail handler.
     app.add_api_route(
-        path="/api/model-info/{model_id:path}",
-        endpoint=handle_model_info_detail,
+        path="/api/model-info/{model_id:path}/aliases",
+        endpoint=handle_model_info_aliases,
         methods=["GET"],
         dependencies=dependencies,
     )
     app.add_api_route(
-        path="/api/model-info/{model_id:path}/aliases",
-        endpoint=handle_model_info_aliases,
+        path="/api/model-info/{model_id:path}",
+        endpoint=handle_model_info_detail,
         methods=["GET"],
         dependencies=dependencies,
     )

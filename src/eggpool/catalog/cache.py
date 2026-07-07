@@ -759,8 +759,16 @@ class ModelCatalogCache:
         return self._account_providers.get(account_name)
 
     def known_provider_ids(self) -> set[str]:
-        """Return the set of all known provider IDs from the account registry."""
-        return set(self._account_providers.values())
+        """Return provider IDs known from provider-scoped catalog rows.
+
+        These are the namespaces used to strip aggregator-style suffixes
+        (e.g. ``minimax-m3/opencode-go`` -> ``minimax-m3``) during model-info
+        identity matching.  Deriving them from ``_provider_models`` keeps the
+        namespace set aligned with the catalog rows that actually expose a
+        provider scope, rather than accounts that may not yet have any model
+        rows.
+        """
+        return {str(provider_id) for (_model_id, provider_id) in self._provider_models}
 
     def get_model(self, model_id: str) -> dict[str, Any] | None:
         """Get a specific model from the cache."""

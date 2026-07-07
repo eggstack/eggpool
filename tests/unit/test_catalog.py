@@ -1257,3 +1257,66 @@ def test_get_provider_model_entries_keys_are_deterministic() -> None:
     # (model_id, provider_id) lexical order.
     assert first[0] == ("alpha", "prov-a")
     assert first[-1] == ("zeta", "prov-b")
+
+
+# ---------------------------------------------------------------------------
+# known_provider_ids() — namespace accessor used by model-info tiered matcher
+# ---------------------------------------------------------------------------
+
+
+def test_known_provider_ids_returns_provider_model_namespaces() -> None:
+    """The accessor yields provider IDs sourced from provider-scoped rows.
+
+    These namespaces drive ``ModelInfoService._known_provider_namespaces``,
+    which strips aggregator-style suffixes (e.g. ``opencode-go``) before
+    tiered identity matching.  Deriving from ``_provider_models`` keeps the
+    namespace set aligned with the catalog rows that actually expose a
+    provider scope.
+    """
+    cache = ModelCatalogCache()
+    cache._provider_models[("minimax-m3", "opencode-go")] = {
+        "model_id": "minimax-m3",
+        "protocol": "openai",
+    }
+    cache._provider_models[("gpt-4o", "openai-direct")] = {
+        "model_id": "gpt-4o",
+        "protocol": "openai",
+    }
+    assert cache.known_provider_ids() == {"opencode-go", "openai-direct"}
+
+
+def test_known_provider_ids_empty_when_no_provider_rows() -> None:
+    """A bare cache has no provider namespaces; the accessor returns an empty set.
+
+    ``ModelInfoService._known_provider_namespaces`` translates ``{}`` to
+    ``None`` so it does not pass an empty set into the tiered resolver.
+    """
+    cache = ModelCatalogCache()
+    assert cache.known_provider_ids() == set()
+
+
+def test_known_provider_ids_dedupes_repeated_provider_keys() -> None:
+    """Repeated ``(model_id, provider_id)`` pairs collapse to one entry per provider."""
+    cache = ModelCatalogCache()
+    for mid in ("minimax-m3", "minimax-m3-fast", "minimax-m3-pro"):
+        cache._provider_models[(mid, "opencode-go")] = {
+            "model_id": mid,
+            "protocol": "openai",
+        }
+    assert cache.known_provider_ids() == {"opencode-go"}
+
+
+def test_known_provider_ids_ignores_account_registry() -> None:
+    """Accounts without provider-scoped catalog rows do not leak as namespaces.
+
+    An account may be registered to a provider before any provider-scoped
+    model row lands; that provider should not appear as a stripping
+    namespace until it actually exposes catalog rows.
+    """
+    cache = ModelCatalogCache()
+    cache.set_account_provider("acc-1", "opencode-go")
+    cache._provider_models[("minimax-m3", "openai-direct")] = {
+        "model_id": "minimax-m3",
+        "protocol": "openai",
+    }
+    assert cache.known_provider_ids() == {"openai-direct"}
