@@ -579,6 +579,141 @@ class ModelInfoRepository:
             }
         return result
 
+    async def upsert_alias_with_method(
+        self,
+        model_id: str,
+        provider_id: str | None,
+        alias: str,
+        source: str,
+        *,
+        match_method: str,
+        discovered_by: str = "tiered_resolver",
+        confidence: float = 0.5,
+        diagnostics: dict[str, object] | None = None,
+        active: bool = True,
+    ) -> None:
+        """Upsert an alias row and stamp match_method / discovered_by / diagnostics.
+
+        Uses the existing ``model_info_aliases`` table — the columns
+        match_method / discovered_by / diagnostics_json were added by
+        migration 0049.
+        """
+        diag_json = json.dumps(diagnostics or {}, sort_keys=True)
+        async with self._db.transaction():
+            await self._db.execute_write(
+                "INSERT INTO model_info_aliases "
+                "(model_id, provider_id, alias, source, confidence, active, "
+                "match_method, discovered_by, diagnostics_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(provider_id, alias, source) DO UPDATE SET "
+                "model_id = excluded.model_id, "
+                "confidence = excluded.confidence, "
+                "active = excluded.active, "
+                "match_method = excluded.match_method, "
+                "discovered_by = excluded.discovered_by, "
+                "diagnostics_json = excluded.diagnostics_json, "
+                "last_seen_at = CURRENT_TIMESTAMP",
+                (
+                    model_id,
+                    provider_id,
+                    alias,
+                    source,
+                    confidence,
+                    int(active),
+                    match_method,
+                    discovered_by,
+                    diag_json,
+                ),
+            )
+
+    async def record_match_evidence(
+        self,
+        model_id: str,
+        provider_id: str | None,
+        source: str,
+        alias: str,
+        match_method: str,
+        confidence: float,
+        diagnostics: dict[str, object] | None = None,
+    ) -> None:
+        """Insert a row into ``model_info_match_evidence``.
+
+        Same FK to models.model_id as other model_info tables. The migration
+        0049 already created the table.
+        """
+        now_iso = datetime.now(UTC).isoformat()
+        diag_json = json.dumps(diagnostics or {}, sort_keys=True)
+        async with self._db.transaction():
+            await self._db.execute_write(
+                "INSERT OR IGNORE INTO models "
+                "(model_id, display_name, first_seen_at, last_seen_at) "
+                "VALUES (?, NULL, ?, ?)",
+                (model_id, now_iso, now_iso),
+            )
+            await self._db.execute_write(
+                "INSERT INTO model_info_match_evidence "
+                "(model_id, provider_id, source, alias, match_method, "
+                "confidence, diagnostics_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    model_id,
+                    provider_id,
+                    source,
+                    alias,
+                    match_method,
+                    confidence,
+                    diag_json,
+                ),
+            )
+
+    async def list_match_evidence(
+        self,
+        model_id: str,
+        *,
+        source: str | None = None,
+    ) -> list[dict[str, object]]:
+        """Return match evidence rows for a model, optionally filtered by source.
+
+        Case-insensitive lookup on model_id. Returns dicts with id, model_id,
+        provider_id, source, alias, match_method, confidence, diagnostics_json,
+        created_at, last_seen_at.
+        """
+        if source is not None:
+            rows = await self._db.fetch_all(
+                "SELECT id, model_id, provider_id, source, alias, match_method, "
+                "confidence, diagnostics_json, created_at, last_seen_at "
+                "FROM model_info_match_evidence "
+                "WHERE lower(model_id) = lower(?) AND source = ? "
+                "ORDER BY last_seen_at DESC",
+                (model_id, source),
+            )
+        else:
+            rows = await self._db.fetch_all(
+                "SELECT id, model_id, provider_id, source, alias, match_method, "
+                "confidence, diagnostics_json, created_at, last_seen_at "
+                "FROM model_info_match_evidence "
+                "WHERE lower(model_id) = lower(?) "
+                "ORDER BY last_seen_at DESC",
+                (model_id,),
+            )
+        return [
+            {
+                "id": row["id"],
+                "model_id": row["model_id"],
+                "provider_id": row["provider_id"],
+                "source": row["source"],
+                "alias": row["alias"],
+                "match_method": row["match_method"],
+                "confidence": float(row["confidence"])
+                if row["confidence"] is not None
+                else None,
+                "diagnostics_json": row["diagnostics_json"],
+                "created_at": row["created_at"],
+                "last_seen_at": row["last_seen_at"],
+            }
+            for row in rows
+        ]
+
     async def list_compact_observations_for_model(
         self, model_id: str
     ) -> list[dict[str, Any]]:

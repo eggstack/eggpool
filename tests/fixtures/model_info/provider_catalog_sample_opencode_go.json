@@ -1,0 +1,6 @@
+{
+  "opencode-go": [
+    {"model_id": "minimax-m3", "display_name": "MiniMax-M3", "protocol": "openai"},
+    {"model_id": "deepseek-v4", "display_name": "DeepSeek V4", "protocol": "openai"}
+  ]
+}

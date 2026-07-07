@@ -47,6 +47,7 @@
     "0045_synthetic_cache_controls.sql": "c454e3462549cdf38fd5e8a5ec30bd2a52dcee97a4a09211d068f18efdd240fc",
     "0046_closed_loop_threshold_tuning.sql": "5912c17e86ef1657cf7f7e7aec3efa2feaa7bfc37185b21f22e0026fec0d8aff",
     "0047_normalize_rollup_bucket_start.sql": "18ce1ecf758df4864ffe82d63f374594cca3d8f9acbb7c0d33c586cff95ba871",
-    "0048_request_cost_repairs.sql": "8df6ed6b24a0d076c5dc00bf4c3d28c624c56ed05d7f1bcfe3617ce919afda65"
+    "0048_request_cost_repairs.sql": "8df6ed6b24a0d076c5dc00bf4c3d28c624c56ed05d7f1bcfe3617ce919afda65",
+    "0049_model_info_match_evidence.sql": "ed87a96750593860c358ef9f47c46bcaf78e51822be9202bf173b4e7905a7507"
   }
 }

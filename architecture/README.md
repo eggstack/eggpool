@@ -2097,6 +2097,23 @@ AggregatorError (base)
 - **Detail API enhancements** (phase 5): `GET /api/model-info/{model_id}` returns benchmark data (per-source throughput/latency/pricing), alias list, Hugging Face metadata (pipeline_tags, model_card_url, library_name), and manual override indicators
 - **Richer summary generation** (phase 5): deterministic summaries now include sparse-data warnings, benchmark highlights (e.g., "74 tok/s on Artificial Analysis"), Hugging Face card availability, and conflict annotations when sources disagree on fields
 - **`model_info_overrides` table** (phase 5): migration `0038` adds a `model_info_overrides` table for persisting operator-set overrides to canonical fields. Overridden fields are marked with an `overridden` flag on canonical rows to distinguish from source-provided values
+- **Tiered identity matching** (migration `0049`): `model_info/matching.py` resolves local model IDs to source records through a 5-tier resolver:
+    0. `configured_exact_alias` — operator-configured `[model_info.aliases]` rows
+    1. `exact_source_id` — raw `model_id` or `split(model_id)[1]` or provider-catalog
+       `<provider_id>/<model_id>` aliases indexed verbatim
+    2. `normalized_exact` — `normalize_model_key()` of model_id, display_name, and
+       provider-catalog aliases compared against the candidate index
+    3. `regex_rule` — conservative built-in patterns for `minimax`, `claude`,
+       `gemini` family shapes
+    4. `similarity_guarded` — `difflib.SequenceMatcher` with strict thresholds
+       (disabled by default)
+  Normalization uses NFKC + `.casefold()` + separator stripping + duplicate-vendor
+  collapse, so `MiniMax-M3`, `minimax-m3`, `MiniMax M3`, and `MiniMax: MiniMax M3`
+  all normalize to `minimaxm3`. Provider namespaces like `opencode-go/minimax-m3`
+  are stripped via `strip_provider_namespace` — they are NOT vendor namespaces.
+  Non-exact accepted matches persist evidence rows in `model_info_match_evidence`
+  and stamp `match_method` / `discovered_by` / `diagnostics_json` on
+  `model_info_aliases`. Periodic refresh logs WARNING on no-match cycles.
 
 ### Corrective Pass (Phases A–F)
 

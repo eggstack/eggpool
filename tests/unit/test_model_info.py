@@ -76,8 +76,8 @@ async def test_model_info_migration_is_idempotent() -> None:
             "WHERE type='table' AND name LIKE 'model_info_%'"
         )
         assert (
-            len(rows) == 5
-        )  # canonical, observations, aliases, source_health, overrides
+            len(rows) == 6
+        )  # canonical, observations, aliases, source_health, overrides, match_evidence
     finally:
         await db.disconnect()
 

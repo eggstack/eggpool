@@ -15,6 +15,12 @@ from eggpool.model_info.identity import (
     dedupe_alias_strings,
     resolve_openrouter_record,
 )
+from eggpool.model_info.matching import (
+    ModelInfoCandidateIndex,
+    ModelInfoMatchingConfig,
+    build_candidate_index,
+    resolve_source_record_tiered,
+)
 from eggpool.model_info.repository import ModelInfoRepository
 from eggpool.model_info.scheduler import ModelInfoRefreshScheduler
 from eggpool.model_info.sources.provider_catalog import ProviderCatalogSource
@@ -61,6 +67,7 @@ class ModelInfoService:
         self._repo = ModelInfoRepository(db)
         self._provider_source = ProviderCatalogSource(catalog)
         self._scheduler = ModelInfoRefreshScheduler(config)
+        self._matching_config = ModelInfoMatchingConfig()
 
         # External sources (optional)
         self._openrouter_source: OpenRouterModelInfoSource | None = None
@@ -518,7 +525,7 @@ class ModelInfoService:
             "total": len(result.live_model_ids),
         }
 
-    async def refresh_due_models(self) -> dict[str, int]:
+    async def refresh_due_models(self) -> dict[str, object]:
         """Refresh provider-native and external observations for due models.
 
         Queries the repository for due rows, refreshes provider observations,
@@ -576,6 +583,14 @@ class ModelInfoService:
         skipped = 0
         openrouter_attempted = 0
         openrouter_matched = 0
+        batch_source_diagnostics: dict[str, dict[str, object]] = {}
+
+        or_candidate_index: ModelInfoCandidateIndex | None = None
+        if openrouter_indexed:
+            or_candidate_index = build_candidate_index(
+                "openrouter", openrouter_indexed.values()
+            )
+
         for canonical in due_rows:
             model_id = canonical.model_id
             existing = await self._repo.get_canonical(model_id)
@@ -595,8 +610,16 @@ class ModelInfoService:
             # Source success was already recorded above on the bulk
             # fetch; per-model matches only persist observations.
             openrouter_attempted += 1
-            or_record = await resolve_openrouter_record(
-                model_id, self._repo, openrouter_indexed
+            source_diagnostics = batch_source_diagnostics.setdefault(model_id, {})
+            provider_detail = self._build_detail(model_id)
+            or_record = await self._resolve_openrouter_with_tiered_matching(
+                model_id=model_id,
+                openrouter_indexed=openrouter_indexed,
+                candidate_index=or_candidate_index
+                if or_candidate_index is not None
+                else build_candidate_index("openrouter", []),
+                provider_catalog_detail=provider_detail,
+                source_diagnostics=source_diagnostics,
             )
             if or_record is not None:
                 openrouter_matched += 1
@@ -774,6 +797,17 @@ class ModelInfoService:
         if to_write:
             await self._repo.upsert_canonical_batch(to_write)
 
+        matched_by_method: dict[str, int] = {}
+        missed_by_reason: dict[str, int] = {}
+        for _mid, diag in batch_source_diagnostics.items():
+            matched_sm_id = diag.get("matched_source_model_id")
+            if matched_sm_id is not None:
+                method = str(diag.get("match_method", "unknown"))
+                matched_by_method[method] = matched_by_method.get(method, 0) + 1
+            else:
+                reason = str(diag.get("miss_reason") or "unknown")
+                missed_by_reason[reason] = missed_by_reason.get(reason, 0) + 1
+
         return {
             "refreshed": len(to_write),
             "total": len(due_rows),
@@ -781,6 +815,8 @@ class ModelInfoService:
             "openrouter_attempted": openrouter_attempted,
             "openrouter_matched": openrouter_matched,
             "openrouter_missed": openrouter_attempted - openrouter_matched,
+            "matched_by_method": matched_by_method,
+            "missed_by_reason": missed_by_reason,
         }
 
     async def refresh_model_info(
@@ -936,67 +972,17 @@ class ModelInfoService:
                 records = await self._openrouter_source.fetch_all()
                 diag["fetched"] = True
                 diag["catalog_count"] = len(records)
-                # Phase 1.1: record OpenRouter source success
-                # independently of match success so source health
-                # reflects catalog availability rather than local
-                # model match success.
                 await self.record_source_success(
                     "openrouter", payload_count=len(records)
                 )
                 or_indexed = {r.source_model_id: r for r in records}
-                resolved = await resolve_openrouter_record(
-                    lookup_id, self._repo, or_indexed
-                )
-                if resolved is not None:
-                    diag["matched_source_model_id"] = resolved.source_model_id
-                    diag["miss_reason"] = "matched"
-                    # Phase 1 polish: surface exact-case vs case-folded
-                    # alias rows even on the matched path so operators
-                    # can audit which row the resolver chose.
-                    alias_rows = await self._repo.list_alias_rows_for_model(
-                        lookup_id, source="openrouter"
-                    )
-                    alias_candidates_rows = choose_alias_candidates(
-                        lookup_id, alias_rows
-                    )
-                    diag["alias_candidates"] = dedupe_alias_strings(
-                        alias_candidates_rows
-                    )
-                    diag["alias_rows"] = [
-                        {
-                            "model_id": row.get("model_id"),
-                            "alias": row.get("alias"),
-                            "source": row.get("source"),
-                            "provider_id": row.get("provider_id"),
-                            "confidence": row.get("confidence"),
-                            "match_kind": row.get("match_kind"),
-                        }
-                        for row in alias_candidates_rows
-                    ]
-                    diag["alias_selection"] = (
-                        (
-                            "exact_case"
-                            if any(
-                                r.get("match_kind") == "exact_case"
-                                for r in alias_candidates_rows
-                            )
-                            else "case_folded"
-                        )
-                        if alias_candidates_rows
-                        else "none"
-                    )
-                    return resolved
-                # No match on this pass: capture alias candidates so
-                # operators can see what was looked up.  Phase 1
-                # polish: surface exact-case vs case-folded alias rows
-                # and the deduped alias list so operators can tell why
-                # a model didn't resolve.
+                or_candidate_index = build_candidate_index("openrouter", records)
+
                 alias_rows = await self._repo.list_alias_rows_for_model(
                     lookup_id, source="openrouter"
                 )
                 alias_candidates_rows = choose_alias_candidates(lookup_id, alias_rows)
-                alias_candidates = dedupe_alias_strings(alias_candidates_rows)
-                diag["alias_candidates"] = alias_candidates
+                diag["alias_candidates"] = dedupe_alias_strings(alias_candidates_rows)
                 diag["alias_rows"] = [
                     {
                         "model_id": row.get("model_id"),
@@ -1020,41 +1006,74 @@ class ModelInfoService:
                     if alias_candidates_rows
                     else "none"
                 )
-                if not alias_candidates:
-                    diag["miss_reason"] = "no_aliases"
-                    return None
-                # Phase 2.4: cache bypass — if a forced refresh sees
-                # aliases but no match in the cached catalog, invalidate
-                # the OpenRouter TTL cache once and retry so a manual
-                # ``POST /api/model-info/refresh?force=1`` doesn't rely
-                # on stale catalog snapshots.
-                try:
-                    self._openrouter_source.invalidate_cache()  # type: ignore[attr-defined]
-                    diag["cache_retry"] = True
-                    records = await self._openrouter_source.fetch_all()
-                    diag["catalog_count"] = len(records)
-                    await self.record_source_success(
-                        "openrouter", payload_count=len(records)
-                    )
-                    or_indexed = {r.source_model_id: r for r in records}
-                except AttributeError:
-                    # Older test doubles may not expose
-                    # invalidate_cache — fall back to the cached
-                    # snapshot result.
-                    diag["cache_retry"] = False
-                resolved = await resolve_openrouter_record(
-                    lookup_id, self._repo, or_indexed
+
+                provider_detail = self._build_detail(lookup_id)
+                tiered_source_diag: dict[str, object] = {}
+                resolved = await self._resolve_openrouter_with_tiered_matching(
+                    model_id=lookup_id,
+                    openrouter_indexed=or_indexed,
+                    candidate_index=or_candidate_index,
+                    provider_catalog_detail=provider_detail,
+                    source_diagnostics=tiered_source_diag,
                 )
+
+                diag["match_method"] = tiered_source_diag.get("match_method")
+                diag["confidence"] = tiered_source_diag.get("confidence")
+                diag["candidate_count"] = tiered_source_diag.get("candidate_count")
+                diag["local_raw_candidates"] = tiered_source_diag.get(
+                    "local_raw_candidates", []
+                )
+
                 if resolved is not None:
                     diag["matched_source_model_id"] = resolved.source_model_id
                     diag["miss_reason"] = "matched"
                     return resolved
-                # Still no match — distinguish empty catalog from
-                # "catalog has rows but none match the alias".
-                if not records:
+
+                alias_candidates = cast("list[str]", diag.get("alias_candidates", []))
+                if alias_candidates:
+                    diag["miss_reason"] = "alias_not_in_catalog"
+                    try:
+                        self._openrouter_source.invalidate_cache()  # type: ignore[attr-defined]
+                        diag["cache_retry"] = True
+                        retry_records = await self._openrouter_source.fetch_all()
+                        diag["catalog_count"] = len(retry_records)
+                        await self.record_source_success(
+                            "openrouter", payload_count=len(retry_records)
+                        )
+                        retry_indexed = {r.source_model_id: r for r in retry_records}
+                        retry_index = build_candidate_index("openrouter", retry_records)
+                        retry_source_diag: dict[str, object] = {}
+                        retry_resolved = (
+                            await self._resolve_openrouter_with_tiered_matching(
+                                model_id=lookup_id,
+                                openrouter_indexed=retry_indexed,
+                                candidate_index=retry_index,
+                                provider_catalog_detail=provider_detail,
+                                source_diagnostics=retry_source_diag,
+                            )
+                        )
+                        if retry_resolved is not None:
+                            diag["matched_source_model_id"] = (
+                                retry_resolved.source_model_id
+                            )
+                            diag["miss_reason"] = "matched"
+                            return retry_resolved
+                    except AttributeError:
+                        diag["cache_retry"] = False
+                    except ModelInfoSourceFetchError as exc:
+                        logger.warning(
+                            "OpenRouter cache retry failed for %s: %s",
+                            lookup_id,
+                            exc,
+                        )
+                        diag["cache_retry"] = False
+                        await self.record_source_error("openrouter", exc)
+                elif not records:
                     diag["miss_reason"] = "empty_catalog"
                 else:
-                    diag["miss_reason"] = "alias_not_in_catalog"
+                    diag["miss_reason"] = tiered_source_diag.get(
+                        "miss_reason", "no_match"
+                    )
                 return None
             except ModelInfoSourceFetchError as exc:
                 logger.warning("OpenRouter fetch failed for %s: %s", lookup_id, exc)
@@ -1301,6 +1320,118 @@ class ModelInfoService:
             "observations": observations,
         }
 
+    async def _resolve_openrouter_with_tiered_matching(
+        self,
+        *,
+        model_id: str,
+        openrouter_indexed: dict[str, SourceModelRecord],
+        candidate_index: ModelInfoCandidateIndex,
+        provider_catalog_detail: dict[str, object] | None,
+        source_diagnostics: dict[str, object],
+    ) -> SourceModelRecord | None:
+        """Resolve via the tiered resolver and record evidence + diagnostics.
+
+        Falls back to the legacy ``resolve_openrouter_record`` when the tiered
+        resolver is disabled or fails internally. The returned record (if any)
+        is suitable for ``_persist_source_observation``.
+        """
+        display_name: str | None = None
+        if isinstance(provider_catalog_detail, dict):
+            dn = provider_catalog_detail.get("display_name")
+            if isinstance(dn, str):
+                display_name = dn
+
+        try:
+            decision = await resolve_source_record_tiered(
+                source="openrouter",
+                model_id=model_id,
+                provider_id=None,
+                display_name=display_name,
+                repo=self._repo,
+                candidate_index=candidate_index,
+                config=self._matching_config,
+            )
+        except Exception:
+            logger.exception(
+                "Tiered resolver failed for %s, falling back to legacy", model_id
+            )
+            source_diagnostics["match_method"] = "tiered_error"
+            source_diagnostics["confidence"] = 0.0
+            source_diagnostics["matched_source_model_id"] = None
+            source_diagnostics["local_raw_candidates"] = []
+            source_diagnostics["candidate_count"] = len(
+                candidate_index.exact_by_source_id
+            )
+            source_diagnostics["miss_reason"] = "tiered_error"
+            legacy = await resolve_openrouter_record(
+                model_id, self._repo, openrouter_indexed
+            )
+            return legacy
+
+        matched_source_model_id = (
+            decision.record.source_model_id
+            if decision.matched and decision.record is not None
+            else None
+        )
+        raw_candidates = decision.diagnostics.get("local_raw_candidates")
+        local_raw_candidates: list[str] = (
+            list(cast("list[str]", raw_candidates))
+            if isinstance(raw_candidates, list)
+            else []
+        )
+        candidate_count = len(candidate_index.exact_by_source_id)
+
+        source_diagnostics["match_method"] = decision.match_method
+        source_diagnostics["confidence"] = decision.confidence
+        source_diagnostics["matched_source_model_id"] = matched_source_model_id
+        source_diagnostics["local_raw_candidates"] = local_raw_candidates
+        source_diagnostics["candidate_count"] = candidate_count
+        source_diagnostics["miss_reason"] = (
+            None if decision.matched else decision.match_method
+        )
+
+        if decision.matched and decision.record is not None:
+            if (
+                decision.match_method
+                not in ("configured_exact_alias", "exact_source_id")
+                and decision.alias_to_persist is not None
+            ):
+                alias_provider_id = decision.alias_to_persist_provider_id
+                try:
+                    await self._repo.upsert_alias_with_method(
+                        model_id=model_id,
+                        provider_id=alias_provider_id,
+                        alias=decision.alias_to_persist,
+                        source="openrouter",
+                        match_method=decision.match_method,
+                        discovered_by="tiered_resolver",
+                        confidence=decision.confidence,
+                        diagnostics=decision.diagnostics,
+                    )
+                    await self._repo.record_match_evidence(
+                        model_id=model_id,
+                        provider_id=alias_provider_id,
+                        source="openrouter",
+                        alias=decision.alias_to_persist,
+                        match_method=decision.match_method,
+                        confidence=decision.confidence,
+                        diagnostics=decision.diagnostics,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to persist tiered match evidence for %s", model_id
+                    )
+            return decision.record
+
+        legacy = await resolve_openrouter_record(
+            model_id, self._repo, openrouter_indexed
+        )
+        if legacy is not None:
+            source_diagnostics["miss_reason"] = None
+            source_diagnostics["matched_source_model_id"] = legacy.source_model_id
+            source_diagnostics["match_method"] = "legacy_fallback"
+        return legacy
+
     async def _persist_source_observation(
         self,
         record: SourceModelRecord,
@@ -1375,11 +1506,50 @@ class ModelInfoService:
             await asyncio.sleep(self._config.refresh_interval_s)
             try:
                 result = await self.refresh_due_models()
-                if result["refreshed"] > 0:
+                refreshed = _safe_int_count(result.get("refreshed"))
+                total = _safe_int_count(result.get("total"))
+                skipped = _safe_int_count(result.get("skipped"))
+                or_attempted = _safe_int_count(result.get("openrouter_attempted"))
+                or_matched = _safe_int_count(result.get("openrouter_matched"))
+                or_missed = _safe_int_count(result.get("openrouter_missed"))
+                matched_by_method: dict[str, int] = cast(
+                    "dict[str, int]",
+                    result.get("matched_by_method", {}),
+                )
+                missed_by_reason: dict[str, int] = cast(
+                    "dict[str, int]",
+                    result.get("missed_by_reason", {}),
+                )
+
+                if or_matched > 0 or refreshed > 0:
                     logger.info(
-                        "Model info periodic refresh: refreshed %d of %d due models",
-                        result["refreshed"],
-                        result["total"],
+                        "Model info periodic refresh: total=%d refreshed=%d"
+                        " skipped=%d openrouter_attempted=%d"
+                        " openrouter_matched=%d openrouter_missed=%d"
+                        " matched_by_method=%s missed_by_reason=%s",
+                        total,
+                        refreshed,
+                        skipped,
+                        or_attempted,
+                        or_matched,
+                        or_missed,
+                        matched_by_method,
+                        missed_by_reason,
+                    )
+                elif or_attempted > 0 and or_matched == 0:
+                    logger.warning(
+                        "Model info periodic refresh: total=%d refreshed=%d"
+                        " skipped=%d openrouter_attempted=%d"
+                        " openrouter_matched=%d openrouter_missed=%d"
+                        " matched_by_method=%s missed_by_reason=%s",
+                        total,
+                        refreshed,
+                        skipped,
+                        or_attempted,
+                        or_matched,
+                        or_missed,
+                        matched_by_method,
+                        missed_by_reason,
                     )
             except asyncio.CancelledError:
                 break

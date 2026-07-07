@@ -140,6 +140,15 @@ Run with:
 uv run pytest tests/unit/test_routing_priority.py -v
 ```
 
+### Tiered identity matching tests
+
+Tiered identity matching tests cover normalization, 5-tier resolution, and integration:
+
+```bash
+# Tiered identity matching tests only
+uv run pytest tests/unit/test_model_info_normalization.py tests/unit/test_model_info_tiered_matching.py tests/unit/test_model_info_tiered_integration.py tests/unit/test_model_info_openrouter_contract.py -v
+```
+
 ### Runtime visibility tests
 
 Cache/compression runtime visibility is covered by three focused unit

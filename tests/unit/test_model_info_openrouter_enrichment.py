@@ -273,6 +273,9 @@ class TestOpenRouterDiagnostics:
 
     @pytest.mark.asyncio()
     async def test_diagnostics_reports_no_aliases_when_unconfigured(self) -> None:
+        """When no alias is configured the tiered resolver may still
+        match via normalized exact. Diagnostics must still surface the
+        empty configured-alias list and the match_method used."""
         db = Database(path=":memory:")
         await db.connect()
         try:
@@ -289,7 +292,14 @@ class TestOpenRouterDiagnostics:
             result = await service.refresh_model_info("minimax-m3", force=True)
             diag = result["source_diagnostics"]["openrouter"]
             assert diag["alias_candidates"] == []
-            assert diag["miss_reason"] == "no_aliases"
+            assert diag["match_method"] in (
+                "normalized_exact",
+                "exact_source_id",
+                "regex_rule",
+                "similarity_guarded",
+                "configured_exact_alias",
+            )
+            assert diag["matched_source_model_id"] == "minimax/minimax-m3"
         finally:
             await db.disconnect()
 
