@@ -7,6 +7,7 @@ to prevent HTML injection (model_id, account_name, error_message, etc.).
 from __future__ import annotations
 
 import html
+import json
 import re
 from typing import Any
 
@@ -38,6 +39,18 @@ def escape_attr(value: Any) -> str:
     if value is None:
         return ""
     return html.escape(str(value), quote=True)
+
+
+def escape_script_json(value: Any) -> str:
+    """Serialize ``value`` as JSON that is safe to embed inside a ``<script>``.
+
+    HTML parsers terminate ``<script>`` data islands at ``</script>`` even when
+    ``type="application/json"``. A provider / model / account / label string
+    containing ``</script>`` therefore breaks out of the JSON island and can
+    inject markup or script. Replace ``</`` with ``<\\/`` so any hostile
+    substring is neutralised without altering the JSON's parseability.
+    """
+    return json.dumps(value).replace("</", "<\\/")
 
 
 def format_microdollars(value: int | float | None) -> str:

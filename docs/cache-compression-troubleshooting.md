@@ -363,7 +363,7 @@ Cards under `/cache` render but show empty / `0` counts.
 
 1. The cache-compression stack runs only on data-plane requests (`/v1/chat/completions`, `/v1/messages`, `/v1/responses`). Health checks and dashboard fetches do not produce request records.
 2. Confirm via `GET /api/stats/cache-observability` — `total_requests` should be non-zero.
-3. If `[dashboard] public = true`, the dashboard still requires `?api_key=...` for runtime metrics (always auth-gated regardless of public / private).
+3. If `[dashboard] public = true`, the dashboard still requires an API key header (`Authorization: Bearer ...` or `x-api-key: ...`) for runtime metrics (always auth-gated regardless of public / private). Query-string authentication (`?api_key=...`) is **not** supported.
 4. Time window — the cards render the live snapshot, not a rolling period. Use the JSON endpoints with the `?period=` parameter for historical rollups.
 
 **Most likely root cause:** the dashboard is showing a fresh install with no data-plane traffic yet. Send a few requests through EggPool and refresh.
@@ -380,25 +380,25 @@ eggpool check-config
 eggpool accounts explain --model claude-sonnet-4 --provider <id> --gates
 
 # Per-provider compression stats
-curl -s "http://127.0.0.1:11300/api/stats/compression-observability?api_key=$EGGPOOL_API_KEY" | jq
+curl -s -H "x-api-key: $EGGPOOL_API_KEY" "http://127.0.0.1:11300/api/stats/compression-observability" | jq
 
 # Per-policy rollup
-curl -s "http://127.0.0.1:11300/api/stats/compression-policies?api_key=$EGGPOOL_API_KEY" | jq
+curl -s -H "x-api-key: $EGGPOOL_API_KEY" "http://127.0.0.1:11300/api/stats/compression-policies" | jq
 
 # Synthetic cache status
-curl -s "http://127.0.0.1:11300/api/stats/synthetic-cache-observability?api_key=$EGGPOOL_API_KEY" | jq
+curl -s -H "x-api-key: $EGGPOOL_API_KEY" "http://127.0.0.1:11300/api/stats/synthetic-cache-observability" | jq
 
 # Routing guardrails
-curl -s "http://127.0.0.1:11300/api/stats/runtime?api_key=$EGGPOOL_API_KEY" | jq '.routing_runtime.guardrails'
+curl -s -H "x-api-key: $EGGPOOL_API_KEY" "http://127.0.0.1:11300/api/stats/runtime" | jq '.routing_runtime.guardrails'
 
 # Cache counters
-curl -s "http://127.0.0.1:11300/api/stats/cache-observability?api_key=$EGGPOOL_API_KEY" | jq
+curl -s -H "x-api-key: $EGGPOOL_API_KEY" "http://127.0.0.1:11300/api/stats/cache-observability" | jq
 
 # Segmentation rollup
-curl -s "http://127.0.0.1:11300/api/stats/canonical-request-segmentation?api_key=$EGGPOOL_API_KEY" | jq
+curl -s -H "x-api-key: $EGGPOOL_API_KEY" "http://127.0.0.1:11300/api/stats/canonical-request-segmentation" | jq
 
 # Tuning recommendations
-curl -s "http://127.0.0.1:11300/api/stats/compression-tuning?api_key=$EGGPOOL_API_KEY" | jq
+curl -s -H "x-api-key: $EGGPOOL_API_KEY" "http://127.0.0.1:11300/api/stats/compression-tuning" | jq
 ```
 
 ## See also

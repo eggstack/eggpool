@@ -13,6 +13,7 @@ import pytest
 from eggpool.dashboard.escape import (
     escape,
     escape_attr,
+    escape_script_json,
     format_bytes,
     format_latency,
     format_microdollars,
@@ -86,6 +87,25 @@ class TestEscape:
     def test_escape_attr(self) -> None:
         result = escape_attr("a&b")
         assert "&amp;" in result
+
+    def test_escape_script_json_round_trips(self) -> None:
+        assert json.loads(escape_script_json({"a": 1, "b": ["x", "y"]})) == {
+            "a": 1,
+            "b": ["x", "y"],
+        }
+        assert escape_script_json(None) == "null"
+
+    def test_escape_script_json_neutralises_closing_tag(self) -> None:
+        payload = "</script><img src=x onerror=alert(1)>"
+        encoded = escape_script_json(payload)
+        assert "</script>" not in encoded
+        assert json.loads(encoded) == payload
+
+    def test_escape_script_json_neutralises_generic_slash_close(self) -> None:
+        # Any "</" sequence must be neutralised, not only literal </script>.
+        encoded = escape_script_json("a</b>c</d>")
+        assert "</" not in encoded
+        assert json.loads(encoded) == "a</b>c</d>"
 
     def test_format_microdollars(self) -> None:
         assert format_microdollars(1_000_000) == "$1.00"
@@ -4123,6 +4143,102 @@ class TestStaticChartDataIsland:
             {"label": "x", "data": [1, 2, 3], "backgroundColor": "red"}
         ]
         assert payload["options"] == {"plugins": {"legend": {"display": False}}}
+
+
+class TestJsonDataIslandEscaping:
+    """JSON payloads inside ``<script type="application/json">`` data islands
+    must never contain a literal ``</script>`` substring. HTML parsers terminate
+    script data at ``</script>`` regardless of the script type, so an attacker
+    who controls any string field (provider_id, model_id, account_name,
+    series.label, etc.) could otherwise inject markup or script into dashboard
+    pages.
+
+    The renderers must therefore neutralise ``</`` via :func:`escape_script_json`
+    before embedding the payload. The rendered HTML is allowed exactly one
+    ``</script>`` substring per data island — the canonical closing tag.
+    """
+
+    _MALICIOUS_LABEL = "</script><img src=x onerror=alert(1)>"
+
+    @staticmethod
+    def _extract_island_body(
+        html: str, *, script_id: str | None = None, script_class: str | None = None
+    ) -> str:
+        for match in re.finditer(
+            r'<script type="application/json"[^>]*>(.*?)</script>', html, re.DOTALL
+        ):
+            opening = match.group(0)
+            if script_id is not None and f'id="{script_id}"' not in opening:
+                continue
+            if script_class is not None and f'class="{script_class}"' not in opening:
+                continue
+            body = match.group(1)
+            assert "</script>" not in body, (
+                f"island class={script_class!r} id={script_id!r} "
+                f"contains raw </script> substring: {body!r}"
+            )
+            return body
+        raise AssertionError(
+            f"expected island class={script_class!r} id={script_id!r} in html"
+        )
+
+    def test_chart_canvas_neutralises_script_close_in_label(self) -> None:
+        from eggpool.dashboard.render import _render_chart_canvas
+
+        labels = json.dumps([self._MALICIOUS_LABEL, "b"])
+        datasets = json.dumps([{"label": "x", "data": [1, 2]}])
+        options = json.dumps({"responsive": True})
+        html = _render_chart_canvas("evil-chart", "bar", labels, datasets, options)
+        body = self._extract_island_body(html, script_class="static-chart-data")
+        payload = json.loads(body)
+        assert payload["labels"] == [self._MALICIOUS_LABEL, "b"]
+
+    def test_grouped_timeseries_neutralises_script_close_in_strings(self) -> None:
+        from eggpool.dashboard.render import _render_grouped_timeseries_chart
+
+        grouped = {
+            "group_by": "model",
+            "metric": "requests",
+            "series": [{"label": self._MALICIOUS_LABEL, "points": [1, 2]}],
+            "points": [
+                {
+                    "bucket": "2024-01-01 12:00:00",
+                    "provider_id": "p</script><script>",
+                    "model_id": self._MALICIOUS_LABEL,
+                    "original_model_id": "m</script>",
+                    "account_name": "acct</script>",
+                    "value": 7,
+                }
+            ],
+            "buckets": ["2024-01-01 12:00:00"],
+        }
+        html = _render_grouped_timeseries_chart(
+            grouped,
+            period="24h",
+            bucket="hour",
+            group_by="model",
+            metric="requests",
+            limit=10,
+        )
+        body = self._extract_island_body(html, script_class="grouped-timeseries-data")
+        payload = json.loads(body)
+        assert payload["points"][0]["model_id"] == self._MALICIOUS_LABEL
+        assert payload["points"][0]["provider_id"] == "p</script><script>"
+
+    def test_timeseries_chart_neutralises_script_close_in_payload(self) -> None:
+        from eggpool.dashboard.render import _render_timeseries_chart
+
+        payload = [
+            {
+                "bucket": "2024-01-01 12:00:00",
+                "request_count": 3,
+                "model_id": self._MALICIOUS_LABEL,
+            }
+        ]
+        html = _render_timeseries_chart("24h", initial_data=payload)
+        body = self._extract_island_body(html, script_id="timeseries-initial-data")
+        parsed = json.loads(body)
+        assert parsed[0]["model_id"] == self._MALICIOUS_LABEL
 
 
 class TestUpdateIndicator:

@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 from eggpool.dashboard.escape import (
     escape,
     escape_attr,
+    escape_script_json,
     format_age_seconds,
     format_bytes,
     format_int,
@@ -1354,7 +1355,7 @@ def _render_timeseries_chart(
     when no inlined payload is available.
     """
     payload = list(initial_data or [])
-    payload_json = json.dumps(payload)
+    payload_json = escape_script_json(payload)
     period_attr = escape_attr(period)
     return f"""
 <section class="panel">
@@ -3288,7 +3289,7 @@ def _render_grouped_timeseries_chart(
     limit_attr = escape_attr(str(limit))
     account_attr = escape_attr(account_filter)
     model_attr = escape_attr(model_filter)
-    payload_json = json.dumps(grouped)
+    payload_json = escape_script_json(grouped)
     empty_state_style = ' style="display: none;"' if has_data else ""
     canvas_style = "" if has_data else ' style="display: none;"'
     return f"""
@@ -6552,8 +6553,8 @@ def _render_chart_canvas(
     self-describing even when the helper is reused across pages.
     """
     del include_chart_js
-    canvas_id_json = json.dumps(canvas_id)
-    payload = json.dumps(
+    canvas_id_json = escape_script_json(canvas_id)
+    payload = escape_script_json(
         {
             "type": chart_type,
             "labels": json.loads(labels_json),
