@@ -3682,26 +3682,28 @@ def render_pings(
     if ping_summary:
         cards: list[str] = []
         for row in ping_summary:
-            pid = escape(str(row.get("provider_id", "")))
             avg_lat = format_latency(row.get("avg_latency_ms", 0))
             success_rate = row.get("success_rate", 0)
             model_count = int(row.get("last_model_count", 0))
             status = "healthy" if float(success_rate or 0) >= 90 else "degraded"
+            title = str(row.get("provider_id", ""))
+            tooltip_text = (
+                "Provider ping latency summary. The metric is average "
+                "ping latency; the subtext shows health status, "
+                "success rate, and last seen model count."
+            )
+            tooltip_attr = _stdlib_escape(tooltip_text, quote=True)
             cards.append(
-                _render_metric_card(
-                    title=str(row.get("provider_id", "")),
-                    metric=avg_lat,
-                    sub=(
-                        f'<span class="{status}">{status}</span>'
-                        f" · {success_rate}% success"
-                        f" · {model_count} models"
-                    ),
-                    tooltip=(
-                        "Provider ping latency summary. The metric is average "
-                        "ping latency; the subtext shows health status, "
-                        "success rate, and last seen model count."
-                    ),
-                )
+                f'<div class="card" data-tooltip="{tooltip_attr}" '
+                f'data-tooltip-pos="bottom" aria-label="{tooltip_attr}">'
+                f"<h3>{_stdlib_escape(title)}</h3>"
+                f'<p class="metric">{_stdlib_escape(avg_lat)}</p>'
+                f'<p class="sub">'
+                f'<span class="{status}">{status}</span>'
+                f" &middot; {_stdlib_escape(f'{success_rate}% success')}"
+                f" &middot; {_stdlib_escape(f'{model_count} models')}"
+                f"</p>"
+                f"</div>"
             )
         provider_cards = f'<section class="cards">{"".join(cards)}</section>'
     elif recent_pings:
