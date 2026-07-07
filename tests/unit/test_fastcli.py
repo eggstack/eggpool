@@ -107,7 +107,7 @@ def test_ensure_running_spawns_when_pid_missing(
     assert result == 0
     mock_popen.assert_called_once()
     argv = mock_popen.call_args[0][0]
-    assert argv == [sys.executable, "-m", "eggpool", "serve"]
+    assert argv == [sys.executable, "-m", "eggpool", "serve", "--verbose"]
     kwargs = mock_popen.call_args[1]
     assert kwargs["start_new_session"] is True
     assert kwargs["stdin"] == subprocess.DEVNULL
