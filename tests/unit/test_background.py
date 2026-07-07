@@ -396,7 +396,7 @@ async def test_last_tick_duration_ms_populated() -> None:
 
     await supervisor.start_all()
     for _ in range(40):
-        if tick_count >= 1:
+        if task._last_tick_duration_ms is not None:
             break
         await asyncio.sleep(0.02)
 
