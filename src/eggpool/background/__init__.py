@@ -103,6 +103,7 @@ class SupervisedTask:
     _consecutive_failure_count: int = 0
     _initial_delay_s: float | None = None
     _last_tick_duration_ms: float | None = None
+    _timeout_s: float | None = None
 
     async def start(self) -> None:
         """Start the supervised task."""
@@ -221,7 +222,11 @@ class SupervisedTask:
                 self._last_tick_started_at = tick_started
                 tick_duration_ms: float | None = None
                 try:
-                    await self._tick_factory()
+                    tick_coro = self._tick_factory()
+                    if self._timeout_s is not None:
+                        await asyncio.wait_for(tick_coro, timeout=self._timeout_s)
+                    else:
+                        await tick_coro
                 except asyncio.CancelledError:
                     self._tick_in_progress = False
                     break
@@ -391,13 +396,14 @@ class TaskSupervisor:
             initial_delay_s: Optional override for the first-tick
                 delay.  Defaults to ``interval_s`` when omitted
                 (preserves current sleep-first semantics).
-            timeout_s: Reserved for future per-tick timeout
-                enforcement; currently accepted but unused.
+            timeout_s: Optional per-tick timeout in seconds.  When set,
+                each tick is awaited via ``asyncio.wait_for``; a
+                ``TimeoutError`` is recorded as a tick failure and the
+                loop continues to the next interval.
             max_restarts: Failure budget.  Defaults to 10; consumed
                 by ``_consecutive_failure_count``.  When exhausted the
                 task exits and the supervisor stops rescheduling.
         """
-        del timeout_s  # accepted for forward compatibility; currently unused
         if name in self._tasks:
             raise ValueError(f"Task {name!r} is already registered")
         if interval_s <= 0:
@@ -408,6 +414,11 @@ class TaskSupervisor:
             raise ValueError(
                 f"Periodic task {name!r} requires initial_delay_s >= 0"
                 f" (got {initial_delay_s!r})"
+            )
+        if timeout_s is not None and timeout_s <= 0:
+            raise ValueError(
+                f"Periodic task {name!r} requires timeout_s > 0 when set"
+                f" (got {timeout_s!r})"
             )
         if run_immediately and initial_delay_s is not None:
             raise ValueError(
@@ -429,6 +440,7 @@ class TaskSupervisor:
             _max_restarts=max_restarts,
             _interval_s=float(interval_s),
             _initial_delay_s=first_delay_s,
+            _timeout_s=float(timeout_s) if timeout_s is not None else None,
         )
         # Prime the first next-run window so the dashboard can show
         # "in <interval>" before the very first tick lands.  Same

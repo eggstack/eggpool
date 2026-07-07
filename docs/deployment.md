@@ -471,8 +471,8 @@ sudo nano /etc/eggpool/env
 # path = "/var/lib/eggpool/usage.sqlite3"
 
 # 4. Validate and start
-sudo -u eggpool bash -c 'set -a; source /etc/eggpool/env; set +a; /opt/eggpool/.venv/bin/eggpool check-config --config /etc/eggpool/config.toml'
-sudo -u eggpool /opt/eggpool/.venv/bin/eggpool migrate --config /etc/eggpool/config.toml
+sudo -u eggpool bash -c 'set -a; source /etc/eggpool/env; set +a; /opt/eggpool/.venv/bin/eggpool --config /etc/eggpool/config.toml check-config'
+sudo -u eggpool /opt/eggpool/.venv/bin/eggpool --config /etc/eggpool/config.toml migrate
 
 # 5. Install the hardened systemd unit
 sudo cp deploy/eggpool.service /etc/systemd/system/

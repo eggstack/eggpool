@@ -2028,9 +2028,9 @@ def _run_production_validation() -> None:
         f"EGGPOOL_CONFIG={config_path}",
         f"EGGPOOL_ENV={env_path}",
         binary_path_for_validation(),
-        "check-config",
         "--config",
         config_path,
+        "check-config",
     ]
     migrate_cmd = [
         "sudo",
@@ -2040,9 +2040,9 @@ def _run_production_validation() -> None:
         f"EGGPOOL_CONFIG={config_path}",
         f"EGGPOOL_ENV={env_path}",
         binary_path_for_validation(),
-        "migrate",
         "--config",
         config_path,
+        "migrate",
     ]
 
     click.echo("  Running eggpool check-config as eggpool user...")

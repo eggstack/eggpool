@@ -299,3 +299,40 @@ class TestDynamicSnippets:
         assert 'CONFIG_PATH="/home/test/config.toml"' in script
         assert 'DB_PATH="/home/test/.local/share/eggpool/usage.sqlite3"' in script
         assert "sudo -u eggpool" not in script
+
+
+class TestProductionValidationCommands:
+    """Regression: production deploy validation must place ``--config``
+    before the subcommand because Click's group options only parse in
+    that position (``tests/integration/test_database_maintenance.py``
+    pins the rejection of the bad order at the CLI layer)."""
+
+    def test_production_validation_builds_config_before_subcommand(self) -> None:
+        from unittest.mock import MagicMock, patch
+
+        from eggpool.cli_full import _run_production_validation
+
+        captured: list[list[str]] = []
+        success_result = MagicMock(returncode=0, stdout="", stderr="")
+
+        def fake_run(cmd, **_kwargs):  # noqa: ANN001 - signature mirrors subprocess.run
+            captured.append(cmd)
+            return success_result
+
+        with (
+            patch(
+                "eggpool.cli_full.binary_path_for_validation",
+                return_value="/opt/eggpool/.venv/bin/eggpool",
+            ),
+            patch("eggpool.cli_full.subprocess.run", side_effect=fake_run),
+        ):
+            _run_production_validation()
+
+        assert len(captured) == 2
+        check_cmd, migrate_cmd = captured
+        assert check_cmd[-3:] == [
+            "--config",
+            "/etc/eggpool/config.toml",
+            "check-config",
+        ]
+        assert migrate_cmd[-3:] == ["--config", "/etc/eggpool/config.toml", "migrate"]

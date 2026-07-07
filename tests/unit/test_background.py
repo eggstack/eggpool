@@ -490,3 +490,97 @@ def test_register_periodic_run_immediately_primes_next_run_at_now() -> None:
     snap = task.snapshot()
     assert snap["next_run_at"] is not None
     assert snap["next_run_at"] <= time.time() + 0.1
+
+
+# ---------------------------------------------------------------------------
+# Per-tick timeout (regression for the ignored timeout_s parameter)
+# ---------------------------------------------------------------------------
+
+
+def test_register_periodic_rejects_non_positive_timeout() -> None:
+    supervisor = TaskSupervisor()
+
+    async def tick() -> None:
+        return None
+
+    with pytest.raises(ValueError, match="timeout_s > 0"):
+        supervisor.register_periodic("zero_to", tick, interval_s=1.0, timeout_s=0.0)
+    with pytest.raises(ValueError, match="timeout_s > 0"):
+        supervisor.register_periodic("neg_to", tick, interval_s=1.0, timeout_s=-1.0)
+
+
+@pytest.mark.asyncio
+async def test_register_periodic_timeout_cancels_slow_tick_and_records_failure() -> (
+    None
+):
+    """A tick that exceeds ``timeout_s`` is cancelled, the failure is
+    recorded, and the loop continues to the next interval."""
+    tick_started = asyncio.Event()
+    cancel_observed = asyncio.Event()
+    tick_count = 0
+
+    async def slow_tick() -> None:
+        nonlocal tick_count
+        tick_count += 1
+        tick_started.set()
+        try:
+            await asyncio.sleep(5.0)
+        except asyncio.CancelledError:
+            cancel_observed.set()
+            raise
+
+    supervisor = TaskSupervisor()
+    task = supervisor.register_periodic(
+        "slow_with_timeout",
+        slow_tick,
+        interval_s=0.05,
+        timeout_s=0.05,
+    )
+    assert task._timeout_s == pytest.approx(0.05)
+
+    await supervisor.start_all()
+
+    for _ in range(80):
+        if tick_started.is_set() and cancel_observed.is_set():
+            break
+        await asyncio.sleep(0.01)
+
+    assert tick_started.is_set()
+    assert cancel_observed.is_set()
+    snap = task.snapshot()
+    assert snap["failure_count"] >= 1
+    assert snap["last_error_class"] == "TimeoutError"
+
+    await supervisor.stop_all()
+
+    # Stop must complete promptly even though the inner tick is cancelled.
+    assert task.is_running is False
+
+
+@pytest.mark.asyncio
+async def test_register_periodic_timeout_allows_fast_tick_to_succeed() -> None:
+    """A tick that completes within ``timeout_s`` is recorded as success
+    and does not see a TimeoutError."""
+
+    async def fast_tick() -> None:
+        await asyncio.sleep(0)
+
+    supervisor = TaskSupervisor()
+    task = supervisor.register_periodic(
+        "fast_with_timeout",
+        fast_tick,
+        interval_s=0.05,
+        timeout_s=1.0,
+    )
+
+    await supervisor.start_all()
+    for _ in range(40):
+        if task._success_count >= 1:
+            break
+        await asyncio.sleep(0.02)
+    snap = task.snapshot()
+    await supervisor.stop_all()
+
+    assert snap["success_count"] >= 1
+    assert snap["failure_count"] == 0
+    assert snap["last_error_class"] is None
