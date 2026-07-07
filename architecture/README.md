@@ -2179,6 +2179,15 @@ What changed:
 - **Catalog-attached-but-empty warning** (`src/eggpool/dashboard/routes.py`): when the catalog is reachable but produces zero rows, the route logs a `WARNING` under `eggpool.dashboard.routes` so operators see "API correct / dashboard empty" as a diagnostic, not a silent failure.
 - **Tests** (`tests/unit/test_dashboard_model_info_join.py`): 13 tests pin the renderer join, route normalization, silent-failure removal, and join-diagnostics behavior. The `test_handle_models_normalizes_suffixed_stats_rows_*` cases reproduce the exact "API correct / dashboard empty" regression that prompted this plan.
 
+### Provider-Scoped Catalog Entries Accessor (Targeted Fix)
+
+The narrow follow-up in `plans/dashboard_provider_catalog_accessor_targeted_fix.md` tightens the cache accessor that `_get_provider_scoped_catalog_rows()` already depends on so `protocol=None` rows still render as unavailable and the deprecated placeholder never leaks onto `/models`.
+
+- **`ModelCatalogCache.get_provider_model_entries()`** (`src/eggpool/catalog/cache.py`): returns a `dict[(model_id, provider_id), dict[str, Any]]` keyed by exact provider-scoped tuple. Iteration order is stable (`sorted(self._provider_models)` by `(model_id, provider_id)`), the deprecated `__deprecated__` placeholder is filtered out, and each value is a shallow copy so mutations cannot leak back into `_provider_models`. Configured capability overrides apply via `get_provider_model_entry()` whenever `cache._config` is attached — matching the single-row accessor contract. There is **no** global fallback: rows whose only representative entry is the `_models` global row do not appear, so the dashboard always renders exact provider availability.
+- **Resolved and unresolved rows both flow through**: an entry with `protocol=None` is kept (not dropped) so the dashboard can render it as `available=False, catalog_status="unavailable"` instead of silently omitting it.
+- **Tests** (`tests/unit/test_catalog.py`, "Provider-scoped catalog entries accessor" block): cover exact-row presence, `protocol=None` preservation, deprecation filter, copy isolation, no-global-fallback, capability-override application, and deterministic ordering. The existing `test_effective_limits_survive_update_from_account` and `test_two_providers_retain_different_limits` tests continue to pass because `dict(entry)` preserves every cached field exactly.
+- **Mock fixtures** (`tests/unit/test_catalog_service_limits.py`): the `_make_config` helper now also seeds `provider.model_capabilities = {}` and `config.model_capabilities = {}` so `MagicMock(spec=ProviderConfig / AppConfig)` exposes the override hooks the new accessor traverses.
+
 ## Model Capabilities
 
 Protocol-neutral capability schema in `src/eggpool/catalog/capabilities.py` provides a structured representation for model capabilities, currently focused on thinking/reasoning. The schema decouples capability knowledge from any specific transcoder implementation so catalog, routing, serialization, and config code can import it without circular dependencies. See `docs/thinking.md` for the full operator guide.

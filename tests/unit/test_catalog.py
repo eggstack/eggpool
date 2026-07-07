@@ -1133,3 +1133,127 @@ def test_prune_unused_noop_when_cache_empty() -> None:
     """Pruning an empty cache returns 0 and is safe."""
     cache = ModelCatalogCache()
     assert cache.prune_unused() == 0
+
+
+# ---------------------------------------------------------------------------
+# Provider-scoped catalog entries accessor (dashboard introspection contract)
+# ---------------------------------------------------------------------------
+
+
+def test_get_provider_model_entries_returns_exact_provider_rows() -> None:
+    """The accessor yields exact provider-scoped rows with a copy of the dict."""
+    cache = ModelCatalogCache()
+    cache._provider_models[("minimax-m3", "opencode-go")] = {
+        "model_id": "minimax-m3",
+        "display_name": "MiniMax M3",
+        "protocol": "openai",
+        "capabilities": {},
+    }
+    rows = cache.get_provider_model_entries()
+    assert list(rows) == [("minimax-m3", "opencode-go")]
+    entry = rows[("minimax-m3", "opencode-go")]
+    assert entry["protocol"] == "openai"
+    assert entry["display_name"] == "MiniMax M3"
+    # Mutating the returned copy must not leak back into the cache.
+    entry["protocol"] = "mutated"
+    assert cache._provider_models[("minimax-m3", "opencode-go")]["protocol"] == "openai"
+
+
+def test_get_provider_model_entries_includes_unresolved_provider_rows() -> None:
+    """Provider rows whose protocol is ``None`` still appear so the dashboard
+    can render them as unavailable rather than dropping them silently."""
+    cache = ModelCatalogCache()
+    cache._provider_models[("minimax-m3", "opencode-go")] = {
+        "model_id": "minimax-m3",
+        "display_name": None,
+        "protocol": None,
+    }
+    rows = cache.get_provider_model_entries()
+    assert ("minimax-m3", "opencode-go") in rows
+    assert rows[("minimax-m3", "opencode-go")]["protocol"] is None
+
+
+def test_get_provider_model_entries_excludes_deprecated_placeholder() -> None:
+    """The synthetic deprecated placeholder must not appear in dashboard rows."""
+    from eggpool.constants import DEPRECATED_MODEL_ID
+
+    cache = ModelCatalogCache()
+    cache._provider_models[(DEPRECATED_MODEL_ID, "opencode-go")] = {
+        "model_id": DEPRECATED_MODEL_ID,
+        "protocol": "openai",
+    }
+    assert cache.get_provider_model_entries() == {}
+
+
+def test_get_provider_model_entries_returns_isolated_copies() -> None:
+    """Each entry is a shallow copy — internal mutations cannot leak back."""
+    cache = ModelCatalogCache()
+    cache._provider_models[("minimax-m3", "opencode-go")] = {
+        "model_id": "minimax-m3",
+        "protocol": "openai",
+        "capabilities": {"supports_tools": True},
+    }
+    rows = cache.get_provider_model_entries()
+    rows[("minimax-m3", "opencode-go")]["protocol"] = "anthropic"
+    rows[("minimax-m3", "opencode-go")]["capabilities"]["supports_tools"] = False
+    raw = cache._provider_models[("minimax-m3", "opencode-go")]
+    assert raw["protocol"] == "openai"
+    # Nested dict is shared by shallow copy; mutating inner values is allowed.
+    assert raw["capabilities"]["supports_tools"] is False
+
+
+def test_get_provider_model_entries_does_not_fall_back_to_global() -> None:
+    """The accessor must NOT borrow another provider's protocol or metadata."""
+    cache = ModelCatalogCache()
+    # Global row exists but no provider-specific row for opencode-go.
+    cache._models["minimax-m3"] = {
+        "model_id": "minimax-m3",
+        "protocol": "anthropic",
+    }
+    rows = cache.get_provider_model_entries()
+    assert ("minimax-m3", "opencode-go") not in rows
+
+
+def test_get_provider_model_entries_applies_capability_overrides() -> None:
+    """When config is attached, configured capability overrides flow through."""
+    from eggpool.models.config import (
+        AppConfig,
+        ModelCapabilitiesOverrideConfig,
+        ThinkingCapabilityOverrideConfig,
+    )
+
+    cache = ModelCatalogCache()
+    cache._provider_models[("minimax-m3", "opencode-go")] = {
+        "model_id": "minimax-m3",
+        "protocol": "openai",
+        "capabilities": {"thinking": {"status": "unsupported"}},
+    }
+    config = AppConfig.model_validate(
+        {
+            "model_capabilities": {
+                "minimax-m3": ModelCapabilitiesOverrideConfig(
+                    thinking=ThinkingCapabilityOverrideConfig(status="supported"),
+                ).model_dump()
+            }
+        }
+    )
+    cache.set_config(config)
+    rows = cache.get_provider_model_entries()
+    entry = rows[("minimax-m3", "opencode-go")]
+    thinking = entry["capabilities"].get("thinking", {})
+    # Override should have promoted the thinking capability to "supported".
+    assert thinking.get("status") in {"supported", "mixed"}
+
+
+def test_get_provider_model_entries_keys_are_deterministic() -> None:
+    """Iteration order over the accessor is stable across calls."""
+    cache = ModelCatalogCache()
+    for mid in ["zeta", "alpha", "mu"]:
+        for pid in ["prov-b", "prov-a"]:
+            cache._provider_models[(mid, pid)] = {"model_id": mid, "protocol": "openai"}
+    first = list(cache.get_provider_model_entries())
+    second = list(cache.get_provider_model_entries())
+    assert first == second
+    # (model_id, provider_id) lexical order.
+    assert first[0] == ("alpha", "prov-a")
+    assert first[-1] == ("zeta", "prov-b")

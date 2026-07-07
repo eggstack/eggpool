@@ -27,6 +27,7 @@ def _make_config(
             prov.protocols = ["openai"]
             prov.models_method = "GET"
             prov.models_path = "/models"
+            prov.model_capabilities = {}
             model_overrides: dict[str, MagicMock] = {}
             for mid, ovr in overrides.items():
                 mo = MagicMock()
@@ -67,6 +68,8 @@ def _make_config(
             )
             mo_global[mid] = mo
     config.model_overrides = mo_global
+
+    config.model_capabilities = {}
 
     config.models = MagicMock()
     config.models.expose_mode = "union"

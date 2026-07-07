@@ -1091,12 +1091,34 @@ class ModelCatalogCache:
     def get_provider_model_entries(
         self,
     ) -> dict[tuple[str, str], dict[str, Any]]:
-        """Get all per-provider model entries.
+        """Return provider-scoped model metadata keyed by ``(model_id, provider_id)``.
 
-        Returns a dict keyed by ``(model_id, provider_id)`` with
-        provider-specific model info dicts as values.
+        This is read-only dashboard/catalog introspection. It exposes one
+        row per provider-specific cache entry without a global fallback so
+        the dashboard can render provider-scoped availability and join each
+        row to canonical model-info using the unsuffixed base model ID.
+
+        Each value is a shallow copy and configured capability overrides
+        are applied when an :class:`~eggpool.models.config.AppConfig` is
+        attached via :meth:`set_config`, matching the single-row
+        :meth:`get_provider_model_entry` contract. The deprecated
+        placeholder model (``DEPRECATED_MODEL_ID``) is filtered out so the
+        route never renders synthetic routing rows.
         """
-        return dict(self._provider_models)
+        result: dict[tuple[str, str], dict[str, Any]] = {}
+        for model_id, provider_id in sorted(self._provider_models):
+            if model_id == DEPRECATED_MODEL_ID:
+                continue
+            if self._config is None:
+                entry = self._provider_models.get((model_id, provider_id))
+                if entry is None:
+                    continue
+                result[(model_id, provider_id)] = dict(entry)
+                continue
+            overridden = self.get_provider_model_entry(model_id, provider_id)
+            if overridden is not None:
+                result[(model_id, provider_id)] = dict(overridden)
+        return result
 
     def set_provider_model_entry(
         self,
