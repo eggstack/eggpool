@@ -758,6 +758,10 @@ class ModelCatalogCache:
         """Get the provider ID for an account."""
         return self._account_providers.get(account_name)
 
+    def known_provider_ids(self) -> set[str]:
+        """Return the set of all known provider IDs from the account registry."""
+        return set(self._account_providers.values())
+
     def get_model(self, model_id: str) -> dict[str, Any] | None:
         """Get a specific model from the cache."""
         return self._models.get(model_id)

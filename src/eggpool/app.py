@@ -1103,10 +1103,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
 
         async def _model_info_refresh_once() -> None:
             result = await model_info.refresh_due_models()
-            refreshed_raw = result.get("refreshed", 0)
-            refreshed = int(refreshed_raw) if isinstance(refreshed_raw, int) else 0
-            if refreshed > 0:
-                logger.info("Model info periodic refresh: %s", result)
+            model_info.log_refresh_result(result)
 
         supervisor.register_periodic(
             "model_info_refresh",

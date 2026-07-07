@@ -215,6 +215,16 @@ present; only the no-config fallback returns bare paths.
 
 API keys must be raw tokens; EggPool prepends the configured auth scheme automatically. An optional `[providers.<id>.verify]` block controls live verification probes.
 
+## Model Information
+
+- `src/eggpool/model_info/` enriches model metadata from multiple sources (OpenRouter, Artificial Analysis, HuggingFace, provider catalog) with dedup, identity resolution, and scheduler-driven refresh
+- **Tiered identity matching** (`model_info/matching.py`): resolves local model IDs to source records through 5 tiers — `configured_exact_alias` → `exact_source_id` → `normalized_exact` → `regex_rule` → `similarity_guarded` (disabled by default). Normalization uses NFKC + `.casefold()` + separator stripping + duplicate-vendor collapse
+- **Regex rule safety**: tier 3 regex rules reject candidates whose version tokens or family tokens differ from the local model (e.g. `flash` vs `pro`, `5.5` vs `5.5-mini`)
+- **Known provider namespaces**: the tiered matcher receives `known_provider_namespaces` from the catalog cache so aggregator provider IDs (e.g. `opencode-go`) are stripped before matching, never treated as vendor namespaces
+- **Match evidence audit trail**: every non-exact accepted match writes a `model_info_match_evidence` row with `match_method`, `confidence`, and `diagnostics_json`. Exposed via `GET /api/model-info/{id}/matches` and as a compact `match_evidence` field on the detail endpoint
+- **Supervisor logging**: the production refresh wrapper (`_model_info_refresh_once` in `app.py`) calls `log_refresh_result()` for consistent INFO/WARNING logging on every cycle — not just cycles with `refreshed > 0`
+- **Case-insensitive lookups**: `ModelInfoRepository.get_canonical`, `get_canonical_many`, `get_aliases_for_model`, and `list_compact_observations_for_model` all normalize via `COLLATE NOCASE` or `lower(model_id) = lower(?)`
+
 ## Dashboard
 
 ### Page Architecture

@@ -37,7 +37,7 @@ read-only `force=1` refresh.
         "openrouter": {
             "miss_reason": "matched",
             "matched_source_model_id": "minimax/minimax-m3",
-            "alias_selection": "exact_case",
+            "match_method": "normalized_exact",
             ...
         }
     }
@@ -54,16 +54,35 @@ read-only `force=1` refresh.
         "external_ids": {"openrouter": "minimax/minimax-m3"},
         "pricing": {"openrouter": {"input_price_per_1k": 0.3e-6, ...}}
     },
+    "match_evidence": [
+        {"source": "openrouter", "alias": "minimax/minimax-m3", "match_method": "normalized_exact", "confidence": 0.85}
+    ],
     "observations": [
         {"source": "openrouter", "source_model_id": "minimax/minimax-m3", "confidence": 0.5}
     ]
 }
+
+==> Match evidence for minimax-m3
+    GET http://127.0.0.1:8000/api/model-info/minimax-m3/matches
+[
+    {"source": "openrouter", "alias": "minimax/minimax-m3", "match_method": "normalized_exact", "confidence": 0.85}
+]
 
 ==> model_info_source_health snapshot
 source         enabled  last_success_at            failure_count  last_payload_count
 -------------- -------- -------------------------- -------------- -------------------
 openrouter     1        2026-07-04T14:23:01Z       0              347
 provider_catalog 1      2026-07-04T14:23:01Z       0              12
+
+==> model_info_match_evidence snapshot
+model_id       source    alias               match_method      confidence  provider_id
+-------------  --------  ------------------  ----------------  ----------  -----------
+minimax-m3     openrouter  minimax/minimax-m3  normalized_exact  0.85
+
+==> model_info_aliases with match_method
+model_id       source      alias               match_method      discovered_by
+-------------  ----------  ------------------  ----------------  -------------
+minimax-m3     openrouter  minimax/minimax-m3  normalized_exact  openrouter
 ```
 
 ## Expected outcomes (Phase 1 polish)
@@ -77,7 +96,7 @@ acceptance criteria in the polish closeout plan:
 |---------|----------|
 | `source_diagnostics.openrouter.miss_reason` | `"matched"` |
 | `source_diagnostics.openrouter.matched_source_model_id` | `"minimax/minimax-m3"` |
-| `source_diagnostics.openrouter.alias_selection` | `"exact_case"` or `"case_folded"` |
+| `source_diagnostics.openrouter.match_method` | `"normalized_exact"` or `"regex_rule"` |
 | `source_diagnostics.openrouter.alias_rows` | one row per alias candidate with `match_kind` |
 | `detail.status` | `"partial"` |
 | `detail.sparse` | `false` |
@@ -87,10 +106,13 @@ acceptance criteria in the polish closeout plan:
 | `detail.limits.external_output` | `512000` for `minimax-m3` |
 | `detail.external_ids.openrouter` | `"minimax/minimax-m3"` |
 | `detail.pricing.openrouter` | present with advisory per-1k pricing |
+| `detail.match_evidence[]` | non-empty list with `match_method`, `confidence`, `source` |
+| `/api/model-info/{id}/matches` | returns match evidence (capped at 50 entries) |
 | `observations[].source_model_id` | real OpenRouter id (`minimax/minimax-m3`), not local id |
 | `observations[]._synthetic` | not present in production handler path |
 | `model_info_source_health.openrouter.last_payload_count` | `> 0` after a successful fetch |
 | `model_info_source_health.openrouter.failure_count` | `0` after a successful fetch |
+| `model_info_match_evidence` table | contains row with `match_method`, `confidence`, `diagnostics_json` |
 
 ## Alias ambiguity regressions
 

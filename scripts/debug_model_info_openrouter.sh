@@ -69,15 +69,52 @@ ORDER BY source;
 SQL
 
 echo ""
-echo "==> Expected outcomes (Phase 1 polish)"
+echo "==> Match evidence for ${MODEL}"
+echo "    GET ${BASE}/api/model-info/${MODEL}/matches"
+curl -sS "${BASE}/api/model-info/${MODEL}/matches" | python3 -m json.tool
+
+echo ""
+echo "==> model_info_match_evidence snapshot (file: ${DB})"
+if [ -f "${DB}" ]; then
+    sqlite3 "${DB}" <<SQL
+.headers on
+.mode column
+SELECT model_id, source, alias, match_method, confidence, provider_id, last_seen_at
+FROM model_info_match_evidence
+WHERE lower(model_id) = lower('${MODEL}')
+ORDER BY created_at DESC
+LIMIT 10;
+SQL
+else
+    echo "    (skip: ${DB} not found)"
+fi
+
+echo ""
+echo "==> model_info_aliases with match_method (file: ${DB})"
+if [ -f "${DB}" ]; then
+    sqlite3 "${DB}" <<SQL
+.headers on
+.mode column
+SELECT model_id, source, alias, match_method, discovered_by
+FROM model_info_aliases
+WHERE lower(model_id) = lower('${MODEL}')
+ORDER BY source, alias;
+SQL
+else
+    echo "    (skip: ${DB} not found)"
+fi
+
+echo ""
+echo "==> Expected outcomes"
 echo "    source_diagnostics.openrouter.miss_reason = matched"
 echo "    source_diagnostics.openrouter.matched_source_model_id = minimax/minimax-m3"
-echo "    source_diagnostics.openrouter.alias_selection = exact_case"
+echo "    source_diagnostics.openrouter.match_method = normalized_exact or regex_rule"
 echo "    detail.display_name populated when provider lacks one"
 echo "    detail.external_ids.openrouter = minimax/minimax-m3"
 echo "    detail.pricing.openrouter present with advisory pricing"
 echo "    detail.limits.external_context = 1048576"
 echo "    detail.limits.external_output = 512000"
+echo "    detail.match_evidence[] contains rows with match_method"
 echo "    observations[] contains an OpenRouter row with"
 echo "      source_model_id = minimax/minimax-m3 (NOT the local id)"
 echo "    model_info_source_health.openrouter.last_payload_count > 0"

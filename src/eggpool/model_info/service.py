@@ -1350,6 +1350,7 @@ class ModelInfoService:
                 repo=self._repo,
                 candidate_index=candidate_index,
                 config=self._matching_config,
+                known_provider_namespaces=self._known_provider_namespaces(),
             )
         except Exception:
             logger.exception(
@@ -1500,57 +1501,65 @@ class ModelInfoService:
             entry_caps["thinking"] = thinking
             entry["capabilities"] = entry_caps
 
+    def log_refresh_result(self, result: dict[str, object]) -> None:
+        """Log a periodic refresh result with appropriate severity.
+
+        Called from both the supervisor-owned periodic task and the legacy
+        ``run_periodic_refresh`` background loop.  Logs at WARNING when
+        OpenRouter was attempted but matched nothing (all-miss cycle),
+        and at INFO when any match or refresh occurred.
+        """
+        refreshed = _safe_int_count(result.get("refreshed"))
+        total = _safe_int_count(result.get("total"))
+        skipped = _safe_int_count(result.get("skipped"))
+        or_attempted = _safe_int_count(result.get("openrouter_attempted"))
+        or_matched = _safe_int_count(result.get("openrouter_matched"))
+        or_missed = _safe_int_count(result.get("openrouter_missed"))
+        matched_by_method: dict[str, int] = cast(
+            "dict[str, int]",
+            result.get("matched_by_method", {}),
+        )
+        missed_by_reason: dict[str, int] = cast(
+            "dict[str, int]",
+            result.get("missed_by_reason", {}),
+        )
+
+        log_payload = (
+            "Model info periodic refresh: total=%d refreshed=%d"
+            " skipped=%d openrouter_attempted=%d"
+            " openrouter_matched=%d openrouter_missed=%d"
+            " matched_by_method=%s missed_by_reason=%s",
+            total,
+            refreshed,
+            skipped,
+            or_attempted,
+            or_matched,
+            or_missed,
+            matched_by_method,
+            missed_by_reason,
+        )
+
+        if or_matched > 0 or refreshed > 0:
+            logger.info(*log_payload)
+        elif or_attempted > 0 and or_matched == 0:
+            logger.warning(*log_payload)
+
+    def _known_provider_namespaces(self) -> set[str] | None:
+        """Return known provider IDs from the catalog cache for namespace stripping.
+
+        Returns ``None`` when the catalog cache has no provider entries
+        (avoids passing an empty set which would disable stripping).
+        """
+        provider_ids = self._catalog.known_provider_ids()
+        return provider_ids or None
+
     async def run_periodic_refresh(self) -> None:
         """Background loop that refreshes due models periodically."""
         while True:
             await asyncio.sleep(self._config.refresh_interval_s)
             try:
                 result = await self.refresh_due_models()
-                refreshed = _safe_int_count(result.get("refreshed"))
-                total = _safe_int_count(result.get("total"))
-                skipped = _safe_int_count(result.get("skipped"))
-                or_attempted = _safe_int_count(result.get("openrouter_attempted"))
-                or_matched = _safe_int_count(result.get("openrouter_matched"))
-                or_missed = _safe_int_count(result.get("openrouter_missed"))
-                matched_by_method: dict[str, int] = cast(
-                    "dict[str, int]",
-                    result.get("matched_by_method", {}),
-                )
-                missed_by_reason: dict[str, int] = cast(
-                    "dict[str, int]",
-                    result.get("missed_by_reason", {}),
-                )
-
-                if or_matched > 0 or refreshed > 0:
-                    logger.info(
-                        "Model info periodic refresh: total=%d refreshed=%d"
-                        " skipped=%d openrouter_attempted=%d"
-                        " openrouter_matched=%d openrouter_missed=%d"
-                        " matched_by_method=%s missed_by_reason=%s",
-                        total,
-                        refreshed,
-                        skipped,
-                        or_attempted,
-                        or_matched,
-                        or_missed,
-                        matched_by_method,
-                        missed_by_reason,
-                    )
-                elif or_attempted > 0 and or_matched == 0:
-                    logger.warning(
-                        "Model info periodic refresh: total=%d refreshed=%d"
-                        " skipped=%d openrouter_attempted=%d"
-                        " openrouter_matched=%d openrouter_missed=%d"
-                        " matched_by_method=%s missed_by_reason=%s",
-                        total,
-                        refreshed,
-                        skipped,
-                        or_attempted,
-                        or_matched,
-                        or_missed,
-                        matched_by_method,
-                        missed_by_reason,
-                    )
+                self.log_refresh_result(result)
             except asyncio.CancelledError:
                 break
             except Exception:

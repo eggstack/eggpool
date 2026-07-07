@@ -2103,8 +2103,9 @@ AggregatorError (base)
        `<provider_id>/<model_id>` aliases indexed verbatim
     2. `normalized_exact` — `normalize_model_key()` of model_id, display_name, and
        provider-catalog aliases compared against the candidate index
-    3. `regex_rule` — conservative built-in patterns for `minimax`, `claude`,
-       `gemini` family shapes
+     3. `regex_rule` — conservative built-in patterns for `minimax`, `claude`,
+        `gemini` family shapes; rejects candidates whose version tokens or
+        family tokens differ from the local model (e.g. `flash` vs `pro`)
     4. `similarity_guarded` — `difflib.SequenceMatcher` with strict thresholds
        (disabled by default)
   Normalization uses NFKC + `.casefold()` + separator stripping + duplicate-vendor
@@ -2114,6 +2115,13 @@ AggregatorError (base)
   Non-exact accepted matches persist evidence rows in `model_info_match_evidence`
   and stamp `match_method` / `discovered_by` / `diagnostics_json` on
   `model_info_aliases`. Periodic refresh logs WARNING on no-match cycles.
+  The tiered matcher receives `known_provider_namespaces` from the catalog cache
+  so aggregator provider IDs (e.g. `opencode-go`) are stripped before matching.
+  The production supervisor refresh (`_model_info_refresh_once` in `app.py`)
+  calls `log_refresh_result()` for consistent INFO/WARNING logging on every
+  cycle, not just cycles with `refreshed > 0`. Match evidence is exposed via
+  `GET /api/model-info/{id}/matches` and as a compact `match_evidence` field
+  on the detail endpoint.
 
 ### Corrective Pass (Phases A–F)
 

@@ -460,6 +460,24 @@ def _tier_regex_rule(
                     and not (set(c.family_tokens) & set(local_family))
                 ):
                     continue
+                # Reject candidates whose version tokens differ from
+                # the local model when both sides carry version info.
+                local_versions = tuple(t for t in local_family if t.isdigit())
+                if (
+                    local_versions
+                    and c.version_tokens
+                    and local_versions != c.version_tokens
+                ):
+                    continue
+                # Reject candidates whose family tokens are not a
+                # subset of the local model's family tokens (e.g.
+                # flash vs pro, mini vs full).
+                if (
+                    c.family_tokens
+                    and local_family
+                    and set(c.family_tokens) != set(local_family)
+                ):
+                    continue
                 seen_ids.add(cid)
                 matching_cands.append(c)
 

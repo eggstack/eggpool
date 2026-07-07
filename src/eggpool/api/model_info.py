@@ -3,6 +3,7 @@
 Endpoints:
 - GET  /api/model-info           — summary list
 - GET  /api/model-info/{model_id} — per-model detail
+- GET  /api/model-info/{model_id}/matches — match evidence diagnostics
 - GET  /api/model-info/sources   — source health
 - POST /api/model-info/refresh   — manual refresh (always auth-gated)
 """
@@ -326,11 +327,28 @@ async def handle_model_info_detail(request: Request, model_id: str) -> Response:
         logger.warning("Failed to read compact observations for %s: %s", lookup_id, exc)
         observations = None
         observations_error = type(exc).__name__
-    return JSONResponse(
-        content=_detail_response(
-            info, observations=observations, observations_error=observations_error
-        )
+    detail = _detail_response(
+        info, observations=observations, observations_error=observations_error
     )
+    try:
+        match_evidence = await model_info.repo.list_match_evidence(
+            lookup_id, source=None
+        )
+        if match_evidence:
+            detail["match_evidence"] = [
+                {
+                    "source": row.get("source"),
+                    "alias": row.get("alias"),
+                    "match_method": row.get("match_method"),
+                    "confidence": row.get("confidence"),
+                    "provider_id": row.get("provider_id"),
+                    "last_seen_at": row.get("last_seen_at"),
+                }
+                for row in match_evidence[:20]
+            ]
+    except Exception as exc:
+        logger.warning("Failed to read match evidence for %s: %s", lookup_id, exc)
+    return JSONResponse(content=detail)
 
 
 async def handle_model_info_sources(request: Request) -> Response:
@@ -386,6 +404,37 @@ async def handle_model_info_aliases(request: Request, model_id: str) -> Response
             "aliases_by_source": source_rows,
         }
     )
+
+
+async def handle_model_info_matches(request: Request, model_id: str) -> Response:
+    """GET /api/model-info/{model_id}/matches — match evidence diagnostics."""
+    model_info = getattr(request.app.state, "model_info", None)
+    if model_info is None:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "model_info disabled"},
+        )
+    decoded_id = unquote(model_id)
+    try:
+        evidence = await model_info.repo.list_match_evidence(decoded_id, source=None)
+    except Exception as exc:
+        logger.warning("Failed to read match evidence for %s: %s", decoded_id, exc)
+        return JSONResponse(
+            status_code=500,
+            content={"error": type(exc).__name__},
+        )
+    data = [
+        {
+            "source": row.get("source"),
+            "alias": row.get("alias"),
+            "match_method": row.get("match_method"),
+            "confidence": row.get("confidence"),
+            "provider_id": row.get("provider_id"),
+            "last_seen_at": row.get("last_seen_at"),
+        }
+        for row in evidence[:50]
+    ]
+    return JSONResponse(content={"model_id": decoded_id, "match_evidence": data})
 
 
 _ALLOWED_REFRESH_SOURCES: frozenset[str] = frozenset(
@@ -548,6 +597,12 @@ def register_model_info_routes(app: Any, require_auth: bool = False) -> None:
         dependencies=dependencies,
     )
     app.add_api_route(
+        path="/api/model-info/{model_id:path}/matches",
+        endpoint=handle_model_info_matches,
+        methods=["GET"],
+        dependencies=dependencies,
+    )
+    app.add_api_route(
         path="/api/model-info/{model_id:path}",
         endpoint=handle_model_info_detail,
         methods=["GET"],
@@ -571,6 +626,7 @@ def register_model_info_routes(app: Any, require_auth: bool = False) -> None:
 __all__ = [
     "handle_model_info_aliases",
     "handle_model_info_detail",
+    "handle_model_info_matches",
     "handle_model_info_refresh",
     "handle_model_info_sources",
     "handle_model_info_summary",
