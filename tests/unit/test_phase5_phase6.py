@@ -298,3 +298,86 @@ def test_queries_use_json_for_exclude_reasons_not_recent() -> None:
     # exclude_reasons_json (that is the routing-decisions surface).
     sql = queries.fetch_recent_requests.__doc__ or ""
     assert "exclude_reasons_json" not in sql
+
+
+async def _seed_cache_heavy_request(db: Database) -> None:
+    """Cache-heavy seed: input=100, cache_read=900, cache_write=100,
+    output=50. ``cache_read_tokens > total_tokens`` is the exact regression
+    scenario flagged in
+    ``plans/2026-07-07-dashboard-cache-token-card-semantics-fix.md``.
+    """
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled, provider_id) "
+            "VALUES (?, ?, 1, ?)",
+            ("acct_cache_heavy", "ENV_C", "opencode-go"),
+        )
+        await db.execute_write(
+            "INSERT INTO models (model_id, protocol, provider_id) VALUES (?, ?, ?)",
+            ("model_cache_heavy", "openai", "opencode-go"),
+        )
+        await db.execute_insert(
+            "INSERT INTO requests ("
+            "  proxy_request_id, account_id, model_id, protocol, streamed, "
+            "  started_at, completed_at, status, "
+            "  input_tokens, output_tokens, "
+            "  cache_read_tokens, cache_write_tokens, reasoning_tokens, "
+            "  cost_microdollars, exactness"
+            ") VALUES (?, 1, 'model_cache_heavy', 'openai', 0, "
+            "  datetime('now', '-1 seconds'), datetime('now'), 'completed', "
+            "  100, 50, 900, 100, 0, 0, 'exact')",
+            ("req-cache-heavy",),
+        )
+
+
+@pytest.mark.asyncio
+async def test_bounded_cache_ratio_cache_heavy(db: Database) -> None:
+    """Cache-heavy regression: bounded ratio must be ``cache_read /
+    (input + cache_read + cache_write)`` and never ``cache_read / input``
+    or ``cache_read / total_tokens``.
+    """
+    await _seed_cache_heavy_request(db)
+    row = queries.bounded_cache_ratio(cache_read=900, input_tokens=100, cache_write=100)
+    assert row == pytest.approx(900 / 1100)
+    # Negative guards: the buggy formulas must NOT be returned.
+    assert row != pytest.approx(9.0)
+    assert row != pytest.approx(900 / 150)
+
+
+@pytest.mark.asyncio
+async def test_summary_token_semantic_split_cache_heavy(db: Database) -> None:
+    """Pin the token semantic split on ``fetch_summary``:
+
+    - ``total_tokens`` = input + output (legacy fresh-token volume).
+    - ``fresh_tokens`` = input + output (explicit alias).
+    - ``accounted_tokens`` = input + output + cache_read + cache_write.
+
+    Regression for
+    ``plans/2026-07-07-dashboard-cache-token-card-semantics-fix.md`` so a
+    future "fix" cannot reinterpret ``total_tokens`` and break the stats
+    API contract or the dashboard headline semantics.
+    """
+    await _seed_cache_heavy_request(db)
+    summary = await queries.fetch_summary(
+        db, "1970-01-01 00:00:00", "2999-12-31 23:59:59"
+    )
+    # Legacy fresh-token volume.
+    assert summary["total_tokens"] == 150
+    # Explicit fresh-token alias.
+    assert summary["fresh_tokens"] == 150
+    # Broad provider-accounting total.
+    assert summary["accounted_tokens"] == 1150
+    # Bounded cache-read share (cache_read / (input + cache_read + cache_write)).
+    assert summary["cache_read_ratio"] == pytest.approx(900 / 1100)
+
+
+@pytest.mark.asyncio
+async def test_empty_summary_exposes_semantic_split_fields(db: Database) -> None:
+    """The empty summary must still carry ``fresh_tokens`` and
+    ``accounted_tokens`` so the dashboard can render with zeros instead of
+    raising on a missing key.
+    """
+    summary = queries._empty_summary()  # noqa: SLF001 - intentional
+    assert summary["fresh_tokens"] == 0
+    assert summary["accounted_tokens"] == 0
+    assert summary["total_tokens"] == 0

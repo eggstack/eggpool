@@ -190,13 +190,19 @@ _CARD_TOOLTIPS: dict[str, str] = {
         "Coefficient of variation across active accounts. Higher values mean "
         "load is concentrated unevenly."
     ),
-    "Total tokens": (
-        "Combined input and output tokens processed in the selected period."
+    "Accounted tokens": (
+        "Input, output, cache-read, and cache-write tokens recorded for the "
+        "selected period. This is the broad provider-accounting total and can "
+        "exceed fresh input/output volume on cache-heavy workloads."
     ),
-    "Cache tokens": (
-        "Prompt-cache token activity. The metric shows cache reads; the "
-        "subtext shows the bounded read share "
-        "(cache_read / (input + cache_read + cache_write)) and cache writes."
+    "Fresh tokens": (
+        "Input plus output tokens recorded for the selected period, excluding "
+        "cache-read and cache-write counters."
+    ),
+    "Cache reads": (
+        "Provider-reported prompt-cache read tokens. The subtext shows the "
+        "bounded read share cache_read / (input + cache_read + cache_write) "
+        "and the cache write volume."
     ),
     "Reasoning tokens": (
         "Tokens reported by upstreams as reasoning or extended-thinking output."
@@ -1763,17 +1769,42 @@ def render_overview(
     errors = int(summary.get("error_requests", 0))
     success = int(summary.get("successful_requests", 0))
     error_rate = float(summary.get("error_rate", 0.0))
-    in_tok = format_tokens(summary.get("total_input_tokens", 0))
-    out_tok = format_tokens(summary.get("total_output_tokens", 0))
-    total_tok = format_tokens(summary.get("total_tokens", 0))
+    total_input_tokens = int(summary.get("total_input_tokens", 0))
+    total_output_tokens = int(summary.get("total_output_tokens", 0))
+    total_cache_read_tokens = int(summary.get("total_cache_read_tokens", 0))
+    total_cache_write_tokens = int(summary.get("total_cache_write_tokens", 0))
+    # ``total_tokens`` is legacy fresh-token volume (= input + output) and is
+    # kept for backward compatibility with existing stats API consumers.
+    # ``fresh_tokens`` mirrors the same value explicitly for the dashboard and
+    # ``accounted_tokens`` is the broader provider-accounting total (input +
+    # output + cache_read + cache_write). See ``_build_summary`` in
+    # ``src/eggpool/stats/queries.py`` and the plan that introduced this split.
+    fresh_tokens = int(
+        summary.get(
+            "fresh_tokens",
+            total_input_tokens + total_output_tokens,
+        )
+    )
+    accounted_tokens = int(
+        summary.get(
+            "accounted_tokens",
+            fresh_tokens + total_cache_read_tokens + total_cache_write_tokens,
+        )
+    )
+    in_tok = format_tokens(total_input_tokens)
+    out_tok = format_tokens(total_output_tokens)
+    fresh_tok = format_tokens(fresh_tokens)
+    accounted_tok = format_tokens(accounted_tokens)
+    cache_read = format_tokens(total_cache_read_tokens)
+    cache_write = format_tokens(total_cache_write_tokens)
+    # ``total_tok`` is retained as an alias for the legacy fresh-token field so
+    # downstream card copy (e.g. ``Total cost`` subtext) keeps working without
+    # re-reading ``summary["total_tokens"]``. It is NOT used as the headline
+    # card metric on the overview page; that role now belongs to ``accounted_tok``.
+    total_tok = fresh_tok
     latency = format_latency(summary.get("avg_latency_ms", 0.0))
     imb_pct = format_percent(float(imbalance.get("imbalance_ratio", 0.0)))
 
-    cache_read = format_tokens(summary.get("total_cache_read_tokens", 0))
-    cache_write = format_tokens(summary.get("total_cache_write_tokens", 0))
-    total_cache_read_tokens = int(summary.get("total_cache_read_tokens", 0))
-    total_input_tokens = int(summary.get("total_input_tokens", 0))
-    total_cache_write_tokens = int(summary.get("total_cache_write_tokens", 0))
     if total_input_tokens > 0 or total_cache_read_tokens > 0:
         cache_read_ratio = total_cache_read_tokens / (
             total_input_tokens + total_cache_read_tokens + total_cache_write_tokens
@@ -1903,13 +1934,21 @@ def render_overview(
         "".join(
             [
                 _render_metric_card(
-                    title="Total tokens",
-                    metric=total_tok,
-                    sub=f"in {in_tok} · out {out_tok}",
+                    title="Accounted tokens",
+                    metric=accounted_tok,
+                    sub=(
+                        f"fresh {fresh_tok} · cache read {cache_read} "
+                        f"· cache write {cache_write}"
+                    ),
                 ),
                 request_shaping_card,
                 _render_metric_card(
-                    title="Cache tokens",
+                    title="Fresh tokens",
+                    metric=fresh_tok,
+                    sub=f"in {in_tok} · out {out_tok}",
+                ),
+                _render_metric_card(
+                    title="Cache reads",
                     metric=cache_read,
                     sub=f"{cache_read_pct} of prompt · write {cache_write}",
                 ),

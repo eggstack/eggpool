@@ -687,7 +687,19 @@ class StatsService:
         *,
         account_id: int | None = None,
     ) -> dict[str, Any]:
-        """Get summary from usage_rollups."""
+        """Get summary from usage_rollups.
+
+        Token field semantics mirror :func:`eggpool.stats.queries._build_summary`:
+
+        - ``total_tokens`` is the legacy fresh-token volume (``input + output``)
+          and is preserved unchanged for backward compatibility with external
+          stats API consumers.
+        - ``fresh_tokens`` is the explicit fresh-token alias of ``total_tokens``.
+        - ``accounted_tokens`` is the broader provider-accounting total
+          (``input + output + cache_read + cache_write``) and is what the
+          dashboard headline "Accounted tokens" card uses. See
+          ``plans/2026-07-07-dashboard-cache-token-card-semantics-fix.md``.
+        """
         assert self._rollup_repo is not None
         row = await self._rollup_repo.query_summary(
             start=time_range.start_str(),
@@ -755,6 +767,11 @@ class StatsService:
             ),
             "total_input_tokens": total_input_tokens,
             "total_output_tokens": total_output_tokens,
+            # ``total_tokens`` is legacy fresh-token volume (= input + output)
+            # and is kept unchanged for backward compatibility. ``fresh_tokens``
+            # mirrors it as the explicit alias and ``accounted_tokens`` is the
+            # broader provider-accounting total the dashboard headline card
+            # uses. See the plan that introduced this split.
             "total_tokens": total_input_tokens + total_output_tokens,
             "fresh_tokens": total_input_tokens + total_output_tokens,
             "accounted_tokens": (

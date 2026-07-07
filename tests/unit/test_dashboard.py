@@ -536,7 +536,9 @@ class TestRenderOverview:
         ) in html
 
     def test_overview_total_tokens_card_renders(self) -> None:
-        """A 'Total tokens' card surfaces Σtokens across all providers near the top."""
+        """A 'Fresh tokens' card surfaces input+output near the top of the
+        token row and the 'Accounted tokens' card surfaces the broader
+        provider-accounting total."""
         html = render_overview(
             overview={
                 "summary": {
@@ -547,6 +549,8 @@ class TestRenderOverview:
                     "total_input_tokens": 1000,
                     "total_output_tokens": 2500,
                     "total_tokens": 3500,
+                    "fresh_tokens": 3500,
+                    "accounted_tokens": 3750,
                     "total_cache_read_tokens": 250,
                     "total_cache_write_tokens": 0,
                     "total_reasoning_tokens": 0,
@@ -562,21 +566,25 @@ class TestRenderOverview:
             },
             accounts=[],
         )
-        assert ">Total tokens<" in html
-        total_tok_card_idx = html.index(">Total tokens<")
-        cache_card_idx = html.index(">Cache tokens<")
-        assert total_tok_card_idx < cache_card_idx
-        # Total tokens = 3500 → format_tokens → "3,500" (exact formatting
-        # below 1M). The metric line of the new card carries the total.
-        assert ">3,500</p>" in html
-        # The new card's sub-line mirrors input/output (total now sits on the
-        # metric line itself).
-        total_card_section = html[total_tok_card_idx:cache_card_idx]
-        assert "in 1,000" in total_card_section
-        assert "out 2,500" in total_card_section
+        assert ">Fresh tokens<" in html
+        assert ">Accounted tokens<" in html
+        accounted_idx = html.index(">Accounted tokens<")
+        fresh_idx = html.index(">Fresh tokens<")
+        cache_idx = html.index(">Cache reads<")
+        # Accounted sits ahead of Fresh which sits ahead of Cache reads.
+        assert accounted_idx < fresh_idx < cache_idx
+        # Accounted metric line shows the provider-accounting total.
+        accounted_section = html[accounted_idx:fresh_idx]
+        assert ">3,750</p>" in accounted_section
+        assert "fresh 3,500" in accounted_section
+        # Fresh metric line shows the legacy input+output total.
+        fresh_section = html[fresh_idx:cache_idx]
+        assert ">3,500</p>" in fresh_section
+        assert "in 1,000" in fresh_section
+        assert "out 2,500" in fresh_section
 
     def test_overview_cache_tokens_card_shows_percent_of_input(self) -> None:
-        """Cache tokens card sub-line reports cache_read / input as a percent."""
+        """Cache reads card sub-line reports cache_read / input as a percent."""
         html = render_overview(
             overview={
                 "summary": {
@@ -587,6 +595,8 @@ class TestRenderOverview:
                     "total_input_tokens": 1000,
                     "total_output_tokens": 500,
                     "total_tokens": 1500,
+                    "fresh_tokens": 1500,
+                    "accounted_tokens": 1800,
                     "total_cache_read_tokens": 250,
                     "total_cache_write_tokens": 50,
                     "total_reasoning_tokens": 0,
@@ -602,7 +612,7 @@ class TestRenderOverview:
             },
             accounts=[],
         )
-        cache_idx = html.index(">Cache tokens<")
+        cache_idx = html.index(">Cache reads<")
         next_card_idx = html.index(">Reasoning tokens<")
         cache_section = html[cache_idx:next_card_idx]
         # Bounded cache-read share: 250 / (1000 + 250 + 50) ≈ 19.2%
@@ -622,6 +632,8 @@ class TestRenderOverview:
                     "total_input_tokens": 0,
                     "total_output_tokens": 0,
                     "total_tokens": 0,
+                    "fresh_tokens": 0,
+                    "accounted_tokens": 0,
                     "total_cache_read_tokens": 0,
                     "total_cache_write_tokens": 0,
                     "total_reasoning_tokens": 0,
@@ -637,10 +649,104 @@ class TestRenderOverview:
             },
             accounts=[],
         )
-        cache_idx = html.index(">Cache tokens<")
+        cache_idx = html.index(">Cache reads<")
         next_card_idx = html.index(">Reasoning tokens<")
         cache_section = html[cache_idx:next_card_idx]
         assert "— of prompt" in cache_section
+
+    def test_overview_cache_heavy_does_not_imply_impossible_totals(self) -> None:
+        """Cache-heavy workload: cache_read > fresh_tokens. The overview
+        must surface ``Accounted tokens`` so the headline total is not
+        smaller than the cache-read sub-card.
+
+        Regression for ``plans/2026-07-07-dashboard-cache-token-card-semantics-fix.md``.
+        """
+        html = render_overview(
+            overview={
+                "summary": {
+                    "total_requests": 2,
+                    "successful_requests": 2,
+                    "error_requests": 0,
+                    "error_rate": 0.0,
+                    "total_input_tokens": 100,
+                    "total_output_tokens": 50,
+                    "total_tokens": 150,
+                    "fresh_tokens": 150,
+                    "accounted_tokens": 1150,
+                    "total_cache_read_tokens": 900,
+                    "total_cache_write_tokens": 100,
+                    "total_reasoning_tokens": 0,
+                    "total_cost_microdollars": 0,
+                    "avg_latency_ms": 50.0,
+                },
+                "imbalance": {
+                    "imbalance_ratio": 0.0,
+                    "active_accounts": 1,
+                    "most_used": None,
+                    "least_used": None,
+                },
+            },
+            accounts=[],
+        )
+        accounted_idx = html.index(">Accounted tokens<")
+        fresh_idx = html.index(">Fresh tokens<")
+        cache_idx = html.index(">Cache reads<")
+        # Accounted sits ahead of Cache reads so the headline total is not
+        # smaller than the cache-read sub-card.
+        assert accounted_idx < cache_idx
+        accounted_section = html[accounted_idx:fresh_idx]
+        # Accounted metric = 100 + 50 + 900 + 100 = 1,150
+        assert ">1,150</p>" in accounted_section
+        # Fresh metric = 100 + 50 = 150
+        fresh_section = html[fresh_idx:cache_idx]
+        assert ">150</p>" in fresh_section
+        # Cache reads metric = 900
+        next_card_idx = html.index(">Reasoning tokens<")
+        cache_section = html[cache_idx:next_card_idx]
+        assert ">900</p>" in cache_section
+        # Bounded ratio: 900 / (100 + 900 + 100) = 0.81818... → 81.8%
+        assert "81.8% of prompt" in cache_section
+        # The legacy misleading pair should never appear on the index page.
+        assert ">Cache tokens<" not in html
+
+    def test_overview_accounted_tokens_falls_back_to_components(self) -> None:
+        """When the summary omits ``fresh_tokens`` and ``accounted_tokens``
+        the renderer must still derive them from the component counters so
+        older callers/tests that build minimal summary dicts keep working.
+        """
+        html = render_overview(
+            overview={
+                "summary": {
+                    "total_requests": 2,
+                    "successful_requests": 2,
+                    "error_requests": 0,
+                    "error_rate": 0.0,
+                    "total_input_tokens": 100,
+                    "total_output_tokens": 50,
+                    "total_cache_read_tokens": 900,
+                    "total_cache_write_tokens": 100,
+                    "total_reasoning_tokens": 0,
+                    "total_cost_microdollars": 0,
+                    "avg_latency_ms": 50.0,
+                },
+                "imbalance": {
+                    "imbalance_ratio": 0.0,
+                    "active_accounts": 1,
+                    "most_used": None,
+                    "least_used": None,
+                },
+            },
+            accounts=[],
+        )
+        accounted_idx = html.index(">Accounted tokens<")
+        fresh_idx = html.index(">Fresh tokens<")
+        cache_idx = html.index(">Cache reads<")
+        accounted_section = html[accounted_idx:fresh_idx]
+        # Renderer fallback: accounted = 100 + 50 + 900 + 100 = 1,150
+        assert ">1,150</p>" in accounted_section
+        fresh_section = html[fresh_idx:cache_idx]
+        # Fresh fallback: 100 + 50 = 150
+        assert ">150</p>" in fresh_section
 
     def test_escapes_period_in_timeseries_chart(self) -> None:
         """Regression test: ``period`` is interpolated into a JS literal;

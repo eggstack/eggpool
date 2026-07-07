@@ -952,7 +952,22 @@ async def fetch_exactness_breakdown(
 
 
 def _build_summary(row: dict[str, Any]) -> dict[str, Any]:
-    """Build a summary dict from a SQL row."""
+    """Build a summary dict from a SQL row.
+
+    Token field semantics (see
+    ``plans/2026-07-07-dashboard-cache-token-card-semantics-fix.md``):
+
+    - ``total_tokens`` is **legacy fresh-token volume** (``input + output``).
+      External consumers may already depend on this value, so it is preserved
+      unchanged for backward compatibility.
+    - ``fresh_tokens`` mirrors ``total_tokens`` for callers that want the
+      explicit "no cache counters" semantics.
+    - ``accounted_tokens`` is the broader provider-accounting total
+      (``input + output + cache_read + cache_write``). The dashboard uses this
+      field for the headline "Accounted tokens" card so that cache-heavy
+      workloads (where ``cache_read > fresh``) cannot look like a persistence
+      bug.
+    """
     total = int(row.get("total_requests", 0))
     errors = int(row.get("error_requests", 0))
     error_rate = (errors / total) if total > 0 else 0.0
@@ -970,6 +985,9 @@ def _build_summary(row: dict[str, Any]) -> dict[str, Any]:
         "error_rate": error_rate,
         "total_input_tokens": total_input_tokens,
         "total_output_tokens": total_output_tokens,
+        # Legacy fresh-token volume (input + output). Kept for backward
+        # compatibility with external stats API consumers; the dashboard now
+        # surfaces this through the explicit ``fresh_tokens`` alias instead.
         "total_tokens": int(row.get("total_tokens", 0)),
         "fresh_tokens": total_input_tokens + total_output_tokens,
         "accounted_tokens": (
