@@ -979,6 +979,38 @@ class TestDashboardJS:
             "canvas.grouped-timeseries-chart"
         ) < grouped_block.index('typeof window.Chart === "undefined"')
 
+    def test_chart_bootstrap_retries_until_chart_js_is_ready(self) -> None:
+        """Chart initialisation must not be a single DOMContentLoaded shot.
+
+        ``chart.js`` is the largest deferred script on chart pages. If
+        ``dashboard.js`` runs first and only checks ``window.Chart`` once,
+        canvases stay blank until a later page refresh or user action.
+        """
+        js = self._load_js()
+        assert "function whenChartReady(callback)" in js
+        assert "window.setTimeout(run, delayMs)" in js
+        bootstrap_start = js.index("namespace.bootstrap")
+        bootstrap_block = js[bootstrap_start : bootstrap_start + 1400]
+        assert "whenChartReady(function ()" in bootstrap_block
+        assert "namespace.initStaticCharts();" in bootstrap_block
+        assert "namespace.initGroupedTimeseriesCharts();" in bootstrap_block
+        assert "namespace.reinitTimeseriesChart();" in bootstrap_block
+
+    def test_grouped_chart_refresh_unhides_canvas_when_data_arrives(self) -> None:
+        """An initially empty grouped chart hides its canvas in the SSR HTML.
+
+        The AJAX refresh path must unhide both the wrapper and the canvas
+        when a later filter/period returns points; otherwise the chart is
+        successfully rebuilt but remains invisible.
+        """
+        js = self._load_js()
+        set_chart_start = js.index("function setChartData")
+        set_chart_block = js[set_chart_start : set_chart_start + 1000]
+        assert 'panel.querySelector("canvas.grouped-timeseries-chart")' in (
+            set_chart_block
+        )
+        assert 'canvas.style.display = hasData ? "" : "none";' in set_chart_block
+
 
 class TestRenderAccounts:
     """Tests for the accounts page renderer."""

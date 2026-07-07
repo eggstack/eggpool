@@ -225,6 +225,34 @@
     }
   }
 
+  function hasChartWork() {
+    return Boolean(
+      document.querySelector("script.static-chart-data[data-chart-id]") ||
+        document.querySelector("canvas.grouped-timeseries-chart") ||
+        document.getElementById("timeseries-chart")
+    );
+  }
+
+  function whenChartReady(callback) {
+    if (!hasChartWork()) return;
+    const maxAttempts = 40;
+    const delayMs = 50;
+    let attempts = 0;
+    const run = function () {
+      if (typeof window.Chart !== "undefined") {
+        callback();
+        return;
+      }
+      attempts += 1;
+      if (attempts >= maxAttempts) {
+        console.warn("EggPoolDashboard: Chart.js not loaded");
+        return;
+      }
+      window.setTimeout(run, delayMs);
+    };
+    run();
+  }
+
   namespace.initGroupedTimeseriesCharts = function initGroupedTimeseriesCharts() {
     const canvases = document.querySelectorAll(
       "canvas.grouped-timeseries-chart"
@@ -587,22 +615,31 @@
   };
 
   namespace.bootstrap = function bootstrap() {
-    try {
-      namespace.initStaticCharts();
-    } catch (err) {
-      console.error(
-        "EggPoolDashboard: initStaticCharts failed",
-        err
-      );
-    }
-    try {
-      namespace.initGroupedTimeseriesCharts();
-    } catch (err) {
-      console.error(
-        "EggPoolDashboard: initGroupedTimeseriesCharts failed",
-        err
-      );
-    }
+    whenChartReady(function () {
+      try {
+        namespace.initStaticCharts();
+      } catch (err) {
+        console.error(
+          "EggPoolDashboard: initStaticCharts failed",
+          err
+        );
+      }
+      try {
+        namespace.initGroupedTimeseriesCharts();
+      } catch (err) {
+        console.error(
+          "EggPoolDashboard: initGroupedTimeseriesCharts failed",
+          err
+        );
+      }
+      try {
+        if (document.getElementById("timeseries-chart")) {
+          namespace.reinitTimeseriesChart();
+        }
+      } catch (err) {
+        console.error("EggPoolDashboard: reinitTimeseriesChart failed", err);
+      }
+    });
     try {
       namespace.initTimeseriesControls();
     } catch (err) {
@@ -625,13 +662,6 @@
       namespace.initNumberSteppers();
     } catch (err) {
       console.error("EggPoolDashboard: initNumberSteppers failed", err);
-    }
-    try {
-      if (document.getElementById("timeseries-chart")) {
-        namespace.reinitTimeseriesChart();
-      }
-    } catch (err) {
-      console.error("EggPoolDashboard: reinitTimeseriesChart failed", err);
     }
   }
 
@@ -712,6 +742,12 @@
     const hasData = points.length > 0 && buckets.length > 0;
     if (container) {
       container.style.display = hasData ? "" : "none";
+    }
+    const canvas = panel
+      ? panel.querySelector("canvas.grouped-timeseries-chart")
+      : null;
+    if (canvas) {
+      canvas.style.display = hasData ? "" : "none";
     }
     if (empty) {
       empty.style.display = hasData ? "none" : "";
