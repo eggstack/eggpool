@@ -460,8 +460,12 @@ def _render_layout(
     blocks HTML parsing on the critical path.
     """
     burger, nav = _render_nav(active_nav, period, available_themes, current_theme)
-    theme_href = f"/static/theme.css?theme={_stdlib_escape(current_theme)}"
-    theme_link = f'<link rel="stylesheet" href="{theme_href}">' if current_theme else ""
+    theme_href = (
+        f"/static/theme.css?theme={quote(current_theme, safe='')}"
+        if current_theme
+        else ""
+    )
+    theme_link = f'<link rel="stylesheet" href="{theme_href}">' if theme_href else ""
     script_block = (
         _render_auto_refresh_script(refresh_interval_s) if auto_refresh else ""
     )
@@ -505,8 +509,8 @@ def _render_layout(
 </svg>
 <header class="topbar">
   {burger}
-  <h1><a href="/?period={_stdlib_escape(period)}&amp;theme={
-        _stdlib_escape(current_theme)
+  <h1><a href="/?period={quote(period, safe="")}&amp;theme={
+        quote(current_theme, safe="")
     }">EggPool</a></h1>
   {nav}
 </header>
@@ -631,8 +635,8 @@ def _render_nav(
     for key, href, label in items:
         cls = "active" if key == active_nav else ""
         parts.append(
-            f'<a class="{cls}" href="{href}?period={_stdlib_escape(period)}'
-            f'&amp;theme={_stdlib_escape(current_theme)}">'
+            f'<a class="{cls}" href="{href}?period={quote(period, safe="")}'
+            f'&amp;theme={quote(current_theme, safe="")}">'
             f"{_stdlib_escape(label)}</a>"
         )
 
@@ -2051,7 +2055,7 @@ def _build_href_with_state(
     if not parts:
         return ""
     return "?" + "&".join(
-        f"{escape(name)}={escape_attr(value)}" for name, value in parts
+        f"{escape(name)}={escape_attr(quote(value, safe=''))}" for name, value in parts
     )
 
 
@@ -2521,7 +2525,7 @@ def render_models(
             quoted_model_id = quote(str(model_id or ""), safe="")
             model_link = (
                 f'<a href="/models/{quoted_model_id}'
-                f'?theme={escape_attr(current_theme)}">'
+                f'?theme={escape_attr(quote(current_theme, safe=""))}">'
                 f"{escape(model_id)}</a>"
             )
 

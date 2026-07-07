@@ -373,8 +373,8 @@ async def test_include_score_components_true_preserves_components() -> None:
 
 
 @pytest.mark.asyncio()
-async def test_default_mode_is_all() -> None:
-    """Default RoutingTraceConfig mode is 'all' (backward compatible)."""
+async def test_default_mode_is_sampled() -> None:
+    """Default RoutingTraceConfig mode is 'sampled' with 5% sampling."""
     cfg = RoutingTraceConfig()
     assert cfg.mode == "sampled"
     assert cfg.sample_rate == 0.05
@@ -382,7 +382,7 @@ async def test_default_mode_is_all() -> None:
 
 
 @pytest.mark.asyncio()
-async def test_trace_mode_none_config_defaults_to_all() -> None:
+async def test_all_mode_writes_traces_when_overridden() -> None:
     """Coordinator with mode='all' writes traces for every request."""
     config = _build_config()  # default trace mode = "sampled"; override to "all"
     config.routing.trace.mode = "all"

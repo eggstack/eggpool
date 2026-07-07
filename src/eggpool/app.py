@@ -632,12 +632,12 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # 6. Crash recovery
     await _crash_recovery(db)
 
-    # aiosqlite uses one worker thread per connection. The default keeps
-    # stats on the primary connection for a single SQLite worker thread;
-    # operators can opt into a second read-only stats connection when
-    # dashboard analytics should avoid the data-plane connection lock.
-    # In-memory SQLite databases cannot be shared by opening a second
-    # connection.
+    # aiosqlite uses one worker thread per connection. The default of 2 opens
+    # a separate read-only stats connection for file-backed databases so
+    # dashboard analytics do not share the data-plane connection lock.
+    # Set worker_threads = 1 for minimum-footprint mode on extremely
+    # constrained devices or in-memory test databases. In-memory SQLite
+    # databases cannot be shared by opening a second connection.
     stats_db = db
     if config.database.path != ":memory:" and config.database.worker_threads > 1:
         stats_db = Database(
