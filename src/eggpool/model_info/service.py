@@ -2902,11 +2902,9 @@ def build_canonical_detail(
             "dict[str, object]", existing_detail.get("external_ids", {})
         )
         for src_name, _ext_id in existing_ext_ids_for_state.items():
-            if not isinstance(src_name, str):
-                continue
             if src_name not in sources and src_name != "provider_catalog":
                 sources.append(src_name)
-                source_states[src_name] = "preserved_external_id"
+                source_states[str(src_name)] = "preserved_external_id"
 
     provenance: dict[str, object] = {"sources": sources}
     if source_states:

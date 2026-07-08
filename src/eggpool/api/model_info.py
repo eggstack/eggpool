@@ -365,7 +365,10 @@ async def handle_model_info_sources(request: Request) -> Response:
     diagnostics_attr = getattr(model_info, "source_diagnostics", None)
     if callable(diagnostics_attr):
         try:
-            configured = diagnostics_attr()
+            configured = cast(
+                "dict[str, dict[str, Any]]",
+                diagnostics_attr(),
+            )
             # If a misbehaving mock returns a coroutine, treat it as
             # not-implemented to preserve the bare-health-row fallback.
             if inspect.isawaitable(configured):
@@ -376,22 +379,29 @@ async def handle_model_info_sources(request: Request) -> Response:
     data: list[dict[str, Any]] = []
     keys = sorted(set(snapshot) | set(configured))
     for source_name in keys:
-        health = snapshot.get(source_name, {}) or {}
+        health_raw = snapshot.get(source_name, {})
+        health = cast("dict[str, Any]", health_raw or {})
         diag = configured.get(source_name, {}) or {}
         data.append(
             {
                 "source": source_name,
-                "enabled": health.get("enabled", diag.get("enabled", False)),
-                "configured": diag.get("configured", bool(health)),
-                "constructed": diag.get("constructed", bool(health)),
-                "requires_api_key": diag.get("requires_api_key", False),
-                "api_key_present": diag.get("api_key_present", False),
+                "enabled": bool(
+                    health.get("enabled", diag.get("enabled", False))
+                ),
+                "configured": bool(
+                    diag.get("configured", bool(health))
+                ),
+                "constructed": bool(
+                    diag.get("constructed", bool(health))
+                ),
+                "requires_api_key": bool(diag.get("requires_api_key", False)),
+                "api_key_present": bool(diag.get("api_key_present", False)),
                 "reason": diag.get("reason"),
                 "last_success_at": health.get("last_success_at"),
                 "last_error_at": health.get("last_error_at"),
                 "last_error_class": health.get("last_error_class"),
                 "cooldown_until": health.get("cooldown_until"),
-                "failure_count": health.get("failure_count", 0),
+                "failure_count": int(health.get("failure_count", 0) or 0),
                 "last_status_code": health.get("last_status_code"),
                 "rate_limited_until": health.get("rate_limited_until"),
                 "last_success_duration_ms": health.get(

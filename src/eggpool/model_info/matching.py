@@ -15,8 +15,6 @@ from difflib import SequenceMatcher
 from typing import TYPE_CHECKING, Any
 
 from eggpool.model_info.normalization import (
-    DEPLOYMENT_SUFFIX_TOKENS,
-    SEMANTIC_VARIANT_TOKENS,
     generate_deployment_suffix_variants,
     normalize_model_key,
     normalize_vendor_key,
