@@ -2891,7 +2891,26 @@ def build_canonical_detail(
     for src in sorted(used_sources):
         if src not in sources:
             sources.append(src)
+
+    # When ``existing_detail`` preserves an external id for a source
+    # that did not contribute this cycle, credit that source in the
+    # provenance as well so ``sources`` and ``detail.external_ids``
+    # don't silently disagree.
+    source_states: dict[str, str] = {}
+    if existing_detail:
+        existing_ext_ids_for_state = cast(
+            "dict[str, object]", existing_detail.get("external_ids", {})
+        )
+        for src_name, _ext_id in existing_ext_ids_for_state.items():
+            if not isinstance(src_name, str):
+                continue
+            if src_name not in sources and src_name != "provider_catalog":
+                sources.append(src_name)
+                source_states[src_name] = "preserved_external_id"
+
     provenance: dict[str, object] = {"sources": sources}
+    if source_states:
+        provenance["source_states"] = source_states
 
     return detail, provenance, conflicts
 
