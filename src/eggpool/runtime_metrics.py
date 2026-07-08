@@ -120,6 +120,9 @@ class RuntimeMetricsService:
         dispatch_span_recorder: Any | None = None,  # noqa: ANN401
         model_info: Any | None = None,  # noqa: ANN401
         dashboard_telemetry: Any | None = None,  # noqa: ANN401
+        stream_diagnostics: Any | None = None,  # noqa: ANN401
+        finalization_retry_queue: Any | None = None,  # noqa: ANN401
+        routing_trace_guard: Any | None = None,  # noqa: ANN401
     ) -> None:
         self._config = config
         self._db = db
@@ -138,6 +141,9 @@ class RuntimeMetricsService:
         self._dispatch_span_recorder = dispatch_span_recorder
         self._model_info = model_info
         self._dashboard_telemetry = dashboard_telemetry
+        self._stream_diagnostics = stream_diagnostics
+        self._finalization_retry_queue = finalization_retry_queue
+        self._routing_trace_guard = routing_trace_guard
 
     async def snapshot(self) -> dict[str, Any]:
         """Return a best-effort runtime snapshot.
@@ -210,6 +216,14 @@ class RuntimeMetricsService:
         result["model_info"] = await self._snapshot_model_info(probe_errors)
 
         result["dashboard_telemetry"] = self._snapshot_dashboard_telemetry(probe_errors)
+
+        result["stream_diagnostics"] = self._snapshot_stream_diagnostics(probe_errors)
+
+        result["finalization_retry_queue"] = self._snapshot_finalization_retry_queue(
+            probe_errors
+        )
+
+        result["routing_trace_guard"] = self._snapshot_routing_trace_guard(probe_errors)
 
         return result
 
@@ -873,6 +887,60 @@ class RuntimeMetricsService:
                 result["cache_stats"] = cache_stats()
 
         return result
+
+    def _snapshot_stream_diagnostics(self, probe_errors: list[str]) -> dict[str, Any]:
+        """Best-effort snapshot of the stream outcome diagnostics service.
+
+        The service is process-local; tests can override the dependency
+        on :class:`RuntimeMetricsService` via the ``stream_diagnostics``
+        constructor argument.  When the dependency is missing (e.g.
+        older test harnesses) the section returns ``enabled: False`` so
+        consumers can rely on the key being present.
+        """
+        if self._stream_diagnostics is None:
+            return {"enabled": False}
+        try:
+            return {"enabled": True, **self._stream_diagnostics.snapshot()}
+        except Exception as exc:
+            _append_probe_error(
+                probe_errors, f"Stream diagnostics snapshot failed: {exc}"
+            )
+            return {"enabled": True, "error": str(exc)}
+
+    def _snapshot_finalization_retry_queue(
+        self, probe_errors: list[str]
+    ) -> dict[str, Any]:
+        """Best-effort snapshot of the bounded finalization retry queue.
+
+        Returns ``enabled: False`` when no retry queue is wired (older
+        test harnesses or downstream callers without the queue).
+        """
+        if self._finalization_retry_queue is None:
+            return {"enabled": False}
+        try:
+            return {
+                "enabled": True,
+                **self._finalization_retry_queue.snapshot(),
+            }
+        except Exception as exc:
+            _append_probe_error(
+                probe_errors,
+                f"Finalization retry queue snapshot failed: {exc}",
+            )
+            return {"enabled": True, "error": str(exc)}
+
+    def _snapshot_routing_trace_guard(self, probe_errors: list[str]) -> dict[str, Any]:
+        """Best-effort snapshot of the routing trace write guardrail."""
+        if self._routing_trace_guard is None:
+            return {"enabled": False}
+        try:
+            return {"enabled": True, **self._routing_trace_guard.snapshot()}
+        except Exception as exc:
+            _append_probe_error(
+                probe_errors,
+                f"Routing trace guard snapshot failed: {exc}",
+            )
+            return {"enabled": True, "error": str(exc)}
 
 
 # -- Helpers ----------------------------------------------------------------

@@ -73,6 +73,11 @@ local_quota_mode = "score_only"
 # mode = "sampled"   # sampled (default) | all | off
 # sample_rate = 0.05
 # include_score_components = false
+# Skip trace writes when the rolling SQLite lock-wait p95 exceeds this
+# many milliseconds. Traces are diagnostic and never required for
+# correctness, so dropping them under pressure protects finalizers.
+# Set to 0 to disable the guardrail.
+# skip_above_lock_wait_p95_ms = 200.0
 
 [limits]
 five_hour_microdollars = 12000000

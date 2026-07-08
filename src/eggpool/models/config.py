@@ -171,6 +171,16 @@ class RoutingTraceConfig(BaseModel):
         default=False,
         description="Include score_components_json in persisted traces (larger rows).",
     )
+    skip_above_lock_wait_p95_ms: float = Field(
+        default=200.0,
+        ge=0.0,
+        description=(
+            "When the SQLite lock-wait p95 (rolling) exceeds this value, "
+            "routing trace writes are skipped to avoid amplifying "
+            "contention. Traces are diagnostic; their absence must never "
+            "fail dispatch. Set to 0 to disable the guardrail."
+        ),
+    )
 
 
 class RoutingConfig(BaseModel):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 from contextlib import suppress
 from contextvars import ContextVar
 
@@ -218,6 +219,8 @@ async def test_concurrent_readers_during_write() -> None:
         db1._last_operation_error_class = None  # type: ignore[reportPrivateUsage]
         db1._cumulative_lock_wait_s = 0.0  # type: ignore[reportPrivateUsage]
         db1._max_lock_wait_s = 0.0  # type: ignore[reportPrivateUsage]
+        db1._lock_wait_count = 0  # type: ignore[reportPrivateUsage]
+        db1._lock_wait_samples_s = collections.deque(maxlen=512)  # type: ignore[reportPrivateUsage]
         db2 = Database.__new__(Database)
         db2._conn = conn2  # type: ignore[reportPrivateUsage]
         db2._path = db_uri  # type: ignore[reportPrivateUsage]
@@ -235,6 +238,8 @@ async def test_concurrent_readers_during_write() -> None:
         db2._last_operation_error_class = None  # type: ignore[reportPrivateUsage]
         db2._cumulative_lock_wait_s = 0.0  # type: ignore[reportPrivateUsage]
         db2._max_lock_wait_s = 0.0  # type: ignore[reportPrivateUsage]
+        db2._lock_wait_count = 0  # type: ignore[reportPrivateUsage]
+        db2._lock_wait_samples_s = collections.deque(maxlen=512)  # type: ignore[reportPrivateUsage]
 
         await _run_migrations(db1)
 

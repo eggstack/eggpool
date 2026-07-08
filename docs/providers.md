@@ -419,3 +419,99 @@ This provider catalog intentionally excludes:
 - Provider SDKs with hidden transport semantics
 
 These require adapter support that EggPool does not currently implement.
+
+## High-Concurrency HTTP Client Profiles
+
+The default provider HTTPX limits (`max_connections=100`,
+`max_keepalive=20`, `read_timeout_s=300`, `pool_timeout_s=30`) are
+calibrated for low-power SBC/Raspberry Pi deployments. The runtime
+settings split into three independent axes that are easy to confuse:
+
+| Setting | Scope | Effect |
+|---------|-------|--------|
+| `server.threads` | Granian worker threads inside one process | CPU-bound request handling parallelism |
+| `database.worker_threads` | Read-only stats DB connections | Dashboard / metrics concurrency |
+| `<provider>.max_connections` | HTTPX connection pool per provider | Outbound HTTP connection parallelism |
+
+Increasing `server.threads` does **not** raise HTTPX connection limits,
+and increasing `max_connections` does not raise SQLite worker threads.
+Each axis must be tuned for its bottleneck.
+
+### Low-power default
+
+Suitable for Raspberry Pi 4 / 5 or any single-board computer. Matches
+the shipped defaults and minimises RSS, file descriptors, and TLS
+state:
+
+```toml
+[server]
+threads = 2
+
+[database]
+worker_threads = 2
+
+[providers.opencode-go]
+max_connections = 100
+max_keepalive = 20
+connect_timeout_s = 5
+read_timeout_s = 300
+write_timeout_s = 30
+pool_timeout_s = 30
+```
+
+### High-concurrency coding-agent streaming
+
+For OpenCode / Claude Code / Aider-style agents that keep many long
+SSE streams open at once. Doubles the HTTPX pool size, raises the
+keepalive window so upstreams reuse TLS sessions, and lengthens the
+read timeout to absorb slow model first-token latencies:
+
+```toml
+[server]
+threads = 2
+
+[database]
+worker_threads = 2
+
+[providers.opencode-go]
+max_connections = 256
+max_keepalive = 128
+connect_timeout_s = 5
+read_timeout_s = 900
+write_timeout_s = 30
+pool_timeout_s = 60
+```
+
+Keep `server.threads` low — Granian already serializes the asyncio
+event loop, so adding threads does not improve HTTPX throughput. The
+real lever is `max_connections`.
+
+### Diagnostic low-noise mode
+
+When reproducing an incident, drop the trace noise floor so the only
+writes hitting SQLite are correctness-critical:
+
+```toml
+[routing.trace]
+mode = "off"
+
+[providers.opencode-go]
+read_timeout_s = 1800
+```
+
+### Tuning warnings
+
+- **Memory:** each `max_connections` slot keeps an open TLS state on
+  warm idle. Going from 100 → 256 doubles the long-lived TLS object
+  count. On a Raspberry Pi 4 with 4 GB RAM, do not exceed 200
+  connections per provider.
+- **File descriptors:** each connection holds one socket. Bump the
+  process `nofile` ulimit to at least `2 × max_connections` plus headroom
+  for SQLite, the ASGI server, and DNS.
+- **Provider throttling:** some upstreams rate-limit aggressively when
+  they see bursty TLS handshakes. Raise `keepalive_timeout_s` to keep
+  the pool warm rather than relying on short-lived connections.
+- **Worker count:** Granian runs with `workers=1` by design. Adding
+  workers creates multiple EggPool processes that each open their own
+  HTTPX pool, which multiplies the connection budget and can push you
+  past upstream per-IP rate limits.

@@ -81,6 +81,15 @@ from eggpool.request.finalizer import (
     RequestFinalizer,
 )
 from eggpool.request.limits import estimate_reservation_tokens
+from eggpool.request.stream_diagnostics import (
+    STREAM_OUTCOME_CLIENT_CANCELLED,
+    STREAM_OUTCOME_COMPLETED,
+    STREAM_OUTCOME_FINALIZER_FAILED,
+    STREAM_OUTCOME_FINALIZER_TIMEOUT,
+    STREAM_OUTCOME_UPSTREAM_MIDSTREAM_ERROR,
+    StreamDiagnostics,
+    get_stream_diagnostics,
+)
 from eggpool.retry.classification import RetryCategory, RetryClassifier
 from eggpool.routing.router import RoutingDecisionTrace, RoutingExclusion
 from eggpool.runtime_dispatch import (
@@ -540,6 +549,9 @@ class RequestCoordinator:
         cache_config: Any | None = None,  # noqa: ANN401
         compression_tuning_registry: Any | None = None,  # noqa: ANN401
         compression_policy: Any | None = None,  # noqa: ANN401
+        stream_diagnostics: StreamDiagnostics | None = None,
+        finalization_retry_queue: Any | None = None,  # noqa: ANN401
+        routing_trace_guard: Any | None = None,  # noqa: ANN401
     ) -> None:
         self._registry = registry
         self._catalog = catalog
@@ -578,6 +590,15 @@ class RequestCoordinator:
         self._cache_config = cache_config
         self._compression_tuning_registry = compression_tuning_registry
         self._compression_policy = compression_policy
+        self._stream_diagnostics = stream_diagnostics or get_stream_diagnostics()
+        self._finalization_retry_queue = finalization_retry_queue
+        if routing_trace_guard is None:
+            from eggpool.request.routing_trace_guard import (
+                get_routing_trace_guard,
+            )
+
+            routing_trace_guard = get_routing_trace_guard()
+        self._routing_trace_guard = routing_trace_guard
 
         # Build the attempt finalizer with all dependencies
         self._attempt_finalizer = AttemptFinalizer(
@@ -601,6 +622,55 @@ class RequestCoordinator:
             persist_error_detail=persist_error_detail,
             metrics_coalescer=metrics_coalescer,
         )
+
+    async def _enqueue_finalization_retry(
+        self,
+        selected: SelectedAttempt,
+        context: ProxyRequestContext,
+        *,
+        outcome: str,
+    ) -> bool:
+        """Queue a finalization retry for *selected* when the immediate
+        shielded finalizer could not complete inside its 10s timeout.
+
+        Returns ``True`` when the entry was enqueued, ``False`` when no
+        retry queue is wired or the entry was rejected (overflow,
+        duplicate, or stale age).  Best-effort: never raises.
+        """
+        if self._finalization_retry_queue is None:
+            return False
+        try:
+            from eggpool.request.finalization_queue import FinalizationRetryEntry
+        except Exception:
+            return False
+        try:
+            entry = FinalizationRetryEntry(
+                enqueue_token=(
+                    f"{selected.db_request_id}:{selected.attempt_id}:{outcome}"
+                ),
+                request_id=context.request_id,
+                db_request_id=selected.db_request_id,
+                attempt_id=selected.attempt_id,
+                reservation_id=selected.reservation_id,
+                account_id=selected.account_id,
+                account_name=selected.account_name,
+                api_key=selected.api_key,
+                model_id=selected.model_id,
+                estimated_tokens=selected.estimated_tokens,
+                estimated_microdollars=selected.estimated_microdollars,
+                attempt_number=selected.attempt_number,
+                provider_id=selected.provider_id,
+                protocol=context.upstream_protocol,
+                outcome=outcome,
+            )
+            return await self._finalization_retry_queue.enqueue(entry)
+        except Exception:
+            logger.debug(
+                "Failed to enqueue finalization retry for %s",
+                context.request_id,
+                exc_info=True,
+            )
+            return False
 
     def _get_client(
         self,
@@ -1616,43 +1686,50 @@ class RequestCoordinator:
                     score_components=score_components,
                 )
         if trace is not None:
-            with _maybe_span(self._dispatch_span_recorder, SPAN_ROUTING_TRACE_WRITE):
-                # The trace write needs its own transaction because it
-                # runs OUTSIDE ``_select_lock`` (and therefore outside
-                # the request/reservation/attempt transaction).  Trace
-                # writes are best-effort observability data; a write
-                # failure must never fail the dispatch.
-                try:
-                    async with self._db.transaction():
-                        await self._routing_decision_repo.create(
-                            request_id=int(db_request_id),
-                            attempt_number=attempt_number,
-                            model_id=trace.model_id,
-                            provider_id=trace.provider_id,
-                            protocol=trace.protocol,
-                            selected_account_id=trace.selected_account_id,
-                            selected_account_name=trace.selected_account_name,
-                            selected_tier=trace.selected_tier,
-                            selected_score=trace.selected_score,
-                            eligible_count=trace.eligible_count,
-                            scored_count=trace.scored_count,
-                            attempted_excluded_count=trace.attempted_excluded_count,
-                            top_score=trace.top_score,
-                            top_score_account_name=trace.top_score_account_name,
-                            exclude_reasons_json=trace.to_exclude_reasons_json(),
-                            score_components_json=(
-                                trace.to_score_components_json()
-                                if trace.score_components is not None
-                                else None
-                            ),
+            skip_trace, skip_reason = self._routing_trace_guard.should_skip(self._db)
+            if skip_trace:
+                self._routing_trace_guard.record_skip(reason=skip_reason)
+            else:
+                with _maybe_span(
+                    self._dispatch_span_recorder, SPAN_ROUTING_TRACE_WRITE
+                ):
+                    # The trace write needs its own transaction because it
+                    # runs OUTSIDE ``_select_lock`` (and therefore outside
+                    # the request/reservation/attempt transaction).  Trace
+                    # writes are best-effort observability data; a write
+                    # failure must never fail the dispatch.
+                    try:
+                        async with self._db.transaction():
+                            await self._routing_decision_repo.create(
+                                request_id=int(db_request_id),
+                                attempt_number=attempt_number,
+                                model_id=trace.model_id,
+                                provider_id=trace.provider_id,
+                                protocol=trace.protocol,
+                                selected_account_id=trace.selected_account_id,
+                                selected_account_name=trace.selected_account_name,
+                                selected_tier=trace.selected_tier,
+                                selected_score=trace.selected_score,
+                                eligible_count=trace.eligible_count,
+                                scored_count=trace.scored_count,
+                                attempted_excluded_count=trace.attempted_excluded_count,
+                                top_score=trace.top_score,
+                                top_score_account_name=trace.top_score_account_name,
+                                exclude_reasons_json=trace.to_exclude_reasons_json(),
+                                score_components_json=(
+                                    trace.to_score_components_json()
+                                    if trace.score_components is not None
+                                    else None
+                                ),
+                            )
+                        self._routing_trace_guard.record_written()
+                    except Exception:  # noqa: BLE001
+                        # Trace writes are best-effort. Log and continue.
+                        logger.debug(
+                            "routing_trace_write_failed",
+                            extra={"proxy_request_id": context.request_id},
+                            exc_info=True,
                         )
-                except Exception:  # noqa: BLE001
-                    # Trace writes are best-effort. Log and continue.
-                    logger.debug(
-                        "routing_trace_write_failed",
-                        extra={"proxy_request_id": context.request_id},
-                        exc_info=True,
-                    )
 
         return SelectedAttempt(
             proxy_request_id=context.request_id,
@@ -1712,6 +1789,18 @@ class RequestCoordinator:
                     resolved_compression_policy=context.resolved_compression_policy,
                     synthetic_cache_result=context.synthetic_cache_result,
                 ),
+            )
+            self._stream_diagnostics.record_outcome(
+                STREAM_OUTCOME_CLIENT_CANCELLED,
+                proxy_request_id=context.request_id,
+                db_request_id=selected.db_request_id,
+                provider_id=selected.provider_id,
+                account_name=selected.account_name,
+                model_id=selected.model_id,
+                protocol=context.upstream_protocol,
+                elapsed_ms=elapsed_ms,
+                attempt=selected.attempt_number,
+                exception_class="CancelledError",
             )
             raise
 
@@ -1780,6 +1869,54 @@ class RequestCoordinator:
                 f"Connection failed: {err}",
                 status_code=None,
                 error_class="ConnectError",
+            ) from err
+        except httpx.PoolTimeout as err:
+            if response is not None:
+                await response.aclose()
+            raise _RetryableUpstreamError(
+                f"HTTPX pool exhausted: {err}",
+                status_code=None,
+                error_class="PoolTimeout",
+            ) from err
+        except httpx.ReadTimeout as err:
+            if response is not None:
+                await response.aclose()
+            raise _RetryableUpstreamError(
+                f"Read timeout: {err}",
+                status_code=504,
+                error_class="ReadTimeout",
+            ) from err
+        except httpx.ConnectTimeout as err:
+            if response is not None:
+                await response.aclose()
+            raise _RetryableUpstreamError(
+                f"Connect timeout: {err}",
+                status_code=504,
+                error_class="ConnectTimeout",
+            ) from err
+        except httpx.WriteTimeout as err:
+            if response is not None:
+                await response.aclose()
+            raise _RetryableUpstreamError(
+                f"Write timeout: {err}",
+                status_code=504,
+                error_class="WriteTimeout",
+            ) from err
+        except httpx.RemoteProtocolError as err:
+            if response is not None:
+                await response.aclose()
+            raise _RetryableUpstreamError(
+                f"Upstream protocol error: {err}",
+                status_code=502,
+                error_class="RemoteProtocolError",
+            ) from err
+        except (httpx.ReadError, httpx.WriteError) as err:
+            if response is not None:
+                await response.aclose()
+            raise _RetryableUpstreamError(
+                f"HTTP transport error: {err}",
+                status_code=None,
+                error_class=type(err).__name__,
             ) from err
         except httpx.TimeoutException as err:
             if response is not None:
@@ -2082,6 +2219,42 @@ class RequestCoordinator:
                     status_code=None,
                     error_class="ConnectError",
                 ) from err
+            except httpx.PoolTimeout as err:
+                raise _RetryableUpstreamError(
+                    f"HTTPX pool exhausted: {err}",
+                    status_code=None,
+                    error_class="PoolTimeout",
+                ) from err
+            except httpx.ReadTimeout as err:
+                raise _RetryableUpstreamError(
+                    f"Read timeout: {err}",
+                    status_code=504,
+                    error_class="ReadTimeout",
+                ) from err
+            except httpx.ConnectTimeout as err:
+                raise _RetryableUpstreamError(
+                    f"Connect timeout: {err}",
+                    status_code=504,
+                    error_class="ConnectTimeout",
+                ) from err
+            except httpx.WriteTimeout as err:
+                raise _RetryableUpstreamError(
+                    f"Write timeout: {err}",
+                    status_code=504,
+                    error_class="WriteTimeout",
+                ) from err
+            except httpx.RemoteProtocolError as err:
+                raise _RetryableUpstreamError(
+                    f"Upstream protocol error: {err}",
+                    status_code=502,
+                    error_class="RemoteProtocolError",
+                ) from err
+            except (httpx.ReadError, httpx.WriteError) as err:
+                raise _RetryableUpstreamError(
+                    f"HTTP transport error: {err}",
+                    status_code=None,
+                    error_class=type(err).__name__,
+                ) from err
             except httpx.TimeoutException as err:
                 raise _RetryableUpstreamError(
                     f"Timeout: {err}",
@@ -2347,6 +2520,23 @@ class RequestCoordinator:
                         reasons=list(_TRANSIENT_BACKOFF_REASONS),
                     )
 
+                self._stream_diagnostics.record_outcome(
+                    STREAM_OUTCOME_COMPLETED,
+                    proxy_request_id=context.request_id,
+                    db_request_id=selected.db_request_id,
+                    provider_id=selected.provider_id,
+                    account_name=selected.account_name,
+                    model_id=selected.model_id,
+                    protocol=context.upstream_protocol,
+                    elapsed_ms=upstream_latency_total,
+                    bytes_emitted=bytes_emitted,
+                    first_byte_ms=(int(first_byte_ms) if first_byte_ms > 0 else None),
+                    upstream_connect_ms=upstream_connect_ms_value,
+                    upstream_header_ms=self._upstream_header_ms(context),
+                    upstream_read_ms=upstream_read_ms_value,
+                    attempt=selected.attempt_number,
+                )
+
             except asyncio.CancelledError:
                 # Client cancellation - finalize but don't penalize health.
                 # Skip if _execute_upstream already finalized (the CancelledError
@@ -2443,10 +2633,75 @@ class RequestCoordinator:
                             context.request_id,
                             selected.db_request_id,
                         )
+                        self._stream_diagnostics.record_outcome(
+                            STREAM_OUTCOME_FINALIZER_TIMEOUT,
+                            proxy_request_id=context.request_id,
+                            db_request_id=selected.db_request_id,
+                            provider_id=selected.provider_id,
+                            account_name=selected.account_name,
+                            model_id=selected.model_id,
+                            protocol=context.upstream_protocol,
+                            elapsed_ms=cancel_latency_total,
+                            bytes_emitted=bytes_emitted,
+                            first_byte_ms=(
+                                int(first_byte_ms) if first_byte_ms > 0 else None
+                            ),
+                            upstream_connect_ms=cancel_connect_ms_value,
+                            upstream_header_ms=self._upstream_header_ms(context),
+                            upstream_read_ms=cancel_read_ms_value,
+                            attempt=selected.attempt_number,
+                        )
+                        await self._enqueue_finalization_retry(
+                            selected,
+                            context,
+                            outcome="CLIENT_CANCELLED",
+                        )
                     except Exception:
                         logger.exception(
                             "Finalizer failed for cancelled stream %s",
                             context.request_id,
+                        )
+                        self._stream_diagnostics.record_outcome(
+                            STREAM_OUTCOME_FINALIZER_FAILED,
+                            proxy_request_id=context.request_id,
+                            db_request_id=selected.db_request_id,
+                            provider_id=selected.provider_id,
+                            account_name=selected.account_name,
+                            model_id=selected.model_id,
+                            protocol=context.upstream_protocol,
+                            elapsed_ms=cancel_latency_total,
+                            bytes_emitted=bytes_emitted,
+                            first_byte_ms=(
+                                int(first_byte_ms) if first_byte_ms > 0 else None
+                            ),
+                            upstream_connect_ms=cancel_connect_ms_value,
+                            upstream_header_ms=self._upstream_header_ms(context),
+                            upstream_read_ms=cancel_read_ms_value,
+                            attempt=selected.attempt_number,
+                        )
+                        await self._enqueue_finalization_retry(
+                            selected,
+                            context,
+                            outcome="CLIENT_CANCELLED",
+                        )
+                    else:
+                        self._stream_diagnostics.record_outcome(
+                            STREAM_OUTCOME_CLIENT_CANCELLED,
+                            proxy_request_id=context.request_id,
+                            db_request_id=selected.db_request_id,
+                            provider_id=selected.provider_id,
+                            account_name=selected.account_name,
+                            model_id=selected.model_id,
+                            protocol=context.upstream_protocol,
+                            elapsed_ms=cancel_latency_total,
+                            bytes_emitted=bytes_emitted,
+                            first_byte_ms=(
+                                int(first_byte_ms) if first_byte_ms > 0 else None
+                            ),
+                            upstream_connect_ms=cancel_connect_ms_value,
+                            upstream_header_ms=self._upstream_header_ms(context),
+                            upstream_read_ms=cancel_read_ms_value,
+                            attempt=selected.attempt_number,
                         )
                 raise
             except Exception as exc:
@@ -2505,6 +2760,23 @@ class RequestCoordinator:
                         resolved_compression_policy=context.resolved_compression_policy,
                         synthetic_cache_result=context.synthetic_cache_result,
                     ),
+                )
+                self._stream_diagnostics.record_outcome(
+                    STREAM_OUTCOME_UPSTREAM_MIDSTREAM_ERROR,
+                    proxy_request_id=context.request_id,
+                    db_request_id=selected.db_request_id,
+                    provider_id=selected.provider_id,
+                    account_name=selected.account_name,
+                    model_id=selected.model_id,
+                    protocol=context.upstream_protocol,
+                    elapsed_ms=mid_latency_total,
+                    bytes_emitted=bytes_emitted,
+                    first_byte_ms=(int(first_byte_ms) if first_byte_ms > 0 else None),
+                    upstream_connect_ms=mid_connect_ms_value,
+                    upstream_header_ms=self._upstream_header_ms(context),
+                    upstream_read_ms=mid_read_ms_value,
+                    attempt=selected.attempt_number,
+                    exception_class=type(exc).__name__,
                 )
                 raise
             finally:
@@ -2609,6 +2881,19 @@ class RequestCoordinator:
         if context.upstream_headers_ms is None:
             return None
         return max(0, observed_elapsed_ms - context.upstream_headers_ms)
+
+    @staticmethod
+    def _upstream_header_ms(context: ProxyRequestContext) -> int | None:
+        """Return elapsed time to receive upstream response headers.
+
+        Returns ``None`` when the upstream response had not finished
+        receiving headers when the context was last updated; the
+        coordinator uses this only for diagnostic instrumentation.
+        """
+        headers_ms = getattr(context, "upstream_headers_ms", None)
+        if headers_ms is None:
+            return None
+        return max(0, int(headers_ms))
 
     @staticmethod
     def _coordinator_overhead_ms(

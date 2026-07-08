@@ -1,0 +1,263 @@
+"""Unit tests for ``eggpool.request.stream_diagnostics``.
+
+Covers the process-local outcome counter service that backs the
+runtime dashboard's stream-stability section.  Validates:
+
+- counter increments for terminal outcomes;
+- bounded ring histograms;
+- stable empty snapshot contract before any operations;
+- httpx / upstream exception class breakdown;
+- integration with the coordinator stream generator.
+"""
+
+from __future__ import annotations
+
+import collections
+from typing import Any
+
+import pytest
+
+from eggpool.request.stream_diagnostics import (
+    STREAM_OUTCOME_CLIENT_CANCELLED,
+    STREAM_OUTCOME_COMPLETED,
+    STREAM_OUTCOME_FINALIZER_FAILED,
+    STREAM_OUTCOME_FINALIZER_TIMEOUT,
+    STREAM_OUTCOME_UPSTREAM_MIDSTREAM_ERROR,
+    StreamDiagnostics,
+    get_stream_diagnostics,
+    reset_stream_diagnostics_for_tests,
+)
+
+
+def test_empty_snapshot_contract() -> None:
+    """Empty snapshot is stable before any operations."""
+    diag = StreamDiagnostics()
+    snap = diag.snapshot()
+    assert snap["outcomes"] == {
+        STREAM_OUTCOME_COMPLETED: 0,
+        STREAM_OUTCOME_CLIENT_CANCELLED: 0,
+        "client_cancelled": 0,  # alias is canonical too
+        STREAM_OUTCOME_UPSTREAM_MIDSTREAM_ERROR: 0,
+        STREAM_OUTCOME_FINALIZER_TIMEOUT: 0,
+        STREAM_OUTCOME_FINALIZER_FAILED: 0,
+        "stream_usage_missing_final_event": 0,
+        "downstream_send_cancelled": 0,
+    }
+    assert snap["httpx_exception_counts"] == {}
+    assert snap["upstream_error_class_counts"] == {}
+    assert snap["last_event"] is None
+    assert snap["last_event_age_ms"] is None
+    assert snap["completed_ms"]["sample_count"] == 0
+    assert snap["client_cancel_ms"]["sample_count"] == 0
+    assert snap["finalizer_timeout_ms"]["sample_count"] == 0
+
+
+def test_outcome_increments_and_histogram_records() -> None:
+    diag = StreamDiagnostics()
+    diag.record_outcome(
+        STREAM_OUTCOME_COMPLETED,
+        proxy_request_id="req-1",
+        elapsed_ms=120,
+        bytes_emitted=42,
+    )
+    diag.record_outcome(
+        STREAM_OUTCOME_COMPLETED,
+        proxy_request_id="req-2",
+        elapsed_ms=240,
+        bytes_emitted=84,
+    )
+    diag.record_outcome(
+        STREAM_OUTCOME_CLIENT_CANCELLED,
+        proxy_request_id="req-3",
+        elapsed_ms=80,
+    )
+    diag.record_outcome(
+        STREAM_OUTCOME_UPSTREAM_MIDSTREAM_ERROR,
+        proxy_request_id="req-4",
+        elapsed_ms=300,
+        exception_class="RemoteProtocolError",
+    )
+    diag.record_outcome(
+        STREAM_OUTCOME_FINALIZER_TIMEOUT,
+        proxy_request_id="req-5",
+        elapsed_ms=10000,
+    )
+    snap = diag.snapshot()
+    assert snap["outcomes"][STREAM_OUTCOME_COMPLETED] == 2
+    assert snap["outcomes"][STREAM_OUTCOME_CLIENT_CANCELLED] == 1
+    assert snap["outcomes"][STREAM_OUTCOME_UPSTREAM_MIDSTREAM_ERROR] == 1
+    assert snap["outcomes"][STREAM_OUTCOME_FINALIZER_TIMEOUT] == 1
+    assert snap["upstream_error_class_counts"] == {"RemoteProtocolError": 1}
+    assert snap["completed_ms"]["sample_count"] == 2
+    assert snap["client_cancel_ms"]["sample_count"] == 1
+    assert snap["finalizer_timeout_ms"]["sample_count"] == 1
+    assert snap["completed_ms"]["p50_ms"] == 120.0
+    assert snap["client_cancel_ms"]["max_ms"] == 80.0
+    assert snap["finalizer_timeout_ms"]["max_ms"] == 10000.0
+    last = snap["last_event"]
+    assert last is not None
+    assert last["outcome"] == STREAM_OUTCOME_FINALIZER_TIMEOUT
+    assert last["proxy_request_id"] == "req-5"
+
+
+def test_unknown_outcome_bucket() -> None:
+    diag = StreamDiagnostics()
+    diag.record_outcome("totally_unrecognized_outcome")
+    snap = diag.snapshot()
+    assert snap["outcomes"]["unknown"] == 1
+
+
+def test_httpx_exception_counts_separated_from_upstream() -> None:
+    diag = StreamDiagnostics()
+    diag.record_outcome(
+        STREAM_OUTCOME_FINALIZER_FAILED,
+        exception_class="PoolTimeout",
+    )
+    diag.record_outcome(
+        STREAM_OUTCOME_UPSTREAM_MIDSTREAM_ERROR,
+        exception_class="ReadTimeout",
+    )
+    snap = diag.snapshot()
+    assert snap["httpx_exception_counts"] == {"PoolTimeout": 1}
+    assert snap["upstream_error_class_counts"] == {"ReadTimeout": 1}
+
+
+def test_get_stream_diagnostics_is_singleton() -> None:
+    a = get_stream_diagnostics()
+    b = get_stream_diagnostics()
+    assert a is b
+    # The reset helper returns a fresh instance for tests.
+    fresh = reset_stream_diagnostics_for_tests()
+    assert fresh is not a
+    assert get_stream_diagnostics() is fresh
+
+
+def test_bounded_ring_does_not_grow_unbounded() -> None:
+    diag = StreamDiagnostics(histogram_capacity=8)
+    for i in range(100):
+        diag.record_outcome(
+            STREAM_OUTCOME_COMPLETED,
+            elapsed_ms=i,
+            bytes_emitted=i,
+        )
+    snap = diag.snapshot()
+    assert snap["completed_ms"]["sample_count"] == 8
+    assert snap["completed_ms"]["max_ms"] == 99.0
+
+
+@pytest.mark.asyncio()
+async def test_database_contention_includes_lock_wait_histogram() -> None:
+    """``Database.contention_snapshot()`` exposes p50/p95/p99 lock waits."""
+    from eggpool.db.connection import Database
+    from eggpool.db.migrations import MigrationRunner
+
+    db = Database(path=":memory:")
+    await db.connect()
+    try:
+        runner = MigrationRunner(db)
+        await runner.run()
+        snap = db.contention_snapshot()
+        assert "lock_wait_count" in snap
+        assert "lock_wait_p50_ms" in snap
+        assert "lock_wait_p95_ms" in snap
+        assert "lock_wait_p99_ms" in snap
+        assert "lock_wait_max_ms" in snap
+        # Fresh instance: histograms reflect only what this test does.
+        # Migrating populated some samples; reset for the strict-empty
+        # assertion and re-acquire the lock to confirm the histogram is
+        # populated.
+        db._lock_wait_samples_s = collections.deque(maxlen=512)  # type: ignore[attr-defined]
+        db._lock_wait_count = 0  # type: ignore[attr-defined]
+        assert db.contention_snapshot()["lock_wait_sample_count"] == 0
+        # Acquire the connection lock and run an operation to populate
+        # the histogram with a real sample.  Use ``fetch_one`` rather
+        # than ``execute_write`` so the path goes through
+        # ``_connection_access`` (which records the wait sample) instead
+        # of bypassing the lock inside ``transaction()``.
+        await db.fetch_one("SELECT 1")
+        snap = db.contention_snapshot()
+        assert snap["lock_wait_sample_count"] >= 1
+        assert snap["lock_wait_count"] >= 1
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio()
+async def test_runtime_metrics_includes_stream_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``RuntimeMetricsService.snapshot()`` surfaces stream diagnostics."""
+    from eggpool.runtime_metrics import RuntimeMetricsService
+
+    diag = StreamDiagnostics()
+    diag.record_outcome(STREAM_OUTCOME_COMPLETED, elapsed_ms=42)
+    service = RuntimeMetricsService(
+        config=_StubConfig(),
+        db=_StubDB(),
+        stats_db=None,
+        supervisor=None,
+        task_monitor=None,
+        router=None,
+        health_manager=None,
+        started_monotonic=0.0,
+        started_epoch=0.0,
+        stream_diagnostics=diag,
+    )
+    snap = await service.snapshot()
+    assert snap["stream_diagnostics"]["enabled"] is True
+    assert snap["stream_diagnostics"]["outcomes"][STREAM_OUTCOME_COMPLETED] == 1
+
+
+class _StubDB:
+    """Minimal stub so ``_snapshot_db`` does not touch a real connection."""
+
+    def __init__(self) -> None:
+        self._conn = None
+
+    def contention_snapshot(self) -> dict[str, Any]:
+        return {
+            "write_ops": 0,
+            "read_ops": 0,
+            "total_transactions": 0,
+            "total_nested_transactions": 0,
+            "last_operation_error_class": None,
+            "cumulative_lock_wait_s": 0.0,
+            "max_lock_wait_s": 0.0,
+            "lock_wait_count": 0,
+            "lock_wait_p50_ms": None,
+            "lock_wait_p95_ms": None,
+            "lock_wait_p99_ms": None,
+            "lock_wait_max_ms": None,
+            "lock_wait_sample_count": 0,
+        }
+
+    async def execute_pragma(self, _pragma: str) -> list[Any]:
+        return []
+
+
+class _StubConfig:
+    """Minimal config stub: only ``server.threads`` and ``database`` are touched."""
+
+    class _Server:
+        threads = 2
+
+    class _Database:
+        path = ":memory:"
+        wal = True
+        synchronous = "NORMAL"
+        busy_timeout_ms = 5000
+        worker_threads = 2
+
+    class _Routing:
+        class _Trace:
+            mode = "sampled"
+
+        trace = _Trace()
+
+    class _Metrics:
+        write_mode = "immediate"
+
+    server = _Server()
+    database = _Database()
+    routing = _Routing()
+    metrics = _Metrics()

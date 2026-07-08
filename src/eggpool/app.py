@@ -66,6 +66,7 @@ from eggpool.providers.client_pool import ProviderClientPool
 from eggpool.providers.dns_cache import DnsNetworkBackend
 from eggpool.providers.outbound import OutboundClientManager, default_network_backend
 from eggpool.request.coordinator import RequestCoordinator
+from eggpool.request.stream_diagnostics import get_stream_diagnostics
 from eggpool.routing.config import routing_stale_after_s
 from eggpool.routing.router import Router
 from eggpool.runtime_dispatch import (
@@ -381,6 +382,7 @@ async def _finalize_stale_requests_once(
     # keep the in-memory reservation total consistent with the
     # released reservations in SQLite.
     seen_accounts: set[str] = set()
+    per_account_reconciled: dict[str, dict[str, int]] = {}
     for row in transitioned:
         account_name = row.get("account_name")
         if not account_name:
@@ -389,6 +391,11 @@ async def _finalize_stale_requests_once(
             seen_accounts.add(account_name)
             # Decrement active request count (idempotent if already 0)
             await router.decrement_active_request_count(account_name)
+            per_account_reconciled[account_name] = {
+                "requests": 0,
+                "tokens": 0,
+                "microdollars": 0,
+            }
 
         # Remove in-memory reservation tracking.  The exact reserved
         # amount must be removed so a future cost accounting run does
@@ -404,11 +411,29 @@ async def _finalize_stale_requests_once(
                 requests=1,
                 tokens=int(leaked_tokens),
             )
+        bucket = per_account_reconciled.setdefault(
+            account_name,
+            {"requests": 0, "tokens": 0, "microdollars": 0},
+        )
+        bucket["requests"] += 1
+        bucket["tokens"] += int(leaked_tokens)
+        bucket["microdollars"] += int(reserved)
 
     logger.info(
-        "Stale request finalizer: cleaned up %d leaked requests",
+        "Stale request finalizer: cleaned up %d leaked requests across %d accounts",
         len(transitioned),
+        len(seen_accounts),
     )
+    if per_account_reconciled:
+        for acct, bucket in sorted(per_account_reconciled.items()):
+            logger.info(
+                "stale_finalizer_reconcile account=%s requests=%d "
+                "tokens=%d microdollars=%d",
+                acct,
+                bucket["requests"],
+                bucket["tokens"],
+                bucket["microdollars"],
+            )
     return len(transitioned)
 
 
@@ -647,6 +672,22 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         )
         await stats_db.connect()
     app.state.stats_db = stats_db
+    # Operator warning: when dashboard reads must share the primary
+    # connection, they queue behind the request path and amplify lock
+    # contention under high concurrency.  This is informational, not
+    # fatal — minimum-footprint installs may accept the trade.
+    if (
+        config.dashboard.enabled
+        and stats_db is db
+        and config.database.path != ":memory:"
+    ):
+        logger.warning(
+            "dashboard_shares_data_plane: database.worker_threads=%d and "
+            "dashboard.enabled=true on a file-backed database will route "
+            "dashboard reads through the primary connection. "
+            "Consider worker_threads=2 for production installs.",
+            config.database.worker_threads,
+        )
 
     # 7. Initialize repositories
     request_repo = RequestRepository(db)
@@ -972,6 +1013,13 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         account_backoff_repo=account_backoff_repo,
         rollup_repo=rollup_repo,
     )
+    if config.dashboard.enabled and stats_db is db:
+        logger.warning(
+            "stats_db_fallback_to_primary: stats_db is the same connection as "
+            "the primary db; dashboard reads will queue behind the request "
+            "path. Set database.worker_threads=2 for a dedicated read-only "
+            "stats connection."
+        )
 
     metrics_coalescer = MetricsWriteCoalescer(
         config=config.metrics,
@@ -1018,8 +1066,46 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         cache_config=config.cache,
         compression_tuning_registry=app.state.compression_tuning_registry,
         compression_policy=config.compression,
+        stream_diagnostics=get_stream_diagnostics(),
     )
     app.state.coordinator = coordinator
+
+    # Finalization retry queue (Phase 3): short-cadence targeted drain
+    # of cancellation finalizations that escaped the immediate shielded
+    # path (10s timeout hit under heavy SQLite lock contention).  Must
+    # be constructed before RuntimeMetricsService so the runtime snapshot
+    # can expose queue state.
+    from eggpool.request.finalization_queue import FinalizationRetryQueue
+
+    finalization_retry_queue = FinalizationRetryQueue(
+        db=db,
+        # coordinator._finalizer is intentionally wired here so the
+        # retry queue can re-run finalization idempotently when the
+        # immediate shielded path timed out.
+        finalizer=coordinator._finalizer,  # pyright: ignore[reportPrivateUsage]
+        router=router,
+        quota_estimator=router.quota_estimator,
+    )
+    app.state.finalization_retry_queue = finalization_retry_queue
+    # Re-wire the coordinator so it routes new enqueues to the same
+    # queue instance the periodic task drains.
+    coordinator._finalization_retry_queue = (  # pyright: ignore[reportPrivateUsage]
+        finalization_retry_queue
+    )
+
+    # Routing trace write guardrail (Phase 4): when the SQLite
+    # lock-wait p95 exceeds the configured threshold, skip the
+    # best-effort routing trace writes to avoid amplifying contention.
+    from eggpool.request.routing_trace_guard import get_routing_trace_guard
+
+    routing_trace_guard = get_routing_trace_guard()
+    routing_trace_guard.configure(
+        threshold_ms=config.routing.trace.skip_above_lock_wait_p95_ms,
+    )
+    app.state.routing_trace_guard = routing_trace_guard
+    coordinator._routing_trace_guard = (  # pyright: ignore[reportPrivateUsage]
+        routing_trace_guard
+    )
 
     # 19. Reconcile expired reservations at startup so dashboard counts
     # and in-memory quota state are accurate before readiness reports OK.
@@ -1047,6 +1133,10 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     app.state.dashboard_telemetry = DashboardTelemetry()
     app.state.dashboard_telemetry.cache_stats = app.state.stats.cache_snapshot
 
+    # Stream outcome diagnostics service (process-wide singleton so the
+    # coordinator and runtime-metrics paths see the same counters).
+    app.state.stream_diagnostics = get_stream_diagnostics()
+
     app.state.runtime_metrics = RuntimeMetricsService(
         config=config,
         db=db,
@@ -1065,6 +1155,9 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         dispatch_span_recorder=dispatch_span_recorder,
         model_info=model_info,
         dashboard_telemetry=app.state.dashboard_telemetry,
+        stream_diagnostics=app.state.stream_diagnostics,
+        finalization_retry_queue=getattr(app.state, "finalization_retry_queue", None),
+        routing_trace_guard=getattr(app.state, "routing_trace_guard", None),
     )
 
     # Register catalog refresh task.  Supervisor owns the cadence so
@@ -1176,6 +1269,20 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         _refresh_usage_windows_once,
         interval_s=60.0,
         initial_delay_s=15.0,
+    )
+
+    # Finalization retry queue periodic drain task.  Cadence is the
+    # queue's ``idle_interval_s`` (default 15s); the drain is cheap
+    # when the queue is empty so the longer idle cadence does not
+    # impact the data plane.
+    async def _finalization_retry_tick() -> None:
+        await finalization_retry_queue.drain_once()
+
+    supervisor.register_periodic(
+        "finalization_retry_drain",
+        _finalization_retry_tick,
+        interval_s=finalization_retry_queue.idle_interval_s,
+        initial_delay_s=5.0,
     )
 
     # Register stale request finalizer (runs every 60s).  Default

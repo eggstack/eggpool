@@ -295,6 +295,7 @@ When `[dashboard].enabled = true`, a multi-page dashboard is served at `/` with 
 | Cache & compression operator guide | [docs/cache-compression.md](docs/cache-compression.md) |
 | Cache & compression profiles | [docs/cache-compression-profiles.md](docs/cache-compression-profiles.md) |
 | Cache & compression troubleshooting | [docs/cache-compression-troubleshooting.md](docs/cache-compression-troubleshooting.md) |
+| OpenCode stream stability | [docs/opencode-stream-stability.md](docs/opencode-stream-stability.md) |
 | Thinking & reasoning | [docs/thinking.md](docs/thinking.md) |
 | Architecture overview | [architecture/README.md](architecture/README.md) |
 

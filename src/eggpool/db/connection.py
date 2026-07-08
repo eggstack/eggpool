@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import threading
 import time
 from contextlib import asynccontextmanager, suppress
@@ -65,6 +66,10 @@ class Database:
         self._last_operation_error_class: str | None = None
         self._cumulative_lock_wait_s: float = 0.0
         self._max_lock_wait_s: float = 0.0
+        self._lock_wait_count: int = 0
+        self._lock_wait_samples_s: collections.deque[float] = collections.deque(
+            maxlen=512
+        )
         # Tracks whether the current asyncio.Task is currently
         # executing inside a ``db.transaction()`` block (outermost
         # OR nested/piggyback). Used by ``_require_transaction_owner``
@@ -251,6 +256,8 @@ class Database:
             self._cumulative_lock_wait_s += elapsed
             if elapsed > self._max_lock_wait_s:
                 self._max_lock_wait_s = elapsed
+            self._lock_wait_count += 1
+            self._lock_wait_samples_s.append(elapsed)
             yield
 
     async def probe_writable(self) -> bool:
@@ -442,8 +449,11 @@ class Database:
 
         Counters are best-effort and reset on process restart.  They
         are intended for runtime diagnostics, not billing or alerting.
+        ``lock_wait_p50_ms`` / ``p95_ms`` / ``p99_ms`` are computed from
+        a bounded ring buffer of recent samples; ``None`` when fewer
+        than one sample has been observed.
         """
-        return {
+        snapshot: dict[str, Any] = {
             "write_ops": self._write_ops,
             "read_ops": self._read_ops,
             "total_transactions": self._total_transactions,
@@ -451,7 +461,29 @@ class Database:
             "last_operation_error_class": self._last_operation_error_class,
             "cumulative_lock_wait_s": round(self._cumulative_lock_wait_s, 4),
             "max_lock_wait_s": round(self._max_lock_wait_s, 4),
+            "lock_wait_count": self._lock_wait_count,
         }
+        if self._lock_wait_samples_s:
+            samples = sorted(self._lock_wait_samples_s)
+            size = len(samples)
+            snapshot["lock_wait_p50_ms"] = round(
+                samples[int(0.50 * (size - 1))] * 1000, 3
+            )
+            snapshot["lock_wait_p95_ms"] = round(
+                samples[int(0.95 * (size - 1))] * 1000, 3
+            )
+            snapshot["lock_wait_p99_ms"] = round(
+                samples[min(int(0.99 * (size - 1)), size - 1)] * 1000, 3
+            )
+            snapshot["lock_wait_max_ms"] = round(samples[-1] * 1000, 3)
+            snapshot["lock_wait_sample_count"] = size
+        else:
+            snapshot["lock_wait_p50_ms"] = None
+            snapshot["lock_wait_p95_ms"] = None
+            snapshot["lock_wait_p99_ms"] = None
+            snapshot["lock_wait_max_ms"] = None
+            snapshot["lock_wait_sample_count"] = 0
+        return snapshot
 
     async def fetch_all(
         self, sql: str, params: Sequence[Any] = ()
