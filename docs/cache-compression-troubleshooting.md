@@ -28,7 +28,7 @@ Before troubleshooting, confirm you are reading the right endpoint:
 | Endpoint | What it answers |
 |----------|-----------------|
 | `/api/stats/request-shaping` | Current operator summary: compression mode, cache-reporting coverage, synthetic cache state, advisory tuning, and routing guardrails. |
-| `/api/stats/cache-observability` | Are providers reporting cache counters? Coverage by `reported` / `not_reported` / `unknown_format`; known-only cache hit ratio; cached input tokens by provider/model. |
+| `/api/stats/cache-observability` | Are providers reporting cache counters? Coverage by `reported` / `not_reported` / `unknown_format`; provider cache hit rate (cache reads are hits; cache writes/creation are warmup, not hits); deprecated `cache_hit_ratio_known_only` alias; cached input tokens by provider/model. |
 | `/api/stats/canonical-request-segmentation` | Are requests segmenting correctly? Status counts; avg stable/semi/volatile token estimates; top request-shape hashes. |
 | `/api/stats/cache-stability` | Narrow summary only. Per-boundary preservation/drop detail lives on the in-memory `CacheBoundaryTracker` for live requests; this endpoint confirms the tracker is wired and reports durable counters where persisted. |
 | `/api/stats/compression-observability` | Observe-mode opportunities plus policy/source warning rollups. |
@@ -43,7 +43,7 @@ Before troubleshooting, confirm you are reading the right endpoint:
 |-------|---------|
 | `cache_counter_reported_requests` | Upstream payload included cache fields. |
 | `cache_counter_unknown_requests` | Payload could not be parsed, or returned a shape EggPool does not recognize. The cache state is ambiguous; do NOT assume zero. |
-| `cache_hit_ratio_known_only` | Cache hit ratio computed only over rows with `cache_counter_status == "reported"`. Excludes `not_reported` and `unknown_format` so a non-reporting provider does not artificially deflate the hit ratio. |
+| `cache_hit_ratio_known_only` | Deprecated compatibility alias for `provider_cache_hit_rate`. Computed as `cache_read_tokens / cache_eligible_input_tokens` (protocol-aware: OpenAI denominator is `prompt_tokens`; Anthropic denominator is `input + cache_read + cache_creation`). |
 
 The `/cache` summary surfaces provider cache counters and EggPool cache
 annotations on separate cards. Missing provider cache counters are

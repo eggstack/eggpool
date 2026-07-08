@@ -2067,9 +2067,8 @@ async def fetch_cache_observability(
       read.
     - ``total_cache_creation_input_tokens``: Anthropic-specific cache
       write.
-    - ``cache_hit_ratio_known_only``      : ``cached_input_tokens /
-      input_tokens`` restricted to rows where status="reported" so
-      the ratio never silently mixes zero with missing.
+    - ``cache_hit_ratio_known_only``      : deprecated compatibility
+      alias for ``provider_cache_hit_rate``.
     - ``transcoded_requests``             : rows where the request
       required protocol transcoding.
 
@@ -2229,10 +2228,6 @@ async def fetch_cache_observability(
     totals = dict(totals_row) if totals_row else {}
 
     total_cached = int(totals.get("total_cached_input_tokens", 0) or 0)
-    total_input_reported = int(totals.get("total_input_tokens_reported", 0) or 0)
-    cache_hit_ratio_known_only = (
-        total_cached / total_input_reported if total_input_reported > 0 else None
-    )
 
     # --- canonical per-protocol cache metrics (Python-side aggregation) ---
     reported_rows_sql = """
@@ -2317,7 +2312,7 @@ async def fetch_cache_observability(
         "total_cache_write_input_tokens": int(
             totals.get("total_cache_write_input_tokens", 0) or 0
         ),
-        "cache_hit_ratio_known_only": cache_hit_ratio_known_only,
+        "cache_hit_ratio_known_only": agg.provider_cache_hit_rate,
         "transcoded_requests": int(totals.get("transcoded_requests", 0) or 0),
         # Canonical per-protocol cache metrics.
         "cache_read_tokens_canonical": agg.cache_read_tokens_canonical,

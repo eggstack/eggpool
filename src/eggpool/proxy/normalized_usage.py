@@ -131,6 +131,25 @@ def _has_any_field(usage: dict[str, Any], fields: tuple[str, ...]) -> bool:
     return any(field in usage for field in fields)
 
 
+def _has_openai_cache_field(usage: dict[str, Any]) -> bool:
+    """Return True when ``usage`` carries any OpenAI-compatible cache field.
+
+    Checks both top-level aliases (``cache_read_input_tokens``,
+    ``cached_tokens``) and nested ``prompt_tokens_details`` keys
+    (``cached_tokens``, ``cache_write_tokens``).  This ensures
+    write-only OpenRouter-style payloads are explicitly classified as
+    reported even if future refactors change token extraction details.
+    """
+    if _has_any_field(usage, ("cache_read_input_tokens", "cached_tokens")):
+        return True
+    prompt_details = usage.get("prompt_tokens_details")
+    if isinstance(prompt_details, dict):
+        return (
+            "cached_tokens" in prompt_details or "cache_write_tokens" in prompt_details
+        )
+    return False
+
+
 def _extract_openai_cache_tokens(usage: dict[str, Any]) -> dict[str, int | None]:
     """Return the OpenAI-shape cache tokens as a mapping.
 
@@ -228,20 +247,9 @@ def _extract_openai(usage: dict[str, Any]) -> NormalizedUsage:
         reasoning_tokens = coerce_token_count(
             completion_details_dict.get("reasoning_tokens")
         )
-    # OpenAI-compatible providers (including OpenRouter) may also surface
-    # ``prompt_tokens_details.cache_write_tokens`` without a read counter,
-    # so key-presence in the nested prompt details must also mark the row
-    # as ``reported``.  ``_has_any_field`` checks top-level keys only; for
-    # nested write tokens we inspect the dict directly.
-    prompt_details_obj: Any = usage.get("prompt_tokens_details")
-    has_nested_cache_field = isinstance(prompt_details_obj, dict) and (
-        "cached_tokens" in prompt_details_obj
-        or "cache_write_tokens" in prompt_details_obj
-    )
     cache_status = (
         CacheCounterStatus.REPORTED
-        if _has_any_field(usage, _OPENAI_CACHE_FIELDS)
-        or has_nested_cache_field
+        if _has_openai_cache_field(usage)
         or any(v is not None for v in cache_tokens.values())
         else CacheCounterStatus.NOT_REPORTED
     )

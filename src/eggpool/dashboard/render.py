@@ -2031,12 +2031,6 @@ def render_overview(
                     sub=f"in {in_tok} · out {out_tok}",
                 ),
                 _render_metric_card(
-                    title="Cache reads",
-                    metric=cache_read,
-                    sub=(f"{cache_read_pct} of prompt · write {cache_write}"),
-                )
-                if cache_observability is None
-                else _render_metric_card(
                     title="Provider cache hit rate",
                     metric=(
                         _format_percent_unit(provider_cache_hit_rate, digits=1)
@@ -2048,10 +2042,21 @@ def render_overview(
                         f"/ eligible {format_tokens(cache_eligible_input_tokens)}"
                         f" · write/warmup "
                         f"{_format_percent_unit(cache_write_rate, digits=1)}"
-                        f" · {cache_counter_coverage_rate:.0%} reported"
+                        f" · "
+                        f"{_format_percent_unit(cache_counter_coverage_rate, digits=0)}"
+                        f" reported"
                         if cache_eligible_input_tokens > 0
                         or cache_read_tokens_canonical > 0
-                        else "read 0 / eligible 0"
+                        else "legacy summary estimate"
+                    ),
+                )
+                if cache_observability is not None
+                else _render_metric_card(
+                    title="Provider cache hit rate",
+                    metric=cache_read_pct,
+                    sub=(
+                        f"legacy summary estimate · read {cache_read}"
+                        f" · write {cache_write}"
                     ),
                 ),
                 _render_metric_card(

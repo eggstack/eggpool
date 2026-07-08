@@ -1037,7 +1037,7 @@ Seven focused JSON endpoints live under `/api/stats/`:
 | Endpoint | Purpose |
 |----------|---------|
 | `request-shaping` | Operator-facing summary of compression mode, cache-reporting coverage, synthetic cache state, advisory tuning, and routing guardrails. |
-| `cache-observability` | Coverage of cache counters by status (`reported` / `not_reported` / `unknown_format`); known-only cache hit ratio; cached input tokens by provider/model. |
+| `cache-observability` | Coverage of cache counters by status (`reported` / `not_reported` / `unknown_format`); provider cache hit rate (cache reads are hits; cache writes/creation are warmup, not hits); deprecated `cache_hit_ratio_known_only` alias; cached input tokens by provider/model. |
 | `canonical-request-segmentation` | Segmentation status counts; avg stable / semi-stable / volatile token estimates; top request-shape hashes. |
 | `cache-stability` | Narrow summary. Per-boundary preservation/drop detail lives on the in-memory `CacheBoundaryTracker`; this endpoint confirms the tracker is wired and reports durable counters. |
 | `compression-observability` | Observe-mode opportunities (candidates, estimated savings, suppress reasons) plus policy/source rollups. |

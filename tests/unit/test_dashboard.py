@@ -570,7 +570,7 @@ class TestRenderOverview:
         assert ">Accounted tokens<" in html
         accounted_idx = html.index(">Accounted tokens<")
         fresh_idx = html.index(">Fresh tokens<")
-        cache_idx = html.index(">Cache reads<")
+        cache_idx = html.index(">Provider cache hit rate<")
         # Accounted sits ahead of Fresh which sits ahead of Cache reads.
         assert accounted_idx < fresh_idx < cache_idx
         # Accounted metric line shows the provider-accounting total.
@@ -612,11 +612,12 @@ class TestRenderOverview:
             },
             accounts=[],
         )
-        cache_idx = html.index(">Cache reads<")
+        cache_idx = html.index(">Provider cache hit rate<")
         next_card_idx = html.index(">Reasoning tokens<")
         cache_section = html[cache_idx:next_card_idx]
         # Bounded cache-read share: 250 / (1000 + 250 + 50) ≈ 19.2%
-        assert "19.2% of prompt" in cache_section
+        assert "19.2%" in cache_section
+        assert "legacy summary estimate" in cache_section
         # Write token sub-line still renders alongside the percent.
         assert "write 50" in cache_section
 
@@ -649,10 +650,10 @@ class TestRenderOverview:
             },
             accounts=[],
         )
-        cache_idx = html.index(">Cache reads<")
+        cache_idx = html.index(">Provider cache hit rate<")
         next_card_idx = html.index(">Reasoning tokens<")
         cache_section = html[cache_idx:next_card_idx]
-        assert "— of prompt" in cache_section
+        assert "legacy summary estimate" in cache_section
 
     def test_overview_cache_heavy_does_not_imply_impossible_totals(self) -> None:
         """Cache-heavy workload: cache_read > fresh_tokens. The overview
@@ -690,8 +691,8 @@ class TestRenderOverview:
         )
         accounted_idx = html.index(">Accounted tokens<")
         fresh_idx = html.index(">Fresh tokens<")
-        cache_idx = html.index(">Cache reads<")
-        # Accounted sits ahead of Cache reads so the headline total is not
+        cache_idx = html.index(">Provider cache hit rate<")
+        # Accounted sits ahead of Provider cache hit rate so the headline total is not
         # smaller than the cache-read sub-card.
         assert accounted_idx < cache_idx
         accounted_section = html[accounted_idx:fresh_idx]
@@ -700,12 +701,14 @@ class TestRenderOverview:
         # Fresh metric = 100 + 50 = 150
         fresh_section = html[fresh_idx:cache_idx]
         assert ">150</p>" in fresh_section
-        # Cache reads metric = 900
+        # Provider cache hit rate metric = 81.8%
         next_card_idx = html.index(">Reasoning tokens<")
         cache_section = html[cache_idx:next_card_idx]
-        assert ">900</p>" in cache_section
+        assert ">81.8%</p>" in cache_section
+        assert "read 900" in cache_section
         # Bounded ratio: 900 / (100 + 900 + 100) = 0.81818... → 81.8%
-        assert "81.8% of prompt" in cache_section
+        assert "81.8%" in cache_section
+        assert "legacy summary estimate" in cache_section
         # The legacy misleading pair should never appear on the index page.
         assert ">Cache tokens<" not in html
 
@@ -740,7 +743,7 @@ class TestRenderOverview:
         )
         accounted_idx = html.index(">Accounted tokens<")
         fresh_idx = html.index(">Fresh tokens<")
-        cache_idx = html.index(">Cache reads<")
+        cache_idx = html.index(">Provider cache hit rate<")
         accounted_section = html[accounted_idx:fresh_idx]
         # Renderer fallback: accounted = 100 + 50 + 900 + 100 = 1,150
         assert ">1,150</p>" in accounted_section
@@ -973,6 +976,108 @@ class TestRenderOverview:
         )
         assert "No accounts configured." in html
         assert "show them" not in html
+
+    def test_overview_fallback_renders_provider_cache_hit_rate_title(self) -> None:
+        """When cache_observability is None, fallback uses 'Provider cache hit rate'."""
+        html = render_overview(
+            overview={
+                "summary": {
+                    "total_requests": 2,
+                    "successful_requests": 2,
+                    "error_requests": 0,
+                    "error_rate": 0.0,
+                    "total_input_tokens": 1000,
+                    "total_output_tokens": 500,
+                    "total_tokens": 1500,
+                    "fresh_tokens": 1500,
+                    "accounted_tokens": 1800,
+                    "total_cache_read_tokens": 250,
+                    "total_cache_write_tokens": 50,
+                    "total_reasoning_tokens": 0,
+                    "total_cost_microdollars": 0,
+                    "avg_latency_ms": 50.0,
+                },
+                "imbalance": {
+                    "imbalance_ratio": 0.0,
+                    "active_accounts": 1,
+                    "most_used": None,
+                    "least_used": None,
+                },
+            },
+            accounts=[],
+        )
+        assert ">Provider cache hit rate<" in html
+        assert ">Cache reads<" not in html
+        assert "legacy summary estimate" in html
+
+    def test_overview_canonical_cache_card_renders(self) -> None:
+        """When cache_observability is provided, canonical card renders."""
+        html = render_overview(
+            overview={
+                "summary": {
+                    "total_requests": 2,
+                    "successful_requests": 2,
+                    "error_requests": 0,
+                    "error_rate": 0.0,
+                    "total_input_tokens": 1000,
+                    "total_output_tokens": 500,
+                    "total_cost_microdollars": 0,
+                    "avg_latency_ms": 50.0,
+                },
+                "imbalance": {
+                    "imbalance_ratio": 0.0,
+                    "active_accounts": 1,
+                    "most_used": None,
+                    "least_used": None,
+                },
+            },
+            accounts=[],
+            cache_observability={
+                "provider_cache_hit_rate": 0.65,
+                "cache_write_rate": 0.20,
+                "cache_counter_coverage_rate": 0.85,
+                "cache_read_tokens_canonical": 1300,
+                "cache_eligible_input_tokens": 2000,
+            },
+        )
+        assert ">Provider cache hit rate<" in html
+        assert "65.0%" in html
+        assert "read 1,300" in html
+        assert "eligible 2,000" in html
+        assert "write/warmup" in html
+        assert "85% reported" in html
+
+    def test_overview_cache_card_coverage_rate_none_no_crash(self) -> None:
+        """cache_counter_coverage_rate=None does not raise when rendering."""
+        html = render_overview(
+            overview={
+                "summary": {
+                    "total_requests": 1,
+                    "successful_requests": 1,
+                    "error_requests": 0,
+                    "error_rate": 0.0,
+                    "total_input_tokens": 100,
+                    "total_output_tokens": 50,
+                    "total_cost_microdollars": 0,
+                    "avg_latency_ms": 50.0,
+                },
+                "imbalance": {
+                    "imbalance_ratio": 0.0,
+                    "active_accounts": 1,
+                    "most_used": None,
+                    "least_used": None,
+                },
+            },
+            accounts=[],
+            cache_observability={
+                "provider_cache_hit_rate": 0.5,
+                "cache_write_rate": 0.1,
+                "cache_counter_coverage_rate": None,
+                "cache_read_tokens_canonical": 50,
+                "cache_eligible_input_tokens": 100,
+            },
+        )
+        assert ">Provider cache hit rate<" in html
 
 
 class TestAutoRefreshBootstrap:

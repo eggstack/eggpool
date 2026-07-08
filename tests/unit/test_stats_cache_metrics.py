@@ -129,6 +129,60 @@ class TestDeriveCacheMetricTerms:
         )
         assert terms.protocol_shape == ProtocolShape.UNKNOWN
 
+    def test_anthropic_cache_heavy_row_not_clamped(self) -> None:
+        """Anthropic: cache read/write exceeding fresh input are NOT clamped."""
+        terms = derive_cache_metric_terms(
+            input_tokens=100,
+            cache_read_tokens=700,
+            cache_write_tokens=200,
+            protocol="anthropic",
+        )
+        assert terms.cache_read_tokens == 700
+        assert terms.cache_write_tokens == 200
+        assert terms.cache_eligible_input_tokens == 1000
+        assert terms.cache_read_clamped is False
+        assert terms.cache_write_clamped is False
+
+    def test_openai_write_clamped(self) -> None:
+        """OpenAI: write clamped to eligible when write > eligible."""
+        terms = derive_cache_metric_terms(
+            input_tokens=100,
+            cache_read_tokens=50,
+            cache_write_tokens=200,
+            protocol="openai",
+        )
+        assert terms.cache_read_tokens == 50
+        assert terms.cache_write_tokens == 100
+        assert terms.cache_read_clamped is False
+        assert terms.cache_write_clamped is True
+
+    def test_openai_both_clamped(self) -> None:
+        """OpenAI: both read and write clamped when both exceed eligible."""
+        terms = derive_cache_metric_terms(
+            input_tokens=50,
+            cache_read_tokens=100,
+            cache_write_tokens=80,
+            protocol="openai",
+        )
+        assert terms.cache_read_tokens == 50
+        assert terms.cache_write_tokens == 50
+        assert terms.cache_read_clamped is True
+        assert terms.cache_write_clamped is True
+
+    def test_openai_zero_eligible_no_clamp(self) -> None:
+        """OpenAI: zero eligible means no clamping, raw values preserved."""
+        terms = derive_cache_metric_terms(
+            input_tokens=0,
+            cache_read_tokens=10,
+            cache_write_tokens=5,
+            protocol="openai",
+        )
+        assert terms.cache_read_tokens == 10
+        assert terms.cache_write_tokens == 5
+        assert terms.cache_eligible_input_tokens == 0
+        assert terms.cache_read_clamped is False
+        assert terms.cache_write_clamped is False
+
 
 class TestAggregateCacheTerms:
     """aggregate_cache_terms computes totals and rates from mixed rows."""
@@ -229,4 +283,65 @@ class TestAggregateCacheTerms:
         statuses = [CacheCounterStatus.REPORTED]
         agg = aggregate_cache_terms(rows, statuses)
         # eligible = read + write = 25, read = 20, not inconsistent
+        assert agg.inconsistent_cache_counter_rows == 0
+
+    def test_anthropic_cache_heavy_not_inconsistent(self) -> None:
+        """Anthropic cache-heavy rows are not flagged as inconsistent."""
+        rows = [
+            derive_cache_metric_terms(
+                input_tokens=100,
+                cache_read_tokens=700,
+                cache_write_tokens=200,
+                protocol="anthropic",
+            ),
+        ]
+        statuses = [CacheCounterStatus.REPORTED]
+        agg = aggregate_cache_terms(rows, statuses)
+        assert agg.inconsistent_cache_counter_rows == 0
+        assert agg.provider_cache_hit_rate == pytest.approx(0.7)
+        assert agg.cache_write_rate == pytest.approx(0.2)
+
+    def test_openai_clamp_flagged_as_inconsistent(self) -> None:
+        """OpenAI rows that trigger clamping are flagged as inconsistent."""
+        rows = [
+            derive_cache_metric_terms(
+                input_tokens=100,
+                cache_read_tokens=700,
+                cache_write_tokens=0,
+                protocol="openai",
+            ),
+        ]
+        statuses = [CacheCounterStatus.REPORTED]
+        agg = aggregate_cache_terms(rows, statuses)
+        assert agg.inconsistent_cache_counter_rows == 1
+        assert agg.provider_cache_hit_rate == pytest.approx(1.0)
+
+    def test_mixed_protocol_aggregate(self) -> None:
+        """Mixed OpenAI + Anthropic aggregate correctly."""
+        rows = [
+            derive_cache_metric_terms(
+                input_tokens=1000,
+                cache_read_tokens=600,
+                cache_write_tokens=200,
+                protocol="openai",
+            ),
+            derive_cache_metric_terms(
+                input_tokens=100,
+                cache_read_tokens=700,
+                cache_write_tokens=200,
+                protocol="anthropic",
+            ),
+        ]
+        statuses = [
+            CacheCounterStatus.REPORTED,
+            CacheCounterStatus.REPORTED,
+        ]
+        agg = aggregate_cache_terms(rows, statuses)
+        # OpenAI: eligible=1000, read=600, write=200
+        # Anthropic: eligible=1000, read=700, write=200
+        assert agg.cache_read_tokens_canonical == 1300
+        assert agg.cache_write_tokens_canonical == 400
+        assert agg.cache_eligible_input_tokens == 2000
+        assert agg.provider_cache_hit_rate == pytest.approx(0.65)
+        assert agg.cache_write_rate == pytest.approx(0.2)
         assert agg.inconsistent_cache_counter_rows == 0

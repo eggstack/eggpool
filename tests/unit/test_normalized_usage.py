@@ -343,3 +343,76 @@ def test_normalized_usage_accepts_none_token_values() -> None:
     assert usage.input_tokens is None
     assert usage.cached_input_tokens is None
     assert usage.raw_usage is None
+
+
+# ---------------------------------------------------------------------------
+# _has_openai_cache_field helper
+# ---------------------------------------------------------------------------
+
+
+def test_openai_nested_cached_tokens_detected() -> None:
+    """prompt_tokens_details.cached_tokens read-only -> reported."""
+    body = _payload(
+        {
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 50,
+                "prompt_tokens_details": {"cached_tokens": 80},
+            },
+        }
+    )
+    result = normalize_usage(body, protocol=OPENAI_PROTOCOL)
+    assert result.cache_counter_status is CacheCounterStatus.REPORTED
+    assert result.cache_read_input_tokens == 80
+    assert result.cache_write_input_tokens is None
+
+
+def test_openai_nested_cache_write_tokens_detected() -> None:
+    """prompt_tokens_details.cache_write_tokens write-only -> reported."""
+    body = _payload(
+        {
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 50,
+                "prompt_tokens_details": {"cache_write_tokens": 30},
+            },
+        }
+    )
+    result = normalize_usage(body, protocol=OPENAI_PROTOCOL)
+    assert result.cache_counter_status is CacheCounterStatus.REPORTED
+    assert result.cache_write_input_tokens == 30
+
+
+def test_openai_nested_both_fields_detected() -> None:
+    """prompt_tokens_details with both cached_tokens and cache_write_tokens."""
+    body = _payload(
+        {
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 50,
+                "prompt_tokens_details": {
+                    "cached_tokens": 60,
+                    "cache_write_tokens": 20,
+                },
+            },
+        }
+    )
+    result = normalize_usage(body, protocol=OPENAI_PROTOCOL)
+    assert result.cache_counter_status is CacheCounterStatus.REPORTED
+    assert result.cache_read_input_tokens == 60
+    assert result.cache_write_input_tokens == 20
+
+
+def test_openai_no_nested_cache_fields_not_reported() -> None:
+    """prompt_tokens_details without cache fields -> not_reported."""
+    body = _payload(
+        {
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 50,
+                "prompt_tokens_details": {"audio_tokens": 10},
+            },
+        }
+    )
+    result = normalize_usage(body, protocol=OPENAI_PROTOCOL)
+    assert result.cache_counter_status is CacheCounterStatus.NOT_REPORTED

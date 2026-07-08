@@ -75,19 +75,28 @@ def derive_cache_metric_terms(
 ) -> CacheMetricTerms:
     shape = _map_protocol(protocol)
     inp = max(0, input_tokens or 0)
-    read = max(0, cache_read_tokens or 0)
-    write = max(0, cache_write_tokens or 0)
-    has_input = input_tokens is not None and input_tokens > 0
-    read_clamped = has_input and read > inp
-    write_clamped = has_input and write > inp
-    if read_clamped:
-        read = inp
-    if write_clamped:
-        write = inp
+    raw_read = max(0, cache_read_tokens or 0)
+    raw_write = max(0, cache_write_tokens or 0)
+
     if shape == ProtocolShape.OPENAI:
         eligible = inp
+        read_clamped = eligible > 0 and raw_read > eligible
+        write_clamped = eligible > 0 and raw_write > eligible
+        read = min(raw_read, eligible) if eligible > 0 else raw_read
+        write = min(raw_write, eligible) if eligible > 0 else raw_write
+    elif shape == ProtocolShape.ANTHROPIC:
+        read = raw_read
+        write = raw_write
+        eligible = inp + read + write
+        read_clamped = False
+        write_clamped = False
     else:
-        eligible = inp + read + write if has_input else read + write
+        read = raw_read
+        write = raw_write
+        eligible = inp + read + write if (inp > 0 or read > 0 or write > 0) else 0
+        read_clamped = False
+        write_clamped = False
+
     return CacheMetricTerms(
         cache_read_tokens=read,
         cache_write_tokens=write,
@@ -127,7 +136,7 @@ def aggregate_cache_terms(
             benefited += 1
         if terms.cache_eligible_input_tokens > 0:
             eligible_count += 1
-        if terms.cache_read_tokens > terms.cache_eligible_input_tokens:
+        if terms.cache_read_clamped or terms.cache_write_clamped:
             inconsistent += 1
     hit_rate = total_read / total_eligible if total_eligible > 0 else None
     write_rate = total_write / total_eligible if total_eligible > 0 else None
