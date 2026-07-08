@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+import pytest_asyncio
 
 from eggpool.db.connection import Database
 from eggpool.request.routing_trace_guard import (
@@ -12,7 +13,7 @@ from eggpool.request.routing_trace_guard import (
 )
 
 
-@pytest.fixture()
+@pytest_asyncio.fixture()
 async def db() -> Database:
     database = Database(path=":memory:")
     await database.connect()
@@ -52,6 +53,7 @@ def test_guard_records_written() -> None:
     assert snap["skipped_total"] == 0
 
 
+@pytest.mark.asyncio()
 async def test_guard_skips_on_db_pressure(db: Database) -> None:
     guard = RoutingTraceGuard(threshold_ms=10.0)
     # Seed the contention histogram with samples that exceed 10ms p95.
@@ -68,6 +70,7 @@ async def test_guard_skips_on_db_pressure(db: Database) -> None:
     assert snap["last_lock_wait_p95_ms"] > 10.0
 
 
+@pytest.mark.asyncio()
 async def test_guard_allows_when_below_threshold(db: Database) -> None:
     guard = RoutingTraceGuard(threshold_ms=500.0)
     db._lock_wait_samples_s.extend([0.001] * 16)  # pyright: ignore[reportPrivateUsage]
@@ -77,6 +80,7 @@ async def test_guard_allows_when_below_threshold(db: Database) -> None:
     assert reason == "ok"
 
 
+@pytest.mark.asyncio()
 async def test_guard_insufficient_samples_does_not_skip(db: Database) -> None:
     """Skip requires >= 8 samples to avoid tripping on cold-start spikes."""
     guard = RoutingTraceGuard(threshold_ms=10.0)

@@ -3,18 +3,24 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import pytest_asyncio
 
 from eggpool.dashboard.telemetry import DashboardTelemetry
+from eggpool.db.connection import Database
 from eggpool.stats.service import StatsService, TimeRange
 
-if TYPE_CHECKING:
-    from eggpool.db.connection import Database
-
 pytestmark = pytest.mark.dashboard
+
+
+@pytest_asyncio.fixture()
+async def db() -> Database:
+    database = Database(path=":memory:")
+    await database.connect()
+    yield database
+    await database.disconnect()
 
 
 class TestDashboardTelemetryRecordStage:
