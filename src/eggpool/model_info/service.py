@@ -626,10 +626,20 @@ class ModelInfoService:
                 await self._persist_source_observation(or_record, model_id=model_id)
 
             # Try Artificial Analysis identity resolution
-            aa_record = await _resolve_aa_record(model_id, self._repo, aa_indexed)
+            aa_record = await _resolve_aa_record(
+                model_id,
+                self._repo,
+                aa_indexed,
+                provider_catalog_detail=provider_detail,
+                known_provider_namespaces=self._known_provider_namespaces(),
+                matching_config=self._matching_config,
+            )
             if aa_record is not None:
                 await self._persist_source_observation(aa_record, model_id=model_id)
                 await self.record_source_success("artificial_analysis")
+                source_diagnostics["aa_matched"] = True
+            else:
+                source_diagnostics.setdefault("aa_matched", False)
 
             # Try HuggingFace identity resolution
             hf_record: SourceModelRecord | None = None
@@ -1114,7 +1124,13 @@ class ModelInfoService:
                 await self.record_source_error("artificial_analysis", exc)
                 return None
             aa_indexed = {r.source_model_id: r for r in aa_records}
-            return await _resolve_aa_record(lookup_id, self._repo, aa_indexed)
+            return await _resolve_aa_record(
+                lookup_id,
+                self._repo,
+                aa_indexed,
+                known_provider_namespaces=self._known_provider_namespaces(),
+                matching_config=self._matching_config,
+            )
 
         async def _fetch_hf() -> SourceModelRecord | None:
             if self._huggingface_source is None:
@@ -1552,6 +1568,71 @@ class ModelInfoService:
         """
         provider_ids = self._catalog.known_provider_ids()
         return provider_ids or None
+
+    def source_diagnostics(self) -> dict[str, dict[str, Any]]:
+        """Return per-source diagnostics for ``/api/model-info/sources``.
+
+        Merges the configured intent (enabled + api-key availability +
+        constructed source object) with the persisted health snapshot.
+        Every configured source appears exactly once with the same key
+        shape so the API consumer can reason about the state of each
+        known source, including disabled/unconstructed/missing-key
+        conditions that would otherwise be invisible.
+
+        ``requires_api_key`` and ``api_key_present`` are explicit
+        booleans — never a key value.  ``reason`` is a stable,
+        machine-readable label that explains the current state.
+        """
+        snapshot_sources: dict[str, dict[str, Any]] = {
+            "provider_catalog": {
+                "source": "provider_catalog",
+                "configured": True,
+                "constructed": True,
+                "enabled": True,
+                "requires_api_key": False,
+                "api_key_present": False,
+                "reason": "always_available",
+            }
+        }
+        for name in ("openrouter", "artificial_analysis", "huggingface"):
+            cfg = getattr(self._config.sources, name, None)
+            if cfg is None:
+                continue
+            enabled = bool(getattr(cfg, "enabled", False))
+            resolved_key = (
+                bool(cfg.resolved_api_key) if hasattr(cfg, "resolved_api_key") else False
+            )
+            constructed = any(
+                name == source_name
+                for source_name in self._external_sources
+            )
+            requires_key = bool(
+                getattr(cfg, "api_key", None) is not None
+                or getattr(cfg, "api_key_env", None) is not None
+            )
+            if not enabled:
+                reason = "disabled"
+            elif requires_key and not resolved_key:
+                # Enabled but key requirement not met -- always
+                # surface missing_api_key regardless of construction.
+                reason = "missing_api_key"
+            elif not constructed:
+                # Enabled, no key required, but the service couldn't
+                # build a source object (typically because no
+                # outbound_client is available at startup).
+                reason = "missing_outbound_client"
+            else:
+                reason = "ready"
+            snapshot_sources[name] = {
+                "source": name,
+                "configured": True,
+                "enabled": enabled,
+                "constructed": constructed,
+                "requires_api_key": requires_key,
+                "api_key_present": resolved_key,
+                "reason": reason,
+            }
+        return snapshot_sources
 
     async def run_periodic_refresh(self) -> None:
         """Background loop that refreshes due models periodically."""
@@ -2861,18 +2942,89 @@ async def _resolve_aa_record(
     model_id: str,
     repo: ModelInfoRepository,
     aa_indexed: dict[str, SourceModelRecord],
+    *,
+    provider_catalog_detail: dict[str, object] | None = None,
+    known_provider_namespaces: set[str] | None = None,
+    matching_config: ModelInfoMatchingConfig | None = None,
 ) -> SourceModelRecord | None:
     """Resolve a local model_id to an Artificial Analysis source record.
 
-    Uses exact alias matching only — no fuzzy matching. Resolution
-    rules mirror :func:`resolve_openrouter_record`:
+    Uses the same tiered resolver as OpenRouter:
 
-    1. Exact ``model_info_aliases`` row with ``source=artificial_analysis``.
-    2. Direct ``source_model_id == model_id`` match.
+    1. Configured exact aliases (``tier 0``)
+    2. Exact source ID (``tier 1``)
+    3. Normalized exact (``tier 2``)
+    4. Deployment-suffix normalized exact (``tier 2b``)
+    5. Regex rules (``tier 3``)
+    6. Similarity guarded (``tier 4``)
+
+    Falls back to a direct ``source_model_id == model_id`` match only when
+    the candidate index is empty (single-record sources can bypass the
+    tiered path entirely).
     """
     if not aa_indexed:
         return None
 
+    display_name: str | None = None
+    if isinstance(provider_catalog_detail, dict):
+        dn = provider_catalog_detail.get("display_name")
+        if isinstance(dn, str):
+            display_name = dn
+
+    candidate_index = build_candidate_index(
+        "artificial_analysis", aa_indexed.values()
+    )
+    if candidate_index.exact_by_source_id:
+        try:
+            decision = await resolve_source_record_tiered(
+                source="artificial_analysis",
+                model_id=model_id,
+                provider_id=None,
+                display_name=display_name,
+                repo=repo,
+                candidate_index=candidate_index,
+                config=matching_config,
+                known_provider_namespaces=known_provider_namespaces,
+            )
+            if decision.matched and decision.record is not None:
+                if (
+                    decision.match_method
+                    not in ("configured_exact_alias", "exact_source_id")
+                    and decision.alias_to_persist is not None
+                ):
+                    try:
+                        await repo.upsert_alias_with_method(
+                            model_id=model_id,
+                            provider_id=decision.alias_to_persist_provider_id,
+                            alias=decision.alias_to_persist,
+                            source="artificial_analysis",
+                            match_method=decision.match_method,
+                            discovered_by="tiered_resolver",
+                            confidence=decision.confidence,
+                            diagnostics=decision.diagnostics,
+                        )
+                        await repo.record_match_evidence(
+                            model_id=model_id,
+                            provider_id=decision.alias_to_persist_provider_id,
+                            source="artificial_analysis",
+                            alias=decision.alias_to_persist,
+                            match_method=decision.match_method,
+                            confidence=decision.confidence,
+                            diagnostics=decision.diagnostics,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Failed to persist AA tiered match evidence for %s",
+                            model_id,
+                        )
+                return decision.record
+        except Exception:
+            logger.exception(
+                "AA tiered resolver failed for %s, falling back to direct",
+                model_id,
+            )
+
+    # Fallback: exact-match only path (legacy behaviour).
     alias_strings = await repo.get_aliases_for_model(
         model_id, source="artificial_analysis"
     )

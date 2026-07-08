@@ -15,6 +15,9 @@ from difflib import SequenceMatcher
 from typing import TYPE_CHECKING, Any
 
 from eggpool.model_info.normalization import (
+    DEPLOYMENT_SUFFIX_TOKENS,
+    SEMANTIC_VARIANT_TOKENS,
+    generate_deployment_suffix_variants,
     normalize_model_key,
     normalize_vendor_key,
     split_source_id,
@@ -113,6 +116,7 @@ class ModelInfoMatchingConfig:
 
     enabled: bool = True
     normalized_exact: bool = True
+    deployment_suffix_normalized_exact: bool = True
     regex_rules: bool = True
     similarity: bool = False
     similarity_threshold: float = 0.92
@@ -422,6 +426,163 @@ def _tier_normalized_exact(
 
 
 # ---------------------------------------------------------------------------
+# Tier 2b: deployment suffix normalized exact
+# ---------------------------------------------------------------------------
+
+
+def _tier_deployment_suffix_normalized_exact(
+    *,
+    local_raw_candidates: list[str],
+    local_vendor_token: str | None,
+    candidate_index: ModelInfoCandidateIndex,
+) -> MatchDecision | None:
+    """Tier 2b: strip safe deployment suffixes and resolve via normalized key.
+
+    Conservative behaviour:
+
+    * Only ``DEPLOYMENT_SUFFIX_TOKENS`` are stripped.  Tokens in
+      ``SEMANTIC_VARIANT_TOKENS`` (e.g. ``pro``, ``mini``) are NEVER
+      stripped -- that responsibility belongs to other tiers.
+    * After stripping, the base must still contain a digit/family anchor.
+    * Acceptance requires a unique survivor through vendor/family tie-break.
+    """
+    # Generate deployment-suffix-stripped variants for each local raw candidate.
+    expanded: list[str] = []
+    seen: set[str] = set()
+    for raw in local_raw_candidates:
+        for variant in generate_deployment_suffix_variants(raw):
+            if variant in seen:
+                continue
+            seen.add(variant)
+            expanded.append(variant)
+
+    # Also map every original raw so normalize_exact tier isn't subverted.
+    stripped_only: list[str] = []
+    base_set: set[str] = set()
+    for raw in local_raw_candidates:
+        variants = generate_deployment_suffix_variants(raw)
+        # First entry is always the original raw; skip it.
+        for v in variants[1:]:
+            if v not in base_set:
+                base_set.add(v)
+                stripped_only.append(v)
+
+    if not stripped_only:
+        return None
+
+    # Resolve via normalized key.
+    norm_keys_seen: dict[str, list[str]] = {}
+    for raw in stripped_only:
+        nk = normalize_model_key(raw)
+        if nk and nk not in norm_keys_seen:
+            norm_keys_seen[nk] = [raw]
+
+    all_matches: list[ModelInfoMatchCandidate] = []
+    seen_candidates: set[int] = set()
+    matched_via: dict[int, dict[str, str]] = {}
+
+    for nk, sources in norm_keys_seen.items():
+        candidates = candidate_index.by_normalized_key.get(nk, [])
+        if not candidates:
+            continue
+        for cand in candidates:
+            cid = id(cand.record)
+            if cid in seen_candidates:
+                continue
+            seen_candidates.add(cid)
+            all_matches.append(cand)
+            matched_via[cid] = {
+                "normalized_key": nk,
+                "stripped_variant": sources[0],
+                "raw_original": local_raw_candidates[
+                    0
+                ],  # debug breadcrumb; may not match
+            }
+
+    if not all_matches:
+        return None
+
+    # Unique survivor -- accept.
+    if len(all_matches) == 1:
+        cand = all_matches[0]
+        info = matched_via[id(cand.record)]
+        stripped_variant = info["stripped_variant"]
+        return MatchDecision(
+            record=cand.record,
+            matched=True,
+            match_method="deployment_suffix_normalized_exact",
+            confidence=0.75,
+            diagnostics={
+                "stripped_variant": stripped_variant,
+                "base_variant": stripped_variant,
+                "normalized_key": info["normalized_key"],
+                "matched_source_model_id": cand.source_model_id,
+                "candidate_count": len(all_matches),
+            },
+            alias_to_persist=cand.source_model_id,
+            alias_to_persist_provider_id=None,
+        )
+
+    # Multiple matches -- apply vendor tie-break conservatively.
+    if local_vendor_token is not None:
+        vendor_norm = normalize_vendor_key(local_vendor_token)
+        vendor_filtered = [
+            c
+            for c in all_matches
+            if normalize_vendor_key(c.vendor) == vendor_norm
+            or (
+                c.family_tokens
+                and normalize_model_key(c.family_tokens[0])
+                == normalize_model_key(local_vendor_token)
+            )
+        ]
+        if len(vendor_filtered) == 1:
+            cand = vendor_filtered[0]
+            info = matched_via[id(cand.record)]
+            stripped_variant = info["stripped_variant"]
+            return MatchDecision(
+                record=cand.record,
+                matched=True,
+                match_method="deployment_suffix_normalized_exact",
+                confidence=0.70,
+                diagnostics={
+                    "stripped_variant": stripped_variant,
+                    "base_variant": stripped_variant,
+                    "tie_break": "vendor_match",
+                    "normalized_key": info["normalized_key"],
+                    "matched_source_model_id": cand.source_model_id,
+                    "candidate_count": len(all_matches),
+                    "rejected_source_model_ids": [
+                        c.source_model_id for c in all_matches if c is not cand
+                    ],
+                },
+                alias_to_persist=cand.source_model_id,
+                alias_to_persist_provider_id=None,
+            )
+
+    # Ambiguous -- surface a no-match so downstream keeps original sparse
+    # classification.  Diagnostics still capture everything for audit.
+    return MatchDecision(
+        record=None,
+        matched=False,
+        match_method="ambiguous_deployment_suffix_candidates",
+        confidence=0.0,
+        diagnostics={
+            "stripped_variants": stripped_only,
+            "candidate_count": len(all_matches),
+            "candidates": [
+                {
+                    "source_model_id": c.source_model_id,
+                    "vendor": c.vendor,
+                    "display_name": c.display_name,
+                }
+                for c in all_matches
+            ],
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # Tier 3: regex rule
 # ---------------------------------------------------------------------------
 
@@ -611,6 +772,7 @@ async def resolve_source_record_tiered(
       0. configured_exact_alias
       1. exact_source_id
       2. normalized_exact
+      2b. deployment_suffix_normalized_exact
       3. regex_rule
       4. similarity_guarded
 
@@ -667,6 +829,16 @@ async def resolve_source_record_tiered(
         )
         if t2 is not None:
             return t2
+
+    # Tier 2b: deployment-suffix normalized exact.
+    if config.deployment_suffix_normalized_exact:
+        t2b = _tier_deployment_suffix_normalized_exact(
+            local_raw_candidates=local_raw,
+            local_vendor_token=local_vendor,
+            candidate_index=candidate_index,
+        )
+        if t2b is not None:
+            return t2b
 
     # Tier 3: regex rules.
     if config.regex_rules:

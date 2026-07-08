@@ -73,6 +73,169 @@ def split_source_id(value: str) -> tuple[str | None, str]:
     return (None, value)
 
 
+# ---------------------------------------------------------------------------
+# Deployment-suffix variant generator
+# ---------------------------------------------------------------------------
+#
+# Some providers attach deployment/presentation suffixes to a base source
+# model ID.  ``MiniMax-M2.7-highspeed`` is the same underlying ``MiniMax-M2.7``
+# model, but presented under a routing alias.  These tokens are
+# deployment-tier descriptors, NOT semantic model variants like ``pro``,
+# ``mini``, ``flash``, or ``lite``.
+#
+# Stripping only happens when the trailing token is in this set AND the
+# remaining base still contains a digit/family anchor.  Bare names like
+# just ``highspeed`` are rejected.
+
+DEPLOYMENT_SUFFIX_TOKENS: frozenset[str] = frozenset(
+    {
+        "highspeed",
+        "fast",
+        "turbo",
+        "speed",
+        "lowlatency",
+        "lowlat",
+    }
+)
+
+# Tokens that look like deployment suffixes but are actually semantic
+# model variants.  Must NEVER be stripped.
+SEMANTIC_VARIANT_TOKENS: frozenset[str] = frozenset(
+    {
+        "pro",
+        "mini",
+        "flash",
+        "lite",
+        "max",
+        "plus",
+        "instruct",
+        "chat",
+        "reasoning",
+        "thinking",
+        "preview",
+        "code",
+        "coder",
+        "omni",
+    }
+)
+
+
+def has_digit_or_family_anchor(value: str) -> bool:
+    """Return True if the model string contains at least one digit or
+    a recognizable family anchor.
+
+    Used to ensure we never strip suffixes from a bare name like
+    ``highspeed`` alone.  This is a deliberately loose test: any digit
+    anywhere in the string is enough, since version/family anchors are
+    how we tell two deployment variants apart.
+    """
+    if not value:
+        return False
+    for ch in value:
+        if ch.isdigit():
+            return True
+    return False
+
+
+def generate_deployment_suffix_variants(value: str) -> tuple[str, ...]:
+    """Return deterministic base-name variants with deployment suffixes stripped.
+
+    Conservative rules:
+
+    1. If the input is slash-delimited, only the model segment is varied;
+       the namespace prefix is preserved on each emitted variant.
+    2. The trailing token (after separator split) must be in
+       :data:`DEPLOYMENT_SUFFIX_TOKENS`.  Tokens in
+       :data:`SEMANTIC_VARIANT_TOKENS` are NEVER stripped.
+    3. After stripping, the remaining base must still carry a digit or
+       family anchor -- preventing ``highspeed`` -> ``""``.
+    4. Only one suffix is stripped per call.  Chained suffixes are not
+       automatic (no evidence yet of safety).
+    5. Order is deterministic: original input first, then the stripped
+       variant (if produced).  Callers should de-duplicate if needed.
+
+    Examples::
+
+        >>> generate_deployment_suffix_variants("MiniMax-M2.7-highspeed")
+        ('MiniMax-M2.7-highspeed', 'MiniMax-M2.7')
+        >>> generate_deployment_suffix_variants("minimax/MiniMax-M2.7-highspeed")
+        ('minimax/MiniMax-M2.7-highspeed', 'minimax/MiniMax-M2.7')
+        >>> generate_deployment_suffix_variants("MiniMax-M2.7-pro")
+        ('MiniMax-M2.7-pro',)
+    """
+    if not value:
+        return (value,)
+
+    namespace: str | None = None
+    raw = value
+    if "/" in raw:
+        namespace, raw = raw.split("/", 1)
+
+    tokens = tokenize_model_key(raw)
+    if not tokens:
+        out: tuple[str, ...] = (value,)
+        return out
+
+    last_token = tokens[-1]
+    if last_token not in DEPLOYMENT_SUFFIX_TOKENS:
+        out = (value,)
+        return out
+    if last_token in SEMANTIC_VARIANT_TOKENS:
+        out = (value,)
+        return out
+
+    # Safety guard: if the original model already contains a semantic
+    # variant token (mini/pro/flash/lite/etc.), we MUST NOT strip a
+    # deployment suffix.  Stripping ``-turbo`` from ``gpt-5-mini-turbo``
+    # would otherwise incorrectly collapse to ``gpt-5-mini``,
+    # crossing a semantic identity boundary.
+    if set(tokens) & SEMANTIC_VARIANT_TOKENS:
+        out = (value,)
+        return out
+
+    # Reconstruct the base segment by removing the trailing token.
+    # We have to be careful to preserve the original capitalization:
+    # ``raw`` is the slash-stripped form.  We tokenize, check the last
+    # token, and rebuild from original raw_segments.
+    segments = [t for t in raw.split("-") if t]
+    if not segments:
+        out = (value,)
+        return out
+
+    # Some tokens can contain "-" inside them (rare); fall back to
+    # tokenize result for the suffix check, then drop only the last
+    # raw segment for the rebuild.
+    suffix_segment = segments[-1].casefold()
+    if suffix_segment != last_token:
+        # last_token was formed via tokenize (separator split).  Map it
+        # back to the raw final segment by casefolded equality.
+        for seg in reversed(segments):
+            if seg.casefold() == last_token:
+                base_segments = segments[: segments.index(seg)]
+                break
+        else:
+            base_segments = segments[:-1]
+    else:
+        base_segments = segments[:-1]
+
+    if not base_segments:
+        out = (value,)
+        return out
+
+    base_value = "-".join(base_segments)
+    if not has_digit_or_family_anchor(base_value):
+        out = (value,)
+        return out
+
+    if namespace:
+        stripped = f"{namespace}/{base_value}"
+    else:
+        stripped = base_value
+
+    out = (value, stripped)
+    return out
+
+
 def normalize_vendor_key(value: str | None) -> str | None:
     """Return a deterministic vendor comparison key.
 

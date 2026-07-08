@@ -343,7 +343,177 @@ class TestSimilarityDisabledByDefault:
         assert config.similarity is False
         assert config.normalized_exact is True
         assert config.regex_rules is True
+        assert config.deployment_suffix_normalized_exact is True
         assert config.similarity_threshold == 0.92
         assert config.similarity_min_gap == 0.05
         assert config.persist_discovered_aliases is True
         assert config.max_candidates_per_model == 20
+
+
+# ---------------------------------------------------------------------------
+# Deployment-suffix tier (2b)
+# ---------------------------------------------------------------------------
+
+
+class TestDeploymentSuffixHighspeedMinimax:
+    """Suite covering `MiniMax-M{x}-highspeed` resolving to base
+    `minimax/minimax-m{x}` OpenRouter IDs through the new tier 2b."""
+
+    @pytest.mark.asyncio()
+    @pytest.mark.parametrize(
+        ("variant_id", "expected_source_id"),
+        [
+            ("MiniMax-M2.1-highspeed", "minimax/minimax-m2.1"),
+            ("MiniMax-M2.5-highspeed", "minimax/minimax-m2.5"),
+            ("MiniMax-M2.7-highspeed", "minimax/minimax-m2.7"),
+            ("MiniMax-M2.7-fast", "minimax/minimax-m2.7"),
+            ("MiniMax-M2.7-turbo", "minimax/minimax-m2.7"),
+            ("MiniMax-M2.7-lowlatency", "minimax/minimax-m2.7"),
+            ("MiniMax-M2.7-lowlat", "minimax/minimax-m2.7"),
+            (
+                "minimax/MiniMax-M2.7-highspeed",
+                "minimax/minimax-m2.7",
+            ),
+        ],
+    )
+    async def test_highspeed_strips_to_base_minimax(
+        self, variant_id: str, expected_source_id: str
+    ) -> None:
+        records = [
+            _record("minimax/minimax-m2.1"),
+            _record("minimax/minimax-m2.5"),
+            _record("minimax/minimax-m2.7"),
+        ]
+        index = build_candidate_index("openrouter", records)
+        repo = FakeRepo()
+
+        decision = await resolve_source_record_tiered(
+            source="openrouter",
+            model_id=variant_id,
+            provider_id="minimax",
+            display_name=None,
+            repo=repo,
+            candidate_index=index,
+        )
+        assert decision.matched is True
+        assert decision.match_method == "deployment_suffix_normalized_exact"
+        assert decision.record is not None
+        assert decision.record.source_model_id == expected_source_id
+
+
+class TestDeploymentSuffixDoesNotStripSemanticVariants:
+    """Safety: semantic variant tokens (pro, mini, flash, lite,
+    plus, code, preview, etc.) must NEVER be stripped."""
+
+    @pytest.mark.asyncio()
+    @pytest.mark.parametrize(
+        "variant_id",
+        [
+            "MiniMax-M2.7-pro",
+            "MiniMax-M2.7-mini",
+            "MiniMax-M2.7-flash",
+            "MiniMax-M2.7-lite",
+            "mimo-v2.5-pro",
+            "qwen3.7-plus",
+            "kimi-k2.7-code",
+            "hy3-preview",
+            "deepseek-v4-flash",
+            "deepseek-v4-pro",
+            "MiniMax-M2.7-thinking",
+        ],
+    )
+    async def test_no_strip_for_semantic_variant(self, variant_id: str) -> None:
+        record = _record("minimax/minimax-m2.7")
+        index = build_candidate_index("openrouter", [record])
+        repo = FakeRepo()
+
+        decision = await resolve_source_record_tiered(
+            source="openrouter",
+            model_id=variant_id,
+            provider_id=None,
+            display_name=None,
+            repo=repo,
+            candidate_index=index,
+        )
+        assert decision.matched is False
+
+
+class TestDeploymentSuffixAmbiguityGuard:
+    """When multiple source candidates share the stripped normalized
+    base, the resolver must NOT silently pick one — it must return
+    no_match (or ambiguous_deployment_suffix_candidates)."""
+
+    @pytest.mark.asyncio()
+    async def test_two_candidate_base_keys_does_not_match(self) -> None:
+        # Both records normalize (after strip) to the same base key
+        # ``minimaxminimaxm27``.  Tier 2b cannot break the tie without
+        # semantic info -- it must surface no-match rather than guess.
+        records = [
+            _record("minimax/minimax-m2.7"),
+            _record("minimax/MiniMax M2.7"),  # casing/space variant
+        ]
+        index = build_candidate_index("openrouter", records)
+        repo = FakeRepo()
+
+        decision = await resolve_source_record_tiered(
+            source="openrouter",
+            model_id="MiniMax-M2.7-highspeed",
+            provider_id="minimax",
+            display_name=None,
+            repo=repo,
+            candidate_index=index,
+        )
+        assert decision.matched is False
+        assert decision.match_method in (
+            "no_match",
+            "ambiguous_deployment_suffix_candidates",
+            "ambiguous_candidates",
+        )
+
+
+class TestDeploymentSuffixPersistsAlias:
+    """Tier 2b matches must propagate the discovered alias through the
+    resolver's MatchDecision.alias_to_persist contract."""
+
+    @pytest.mark.asyncio()
+    async def test_alias_to_persist_is_base_source_id(self) -> None:
+        record = _record("minimax/minimax-m2.7")
+        index = build_candidate_index("openrouter", [record])
+        repo = FakeRepo()
+
+        decision = await resolve_source_record_tiered(
+            source="openrouter",
+            model_id="MiniMax-M2.7-highspeed",
+            provider_id="minimax",
+            display_name=None,
+            repo=repo,
+            candidate_index=index,
+        )
+        assert decision.matched is True
+        assert decision.alias_to_persist == "minimax/minimax-m2.7"
+        assert decision.diagnostics.get("stripped_variant") == "MiniMax-M2.7"
+
+
+class TestDeploymentSuffixOffByConfig:
+    """Disabling the deployment-suffix tier via config must prevent
+    highspeed variants from binding to base source IDs."""
+
+    @pytest.mark.asyncio()
+    async def test_tier_disabled_returns_no_match(self) -> None:
+        record = _record("minimax/minimax-m2.7")
+        index = build_candidate_index("openrouter", [record])
+        repo = FakeRepo()
+
+        config = ModelInfoMatchingConfig(
+            deployment_suffix_normalized_exact=False,
+        )
+        decision = await resolve_source_record_tiered(
+            source="openrouter",
+            model_id="MiniMax-M2.7-highspeed",
+            provider_id="minimax",
+            display_name=None,
+            repo=repo,
+            candidate_index=index,
+            config=config,
+        )
+        assert decision.matched is False

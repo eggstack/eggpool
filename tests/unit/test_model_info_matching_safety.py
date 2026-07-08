@@ -122,3 +122,76 @@ class TestGemini25FlashDoesNotBindToPro:
             candidate_index=index,
         )
         assert decision.matched is False
+
+
+# ---------------------------------------------------------------------------
+# Deployment-suffix safety: semantic variants must not be auto-stripped
+# ---------------------------------------------------------------------------
+
+
+class TestHighspeedDoesNotBindToPro:
+    @pytest.mark.asyncio()
+    async def test_no_match(self) -> None:
+        """Even with deployment-suffix tier enabled, `*-pro` is a
+        semantic variant and must not collapse to the base."""
+        record = _record("minimax/minimax-m2.7")
+        index = build_candidate_index("openrouter", [record])
+        repo = FakeRepo()
+
+        decision = await resolve_source_record_tiered(
+            source="openrouter",
+            model_id="MiniMax-M2.7-pro",
+            provider_id=None,
+            display_name=None,
+            repo=repo,
+            candidate_index=index,
+        )
+        assert decision.matched is False
+
+
+class TestHighspeedDoesNotBindToMini:
+    @pytest.mark.asyncio()
+    async def test_no_match(self) -> None:
+        record = _record("openai/gpt-5-mini")
+        index = build_candidate_index("openrouter", [record])
+        repo = FakeRepo()
+
+        decision = await resolve_source_record_tiered(
+            source="openrouter",
+            model_id="gpt-5-mini-turbo",
+            provider_id=None,
+            display_name=None,
+            repo=repo,
+            candidate_index=index,
+        )
+        assert decision.matched is False
+
+
+class TestSemanticTokenNotTreatedAsDeploymentSuffix:
+    """Ensure the deployment-suffix tier does not silently strip
+    semantic variants like ``preview`` or ``code``."""
+
+    @pytest.mark.asyncio()
+    @pytest.mark.parametrize(
+        "variant_id",
+        [
+            "kimi-k2.7-code",
+            "hy3-preview",
+            "MiniMax-M2.7-thinking",
+            "mimo-v2.5-pro",
+        ],
+    )
+    async def test_no_strip(self, variant_id: str) -> None:
+        record = _record("minimax/minimax-m2.7")
+        index = build_candidate_index("openrouter", [record])
+        repo = FakeRepo()
+
+        decision = await resolve_source_record_tiered(
+            source="openrouter",
+            model_id=variant_id,
+            provider_id=None,
+            display_name=None,
+            repo=repo,
+            candidate_index=index,
+        )
+        assert decision.matched is False
