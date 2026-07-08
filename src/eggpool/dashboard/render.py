@@ -5878,12 +5878,29 @@ def render_runtime(
                 )
                 > float(interval_s) * 2.0
             )
+            # First-run state classification.  When ``first_run_state``
+            # is provided, surface a friendly label for healthy
+            # startup-deferred tasks instead of the old "never ran"
+            # badge that made freshly-restarted processes look broken.
+            first_run_state = task.get("first_run_state")
             if cancelled:
                 status = "cancelled"
                 status_cls = "no"
             elif done:
                 status = "stopped"
                 status_cls = ""
+            elif first_run_state == "never_run_startup_deferred":
+                status = "startup deferred"
+                status_cls = ""
+            elif first_run_state == "never_run_not_due":
+                status = "not yet due"
+                status_cls = ""
+            elif first_run_state == "never_run_overdue":
+                status = "never ran (overdue)"
+                status_cls = "no"
+            elif first_run_state == "last_error":
+                status = "failing"
+                status_cls = "no"
             elif running and tick_running_long:
                 status = "tick slow"
                 status_cls = "no"

@@ -58,6 +58,49 @@ def _compute_overdue_seconds(
     return float(delta_s)
 
 
+def _first_run_state(
+    task: SupervisedTask,
+) -> str:
+    """Classify a supervised task for the dashboard's first-run column.
+
+    Returns one of:
+
+    - ``never_run_not_due``: registered, no tick yet, first run scheduled
+      in the future (i.e. ``next_run_at`` is in the future).
+    - ``never_run_startup_deferred``: registered with ``initial_delay_s``
+      still in flight -- the periodic loop has not yet slept past the
+      first delay.
+    - ``never_run_overdue``: registered but no tick yet, and the deadline
+      has already passed.
+    - ``last_success``: at least one successful tick.
+    - ``last_error``: the last attempt failed and no successful tick has
+      been recorded.
+
+    Daemon tasks always return ``last_success`` (they have no first-run
+    semantics worth surfacing).
+    """
+    if task.mode != "periodic":
+        return "last_success"
+    now = time.time()
+    next_run_at = task._next_run_at if task._next_run_at > 0 else None  # pyright: ignore[reportPrivateUsage]
+    last_tick_started = task._last_tick_started_at if task._last_tick_started_at > 0 else None  # pyright: ignore[reportPrivateUsage]
+    has_run = last_tick_started is not None
+
+    if task._failure_count > 0 and (  # pyright: ignore[reportPrivateUsage]
+        task._success_count == 0  # pyright: ignore[reportPrivateUsage]
+    ):
+        return "last_error"
+    if has_run:
+        return "last_success"
+    if next_run_at is None:
+        return "never_run_not_due"
+    if now < next_run_at:
+        return "never_run_not_due"
+    if task._initial_delay_s is not None and task._initial_delay_s > 0:  # pyright: ignore[reportPrivateUsage]
+        return "never_run_startup_deferred"
+    return "never_run_overdue"
+
+
 @dataclass
 class SupervisedTask:
     """A supervised background task.
@@ -288,6 +331,7 @@ class SupervisedTask:
                     next_run_at=next_run_at,
                     interval_s=self._interval_s,
                 )
+        first_run_state = _first_run_state(self)
         return {
             "name": self.name,
             "registered": True,
@@ -312,6 +356,7 @@ class SupervisedTask:
             "overdue_seconds": overdue_seconds,
             "last_error_at": self._last_error_at or None,
             "last_error_class": self._last_error_class,
+            "first_run_state": first_run_state,
         }
 
 

@@ -606,6 +606,7 @@ def _register_update_checker(
         "update_checker",
         _update_check_once,
         interval_s=float(update_checker.check_interval_s),
+        run_immediately=True,
     )
     return update_checker
 
@@ -1203,6 +1204,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             "model_info_refresh",
             _model_info_refresh_once,
             interval_s=float(config.model_info.refresh_interval_s),
+            run_immediately=True,
         )
 
     # Register periodic backfill of canonical rows for models that lack
@@ -1255,6 +1257,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         "checkpoint",
         _checkpoint_once,
         interval_s=14400.0,
+        run_immediately=True,
     )
 
     # Register periodic usage window refresh (every 60 seconds).

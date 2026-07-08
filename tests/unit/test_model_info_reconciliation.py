@@ -266,8 +266,14 @@ class TestBuildCanonicalDetail:
         assert detail["huggingface_metadata"]["pipeline_tag"] == "text-generation"
         assert detail["huggingface_metadata"]["license"] == "apache-2.0"
         assert any(b.get("name") == "MMLU" for b in detail["benchmarks"])
-        # No external sources this cycle.
-        assert prov["sources"] == ["provider_catalog"]
+        # Provenance now credits openrouter because its external_id is
+        # preserved from existing_detail, with source_states flagging
+        # it as preserved_external_id (Phase 4 contract).
+        assert prov["sources"] == ["provider_catalog", "openrouter"]
+        assert (
+            prov.get("source_states", {}).get("openrouter")
+            == "preserved_external_id"
+        )
 
     def test_conflict_recorded_when_external_differs_materially(self) -> None:
         provider_detail = {"limits": {"effective_context": 128000}}

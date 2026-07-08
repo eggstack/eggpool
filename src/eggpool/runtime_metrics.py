@@ -415,12 +415,18 @@ class RuntimeMetricsService:
         the total number of last-error ticks.  ``overdue`` only counts
         periodic tasks whose ``overdue_seconds`` exceeds the grace band
         so transient scheduler jitter does not fire the alert.
+        ``never_run_not_due`` and ``never_run_startup_deferred`` are
+        counted separately so the dashboard can render a friendly label
+        for healthy startup-deferred tasks (the old code rendered all
+        never-run tasks as opaque ``never ran``).
         """
         registered = len(tasks)
         running = 0
         failed = 0
         overdue = 0
         last_error_count = 0
+        never_run_not_due = 0
+        never_run_overdue = 0
         for task in tasks:
             is_running = bool(task.get("running"))
             is_done = bool(task.get("done"))
@@ -436,12 +442,19 @@ class RuntimeMetricsService:
                 overdue += 1
             if task.get("last_error_class"):
                 last_error_count += 1
+            first_run = task.get("first_run_state")
+            if first_run == "never_run_not_due":
+                never_run_not_due += 1
+            elif first_run == "never_run_overdue":
+                never_run_overdue += 1
         return {
             "registered": registered,
             "running": running,
             "failed": failed,
             "overdue": overdue,
             "last_error_count": last_error_count,
+            "never_run_not_due": never_run_not_due,
+            "never_run_overdue": never_run_overdue,
         }
 
     # -- Database health ----------------------------------------------------
