@@ -14,7 +14,7 @@ spike in pending requests, walk through this list in order:
 1. **Dashboard runtime tab — stream diagnostics card.**
    The `outcomes` histogram should be dominated by `stream_completed`.
    A spike in `stream_finalizer_timeout`, `upstream_midstream_error`,
-   or `downstream_send_cancelled` points at the failing layer.
+   or `client_cancelled` points at the failing layer.
 2. **`/api/stats/runtime` JSON — `db_contention.lock_wait_p95_ms`.**
    Anything above `200 ms` means SQLite is the bottleneck. The routing
    trace guardrail should be skipping writes; confirm via

@@ -29,11 +29,9 @@ logger = logging.getLogger(__name__)
 # can rely on a fixed key set.
 STREAM_OUTCOME_COMPLETED = "stream_completed"
 STREAM_OUTCOME_CLIENT_CANCELLED = "client_cancelled"
-STREAM_OUTCOME_DOWNSTREAM_SEND_CANCELLED = "downstream_send_cancelled"
 STREAM_OUTCOME_UPSTREAM_MIDSTREAM_ERROR = "upstream_midstream_error"
 STREAM_OUTCOME_FINALIZER_TIMEOUT = "stream_finalizer_timeout"
 STREAM_OUTCOME_FINALIZER_FAILED = "stream_finalizer_failed"
-STREAM_OUTCOME_USAGE_MISSING_FINAL_EVENT = "stream_usage_missing_final_event"
 
 
 @dataclass
@@ -121,11 +119,9 @@ class StreamDiagnostics:
         self._outcomes: dict[str, int] = {
             STREAM_OUTCOME_COMPLETED: 0,
             STREAM_OUTCOME_CLIENT_CANCELLED: 0,
-            STREAM_OUTCOME_DOWNSTREAM_SEND_CANCELLED: 0,
             STREAM_OUTCOME_UPSTREAM_MIDSTREAM_ERROR: 0,
             STREAM_OUTCOME_FINALIZER_TIMEOUT: 0,
             STREAM_OUTCOME_FINALIZER_FAILED: 0,
-            STREAM_OUTCOME_USAGE_MISSING_FINAL_EVENT: 0,
         }
         self._httpx_exception_counts: dict[str, int] = {}
         self._upstream_error_class_counts: dict[str, int] = {}
@@ -196,10 +192,7 @@ class StreamDiagnostics:
                 if elapsed_ms is not None and elapsed_ms >= 0:
                     if outcome == STREAM_OUTCOME_COMPLETED:
                         self._completed_ms.record(float(elapsed_ms))
-                    elif outcome in (
-                        STREAM_OUTCOME_CLIENT_CANCELLED,
-                        STREAM_OUTCOME_DOWNSTREAM_SEND_CANCELLED,
-                    ):
+                    elif outcome == STREAM_OUTCOME_CLIENT_CANCELLED:
                         self._client_cancel_ms.record(float(elapsed_ms))
                     elif outcome == STREAM_OUTCOME_FINALIZER_TIMEOUT:
                         self._finalizer_timeout_ms.record(float(elapsed_ms))

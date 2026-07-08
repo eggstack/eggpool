@@ -336,7 +336,7 @@ open in parallel. When users report drops, timeouts, or
 1. `eggpool runtime show` and `GET /api/stats/runtime` →
    `stream_diagnostics.outcomes` should be dominated by
    `stream_completed`. Spikes in `stream_finalizer_timeout`,
-   `upstream_midstream_error`, or `downstream_send_cancelled` point
+   `upstream_midstream_error`, or `client_cancelled` point
    at the failing layer.
 2. `GET /api/stats/runtime` →
    `db_contention.lock_wait_p95_ms` above `200 ms` means SQLite is

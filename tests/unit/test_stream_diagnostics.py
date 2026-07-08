@@ -40,8 +40,6 @@ def test_empty_snapshot_contract() -> None:
         STREAM_OUTCOME_UPSTREAM_MIDSTREAM_ERROR: 0,
         STREAM_OUTCOME_FINALIZER_TIMEOUT: 0,
         STREAM_OUTCOME_FINALIZER_FAILED: 0,
-        "stream_usage_missing_final_event": 0,
-        "downstream_send_cancelled": 0,
     }
     assert snap["httpx_exception_counts"] == {}
     assert snap["upstream_error_class_counts"] == {}

@@ -22,6 +22,52 @@ class _RollbackProbeError(Exception):
     """Sentinel exception for probe_writable to roll back without logging."""
 
 
+def _classify_op_kind(sql: str) -> str:
+    """Classify a SQL statement into a coarse operator-kind bucket.
+
+    The result feeds the in-memory ``operations_by_kind`` counter so
+    operators can see whether the database is dominated by SELECTs,
+    INSERTs, UPDATEs, DELETEs, or admin pragmas / schema migrations.
+    Only the leading keyword is inspected.
+    """
+    stripped = sql.lstrip()
+    upper = stripped.upper()
+    if upper.startswith("SELECT"):
+        return "select"
+    if upper.startswith("INSERT"):
+        return "insert"
+    if upper.startswith("UPDATE"):
+        return "update"
+    if upper.startswith("DELETE"):
+        return "delete"
+    if upper.startswith("REPLACE"):
+        return "replace"
+    if upper.startswith("BEGIN") or upper.startswith("COMMIT"):
+        return "transaction"
+    if upper.startswith("PRAGMA"):
+        return "pragma"
+    return "other"
+
+
+def _classify_error_kind(exc: BaseException) -> str:
+    """Classify a database exception into a coarse operator-kind bucket.
+
+    The result feeds the in-memory ``last_operation_error_kind`` counter
+    so operators can see whether the most recent failure was a lock
+    conflict, schema error, integrity violation, or other class.
+    """
+    cls_name = type(exc).__qualname__.lower()
+    if "lock" in cls_name or "busy" in cls_name:
+        return "lock"
+    if "integrity" in cls_name:
+        return "integrity"
+    if "operational" in cls_name:
+        return "operational"
+    if "syntax" in cls_name or "schema" in cls_name:
+        return "schema"
+    return "other"
+
+
 class Database:
     """Async wrapper around aiosqlite with pragma configuration.
 
@@ -64,6 +110,8 @@ class Database:
         self._total_transactions: int = 0
         self._total_nested_transactions: int = 0
         self._last_operation_error_class: str | None = None
+        self._last_operation_error_kind: str | None = None
+        self._operations_by_kind: dict[str, int] = {}
         self._cumulative_lock_wait_s: float = 0.0
         self._max_lock_wait_s: float = 0.0
         self._lock_wait_count: int = 0
@@ -314,9 +362,12 @@ class Database:
             cursor = await self.connection.execute(sql, params)  # type: ignore[union-attr]
             rowcount = cursor.rowcount
             self._write_ops += 1
+            kind = _classify_op_kind(sql)
+            self._operations_by_kind[kind] = self._operations_by_kind.get(kind, 0) + 1
             return int(rowcount) if rowcount >= 0 else 0
         except Exception as exc:
             self._last_operation_error_class = type(exc).__qualname__
+            self._last_operation_error_kind = _classify_error_kind(exc)
             raise DatabaseError(f"Execute write failed: {exc}") from exc
 
     async def execute_many(
@@ -337,9 +388,12 @@ class Database:
             cursor = await self.connection.executemany(sql, params)  # type: ignore[union-attr]
             rowcount = cursor.rowcount
             self._write_ops += len(params)
+            kind = _classify_op_kind(sql)
+            self._operations_by_kind[kind] = self._operations_by_kind.get(kind, 0) + 1
             return int(rowcount) if rowcount >= 0 else 0
         except Exception as exc:
             self._last_operation_error_class = type(exc).__qualname__
+            self._last_operation_error_kind = _classify_error_kind(exc)
             raise DatabaseError(f"Execute many failed: {exc}") from exc
 
     async def execute_insert(
@@ -361,11 +415,14 @@ class Database:
             if last_id is None:
                 raise DatabaseError("INSERT did not return lastrowid")
             self._write_ops += 1
+            kind = _classify_op_kind(sql)
+            self._operations_by_kind[kind] = self._operations_by_kind.get(kind, 0) + 1
             return int(last_id)
         except DatabaseError:
             raise
         except Exception as exc:
             self._last_operation_error_class = type(exc).__qualname__
+            self._last_operation_error_kind = _classify_error_kind(exc)
             raise DatabaseError(f"Execute insert failed: {exc}") from exc
 
     async def execute_returning(
@@ -390,9 +447,12 @@ class Database:
                 self._read_ops += 1
             else:
                 self._write_ops += 1
+            kind = _classify_op_kind(sql)
+            self._operations_by_kind[kind] = self._operations_by_kind.get(kind, 0) + 1
             return list(rows)  # type: ignore[arg-type]
         except Exception as exc:
             self._last_operation_error_class = type(exc).__qualname__
+            self._last_operation_error_kind = _classify_error_kind(exc)
             raise DatabaseError(f"Execute returning failed: {exc}") from exc
 
     async def vacuum(self) -> None:
@@ -459,6 +519,8 @@ class Database:
             "total_transactions": self._total_transactions,
             "total_nested_transactions": self._total_nested_transactions,
             "last_operation_error_class": self._last_operation_error_class,
+            "last_operation_error_kind": self._last_operation_error_kind,
+            "operations_by_kind": dict(self._operations_by_kind),
             "cumulative_lock_wait_s": round(self._cumulative_lock_wait_s, 4),
             "max_lock_wait_s": round(self._max_lock_wait_s, 4),
             "lock_wait_count": self._lock_wait_count,
@@ -494,9 +556,13 @@ class Database:
                 cursor = await self.connection.execute(sql, params)  # type: ignore[union-attr]
                 rows = await cursor.fetchall()
                 self._read_ops += 1
+                kind = _classify_op_kind(sql)
+                cur = self._operations_by_kind
+                cur[kind] = cur.get(kind, 0) + 1
                 return list(rows)  # type: ignore[arg-type]
             except Exception as exc:
                 self._last_operation_error_class = type(exc).__qualname__
+                self._last_operation_error_kind = _classify_error_kind(exc)
                 raise DatabaseError(f"Fetch all failed: {exc}") from exc
 
     async def fetch_one(
@@ -508,9 +574,13 @@ class Database:
                 cursor = await self.connection.execute(sql, params)  # type: ignore[union-attr]
                 row = await cursor.fetchone()
                 self._read_ops += 1
+                kind = _classify_op_kind(sql)
+                cur = self._operations_by_kind
+                cur[kind] = cur.get(kind, 0) + 1
                 return row  # type: ignore[return-value]
             except Exception as exc:
                 self._last_operation_error_class = type(exc).__qualname__
+                self._last_operation_error_kind = _classify_error_kind(exc)
                 raise DatabaseError(f"Fetch one failed: {exc}") from exc
 
     @asynccontextmanager

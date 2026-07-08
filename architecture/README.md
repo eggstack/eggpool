@@ -2725,11 +2725,9 @@ path under a fixed label set:
 
 - `stream_completed`
 - `client_cancelled`
-- `downstream_send_cancelled`
 - `upstream_midstream_error`
 - `stream_finalizer_timeout`
 - `stream_finalizer_failed`
-- `stream_usage_missing_final_event`
 
 Bounded ring histograms (`completed_ms`, `client_cancel_ms`,
 `finalizer_timeout_ms`) keep p50 / p95 / p99 of recent samples without

@@ -1,12 +1,15 @@
-"""Reproduce the high-concurrency streaming harness from the CLI.
+r"""Reproduce the high-concurrency streaming harness from the CLI.
 
 Drives a configurable burst of streaming requests through the
 coordinator pipeline (mock upstream) and prints a structured summary of
 runtime telemetry, DB state, and lock contention.  Useful for operators
 who want to validate stream stability outside the pytest harness:
 
-    python -m scripts.repro_high_concurrency_streams \\
-        --concurrency 100 --cancel-rate 0.25 --cancel-offset 3
+    python scripts/repro_high_concurrency_streams.py \\
+        --concurrency 50 --cancel-rate 0.25 --scenario slow-stream
+
+    python scripts/repro_high_concurrency_streams.py \\
+        --concurrency 100 --cancel-rate 0.50 --scenario abrupt-upstream-close
 
 The script is intentionally a thin shell over the same primitives the
 integration test exercises so the harness and the script stay in sync.
@@ -44,11 +47,46 @@ from eggpool.request.coordinator import (
 from eggpool.request.stream_diagnostics import (
     STREAM_OUTCOME_CLIENT_CANCELLED,
     STREAM_OUTCOME_COMPLETED,
+    STREAM_OUTCOME_FINALIZER_TIMEOUT,
+    STREAM_OUTCOME_UPSTREAM_MIDSTREAM_ERROR,
     get_stream_diagnostics,
 )
 from eggpool.routing.router import Router
 
 UPSTREAM_BASE = "https://test-upstream.example.com"
+
+
+SCENARIO_HAPPY_PATH = "happy-path"
+SCENARIO_NO_USAGE = "no-usage"
+SCENARIO_SLOW_FIRST_BYTE = "slow-first-byte"
+SCENARIO_SLOW_TOKEN_CADENCE = "slow-stream"
+SCENARIO_ABRUPT_CLOSE = "abrupt-upstream-close"
+SCENARIO_SERVER_STALL = "read-timeout"
+SCENARIO_MALFORMED_FRAME = "malformed-frame"
+SCENARIO_CONNECTION_RESET = "connection-reset"
+
+ALL_SCENARIOS: tuple[str, ...] = (
+    SCENARIO_HAPPY_PATH,
+    SCENARIO_NO_USAGE,
+    SCENARIO_SLOW_FIRST_BYTE,
+    SCENARIO_SLOW_TOKEN_CADENCE,
+    SCENARIO_ABRUPT_CLOSE,
+    SCENARIO_SERVER_STALL,
+    SCENARIO_MALFORMED_FRAME,
+    SCENARIO_CONNECTION_RESET,
+)
+
+CANCEL_BEFORE_FIRST_BYTE = "before-first-byte"
+CANCEL_AFTER_FIRST_TOKEN = "after-first-token"
+CANCEL_MIDSTREAM = "midstream"
+CANCEL_AFTER_FINAL_BEFORE_USAGE = "after-final-before-usage"
+
+ALL_CANCEL_OFFSETS: tuple[str, ...] = (
+    CANCEL_BEFORE_FIRST_BYTE,
+    CANCEL_AFTER_FIRST_TOKEN,
+    CANCEL_MIDSTREAM,
+    CANCEL_AFTER_FINAL_BEFORE_USAGE,
+)
 
 
 def _build_config() -> AppConfig:
@@ -127,52 +165,220 @@ def _make_body() -> bytes:
     ).encode()
 
 
-def _iter_chunks(count: int, delay: float) -> Any:
-    def _gen() -> Any:
-        for i in range(count):
-            yield (
-                f'data: {{"choices":[{{"delta":{{"content":"tok{i}"}}}}]}}\n\n'
-            ).encode()
-            time.sleep(delay)
-        yield (
-            b'data: {"choices":[{"delta":{},"finish_reason":"stop"}],'
-            b'"usage":{"prompt_tokens":1,"completion_tokens":1,'
-            b'"total_tokens":2}}\n\n'
-        )
-        yield b"data: [DONE]\n\n"
+def _sse_chunk(delta: str) -> bytes:
+    payload = {
+        "id": f"chunk-{delta}",
+        "object": "chat.completion.chunk",
+        "choices": [{"delta": {"content": delta}, "index": 0}],
+    }
+    return f"data: {json.dumps(payload)}\n\n".encode()
 
-    return _gen()
+
+def _sse_usage_chunk() -> bytes:
+    payload: dict[str, Any] = {
+        "id": "usage",
+        "object": "chat.completion.chunk",
+        "choices": [],
+        "usage": {
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "total_tokens": 2,
+        },
+    }
+    return f"data: {json.dumps(payload)}\n\n".encode()
+
+
+def _sse_done() -> bytes:
+    return b"data: [DONE]\n\n"
+
+
+def _should_cancel(offset: str, chunks_seen: int, started: bool) -> bool:
+    if not started:
+        return False
+    if offset == CANCEL_BEFORE_FIRST_BYTE:
+        return chunks_seen == 0
+    if offset == CANCEL_AFTER_FIRST_TOKEN:
+        return chunks_seen >= 1
+    if offset == CANCEL_MIDSTREAM:
+        return chunks_seen >= 2
+    if offset == CANCEL_AFTER_FINAL_BEFORE_USAGE:
+        return chunks_seen >= 4
+    return chunks_seen >= 2
+
+
+def _scenario_response(
+    scenario: str,
+    chunks_per_stream: int,
+    chunk_delay_s: float,
+) -> httpx.Response:
+    if scenario == SCENARIO_HAPPY_PATH:
+
+        async def _gen() -> Any:
+            for i in range(chunks_per_stream):
+                yield _sse_chunk(f"tok{i}")
+                await asyncio.sleep(chunk_delay_s)
+            yield _sse_usage_chunk()
+            yield _sse_done()
+
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_gen(),  # pyright: ignore[reportArgumentType]
+        )
+
+    if scenario == SCENARIO_NO_USAGE:
+
+        async def _gen() -> Any:
+            for i in range(chunks_per_stream):
+                yield _sse_chunk(f"tok{i}")
+                await asyncio.sleep(chunk_delay_s)
+            yield _sse_done()
+
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_gen(),  # pyright: ignore[reportArgumentType]
+        )
+
+    if scenario == SCENARIO_SLOW_FIRST_BYTE:
+
+        async def _gen() -> Any:
+            await asyncio.sleep(max(1.0, chunk_delay_s * 100))
+            yield _sse_chunk("first")
+            for i in range(1, chunks_per_stream):
+                yield _sse_chunk(f"tok{i}")
+                await asyncio.sleep(chunk_delay_s)
+            yield _sse_usage_chunk()
+            yield _sse_done()
+
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_gen(),  # pyright: ignore[reportArgumentType]
+        )
+
+    if scenario == SCENARIO_SLOW_TOKEN_CADENCE:
+
+        async def _gen() -> Any:
+            for i in range(chunks_per_stream):
+                yield _sse_chunk(f"tok{i}")
+                await asyncio.sleep(max(0.5, chunk_delay_s * 50))
+            yield _sse_usage_chunk()
+            yield _sse_done()
+
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_gen(),  # pyright: ignore[reportArgumentType]
+        )
+
+    if scenario == SCENARIO_ABRUPT_CLOSE:
+
+        async def _gen() -> Any:
+            for i in range(chunks_per_stream):
+                yield _sse_chunk(f"tok{i}")
+                await asyncio.sleep(chunk_delay_s)
+
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_gen(),  # pyright: ignore[reportArgumentType]
+        )
+
+    if scenario == SCENARIO_SERVER_STALL:
+
+        async def _gen() -> Any:
+            await asyncio.sleep(60.0)
+            yield b""
+
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_gen(),  # pyright: ignore[reportArgumentType]
+        )
+
+    if scenario == SCENARIO_MALFORMED_FRAME:
+
+        async def _gen() -> Any:
+            for i in range(chunks_per_stream):
+                yield _sse_chunk(f"tok{i}")
+                await asyncio.sleep(chunk_delay_s)
+            yield b"this is not a valid SSE frame\n\n"
+            await asyncio.sleep(chunk_delay_s)
+            yield _sse_done()
+
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_gen(),  # pyright: ignore[reportArgumentType]
+        )
+
+    if scenario == SCENARIO_CONNECTION_RESET:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n',
+        )
+
+    msg = f"Unknown scenario: {scenario}"
+    raise ValueError(msg)
+
+
+def _positive_delta(
+    baseline: dict[str, int], current: dict[str, int]
+) -> dict[str, int]:
+    keys = set(baseline) | set(current)
+    return {
+        key: current.get(key, 0) - baseline.get(key, 0)
+        for key in keys
+        if current.get(key, 0) - baseline.get(key, 0) > 0
+    }
 
 
 async def _run_burst(
     coord: RequestCoordinator,
+    db: Database,
     *,
     concurrency: int,
     cancel_rate: float,
-    cancel_offset: int,
+    cancel_offset: str,
+    scenario: str,
     chunks_per_stream: int,
-    delay: float,
+    chunk_delay_s: float,
 ) -> dict[str, Any]:
+
     diagnostics = get_stream_diagnostics()
-    initial_outcomes = dict(diagnostics.snapshot()["outcomes"])
+    initial_snap = diagnostics.snapshot()
+    initial_outcomes = dict(initial_snap["outcomes"])
+    initial_httpx = dict(initial_snap.get("httpx_exception_counts", {}))
+    initial_upstream = dict(initial_snap.get("upstream_error_class_counts", {}))
+    baseline_lock_wait = int(
+        db.contention_snapshot().get("lock_wait_sample_count") or 0
+    )
+    baseline_quota = sum(
+        coord._router.quota_estimator._account_reserved_cost.values()  # pyright: ignore[reportPrivateUsage]
+    )
+    baseline_active_requests = sum(
+        s.active_request_count
+        for s in coord._router._registry.get_all_states()  # pyright: ignore[reportPrivateUsage]
+    )
 
     completed = 0
     cancelled = 0
+    upstream_failed = 0
+    finalizer_timed_out = 0
     failures = 0
 
     with respx.mock(assert_all_called=False) as mock:
 
         async def _side_effect(_request: httpx.Request) -> httpx.Response:
-            return httpx.Response(
-                200,
-                headers={"content-type": "text/event-stream"},
-                stream=_iter_chunks(chunks_per_stream, delay),
-            )
+            return _scenario_response(scenario, chunks_per_stream, chunk_delay_s)
 
         mock.post(f"{UPSTREAM_BASE}/chat/completions").mock(side_effect=_side_effect)
 
         async def _drive_one(idx: int) -> None:
-            nonlocal completed, cancelled, failures
+            nonlocal completed, cancelled
+            nonlocal upstream_failed, finalizer_timed_out, failures
             req_id = f"repro-{idx:04d}"
             cancel = (idx / max(1, concurrency)) < cancel_rate
             ctx = ProxyRequestContext(
@@ -196,7 +402,11 @@ async def _run_burst(
                     chunks_seen += 1
                     if not started.is_set():
                         started.set()
-                    if cancel and chunks_seen >= cancel_offset:
+                    if cancel and _should_cancel(
+                        cancel_offset,
+                        chunks_seen,
+                        started.is_set(),
+                    ):
                         at_target.set()
                     else:
                         await asyncio.sleep(0)
@@ -204,9 +414,13 @@ async def _run_burst(
             task = asyncio.create_task(_drive())
             try:
                 if cancel:
-                    await asyncio.wait_for(started.wait(), timeout=2.0)
-                    await asyncio.wait_for(at_target.wait(), timeout=2.0)
-                    await asyncio.sleep(0)
+                    if cancel_offset == CANCEL_BEFORE_FIRST_BYTE:
+                        await asyncio.wait_for(started.wait(), timeout=1.0)
+                        await asyncio.sleep(0)
+                    else:
+                        await asyncio.wait_for(started.wait(), timeout=2.0)
+                        await asyncio.wait_for(at_target.wait(), timeout=2.0)
+                        await asyncio.sleep(0)
                     task.cancel()
                 await task
                 completed += 1
@@ -225,23 +439,81 @@ async def _run_burst(
             except TimeoutError:
                 break
 
-    final_outcomes = dict(diagnostics.snapshot()["outcomes"])
+    if coord._finalization_retry_queue is not None:  # pyright: ignore[reportPrivateUsage]
+        for _ in range(5):
+            await coord._finalization_retry_queue.drain_once()  # pyright: ignore[reportPrivateUsage]
+
+    final_snap = diagnostics.snapshot()
+    final_outcomes = dict(final_snap["outcomes"])
+    final_httpx = dict(final_snap.get("httpx_exception_counts", {}))
+    final_upstream = dict(final_snap.get("upstream_error_class_counts", {}))
+
+    pending = await db.fetch_one(
+        "SELECT COUNT(*) AS c FROM requests WHERE status = 'pending'"
+    )
+    pending_count = int(pending["c"] if pending else 0)
+    active_reservations = await db.fetch_one(
+        "SELECT COUNT(*) AS c FROM reservations WHERE status = 'active' "
+        "AND expires_at > unixepoch('now')"
+    )
+    active_reservations_count = int(
+        active_reservations["c"] if active_reservations else 0
+    )
+    final_active_requests = sum(
+        s.active_request_count
+        for s in coord._router._registry.get_all_states()  # pyright: ignore[reportPrivateUsage]
+    )
+    final_quota = sum(coord._router.quota_estimator._account_reserved_cost.values())  # pyright: ignore[reportPrivateUsage]
+    contention = db.contention_snapshot()
+
+    outcomes_delta = {
+        key: final_outcomes.get(key, 0) - initial_outcomes.get(key, 0)
+        for key in (
+            STREAM_OUTCOME_COMPLETED,
+            STREAM_OUTCOME_CLIENT_CANCELLED,
+            "upstream_midstream_error",
+            STREAM_OUTCOME_FINALIZER_TIMEOUT,
+            "stream_finalizer_failed",
+        )
+    }
+    upstream_failed = outcomes_delta.get(STREAM_OUTCOME_UPSTREAM_MIDSTREAM_ERROR, 0)
+    finalizer_timed_out = outcomes_delta.get(STREAM_OUTCOME_FINALIZER_TIMEOUT, 0)
+    total = completed + cancelled + upstream_failed + finalizer_timed_out + failures
+
     return {
         "concurrency": concurrency,
         "cancel_rate": cancel_rate,
+        "scenario": scenario,
+        "cancel_offset": cancel_offset,
+        "total_requests": total,
         "completed": completed,
         "cancelled": cancelled,
+        "upstream_failed": upstream_failed,
+        "finalizer_timed_out": finalizer_timed_out,
         "failures": failures,
-        "outcomes_delta": {
-            STREAM_OUTCOME_COMPLETED: (
-                final_outcomes.get(STREAM_OUTCOME_COMPLETED, 0)
-                - initial_outcomes.get(STREAM_OUTCOME_COMPLETED, 0)
-            ),
-            STREAM_OUTCOME_CLIENT_CANCELLED: (
-                final_outcomes.get(STREAM_OUTCOME_CLIENT_CANCELLED, 0)
-                - initial_outcomes.get(STREAM_OUTCOME_CLIENT_CANCELLED, 0)
-            ),
-        },
+        "outcomes_delta": outcomes_delta,
+        "httpx_exception_counts": _positive_delta(initial_httpx, final_httpx),
+        "upstream_error_class_counts": _positive_delta(
+            initial_upstream, final_upstream
+        ),
+        "leaked_pending_rows": pending_count,
+        "leaked_active_reservations": active_reservations_count,
+        "router_active_requests_after": final_active_requests,
+        "router_active_requests_delta": (
+            final_active_requests - baseline_active_requests
+        ),
+        "quota_reserved_cost_after": final_quota,
+        "quota_reserved_cost_delta": final_quota - baseline_quota,
+        "finalization_retry_queue_size": (
+            coord._finalization_retry_queue.size  # pyright: ignore[reportPrivateUsage]
+            if coord._finalization_retry_queue  # pyright: ignore[reportPrivateUsage]
+            else 0
+        ),
+        "db_lock_wait_p95_ms": contention.get("lock_wait_p95_ms"),
+        "db_lock_wait_max_ms": contention.get("lock_wait_max_ms"),
+        "db_lock_wait_sample_count_delta": (
+            int(contention.get("lock_wait_sample_count") or 0) - baseline_lock_wait
+        ),
     }
 
 
@@ -249,7 +521,18 @@ async def _main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--concurrency", type=int, default=50)
     parser.add_argument("--cancel-rate", type=float, default=0.0)
-    parser.add_argument("--cancel-offset", type=int, default=2)
+    parser.add_argument(
+        "--cancel-offset",
+        type=str,
+        default=CANCEL_MIDSTREAM,
+        choices=ALL_CANCEL_OFFSETS,
+    )
+    parser.add_argument(
+        "--scenario",
+        type=str,
+        default=SCENARIO_HAPPY_PATH,
+        choices=ALL_SCENARIOS,
+    )
     parser.add_argument("--chunks-per-stream", type=int, default=6)
     parser.add_argument("--chunk-delay-s", type=float, default=0.01)
     args = parser.parse_args()
@@ -259,11 +542,13 @@ async def _main() -> int:
     try:
         summary = await _run_burst(
             coord,
+            db,
             concurrency=args.concurrency,
             cancel_rate=args.cancel_rate,
             cancel_offset=args.cancel_offset,
+            scenario=args.scenario,
             chunks_per_stream=args.chunks_per_stream,
-            delay=args.chunk_delay_s,
+            chunk_delay_s=args.chunk_delay_s,
         )
     finally:
         await httpx_client.aclose()
