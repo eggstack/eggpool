@@ -2728,6 +2728,13 @@ path under a fixed label set:
 - `upstream_midstream_error`
 - `stream_finalizer_timeout`
 - `stream_finalizer_failed`
+- `upstream_pool_timeout`
+- `upstream_read_timeout`
+- `upstream_connect_timeout`
+- `upstream_write_timeout`
+- `upstream_protocol_error`
+- `upstream_connect_error`
+- `upstream_transport_error`
 
 Bounded ring histograms (`completed_ms`, `client_cancel_ms`,
 `finalizer_timeout_ms`) keep p50 / p95 / p99 of recent samples without
@@ -2775,6 +2782,10 @@ cancellation path used to fall back to the broad 60-second
 
 The queue does NOT substitute for `_crash_recovery`: durable rows
 that never converge are still recovered at every startup.
+`RuntimeMetricsService._snapshot_finalization_retry_queue()` is async
+and correctly awaits the queue's `snapshot()` method so the
+`/api/stats/runtime` endpoint serializes retry queue state without
+coroutine leaks or fallback errors.
 
 ### Routing-trace pressure guard
 
@@ -2807,6 +2818,12 @@ aggregated under `httpx_exception_counts` /
 
 ### Reproducer and operator surface
 
+The shared test harness (`tests/helpers/stream_stability_harness.py`)
+provides canonical scenario names (`slow-stream` as primary,
+`slow-token-cadence` as alias), SSE helpers, cancellation logic, and the
+scenario-to-response builder used by both the integration test and the
+CLI reproducer.
+
 - `tests/integration/test_high_concurrency_streaming.py` runs 50
   concurrent mock streams with a configurable cancel rate and asserts
   the closure validation matrix (no leaked pending rows, no active
@@ -2818,7 +2835,9 @@ aggregated under `httpx_exception_counts` /
   operators without a pytest harness — runs the same harness against a
   configurable `--concurrency`, `--cancel-rate`, `--cancel-offset`,
   `--chunks-per-stream`, `--chunk-delay-s` and prints a structured
-  summary.
+  summary. The `--scenario` flag accepts canonical names from the shared
+  harness (`slow-stream`, `happy-path`, etc.) plus aliases
+  (`slow-token-cadence`).
 - `docs/opencode-stream-stability.md` is the operator playbook:
   symptom checklist, root-cause matrix, recovery commands
   (`eggpool runtime show`, `eggpool admin drain-finalization-queue`,

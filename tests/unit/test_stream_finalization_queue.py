@@ -13,6 +13,7 @@ drain task.  Validates:
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
@@ -216,3 +217,166 @@ async def test_drain_skips_stale_entries() -> None:
     assert succeeded == 0
     snap = await queue.snapshot()
     assert snap["dropped_age"] == 1
+
+
+class _AlwaysFailFinalizer(_StubFinalizer):
+    """Finalizer that always raises, simulating a transient DB error."""
+
+    def __init__(self) -> None:
+        super().__init__(transition=False)
+
+    async def finalize(
+        self,
+        selected: Any,
+        data: Any,
+    ) -> bool:
+        raise RuntimeError("deterministic transient failure")
+
+
+@pytest.mark.asyncio()
+async def test_retry_count_exhaustion_drops_entry() -> None:
+    """Entry with a flaky finalizer is dropped after retry_count > 4."""
+    queue = FinalizationRetryQueue(
+        db=None,  # type: ignore[arg-type]
+        finalizer=_AlwaysFailFinalizer(),  # type: ignore[arg-type]
+    )
+    await queue.enqueue(_make_entry(enqueued_at=time.monotonic()))
+    # 5 drains: retry_count goes 1,2,3,4,5 (> 4 on the 5th).
+    for _ in range(5):
+        await queue.drain_once()
+    snap = await queue.snapshot()
+    assert snap["size"] == 0
+    assert snap["dropped_age"] >= 1
+
+
+@pytest.mark.asyncio()
+async def test_duplicate_rejection_increments_counter() -> None:
+    """Duplicate enqueue_token increments dropped_duplicate."""
+    finalizer = _StubFinalizer()
+    queue = FinalizationRetryQueue(
+        db=None,  # type: ignore[arg-type]
+        finalizer=finalizer,  # type: ignore[arg-type]
+    )
+    now = time.monotonic()
+    e1 = _make_entry(
+        db_request_id="db-dup", outcome="CLIENT_CANCELLED", enqueued_at=now
+    )
+    e2 = _make_entry(
+        db_request_id="db-dup", outcome="CLIENT_CANCELLED", enqueued_at=now
+    )
+    assert await queue.enqueue(e1) is True
+    assert await queue.enqueue(e2) is False
+    snap = await queue.snapshot()
+    assert snap["dropped_duplicate"] == 1
+    assert snap["size"] == 1
+
+
+@pytest.mark.asyncio()
+async def test_overflow_behavior() -> None:
+    """Queue with max_entries=2 drops the third entry."""
+    finalizer = _StubFinalizer()
+    queue = FinalizationRetryQueue(
+        db=None,  # type: ignore[arg-type]
+        finalizer=finalizer,  # type: ignore[arg-type]
+        max_entries=2,
+    )
+    now = time.monotonic()
+    for i in range(3):
+        assert await queue.enqueue(
+            _make_entry(db_request_id=f"db-of-{i}", enqueued_at=now)
+        ) is (i < 2)
+    snap = await queue.snapshot()
+    assert snap["dropped_overflow"] == 1
+    assert snap["size"] == 2
+
+
+@pytest.mark.asyncio()
+async def test_drain_returns_succeeded_count() -> None:
+    """drain_once returns the number of entries where the finalizer returned True."""
+    finalizer = _StubFinalizer(transition=True)
+    queue = FinalizationRetryQueue(
+        db=None,  # type: ignore[arg-type]
+        finalizer=finalizer,  # type: ignore[arg-type]
+    )
+    now = time.monotonic()
+    for i in range(3):
+        await queue.enqueue(_make_entry(db_request_id=f"db-ok-{i}", enqueued_at=now))
+    succeeded = await queue.drain_once()
+    assert succeeded == 3
+    snap = await queue.snapshot()
+    assert snap["drained_total"] == 3
+    assert snap["size"] == 0
+
+
+@pytest.mark.asyncio()
+async def test_drain_with_mixed_outcomes() -> None:
+    """drain_once counts only entries where the finalizer returned True."""
+
+    class _MixedFinalizer(_StubFinalizer):
+        def __init__(self) -> None:
+            super().__init__(transition=True)
+
+        async def finalize(
+            self,
+            selected: Any,
+            data: Any,
+        ) -> bool:
+            self.calls.append((selected.db_request_id, data.outcome.value))
+            return selected.db_request_id != "db-fail"
+
+    queue = FinalizationRetryQueue(
+        db=None,  # type: ignore[arg-type]
+        finalizer=_MixedFinalizer(),  # type: ignore[arg-type]
+    )
+    now = time.monotonic()
+    await queue.enqueue(_make_entry(db_request_id="db-success", enqueued_at=now))
+    await queue.enqueue(_make_entry(db_request_id="db-fail", enqueued_at=now))
+    succeeded = await queue.drain_once()
+    assert succeeded == 1
+
+
+_SNAPSHOT_EXPECTED_KEYS = frozenset(
+    {
+        "enabled",
+        "size",
+        "max_entries",
+        "max_age_s",
+        "oldest_entry_age_s",
+        "active_interval_s",
+        "idle_interval_s",
+        "enqueued_total",
+        "drained_total",
+        "dropped_overflow",
+        "dropped_age",
+        "dropped_duplicate",
+        "last_drain_at",
+        "last_drain_duration_ms",
+        "last_drain_processed",
+        "last_drain_succeeded",
+    }
+)
+
+
+@pytest.mark.asyncio()
+async def test_snapshot_includes_all_expected_keys() -> None:
+    """Fresh queue snapshot contains every expected key."""
+    finalizer = _StubFinalizer()
+    queue = FinalizationRetryQueue(
+        db=None,  # type: ignore[arg-type]
+        finalizer=finalizer,  # type: ignore[arg-type]
+    )
+    snap = await queue.snapshot()
+    assert set(snap.keys()) == _SNAPSHOT_EXPECTED_KEYS
+
+
+@pytest.mark.asyncio()
+async def test_snapshot_json_serializable() -> None:
+    """snapshot() output can be serialized to JSON without raising."""
+    finalizer = _StubFinalizer()
+    queue = FinalizationRetryQueue(
+        db=None,  # type: ignore[arg-type]
+        finalizer=finalizer,  # type: ignore[arg-type]
+    )
+    snap = await queue.snapshot()
+    serialized = json.dumps(snap, default=str)
+    assert isinstance(serialized, str)

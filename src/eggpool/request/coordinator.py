@@ -88,6 +88,7 @@ from eggpool.request.stream_diagnostics import (
     STREAM_OUTCOME_FINALIZER_TIMEOUT,
     STREAM_OUTCOME_UPSTREAM_MIDSTREAM_ERROR,
     StreamDiagnostics,
+    classify_httpx_error_class,
     get_stream_diagnostics,
 )
 from eggpool.retry.classification import RetryCategory, RetryClassifier
@@ -2778,6 +2779,29 @@ class RequestCoordinator:
                     attempt=selected.attempt_number,
                     exception_class=type(exc).__name__,
                 )
+                # Record the first-class HTTPX transport outcome when
+                # the exception class maps to a known upstream label.
+                if exc_class_name := type(exc).__name__:
+                    first_class_outcome = classify_httpx_error_class(exc_class_name)
+                    self._stream_diagnostics.record_outcome(
+                        first_class_outcome,
+                        proxy_request_id=context.request_id,
+                        db_request_id=selected.db_request_id,
+                        provider_id=selected.provider_id,
+                        account_name=selected.account_name,
+                        model_id=selected.model_id,
+                        protocol=context.upstream_protocol,
+                        elapsed_ms=mid_latency_total,
+                        bytes_emitted=bytes_emitted,
+                        first_byte_ms=(
+                            int(first_byte_ms) if first_byte_ms > 0 else None
+                        ),
+                        upstream_connect_ms=mid_connect_ms_value,
+                        upstream_header_ms=self._upstream_header_ms(context),
+                        upstream_read_ms=mid_read_ms_value,
+                        attempt=selected.attempt_number,
+                        exception_class=type(exc).__name__,
+                    )
                 raise
             finally:
                 try:
@@ -3694,6 +3718,26 @@ class RequestCoordinator:
                     synthetic_cache_result=context.synthetic_cache_result,
                 ),
             )
+            # Record first-class HTTPX transport outcome for streaming
+            # requests that exhaust retries or hit non-retryable errors.
+            if (
+                context.streaming
+                and error_class is not None
+                and isinstance(last_error, _RetryableUpstreamError)
+            ):
+                first_class_outcome = classify_httpx_error_class(error_class)
+                self._stream_diagnostics.record_outcome(
+                    first_class_outcome,
+                    proxy_request_id=context.request_id,
+                    db_request_id=last_selected.db_request_id,
+                    provider_id=last_selected.provider_id,
+                    account_name=last_selected.account_name,
+                    model_id=last_selected.model_id,
+                    protocol=context.upstream_protocol,
+                    elapsed_ms=elapsed_ms,
+                    attempt=last_selected.attempt_number,
+                    exception_class=error_class,
+                )
         elif context.client_metadata.get("db_request_id") is not None:
             # No selected attempt but request exists - synthesize a
             # SelectedAttempt so the existing finalizer path populates

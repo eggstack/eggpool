@@ -33,6 +33,28 @@ STREAM_OUTCOME_UPSTREAM_MIDSTREAM_ERROR = "upstream_midstream_error"
 STREAM_OUTCOME_FINALIZER_TIMEOUT = "stream_finalizer_timeout"
 STREAM_OUTCOME_FINALIZER_FAILED = "stream_finalizer_failed"
 
+# First-class HTTPX upstream transport outcome labels.
+STREAM_OUTCOME_UPSTREAM_POOL_TIMEOUT = "upstream_pool_timeout"
+STREAM_OUTCOME_UPSTREAM_READ_TIMEOUT = "upstream_read_timeout"
+STREAM_OUTCOME_UPSTREAM_CONNECT_TIMEOUT = "upstream_connect_timeout"
+STREAM_OUTCOME_UPSTREAM_WRITE_TIMEOUT = "upstream_write_timeout"
+STREAM_OUTCOME_UPSTREAM_PROTOCOL_ERROR = "upstream_protocol_error"
+STREAM_OUTCOME_UPSTREAM_CONNECT_ERROR = "upstream_connect_error"
+STREAM_OUTCOME_UPSTREAM_TRANSPORT_ERROR = "upstream_transport_error"
+
+
+def classify_httpx_error_class(error_class: str) -> str:
+    """Map an HTTPX exception class name to a first-class stream diagnostic outcome."""
+    _map = {
+        "PoolTimeout": STREAM_OUTCOME_UPSTREAM_POOL_TIMEOUT,
+        "ReadTimeout": STREAM_OUTCOME_UPSTREAM_READ_TIMEOUT,
+        "ConnectTimeout": STREAM_OUTCOME_UPSTREAM_CONNECT_TIMEOUT,
+        "WriteTimeout": STREAM_OUTCOME_UPSTREAM_WRITE_TIMEOUT,
+        "RemoteProtocolError": STREAM_OUTCOME_UPSTREAM_PROTOCOL_ERROR,
+        "ConnectError": STREAM_OUTCOME_UPSTREAM_CONNECT_ERROR,
+    }
+    return _map.get(error_class, STREAM_OUTCOME_UPSTREAM_TRANSPORT_ERROR)
+
 
 @dataclass
 class StreamOutcomeEvent:
@@ -122,6 +144,13 @@ class StreamDiagnostics:
             STREAM_OUTCOME_UPSTREAM_MIDSTREAM_ERROR: 0,
             STREAM_OUTCOME_FINALIZER_TIMEOUT: 0,
             STREAM_OUTCOME_FINALIZER_FAILED: 0,
+            STREAM_OUTCOME_UPSTREAM_POOL_TIMEOUT: 0,
+            STREAM_OUTCOME_UPSTREAM_READ_TIMEOUT: 0,
+            STREAM_OUTCOME_UPSTREAM_CONNECT_TIMEOUT: 0,
+            STREAM_OUTCOME_UPSTREAM_WRITE_TIMEOUT: 0,
+            STREAM_OUTCOME_UPSTREAM_PROTOCOL_ERROR: 0,
+            STREAM_OUTCOME_UPSTREAM_CONNECT_ERROR: 0,
+            STREAM_OUTCOME_UPSTREAM_TRANSPORT_ERROR: 0,
         }
         self._httpx_exception_counts: dict[str, int] = {}
         self._upstream_error_class_counts: dict[str, int] = {}

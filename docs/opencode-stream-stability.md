@@ -109,3 +109,48 @@ Do **not** raise `server.threads` or `workers`. Granian runs one
 worker with a single asyncio loop. Adding threads does not improve
 HTTPX concurrency, and adding workers multiplies the connection
 budget per upstream IP.
+
+## Closure validation
+
+After deploying the stream-stability changes, run these commands to
+verify the runtime diagnostics and harness are working correctly:
+
+```bash
+# Unit tests for stream diagnostics, finalization queue, and runtime metrics
+uv run pytest tests/unit/test_runtime_metrics.py -q
+uv run pytest tests/unit/test_stream_diagnostics.py -q
+uv run pytest tests/unit/test_stream_finalization_queue.py -q
+
+# Integration test: 50 concurrent streams, no cancellations
+uv run pytest tests/integration/test_high_concurrency_streaming.py -q
+
+# CLI reproducer: 50 streams with 25% cancellation
+python scripts/repro_high_concurrency_streams.py \
+    --concurrency 50 --cancel-rate 0.25 --scenario slow-stream
+
+# CLI reproducer: 100 streams with 50% cancellation
+python scripts/repro_high_concurrency_streams.py \
+    --concurrency 100 --cancel-rate 0.50 --scenario slow-stream
+```
+
+### Expected summary values
+
+A clean run should produce:
+
+- `leaked_pending_rows == 0`
+- `leaked_active_reservations == 0`
+- `router_active_requests_after == 0`
+- `finalization_retry_queue_size == 0`
+- `quota_reserved_cost_delta == 0`
+- DB lock p95/max present when contention was observed (concurrency > 1)
+- Stream diagnostics `stream_completed` delta matches the number of non-cancelled streams
+- HTTPX first-class outcome labels (`upstream_read_timeout`, etc.) are zero for the happy path
+
+### Runtime diagnostics sections
+
+The `/api/stats/runtime` endpoint exposes these stream-stability sections:
+
+- `stream_diagnostics` — outcome counters and histograms
+- `finalization_retry_queue` — queue depth, drain stats, overflow/duplicate counters
+- `routing_trace_guard` — skip rate and lock-pressure threshold
+- `db.contention` — lock-wait p50/p95/p99/max and sample count

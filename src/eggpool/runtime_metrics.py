@@ -219,9 +219,9 @@ class RuntimeMetricsService:
 
         result["stream_diagnostics"] = self._snapshot_stream_diagnostics(probe_errors)
 
-        result["finalization_retry_queue"] = self._snapshot_finalization_retry_queue(
-            probe_errors
-        )
+        result[
+            "finalization_retry_queue"
+        ] = await self._snapshot_finalization_retry_queue(probe_errors)
 
         result["routing_trace_guard"] = self._snapshot_routing_trace_guard(probe_errors)
 
@@ -907,7 +907,7 @@ class RuntimeMetricsService:
             )
             return {"enabled": True, "error": str(exc)}
 
-    def _snapshot_finalization_retry_queue(
+    async def _snapshot_finalization_retry_queue(
         self, probe_errors: list[str]
     ) -> dict[str, Any]:
         """Best-effort snapshot of the bounded finalization retry queue.
@@ -920,7 +920,7 @@ class RuntimeMetricsService:
         try:
             return {
                 "enabled": True,
-                **self._finalization_retry_queue.snapshot(),
+                **await self._finalization_retry_queue.snapshot(),
             }
         except Exception as exc:
             _append_probe_error(

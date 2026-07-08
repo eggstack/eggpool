@@ -70,6 +70,7 @@ def _make_service(
     started_epoch: float | None = None,
     dispatch_overhead_recorder: Any | None = None,
     dispatch_span_recorder: Any | None = None,
+    finalization_retry_queue: Any | None = None,
 ) -> RuntimeMetricsService:
     if config is None:
         config = _build_config()
@@ -89,6 +90,7 @@ def _make_service(
         started_epoch=started_epoch,
         dispatch_overhead_recorder=dispatch_overhead_recorder,
         dispatch_span_recorder=dispatch_span_recorder,
+        finalization_retry_queue=finalization_retry_queue,
     )
 
 
@@ -1083,3 +1085,99 @@ async def test_rollup_freshness_reports_staleness(
     assert freshness["requests_latest_started_at"] == recent_str
     expected_gap = (recent_dt - older_dt).total_seconds()
     assert freshness["staleness_seconds"] == pytest.approx(expected_gap)
+
+
+# -- Finalization retry queue snapshot (async) -------------------------------
+
+
+class _StubFinalizerForMetrics:
+    """Minimal stub satisfying FinalizationRetryQueue's finalizer protocol."""
+
+    async def finalize(self, selected: Any, data: Any) -> bool:
+        return True
+
+
+@pytest.mark.asyncio
+async def test_finalization_retry_queue_snapshot_empty(db: Database) -> None:
+    """snapshot() returns enabled=True and size=0 for a fresh queue."""
+    from eggpool.request.finalization_queue import FinalizationRetryQueue
+
+    queue = FinalizationRetryQueue(db=db, finalizer=_StubFinalizerForMetrics())
+    service = _make_service(db, finalization_retry_queue=queue)
+    snapshot = await service.snapshot()
+    frq = snapshot["finalization_retry_queue"]
+    assert frq["enabled"] is True
+    assert frq["size"] == 0
+
+
+@pytest.mark.asyncio
+async def test_finalization_retry_queue_no_probe_error(db: Database) -> None:
+    """No probe error mentioning finalization retry queue on success."""
+    from eggpool.request.finalization_queue import FinalizationRetryQueue
+
+    queue = FinalizationRetryQueue(db=db, finalizer=_StubFinalizerForMetrics())
+    service = _make_service(db, finalization_retry_queue=queue)
+    snapshot = await service.snapshot()
+    for err in snapshot["probe_errors"]:
+        assert "finalization retry queue" not in err.lower()
+
+
+@pytest.mark.asyncio
+async def test_finalization_retry_queue_no_coroutine_in_snapshot(
+    db: Database,
+) -> None:
+    """The snapshot dict must contain plain values, not coroutine objects."""
+    from eggpool.request.finalization_queue import FinalizationRetryQueue
+
+    queue = FinalizationRetryQueue(db=db, finalizer=_StubFinalizerForMetrics())
+    service = _make_service(db, finalization_retry_queue=queue)
+    snapshot = await service.snapshot()
+    frq = snapshot["finalization_retry_queue"]
+    for key, value in frq.items():
+        assert not callable(value), f"Field {key!r} is a callable: {value!r}"
+
+
+@pytest.mark.asyncio
+async def test_finalization_retry_queue_snapshot_json_serializable(
+    db: Database,
+) -> None:
+    """json.dumps must succeed on the snapshot with the queue wired."""
+    import json
+
+    from eggpool.request.finalization_queue import FinalizationRetryQueue
+
+    queue = FinalizationRetryQueue(db=db, finalizer=_StubFinalizerForMetrics())
+    service = _make_service(db, finalization_retry_queue=queue)
+    snapshot = await service.snapshot()
+    result = json.dumps(snapshot, default=str)
+    assert isinstance(result, str)
+    assert "finalization_retry_queue" in result
+
+
+@pytest.mark.asyncio
+async def test_finalization_retry_queue_disabled_when_none(db: Database) -> None:
+    """When no queue is wired, snapshot returns enabled=False."""
+    service = _make_service(db, finalization_retry_queue=None)
+    snapshot = await service.snapshot()
+    frq = snapshot["finalization_retry_queue"]
+    assert frq == {"enabled": False}
+
+
+@pytest.mark.asyncio
+async def test_snapshot_finalization_retry_queue_section_serializes(
+    db: Database,
+) -> None:
+    """The finalization_retry_queue section must be JSON-serializable."""
+    import json
+
+    from eggpool.request.finalization_queue import FinalizationRetryQueue
+
+    queue = FinalizationRetryQueue(db=db, finalizer=_StubFinalizerForMetrics())
+    service = _make_service(db, finalization_retry_queue=queue)
+    snapshot = await service.snapshot()
+    # Must not raise
+    serialized = json.dumps(snapshot, default=str)
+    assert "finalization_retry_queue" in serialized
+    frq = snapshot["finalization_retry_queue"]
+    assert frq["enabled"] is True
+    assert frq["size"] == 0

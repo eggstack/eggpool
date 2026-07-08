@@ -22,7 +22,6 @@ import asyncio
 import json
 import os
 import sys
-import time
 from typing import Any
 
 import httpx
@@ -52,40 +51,17 @@ from eggpool.request.stream_diagnostics import (
     get_stream_diagnostics,
 )
 from eggpool.routing.router import Router
-
-UPSTREAM_BASE = "https://test-upstream.example.com"
-
-
-SCENARIO_HAPPY_PATH = "happy-path"
-SCENARIO_NO_USAGE = "no-usage"
-SCENARIO_SLOW_FIRST_BYTE = "slow-first-byte"
-SCENARIO_SLOW_TOKEN_CADENCE = "slow-stream"
-SCENARIO_ABRUPT_CLOSE = "abrupt-upstream-close"
-SCENARIO_SERVER_STALL = "read-timeout"
-SCENARIO_MALFORMED_FRAME = "malformed-frame"
-SCENARIO_CONNECTION_RESET = "connection-reset"
-
-ALL_SCENARIOS: tuple[str, ...] = (
-    SCENARIO_HAPPY_PATH,
-    SCENARIO_NO_USAGE,
-    SCENARIO_SLOW_FIRST_BYTE,
-    SCENARIO_SLOW_TOKEN_CADENCE,
-    SCENARIO_ABRUPT_CLOSE,
-    SCENARIO_SERVER_STALL,
-    SCENARIO_MALFORMED_FRAME,
-    SCENARIO_CONNECTION_RESET,
-)
-
-CANCEL_BEFORE_FIRST_BYTE = "before-first-byte"
-CANCEL_AFTER_FIRST_TOKEN = "after-first-token"
-CANCEL_MIDSTREAM = "midstream"
-CANCEL_AFTER_FINAL_BEFORE_USAGE = "after-final-before-usage"
-
-ALL_CANCEL_OFFSETS: tuple[str, ...] = (
+from tests.helpers.stream_stability_harness import (
+    ALL_CANCEL_OFFSETS,
+    ALL_SCENARIOS,
     CANCEL_BEFORE_FIRST_BYTE,
-    CANCEL_AFTER_FIRST_TOKEN,
     CANCEL_MIDSTREAM,
-    CANCEL_AFTER_FINAL_BEFORE_USAGE,
+    SCENARIO_HAPPY_PATH,
+    UPSTREAM_BASE,
+    normalize_scenario,
+    positive_delta,
+    scenario_respx_response,
+    should_cancel,
 )
 
 
@@ -165,176 +141,6 @@ def _make_body() -> bytes:
     ).encode()
 
 
-def _sse_chunk(delta: str) -> bytes:
-    payload = {
-        "id": f"chunk-{delta}",
-        "object": "chat.completion.chunk",
-        "choices": [{"delta": {"content": delta}, "index": 0}],
-    }
-    return f"data: {json.dumps(payload)}\n\n".encode()
-
-
-def _sse_usage_chunk() -> bytes:
-    payload: dict[str, Any] = {
-        "id": "usage",
-        "object": "chat.completion.chunk",
-        "choices": [],
-        "usage": {
-            "prompt_tokens": 1,
-            "completion_tokens": 1,
-            "total_tokens": 2,
-        },
-    }
-    return f"data: {json.dumps(payload)}\n\n".encode()
-
-
-def _sse_done() -> bytes:
-    return b"data: [DONE]\n\n"
-
-
-def _should_cancel(offset: str, chunks_seen: int, started: bool) -> bool:
-    if not started:
-        return False
-    if offset == CANCEL_BEFORE_FIRST_BYTE:
-        return chunks_seen == 0
-    if offset == CANCEL_AFTER_FIRST_TOKEN:
-        return chunks_seen >= 1
-    if offset == CANCEL_MIDSTREAM:
-        return chunks_seen >= 2
-    if offset == CANCEL_AFTER_FINAL_BEFORE_USAGE:
-        return chunks_seen >= 4
-    return chunks_seen >= 2
-
-
-def _scenario_response(
-    scenario: str,
-    chunks_per_stream: int,
-    chunk_delay_s: float,
-) -> httpx.Response:
-    if scenario == SCENARIO_HAPPY_PATH:
-
-        async def _gen() -> Any:
-            for i in range(chunks_per_stream):
-                yield _sse_chunk(f"tok{i}")
-                await asyncio.sleep(chunk_delay_s)
-            yield _sse_usage_chunk()
-            yield _sse_done()
-
-        return httpx.Response(
-            200,
-            headers={"content-type": "text/event-stream"},
-            stream=_gen(),  # pyright: ignore[reportArgumentType]
-        )
-
-    if scenario == SCENARIO_NO_USAGE:
-
-        async def _gen() -> Any:
-            for i in range(chunks_per_stream):
-                yield _sse_chunk(f"tok{i}")
-                await asyncio.sleep(chunk_delay_s)
-            yield _sse_done()
-
-        return httpx.Response(
-            200,
-            headers={"content-type": "text/event-stream"},
-            stream=_gen(),  # pyright: ignore[reportArgumentType]
-        )
-
-    if scenario == SCENARIO_SLOW_FIRST_BYTE:
-
-        async def _gen() -> Any:
-            await asyncio.sleep(max(1.0, chunk_delay_s * 100))
-            yield _sse_chunk("first")
-            for i in range(1, chunks_per_stream):
-                yield _sse_chunk(f"tok{i}")
-                await asyncio.sleep(chunk_delay_s)
-            yield _sse_usage_chunk()
-            yield _sse_done()
-
-        return httpx.Response(
-            200,
-            headers={"content-type": "text/event-stream"},
-            stream=_gen(),  # pyright: ignore[reportArgumentType]
-        )
-
-    if scenario == SCENARIO_SLOW_TOKEN_CADENCE:
-
-        async def _gen() -> Any:
-            for i in range(chunks_per_stream):
-                yield _sse_chunk(f"tok{i}")
-                await asyncio.sleep(max(0.5, chunk_delay_s * 50))
-            yield _sse_usage_chunk()
-            yield _sse_done()
-
-        return httpx.Response(
-            200,
-            headers={"content-type": "text/event-stream"},
-            stream=_gen(),  # pyright: ignore[reportArgumentType]
-        )
-
-    if scenario == SCENARIO_ABRUPT_CLOSE:
-
-        async def _gen() -> Any:
-            for i in range(chunks_per_stream):
-                yield _sse_chunk(f"tok{i}")
-                await asyncio.sleep(chunk_delay_s)
-
-        return httpx.Response(
-            200,
-            headers={"content-type": "text/event-stream"},
-            stream=_gen(),  # pyright: ignore[reportArgumentType]
-        )
-
-    if scenario == SCENARIO_SERVER_STALL:
-
-        async def _gen() -> Any:
-            await asyncio.sleep(60.0)
-            yield b""
-
-        return httpx.Response(
-            200,
-            headers={"content-type": "text/event-stream"},
-            stream=_gen(),  # pyright: ignore[reportArgumentType]
-        )
-
-    if scenario == SCENARIO_MALFORMED_FRAME:
-
-        async def _gen() -> Any:
-            for i in range(chunks_per_stream):
-                yield _sse_chunk(f"tok{i}")
-                await asyncio.sleep(chunk_delay_s)
-            yield b"this is not a valid SSE frame\n\n"
-            await asyncio.sleep(chunk_delay_s)
-            yield _sse_done()
-
-        return httpx.Response(
-            200,
-            headers={"content-type": "text/event-stream"},
-            stream=_gen(),  # pyright: ignore[reportArgumentType]
-        )
-
-    if scenario == SCENARIO_CONNECTION_RESET:
-        return httpx.Response(
-            200,
-            headers={"content-type": "text/event-stream"},
-            content=b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n',
-        )
-
-    msg = f"Unknown scenario: {scenario}"
-    raise ValueError(msg)
-
-
-def _positive_delta(
-    baseline: dict[str, int], current: dict[str, int]
-) -> dict[str, int]:
-    keys = set(baseline) | set(current)
-    return {
-        key: current.get(key, 0) - baseline.get(key, 0)
-        for key in keys
-        if current.get(key, 0) - baseline.get(key, 0) > 0
-    }
-
-
 async def _run_burst(
     coord: RequestCoordinator,
     db: Database,
@@ -363,22 +169,18 @@ async def _run_burst(
         for s in coord._router._registry.get_all_states()  # pyright: ignore[reportPrivateUsage]
     )
 
-    completed = 0
-    cancelled = 0
-    upstream_failed = 0
-    finalizer_timed_out = 0
-    failures = 0
-
     with respx.mock(assert_all_called=False) as mock:
 
         async def _side_effect(_request: httpx.Request) -> httpx.Response:
-            return _scenario_response(scenario, chunks_per_stream, chunk_delay_s)
+            return scenario_respx_response(
+                scenario,
+                chunks_per_stream=chunks_per_stream,
+                chunk_delay_s=chunk_delay_s,
+            )
 
         mock.post(f"{UPSTREAM_BASE}/chat/completions").mock(side_effect=_side_effect)
 
-        async def _drive_one(idx: int) -> None:
-            nonlocal completed, cancelled
-            nonlocal upstream_failed, finalizer_timed_out, failures
+        async def _drive_one(idx: int) -> dict[str, str]:
             req_id = f"repro-{idx:04d}"
             cancel = (idx / max(1, concurrency)) < cancel_rate
             ctx = ProxyRequestContext(
@@ -402,7 +204,7 @@ async def _run_burst(
                     chunks_seen += 1
                     if not started.is_set():
                         started.set()
-                    if cancel and _should_cancel(
+                    if cancel and should_cancel(
                         cancel_offset,
                         chunks_seen,
                         started.is_set(),
@@ -423,25 +225,46 @@ async def _run_burst(
                         await asyncio.sleep(0)
                     task.cancel()
                 await task
-                completed += 1
+                return {"outcome": "completed"}
             except asyncio.CancelledError:
-                cancelled += 1
+                return {"outcome": "cancelled"}
             except Exception:
-                failures += 1
-            if cancel:
-                await asyncio.sleep(0.3)
+                return {"outcome": "failure"}
+            finally:
+                if cancel:
+                    await asyncio.sleep(0.3)
 
-        deadline = time.monotonic() + 30.0
+        tasks: list[asyncio.Task[dict[str, str]]] = []
         for i in range(concurrency):
-            remaining = max(0.01, deadline - time.monotonic())
-            try:
-                await asyncio.wait_for(_drive_one(i), timeout=remaining)
-            except TimeoutError:
-                break
+            tasks.append(asyncio.create_task(_drive_one(i)))
+
+        try:
+            results: list[dict[str, str] | BaseException] = await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True),
+                timeout=30.0,
+            )
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     if coord._finalization_retry_queue is not None:  # pyright: ignore[reportPrivateUsage]
         for _ in range(5):
             await coord._finalization_retry_queue.drain_once()  # pyright: ignore[reportPrivateUsage]
+
+    completed = 0
+    cancelled = 0
+    failures = 0
+    for r in results:
+        if isinstance(r, BaseException):
+            failures += 1
+        elif r.get("outcome") == "completed":
+            completed += 1
+        elif r.get("outcome") == "cancelled":
+            cancelled += 1
+        else:
+            failures += 1
 
     final_snap = diagnostics.snapshot()
     final_outcomes = dict(final_snap["outcomes"])
@@ -492,10 +315,8 @@ async def _run_burst(
         "finalizer_timed_out": finalizer_timed_out,
         "failures": failures,
         "outcomes_delta": outcomes_delta,
-        "httpx_exception_counts": _positive_delta(initial_httpx, final_httpx),
-        "upstream_error_class_counts": _positive_delta(
-            initial_upstream, final_upstream
-        ),
+        "httpx_exception_counts": positive_delta(initial_httpx, final_httpx),
+        "upstream_error_class_counts": positive_delta(initial_upstream, final_upstream),
         "leaked_pending_rows": pending_count,
         "leaked_active_reservations": active_reservations_count,
         "router_active_requests_after": final_active_requests,
@@ -531,11 +352,12 @@ async def _main() -> int:
         "--scenario",
         type=str,
         default=SCENARIO_HAPPY_PATH,
-        choices=ALL_SCENARIOS,
+        choices=list(ALL_SCENARIOS) + ["slow-token-cadence"],
     )
     parser.add_argument("--chunks-per-stream", type=int, default=6)
     parser.add_argument("--chunk-delay-s", type=float, default=0.01)
     args = parser.parse_args()
+    scenario = normalize_scenario(args.scenario)
 
     config = _build_config()
     coord, db, httpx_client = await _build_coordinator(config)
@@ -546,7 +368,7 @@ async def _main() -> int:
             concurrency=args.concurrency,
             cancel_rate=args.cancel_rate,
             cancel_offset=args.cancel_offset,
-            scenario=args.scenario,
+            scenario=scenario,
             chunks_per_stream=args.chunks_per_stream,
             chunk_delay_s=args.chunk_delay_s,
         )

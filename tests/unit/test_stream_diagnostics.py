@@ -22,8 +22,16 @@ from eggpool.request.stream_diagnostics import (
     STREAM_OUTCOME_COMPLETED,
     STREAM_OUTCOME_FINALIZER_FAILED,
     STREAM_OUTCOME_FINALIZER_TIMEOUT,
+    STREAM_OUTCOME_UPSTREAM_CONNECT_ERROR,
+    STREAM_OUTCOME_UPSTREAM_CONNECT_TIMEOUT,
     STREAM_OUTCOME_UPSTREAM_MIDSTREAM_ERROR,
+    STREAM_OUTCOME_UPSTREAM_POOL_TIMEOUT,
+    STREAM_OUTCOME_UPSTREAM_PROTOCOL_ERROR,
+    STREAM_OUTCOME_UPSTREAM_READ_TIMEOUT,
+    STREAM_OUTCOME_UPSTREAM_TRANSPORT_ERROR,
+    STREAM_OUTCOME_UPSTREAM_WRITE_TIMEOUT,
     StreamDiagnostics,
+    classify_httpx_error_class,
     get_stream_diagnostics,
     reset_stream_diagnostics_for_tests,
 )
@@ -40,6 +48,13 @@ def test_empty_snapshot_contract() -> None:
         STREAM_OUTCOME_UPSTREAM_MIDSTREAM_ERROR: 0,
         STREAM_OUTCOME_FINALIZER_TIMEOUT: 0,
         STREAM_OUTCOME_FINALIZER_FAILED: 0,
+        STREAM_OUTCOME_UPSTREAM_POOL_TIMEOUT: 0,
+        STREAM_OUTCOME_UPSTREAM_READ_TIMEOUT: 0,
+        STREAM_OUTCOME_UPSTREAM_CONNECT_TIMEOUT: 0,
+        STREAM_OUTCOME_UPSTREAM_WRITE_TIMEOUT: 0,
+        STREAM_OUTCOME_UPSTREAM_PROTOCOL_ERROR: 0,
+        STREAM_OUTCOME_UPSTREAM_CONNECT_ERROR: 0,
+        STREAM_OUTCOME_UPSTREAM_TRANSPORT_ERROR: 0,
     }
     assert snap["httpx_exception_counts"] == {}
     assert snap["upstream_error_class_counts"] == {}
@@ -141,6 +156,62 @@ def test_bounded_ring_does_not_grow_unbounded() -> None:
     snap = diag.snapshot()
     assert snap["completed_ms"]["sample_count"] == 8
     assert snap["completed_ms"]["max_ms"] == 99.0
+
+
+def test_new_httpx_outcome_labels_exist_in_default_counter_set() -> None:
+    """All first-class HTTPX transport outcome labels are present with value 0."""
+    diag = StreamDiagnostics()
+    snap = diag.snapshot()
+    for label in (
+        STREAM_OUTCOME_UPSTREAM_POOL_TIMEOUT,
+        STREAM_OUTCOME_UPSTREAM_READ_TIMEOUT,
+        STREAM_OUTCOME_UPSTREAM_CONNECT_TIMEOUT,
+        STREAM_OUTCOME_UPSTREAM_WRITE_TIMEOUT,
+        STREAM_OUTCOME_UPSTREAM_PROTOCOL_ERROR,
+        STREAM_OUTCOME_UPSTREAM_CONNECT_ERROR,
+        STREAM_OUTCOME_UPSTREAM_TRANSPORT_ERROR,
+    ):
+        assert label in snap["outcomes"], f"{label} missing from outcomes"
+        assert snap["outcomes"][label] == 0, f"{label} should start at 0"
+
+
+def test_classify_httpx_error_class_known_mappings() -> None:
+    """classify_httpx_error_class maps every known HTTPX class."""
+    cases = [
+        ("PoolTimeout", STREAM_OUTCOME_UPSTREAM_POOL_TIMEOUT),
+        ("ReadTimeout", STREAM_OUTCOME_UPSTREAM_READ_TIMEOUT),
+        ("ConnectTimeout", STREAM_OUTCOME_UPSTREAM_CONNECT_TIMEOUT),
+        ("WriteTimeout", STREAM_OUTCOME_UPSTREAM_WRITE_TIMEOUT),
+        (
+            "RemoteProtocolError",
+            STREAM_OUTCOME_UPSTREAM_PROTOCOL_ERROR,
+        ),
+        ("ConnectError", STREAM_OUTCOME_UPSTREAM_CONNECT_ERROR),
+    ]
+    for cls, expected in cases:
+        assert classify_httpx_error_class(cls) == expected
+
+
+def test_classify_httpx_error_class_unknown_maps_to_transport_error() -> None:
+    """Unknown exception classes fall back to upstream_transport_error."""
+    for cls in ("ReadError", "WriteError", "SomeFutureHttpxError"):
+        assert classify_httpx_error_class(cls) == (
+            STREAM_OUTCOME_UPSTREAM_TRANSPORT_ERROR
+        )
+
+
+def test_first_class_outcome_increments_on_record() -> None:
+    """Recording a first-class HTTPX outcome increments its counter."""
+    diag = StreamDiagnostics()
+    diag.record_outcome(
+        STREAM_OUTCOME_UPSTREAM_READ_TIMEOUT,
+        proxy_request_id="req-rt",
+        elapsed_ms=500,
+        exception_class="ReadTimeout",
+    )
+    snap = diag.snapshot()
+    assert snap["outcomes"][STREAM_OUTCOME_UPSTREAM_READ_TIMEOUT] == 1
+    assert snap["outcomes"][STREAM_OUTCOME_UPSTREAM_MIDSTREAM_ERROR] == 0
 
 
 @pytest.mark.asyncio()
