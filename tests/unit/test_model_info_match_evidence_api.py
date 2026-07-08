@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from eggpool.api.model_info import (
+    handle_model_info_aliases,
     handle_model_info_detail,
     handle_model_info_matches,
 )
@@ -268,3 +269,88 @@ class TestMatchesEndpoint:
 
         assert data["model_id"] == "partial-model"
         assert "match_evidence" not in data
+
+
+class TestProviderSuffixResolution:
+    """Verify that aliases/matches resolve provider-suffixed IDs
+    through the same canonical lookup as the detail endpoint."""
+
+    @pytest.mark.asyncio()
+    async def test_aliases_endpoint_resolves_provider_suffixed_id_to_canonical(
+        self,
+    ) -> None:
+        mock_service = AsyncMock()
+        mock_service.repo.get_aliases_for_model.return_value = ["minimax-m3"]
+        mock_service.repo.list_alias_rows_for_model.return_value = []
+
+        request = MagicMock()
+        request.app.state.model_info = mock_service
+        request.app.state.config = MagicMock(providers={"opencode-go": ...})
+
+        response = await handle_model_info_aliases(request, "minimax-m3%2Fopencode-go")
+        data = json.loads(response.body)
+
+        assert data["model_id"] == "minimax-m3"
+        assert data["requested_model_id"] == "minimax-m3/opencode-go"
+        assert data["provider_suffix"] == "opencode-go"
+        mock_service.repo.get_aliases_for_model.assert_awaited_once_with("minimax-m3")
+
+    @pytest.mark.asyncio()
+    async def test_matches_endpoint_resolves_provider_suffixed_id_to_canonical(
+        self,
+    ) -> None:
+        mock_service = AsyncMock()
+        mock_service.repo.list_match_evidence.return_value = [
+            {
+                "id": 1,
+                "model_id": "minimax-m3",
+                "provider_id": None,
+                "source": "openrouter",
+                "alias": "minimax/minimax-m3",
+                "match_method": "normalized_exact",
+                "confidence": 0.85,
+                "diagnostics_json": None,
+                "created_at": "2026-06-29T20:00:00Z",
+                "last_seen_at": "2026-07-01T12:00:00Z",
+            }
+        ]
+
+        request = MagicMock()
+        request.app.state.model_info = mock_service
+        request.app.state.config = MagicMock(providers={"opencode-go": ...})
+
+        response = await handle_model_info_matches(request, "minimax-m3%2Fopencode-go")
+        data = json.loads(response.body)
+
+        assert data["model_id"] == "minimax-m3"
+        assert data["requested_model_id"] == "minimax-m3/opencode-go"
+        assert data["provider_suffix"] == "opencode-go"
+        assert len(data["match_evidence"]) == 1
+        mock_service.repo.list_match_evidence.assert_awaited_once_with(
+            "minimax-m3", source=None
+        )
+
+    @pytest.mark.asyncio()
+    async def test_aliases_and_matches_unsuffixed_ids_remain_unchanged(
+        self,
+    ) -> None:
+        mock_service = AsyncMock()
+        mock_service.repo.get_aliases_for_model.return_value = ["minimax-m3"]
+        mock_service.repo.list_alias_rows_for_model.return_value = []
+        mock_service.repo.list_match_evidence.return_value = []
+
+        request = MagicMock()
+        request.app.state.model_info = mock_service
+        request.app.state.config = MagicMock(providers={"opencode-go": ...})
+
+        aliases_resp = await handle_model_info_aliases(request, "minimax-m3")
+        aliases_data = json.loads(aliases_resp.body)
+        assert aliases_data["model_id"] == "minimax-m3"
+        assert aliases_data["requested_model_id"] == "minimax-m3"
+        assert aliases_data["provider_suffix"] is None
+
+        matches_resp = await handle_model_info_matches(request, "minimax-m3")
+        matches_data = json.loads(matches_resp.body)
+        assert matches_data["model_id"] == "minimax-m3"
+        assert matches_data["requested_model_id"] == "minimax-m3"
+        assert matches_data["provider_suffix"] is None

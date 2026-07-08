@@ -20,6 +20,10 @@ import pytest
 from eggpool.catalog.cache import ModelCatalogCache
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
+from eggpool.model_info.normalization import (
+    generate_deployment_suffix_variants,
+    normalize_model_key,
+)
 from eggpool.model_info.service import ModelInfoService
 from eggpool.model_info.types import CanonicalModelInfo
 from eggpool.models.config import (
@@ -268,5 +272,141 @@ class TestHighspeedM21Fixture:
                 refreshed.detail.get("external_ids", {}).get("openrouter")
                 == expected_openrouter_id
             )
+        finally:
+            await db.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# Separator-agnostic deployment suffix stripping
+# ---------------------------------------------------------------------------
+
+
+class TestDeploymentSuffixSeparatorAgnostic:
+    """Verify that deployment-suffix stripping works across all supported
+    separator families: hyphen, underscore, dot, space, colon, slash."""
+
+    @pytest.mark.parametrize(
+        ("raw", "expected_base"),
+        [
+            ("MiniMax-M2.7-highspeed", "MiniMax-M2.7"),
+            ("MiniMax_M2.7_highspeed", "MiniMax_M2.7"),
+            ("MiniMax M2.7 highspeed", "MiniMax M2.7"),
+            ("MiniMax.M2.7.highspeed", "MiniMax.M2.7"),
+            ("MiniMax:M2.7:highspeed", "MiniMax:M2.7"),
+            ("minimax/MiniMax-M2.7-highspeed", "minimax/MiniMax-M2.7"),
+            ("MiniMax-M2.7-fast", "MiniMax-M2.7"),
+            ("MiniMax_M2.7_turbo", "MiniMax_M2.7"),
+            ("MiniMax M2.7 speed", "MiniMax M2.7"),
+        ],
+    )
+    def test_deployment_suffix_variants_strip_all_supported_separators(
+        self, raw: str, expected_base: str
+    ) -> None:
+        variants = generate_deployment_suffix_variants(raw)
+        assert len(variants) == 2
+        assert variants[0] == raw
+        assert variants[1] == expected_base
+
+    @pytest.mark.parametrize(
+        ("raw", "expected_norm"),
+        [
+            ("MiniMax-M2.7-highspeed", "minimaxm27"),
+            ("MiniMax_M2.7_highspeed", "minimaxm27"),
+            ("MiniMax M2.7 highspeed", "minimaxm27"),
+            ("MiniMax.M2.7.highspeed", "minimaxm27"),
+            ("MiniMax:M2.7:highspeed", "minimaxm27"),
+            ("minimax/MiniMax-M2.7-fast", "minimaxminimaxm27"),
+        ],
+    )
+    def test_deployment_suffix_variants_normalize_to_base(
+        self, raw: str, expected_norm: str
+    ) -> None:
+        variants = generate_deployment_suffix_variants(raw)
+        assert len(variants) == 2
+        assert normalize_model_key(variants[1]) == expected_norm
+
+    def test_namespace_preservation_with_separator_variants(self) -> None:
+        assert generate_deployment_suffix_variants("minimax/MiniMax-M2.7-highspeed")[
+            1
+        ].startswith("minimax/")
+        assert generate_deployment_suffix_variants("minimax/MiniMax_M2.7_highspeed")[
+            1
+        ].startswith("minimax/")
+        assert generate_deployment_suffix_variants("minimax/MiniMax.M2.7.highspeed")[
+            1
+        ].startswith("minimax/")
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "MiniMax-M2.7-pro",
+            "mimo-v2.5-pro",
+            "qwen3.7-plus",
+            "kimi-k2.7-code",
+            "hy3-preview",
+            "deepseek-v4-flash",
+            "gpt-5-mini-turbo",
+            "highspeed",
+        ],
+    )
+    def test_deployment_suffix_variants_do_not_strip_semantic_or_unanchored_names(
+        self, raw: str
+    ) -> None:
+        assert generate_deployment_suffix_variants(raw) == (raw,)
+
+    def test_single_separator_mixed_with_namespace(self) -> None:
+        """Namespace segment uses slash but model segment uses underscore."""
+        result = generate_deployment_suffix_variants("minimax/MiniMax_M2.7_highspeed")
+        assert result == (
+            "minimax/MiniMax_M2.7_highspeed",
+            "minimax/MiniMax_M2.7",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Deployment-suffix match-evidence diagnostics
+# ---------------------------------------------------------------------------
+
+
+class TestDeploymentSuffixMatchEvidenceDiagnostics:
+    """Verify that match evidence diagnostics include raw_candidate
+    and stripped_suffix fields after a deployment-suffix match."""
+
+    @pytest.mark.asyncio()
+    async def test_diagnostics_include_raw_candidate_and_suffix(self) -> None:
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await _run_migrations(db)
+            await _seed_model(db, "MiniMax-M2.7-highspeed")
+
+            cache = _make_provider_catalog_cache(["MiniMax-M2.7-highspeed"])
+            or_payload = _load_json(
+                FIXTURES_DIR / "openrouter_minimax_highspeed_sample.json"
+            )
+            client = _OpenRouterMockClient(or_payload)
+
+            config = ModelInfoConfig(
+                sources=ModelInfoSourcesConfig(
+                    openrouter=ModelInfoSourceConfig(enabled=True),
+                )
+            )
+            service = ModelInfoService(config, db, cache, outbound_client=client)
+
+            await _seed_sparse(service, "MiniMax-M2.7-highspeed")
+            await service.load_cache()
+            await service.reconcile_catalog_snapshot()
+            await service.refresh_model_info("MiniMax-M2.7-highspeed", force=True)
+
+            evidence = await service.repo.list_match_evidence(
+                "MiniMax-M2.7-highspeed", source="openrouter"
+            )
+            assert len(evidence) >= 1
+            row = evidence[0]
+            assert row["match_method"] == "deployment_suffix_normalized_exact"
+            diag = json.loads(row["diagnostics_json"])
+            assert diag["raw_candidate"] == "MiniMax-M2.7-highspeed"
+            assert diag["stripped_suffix"] == "highspeed"
+            assert diag["base_variant"] == "MiniMax-M2.7"
         finally:
             await db.disconnect()

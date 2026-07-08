@@ -412,6 +412,10 @@ async def handle_model_info_aliases(request: Request, model_id: str) -> Response
     source-keyed list so callers can tell which source each alias
     is configured for.  Source-keyed entries include ``source``,
     ``alias``, ``provider_id``, ``confidence``, and ``active``.
+
+    Provider-suffixed IDs (e.g. ``minimax-m3/opencode-go``) are
+    resolved to the canonical base via ``_decode_model_info_lookup_id``
+    so aliases resolve identically to the detail endpoint.
     """
     model_info = getattr(request.app.state, "model_info", None)
     if model_info is None:
@@ -419,12 +423,16 @@ async def handle_model_info_aliases(request: Request, model_id: str) -> Response
             status_code=503,
             content={"error": "model_info disabled"},
         )
-    decoded_id = unquote(model_id)
-    flat_aliases = await model_info.repo.get_aliases_for_model(decoded_id)
-    source_rows = await model_info.repo.list_alias_rows_for_model(decoded_id)
+    decoded_id, lookup_id, provider_suffix = _decode_model_info_lookup_id(
+        request, model_id
+    )
+    flat_aliases = await model_info.repo.get_aliases_for_model(lookup_id)
+    source_rows = await model_info.repo.list_alias_rows_for_model(lookup_id)
     return JSONResponse(
         content={
-            "model_id": decoded_id,
+            "model_id": lookup_id,
+            "requested_model_id": decoded_id,
+            "provider_suffix": provider_suffix,
             "aliases": flat_aliases,
             "aliases_by_source": source_rows,
         }
@@ -432,18 +440,25 @@ async def handle_model_info_aliases(request: Request, model_id: str) -> Response
 
 
 async def handle_model_info_matches(request: Request, model_id: str) -> Response:
-    """GET /api/model-info/{model_id}/matches — match evidence diagnostics."""
+    """GET /api/model-info/{model_id}/matches — match evidence diagnostics.
+
+    Provider-suffixed IDs (e.g. ``minimax-m3/opencode-go``) are
+    resolved to the canonical base via ``_decode_model_info_lookup_id``
+    so matches resolve identically to the detail endpoint.
+    """
     model_info = getattr(request.app.state, "model_info", None)
     if model_info is None:
         return JSONResponse(
             status_code=503,
             content={"error": "model_info disabled"},
         )
-    decoded_id = unquote(model_id)
+    decoded_id, lookup_id, provider_suffix = _decode_model_info_lookup_id(
+        request, model_id
+    )
     try:
-        evidence = await model_info.repo.list_match_evidence(decoded_id, source=None)
+        evidence = await model_info.repo.list_match_evidence(lookup_id, source=None)
     except Exception as exc:
-        logger.warning("Failed to read match evidence for %s: %s", decoded_id, exc)
+        logger.warning("Failed to read match evidence for %s: %s", lookup_id, exc)
         return JSONResponse(
             status_code=500,
             content={"error": type(exc).__name__},
@@ -459,7 +474,14 @@ async def handle_model_info_matches(request: Request, model_id: str) -> Response
         }
         for row in evidence[:50]
     ]
-    return JSONResponse(content={"model_id": decoded_id, "match_evidence": data})
+    return JSONResponse(
+        content={
+            "model_id": lookup_id,
+            "requested_model_id": decoded_id,
+            "provider_suffix": provider_suffix,
+            "match_evidence": data,
+        }
+    )
 
 
 _ALLOWED_REFRESH_SOURCES: frozenset[str] = frozenset(

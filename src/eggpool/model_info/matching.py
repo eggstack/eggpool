@@ -15,6 +15,7 @@ from difflib import SequenceMatcher
 from typing import TYPE_CHECKING, Any
 
 from eggpool.model_info.normalization import (
+    DEPLOYMENT_SUFFIX_TOKENS,
     generate_deployment_suffix_variants,
     normalize_model_key,
     normalize_vendor_key,
@@ -456,6 +457,8 @@ def _tier_deployment_suffix_normalized_exact(
 
     # Also map every original raw so normalize_exact tier isn't subverted.
     stripped_only: list[str] = []
+    stripped_to_raw: dict[str, str] = {}
+    raw_to_suffix: dict[str, str] = {}
     base_set: set[str] = set()
     for raw in local_raw_candidates:
         variants = generate_deployment_suffix_variants(raw)
@@ -464,6 +467,12 @@ def _tier_deployment_suffix_normalized_exact(
             if v not in base_set:
                 base_set.add(v)
                 stripped_only.append(v)
+                stripped_to_raw[v] = raw
+                tokens = tokenize_model_key(raw)
+                raw_to_suffix[raw] = next(
+                    (t for t in reversed(tokens) if t in DEPLOYMENT_SUFFIX_TOKENS),
+                    "",
+                )
 
     if not stripped_only:
         return None
@@ -489,12 +498,12 @@ def _tier_deployment_suffix_normalized_exact(
                 continue
             seen_candidates.add(cid)
             all_matches.append(cand)
+            sv = sources[0]
             matched_via[cid] = {
                 "normalized_key": nk,
-                "stripped_variant": sources[0],
-                "raw_original": local_raw_candidates[
-                    0
-                ],  # debug breadcrumb; may not match
+                "stripped_variant": sv,
+                "raw_candidate": stripped_to_raw.get(sv, ""),
+                "stripped_suffix": raw_to_suffix.get(stripped_to_raw.get(sv, ""), ""),
             }
 
     if not all_matches:
@@ -511,7 +520,9 @@ def _tier_deployment_suffix_normalized_exact(
             match_method="deployment_suffix_normalized_exact",
             confidence=0.75,
             diagnostics={
+                "raw_candidate": info["raw_candidate"],
                 "stripped_variant": stripped_variant,
+                "stripped_suffix": info["stripped_suffix"],
                 "base_variant": stripped_variant,
                 "normalized_key": info["normalized_key"],
                 "matched_source_model_id": cand.source_model_id,
@@ -544,7 +555,9 @@ def _tier_deployment_suffix_normalized_exact(
                 match_method="deployment_suffix_normalized_exact",
                 confidence=0.70,
                 diagnostics={
+                    "raw_candidate": info["raw_candidate"],
                     "stripped_variant": stripped_variant,
+                    "stripped_suffix": info["stripped_suffix"],
                     "base_variant": stripped_variant,
                     "tie_break": "vendor_match",
                     "normalized_key": info["normalized_key"],
@@ -566,7 +579,16 @@ def _tier_deployment_suffix_normalized_exact(
         match_method="ambiguous_deployment_suffix_candidates",
         confidence=0.0,
         diagnostics={
-            "stripped_variants": stripped_only,
+            "stripped_variants": [
+                {
+                    "raw_candidate": stripped_to_raw.get(sv, ""),
+                    "stripped_variant": sv,
+                    "stripped_suffix": raw_to_suffix.get(
+                        stripped_to_raw.get(sv, ""), ""
+                    ),
+                }
+                for sv in stripped_only
+            ],
             "candidate_count": len(all_matches),
             "candidates": [
                 {

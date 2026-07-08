@@ -134,6 +134,32 @@ def has_digit_or_family_anchor(value: str) -> bool:
     return any(ch.isdigit() for ch in value)
 
 
+_DEPLOYMENT_SUFFIX_RE = re.compile(
+    r"(?i)(?P<sep>[-_:. /]+)(?P<suffix>highspeed|fast|turbo|speed|lowlatency|lowlat)$"
+)
+
+
+def _strip_deployment_suffix_segment(raw: str) -> tuple[str, str] | None:
+    """Strip a single deployment-suffix segment from a model string.
+
+    Returns ``(base, suffix)`` when stripping succeeds and the base has
+    a digit/family anchor, or ``None`` when no safe strip is possible.
+    """
+    match = _DEPLOYMENT_SUFFIX_RE.search(raw)
+    if match is None:
+        return None
+    suffix = match.group("suffix").casefold()
+    if suffix not in DEPLOYMENT_SUFFIX_TOKENS:
+        return None
+    base = raw[: match.start("sep")]
+    if not base or not has_digit_or_family_anchor(base):
+        return None
+    tokens = tokenize_model_key(raw)
+    if set(tokens) & SEMANTIC_VARIANT_TOKENS:
+        return None
+    return base, suffix
+
+
 def generate_deployment_suffix_variants(value: str) -> tuple[str, ...]:
     """Return deterministic base-name variants with deployment suffixes stripped.
 
@@ -163,71 +189,18 @@ def generate_deployment_suffix_variants(value: str) -> tuple[str, ...]:
     if not value:
         return (value,)
 
-    namespace: str | None = None
-    raw = value
-    if "/" in raw:
-        namespace, raw = raw.split("/", 1)
+    namespace, model_segment = split_source_id(value)
 
-    tokens = tokenize_model_key(raw)
-    if not tokens:
-        out: tuple[str, ...] = (value,)
-        return out
+    result = _strip_deployment_suffix_segment(model_segment)
+    if result is None:
+        return (value,)
 
-    last_token = tokens[-1]
-    if last_token not in DEPLOYMENT_SUFFIX_TOKENS:
-        out = (value,)
-        return out
-    if last_token in SEMANTIC_VARIANT_TOKENS:
-        out = (value,)
-        return out
+    base, _suffix = result
+    stripped = f"{namespace}/{base}" if namespace else base
+    if stripped == value:
+        return (value,)
 
-    # Safety guard: if the original model already contains a semantic
-    # variant token (mini/pro/flash/lite/etc.), we MUST NOT strip a
-    # deployment suffix.  Stripping ``-turbo`` from ``gpt-5-mini-turbo``
-    # would otherwise incorrectly collapse to ``gpt-5-mini``,
-    # crossing a semantic identity boundary.
-    if set(tokens) & SEMANTIC_VARIANT_TOKENS:
-        out = (value,)
-        return out
-
-    # Reconstruct the base segment by removing the trailing token.
-    # We have to be careful to preserve the original capitalization:
-    # ``raw`` is the slash-stripped form.  We tokenize, check the last
-    # token, and rebuild from original raw_segments.
-    segments = [t for t in raw.split("-") if t]
-    if not segments:
-        out = (value,)
-        return out
-
-    # Some tokens can contain "-" inside them (rare); fall back to
-    # tokenize result for the suffix check, then drop only the last
-    # raw segment for the rebuild.
-    suffix_segment = segments[-1].casefold()
-    if suffix_segment != last_token:
-        # last_token was formed via tokenize (separator split).  Map it
-        # back to the raw final segment by casefolded equality.
-        for seg in reversed(segments):
-            if seg.casefold() == last_token:
-                base_segments = segments[: segments.index(seg)]
-                break
-        else:
-            base_segments = segments[:-1]
-    else:
-        base_segments = segments[:-1]
-
-    if not base_segments:
-        out = (value,)
-        return out
-
-    base_value = "-".join(base_segments)
-    if not has_digit_or_family_anchor(base_value):
-        out = (value,)
-        return out
-
-    stripped = f"{namespace}/{base_value}" if namespace else base_value
-
-    out = (value, stripped)
-    return out
+    return (value, stripped)
 
 
 def normalize_vendor_key(value: str | None) -> str | None:
