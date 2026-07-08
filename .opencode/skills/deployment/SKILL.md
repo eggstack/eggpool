@@ -327,6 +327,43 @@ eggpool runtime-status          # compact runtime health from running server
 - Startup logs `Granian profile: workers=1 runtime_threads=N database_worker_threads=M access_log=...` so the effective profile is visible at every `eggpool serve` start.
 - See `docs/deployment.md` Performance Profiles for the balanced / minimum-footprint / full-diagnostics profile set.
 
+### High-concurrency / OpenCode streaming
+
+OpenCode-style coding-agent clients keep many long-lived SSE streams
+open in parallel. When users report drops, timeouts, or
+`Failed to execute statement` from OpenCode itself, walk through:
+
+1. `eggpool runtime show` and `GET /api/stats/runtime` →
+   `stream_diagnostics.outcomes` should be dominated by
+   `stream_completed`. Spikes in `stream_finalizer_timeout`,
+   `upstream_midstream_error`, or `downstream_send_cancelled` point
+   at the failing layer.
+2. `GET /api/stats/runtime` →
+   `db_contention.lock_wait_p95_ms` above `200 ms` means SQLite is
+   the bottleneck. The routing-trace guard should be skipping writes
+   (`routing_trace_guard.skipped_db_pressure` > 0).
+3. `GET /api/stats/runtime` →
+   `finalization_retry_queue.depth` non-zero means the shielded
+   finalizer timed out. The supervisor-owned drain task clears it on
+   its own cadence; sustained growth means the upstream is the
+   problem, not the local finalizer.
+4. Apply the high-concurrency profile from `docs/providers.md` §
+   High-Concurrency HTTP Client Profiles: raise
+   `[providers.<id>].max_connections` to `256` and
+   `max_keepalive` to `128`, set `read_timeout_s = 900` for normal
+   completions and `1800` for extended thinking, set
+   `pool_timeout_s = 60`. Do not raise `server.threads` or
+   `server.workers`.
+5. If the contention persists, drop diagnostic writes entirely with
+   `[routing.trace] mode = "off"` to confirm the trace path is the
+   source.
+
+Full operator playbook: `docs/opencode-stream-stability.md`. The
+`scripts/repro_high_concurrency_streams.py` CLI mirror reproduces
+the harness locally without real providers; see
+`architecture/README.md` § High-Concurrency Stream Stability for the
+design.
+
 ---
 
 ## Security

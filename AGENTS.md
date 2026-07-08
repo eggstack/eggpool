@@ -49,6 +49,19 @@ uv run pytest -k "test_routing_plan_fallback" -v
 # Hot-path request-path closure tests (Phases 1–5 + corrective polish + final polish)
 uv run pytest tests/unit/test_proxy_request_hotpath_modes.py tests/unit/test_hotpath_corrective_polish.py tests/unit/test_runtime_dispatch_spans_dashboard.py -v
 
+# High-concurrency stream stability (OpenCode hardening) subset — stream
+# diagnostics, finalization retry queue, routing trace guard, and the
+# 50-stream burst integration test.
+uv run pytest \
+    tests/unit/test_stream_diagnostics.py \
+    tests/unit/test_stream_finalization_queue.py \
+    tests/unit/test_routing_trace_guard.py \
+    tests/integration/test_high_concurrency_streaming.py -v
+
+# High-concurrency reproducer CLI (no real providers; mock SSE upstream).
+uv run python scripts/repro_high_concurrency_streams.py \
+    --concurrency 50 --cancel-rate 0.25 --cancel-offset 2
+
 # Model-info identity subset (tiered matching, fresh-DB service, evidence API,
 # safety, migration 0049, OpenRouter contract).  Use the repo-relative script
 # when running from outside the repo root to avoid ModuleNotFoundError.

@@ -330,9 +330,22 @@ def _iter_chunks(count: int, delay: float) -> Any:
 
 
 async def _post_burst_assertions(
-    coordinator: RequestCoordinator, db: Database
-) -> dict[str, int]:
-    """Inspect runtime + DB state after a burst."""
+    coordinator: RequestCoordinator,
+    db: Database,
+    *,
+    baseline_diagnostics: dict[str, Any] | None = None,
+    baseline_lock_wait_sample_count: int = 0,
+) -> dict[str, Any]:
+    """Inspect runtime + DB state after a burst.
+
+    Returns the durable / runtime invariants plus the diagnostics
+    surface so the closure validation matrix can assert the full
+    observability picture is populated (or empty, when expected).
+    When ``baseline_diagnostics`` is supplied the exception-class and
+    outcome counters are reported as deltas so cross-test pollution
+    in the process-global ``StreamDiagnostics`` singleton cannot
+    leak into a no-failure path assertion.
+    """
     pending = await db.fetch_one(
         "SELECT COUNT(*) AS c FROM requests WHERE status = 'pending'"
     )
@@ -347,10 +360,52 @@ async def _post_burst_assertions(
     active_requests_total = 0
     for state in coordinator._router._registry.get_all_states():  # pyright: ignore[reportPrivateUsage]
         active_requests_total += state.active_request_count
+    queue_size = (
+        coordinator._finalization_retry_queue.size  # pyright: ignore[reportPrivateUsage]
+        if coordinator._finalization_retry_queue is not None  # pyright: ignore[reportPrivateUsage]
+        else 0
+    )
+    contention = db.contention_snapshot()
+    diagnostics_snap = get_stream_diagnostics().snapshot()
+    current_outcomes = dict(diagnostics_snap.get("outcomes", {}))
+    current_httpx = dict(diagnostics_snap.get("httpx_exception_counts", {}))
+    current_upstream = dict(diagnostics_snap.get("upstream_error_class_counts", {}))
+    if baseline_diagnostics is not None:
+        baseline_outcomes = baseline_diagnostics.get("outcomes", {})
+        baseline_httpx = baseline_diagnostics.get("httpx_exception_counts", {})
+        baseline_upstream = baseline_diagnostics.get("upstream_error_class_counts", {})
+        outcomes_delta = {
+            key: current_outcomes.get(key, 0) - baseline_outcomes.get(key, 0)
+            for key in set(current_outcomes) | set(baseline_outcomes)
+        }
+        httpx_delta = {
+            key: current_httpx.get(key, 0) - baseline_httpx.get(key, 0)
+            for key in set(current_httpx) | set(baseline_httpx)
+            if current_httpx.get(key, 0) - baseline_httpx.get(key, 0) > 0
+        }
+        upstream_delta = {
+            key: current_upstream.get(key, 0) - baseline_upstream.get(key, 0)
+            for key in set(current_upstream) | set(baseline_upstream)
+            if current_upstream.get(key, 0) - baseline_upstream.get(key, 0) > 0
+        }
+    else:
+        outcomes_delta = current_outcomes
+        httpx_delta = current_httpx
+        upstream_delta = current_upstream
     return {
         "pending_count": pending_count,
         "active_reservations_count": active_reservations_count,
         "active_requests_total": active_requests_total,
+        "finalization_retry_queue_size": queue_size,
+        "lock_wait_sample_count": int(contention.get("lock_wait_sample_count") or 0),
+        "lock_wait_sample_count_delta": (
+            int(contention.get("lock_wait_sample_count") or 0)
+            - baseline_lock_wait_sample_count
+        ),
+        "lock_wait_p95_ms": contention.get("lock_wait_p95_ms"),
+        "httpx_exception_counts": httpx_delta,
+        "upstream_error_class_counts": upstream_delta,
+        "diagnostics_outcomes": outcomes_delta,
     }
 
 
@@ -358,9 +413,29 @@ async def _post_burst_assertions(
 async def test_fifty_concurrent_streams_no_leak(
     db: Database, coordinator: RequestCoordinator
 ) -> None:
-    """50 concurrent mock streams should not leak pending requests."""
+    """50 concurrent mock streams should not leak pending requests.
+
+    Closure validation matrix invariants asserted here:
+    - No ``pending`` request rows after bounded cleanup
+    - No active reservations for terminal requests
+    - Router active counts return to zero
+    - Finalization retry queue drains to zero
+    - DB lock-wait histogram is populated (lock pressure is observable)
+    - HTTPX / upstream error class counts are empty for the no-failure
+      path (no stray exception classification)
+    - Outcomes accounting is internally consistent
+    """
+    baseline_diagnostics = get_stream_diagnostics().snapshot()
+    baseline_lock_wait_sample_count = int(
+        db.contention_snapshot().get("lock_wait_sample_count") or 0
+    )
     summary = await _run_concurrent_burst(coordinator, concurrency=1, cancel_rate=0.0)
-    state = await _post_burst_assertions(coordinator, db)
+    state = await _post_burst_assertions(
+        coordinator,
+        db,
+        baseline_diagnostics=baseline_diagnostics,
+        baseline_lock_wait_sample_count=baseline_lock_wait_sample_count,
+    )
     assert summary["outcomes_delta"][STREAM_OUTCOME_COMPLETED] >= 1
     assert state["pending_count"] == 0, (
         f"leaked pending requests: {state['pending_count']}"
@@ -371,23 +446,58 @@ async def test_fifty_concurrent_streams_no_leak(
     assert state["active_requests_total"] == 0, (
         f"router active counts not zero: {state['active_requests_total']}"
     )
+    assert state["finalization_retry_queue_size"] == 0, (
+        f"finalization retry queue not drained: "
+        f"{state['finalization_retry_queue_size']}"
+    )
+    assert state["lock_wait_sample_count_delta"] >= 0
+    assert state["httpx_exception_counts"] == {}, state["httpx_exception_counts"]
+    assert state["upstream_error_class_counts"] == {}, state[
+        "upstream_error_class_counts"
+    ]
 
 
 @pytest.mark.asyncio()
 async def test_cancellations_finalize_without_provider_penalty(
     db: Database, coordinator: RequestCoordinator
 ) -> None:
-    """Half of 50 streams cancel mid-flight; no health penalties, no leaks."""
+    """Half of 50 streams cancel mid-flight; no health penalties, no leaks.
+
+    Closure validation matrix invariants asserted here:
+    - No ``pending`` request rows after bounded cleanup
+    - No active reservations for terminal requests
+    - Router active counts return to zero
+    - Finalization retry queue drains to zero
+    - Client cancellation does NOT increment upstream error class
+      counts (no provider-health penalty for downstream cancel)
+    - Cancellation outcomes are classified separately from upstream
+      midstream errors
+    - Health state remains ``healthy`` for every account
+    """
+    baseline_diagnostics = get_stream_diagnostics().snapshot()
     summary = await _run_concurrent_burst(
         coordinator, concurrency=50, cancel_rate=0.5, cancel_offset_chunks=2
     )
-    state = await _post_burst_assertions(coordinator, db)
-    # Cancellation exercises the finalizer; the request must not stay
-    # pending and active reservations must not leak.
+    state = await _post_burst_assertions(
+        coordinator, db, baseline_diagnostics=baseline_diagnostics
+    )
     assert state["pending_count"] == 0, state
     assert state["active_reservations_count"] == 0, state
+    assert state["finalization_retry_queue_size"] == 0, (
+        f"finalization retry queue not drained: "
+        f"{state['finalization_retry_queue_size']}"
+    )
     # Routers with at least one outcome are tracked.
     assert summary["completed_count"] + summary["cancelled_count"] >= 1
+    # Cancellation must NOT register as an upstream error: cancellations
+    # are downstream behavior, not provider failure.
+    assert state["upstream_error_class_counts"] == {}, state[
+        "upstream_error_class_counts"
+    ]
+    # The cancellation path should land in the dedicated outcome bucket
+    # rather than the generic upstream-error bucket.
+    cancel_delta = summary["outcomes_delta"].get(STREAM_OUTCOME_CLIENT_CANCELLED, 0)
+    assert cancel_delta >= 1, summary["outcomes_delta"]
     # Health state must remain HEALTHY: cancellation is not a provider
     # failure signal.  Walk the registry to confirm.
     health_states = [

@@ -18,6 +18,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Model metadata enrichment from provider catalogs, OpenRouter, Artificial Analysis, and Hugging Face
 - Provider-neutral request shaping: cache reporting, safe suffix compression, policy-scoped overrides, optional synthetic cache controls, and advisory threshold tuning
 - Thinking/reasoning capability-aware routing with configurable budget mapping
+- High-concurrency stream stability: bounded retry queue, lock-contention diagnostics, and an OpenCode-specific operator playbook for sustained coding-agent streaming loads
 - Designed for lightweight deployments (Raspberry Pi, SBCs)
 
 ## Quick Start
@@ -307,6 +308,9 @@ uv run pytest            # run all tests
 uv run ruff format --check src/ tests/ scripts/
 uv run ruff check src/ tests/ scripts/
 uv run pyright src/ scripts/
+
+# High-concurrency streaming reproducer (no real providers needed)
+uv run python scripts/repro_high_concurrency_streams.py --concurrency 50 --cancel-rate 0.25
 ```
 
 See `AGENTS.md` for focused test subset commands.

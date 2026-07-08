@@ -2707,3 +2707,147 @@ The `frozenset` switch on `_account_support` (`src/eggpool/catalog/cache.py:639`
 - Exactness labels on `requests.cost_microdollars`: `provider_reported`, `exact`, `derived`, `partial`, `estimated`, `unknown`. `estimated` covers both “no trusted rate exists” and “a local rate/cost was guardrailed as implausible”.
 - Historical cleanup uses `eggpool stats repair-costs` for suspicious rows (dry-run by default, provider-reported rows skipped, audit rows written to `request_cost_repairs`). `repair-costs` recognizes a new suspicion class `reservation_fallback_overrode_lower_local_estimate` — canonical `cost_microdollars == reserved_microdollars` while a non-null, smaller persisted `local_cost_microdollars` exists — and prefers the persisted local estimate via `choose_bounded_estimated_cost`. `eggpool stats recompute-costs` remains the broader whole-table recalculation command.
 - **Canonical cost precedence** — persisted `requests.cost_microdollars` follows: provider-reported → trusted local exact/derived/partial → bounded-estimated (via `choose_bounded_estimated_cost()` in `src/eggpool/catalog/pricing.py`). Reservation estimates are routing budgets/audit fields; they do NOT floor canonical request cost, and nothing in the finalizer may raise a chosen estimate back to the reservation after the bounded selector. Regression: MiniMax `model_id="MiniMax-M3"`, local estimated `21_848` μ$ vs reservation `5_411_079` μ$ — canonical must be `21_848`. See `tests/unit/test_request_finalizer.py::test_estimated_local_cost_beats_higher_reservation_floor_regression`.
+
+## High-Concurrency Stream Stability (OpenCode Hardening)
+
+OpenCode-style coding-agent clients keep many long-lived SSE streams open
+in parallel. A small upstream hiccup can cascade into hundreds of pending
+requests with locked-out reservations, and the symptoms can match
+OpenCode's own `Failed to execute statement` reports even though EggPool
+is the upstream trigger (dropped downstream responses, slow reads, lock
+contention). The slice below is the layered defense.
+
+### Stream outcome diagnostics
+
+`StreamDiagnostics` (`src/eggpool/request/stream_diagnostics.py`) is a
+process-local counter service that records every terminal streaming
+path under a fixed label set:
+
+- `stream_completed`
+- `client_cancelled`
+- `downstream_send_cancelled`
+- `upstream_midstream_error`
+- `stream_finalizer_timeout`
+- `stream_finalizer_failed`
+- `stream_usage_missing_final_event`
+
+Bounded ring histograms (`completed_ms`, `client_cancel_ms`,
+`finalizer_timeout_ms`) keep p50 / p95 / p99 of recent samples without
+unbounded memory growth. HTTPX exceptions are recorded separately as
+`httpx_exception_counts`; upstream midstream errors record the
+exception class under `upstream_error_class_counts`. The snapshot is
+exposed under `/api/stats/runtime` and is the surface operators read
+when triaging OpenCode-visible stream drops.
+
+### Database contention surface
+
+`Database.contention_snapshot()` records a rolling p50 / p95 / p99
+lock-wait distribution plus cumulative counters. The runtime snapshot
+keys are: `lock_wait_p50_ms`, `lock_wait_p95_ms`, `lock_wait_p99_ms`,
+`lock_wait_max_ms`, `lock_wait_sample_count`, `lock_wait_count`,
+`cumulative_lock_wait_s`, `max_lock_wait_s`. When the p95 exceeds the
+configured threshold the routing-trace guardrail skips its diagnostic
+writes — see below.
+
+### Finalization retry queue
+
+The shielded immediate finalizer inside
+`_build_stream_generator` is capped at 10 seconds. When SQLite lock
+contention delays the immediate finalization past that ceiling, the
+cancellation path used to fall back to the broad 60-second
+`_finalize_stale_requests_once` sweep. `FinalizationRetryQueue`
+(`src/eggpool/request/finalization_queue.py`) closes that gap:
+
+- **Bounded** (`max_entries = 1024` default). Overflow drops a new
+  entry and increments `dropped_overflow`.
+- **Idempotent**. Re-enqueuing an existing `enqueue_token` is a no-op.
+  Re-finalizing an already-terminal request returns `False` and the
+  queue treats it as a successful drain.
+- **Periodic drain** owned by `TaskSupervisor`. Active cadence
+  `1.5s` when the queue is non-empty; idle cadence `15s`. The first
+  tick is delayed by `initial_delay_s=5.0` so startup does not collide
+  with the rest of the supervisor work.
+- **Age-bounded**. Entries older than `max_age_s = 120` are dropped
+  and counted under `dropped_age` so an entry that never converges
+  cannot block the queue indefinitely.
+- **Retry-bounded**. Entries that fail to finalize are re-queued up to
+  4 times before being dropped. The queue never applies provider
+  health penalties — `CLIENT_CANCELLED` finalizations skip the
+  penalty path entirely.
+
+The queue does NOT substitute for `_crash_recovery`: durable rows
+that never converge are still recovered at every startup.
+
+### Routing-trace pressure guard
+
+`RoutingTraceGuard` (`src/eggpool/request/routing_trace_guard.py`) is a
+tiny stdlib-only guard that consults `db.contention_snapshot()` before
+a routing trace write and skips the write when the rolling p95 lock
+wait exceeds `routing.trace.skip_above_lock_wait_p95_ms` (default
+`200.0` ms). Skips require `>= 8` samples to avoid tripping on cold-
+start spikes. Skips are counted under `skipped_db_pressure`; written
+rows under `written`. The guard never raises — trace rows are
+diagnostic, so their absence must never affect dispatch.
+
+### HTTPX error classification
+
+The coordinator classifies HTTPX failures explicitly instead of
+folding them into a generic `httpx.HTTPError`:
+
+- `PoolTimeout` — connection pool exhausted (HTTPX pool slot)
+- `ReadTimeout` — upstream read stalled past `read_timeout_s`
+- `ConnectTimeout` — TCP / TLS connect stalled past `connect_timeout_s`
+- `WriteTimeout` — upstream write stalled past `write_timeout_s`
+- `RemoteProtocolError` — upstream closed the stream midstream
+- `ReadError` / `WriteError` — lower-level transport errors
+- `TimeoutException` — generic catch-all (logged only when nothing
+  more specific is available)
+
+Each classification is recorded on the `StreamOutcomeEvent` and
+aggregated under `httpx_exception_counts` /
+`upstream_error_class_counts`.
+
+### Reproducer and operator surface
+
+- `tests/integration/test_high_concurrency_streaming.py` runs 50
+  concurrent mock streams with a configurable cancel rate and asserts
+  the closure validation matrix (no leaked pending rows, no active
+  reservations, router active counts return to zero, the finalization
+  retry queue drains to zero, HTTPX / upstream error class counts are
+  empty for the no-failure path, client cancellation does not register
+  as an upstream error, provider health remains `healthy`).
+- `scripts/repro_high_concurrency_streams.py` is the CLI mirror for
+  operators without a pytest harness — runs the same harness against a
+  configurable `--concurrency`, `--cancel-rate`, `--cancel-offset`,
+  `--chunks-per-stream`, `--chunk-delay-s` and prints a structured
+  summary.
+- `docs/opencode-stream-stability.md` is the operator playbook:
+  symptom checklist, root-cause matrix, recovery commands
+  (`eggpool runtime show`, `eggpool admin drain-finalization-queue`,
+  `eggpool stats repair-reservations`, `eggpool admin
+  set-routing-trace-threshold`), and capacity planning for OpenCode.
+- `docs/providers.md` § High-Concurrency HTTP Client Profiles exposes
+  three copy-pasteable profiles: low-power default, high-concurrency
+  coding-agent streaming (`max_connections=256`, `max_keepalive=128`,
+  `read_timeout_s=900`, `pool_timeout_s=60`), and diagnostic
+  low-noise (`routing.trace.mode = "off"`, `read_timeout_s=1800`).
+
+### Critical rules
+
+- Do not raise `server.threads` or `workers` to "fix" high-concurrency
+  stream instability. Granian runs `workers=1` and `threads=2`; raising
+  `threads` does not improve HTTPX concurrency and raising `workers`
+  multiplies the SQLite connection budget.
+- Keep `database.worker_threads = 2` (default) so the dashboard
+  analytics connection does not queue behind request-path writes on
+  the shared connection lock.
+- Keep `routing.trace.mode = "sampled"` as the default. Full trace
+  persistence (`mode = "all"`) is diagnostic-only and should never be
+  the steady-state posture on a high-concurrency streaming workload.
+- Client cancellation is downstream behavior; it MUST NOT register as
+  an upstream error or apply a provider health penalty. The
+  coordinator passes `CLIENT_CANCELLED` through the dedicated outcome
+  label and skips `HealthManager.record_failure` for that path.
+- HTTPX exception class names are stable operator-facing tokens — do
+  not rename them without a coordinated update to the dashboard,
+  the runtime JSON contract, and the playbook.

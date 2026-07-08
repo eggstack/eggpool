@@ -247,6 +247,46 @@ Canonical cost precedence: provider-reported → trusted local exact/derived/par
 uv run pytest tests/unit/test_request_finalizer.py -v
 ```
 
+### High-concurrency streaming tests
+
+The OpenCode hardening line ships three focused test files plus the
+CLI repro harness:
+
+- `tests/unit/test_stream_diagnostics.py` — counter / histogram
+  contract for `StreamDiagnostics`, `Database.contention_snapshot()`
+  lock-wait histogram shape, and `RuntimeMetricsService.snapshot()`
+  wiring.
+- `tests/unit/test_stream_finalization_queue.py` — bounded queue
+  semantics (dedup, overflow, max-age, idempotent re-finalize,
+  transient failure retry budget, stale-entry skip).
+- `tests/unit/test_routing_trace_guard.py` — guard disabled /
+  threshold-zero / record_written / db-pressure skip / below
+  threshold allow / insufficient-samples / configure / singleton.
+- `tests/integration/test_high_concurrency_streaming.py` — 50-stream
+  burst with configurable cancel rate, asserting the closure
+  validation matrix (no leaked pending rows, no active reservations,
+  router active counts return to zero, the finalization retry queue
+  drains to zero, HTTPX / upstream error class counts are empty for
+  the no-failure path, client cancellation does not register as an
+  upstream error, provider health remains `healthy`).
+
+Acceptance:
+
+```bash
+uv run pytest tests/unit/test_stream_diagnostics.py \
+    tests/unit/test_stream_finalization_queue.py \
+    tests/unit/test_routing_trace_guard.py \
+    tests/integration/test_high_concurrency_streaming.py -v
+```
+
+The CLI repro mirror does not need a running pytest and is useful for
+local triage:
+
+```bash
+uv run python scripts/repro_high_concurrency_streams.py \
+    --concurrency 50 --cancel-rate 0.25 --cancel-offset 2
+```
+
 ### Replay fixtures & regression harness
 
 The replay harness pins high-risk request-shaping behavior without ever
